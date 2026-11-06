@@ -3,12 +3,13 @@ use crate::request::lifecycle::{
     ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome,
 };
 use crate::store::identity::{KeyIdentity, NodeIdentity};
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
 use gents_protocol::request_input::{GoalAssignmentInput, QueuePolicy, QueueSource, RequestQueue};
 use gents_protocol::row::AgentRequestRow;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 fn key(id: u64) -> String {
     format!("background-completion-notification:scope-{id}:tool")
@@ -449,7 +450,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
         )
         .await;
         let rows = load(
-            &node,
+            &access,
             &request,
             lifecycle.background_completion_input_through_sequence(),
         )
@@ -473,4 +474,173 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
         node.shutdown().await.expect("node shutdown");
     }
     assert!(conflicting_history_cases > 0);
+}
+
+#[tokio::test]
+async fn claimed_background_wake_reads_user_session_as_selected_agent() {
+    use crate::request::lifecycle::queue::persist_background_completion_with_message_waking_with_access;
+    use crate::request::lifecycle::{RequestHopCause, RequestTerminalOutcome};
+    use crate::tools::call::lifecycle::admission_fixture::{
+        published_admission_with_owner, PublishedAdmissionOptions,
+    };
+    use crate::tools::call::lifecycle::AwaitMode;
+
+    let (fixture, mut parent) = published_admission_with_owner(PublishedAdmissionOptions {
+        name: "wake-agent-observation".into(),
+        await_mode: AwaitMode::Background,
+        start_running: false,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let node = fixture.node.clone();
+    let selected = parent.request().agent_did.clone();
+    let agent_row = fixture
+        .client
+        .execute(&format!(
+            r#"{{Agent(filter: {{agent_did: {{_eq: "{}"}}}}, limit: 2) {{agent_did creation_nonce}}}}"#,
+            escape_graphql_string(&selected),
+        ))
+        .await
+        .unwrap();
+    let [agent_row] = agent_row["data"]["Agent"].as_array().unwrap().as_slice() else {
+        panic!("fixture Agent must be unique");
+    };
+    let binding: gents_protocol::agent_identity::AgentIdentityBinding =
+        serde_json::from_value(agent_row.clone()).unwrap();
+    let agent =
+        crate::store::identity::resolve_agent_identity(fixture.runtime.as_ref(), &binding).unwrap();
+    let agent_access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let original = parent.request().clone();
+    let wake = persist_background_completion_with_message_waking_with_access(
+        &agent_access,
+        &node,
+        &original,
+        "background result",
+        "background-completion-notification:agent-observation:tool",
+        "Review background completion results",
+        RequestQueue {
+            delivery: Default::default(),
+            position: None,
+            source: QueueSource::BackgroundCompletion,
+            policy: QueuePolicy::Coalesce,
+            key: Some("background_completion:agent-observation".into()),
+            queued_after_request_id: Some(original.request_id.clone()),
+            interrupted_request_id: None,
+            background_completion_wake_version: None,
+        },
+        None,
+        RequestHopCause::Continuation,
+    )
+    .await
+    .unwrap()
+    .request
+    .expect("background wake request");
+    parent
+        .terminalize_owned(
+            RequestTerminalOutcome::Completed,
+            gents_protocol::output::TerminalOutput::NoMessage,
+            None,
+        )
+        .await
+        .unwrap();
+    let query = format!(
+        r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{{}}}}}"#,
+        escape_graphql_string(&wake.doc_id),
+        crate::request::watcher::AGENT_REQUEST_FIELDS,
+    );
+    let row = agent_access.execute(&query).await.unwrap();
+    let [row] = row["data"]["AgentRequest"].as_array().unwrap().as_slice() else {
+        panic!("selected Agent must see one wake request");
+    };
+    let row: AgentRequestRow = serde_json::from_value(row.clone()).unwrap();
+    let request: crate::AgentRequest = row.try_into().unwrap();
+    let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        fixture.runtime.clone(),
+        authority,
+    );
+    let (request, admission) = verifier
+        .verify_fresh_for_claim_with_identity(&request, agent.as_ref())
+        .await
+        .unwrap();
+    assert!(admission.is_none(), "runtime wake is not a client claim");
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        agent.did(),
+        &fixture.node_did,
+        request,
+        60,
+        ExecutionOrigin::Scheduled,
+        "wake-test-backend",
+    );
+    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+        node.clone(),
+        &lifecycle,
+        std::time::Duration::ZERO,
+    )
+    .unwrap();
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let cutoff = lifecycle.background_completion_input_through_sequence();
+    assert!(
+        cutoff.is_some(),
+        "claim must capture the wake notification cutoff"
+    );
+    let request = lifecycle.request();
+    let runtime_access = ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(fixture.runtime.did()).unwrap(),
+    );
+    let visible = runtime_access.execute(&query).await.unwrap();
+    assert!(
+        visible["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "the runtime must not inherit the User's session read authority"
+    );
+    assert!(load(&runtime_access, request, cutoff).await.is_err());
+    let actual = load(&agent_access, request, cutoff).await.unwrap();
+    assert_eq!(actual.len(), 1);
+    assert_eq!(
+        actual[0].message.rag_text().as_deref(),
+        Some("background result")
+    );
+    assert!(actual[0].physical_header.is_some());
+
+    let other_binding = crate::test_support::install_test_agent_as(
+        &node,
+        fixture.runtime.as_ref(),
+        fixture.requester_identity.as_ref(),
+        "Other Agent",
+    )
+    .await;
+    let other =
+        crate::store::identity::resolve_agent_identity(fixture.runtime.as_ref(), &other_binding)
+            .unwrap();
+    let other_access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(other.did()).unwrap(),
+        other.as_ref(),
+    )
+    .unwrap();
+    assert!(
+        load(&other_access, request, cutoff).await.is_err(),
+        "a different Agent must not observe the selected Agent's wake"
+    );
+    drop(lifecycle);
+    drop(parent);
+    node.shutdown().await.expect("node shutdown");
+    tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }

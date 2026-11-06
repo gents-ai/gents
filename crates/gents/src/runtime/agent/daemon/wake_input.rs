@@ -1,8 +1,6 @@
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;
 
@@ -56,7 +54,7 @@ fn receipt_keys(row: &Value) -> Result<Vec<String>> {
 }
 
 pub(super) async fn load(
-    node: &Arc<EmbeddedNode>,
+    access: &ConfigAccess,
     request: &crate::AgentRequest,
     cutoff: Option<u32>,
 ) -> Result<Vec<TaggedMessage>> {
@@ -68,7 +66,7 @@ pub(super) async fn load(
         &request.session_id,
         request.requester_did.as_deref(),
     );
-    ConfigAccess::transact_local_readonly(node, None, "request.wake_input", |txn| {
+    access.transact_readonly("request.wake_input", |txn| {
         let scope = scope.clone();
         Box::pin(async move {
             let mut assignments = crate::goal::load_request_assignment_scopes(txn, &request.node_did, &request.session_id).await?;

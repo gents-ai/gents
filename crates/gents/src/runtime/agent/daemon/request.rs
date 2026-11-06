@@ -319,8 +319,13 @@ where
                 let wake_notifications = if resume_from_history {
                     Vec::new()
                 } else {
+                    let access = crate::ConfigAccess::local_managed_agent(
+                        self.node.clone(),
+                        identity::Did::new(&request.agent_did)?,
+                        self.agent_config.agent_identity.as_ref(),
+                    )?;
                     super::wake_input::load(
-                        &self.node,
+                        &access,
                         &request,
                         lifecycle.background_completion_input_through_sequence(),
                     )
