@@ -502,6 +502,22 @@ impl CanonicalBackgroundFixture {
                     .is_some_and(|key| !key.trim().is_empty()),
             "fixture notification requires a keyed coalescing background queue"
         );
+        let publication = self.prepare_notification(notification_content).await?;
+        self.publish_prepared_notification(
+            notification_content,
+            message_key,
+            wake_content,
+            queue,
+            existing_notification_doc_id,
+            &publication,
+        )
+        .await
+    }
+
+    async fn prepare_notification(
+        &mut self,
+        notification_content: &str,
+    ) -> anyhow::Result<ToolNotificationPublication> {
         let turn = self.next_turn;
         self.next_turn += 1;
         self.writer
@@ -570,6 +586,24 @@ impl CanonicalBackgroundFixture {
         let tool_call_doc_id = tool
             .doc_id()
             .context("fixture tool has physical document")?;
+        Ok(ToolNotificationPublication {
+            tool_call_doc_id: tool_call_doc_id.to_owned(),
+            presentation: vec![PresentationPart::OutputRange {
+                start_byte: 0,
+                end_byte: notification_content.len() as u64,
+            }],
+        })
+    }
+
+    async fn publish_prepared_notification(
+        &self,
+        notification_content: &str,
+        message_key: &str,
+        wake_content: &str,
+        queue: RequestQueue,
+        existing_notification_doc_id: Option<&str>,
+        publication: &ToolNotificationPublication,
+    ) -> anyhow::Result<EnqueuedBackgroundCompletionInput> {
         persist_background_completion_with_message_canonical_with_access(
             &self.access,
             &self.node,
@@ -579,13 +613,7 @@ impl CanonicalBackgroundFixture {
             wake_content,
             queue,
             existing_notification_doc_id,
-            &ToolNotificationPublication {
-                tool_call_doc_id: tool_call_doc_id.to_owned(),
-                presentation: vec![PresentationPart::OutputRange {
-                    start_byte: 0,
-                    end_byte: notification_content.len() as u64,
-                }],
-            },
+            publication,
             crate::request::lifecycle::RequestHopCause::Continuation,
         )
         .await
