@@ -6,8 +6,9 @@ impl ConfigCommandTool {
         use crate::inference::auth::credential::backend_account;
         use crate::inference::backends::provider::BackendProviderOauthExt;
         use crate::inference::usage_observation::{read_node_usage, UsageTrigger};
-        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
         let node_did = self.node_did.as_str();
+        let access =
+            crate::inference::auth::credential::runtime_credential_access(&self.node, node_did)?;
         let accounts = crate::inference::auth::credential::list_accounts(&access, node_did).await?;
         let (backends, profiles) =
             crate::store::config_client::ConfigAccess::transact_local_readonly(

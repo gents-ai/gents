@@ -6107,25 +6107,29 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     );
 }
 
-async fn account_state_rows(node: &std::sync::Arc<defra_node::Node>) -> Value {
-    let response = node
-        .execute(
-            "{ OAuthCredential { _docID credential_id enabled label access_token } \
-               InferenceBackend { _docID backend_id enabled auth } }",
-        )
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    response.data.expect("data")
+async fn account_state_rows(fixture: &SelfConfigFixture) -> Value {
+    let access = crate::inference::auth::credential::runtime_credential_access(
+        &fixture.db.node,
+        fixture.node_did(),
+    )
+    .unwrap();
+    let credentials = access
+        .execute("{ OAuthCredential { _docID credential_id enabled label access_token } }")
+        .await
+        .unwrap();
+    let backend = fixture.user_access.execute("{ InferenceBackendMetadata { _docID backend_id enabled auth_kind } BackendCredential { _docID credential_id secret } }").await.unwrap();
+    json!({"credentials": credentials["data"], "backend": backend["data"]})
 }
 
 async fn seed_account_view(
     cache: &crate::inference::usage_observation::UsageCache,
-    node: &std::sync::Arc<defra_node::Node>,
-    owner: &str,
+    fixture: &SelfConfigFixture,
 ) {
     use crate::inference::auth::credential::{
         oauth_credential_id, upsert_oauth_credential, OAuthCredential,
     };
+    let node = &fixture.db.node;
+    let owner = fixture.node_did();
     let provider = crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
     let account = |account_ref: Option<&str>, label: &str, enabled: bool| OAuthCredential {
         doc_id: None,
@@ -6155,7 +6159,7 @@ async fn seed_account_view(
     upsert_oauth_credential(node, &account(Some("acct-l2"), "Work", false))
         .await
         .unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let access = fixture.user_access();
     for (backend_id, kind, auth, endpoint) in [
         (
             "backend-usage-claude",
@@ -6185,7 +6189,7 @@ async fn seed_account_view(
             "auth": auth,
         }))
         .unwrap();
-        crate::store::config_client::write_inference_backend_document(&access, &backend)
+        crate::store::config_client::write_inference_backend_document(access, &backend)
             .await
             .unwrap();
     }
@@ -6196,7 +6200,7 @@ async fn seed_account_view(
         "model_name": "model-x",
     }))
     .unwrap();
-    crate::store::config_client::write_inference_profile_document(&access, &profile)
+    crate::store::config_client::write_inference_profile_document(access, &profile)
         .await
         .unwrap();
     crate::inference::usage_observation::record_usage(
@@ -6228,10 +6232,8 @@ async fn seed_account_view(
 
 #[tokio::test]
 async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
-    let node = build_agent_node().await;
-    let identity = node_identity("config-accounts");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "alpha").await;
+    let fixture = SelfConfigFixture::new("config-accounts").await;
+    fixture.grant_node_reader().await;
     let cache = std::sync::Arc::new(
         crate::inference::usage_observation::UsageCache::with_endpoints(
             crate::inference::usage_observation::UsageEndpoints {
@@ -6240,22 +6242,24 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
             },
         ),
     );
-    seed_account_view(&cache, &node, &owner).await;
+    seed_account_view(&cache, &fixture).await;
     let mut tool_config = config(&["node", "profile", "backend"]);
-    tool_config.agent_did = "alpha".into();
-    let tools = build_self_config_tools(
+    tool_config.agent_did = fixture.agent_did().to_owned();
+    let tools = build_self_config_tools_with_runtime(
         cache,
-        node.clone(),
-        owner,
-        Some(identity),
+        fixture.db.node.clone(),
+        fixture.node_did().to_owned(),
+        Some(fixture.agent.clone()),
+        Some(fixture.db.node_identity.clone()),
         &tool_config,
         test_plugins(),
+        Some(fixture.node_binding.clone()),
     );
     let config = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap();
-    let before = account_state_rows(&node).await;
+    let before = account_state_rows(&fixture).await;
 
     let text = config
         .call(json!({"argv":["backend", "accounts"]}).to_string())
@@ -6296,7 +6300,7 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
     ] {
         assert!(!text.contains(hidden), "{hidden}: {text}");
     }
-    assert_eq!(account_state_rows(&node).await, before);
+    assert_eq!(account_state_rows(&fixture).await, before);
 
     let help = config
         .call(json!({"argv":["help", "backend"]}).to_string())
@@ -6311,20 +6315,8 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
 
 #[tokio::test]
 async fn config_backend_accounts_is_readable_without_the_backend_grant() {
-    let node = build_agent_node().await;
-    let identity = node_identity("config-accounts-grant");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "alpha").await;
-    let mut tool_config = config(&["node", "profile"]);
-    tool_config.agent_did = "alpha".into();
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("config-accounts-grant").await;
+    let tools = fixture.tools(&["node", "profile"]);
     let config = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
