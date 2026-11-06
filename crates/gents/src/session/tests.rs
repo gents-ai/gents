@@ -179,82 +179,65 @@ async fn signed_compaction_fixture(
 
 #[tokio::test]
 async fn compaction_entries_track_files_cumulatively() {
-    let data_path = std::env::temp_dir().join(format!("gents-compaction-{}", uuid::Uuid::new_v4()));
-    let node = std::sync::Arc::new(
-        crate::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    use crate::store::identity::NodeIdentity;
+    let (db, user, agent, access, requests) =
+        signed_compaction_fixture("compaction-cumulative", "session-1", 3).await;
+    let node_did = db.node_identity.did();
+    for (index, summary, read, modified, count, cursor, original, compacted) in [
+        (
+            0,
+            "First summary",
+            vec!["/tmp/a.rs".to_string()],
+            vec!["/tmp/b.rs".to_string()],
+            5,
+            10,
+            1000,
+            200,
+        ),
+        (
+            1,
+            "Second summary",
+            vec!["/tmp/c.rs".to_string(), "/tmp/a.rs".to_string()],
+            vec!["/tmp/d.rs".to_string()],
+            7,
+            30,
+            1200,
+            250,
+        ),
+        (2, "Third summary", vec![], vec![], 3, 40, 500, 100),
+    ] {
+        let generation = load_prompt_compaction_state_with_access(
+            &access,
+            "session-1",
+            node_did,
+            Some(user.did()),
+            None,
+        )
+        .await
+        .unwrap()
+        .generation;
+        compaction_entries::save_compaction_entry_with_access(
+            &access,
+            agent.did(),
+            "session-1",
+            node_did,
+            Some(user.did()),
+            &requests[index].0,
+            &requests[index].1,
+            summary,
+            &read,
+            &modified,
+            count,
+            cursor,
+            original,
+            compacted,
+            &generation,
+        )
+        .await
+        .unwrap();
+    }
 
-    save_compaction_entry(
-        &node,
-        "did:test:test",
-        "session-1",
-        "did:test:test",
-        "request-1",
-        "request-doc-1",
-        "First summary",
-        &["/tmp/a.rs".to_string()],
-        &["/tmp/b.rs".to_string()],
-        5,
-        10,
-        1000,
-        200,
-    )
-    .await
-    .unwrap();
-    save_compaction_entry(
-        &node,
-        "did:test:test",
-        "session-1",
-        "did:test:test",
-        "request-2",
-        "request-doc-2",
-        "Second summary",
-        &["/tmp/c.rs".to_string(), "/tmp/a.rs".to_string()],
-        &["/tmp/d.rs".to_string()],
-        7,
-        30,
-        1200,
-        250,
-    )
-    .await
-    .unwrap();
-    let generation = load_prompt_compaction_state(
-        &node,
-        "did:test:test",
-        "session-1",
-        "did:test:test",
-        None,
-        None,
-    )
-    .await
-    .unwrap()
-    .generation;
-    save_compaction_entry_with_requester_did(
-        &node,
-        "did:test:test",
-        "session-1",
-        "did:test:test",
-        None,
-        "request-3",
-        "request-doc-3",
-        "Third summary",
-        &[],
-        &[],
-        3,
-        40,
-        500,
-        100,
-        &generation,
-    )
-    .await
-    .unwrap();
-
-    let entries = load_compaction_entries(&crate::store::config_client::ConfigAccess::local(node.clone()), "session-1", "did:test:test", None)
+    let entries = load_compaction_entries(&access, "session-1", node_did, Some(user.did()))
         .await
         .unwrap();
     assert_eq!(entries.len(), 3);
@@ -262,17 +245,8 @@ async fn compaction_entries_track_files_cumulatively() {
     assert_eq!(entries[1].files_read, vec!["/tmp/a.rs", "/tmp/c.rs"]);
     assert_eq!(entries[1].files_modified, vec!["/tmp/b.rs", "/tmp/d.rs"]);
     assert_eq!(entries[2].compacted_through_sequence, Some(40));
-    let stored = node
-        .execute(
-            r#"{ CompactionEntry(filter: { session_id: { _eq: "session-1" }, node_did: { _eq: "did:test:test" } }, order: { sequence: ASC }) { files_read files_modified } }"#,
-        )
-        .await;
-    assert!(
-        !stored.has_errors(),
-        "stored rows query failed: {:?}",
-        stored.errors
-    );
-    let stored_rows = stored.data.unwrap()["CompactionEntry"]
+    let stored = access.execute(r#"{ CompactionEntry(filter: { session_id: { _eq: "session-1" } }, order: { sequence: ASC }) { files_read files_modified } }"#).await.unwrap();
+    let stored_rows = stored["data"]["CompactionEntry"]
         .as_array()
         .unwrap()
         .iter()
@@ -300,12 +274,11 @@ async fn compaction_entries_track_files_cumulatively() {
             ),
         ]
     );
-    let prompt_state = load_prompt_compaction_state(
-        &node,
-        "did:test:test",
+    let prompt_state = load_prompt_compaction_state_with_access(
+        &access,
         "session-1",
-        "did:test:test",
-        None,
+        node_did,
+        Some(user.did()),
         None,
     )
     .await
@@ -313,12 +286,11 @@ async fn compaction_entries_track_files_cumulatively() {
     assert_eq!(prompt_state.summaries.len(), 3);
     assert_eq!(prompt_state.total_messages_compacted, 15);
     assert_eq!(prompt_state.compacted_through_sequence, Some(40));
-    let before_cursor = load_prompt_compaction_state(
-        &node,
-        "did:test:test",
+    let before_cursor = load_prompt_compaction_state_with_access(
+        &access,
         "session-1",
-        "did:test:test",
-        None,
+        node_did,
+        Some(user.did()),
         Some(20),
     )
     .await
@@ -326,12 +298,11 @@ async fn compaction_entries_track_files_cumulatively() {
     assert_eq!(before_cursor.summaries, vec!["First summary"]);
     assert_eq!(before_cursor.total_messages_compacted, 5);
     assert_eq!(before_cursor.compacted_through_sequence, Some(10));
-    let at_cursor = load_prompt_compaction_state(
-        &node,
-        "did:test:test",
+    let at_cursor = load_prompt_compaction_state_with_access(
+        &access,
         "session-1",
-        "did:test:test",
-        None,
+        node_did,
+        Some(user.did()),
         Some(40),
     )
     .await
@@ -340,62 +311,68 @@ async fn compaction_entries_track_files_cumulatively() {
     assert_eq!(at_cursor.total_messages_compacted, 15);
     assert_eq!(at_cursor.compacted_through_sequence, Some(40));
 
-    let _ = std::fs::remove_dir_all(&data_path);
+    db.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
 async fn legacy_cumulative_compaction_paths_extend_and_redeliver_as_deltas() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
+    use crate::store::identity::NodeIdentity;
     let session_id = "session-legacy-file-activity";
-    let key = escape_graphql_string(&compaction_key("did:test:test", session_id, None, 1));
-    let mutation = format!(
-        r#"mutation {{ create_CompactionEntry(input: {{
-            compaction_key: "{key}"
-            session_id: "{session_id}"
-            node_did: "did:test:test"
-            requester_did: null
-            request_id: "old-request"
-            request_doc_id: "old-request-doc"
-            sequence: 1
-            summary: "legacy"
-            files_read: "[\"/legacy/read.rs\"]"
-            files_modified: "[\"/legacy/write.rs\"]"
-            messages_compacted: 1
-            compacted_through_sequence: 10
-            original_tokens: 100
-            compacted_tokens: 20
-            created_at: "2026-10-15T00:00:00Z"
-        }}) {{ _docID }} }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "legacy seed failed: {:?}",
-        response.errors
-    );
-
-    let prior = load_prompt_compaction_state(
-        &node,
-        "did:test:test",
+    let (db, user, agent, access, requests) =
+        signed_compaction_fixture("compaction-legacy", session_id, 2).await;
+    let node_did = db.node_identity.did();
+    let response = access.execute(r#"{ AgentSession(filter: {session_id: {_eq: "session-legacy-file-activity"}}, limit: 2) { _docID } }"#).await.unwrap();
+    let [row] = response["data"]["AgentSession"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("fixture session must be unique")
+    };
+    let session_doc = row["_docID"].as_str().unwrap().to_owned();
+    let input = serde_json::json!({
+        "compaction_key": compaction_key(node_did, session_id, Some(user.did()), 1),
+        "session_id": session_id, "node_did": node_did, "requester_did": user.did(),
+        "request_id": requests[0].0, "request_doc_id": requests[0].1,
+        "sequence": 1, "summary": "legacy", "files_read": "[\"/legacy/read.rs\"]",
+        "files_modified": "[\"/legacy/write.rs\"]", "messages_compacted": 1,
+        "compacted_through_sequence": 10, "original_tokens": 100, "compacted_tokens": 20,
+        "created_at": "2026-10-15T00:00:00Z",
+    });
+    access.transact_write("test.legacy_compaction", |txn| {
+        let input = &input;
+        let session_doc = &session_doc;
+        Box::pin(async move {
+            let response = txn.execute_with_variables(
+                "mutation($input: CompactionEntryMutationInputArg!) { create_CompactionEntry(input: $input) { _docID } }",
+                &serde_json::json!({"input": input}),
+            ).await?;
+            let doc = crate::store::graphql::created_doc_id(&response, "CompactionEntry")?;
+            txn.add_resource_relationship("CompactionEntry", &doc, "parent", "sessions", session_doc).await?;
+            Ok::<_, anyhow::Error>(())
+        })
+    }).await.unwrap();
+    let prior = load_prompt_compaction_state_with_access(
+        &access,
         session_id,
-        "did:test:test",
-        None,
+        node_did,
+        Some(user.did()),
         None,
     )
     .await
     .unwrap();
+
     let files_read = ["/legacy/read.rs".to_string(), "/new/read.rs".to_string()];
     let files_modified = ["/new/write.rs".to_string()];
     let save = || {
-        save_compaction_entry_with_requester_did(
-            &node,
-            "did:test:test",
+        compaction_entries::save_compaction_entry_with_access(
+            &access,
+            agent.did(),
             session_id,
-            "did:test:test",
-            None,
-            "new-request",
-            "new-request-doc",
+            node_did,
+            Some(user.did()),
+            &requests[1].0,
+            &requests[1].1,
             "new summary",
             &files_read,
             &files_modified,
@@ -413,23 +390,14 @@ async fn legacy_cumulative_compaction_paths_extend_and_redeliver_as_deltas() {
         vec!["/legacy/write.rs", "/new/write.rs"]
     );
     assert_eq!(save().await.unwrap(), first);
-    let entries = load_compaction_entries(&crate::store::config_client::ConfigAccess::local(node.clone()), session_id, "did:test:test", None)
+    let entries = load_compaction_entries(&access, session_id, node_did, Some(user.did()))
         .await
         .unwrap();
     assert_eq!(entries[0].files_read, vec!["/legacy/read.rs"]);
     assert_eq!(entries[1].files_read, first.files_read);
     assert_eq!(entries[1].files_modified, first.files_modified);
-    let stored = node
-        .execute(
-            r#"{ CompactionEntry(filter: { session_id: { _eq: "session-legacy-file-activity" }, sequence: { _eq: 2 } }) { files_read files_modified } }"#,
-        )
-        .await;
-    assert!(
-        !stored.has_errors(),
-        "stored row query failed: {:?}",
-        stored.errors
-    );
-    let stored_data = stored.data.unwrap();
+    let stored = access.execute(r#"{ CompactionEntry(filter: {session_id: {_eq: "session-legacy-file-activity"}, sequence: {_eq: 2}}) { files_read files_modified } }"#).await.unwrap();
+    let stored_data = &stored["data"];
     let stored_row = &stored_data["CompactionEntry"][0];
     assert_eq!(
         stored_row["files_read"].as_str(),
@@ -439,7 +407,7 @@ async fn legacy_cumulative_compaction_paths_extend_and_redeliver_as_deltas() {
         stored_row["files_modified"].as_str(),
         Some(r#"{"version":1,"paths":["/new/write.rs"]}"#)
     );
-    node.shutdown().await.expect("shut down test node");
+    db.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
