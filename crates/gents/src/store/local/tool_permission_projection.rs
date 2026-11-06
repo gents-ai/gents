@@ -271,6 +271,7 @@ mod tests {
     {
         let node_did = "did:key:node";
         let agent_did = "did:key:agent";
+        let sibling_did = "did:key:sibling";
         let projector = Arc::new(
             super::super::runtime_document_projection::RuntimeDocumentProjector::new(
                 node_did,
@@ -288,6 +289,7 @@ mod tests {
         crate::ensure_runtime_schemas(&node).await?;
         let node_value = escape_graphql_string(node_did);
         let agent_value = escape_graphql_string(agent_did);
+        let sibling_value = escape_graphql_string(sibling_did);
         let entries = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
             "entries": [{"kind":"query", "tool_name":"find_probe", "collection":"Probe",
                 "description":"Find a probe", "fields":["name"]}]
@@ -308,11 +310,15 @@ mod tests {
             format!(
                 r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{agent_value}",creation_nonce:"nonce",context_id:"context",enabled:true}}) {{_docID}} }}"#
             ),
+            format!(
+                r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{sibling_value}",creation_nonce:"sibling-nonce",enabled:true}}) {{_docID}} }}"#
+            ),
         ] {
             let response = node.execute(&mutation).await;
             anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
         }
         let agent = identity::Did::new(agent_did)?;
+        let sibling = identity::Did::new(sibling_did)?;
         let access = crate::ConfigAccess::local_as(node.clone(), agent.clone());
         let model = crate::lean_vocab_test::lean_identity_household_cases()
             .iter()
@@ -336,6 +342,12 @@ mod tests {
             expected("datastore-query"),
         );
         assert!(access.collection_version("Node").await?.is_some());
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&sibling, NodePermission::CollectionGet)
+                .await?,
+            expected("none"),
+        );
         let response = node.execute(&format!(r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"tools"}}}},input:{{built_ins:{{enable_schema_tool:true}}}}) {{_docID}} }}"#)).await;
         anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
         let response = node.execute(&format!(r#"mutation {{ update_DatastoreToolSurface(filter: {{node_did:{{_eq:"{node_value}"}},surface_id:{{_eq:"surface"}}}},input:{{enabled:false}}) {{_docID}} }}"#)).await;
