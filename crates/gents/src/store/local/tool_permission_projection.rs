@@ -472,6 +472,41 @@ mod tests {
                 .await?,
             allowed
         );
+        // Install a legacy source to exercise cleanup after upgrading the projector.
+        let projector = ToolPermissionProjection::new(
+            Arc::new(crate::KeyIdentity::load_or_create(&path, None)?),
+            crate::tools::surface::ToolCeiling::meta_only(),
+        )?;
+        let legacy_source = format!("{}legacy", projector.prefix());
+        let txn = node.database().new_txn(false).await?;
+        let view = txn.datastore()?.sibling(Namespace::Acpstore);
+        let node_did = identity::Did::new(runtime.did())?;
+        for (parent_source, subject_kind, subject) in [
+            (Some(legacy_source.as_str()), "actor", user.did()),
+            (None, "source", legacy_source.as_str()),
+        ] {
+            assert!(node
+                .nac_manager()
+                .change_source_permission_in_txn(
+                    view.clone(),
+                    &node_did,
+                    &db::nac::SourcePermissionChange {
+                        permission: NodePermission::CollectionPatch,
+                        parent_source,
+                        subject_kind,
+                        subject,
+                        delete: false,
+                    },
+                )
+                .await?
+                .is_some());
+        }
+        txn.commit().await?;
+        assert!(
+            node.nac_manager()
+                .check_permission(&user_did, NodePermission::CollectionPatch)
+                .await?
+        );
         owner
             .grant_node_permission(&user_did, NodePermission::CollectionPatch)
             .await?;
