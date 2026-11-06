@@ -1185,6 +1185,17 @@ mod tests {
                 .await?,
             expected("replaced-digest")
         );
+        let unpinned = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+            "plugins": [{"plugin":"team/worker"}]
+        }))?;
+        owner.write("test.plugin_delete.unpinned", &format!(r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"plugin-tools"}}}},input:{{integrations:{unpinned}}}) {{_docID}} }}"#)).await?;
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::DocumentDelete)
+                .await?,
+            expected("unpinned-upgrade")
+        );
+        owner.write("test.plugin_delete.restore_pin", &format!(r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"plugin-tools"}}}},input:{{integrations:{integration}}}) {{_docID}} }}"#)).await?;
         owner
             .transact_write("test.plugin_delete.downgrade", |txn| {
                 let (old, new) = (&replacement, &record);
