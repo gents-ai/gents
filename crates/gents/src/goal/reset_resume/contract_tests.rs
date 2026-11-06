@@ -155,25 +155,39 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
             .unwrap();
         }
         if !facts.backend_enabled {
-            execute(
-                &f.user_access(),
-                &format!(
-                    r#"mutation {{ update_InferenceBackend(filter: {{ node_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}, input: {{ enabled: false }}) {{ _docID }} }}"#,
-                    escape_graphql_string(did),
-                    escape_graphql_string(&accounts.a)
-                ),
-            )
-            .await;
+            let access = f.user_access();
+            access
+                .transact_write("test.disable_resume_backend", |txn| {
+                    let backend = &accounts.a;
+                    Box::pin(async move {
+                        let (_, mut value) =
+                            crate::store::config_client::read_desired_state_record_in_txn(
+                                txn,
+                                crate::Collection::InferenceBackend,
+                                did,
+                                backend,
+                            )
+                            .await?
+                            .expect("selected backend");
+                        value["enabled"] = false.into();
+                        let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+                            crate::store::config_client::DesiredStateApplyDocument {
+                                collection: crate::Collection::InferenceBackend,
+                                add: value.clone(),
+                                update: value,
+                            },
+                        ])?;
+                        crate::store::config_client::apply_desired_state_plan(txn, &plan).await?;
+                        Ok::<_, anyhow::Error>(())
+                    })
+                })
+                .await
+                .unwrap();
         }
         assert_eq!(f.observe().await, case.before, "{} initial", case.name);
 
         let goal = f.current_goal().await;
-        let agent = crate::store::identity::RegisteredIdentity::from_registered_did(
-            &f.parent.agent_did,
-            None,
-        )
-        .unwrap();
-        let result = resume_at_reset(&f.node, &agent, &goal, at(facts.now))
+        let result = resume_at_reset(&f.node, f.agent.as_ref(), &goal, at(facts.now))
             .await
             .unwrap();
         match case.outcome.as_str() {

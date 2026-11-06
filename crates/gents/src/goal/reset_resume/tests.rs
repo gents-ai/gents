@@ -94,12 +94,7 @@ impl Reset {
     }
 
     async fn resume_with(&self, goal: &GoalDocument, now: i64) -> Option<GoalResumeReceipt> {
-        let agent = crate::store::identity::RegisteredIdentity::from_registered_did(
-            &self.f.parent.agent_did,
-            None,
-        )
-        .unwrap();
-        resume_at_reset(&self.f.node, &agent, goal, at(now))
+        resume_at_reset(&self.f.node, self.f.agent.as_ref(), goal, at(now))
             .await
             .unwrap()
     }
