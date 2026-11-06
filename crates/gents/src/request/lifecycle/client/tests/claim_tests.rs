@@ -1644,6 +1644,18 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
         )
         .await
         .unwrap();
+    let blocked = crate::request::lifecycle::queue::steering_snapshot(
+        &node,
+        lifecycle.request(),
+        &verifier,
+        Some(agent.as_ref()),
+    )
+    .await
+    .unwrap();
+    assert!(
+        blocked.inputs.is_empty(),
+        "a revoked author is not repeatedly selected"
+    );
     assert!(writer
         .publish_authored_message(&lifecycle, &input.key, &input.message)
         .await

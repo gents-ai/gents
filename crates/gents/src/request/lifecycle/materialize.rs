@@ -858,6 +858,7 @@ impl RequestLifecycle {
             execution_lease: None,
             renewal_task: None,
             client_claim_admission: None,
+            steering_admission: None,
             fold_admitted: Vec::new(),
             folded_selection: Vec::new(),
             natural_finish_allowed: false,

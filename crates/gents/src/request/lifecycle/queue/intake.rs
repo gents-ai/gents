@@ -179,6 +179,7 @@ pub(crate) async fn steering_snapshot(
     node: &std::sync::Arc<EmbeddedNode>,
     head: &AgentRequest,
     verifier: &crate::request::admission::AgentRequestAdmissionVerifier,
+    agent_identity: Option<&dyn crate::store::identity::NodeIdentity>,
 ) -> Result<gents_loop::loop_stream::SteeringSnapshot> {
     let rows = crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
@@ -200,10 +201,42 @@ pub(crate) async fn steering_snapshot(
         }
         let id = row.doc_id.clone().unwrap_or_default();
         let request = AgentRequest::try_from(row.clone())?;
-        match verifier.verify_fresh(&request, &head.agent_did).await {
-            Ok(_) => {}
+        let verified = match agent_identity {
+            Some(identity) if identity.did() == head.agent_did => {
+                verifier
+                    .verify_fresh_for_claim_with_identity(&request, identity)
+                    .await
+            }
+            Some(_) => anyhow::bail!("steering identity differs from selected Agent"),
+            None => verifier
+                .verify_fresh(&request, &head.agent_did)
+                .await
+                .map(|request| (request, None)),
+        };
+        let (verified, admission) = match verified {
+            Ok(verified) => verified,
             Err(error) if !error.is_denied() => return Err(error.into()),
             Err(_) => break,
+        };
+        if let Some(admission) = admission {
+            let identity = agent_identity.context("client steering requires the held Agent")?;
+            let access = crate::ConfigAccess::local_managed_agent(
+                node.clone(),
+                identity::Did::new(identity.did())?,
+                identity,
+            )?;
+            let decision = access
+                .transact_readonly("queue.steering_authorization", |txn| {
+                    let verified = &verified;
+                    let admission = &admission;
+                    Box::pin(async move { admission.authorize_in_txn(txn, verified).await })
+                })
+                .await?;
+            match decision {
+                crate::request::admission::ClientClaimAuthorization::Allowed => {}
+                crate::request::admission::ClientClaimAuthorization::Denied
+                | crate::request::admission::ClientClaimAuthorization::Unavailable => break,
+            }
         }
         inputs.push(gents_loop::loop_stream::FoldedPrompt {
             key: folded_input_key(&id),
@@ -221,8 +254,11 @@ pub(crate) async fn steering_inputs(
     node: &std::sync::Arc<EmbeddedNode>,
     head: &AgentRequest,
     verifier: &crate::request::admission::AgentRequestAdmissionVerifier,
+    agent_identity: Option<&dyn crate::store::identity::NodeIdentity>,
 ) -> Result<Vec<gents_loop::loop_stream::FoldedPrompt>> {
-    Ok(steering_snapshot(node, head, verifier).await?.inputs)
+    Ok(steering_snapshot(node, head, verifier, agent_identity)
+        .await?
+        .inputs)
 }
 
 pub(crate) async fn pending_ids_in_txn(

@@ -692,6 +692,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                             &db.node,
                             turn.lifecycle.request(),
                             &verifier,
+                            None,
                         )
                         .await
                         .unwrap();
@@ -957,10 +958,14 @@ async fn direct_user_steer_passes_ordinary_queue_without_consuming_it() {
         db.identity.clone(),
         authority,
     );
-    let snapshot =
-        super::super::intake::steering_snapshot(&db.node, active.lifecycle.request(), &verifier)
-            .await
-            .unwrap();
+    let snapshot = super::super::intake::steering_snapshot(
+        &db.node,
+        active.lifecycle.request(),
+        &verifier,
+        None,
+    )
+    .await
+    .unwrap();
     let selected = case.expected.expect("modeled steer selection");
     assert_eq!(snapshot.inputs.len(), 1);
     assert_eq!(snapshot.inputs[0].key, folded_input_key(&bound[&selected]));
@@ -1048,6 +1053,7 @@ async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
             &db.node,
             active.lifecycle.request(),
             &verifier,
+            None,
         )
         .await
         .unwrap();

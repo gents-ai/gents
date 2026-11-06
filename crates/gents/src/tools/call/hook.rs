@@ -1296,6 +1296,7 @@ pub struct DefraSessionHook {
 struct SteeringInputSource {
     request: crate::request::watcher::AgentRequest,
     verifier: crate::request::admission::AgentRequestAdmissionVerifier,
+    agent_identity: Arc<dyn crate::store::identity::NodeIdentity>,
     natural_finish_allowed: bool,
 }
 
@@ -1342,11 +1343,13 @@ impl DefraSessionHook {
         mut self,
         request: crate::request::watcher::AgentRequest,
         verifier: crate::request::admission::AgentRequestAdmissionVerifier,
+        agent_identity: Arc<dyn crate::store::identity::NodeIdentity>,
         natural_finish_allowed: bool,
     ) -> Self {
         self.steering_input_source = Some(Arc::new(SteeringInputSource {
             request,
             verifier,
+            agent_identity,
             natural_finish_allowed,
         }));
         self
@@ -2265,6 +2268,7 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
             &self.node,
             &source.request,
             &source.verifier,
+            Some(source.agent_identity.as_ref()),
         )
         .await?)
     }
@@ -2285,6 +2289,7 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
                 &self.node,
                 &source.request,
                 &source.verifier,
+                Some(source.agent_identity.as_ref()),
             )
             .await?,
         ))

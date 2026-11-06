@@ -179,6 +179,25 @@ impl DefraStreamWriter {
             close: None,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
+        let mut consumes_folded = crate::request::lifecycle::queue::FoldedConsumption::for_key(
+            request,
+            key,
+            lifecycle.folded_selection(),
+        );
+        if let (Some(consumption), Some((verifier, agent))) =
+            (consumes_folded.as_mut(), lifecycle.steering_admission())
+        {
+            consumption.require_verification();
+            if let Ok((candidate, admission)) = verifier
+                .verify_folded_for_claim(&consumption.folded_request_doc_id, agent)
+                .await
+            {
+                consumption.mark_verified();
+                if let Some(admission) = admission {
+                    consumption.bind_client_admission(candidate, admission);
+                }
+            }
+        }
         let plan = canonical::ProviderPublicationPlan {
             final_flush: Some(segment),
             message_key: crate::session::canonical_rows::authored_message_key(&request.doc_id, key),
@@ -189,11 +208,7 @@ impl DefraStreamWriter {
                 .context("authored publication is missing request deadline")?
                 .to_rfc3339(),
             background_calls: Vec::new(),
-            consumes_folded: crate::request::lifecycle::queue::FoldedConsumption::for_key(
-                request,
-                key,
-                lifecycle.folded_selection(),
-            ),
+            consumes_folded,
         };
         let published = canonical::publish_provider_turn_with_time(
             &self.node,

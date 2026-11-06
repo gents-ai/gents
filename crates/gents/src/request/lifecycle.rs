@@ -551,6 +551,10 @@ pub struct RequestLifecycle {
     execution_lease_duration_secs: u64,
     renewal_task: Option<execution_renewal::RenewalTask>,
     client_claim_admission: Option<crate::request::admission::ClientClaimAdmission>,
+    steering_admission: Option<(
+        crate::request::admission::AgentRequestAdmissionVerifier,
+        Arc<dyn crate::store::identity::NodeIdentity>,
+    )>,
     fold_admitted: Vec<String>,
     folded_selection: Vec<queue::FoldedInput>,
     natural_finish_allowed: bool,
@@ -614,6 +618,27 @@ impl RequestLifecycle {
     ) {
         assert_eq!(self.state, LocalLifecycleState::Pending);
         self.client_claim_admission = admission;
+    }
+
+    pub(crate) fn set_steering_admission(
+        &mut self,
+        verifier: crate::request::admission::AgentRequestAdmissionVerifier,
+        agent: Arc<dyn crate::store::identity::NodeIdentity>,
+    ) {
+        assert_eq!(self.state, LocalLifecycleState::Pending);
+        assert_eq!(self.agent_did, agent.did());
+        self.steering_admission = Some((verifier, agent));
+    }
+
+    pub(crate) fn steering_admission(
+        &self,
+    ) -> Option<(
+        &crate::request::admission::AgentRequestAdmissionVerifier,
+        &dyn crate::store::identity::NodeIdentity,
+    )> {
+        self.steering_admission
+            .as_ref()
+            .map(|(verifier, agent)| (verifier, agent.as_ref()))
     }
 
     /// Pending requests whose signed admission the caller verified for this

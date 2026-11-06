@@ -78,6 +78,12 @@ pub(crate) struct FoldedConsumption {
     pub(crate) node_did: String,
     head: AgentRequest,
     selected_at_claim: bool,
+    client_admission: Option<(
+        AgentRequest,
+        crate::request::admission::ClientClaimAdmission,
+    )>,
+    verification_required: bool,
+    verified: bool,
 }
 
 impl FoldedConsumption {
@@ -93,7 +99,26 @@ impl FoldedConsumption {
             node_did: head.node_did.clone(),
             head: head.clone(),
             selected_at_claim: selected.iter().any(|entry| entry.request_doc_id == folded),
+            client_admission: None,
+            verification_required: false,
+            verified: false,
         })
+    }
+
+    pub(crate) fn bind_client_admission(
+        &mut self,
+        request: AgentRequest,
+        admission: crate::request::admission::ClientClaimAdmission,
+    ) {
+        self.client_admission = Some((request, admission));
+    }
+
+    pub(crate) fn require_verification(&mut self) {
+        self.verification_required = true;
+    }
+
+    pub(crate) fn mark_verified(&mut self) {
+        self.verified = true;
     }
 }
 
@@ -294,6 +319,21 @@ pub(crate) async fn consume_folded_in_txn(
                 .unwrap_or(&RequestInput::default())
                 .authored_message(row.content.as_deref().unwrap_or_default())?
     {
+        return Err(PendingInputChanged.into());
+    }
+    if consumption.verification_required && !consumption.verified {
+        return Err(PendingInputChanged.into());
+    }
+    if let Some((request, admission)) = consumption.client_admission.as_ref() {
+        if request.doc_id != consumption.folded_request_doc_id
+            || !matches!(
+                admission.authorize_in_txn(txn, request).await?,
+                crate::request::admission::ClientClaimAuthorization::Allowed
+            )
+        {
+            return Err(PendingInputChanged.into());
+        }
+    } else if row.admission_kind.as_deref() == Some("client") {
         return Err(PendingInputChanged.into());
     }
     let doc_id = escape_graphql_string(&consumption.folded_request_doc_id);

@@ -78,6 +78,10 @@ where
         );
         lifecycle.bind_managed_agent(self.agent_config.agent_identity.as_ref())?;
         lifecycle.set_client_claim_admission(client_claim);
+        lifecycle.set_steering_admission(
+            self.request_admission.clone(),
+            self.agent_config.agent_identity.clone(),
+        );
         lifecycle.set_execution_lease_duration(self.agent_config.stream_liveness_timeout);
         lifecycle.set_configured_max_total_tokens(self.agent_config.max_total_tokens);
         lifecycle.set_fold_admitted(self.verified_fold_admissions(&request).await);

@@ -278,6 +278,7 @@ where
                     .with_steering_inputs(
                         request.clone(),
                         self.request_admission.clone(),
+                        self.agent_config.agent_identity.clone(),
                         lifecycle.natural_finish_allowed(),
                     );
                     let hook = match &self.job_driver {

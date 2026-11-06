@@ -439,7 +439,7 @@ pub async fn sign_agent_request_create_as_registered_target(
 }
 
 /// Immutable signed admission retained until the native claim transaction.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct ClientClaimAdmission {
     row: AgentRequestRow,
 }
@@ -679,6 +679,17 @@ impl AgentRequestAdmissionVerifier {
             Some(agent_identity),
         )
         .await
+    }
+
+    pub(crate) async fn verify_folded_for_claim(
+        &self,
+        document: &str,
+        agent_identity: &dyn NodeIdentity,
+    ) -> AdmissionResult<(AgentRequest, Option<ClientClaimAdmission>)> {
+        let row = load_signed_request_as(&self.node, document, agent_identity.did()).await?;
+        let request = AgentRequest::try_from(row).map_err(AgentRequestAdmissionError::denied)?;
+        self.verify_fresh_for_claim_with_identity(&request, agent_identity)
+            .await
     }
 
     #[cfg(test)]
