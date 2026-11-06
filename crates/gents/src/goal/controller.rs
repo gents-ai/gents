@@ -216,3 +216,36 @@ pub(crate) async fn fence_goal_continuation_claim_in_txn(
     )
     .await
 }
+
+#[cfg(test)]
+mod client_goal_binding_tests {
+    use super::*;
+
+    #[test]
+    fn generated_client_goal_claim_requires_the_physical_assignment() {
+        let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+        let cases = snapshot.request_input_cases[0]["client_goal_claim_binding_cases"]
+            .as_array()
+            .unwrap();
+        assert_eq!(cases.len(), 8);
+        for case in cases {
+            let visible = case["visible"].as_bool().unwrap();
+            let matches = case["matches"].as_bool().unwrap();
+            let root = case["root"].as_bool().unwrap();
+            let goal: GoalDocument = serde_json::from_value(serde_json::json!({
+                "_docID": "physical-goal",
+                "goal_id": if matches { "goal" } else { "other-goal" },
+                "session_id": "session",
+                "node_did": "node",
+                "status": "active",
+                "assignment_root_request_doc_id": root.then_some("physical-root"),
+            }))
+            .unwrap();
+            assert_eq!(
+                client_goal_claim_binding(visible.then_some(&goal), Some("goal")),
+                case["expected"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+    }
+}
