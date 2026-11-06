@@ -91,7 +91,12 @@ impl ConfigReferences {
         let mut documents = Vec::new();
         for collection in Collection::ALL {
             let name = collection.graphql_type();
-            let fields = config_projection(collection, None)?.0.join(" ");
+            let fields = if collection == Collection::InferenceBackend {
+                crate::store::config_client::backend_metadata_fields()?
+            } else {
+                config_projection(collection, None)?.0
+            }
+            .join(" ");
             let response = txn
                 .execute(&format!(
                     r#"{{ {name}(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ {fields} }} }}"#,
@@ -103,7 +108,16 @@ impl ConfigReferences {
                 .and_then(|data| data.get(name))
                 .and_then(Value::as_array)
                 .with_context(|| format!("{name} configuration query did not return rows"))?;
-            documents.extend(rows.iter().cloned().map(|row| (collection, row)));
+            for row in rows {
+                let value = if collection == Collection::InferenceBackend {
+                    let metadata: InferenceBackendMetadata = serde_json::from_value(row.clone())
+                        .context("decoding backend metadata in configuration references")?;
+                    serde_json::to_value(metadata.into_backend()?)?
+                } else {
+                    row.clone()
+                };
+                documents.push((collection, value));
+            }
         }
         Self::from_documents(node_did, documents)
     }
