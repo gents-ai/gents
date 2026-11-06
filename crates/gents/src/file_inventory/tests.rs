@@ -107,8 +107,27 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
                 .unwrap()
                 .unwrap();
         assert_ne!(reader.did(), tool.requester_did().unwrap());
-        let reader_access = ConfigAccess::local_as(node.clone(), reader.did().parse().unwrap());
-        let session = reader_access
+        let reader_did: identity::Did = reader.did().parse().unwrap();
+        let admin = ConfigAccess::local_as(node.clone(), fixture.node_did.parse().unwrap());
+        for permission in [
+            crate::store::config_client::NodePermission::DocumentRead,
+            crate::store::config_client::NodePermission::CollectionGet,
+        ] {
+            admin
+                .grant_node_permission(&reader_did, permission)
+                .await
+                .unwrap();
+        }
+        let user_did = identity::Did::new(&fixture.client.actor_did().unwrap()).unwrap();
+        admin
+            .grant_node_permission(
+                &user_did,
+                crate::store::config_client::NodePermission::DacRelationDelete,
+            )
+            .await
+            .unwrap();
+        let session = fixture
+            .client
             .transact_readonly("test.inventory.direct_session", |txn| {
                 let tool = &tool;
                 Box::pin(async move {
@@ -123,6 +142,12 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
             .await
             .unwrap()
             .unwrap();
+        fixture
+            .client
+            .add_actor_relationship("AgentSession", &session.doc_id, "reader", &reader_did)
+            .await
+            .unwrap();
+        let reader_access = ConfigAccess::local_as(node.clone(), reader_did.clone());
         let mut admission = FileInventoryAdmission {
             request: HydrationRequest {
                 request_key: name.into(),
@@ -146,10 +171,10 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
                     after: metadata(&change["after"]),
                 })
                 .collect::<Vec<_>>();
-            let owner: ::identity::Did = if projection["owner"] == model_tool["agent_did"] {
-                tool.actor().clone()
+            let projection_access = if projection["owner"] == model_tool["agent_did"] {
+                tool.access().unwrap()
             } else {
-                fixture.node_did.parse().unwrap()
+                admin.clone()
             };
             let input = json!({
                 "tool_call_doc_id": tool.doc_id().unwrap(),
@@ -159,7 +184,7 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
                 "observation_doc_id": document(&projection["observation"]),
                 "changes": changes,
             });
-            let id = ConfigAccess::local_as(node.clone(), owner.clone())
+            let id = projection_access
                 .transact_write("test.inventory.direct_projection", |txn| {
                     let input = &input;
                     Box::pin(async move {
@@ -170,55 +195,28 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
                         crate::store::graphql::created_doc_id(&response, "ToolFileInventory")
                     })
                 }).await.unwrap();
-            node.add_dac_actor_relationship(
-                owner.as_str(),
-                "ToolFileInventory",
-                &id,
-                "reader",
-                reader.did(),
-            )
-            .await
-            .unwrap();
+            for subject in [&reader_did, &user_did] {
+                projection_access
+                    .add_actor_relationship("ToolFileInventory", &id, "reader", subject)
+                    .await
+                    .unwrap();
+            }
         }
-        let denied_node = if case["source"]["catalog"]["session_reads"]
+        let denies_session = case["source"]["catalog"]["session_reads"]
             .as_array()
-            .is_some_and(|reads| reads.iter().any(|read| read["visible"] == false))
-        {
-            let denied =
-                std::sync::Arc::new(defra_node::Node::builder().build().await.unwrap());
-            let policy = denied
-                .add_dac_policy_as(
-                    &defra_core::RequestContext::default()
-                        .with_identity(Some(fixture.node_did.clone())),
-                    "name: Inventory session read\nresources:\n  - name: sessions\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n",
+            .is_some_and(|reads| reads.iter().any(|read| read["visible"] == false));
+        if denies_session {
+            fixture
+                .client
+                .delete_actor_relationship(
+                    "AgentSession",
+                    &admission.session_doc_id,
+                    "reader",
+                    &reader_did,
                 )
                 .await
                 .unwrap();
-            let schema = gents_protocol::schemas::AGENT_SESSION.replace(
-                "type AgentSession ",
-                &format!("type AgentSession @policy(id: \"{policy}\", resource: \"sessions\") "),
-            );
-            ConfigAccess::local(denied.clone())
-                .add_collection(&schema)
-                .await
-                .unwrap();
-            let owner = ConfigAccess::local_as(denied.clone(), tool.actor().clone());
-            let input = json!({"session_id": tool.session_id(), "node_did": tool.node_did(),
-                "requester_did": tool.requester_did(), "agent_did": tool.actor().as_str(),
-                "created_at": "2026-10-24T00:00:00Z"});
-            admission.session_doc_id = owner.transact_write("test.inventory.denied_session", |txn| {
-                let input = &input;
-                Box::pin(async move {
-                    let result = txn.execute_with_variables(
-                        "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
-                        &json!({"input": input})).await?;
-                    crate::store::graphql::created_doc_id(&result, "AgentSession")
-                })
-            }).await.unwrap();
-            Some(denied)
-        } else {
-            None
-        };
+        }
         let access = if case["actor"] == "" {
             ConfigAccess::local(node.clone())
         } else if case["actor"] != case["admission"]["requester"]
@@ -226,10 +224,7 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
         {
             ConfigAccess::local_as(node.clone(), fixture.node_did.parse().unwrap())
         } else {
-            ConfigAccess::local_as(
-                denied_node.as_ref().unwrap_or(&node).clone(),
-                reader.did().parse().unwrap(),
-            )
+            reader_access
         };
         let result = FileInventorySnapshot::load_on(&access, &admission).await;
         assert_eq!(
@@ -254,6 +249,7 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
                 assert_eq!(entry.tool_call_doc_id, tool.doc_id().unwrap());
             }
         }
+        let original_session_doc_id = admission.session_doc_id.clone();
         admission.session_doc_id = "wrong-physical-session".into();
         assert_eq!(
             FileInventorySnapshot::load_on(&access, &admission)
@@ -262,8 +258,44 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
             case["wrong_physical_expected"]["kind"] == "selected",
             "{name}"
         );
-        if let Some(denied) = denied_node {
-            denied.shutdown().await.expect("denied node shutdown");
+        if case["expected"]["kind"] == "selected" {
+            let direct = gents_protocol::file_inventory::DirectFileInventoryRequest {
+                node_did: tool.node_did().to_owned(),
+                session_id: tool.session_id().to_owned(),
+                peer_id: "direct-reader".into(),
+                action: Default::default(),
+            };
+            assert!(super::read_direct_inventory(&access, &direct)
+                .await
+                .unwrap()
+                .is_some());
+            let user_access = ConfigAccess::local_as(node.clone(), user_did.clone());
+            assert!(super::read_direct_inventory(&user_access, &direct)
+                .await
+                .unwrap()
+                .is_some());
+            fixture
+                .client
+                .delete_actor_relationship(
+                    "AgentSession",
+                    &original_session_doc_id,
+                    "reader",
+                    &reader_did,
+                )
+                .await
+                .unwrap();
+            let after = super::read_direct_inventory(&access, &direct).await;
+            assert!(
+                matches!(after, Ok(None) | Err(_)),
+                "revocation must hide inventory metadata"
+            );
+            assert!(
+                super::read_direct_inventory(&user_access, &direct)
+                    .await
+                    .unwrap()
+                    .is_some(),
+                "revoking a shared reader must not revoke the User owner"
+            );
         }
         node.shutdown().await.expect("node shutdown");
         tokio::fs::remove_dir_all(fixture.path).await.unwrap();
