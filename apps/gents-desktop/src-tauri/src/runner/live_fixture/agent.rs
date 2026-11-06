@@ -1,25 +1,21 @@
 #[path = "inference.rs"]
 mod inference;
 
+use anyhow::{Context, Result};
+use gents::eval::runner::embedded::EmbeddedHome;
+use gents::{
+    cli_tool, default_inference_profile_id_for_agent, DocumentRuntimeOptions, Gents,
+    InferenceBackend, ToolCeiling,
+};
+use gents_desktop_core::client::PrincipalIdentity;
+use gents_protocol::row::{decode_node_readiness_snapshot, NodeReadinessRow};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-
-use anyhow::{Context, Result};
-use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use gents::{
-    cli_tool, default_inference_profile_id_for_agent, DocumentRuntimeOptions, Gents,
-    InferenceBackend, NodeIdentity, ToolCeiling,
-};
-use gents_desktop_core::client::ClientCore;
-use gents_protocol::row::{decode_node_readiness_snapshot, NodeReadinessRow};
-use serde_json::Value;
 use tokio::sync::watch;
-use tracing::Instrument;
 
 use super::backend::LiveBackendConfig;
 use super::workspace::seed_repo_workspace;
-use super::DEFAULT_DEPLOYMENT_LABEL;
 
 #[derive(Debug, Clone)]
 pub(crate) struct LiveAgentDocs {
@@ -46,8 +42,8 @@ impl RunningNode {
 }
 
 pub(super) async fn spawn_live_node(
-    node_owner: Arc<ClientCore>,
-    config_actor_did: &str,
+    home: &EmbeddedHome,
+    config_actor: &PrincipalIdentity,
     agent_root: PathBuf,
     name: &str,
     backend: &LiveBackendConfig,
@@ -58,21 +54,15 @@ pub(super) async fn spawn_live_node(
         .with_context(|| format!("creating live tool root {}", tool_root.display()))?;
     seed_repo_workspace(&tool_root)?;
 
-    let identity: Arc<dyn NodeIdentity> = Arc::new(node_owner.node_identity().clone());
-    let node_did = identity.did().to_string();
-    let docs = seed_live_agent_documents(
-        node_owner.as_ref(),
-        config_actor_did,
-        &node_did,
-        name,
-        backend,
-        target_backend,
-    )
-    .await?;
+    let node_did = home.identity.did().to_string();
+    let docs =
+        seed_live_agent_documents(home, config_actor, &node_did, name, backend, target_backend)
+            .await?;
     let agent = Gents::from_default_agent_documents(
-        node_owner.node_arc(),
-        identity,
+        home.node.clone(),
+        Arc::clone(&home.identity),
         DocumentRuntimeOptions {
+            backend_admission: Some(home.backend_admission()),
             tool_ceiling: ToolCeiling::readwrite(tool_root.clone())
                 .with_command_timeout_secs(30)
                 .with_cli_tool(cli_tool("rg", "rg", "Search files with ripgrep")),
@@ -82,12 +72,8 @@ pub(super) async fn spawn_live_node(
     .await?;
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let run_task = tokio::spawn(agent.run(shutdown_rx).instrument(tracing::info_span!(
-        "live_bridge_node",
-        deployment_label = %DEFAULT_DEPLOYMENT_LABEL,
-        node_did = %node_did
-    )));
-    wait_for_runtime_process_state(node_owner.node(), &node_did, "ready").await?;
+    let run_task = tokio::spawn(agent.run(shutdown_rx));
+    wait_for_runtime_process_state(home, &node_did).await?;
 
     Ok((
         RunningNode {
@@ -101,8 +87,8 @@ pub(super) async fn spawn_live_node(
 }
 
 async fn seed_live_agent_documents(
-    core: &ClientCore,
-    config_actor_did: &str,
+    home: &EmbeddedHome,
+    config_actor: &PrincipalIdentity,
     node_did: &str,
     agent_name: &str,
     backend: &LiveBackendConfig,
@@ -111,12 +97,70 @@ async fn seed_live_agent_documents(
     use gents::documents::PackConfig;
     use gents::store::config_client::{
         apply_desired_state_plan, load_inference_backend_in_txn, ConfigAccess,
-        DesiredStateApplyPlan,
+        DesiredStateApplyDocument, DesiredStateApplyPlan, GraphqlEndpoint, NodePermission,
     };
     use serde_json::json;
     let inference = inference::LiveInferenceSettings::from_env()?;
-    let binding = gents::store::identity::provision_agent_identity(core.node_identity())?;
-    let target_binding = gents::store::identity::provision_agent_identity(core.node_identity())?;
+    let config_actor_did = config_actor.did();
+    anyhow::ensure!(
+        home.node.node_identity_did() == Some(node_did),
+        "runtime node identity mismatch"
+    );
+    anyhow::ensure!(
+        node_did != config_actor_did,
+        "runtime and User identities must differ"
+    );
+    let actor_did = config_actor_did.parse()?;
+    let runtime_access = ConfigAccess::local_as(home.node.clone(), node_did.parse()?);
+    for permission in [
+        NodePermission::CollectionGet,
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::DocumentDelete,
+        NodePermission::DacRelationAdd,
+        NodePermission::DacRelationDelete,
+    ] {
+        runtime_access
+            .grant_node_permission(&actor_did, permission)
+            .await?;
+    }
+    let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        config_actor.private_key_bytes(),
+    )?;
+    let access = ConfigAccess::Graphql(
+        GraphqlEndpoint::as_principal(
+            home.graphql_endpoint()
+                .context("runtime HTTP endpoint missing")?,
+            config_actor_did,
+        )
+        .with_client_signing_capability(capability)?
+        .with_client_signed_agent_creates(),
+    );
+    let node_input =
+        json!({"node_did":node_did,"display_name":agent_name,"created_by":config_actor_did});
+    let initial = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: gents::Collection::Node,
+        add: node_input.clone(),
+        update: node_input,
+    }])?;
+    access
+        .transact_write("desktop.fixture.node", |txn| {
+            let initial = &initial;
+            Box::pin(async move { apply_desired_state_plan(txn, initial).await })
+        })
+        .await?;
+    let binding = gents::store::identity::provision_agent_identity_authorized(
+        &home.node,
+        home.identity.as_ref(),
+        &actor_did,
+    )
+    .await?;
+    let target_binding = gents::store::identity::provision_agent_identity_authorized(
+        &home.node,
+        home.identity.as_ref(),
+        &actor_did,
+    )
+    .await?;
     let agent_did = binding.agent_did;
     let target_agent_did = target_binding.agent_did;
     let backend_id = format!("{agent_name}-backend");
@@ -164,7 +208,6 @@ async fn seed_live_agent_documents(
         "compactions":[{"node_did":node_did,"compaction_id":compaction_id,"strategy":"StripThenSummarize","threshold":0.95}]
     });
     inference.apply(&mut config);
-    let access = ConfigAccess::local_as(core.node_arc(), config_actor_did.parse()?);
     access
         .transact_write("desktop.fixture.config", |txn| {
             let mut config = config.clone();
@@ -193,7 +236,6 @@ async fn seed_live_agent_documents(
             })
         })
         .await?;
-    core.refresh_store().await?;
     Ok(LiveAgentDocs {
         agent_did,
         target_agent_did,
@@ -251,44 +293,27 @@ fn live_backend_candidate(
     Ok(candidate)
 }
 
-async fn wait_for_runtime_process_state(
-    node: &gents::defra_node::Node,
-    node_did: &str,
-    expected_process_state: &str,
-) -> Result<()> {
-    let escaped_node_did = escape_graphql_string(node_did);
+async fn wait_for_runtime_process_state(home: &EmbeddedHome, node_did: &str) -> Result<()> {
+    let access = gents::ConfigAccess::local_as(home.node.clone(), node_did.parse()?);
+    let query = format!(
+        r#"{{ NodeReadiness(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{ node_did snapshot_json updated_at }} }}"#,
+        gents::store::graphql::escape_graphql_string(node_did)
+    );
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
-        let query = format!(
-            r#"{{
-                NodeReadiness(
-                    filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
-                    limit: 1
-                ) {{
-                    node_did
-                    snapshot_json
-                    updated_at
-                }}
-            }}"#
-        );
-        let response = graphql_with_transaction_retry(node, &query, "NodeReadiness query").await?;
-        let process_state = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("NodeReadiness"))
-            .and_then(Value::as_array)
+        let response = access.execute(&query).await?;
+        let process_state = response["data"]["NodeReadiness"]
+            .as_array()
             .and_then(|rows| rows.first())
             .cloned()
             .and_then(|row| serde_json::from_value::<NodeReadinessRow>(row).ok())
             .and_then(|row| decode_node_readiness_snapshot(&row, node_did).ok())
             .map(|snapshot| snapshot.process_state);
-        if process_state.map(|state| state.as_str()) == Some(expected_process_state) {
+        if process_state.map(|state| state.as_str()) == Some("ready") {
             return Ok(());
         }
         if tokio::time::Instant::now() >= deadline {
-            anyhow::bail!(
-                "timed out waiting for NodeReadiness {node_did} to reach process_state={expected_process_state}; last={process_state:?}"
-            );
+            anyhow::bail!("timed out waiting for NodeReadiness {node_did} to reach ready; last={process_state:?}");
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }

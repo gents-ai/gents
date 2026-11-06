@@ -4517,6 +4517,7 @@ dependencies = [
  "block2",
  "chrono",
  "clap",
+ "defra-p2p-adapter",
  "gents",
  "gents-cli",
  "gents-desktop-bridge",

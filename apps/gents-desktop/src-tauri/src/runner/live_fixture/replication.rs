@@ -1,17 +1,19 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use defra_p2p_adapter::P2POperations;
 use gents_desktop_core::client::{ClientCore, DesktopPaths, PeerRecord};
 
 use super::agent::LiveAgentDocs;
 
-pub(super) async fn wait_for_connectable_iroh_addr(
-    core: &ClientCore,
+pub(super) async fn wait_for_runtime_iroh_addr(
+    p2p: &Arc<dyn P2POperations>,
     label: &str,
 ) -> Result<String> {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        let addrs = core.p2p().listen_addresses().await?;
+        let addrs = p2p.listen_addresses().await?;
         if let Some(addr) = addrs
             .iter()
             .find(|addr| addr.contains("/p2p/") || addr.starts_with("endpoint"))
@@ -25,15 +27,14 @@ pub(super) async fn wait_for_connectable_iroh_addr(
     }
 }
 
-pub(super) async fn connect_live_peers(
+pub(super) async fn connect_runtime_peer(
     desktop_core: &ClientCore,
-    remote_core: &ClientCore,
+    runtime_p2p: &Arc<dyn P2POperations>,
     label: &str,
 ) -> Result<()> {
-    let desktop_addr = wait_for_connectable_iroh_addr(desktop_core, "desktop").await?;
-    let remote_addr = wait_for_connectable_iroh_addr(remote_core, label).await?;
-    let desktop_peer_id = desktop_core.local_peer_id().to_string();
-    let remote_peer_id = remote_core.local_peer_id().to_string();
+    let desktop_addr = wait_for_runtime_iroh_addr(desktop_core.p2p(), "desktop").await?;
+    let remote_addr = wait_for_runtime_iroh_addr(runtime_p2p, label).await?;
+    let remote_peer_id = runtime_p2p.local_peer_id().await?;
 
     connect_peer_with_retry(
         desktop_core,
@@ -42,13 +43,7 @@ pub(super) async fn connect_live_peers(
         &format!("desktop -> {label}"),
     )
     .await?;
-    connect_peer_with_retry(
-        remote_core,
-        &desktop_addr,
-        &desktop_peer_id,
-        &format!("{label} -> desktop"),
-    )
-    .await?;
+    runtime_p2p.connect_peer(&desktop_addr).await?;
     Ok(())
 }
 
@@ -156,7 +151,7 @@ pub(super) async fn wait_for_live_documents(
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
-        desktop_core.refresh_store().await?;
+        desktop_core.refresh_node(node_did).await?;
         let snapshot = desktop_core.store().snapshot();
         let has_node = snapshot.nodes.iter().any(|row| row.node_did == node_did);
         let has_agent = snapshot

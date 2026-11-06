@@ -318,10 +318,7 @@ impl EmbeddedHome {
         self.node_acp_enabled
     }
 
-    #[cfg(test)]
-    pub(crate) fn backend_admission(
-        &self,
-    ) -> crate::store::local::backend_protection::BackendAdmission {
+    pub fn backend_admission(&self) -> crate::store::local::backend_protection::BackendAdmission {
         self.backend_admission.clone()
     }
 

@@ -14,8 +14,11 @@ pub(super) fn seed_runner_node_home(
     std::fs::write(
         node_home.join("init.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
+            "home": node_home,
             "node_name": node_name,
             "node_did": node_did,
+            "key_path": node_home.join("node.key"),
+            "identity_backend": "file",
         }))?,
     )?;
     std::fs::write(

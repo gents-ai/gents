@@ -18,6 +18,7 @@ tauri-build = { version = "2", features = [] }
 anyhow.workspace = true
 clap.workspace = true
 chrono.workspace = true
+defra-p2p-adapter.workspace = true
 gents = { path = "../../../crates/gents" }
 gents-fs-runner = { path = "../../../crates/gents-fs-runner" }
 gents-desktop-bridge = { workspace = true }
