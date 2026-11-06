@@ -335,22 +335,27 @@ async fn modeled_provider_inputs_recheck_backend_metadata_as_agent() -> anyhow::
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
-    let user = &case
-        .objects
-        .iter()
-        .find(|object| object.id == "home")
-        .unwrap()
-        .owner;
     let agent = &case
         .objects
         .iter()
         .find(|object| object.id == "agent-created")
         .unwrap()
         .owner;
-    let node = Arc::new(defra_node::Node::builder().build().await?);
+    let directory = tempfile::tempdir()?;
+    let key_path = directory.path().join("node");
+    let owner =
+        tokio::task::spawn_blocking(move || crate::KeyIdentity::load_or_create(key_path, None))
+            .await??;
+    let user = owner.did();
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(user)
+            .build()
+            .await?,
+    );
     let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user)?);
     let actor = identity::Did::new(agent)?;
-    let context = defra_core::RequestContext::default().with_identity(Some(user.clone()));
+    let context = defra_core::RequestContext::default().with_identity(Some(user.to_owned()));
     let policy = node
         .add_dac_policy_with_counter_as(&context, &case.policy_yaml, 0)
         .await?;
