@@ -289,27 +289,117 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
         .unwrap();
     let expected = OutcomeKind::parse(case["outcome"].as_str().unwrap()).unwrap();
     let runs = tempfile::tempdir().unwrap();
-    let home = EmbeddedHome::create_retained(&runs.path().join("trial/home"))
+    let trial_dir = runs.path().join("trial");
+    let pack_dir = trial_dir.join("pack");
+    write_slot_pack(&pack_dir, "gents:inference-slot:primary");
+    let workspace = trial_dir.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let mut spec = TrialSpec {
+        pack_digest: materialized_digest(&pack_dir),
+        pack_dir,
+        agent_slot: "subject".into(),
+        inference: frozen_binding(json!("frozen-profile")),
+        ..TrialSpec::empty_for_tests("recollect")
+    };
+    let mut home = EmbeddedHome::create_trial_retained(&trial_dir.join("home"))
         .await
         .unwrap();
-    for state in ["pending", "processing"] {
-        seed_request_with_state(&home, &format!("retained-{state}"), state).await;
-    }
+    let evaluator = bind_test_evaluator(&mut spec, &mut home);
+    let agent_did = install(&spec, &home, &workspace).await.unwrap();
     let locator = TrialLocator {
         trial_node_did: home.did().to_owned(),
         session_id: "s-1".into(),
         home_hint: Some("trial".into()),
     };
+    let stage = StageSpec {
+        stage_id: "retained".into(),
+        prompt: "x".into(),
+        seed: None,
+        deadline_secs: None,
+        settle: false,
+        continuation: None,
+        review_previous: false,
+        captures: Vec::new(),
+    };
+    for state in ["pending", "processing"] {
+        super::submit::submit_stage(
+            &home,
+            &spec.evaluator_did,
+            &locator,
+            &agent_did,
+            &stage,
+            &format!("retained-{state}"),
+        )
+        .await
+        .unwrap();
+    }
+    let client = home.client_access(&spec.evaluator_did).unwrap();
+    let agents = client
+        .execute("{ Agent { agent_did creation_nonce } }")
+        .await
+        .unwrap();
+    let binding: gents_protocol::agent_identity::AgentIdentityBinding = serde_json::from_value(
+        agents["data"]["Agent"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["agent_did"] == agent_did)
+            .unwrap()
+            .clone(),
+    )
+    .unwrap();
+    let agent =
+        crate::store::identity::resolve_agent_identity(home.identity.as_ref(), &binding).unwrap();
+    let agent_access = crate::ConfigAccess::local_managed_agent(
+        home.node.clone(),
+        ::identity::Did::new(&agent_did).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let response = agent_access.execute(&format!(
+        r#"{{ AgentRequest(filter: {{request_id: {{_eq: "retained-processing"}}}}) {{ {} }} }}"#,
+        crate::request::watcher::AGENT_REQUEST_FIELDS,
+    )).await.unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+    let request = row.try_into().unwrap();
+    let (_authority_owner, authority) =
+        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        home.node.clone(),
+        home.identity.clone(),
+        authority,
+    );
+    let (request, admission) = verifier
+        .verify_fresh_for_claim_with_identity(&request, agent.as_ref())
+        .await
+        .unwrap();
+    let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
+        home.node.clone(),
+        &agent_did,
+        home.did(),
+        request,
+        60,
+    );
+    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
+    lifecycle.set_client_claim_admission(admission);
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        crate::request::lifecycle::ClaimOutcome::Claimed
+    );
+    drop(lifecycle);
+    drop(verifier);
+    drop(agent_access);
     let subject = crate::eval::runner::subject_binding::SubjectAgent {
         slot: "subject".into(),
-        agent_did: "seeded-agent".into(),
+        agent_did,
     };
     crate::eval::runner::view::write_evidence_record(
         &runs.path().join("trial"),
         &crate::eval::runner::view::EvidenceRecord {
             evidence_digest: "retained".into(),
             subject_agent: Some(subject.clone()),
-            evaluator_did: Some(home.did().to_owned()),
+            evaluator_did: Some(spec.evaluator_did.clone()),
             anchor: crate::eval::Anchor {
                 terminal_states: vec![],
                 requests: 2,
@@ -327,6 +417,10 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
         DocumentRuntimeOptions::default(),
         runs.path().to_owned(),
         crate::test_support::runtime_handle(),
+    )
+    .with_evaluator_identity(
+        evaluator.clone(),
+        evaluator.client_signing_capability().unwrap(),
     );
     let capture = Capture::Documents {
         name: "subject-requests".into(),
@@ -359,19 +453,44 @@ async fn recollect_refuses_a_home_hint_outside_the_runs_directory() {
     let dir = tempfile::tempdir().unwrap();
     let runs_dir = dir.path().join("runs");
     let outside = dir.path().join("outside");
-    close(
-        EmbeddedHome::create_retained(&outside.join("home"))
-            .await
-            .unwrap(),
+    let mut home = EmbeddedHome::create_trial_retained(&outside.join("home"))
+        .await
+        .unwrap();
+    let mut spec = TrialSpec::empty_for_tests("recollect-paths");
+    let evaluator = bind_test_evaluator(&mut spec, &mut home);
+    super::install::grant_trial_operations(&home, &spec.evaluator_did)
+        .await
+        .unwrap();
+    let node_did = home.did().to_owned();
+    crate::eval::runner::view::write_evidence_record(
+        &outside,
+        &crate::eval::runner::view::EvidenceRecord {
+            evidence_digest: "retained".into(),
+            subject_agent: None,
+            evaluator_did: Some(spec.evaluator_did.clone()),
+            anchor: crate::eval::Anchor {
+                terminal_states: vec![],
+                requests: 0,
+                inference_calls: 0,
+            },
+            ended_at: None,
+            live: None,
+            goal: vec![],
+        },
     )
-    .await;
+    .unwrap();
+    close(home).await;
     let executor = EmbeddedExecutor::new(
         DocumentRuntimeOptions::default(),
         runs_dir.clone(),
         crate::test_support::runtime_handle(),
+    )
+    .with_evaluator_identity(
+        evaluator.clone(),
+        evaluator.client_signing_capability().unwrap(),
     );
     let locator = |hint: &str| TrialLocator {
-        trial_node_did: "did:key:zAny".to_string(),
+        trial_node_did: node_did.clone(),
         session_id: "s-1".to_string(),
         home_hint: Some(hint.to_string()),
     };
