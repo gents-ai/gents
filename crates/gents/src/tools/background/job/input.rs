@@ -793,6 +793,56 @@ pub(crate) mod tests {
         node
     }
 
+    /// `open()` plus the runtime Node document and the fixture Agent installed
+    /// under the node identity, as signed fixtures install them.
+    pub(crate) async fn open_with_agent() -> Arc<EmbeddedNode> {
+        let node = open().await;
+        let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(node_did()).unwrap());
+        crate::test_support::bootstrap_signed_test_node(&owner, node_did()).await;
+        crate::test_support::install_test_agent_binding_with_access(
+            node_did(),
+            "Job fixture agent",
+            agent_binding(),
+            &owner,
+        )
+        .await;
+        node
+    }
+
+    /// Inserts a document through `access` and returns its doc id. Rows owned
+    /// by an Agent must be written through that Agent's access.
+    pub(crate) async fn insert_as(access: &ConfigAccess, collection: &str, value: Value) -> String {
+        access
+            .transact_write("test.plugin_job_children", |txn| {
+                let value = &value;
+                Box::pin(async move {
+                    let query = format!(
+                        "mutation($input: {collection}MutationInputArg!) {{create_{collection}(input:$input){{_docID}}}}"
+                    );
+                    let response = txn
+                        .execute_with_variables(&query, &json!({ "input": value }))
+                        .await?;
+                    Ok::<_, anyhow::Error>(gents_protocol::graphql::extract_mutation_doc_id(&response, collection)?)
+                })
+            })
+            .await
+            .unwrap()
+    }
+
+    async fn doc_id_of(access: &ConfigAccess, collection: &str, field: &str, value: &str) -> String {
+        let response = access
+            .execute(&format!(
+                r#"{{ {collection}(filter: {{ {field}: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                crate::store::graphql::escape_graphql_string(value)
+            ))
+            .await
+            .unwrap();
+        response["data"][collection][0]["_docID"]
+            .as_str()
+            .expect("fixture document exists")
+            .to_owned()
+    }
+
     pub(crate) async fn insert(
         node: &std::sync::Arc<EmbeddedNode>,
         collection: &str,
@@ -1190,15 +1240,16 @@ pub(crate) mod tests {
         retry_key: &str,
         text: &str,
     ) {
-        let node_did = "did:test:test";
-        insert(
-            node,
+        let agent = agent_access(node);
+        let node_did = node_did();
+        insert_as(
+            &agent,
             "AgentRequest",
             json!({
                 "request_id": request_id,
                 "purpose": "normal",
                 "node_did": node_did,
-                "agent_did": "general",
+                "agent_did": agent_did(),
                 "session_id": session_id,
                 "retry_parent_request": "",
                 "retry_root_request": request_id,
@@ -1220,23 +1271,23 @@ pub(crate) mod tests {
             }),
         )
         .await;
-        let row = node
+        let response = agent
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
                 crate::request::watcher::AGENT_REQUEST_FIELDS,
             ))
-            .await;
+            .await
+            .unwrap();
         let row: gents_protocol::row::AgentRequestRow =
-            crate::store::graphql::first_row(&row, "AgentRequest")
-                .unwrap()
-                .unwrap();
+            serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
         let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
             node.clone(),
-            "general",
+            agent_did(),
             node_did,
             row.try_into().unwrap(),
             60,
         );
+        lifecycle.bind_managed_agent(managed_agent().as_ref()).unwrap();
         assert_eq!(
             lifecycle.claim().await.unwrap(),
             crate::request::lifecycle::ClaimOutcome::Claimed
@@ -1278,7 +1329,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn batched_jobs_keep_their_own_result_caps_for_repeated_slots() {
-        let node = open().await;
+        let node = open_with_agent().await;
         for (chain, request_id) in [("first-row", "first-child"), ("second-row", "second-child")] {
             completed_request(
                 &node,
@@ -1290,7 +1341,7 @@ pub(crate) mod tests {
             )
             .await;
         }
-        let access = ConfigAccess::local(node.clone());
+        let access = agent_access(&node);
         let first = vec!["first-row".into(), "first-row".into()];
         let second = vec!["second-row".into()];
         let children =
@@ -1346,7 +1397,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn completed_child_reports_its_rendered_terminal_and_truncates_at_the_cap() {
-        let node = open().await;
+        let node = open_with_agent().await;
         let chain = "chain-row";
         completed_request(
             &node,
@@ -1357,7 +1408,7 @@ pub(crate) mod tests {
             "twelve bytes",
         )
         .await;
-        let access = ConfigAccess::local(node.clone());
+        let access = agent_access(&node);
         let whole = derive_children(&access, &[chain.into()], 64).await.unwrap();
         assert_eq!(whole[0].0.state, JobChildState::Completed);
         assert_eq!(whole[0].1.state, JobChildState::Completed);
@@ -1485,14 +1536,26 @@ pub(crate) mod tests {
         })
     }
 
+    pub(crate) fn agent_binding() -> &'static gents_protocol::agent_identity::AgentIdentityBinding {
+        static BINDING: std::sync::OnceLock<gents_protocol::agent_identity::AgentIdentityBinding> =
+            std::sync::OnceLock::new();
+        BINDING.get_or_init(|| {
+            crate::store::identity::provision_agent_identity(node_identity()).unwrap()
+        })
+    }
+
     pub(crate) fn managed_agent() -> &'static Arc<dyn crate::store::identity::NodeIdentity> {
         static AGENT: std::sync::OnceLock<Arc<dyn crate::store::identity::NodeIdentity>> =
             std::sync::OnceLock::new();
         AGENT.get_or_init(|| {
-            let binding =
-                crate::store::identity::provision_agent_identity(node_identity()).unwrap();
-            crate::store::identity::resolve_agent_identity(node_identity(), &binding).unwrap()
+            crate::store::identity::resolve_agent_identity(node_identity(), agent_binding()).unwrap()
         })
+    }
+
+    /// The fixture Agent's own access, which reads and writes the rows it owns.
+    pub(crate) fn agent_access(node: &Arc<EmbeddedNode>) -> ConfigAccess {
+        ConfigAccess::local_managed_agent(node.clone(), agent_actor(), managed_agent().as_ref())
+            .unwrap()
     }
 
     pub(crate) fn node_did() -> &'static str {
@@ -1616,42 +1679,30 @@ pub(crate) mod tests {
         settings: Option<&PluginJobSettings>,
         request_cwd: Option<&str>,
     ) -> Job {
-        let node = open().await;
+        let node = open_with_agent().await;
         let home = tempfile::tempdir().unwrap();
         let cwd = tempfile::tempdir().unwrap();
         crate::plugin::store::write_record(home.path(), &plugin()).unwrap();
+        let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(node_did()).unwrap());
         let tools: Tools = serde_json::from_value(json!({
-            "tools_id": "tools",
+            "tools_id": format!("{}:tools", agent_did()),
             "node_did": node_did(),
             "integrations": {"plugins": [{"plugin": "acme/engine", "job": settings}]},
         }))
         .unwrap();
-        let access = ConfigAccess::local(node.clone());
-        crate::store::config_client::write_tools_document(&access, &tools)
+        crate::store::config_client::write_tools_document(&owner, &tools)
             .await
             .unwrap();
-        insert(
-            &node,
-            "AgentContext",
-            json!({"context_id": "context", "node_did": node_did(), "tools_id": "tools"}),
-        )
-        .await;
-        let agent_doc = insert(
-            &node,
-            "Agent",
-            json!({"agent_did": agent_did(), "node_did": node_did(), "context_id": "context",
-                   "inference_profile_id": "inference", "enabled": true}),
-        )
-        .await;
+        let agent = agent_access(&node);
         let now = chrono::Utc::now().to_rfc3339();
-        let session_doc = insert(
-            &node,
+        let session_doc = insert_as(
+            &owner,
             "AgentSession",
             json!({"session_id": "session-1", "node_did": node_did(), "requester_did": null,
                    "agent_did": agent_did(), "created_at": now}),
         )
         .await;
-        let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(node_did()).unwrap());
+        let agent_doc = doc_id_of(&owner, "Agent", "agent_did", agent_did()).await;
         owner
             .add_actor_relationship("Agent", &agent_doc, "executor", &agent_actor())
             .await
@@ -1676,17 +1727,16 @@ pub(crate) mod tests {
         if let Some(cwd) = request_cwd {
             value["input"] = json!({ "cwd": cwd });
         }
-        insert(&node, "AgentRequest", value).await;
-        let response = node
+        insert_as(&agent, "AgentRequest", value).await;
+        let response = agent
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "request-1" }} }}) {{ {} }} }}"#,
                 crate::request::watcher::AGENT_REQUEST_FIELDS
             ))
-            .await;
+            .await
+            .unwrap();
         let row: gents_protocol::row::AgentRequestRow =
-            crate::store::graphql::first_row(&response, "AgentRequest")
-                .unwrap()
-                .unwrap();
+            serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
         let mut request = RequestLifecycle::new_with_node_did(
             node.clone(),
             agent_did(),
@@ -1707,15 +1757,9 @@ pub(crate) mod tests {
         };
         let (_snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(agent_snapshot());
         runtime.bind_snapshot(snapshot_rx).unwrap();
-        let access = ConfigAccess::local_managed_agent(
-            node.clone(),
-            agent_actor(),
-            managed_agent().as_ref(),
-        )
-        .unwrap();
         Job {
             node,
-            access,
+            access: agent,
             runtime,
             _home: home,
             cwd,
