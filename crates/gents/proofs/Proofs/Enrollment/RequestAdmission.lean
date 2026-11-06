@@ -380,6 +380,24 @@ theorem client_admission_independent_of_enrollment
     agentRequestAdmissible t request admission er' decision' fresh' evidence fields deadline target := by
   simp only [agentRequestAdmissible, hkind]
 
+/-- This is only a routing candidate for a cross-actor Client claim. Native
+claim authorization, session binding and the verified Goal edge remain required;
+queue metadata cannot supply any of them. -/
+def clientClaimQueueCandidate (input : RequestInput) (localAgentMessage : Bool) : Bool :=
+  match input.queue with
+  | none => true
+  | some queue =>
+      queue.source == .user ||
+      (localAgentMessage && queue.source == .steering) ||
+      (queue.source == .goal && input.goalContinuation.isSome)
+
+example : clientClaimQueueCandidate
+    { queue := some { source := .goal, policy := .coalesce },
+      goalContinuation := some ⟨1, false⟩ } false = true := by decide
+
+example : clientClaimQueueCandidate
+    { queue := some { source := .goal, policy := .coalesce } } false = false := by decide
+
 /-- Queue provenance never grants a continuation branch. An explicit client
 resume keeps the client signer and must bind the same canonical goal edge as a
 runtime timer. A goal wake missing its original facts cannot infer them from Goal.

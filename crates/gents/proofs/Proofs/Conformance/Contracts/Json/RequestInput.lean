@@ -145,6 +145,8 @@ private def requestInputCaseJson (c : RequestInputCase) : String :=
   ",\"admission_kind\":" ++ admissionKindJson c.admissionKind ++
   ",\"runtime_source\":" ++ runtimeSourceJson c.runtimeSource ++
   ",\"verified_goal_continuation\":" ++ goalJson c.verifiedGoalContinuation ++
+  ",\"expected_client_claim_queue_candidate\":" ++ boolString (clientClaimQueueCandidate c.input false) ++
+  ",\"expected_agent_message_claim_queue_candidate\":" ++ boolString (clientClaimQueueCandidate c.input true) ++
   ",\"context_skill_ids\":" ++ jsonStringArray c.contextSkillIds ++
   ",\"cwd_allowed\":" ++ boolString c.cwdAllowed ++
   ",\"queue_source_allowed\":" ++ boolString c.queueSourceAllowed ++

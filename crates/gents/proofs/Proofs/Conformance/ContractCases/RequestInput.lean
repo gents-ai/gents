@@ -289,13 +289,15 @@ def requestInputCases : List RequestInputCase :=
       admissionKind := .runtimeInternal
       verifiedGoalContinuation := some ⟨3, false⟩ }
 
-  ] ++ workspaceCases ++ queueExtensionCases ++ capturedContextCases ++ capturedPresentationCases ++ capturedCompatibilityCases ++ goalAssignmentCases ++ attachmentCases
+  ] ++ workspaceCases ++ queueExtensionCases ++ capturedContextCases ++ capturedPresentationCases ++ capturedCompatibilityCases ++ goalAssignmentCases ++ attachmentCases ++
+  [ { name := "client-local-agent-message-steering-candidate",
+      input := { queue := some { source := .steering, policy := .append } }, contextSkillIds := [] } ]
 
 theorem input_boundary_cases_pinned : requestInputCases.map RequestInputCase.accepted =
     [true, true, false, false, false, false, false, true, true, true, false,
      false, true, false, false, false, false, false, true, true, false, false, false, false, false, false, true,
      true, false, false, false, false, false, true, false, false, false, true, true, true, true, true] ++
-      List.replicate 17 true ++ [false, false, false, false] ++ List.replicate 33 true ++ List.replicate 4 false := by native_decide
+      List.replicate 17 true ++ [false, false, false, false] ++ List.replicate 33 true ++ List.replicate 4 false ++ [true] := by native_decide
 
 theorem title_creation_cases_pinned :
     (requestInputCases.drop 7 |>.take 3).map
