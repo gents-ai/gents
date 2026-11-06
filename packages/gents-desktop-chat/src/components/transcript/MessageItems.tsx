@@ -105,7 +105,9 @@ export function UserMessageItem({
     item.kind === "automatedInput" &&
     item.origin.kind === "backgroundCompletion"
   )
-    return <RuntimeBackgroundItem item={item} />;
+    return item.origin.notification ? (
+      <RuntimeBackgroundItem item={item} />
+    ) : null;
   const content = normalizeTranscriptText(item.content);
   const received =
     item.kind === "automatedInput" && item.origin.kind === "sessionMessage"
