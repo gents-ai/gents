@@ -661,10 +661,17 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
     let db = crate::support::test_signed_db("modeled-self-config-native").await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
-    let user = gents::KeyIdentity::load_or_create(db.data_path().join("household-user.key"), None)?;
-    let agent = gents::store::identity::provision_agent_identity(runtime.as_ref())?;
-    let sibling = gents::store::identity::provision_agent_identity(runtime.as_ref())?;
-    let agent_signer = gents::store::identity::resolve_agent_identity(runtime.as_ref(), &agent)?;
+    let fixture = crate::support::managed_agent_fixture(&db).await;
+    let user = &fixture.user;
+    let user_access = fixture.access.clone();
+    let agent = &fixture.binding;
+    let agent_signer = fixture.agent.clone();
+    let sibling = gents::store::identity::provision_agent_identity_authorized(
+        &node,
+        runtime.as_ref(),
+        &Did::new(user.did())?,
+    )
+    .await?;
     let sibling_signer =
         gents::store::identity::resolve_agent_identity(runtime.as_ref(), &sibling)?;
     let node_admin = gents::ConfigAccess::local_as(node.clone(), Did::new(runtime.did())?);
@@ -681,7 +688,6 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
                 .await?;
         }
     }
-    let user_access = db.client_access(&user);
     let agent_access = gents::ConfigAccess::local_managed_agent(
         node.clone(),
         Did::new(agent_signer.did())?,
@@ -692,39 +698,18 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
         Did::new(sibling_signer.did())?,
         sibling_signer.as_ref(),
     )?;
-    let agent_value = serde_json::json!({
-        "node_did": runtime.did(), "agent_did": agent.agent_did,
-        "creation_nonce": agent.creation_nonce,
-    });
-    let node_value = serde_json::json!({"node_did": runtime.did()});
-    let plan = gents::store::config_client::DesiredStateApplyPlan::new(vec![
-        gents::store::config_client::DesiredStateApplyDocument {
-            collection: gents::Collection::Node,
-            add: node_value.clone(),
-            update: node_value,
-        },
-        gents::store::config_client::DesiredStateApplyDocument {
-            collection: gents::Collection::Agent,
-            add: agent_value.clone(),
-            update: agent_value.clone(),
-        },
-    ])?;
-    let agent_doc = user_access
-        .transact_write("test.self_config.seed", |txn| {
-            let plan = &plan;
+    let (agent_doc, agent_value) = user_access
+        .transact_readonly("test.self_config.agent", |txn| {
             let runtime = &runtime;
-            let agent = &agent;
             Box::pin(async move {
-                gents::store::config_client::apply_desired_state_plan(txn, plan).await?;
-                let (agent_doc, _) = gents::store::config_client::read_desired_state_record_in_txn(
+                gents::store::config_client::read_desired_state_record_in_txn(
                     txn,
                     gents::Collection::Agent,
                     runtime.did(),
                     &agent.agent_did,
                 )
                 .await?
-                .context("modeled Agent is unavailable")?;
-                Ok::<_, anyhow::Error>(agent_doc)
+                .context("modeled Agent is unavailable")
             })
         })
         .await?;
