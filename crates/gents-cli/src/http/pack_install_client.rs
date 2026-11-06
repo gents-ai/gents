@@ -426,7 +426,7 @@ pub(crate) async fn install_remote(
     args: &crate::cli::PackInstallArgs,
     explicit: bool,
 ) -> Result<Value> {
-    ensure!(args.wire.is_empty(), "remote pack install does not yet support --wire with client-held signing; install the pack and wire it separately");
+    ensure!(args.wire.is_empty(), "remote pack install does not yet support --wire with client-held signing; install the pack and wire it separately on the owning node");
     let request =
         super::pack_install::encode_install_request(pack, dependencies, args, owner, explicit)
             .await?;
