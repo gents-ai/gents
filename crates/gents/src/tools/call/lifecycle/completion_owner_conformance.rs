@@ -984,21 +984,28 @@ async fn a_retried_over_bound_wake_is_refused_again() {
     let access = admission.tool.access().unwrap();
     let did = admission.node_did.as_str();
     let agent_did = escape_graphql_string(admission.tool.actor().as_str());
-    let node_input = json!({"node_did": did, "max_request_hop": 8});
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-        crate::store::config_client::DesiredStateApplyDocument {
-            collection: crate::Collection::Node,
-            add: node_input.clone(),
-            update: node_input,
-        },
-    ])
-    .unwrap();
     admission
         .client
         .transact_write("test.completion.configure_hop_bound", |txn| {
-            let plan = &plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                let (_, mut node_input) =
+                    crate::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Node,
+                        did,
+                        did,
+                    )
+                    .await?
+                    .context("owned Node is unavailable")?;
+                node_input["max_request_hop"] = json!(8);
+                let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+                    crate::store::config_client::DesiredStateApplyDocument {
+                        collection: crate::Collection::Node,
+                        add: node_input.clone(),
+                        update: node_input,
+                    },
+                ])?;
+                crate::store::config_client::apply_desired_state_plan(txn, &plan).await
             })
         })
         .await
