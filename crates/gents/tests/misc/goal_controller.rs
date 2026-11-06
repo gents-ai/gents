@@ -558,6 +558,13 @@ async fn source_for_agent(
         agent_identity.did(),
     )
     .await;
+    unready_source_for_agent(db, agent_identity)
+}
+
+fn agent_snapshot(
+    db: &TestDb,
+    agent_identity: &Arc<dyn NodeIdentity>,
+) -> Arc<ActiveRuntimeSnapshot> {
     let node =
         crate::support::fixtures::test_node_for(db.node_identity.clone(), agent_identity.did());
     let agent =
@@ -568,7 +575,14 @@ async fn source_for_agent(
     current
         .agents
         .insert(agent_identity.did().to_owned(), Arc::new(agent));
-    let (tx, rx) = watch::channel(Arc::new(current));
+    Arc::new(current)
+}
+
+fn unready_source_for_agent(
+    db: &TestDb,
+    agent_identity: &Arc<dyn NodeIdentity>,
+) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
+    let (tx, rx) = watch::channel(agent_snapshot(db, agent_identity));
     let subscriptions: Arc<dyn UpdateSubscriptionSource> =
         Arc::new(MockUpdateSubscriptionSource::new());
     (
@@ -5304,47 +5318,50 @@ async fn settled_invalid_agent_pauses_goal_with_its_reason() {
 async fn claimed_continuation_waits_for_readiness_before_materializing() {
     use gents_protocol::row::NodeReadinessProcessState as Process;
     let db = test_db("goal-claimed-readiness").await;
-    seed_completed_request(&db, "parent-claimed-waits").await;
-    let goal = set_goal(
-        &db.node,
+    let (_user, agent, access) =
+        goal_recovery_actors(&db, "parent-claimed-waits", "completed").await;
+    let goal = set_goal_from_access(
+        &access,
         db.node_identity.did(),
         SESSION,
         Some("Hold a durable claim until the behavior is ready"),
         Some(GoalStatus::Active),
+        None,
         None,
     )
     .await
     .expect("set goal");
     assert!(claim_continuation(
         &db.node,
-        &identity::Did::new(db.node_identity.did()).unwrap(),
+        &agent.did().parse().unwrap(),
         &goal,
         "parent-claimed-waits"
     )
     .await
     .expect("claim continuation"));
-    publish_node_readiness(&db, Process::Recovering, None).await;
-    let claimed = canonical_goal_json(&db).await;
-    let (mut source, _tx) = unready_source(&db);
+    publish_node_readiness_for_agent(&db, Process::Recovering, None, agent.did()).await;
+    let claimed =
+        serde_json::to_value(load_goal_as(&access, db.node_identity.did()).await.unwrap()).unwrap();
+    let (mut source, _tx) = unready_source_for_agent(&db, &agent);
     assert!(
         tokio::time::timeout(Duration::from_millis(300), source.next_fire())
             .await
             .is_err(),
         "a claimed child must not be published to an unready behavior"
     );
-    assert!(goal_children(&db).await.is_empty());
+    assert!(goal_children_from_access(&access).await.is_empty());
     assert_eq!(
-        canonical_goal_json(&db).await,
+        serde_json::to_value(load_goal_as(&access, db.node_identity.did()).await.unwrap()).unwrap(),
         claimed,
         "waiting must leave the durable claim untouched"
     );
 
-    publish_node_readiness(&db, Process::Ready, None).await;
+    publish_node_readiness_for_agent(&db, Process::Ready, None, agent.did()).await;
     tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
         .expect("goal source timed out after readiness recovered")
         .expect("claimed continuation");
-    let children = goal_children(&db).await;
+    let children = goal_children_from_access(&access).await;
     assert_eq!(children.len(), 1);
     assert_eq!(
         children[0].caused_by_parent_request_id.as_deref(),
@@ -5355,15 +5372,23 @@ async fn claimed_continuation_waits_for_readiness_before_materializing() {
 #[tokio::test]
 async fn closed_goal_notifications_keep_durable_continuation_and_cancellation_live() {
     let db = test_db("goal-closed-notifications").await;
-    publish_node_readiness(
+    let (user, agent) = goal_creation_actors(&db).await;
+    let access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    publish_node_readiness_for_agent(
         &db,
         gents_protocol::row::NodeReadinessProcessState::Ready,
         None,
+        agent.did(),
     )
     .await;
     let updates = MockUpdateSubscriptionSource::new();
     updates.close();
-    let (_snapshot_tx, rx) = watch::channel(snapshot(db.node_identity.did()));
+    let (_snapshot_tx, rx) = watch::channel(agent_snapshot(&db, &agent));
     let cancel = CancellationToken::new();
     let mut source = GoalSource::with_subscription_source(
         Arc::new(updates),
@@ -5378,13 +5403,15 @@ async fn closed_goal_notifications_keep_durable_continuation_and_cancellation_li
             .is_err(),
         "closing notifications must not retire the durable Goal source"
     );
-    seed_completed_request(&db, "completed-before-continuation").await;
-    set_goal(
-        &db.node,
+    let doc = goal_fixture_request(&db, &user, &agent, "completed-before-continuation").await;
+    publish_owned_terminal_activity(&access, agent.as_ref(), &doc, "durable progress").await;
+    set_goal_from_access(
+        &access,
         db.node_identity.did(),
         SESSION,
         Some("Continue the existing objective"),
         Some(GoalStatus::Active),
+        None,
         None,
     )
     .await
@@ -5393,11 +5420,8 @@ async fn closed_goal_notifications_keep_durable_continuation_and_cancellation_li
         .await
         .expect("durable rescan must find the active Goal")
         .expect("closed notifications must not terminate the source");
-    assert_eq!(goal_children(&db).await.len(), 1);
-    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
-        .await
-        .unwrap()
-        .unwrap();
+    assert_eq!(goal_children_from_access(&access).await.len(), 1);
+    let goal = load_goal_as(&access, db.node_identity.did()).await.unwrap();
     assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
     cancel.cancel();
     assert!(
