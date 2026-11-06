@@ -5,7 +5,9 @@ use crate::tools::call::lifecycle::admission_fixture::{
 };
 use crate::tools::call::lifecycle::AwaitMode;
 
-pub(super) fn cause(
+/// The accepted tool row does not carry its calling request's id; the id is
+/// read from the calling request document, as the owning lifecycle does.
+pub(super) async fn cause(
     message: &crate::tools::call::lifecycle::admission_fixture::PublishedSessionMessage,
     caller_hop: u32,
 ) -> SessionMessageCause {
@@ -15,7 +17,7 @@ pub(super) fn cause(
         caller_agent_did: tool.actor().to_string(),
         caller_session_id: tool.session_id().to_owned(),
         caller_requester_did: tool.requester_did().map(str::to_owned),
-        caller_request_id: tool.request_id().to_owned(),
+        caller_request_id: tool.calling_request_id().await.unwrap(),
         caller_request_doc_id: tool.request_doc_id().unwrap().to_owned(),
         caller_hop,
         tool_call_id: tool.tool_call_id().to_owned(),
@@ -86,7 +88,7 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
             )
             .await
             .unwrap();
-        let cause = cause(&message, case.caller_hop);
+        let cause = cause(&message, case.caller_hop).await;
         let body = RenderedBody {
             content: "again".to_owned(),
             goal: None,
@@ -164,7 +166,7 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
         agent_did: caused.agent_did.clone(),
         session_id: caused.session_id.clone(),
     };
-    let cause = cause(&message, 0);
+    let cause = cause(&message, 0).await;
     let body = RenderedBody {
         content: "staged".to_owned(),
         goal: None,
@@ -254,7 +256,7 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
         agent_did: caused.agent_did.clone(),
         session_id: caused.session_id.clone(),
     };
-    let stale_cause = cause(&message, 0);
+    let stale_cause = cause(&message, 0).await;
     let body = RenderedBody {
         content: "stale".to_owned(),
         goal: None,
@@ -271,7 +273,7 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
     .await
     .unwrap()
     .unwrap();
-    let ahead_cause = cause(&message, 10);
+    let ahead_cause = cause(&message, 10).await;
     let ahead = plan(
         &node,
         &ahead_cause,
@@ -340,7 +342,7 @@ async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
     })
     .await
     .unwrap();
-    let cause = cause(&message, 0);
+    let cause = cause(&message, 0).await;
     let parent = gents_protocol::request_input::RequestInput {
         cwd: Some("/workspace/project".into()),
         ..Default::default()
