@@ -1521,9 +1521,15 @@ def pluginBackendCase (name : String) (actor : Option String) (revoked : String)
 def inferenceSelfConfigCase (phase actor document : String) : Json :=
   let state := if phase == "before" then Configuration.inferenceUsersetFixture
     else if phase == "revoked" then Household.apply Configuration.inferenceSelfConfigFixture
-      (.revoke ⟨"configuration", "execution", "writer", .actor "agent"⟩)
+      (.revoke ⟨"agents", "agent-doc", "config_writer", .actor "agent"⟩)
+    else if phase == "direct-after-revoke" then Household.apply
+      (Household.apply Configuration.inferenceSelfConfigFixture
+        (.grant ⟨"configuration", "execution", "writer", .actor "agent"⟩))
+      (.revoke ⟨"agents", "agent-doc", "config_writer", .actor "agent"⟩)
     else Configuration.inferenceSelfConfigFixture
   Json.mkObj [("phase", toJson phase), ("actor", toJson actor), ("document", toJson document),
+    ("manager_expected", toJson (Household.mayManage state actor
+      ⟨"configuration", document, "selected_by", .entitySet "configuration" "profile" "selected_by"⟩)),
     ("expected", toJson (Household.allowed 8 state actor "configuration" document "update"))]
 
 def json : Json := Json.mkObj
@@ -1667,10 +1673,18 @@ def json : Json := Json.mkObj
    ("configuration_inference_self_config_cases", toJson
       [inferenceSelfConfigCase "before" "agent" "execution",
        inferenceSelfConfigCase "granted" "agent" "profile",
+       inferenceSelfConfigCase "granted" "agent" "context",
+       inferenceSelfConfigCase "granted" "agent" "tools",
        inferenceSelfConfigCase "granted" "agent" "execution",
+       inferenceSelfConfigCase "granted" "agent" "new-execution",
        inferenceSelfConfigCase "granted" "sibling" "execution",
        inferenceSelfConfigCase "granted" "agent" "backend-metadata",
-       inferenceSelfConfigCase "revoked" "agent" "execution"]),
+       inferenceSelfConfigCase "revoked" "agent" "execution",
+       inferenceSelfConfigCase "revoked" "agent" "new-execution",
+       inferenceSelfConfigCase "revoked" "agent" "profile",
+       inferenceSelfConfigCase "revoked" "agent" "context",
+       inferenceSelfConfigCase "revoked" "agent" "tools",
+       inferenceSelfConfigCase "direct-after-revoke" "agent" "execution"]),
    ("configuration_skill_cases", toJson
       [skillUsersetCaseJson "selected" "selected" false,
        skillUsersetCaseJson "sibling" "sibling" false,

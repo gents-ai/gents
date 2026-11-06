@@ -119,7 +119,7 @@ pub(super) async fn agent_self_config_permission(
         "node_did": args.node_did,
         "agent_did": args.agent_did,
         "self_config_granted": grant,
-        "selected_document_grants_changed": false,
+        "independent_document_grants_changed": false,
     }))
 }
 

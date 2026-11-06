@@ -336,19 +336,24 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         crate::store::graphql::escape_graphql_string(&tools_id)
     );
     let configured = user_access.execute(&tools_query).await?;
-    let tools_doc = configured["data"]["Tools"][0]["_docID"]
-        .as_str()
-        .context("selected Tools missing")?;
     assert_eq!(configured["data"]["Tools"][0]["display_name"], "configured");
-    let creator_did = identity::Did::new(&creator.agent_did)?;
     user_access
-        .delete_actor_relationship("Tools", tools_doc, "writer", &creator_did)
+        .set_agent_self_config_permission(
+            runtime.did(), &creator.agent_did,
+            crate::store::config_client::AgentSelfConfigPermission::Revoke,
+        )
         .await?;
     assert!(tool
         .call(json!({"argv":["tools","update"],"set":{"display_name":"revoked"}}).to_string())
         .await
         .is_err());
     assert_eq!(user_access.execute(&tools_query).await?, configured);
+    user_access
+        .set_agent_self_config_permission(
+            runtime.did(), &creator.agent_did,
+            crate::store::config_client::AgentSelfConfigPermission::Grant,
+        )
+        .await?;
     assert_eq!(
         creator_access.execute("{ Node { _docID } }").await?["data"]["Node"],
         json!([])
