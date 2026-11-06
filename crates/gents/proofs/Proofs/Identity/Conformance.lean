@@ -227,6 +227,39 @@ def derivationInputJson (input : DerivationInput) : Json := Json.mkObj
   [("node_key", toJson input.nodeKey), ("creation_nonce", toJson input.creationNonce),
    ("label", toJson input.label)]
 
+/-- A claimed Agent DID names an independent key or a derivation input. -/
+inductive ClaimedDid where
+  | key (name : String)
+  | derived (nodeKey creation : String)
+
+def ClaimedDid.render : ClaimedDid → String
+  | .key name => "key:" ++ name
+  | .derived nodeKey creation => "derived:" ++ nodeKey ++ ":" ++ creation
+
+def ClaimedDid.json : ClaimedDid → Json
+  | .key name => Json.mkObj [("key", toJson name)]
+  | .derived nodeKey creation => Json.mkObj [("derived", Json.mkObj
+      [("node_key", toJson nodeKey), ("creation_nonce", toJson creation)])]
+
+def renderedDerivation (nodeKey creation : String) : String :=
+  (ClaimedDid.derived nodeKey creation).render
+
+def managedToolIdentityCases : List (Option ClaimedDid × String × Option String) :=
+  [ (some (.derived "runtime" creationA), "runtime", some creationA)
+  , (some (.key "user"), "runtime", some creationA)
+  , (some (.derived "runtime" creationB), "runtime", some creationA)
+  , (some (.derived "other-runtime" creationA), "runtime", some creationA)
+  , (some (.key "missing"), "runtime", none)
+  , (some (.key "malformed"), "runtime", some "not-a-nonce")
+  , (none, "runtime", some creationA) ]
+
+def managedToolIdentityCaseJson : Option ClaimedDid × String × Option String → Json
+  | (claimed, nodeKey, creation) => Json.mkObj
+    [("claimed", (claimed.map ClaimedDid.json).getD Json.null), ("node_key", toJson nodeKey),
+     ("creation_nonce", toJson creation),
+     ("allowed", toJson (Configuration.managedToolIdentityAllowed renderedDerivation
+        ((claimed.map ClaimedDid.render).getD "") nodeKey creation))]
+
 def derivationCasesJson : String := (toJson (derivationCases.map fun (name, left, right) =>
   Json.mkObj [("name", toJson name), ("left", derivationInputJson left),
     ("right", derivationInputJson right), ("expected_same_did", toJson (sameDerivedDid left right))])).compress
@@ -1724,10 +1757,7 @@ def json : Json := Json.mkObj
       toolSourceChangeCaseJson "add-allowed" false false true,
       toolSourceChangeCaseJson "delete-allowed" true true true])),
    ("tool_operation_cases", toJson toolOperationCases),
-   ("managed_tool_identity_cases", toJson ([("matched", "agent", "agent"),
-      ("foreign", "user", "agent"), ("empty", "", "agent")].map fun (name, claimed, derived) =>
-      Json.mkObj [("name", toJson name),
-        ("allowed", toJson (Configuration.managedToolSourceMatches claimed derived))])),
+   ("managed_tool_identity_cases", toJson (managedToolIdentityCases.map managedToolIdentityCaseJson)),
    ("policy_yaml", toJson policyYaml),
    ("objects", toJson (initial.objects.map objectJson)),
    ("relations", toJson (initial.relations.map relationJson)), ("enrolled", toJson ([] : List String)),
@@ -2095,7 +2125,7 @@ def householdCasesJson : String := (toJson [HouseholdFixture.json, OperationsFix
 
 def identityContractsJson : String := (toJson [Json.mkObj
   [("name", toJson "identity.agent_owned_data"),
-   ("statement", toJson "User keys stay on clients. Node keys serve P2P and own node-local operational data not caused by agents; operational data inherits user read access through Node. Agent work never falls back to runtime authority. Agent DIDs derive from immutable creation nonces and select all agent work. Users own Node configuration and transitively administer Agents. User-created sessions are user-owned; unattended sessions are agent-owned with configured user access and deletion. Agents own session children with parent-session user access and control. Full policy wiring remains follow-up."),
+   ("statement", toJson "User keys stay on clients. Node keys serve P2P and own node-local operational data not caused by agents; operational data inherits user read access through Node. Agent work never falls back to runtime authority. Agent DIDs derive from immutable creation nonces and select all agent work. Users own Node configuration and transitively administer Agents. User-created sessions are user-owned; unattended sessions are agent-owned with configured user access and deletion. Agents own session children with parent-session user access and control."),
    ("node_local_collections", toJson nodeLocalCollections),
    ("replicated_protocol_collections", toJson replicatedProtocolCollections),
    ("schema_actor", toJson (schemaActor { did := runtimeDid, displayName := none, enabled := true } .createSchema)),

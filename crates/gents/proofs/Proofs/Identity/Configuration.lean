@@ -28,6 +28,30 @@ theorem foreign_agent_cannot_receive_tool_source (claimed derived : String)
     (different : claimed ≠ derived) : managedToolSourceMatches claimed derived = false := by
   simp [managedToolSourceMatches, different]
 
+/-- The native derivation owner accepts only the canonical creation nonce
+encoding of 64 lowercase hexadecimal digits. -/
+def canonicalCreationNonce (nonce : String) : Bool :=
+  nonce.length == 64 && nonce.all fun c => c.isDigit || ('a' ≤ c && c ≤ 'f')
+
+/-- An Agent row derives its DID from the projecting Node key and its creation
+nonce; a missing or non-canonical nonce derives none. `derive` stands for the
+injective `KeyDerivation`. -/
+def derivedAgentDid (derive : String → String → String) (nodeKey : String)
+    (creation : Option String) : Option String :=
+  creation.bind fun nonce => if canonicalCreationNonce nonce then some (derive nodeKey nonce) else none
+
+def managedToolIdentityAllowed (derive : String → String → String) (claimed nodeKey : String)
+    (creation : Option String) : Bool :=
+  match derivedAgentDid derive nodeKey creation with
+  | some derived => managedToolSourceMatches claimed derived
+  | none => false
+
+theorem underived_agent_cannot_receive_tool_source (derive : String → String → String)
+    (claimed nodeKey : String) (creation : Option String)
+    (underived : derivedAgentDid derive nodeKey creation = none) :
+    managedToolIdentityAllowed derive claimed nodeKey creation = false := by
+  simp [managedToolIdentityAllowed, underived]
+
 /-- Schema commands expose collection/version reads, create/patch/activation
 and materialization, migration publication, and view creation. These names
 are the pinned DefraDB node-operation relations for those operations. -/

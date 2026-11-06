@@ -248,6 +248,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) plugin_job_wire_cases: Vec<LeanPluginJobWireCase>,
     pub(crate) plugin_job_lineage_cases: Vec<LeanPluginJobLineageCase>,
     pub(crate) plugin_job_recovery_cases: Vec<LeanPluginJobRecoveryCase>,
+    pub(crate) plugin_job_wake_cases: Vec<LeanPluginJobWakeCase>,
     pub(crate) mailbox_notification_cases: Vec<serde_json::Value>,
     pub(crate) mailbox_reply_cases: Vec<serde_json::Value>,
     pub(crate) mailbox_question_cases: Vec<serde_json::Value>,
@@ -1504,6 +1505,38 @@ pub(crate) struct LeanPluginJobLineageCase {
     pub(crate) name: String,
     pub(crate) rows: Vec<LeanPluginJobRequestRow>,
     pub(crate) queries: Vec<LeanPluginJobLineageQuery>,
+}
+
+/// `Conformance.PluginJob.wakeCasesJson`: the step in flight on a row, a wake
+/// or immediate step of a row, and `ExecutionIdentity.wakeOutcome`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobWakeCase {
+    pub(crate) name: String,
+    pub(crate) running: LeanPluginJobWork,
+    pub(crate) wake: LeanPluginJobWork,
+    pub(crate) expected: LeanPluginJobWakeExpected,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobWork {
+    pub(crate) document: String,
+    pub(crate) agent: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobWakeExpected {
+    pub(crate) outcome: LeanPluginJobWakeOutcome,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LeanPluginJobWakeOutcome {
+    Independent,
+    Coalesced,
+    Refused,
 }
 
 /// `Conformance.PluginJob.recoveryCasesJson`: plugin-job rows, the registered
@@ -2858,6 +2891,10 @@ pub(crate) fn lean_plugin_job_lineage_cases() -> &'static [LeanPluginJobLineageC
 
 pub(crate) fn lean_plugin_job_recovery_cases() -> &'static [LeanPluginJobRecoveryCase] {
     &lean_contract_snapshot().plugin_job_recovery_cases
+}
+
+pub(crate) fn lean_plugin_job_wake_cases() -> &'static [LeanPluginJobWakeCase] {
+    &lean_contract_snapshot().plugin_job_wake_cases
 }
 
 pub(crate) fn lean_plugin_data_cases() -> &'static LeanPluginDataCases {

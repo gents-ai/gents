@@ -52,9 +52,10 @@ theorem ambiguous_edit_anchor (source : History) (key : String)
     editCut source key = none := by
   simp [editCut, ambiguous]
 
-/-- Fork headers currently reuse physical source fragments. A different target
-agent requires a destination-owned copy of the selected fragments before those
-references can be used without granting access to the wider source session. -/
+/-- A fork header may reference physical source fragments only when the target
+agent owns the source session; any other target requires a destination-owned copy
+of the selected fragments, so the references never grant access to the wider
+source session. -/
 def mayReuseSourceFragments (sourceAgent targetAgent : String) : Bool :=
   sourceAgent == targetAgent
 

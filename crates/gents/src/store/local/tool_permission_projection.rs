@@ -981,7 +981,6 @@ mod tests {
         let path = directory.path().join("runtime");
         let runtime = crate::KeyIdentity::load_or_create(&path, None)?;
         let user = crate::KeyIdentity::load_or_create(directory.path().join("user"), None)?;
-        let binding = crate::store::identity::provision_agent_identity(&runtime)?;
         let key = crate::store::identity::load_file_identity(&path)?.private_key_bytes();
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let address = listener.local_addr()?;
@@ -1019,39 +1018,71 @@ mod tests {
         for (collection, mutation, input) in [
             (crate::Collection::Tools, "mutation($input: ToolsMutationInputArg!) { create_Tools(input: $input) { _docID _version { cid } } }", json!({"node_did":runtime.did(),"tools_id":"tools","built_ins":{"enable_schema_tool":true}})),
             (crate::Collection::AgentContext, "mutation($input: AgentContextMutationInputArg!) { create_AgentContext(input: $input) { _docID _version { cid } } }", json!({"node_did":runtime.did(),"context_id":"context","tools_id":"tools"})),
-            (crate::Collection::Agent, "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID _version { cid } } }", json!({"node_did":runtime.did(),"agent_did":user.did(),"creation_nonce":binding.creation_nonce,"context_id":"context","enabled":true})),
         ] {
             access.transact_write("test.user_signed_tool_configuration", |txn| {
                 let input = &input;
                 Box::pin(async move { txn.execute_desired_state_mutation(mutation, &json!({"input":input}), collection, true).await })
             }).await?;
         }
-        let cases = crate::lean_vocab_test::lean_identity_household_cases()
+        use crate::lean_vocab_test::LeanClaimedDid;
+        let identity_cases = &crate::lean_vocab_test::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
-            .unwrap();
-        let allowed = cases
-            .managed_tool_identity_cases
-            .iter()
-            .find(|case| case["name"] == "foreign")
-            .unwrap()["allowed"]
-            .as_bool()
-            .unwrap();
-        assert_eq!(
-            node.nac_manager()
-                .check_permission(&user_did, NodePermission::CollectionPatch)
-                .await?,
-            allowed
-        );
-        for (name, nonce) in [("missing", None), ("malformed", Some("not-a-nonce"))] {
-            let foreign = crate::KeyIdentity::load_or_create(directory.path().join(name), None)?;
-            let mut input = json!({"node_did":runtime.did(),"agent_did":foreign.did(),
+            .unwrap()
+            .managed_tool_identity_cases;
+        assert!(identity_cases.iter().any(|case| case.allowed));
+        assert!(identity_cases.iter().any(|case| !case.allowed));
+        let key = |name: &str| match name {
+            "runtime" => crate::KeyIdentity::load_or_create(&path, None),
+            other => crate::KeyIdentity::load_or_create(directory.path().join(other), None),
+        };
+        let mut rows = Vec::new();
+        for case in identity_cases {
+            anyhow::ensure!(case.node_key == "runtime", "projecting Node key: {case:?}");
+            let claimed = match &case.claimed {
+                None => String::new(),
+                Some(LeanClaimedDid::Key(name)) => key(name)?.did().to_owned(),
+                Some(LeanClaimedDid::Derived {
+                    node_key,
+                    creation_nonce,
+                }) => crate::store::identity::derive_agent_identity(&key(node_key)?, creation_nonce)?
+                    .did()
+                    .to_owned(),
+            };
+            let derived = case.creation_nonce.as_deref().and_then(|nonce| {
+                crate::store::identity::derive_agent_identity(&runtime, nonce)
+                    .ok()
+                    .map(|identity| identity.did().to_owned())
+            });
+            let mut input = json!({"node_did":runtime.did(),"agent_did":claimed,
                 "context_id":"context","enabled":true});
-            if let Some(nonce) = nonce {
+            if let Some(nonce) = &case.creation_nonce {
                 input["creation_nonce"] = json!(nonce);
             }
-            access.transact_write("test.user_signed_invalid_agent", |txn| {
-                let input = &input;
+            let subjects = std::iter::once(claimed)
+                .chain(derived)
+                .filter(|did| !did.is_empty())
+                .map(identity::Did::new)
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows.push((case, input, subjects));
+        }
+        let projected = |subjects: &[identity::Did]| {
+            let node = node.clone();
+            let subjects = subjects.to_vec();
+            async move {
+                let mut granted = Vec::new();
+                for subject in &subjects {
+                    granted.push(
+                        node.nac_manager()
+                            .check_permission(subject, NodePermission::CollectionPatch)
+                            .await?,
+                    );
+                }
+                anyhow::Ok(granted)
+            }
+        };
+        for (case, input, subjects) in rows.iter().filter(|(case, ..)| !case.allowed) {
+            access.transact_write("test.user_signed_unmanaged_agent", |txn| {
                 Box::pin(async move {
                     txn.execute_desired_state_mutation(
                         "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID _version { cid } } }",
@@ -1059,15 +1090,9 @@ mod tests {
                     ).await
                 })
             }).await?;
-            assert_eq!(
-                node.nac_manager()
-                    .check_permission(
-                        &identity::Did::new(foreign.did())?,
-                        NodePermission::CollectionPatch
-                    )
-                    .await?,
-                allowed
-            );
+            for granted in projected(subjects).await? {
+                assert_eq!(granted, case.allowed, "{case:?}");
+            }
         }
         // Install a legacy source to exercise cleanup after upgrading the projector.
         let projector = ToolPermissionProjection::new(
@@ -1108,57 +1133,39 @@ mod tests {
         owner
             .grant_node_permission(&user_did, NodePermission::CollectionPatch)
             .await?;
-        let input = json!({"node_did":runtime.did(),"agent_did":binding.agent_did,
-            "creation_nonce":binding.creation_nonce,"context_id":"context","enabled":true});
-        let denied = access.transact_write("test.user_signed_managed_agent", |txn| {
-            let input = &input;
-            Box::pin(async move {
-                txn.execute_desired_state_mutation(
-                    "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID _version { cid } } }",
-                    &json!({"input":input}), crate::Collection::Agent, true,
-                ).await
-            })
-        }).await.expect_err("a non-admin cannot revoke the legacy source or grant the managed Agent");
-        assert!(denied.is_permission_denied(), "{denied:?}");
-        let managed = identity::Did::new(&binding.agent_did)?;
-        assert!(
-            !node
-                .nac_manager()
-                .check_permission(&managed, NodePermission::CollectionPatch)
-                .await?
-        );
-        let rows = owner
-            .execute(&format!(
-                r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
-                escape_graphql_string(&binding.agent_did)
-            ))
-            .await?;
-        assert!(
-            rows["data"]["Agent"].as_array().is_some_and(Vec::is_empty),
-            "{rows}"
-        );
-        owner.transact_write("test.owner_managed_agent", |txn| {
-            let input = &input;
-            Box::pin(async move {
-                txn.execute_desired_state_mutation(
-                    "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID _version { cid } } }",
-                    &json!({"input":input}), crate::Collection::Agent, true,
-                ).await
-            })
-        }).await?;
-        let matched = cases
-            .managed_tool_identity_cases
-            .iter()
-            .find(|case| case["name"] == "matched")
-            .unwrap()["allowed"]
-            .as_bool()
-            .unwrap();
-        assert_eq!(
-            node.nac_manager()
-                .check_permission(&managed, NodePermission::CollectionPatch)
-                .await?,
-            matched
-        );
+        for (case, input, subjects) in rows.iter().filter(|(case, ..)| case.allowed) {
+            let denied = access.transact_write("test.user_signed_managed_agent", |txn| {
+                Box::pin(async move {
+                    txn.execute_desired_state_mutation(
+                        "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID _version { cid } } }",
+                        &json!({"input":input}), crate::Collection::Agent, true,
+                    ).await
+                })
+            }).await.expect_err("a non-admin cannot revoke the legacy source or grant the managed Agent");
+            assert!(denied.is_permission_denied(), "{denied:?}");
+            assert!(projected(subjects).await?.iter().all(|granted| !granted));
+            let stored = owner
+                .execute(&format!(
+                    r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
+                    escape_graphql_string(input["agent_did"].as_str().unwrap_or_default())
+                ))
+                .await?;
+            assert!(
+                stored["data"]["Agent"].as_array().is_some_and(Vec::is_empty),
+                "{stored}"
+            );
+            owner.transact_write("test.owner_managed_agent", |txn| {
+                Box::pin(async move {
+                    txn.execute_desired_state_mutation(
+                        "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID _version { cid } } }",
+                        &json!({"input":input}), crate::Collection::Agent, true,
+                    ).await
+                })
+            }).await?;
+            for granted in projected(subjects).await? {
+                assert_eq!(granted, case.allowed, "{case:?}");
+            }
+        }
         assert!(
             node.nac_manager()
                 .check_permission(&user_did, NodePermission::CollectionPatch)
@@ -1171,7 +1178,8 @@ mod tests {
             node.nac_manager()
                 .check_permission(&user_did, NodePermission::CollectionPatch)
                 .await?,
-            allowed
+            rows.iter()
+                .any(|(case, _, subjects)| case.allowed && subjects.contains(&user_did))
         );
         node.shutdown().await?;
         Ok(())

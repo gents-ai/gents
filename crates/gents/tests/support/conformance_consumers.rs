@@ -2100,6 +2100,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_session_control_cases_drive_native_interrupt_stop_and_resume",
         },
         ConformanceConsumer::RustTest {
+            id: "tools::background::job::driver::tests::generated_plugin_job_wake_cases_keep_the_selected_agent",
+            package: "gents",
+            source_path: "crates/gents/src/tools/background/job/driver/tests.rs",
+            module_path: "tools::background::job::driver::tests",
+            function: "generated_plugin_job_wake_cases_keep_the_selected_agent",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::recovery_sweeps::generated_plugin_job_recovery_cases_drive_redrive_owner",
             package: "gents",
             source_path: "crates/gents/tests/conformance/recovery_sweeps.rs",
