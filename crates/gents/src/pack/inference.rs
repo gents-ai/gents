@@ -374,7 +374,6 @@ pub(super) fn validate_pack_inference_authoring(
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::sync::Arc;
 
     fn manifest(slots: serde_json::Value) -> PackManifest {
         serde_json::from_value(json!({
@@ -401,12 +400,9 @@ mod tests {
 
     #[tokio::test]
     async fn preview_auto_binds_only_the_unambiguous_one_to_one_case() {
-        let owner = "did:key:preview-owner";
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(&node).await.unwrap();
-        crate::documents::ensure_node(&node, owner).await.unwrap();
-        crate::test_support::install_test_agent(&node, owner, "only").await;
-        let access = ConfigAccess::local(node);
+        let (_directory, runtime, node, access) =
+            super::super::agent_bindings::tests::fixture().await;
+        let owner = crate::NodeIdentity::did(&runtime);
         let one = manifest(json!([
             {"name":"worker","description":"works","agents":["work"]}
         ]));
@@ -414,34 +410,77 @@ mod tests {
             .await
             .unwrap();
         assert!(preview.automatic);
-        assert_eq!(preview.bindings["worker"], "only:inference");
+        assert_eq!(preview.bindings["worker"], "profile");
         let error = preview_pack_inference_bindings(&access, &two_slots(), owner, &BTreeMap::new())
             .await
             .unwrap_err();
         assert!(error.to_string().contains("coordinator, worker"));
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
     async fn preview_accepts_shared_or_distinct_existing_profiles_and_rejects_foreign_ids() {
-        let owner = "did:key:binding-owner";
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(&node).await.unwrap();
-        crate::documents::ensure_node(&node, owner).await.unwrap();
-        crate::test_support::install_test_agent(&node, owner, "claude").await;
-        crate::test_support::install_test_agent(&node, owner, "glm").await;
-        let foreign_owner = "did:key:foreign-owner";
-        crate::documents::ensure_node(&node, foreign_owner)
+        let (directory, runtime, node, access) =
+            super::super::agent_bindings::tests::fixture().await;
+        let owner = crate::NodeIdentity::did(&runtime);
+        let foreign =
+            crate::KeyIdentity::load_or_create(directory.path().join("foreign"), None).unwrap();
+        let foreign_owner = crate::NodeIdentity::did(&foreign);
+        let backend = |owner: &str, id: &str, enabled: bool| {
+            json!({
+                "node_did":owner,"backend_id":id,"name":"Local","provider_kind":"OpenAiCompatible",
+                "endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"unauthenticated"},"enabled":enabled
+            })
+        };
+        let docs = [
+            (
+                crate::Collection::InferenceBackend,
+                backend(owner, "glm:backend", true),
+            ),
+            (
+                crate::Collection::InferenceProfile,
+                json!({"node_did":owner,"profile_id":"glm:inference","backend_id":"glm:backend","model_name":"glm"}),
+            ),
+            (crate::Collection::Node, json!({"node_did":foreign_owner})),
+            (
+                crate::Collection::InferenceBackend,
+                backend(foreign_owner, "foreign:backend", true),
+            ),
+            (
+                crate::Collection::InferenceProfile,
+                json!({"node_did":foreign_owner,"profile_id":"foreign:inference","backend_id":"foreign:backend","model_name":"foreign"}),
+            ),
+        ];
+        let plan = crate::store::config_client::DesiredStateApplyPlan::new(
+            docs.into_iter()
+                .map(
+                    |(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
+                        collection,
+                        add: value.clone(),
+                        update: value,
+                    },
+                )
+                .collect(),
+        )
+        .unwrap();
+        access
+            .transact_write("test.inference.preview", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    crate::store::config_client::apply_desired_state_plan(txn, plan)
+                        .await
+                        .map(|_| ())
+                })
+            })
             .await
             .unwrap();
-        crate::test_support::install_test_agent(&node, foreign_owner, "foreign").await;
-        let access = ConfigAccess::local(node.clone());
         for requested in [
             BTreeMap::from([
-                ("coordinator".into(), "claude:inference".into()),
-                ("worker".into(), "claude:inference".into()),
+                ("coordinator".into(), "profile".into()),
+                ("worker".into(), "profile".into()),
             ]),
             BTreeMap::from([
-                ("coordinator".into(), "claude:inference".into()),
+                ("coordinator".into(), "profile".into()),
                 ("worker".into(), "glm:inference".into()),
             ]),
         ] {
@@ -452,7 +491,7 @@ mod tests {
             assert_eq!(preview.bindings, requested);
         }
         let foreign = BTreeMap::from([
-            ("coordinator".into(), "claude:inference".into()),
+            ("coordinator".into(), "profile".into()),
             ("worker".into(), "foreign:inference".into()),
         ]);
         assert!(
@@ -462,17 +501,28 @@ mod tests {
                 .to_string()
                 .contains("unknown profile")
         );
-        let disabled = node
-            .execute(
-                r#"mutation { update_InferenceBackendMetadata(filter: {
-                    node_did: {_eq: "did:key:binding-owner"},
-                    backend_id: {_eq: "glm:backend"}
-                }, input: {enabled: false}) {_docID} }"#,
-            )
-            .await;
-        assert!(!disabled.has_errors(), "{:?}", disabled.errors);
+        let disabled = backend(owner, "glm:backend", false);
+        let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+            crate::store::config_client::DesiredStateApplyDocument {
+                collection: crate::Collection::InferenceBackend,
+                add: disabled.clone(),
+                update: disabled,
+            },
+        ])
+        .unwrap();
+        access
+            .transact_write("test.inference.disable", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    crate::store::config_client::apply_desired_state_plan(txn, plan)
+                        .await
+                        .map(|_| ())
+                })
+            })
+            .await
+            .unwrap();
         let disabled_binding = BTreeMap::from([
-            ("coordinator".into(), "claude:inference".into()),
+            ("coordinator".into(), "profile".into()),
             ("worker".into(), "glm:inference".into()),
         ]);
         assert!(
@@ -482,5 +532,6 @@ mod tests {
                 .to_string()
                 .contains("disabled")
         );
+        node.shutdown().await.expect("node shutdown");
     }
 }
