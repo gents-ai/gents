@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::escape_graphql_string;
-use crate::store::identity::{KeyIdentity, NodeIdentity};
+use crate::store::identity::NodeIdentity;
 use crate::tools::workspace::WorkspaceBindingDoc;
 
 #[derive(Clone, Copy, Debug)]
@@ -23,32 +23,18 @@ pub(crate) struct Fixture {
     pub(crate) binding: WorkspaceBindingDoc,
     pub(crate) access: ConfigAccess,
     agent: Arc<dyn NodeIdentity>,
-    _home: tempfile::TempDir,
+    _home: crate::support::TestDb,
 }
 
 impl Fixture {
     pub(crate) async fn new() -> Self {
-        let home = tempfile::tempdir().unwrap();
-        let identity = KeyIdentity::load_or_create(home.path().join("identity.key"), None).unwrap();
-        let client = KeyIdentity::load_or_create(home.path().join("client.key"), None).unwrap();
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(identity.did())
-                .with_node_acp_enabled()
-                .build()
-                .await
-                .unwrap(),
-        );
-        crate::ensure_runtime_schemas(&node).await.unwrap();
-        crate::test_support::bootstrap_test_node(&node, &identity, &client).await;
-        let binding = crate::test_support::install_test_agent_as(
-            &node,
-            &identity,
-            &client,
-            "Workspace rejection agent",
-        )
-        .await;
-        let agent = crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
+        let db = crate::support::test_signed_db("workspace-rejection").await;
+        let (home, _user, _user_access, binding) =
+            crate::test_support::signed_test_node_from_db(db, "workspace-rejection-user").await;
+        let node = home.node.clone();
+        let identity = home.node_identity.clone();
+        let agent =
+            crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
         let agent_did: identity::Did = agent.did().parse().unwrap();
         let admin = ConfigAccess::local_as(node.clone(), identity.did().parse().unwrap());
         admin
@@ -75,7 +61,7 @@ impl Fixture {
         create.workspace_id = Some("cleanup-workspace".to_string());
         create.workspace_owner_node_did = Some(identity.did().to_string());
         create.workspace_authority = Some("readWrite".to_string());
-        crate::sign_agent_request_create(&identity, &mut create)
+        crate::sign_agent_request_create(identity.as_ref(), &mut create)
             .await
             .unwrap();
         let response = access
