@@ -1,6 +1,7 @@
 use super::*;
 
 use crate::store::config_client::{ConfigAccess, ConfigClientError, NodePermission};
+use crate::store::identity::GrantSet;
 use acp::nac::{PermissionProvenance, PermissionVia};
 
 const VERBS: [&str; 5] = ["get", "check", "explain", "grant", "revoke"];
@@ -19,6 +20,7 @@ enum PolicyTarget {
 struct PolicyCall {
     subject: ::identity::Did,
     is_self: bool,
+    subject_given: bool,
     target: Option<PolicyTarget>,
 }
 
@@ -141,6 +143,26 @@ fn read_refusal(subject: &::identity::Did, error: ConfigClientError) -> anyhow::
     )
 }
 
+/// Node permissions this Agent keeps against its own revoke while
+/// `self_config_no_lockout` is set: its baseline and policy delegation (Lean
+/// `Identity.GrantSets.lockoutProtected`).
+fn lockout_protected(permission: NodePermission) -> bool {
+    GrantSet::AgentBaseline.permissions().contains(&permission)
+        || GrantSet::PolicyDelegate.permissions().contains(&permission)
+}
+
+/// Lean `Identity.GrantSets.selfChangeKeepsLockout`. Document relationships are
+/// not modeled here and stay governed by native document authorization.
+fn keeps_lockout(no_lockout: bool, is_self: bool, delete: bool, target: &PolicyTarget) -> bool {
+    if !(no_lockout && is_self) {
+        return true;
+    }
+    match target {
+        PolicyTarget::Node(permission) => !(delete && lockout_protected(*permission)),
+        PolicyTarget::Relation { .. } => true,
+    }
+}
+
 /// Permissions the subject holds, with the paths that give each one.
 fn permission_ways(provenance: &[PermissionProvenance], permission: NodePermission) -> Vec<String> {
     provenance
@@ -163,7 +185,7 @@ impl ConfigCommandTool {
         let parsed = ParsedArgs::parse(&argv[1..])?;
         ensure_options(&parsed, verb)?;
         let call = self.policy_call(&parsed, verb).await?;
-        let access = self.core.access()?;
+        let access = self.core.managed_access()?;
         match verb {
             "get" => self.policy_get(&access, &parsed, &call).await,
             "check" | "explain" => self.policy_answer(&access, &call, verb == "explain").await,
@@ -178,6 +200,7 @@ impl ConfigCommandTool {
         } else {
             parse_target(parsed)?
         };
+        let subject_given = parsed.one("subject")?.is_some();
         let (subject, is_self) = match parsed.one("subject")? {
             None | Some("self") => (actor.clone(), true),
             Some(value) if value.starts_with("did:") => {
@@ -195,6 +218,7 @@ impl ConfigCommandTool {
         Ok(PolicyCall {
             subject,
             is_self,
+            subject_given,
             target,
         })
     }
@@ -261,6 +285,11 @@ impl ConfigCommandTool {
         };
         let relation_rows = relations.as_ref().map(|rows| {
             rows.iter()
+                .filter(|row| {
+                    !call.subject_given
+                        || row.subject == call.subject.as_str()
+                        || row.subject == "*"
+                })
                 .map(|row| json!({"relation": row.relation, "subject": row.subject}))
                 .collect::<Vec<_>>()
         });
@@ -327,22 +356,33 @@ impl ConfigCommandTool {
                 (!ways.is_empty(), ways)
             }
         };
-        let answer = if allowed {
-            format!(
+        let relation = matches!(target, PolicyTarget::Relation { .. });
+        let answer = match (allowed, relation) {
+            (true, false) => format!(
                 "yes: {} hold {} ({}).",
                 call.who(),
                 target_words(target),
                 ways.join("; ")
-            )
-        } else {
-            format!("no: {} do not hold {}.", call.who(), target_words(target))
+            ),
+            (false, false) => format!("no: {} do not hold {}.", call.who(), target_words(target)),
+            (true, true) => format!(
+                "yes: {} hold a direct {} ({}).",
+                call.who(),
+                target_words(target),
+                ways.join("; ")
+            ),
+            (false, true) => format!(
+                "no direct {}: {} have no such relationship.",
+                target_words(target),
+                call.who()
+            ),
         };
-        let mut how = if allowed {
-            "policy revoke with the same target removes a direct grant; paths through Tools or admin remain.".to_owned()
-        } else if explain {
-            self.missing_grant_path(access, call, target).await?
-        } else {
-            "policy explain with the same target names the path or the grant that would allow it.".to_owned()
+        let mut how = match (allowed, relation) {
+            (true, true) => "policy revoke with the same target removes this direct relationship; owner, implied-relation and admin paths are not evaluated here.".to_owned(),
+            (false, true) => "policy grant with the same target adds it only if this agent manages the relation on that document; owner, implied-relation and admin paths are not evaluated here.".to_owned(),
+            (true, false) => "policy revoke with the same target removes a direct grant; paths through Tools or admin remain.".to_owned(),
+            (false, false) if explain => self.missing_grant_path(access, call, target).await?,
+            (false, false) => "policy explain with the same target names the path or the grant that would allow it.".to_owned(),
         };
         if !allowed && explain && matches!(target, PolicyTarget::Node(permission) if permission.is_admin_class()) {
             how = format!("{how} Admin-class permissions are never delegated; only a native admin can change them.");
@@ -358,8 +398,9 @@ impl ConfigCommandTool {
         .pretty()
     }
 
-    /// Names the grant that would allow a missing permission: this Agent can
-    /// delegate it only if this Agent holds it too.
+    /// Names the grant that would allow a missing permission. This Agent can
+    /// delegate a node permission only by holding it and `add-nac-relation`,
+    /// and never an admin-class permission.
     async fn missing_grant_path(
         &self,
         access: &ConfigAccess,
@@ -369,24 +410,32 @@ impl ConfigCommandTool {
         let PolicyTarget::Node(permission) = target else {
             return Ok("Grant the relationship with policy grant; DefraDB allows it only if this Agent manages the relation on that document.".to_owned());
         };
+        if permission.is_admin_class() {
+            return Ok(format!(
+                "{} is admin-class: a non-admin Agent never delegates it, and only a native admin can change it.",
+                permission.as_str()
+            ));
+        }
         let actor = self.core.identity()?;
         let own = access
             .explain_node_subject(&actor)
             .await
             .map_err(|error| read_refusal(&actor, error))?;
-        if permission_ways(&own, *permission).is_empty() {
-            Ok(format!(
-                "You do not hold {}, so you cannot delegate it. Ask a User with native admin to grant it, or name a permission you hold in policy grant.",
-                permission.as_str()
-            ))
-        } else {
-            Ok(format!(
-                "You hold {}, so this grant would be allowed: policy grant --subject {} --permission {}.",
+        let holds_permission = !permission_ways(&own, *permission).is_empty();
+        let holds_operation = !permission_ways(&own, NodePermission::NacRelationAdd).is_empty();
+        Ok(match (holds_permission, holds_operation) {
+            (true, true) => format!(
+                "You hold {} and add-nac-relation, so this grant would be allowed: policy grant --subject {} --permission {}.",
                 permission.as_str(),
                 call.subject.as_str(),
                 permission.as_str()
-            ))
-        }
+            ),
+            (false, _) => format!(
+                "You do not hold {}, so you cannot delegate it. Ask a User with native admin to grant it, or name a permission you hold in policy grant.",
+                permission.as_str()
+            ),
+            (true, false) => "You hold the permission but not add-nac-relation, so you cannot delegate any node permission. Ask a User with native admin to grant add-nac-relation.".to_owned(),
+        })
     }
 
     async fn policy_change(
@@ -403,6 +452,15 @@ impl ConfigCommandTool {
             )
         })?;
         let actor = self.core.identity()?;
+        if !keeps_lockout(self.no_lockout, call.is_self, !grant, target) {
+            return Err(guidance(
+                format!(
+                    "self_config_no_lockout keeps {} on this agent, the permissions its own configuration needs; revoke it from another agent, or ask a User with native admin to change this agent.",
+                    target_words(target)
+                ),
+                json!({"argv": ["policy", "get"]}),
+            ));
+        }
         self.execution.enter_mutation();
         let changed = match target {
             PolicyTarget::Node(permission) if grant => {
@@ -497,21 +555,28 @@ impl ConfigCommandTool {
                 format!(" {}", call.subject.as_str())
             }
         );
-        let access_now = match (still, through.is_empty()) {
-            (true, true) => "The subject still holds it.".to_owned(),
-            (true, false) => format!("The subject still holds it through: {through}."),
-            (false, _) if through.starts_with("not readable") => format!("The subject's access after this change is {through}."),
-            (false, _) => "The subject no longer holds it through any path.".to_owned(),
+        let relation = matches!(target, PolicyTarget::Relation { .. });
+        let access_now = match (still, through.is_empty(), relation) {
+            (true, true, false) => "The subject still holds it.".to_owned(),
+            (true, false, false) => format!("The subject still holds it through: {through}."),
+            (false, _, false) if through.starts_with("not readable") => format!("The subject's access after this change is {through}."),
+            (false, _, false) => "The subject no longer holds it through any path.".to_owned(),
+            (true, _, true) => "A direct relationship of this kind remains for the subject on this document.".to_owned(),
+            (false, _, true) if through.starts_with("not readable") => format!("The direct relationship's state after this change is {through}."),
+            (false, _, true) => "The direct relationship was removed. Access through the document owner, another relation, admin or Tools sources was not evaluated.".to_owned(),
         };
+        let mut assumptions = vec![
+            "Grants carry no provenance: a revoke removes the direct grant even if someone else made it.".to_owned(),
+            "Native DefraDB applied the held-bounded rule to this Agent's own signer; this receipt reports what it accepted.".to_owned(),
+            "The requesting User is not carried into this tool; the acting Agent is recorded in metadata.".to_owned(),
+        ];
+        if relation {
+            assumptions.push("Document relationships are read as direct tuples only: owner, implied-relation, admin and Tools paths are not evaluated.".to_owned());
+        }
         ordered! {
             "answer": answer,
             "effective_access": access_now,
-            "refused": "nothing in this call",
-            "assumptions": [
-                "Grants carry no provenance: a revoke removes the direct grant even if someone else made it.",
-                "Native DefraDB applied the held-bounded rule to this Agent's own signer; this receipt reports what it accepted.",
-                "The requesting User is not carried into this tool; the acting Agent is recorded in metadata.",
-            ],
+            "assumptions": assumptions,
             "metadata": json!({
                 "acting_agent_did": actor.as_str(),
                 "subject_did": call.subject.as_str(),
@@ -573,8 +638,40 @@ mod tests {
                 .iter()
                 .map(|value| value.as_str().unwrap().to_owned())
                 .collect::<BTreeSet<_>>();
-            let exposed = categories.contains("policy");
+            let exposed = model_resources(&categories, false).contains(&"policy");
             assert_eq!(exposed, case["exposed"].as_bool().unwrap(), "{categories:?}");
+        }
+    }
+
+    #[test]
+    fn modeled_lockout_guard_matches_the_grant_owner() {
+        let lean = crate::lean_vocab_test::lean_contract_snapshot();
+        let protected = lean.policy_lockout_cases["protected"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_owned())
+            .collect::<BTreeSet<_>>();
+        let owned = GrantSet::AgentBaseline
+            .permissions()
+            .iter()
+            .chain(GrantSet::PolicyDelegate.permissions())
+            .map(|permission| permission.as_str().to_owned())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(owned, protected);
+        for row in lean.policy_lockout_cases["rows"].as_array().unwrap() {
+            let permission = NodePermission::parse(row["permission"].as_str().unwrap())
+                .expect("modeled permission");
+            assert_eq!(
+                keeps_lockout(
+                    row["no_lockout"].as_bool().unwrap(),
+                    row["is_self"].as_bool().unwrap(),
+                    row["delete"].as_bool().unwrap(),
+                    &PolicyTarget::Node(permission),
+                ),
+                row["kept"].as_bool().unwrap(),
+                "{row}"
+            );
         }
     }
 }

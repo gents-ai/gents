@@ -227,6 +227,7 @@ pub(crate) fn build_self_config_tools_with_runtime(
             .with_process_ceiling(config.process_ceiling.clone())
             .with_held_grants(OperatorGrants {
                 pack_install: config.enable_pack_install,
+                policy: config.categories.contains("policy"),
             }),
         Err(error) => {
             tracing::warn!(

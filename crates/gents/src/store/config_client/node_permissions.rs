@@ -47,6 +47,9 @@ impl ConfigAccess {
     ) -> Result<Vec<acp::nac::PermissionProvenance>, ConfigClientError> {
         match self {
             Self::Local(local) => {
+                local
+                    .agent_signer()
+                    .ok_or(ConfigClientError::ManagedAgentSignerRequired)?;
                 let actor = local
                     .identity()
                     .cloned()
@@ -92,6 +95,9 @@ impl ConfigAccess {
         crate::store::graphql::validate_collection_identifier(collection)?;
         match self {
             Self::Local(local) => {
+                local
+                    .agent_signer()
+                    .ok_or(ConfigClientError::ManagedAgentSignerRequired)?;
                 let actor = local
                     .identity()
                     .cloned()
@@ -135,7 +141,7 @@ impl ConfigAccess {
     }
 
     /// Native NAC decides the change as this access's actor: locally its
-    /// identity, over HTTP the endpoint principal.
+    /// identity under its managed signer, over HTTP the endpoint principal.
     async fn change_node_relation(
         &self,
         relation: &'static str,
@@ -144,6 +150,7 @@ impl ConfigAccess {
     ) -> Result<(), ConfigClientError> {
         match self {
             Self::Local(local) => {
+                local.require_mutation_signer()?;
                 let actor = local
                     .identity()
                     .cloned()
