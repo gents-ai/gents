@@ -77,10 +77,18 @@ impl ClientCore {
 
         let node_identity = PrincipalIdentity::load_or_create(&paths).await?;
         checkpoint("paths_and_identity");
+        let projection = gents::store::local::document_projector(
+            node_identity.did(),
+            gents::tools::surface::ToolCeiling::meta_only(),
+        )?;
         let mut node_builder =
             gents::store::local::store_key::persistent_builder(paths.node_data_dir(), &store_key)?
                 .with_p2p(desktop_p2p_config(&paths, &options))
-                .with_node_identity_did(node_identity.did());
+                .with_signing_key(defra_node::SigningKey::Ed25519(
+                    node_identity.private_key_bytes().to_vec(),
+                ))
+                .with_document_projector(projection)
+                .with_node_acp_enabled();
         if let Some(http_addr) = options.http_addr {
             node_builder = node_builder.with_http(HttpConfig::with_addr(http_addr));
         }
@@ -90,6 +98,10 @@ impl ClientCore {
                 .await
                 .context("starting embedded desktop node")?,
         );
+        if node.node_identity_did() != Some(node_identity.did()) {
+            let _ = node.shutdown().await;
+            anyhow::bail!("embedded client signer does not match its held peer identity");
+        }
         let store_access = match gents::store::config_client::ConfigAccess::claimed_local(
             node.clone(),
             store_lock,

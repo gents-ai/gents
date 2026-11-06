@@ -194,14 +194,11 @@ impl PreflightProtectedBackendStore<'_> {
         p2p: Option<defra_node::P2PConfig>,
         ceiling: crate::tools::surface::ToolCeiling,
     ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
-        let projection = super::runtime_document_projection::RuntimeDocumentProjector::new(
-            &self.node_did,
-            ceiling,
-        )
-        .map_err(|error| BackendProtectionError::Schema(error.into()))?;
+        let projection = super::document_projector(&self.node_did, ceiling)
+            .map_err(|error| BackendProtectionError::Schema(error.into()))?;
         let mut builder = super::store_key::persistent_builder(&self.store.data, key)
             .map_err(|error| BackendProtectionError::Schema(error.into()))?
-            .with_document_projector(Arc::new(projection))
+            .with_document_projector(projection)
             .with_node_identity_did(self.node_did)
             .with_node_acp_enabled();
         if let Some(http) = http {
