@@ -398,6 +398,17 @@ example : clientClaimQueueCandidate
 example : clientClaimQueueCandidate
     { queue := some { source := .goal, policy := .coalesce } } false = false := by decide
 
+/-- A Client Goal continuation needs the current visible physical Goal and
+its physical assignment opening. These facts are read in the selected Agent's
+claim transaction; a missing or hidden Goal does not grant authority. -/
+def clientGoalClaimBinding (goalVisible goalMatches rootBound : Bool) : Bool :=
+  goalVisible && goalMatches && rootBound
+
+theorem client_goal_claim_requires_physical_binding
+    (visible matches root : Bool) (h : clientGoalClaimBinding visible matches root = true) :
+    visible = true ∧ matches = true ∧ root = true := by
+  simpa [clientGoalClaimBinding, Bool.and_eq_true, and_assoc] using h
+
 /-- Queue provenance never grants a continuation branch. An explicit client
 resume keeps the client signer and must bind the same canonical goal edge as a
 runtime timer. A goal wake missing its original facts cannot infer them from Goal.
