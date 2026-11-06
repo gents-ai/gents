@@ -145,7 +145,7 @@ pub(super) async fn enroll_managed_runtime(
     result
 }
 
-fn clear_finished_enrollment(
+pub(super) fn clear_finished_enrollment(
     managed: &mut crate::state::ManagedServerState,
     cancel: &Arc<tokio_util::sync::CancellationToken>,
 ) {
