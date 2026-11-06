@@ -42,6 +42,7 @@ pub struct ConfigApplyTxn<'a> {
     pub(super) client_signed_write_dispatched: AtomicBool,
     pub(super) relationship_grants: Mutex<Vec<ConfigRelationshipGrant>>,
     pub(super) publication_observer: Option<Arc<dyn AgentPublicationObserver>>,
+    pub(super) pack_approval: Option<Arc<super::super::pack_effect::PackInterpreterApproval>>,
 }
 
 pub(super) enum EmbeddedTransactionPurpose {
@@ -86,7 +87,37 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     pub(crate) fn client_signed_configuration(&self) -> bool {
-        matches!(&self.backend, TxnBackend::Http { endpoint, .. } if endpoint.client_signed_agent_creates)
+        self.pack_approval.is_some()
+            || matches!(&self.backend, TxnBackend::Http { endpoint, .. } if endpoint.client_signed_agent_creates)
+    }
+
+    pub(crate) async fn pack_timestamp(&self, kind: &'static str) -> Result<String> {
+        let value = if let Some(approval) = &self.pack_approval {
+            approval.approver.next_timestamp(self, kind).await?
+        } else if let TxnBackend::Http { endpoint, .. } = &self.backend {
+            match &endpoint.pack_replay {
+                Some(replay) => replay.0.next_timestamp(kind).await?,
+                None => return Ok(super::super::mint_recreate_identity_timestamp()),
+            }
+        } else {
+            return Ok(super::super::mint_recreate_identity_timestamp());
+        };
+        chrono::DateTime::parse_from_rfc3339(&value)
+            .map_err(|_| ConfigClientError::ClientConfigurationUpdateInvalid)?;
+        Ok(value)
+    }
+
+    /// Read through the currently approved hosted pack transaction.
+    pub async fn pack_session_read(
+        &self,
+        document: &str,
+        variables: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        if self.pack_approval.is_none() {
+            return Err(ConfigClientError::EmbeddedAccessRequired);
+        }
+        super::graphql::ensure_query_document(document)?;
+        self.execute_with_variables(document, variables).await
     }
 
     /// Verify a local operation uses this transaction's configured runtime actor.
@@ -152,9 +183,7 @@ impl<'a> ConfigApplyTxn<'a> {
             EmbeddedTransactionPurpose::ExecutionRenewal(native_operations) => native_operations,
             EmbeddedTransactionPurpose::Mutation
             | EmbeddedTransactionPurpose::VerifiedClient
-            | EmbeddedTransactionPurpose::ReadOnly => {
-                Arc::new(NativeOperationTracker::default())
-            }
+            | EmbeddedTransactionPurpose::ReadOnly => Arc::new(NativeOperationTracker::default()),
         };
         let (rollback_on_drop, handle) = begin_embedded_owned(
             Arc::clone(node),
@@ -181,6 +210,7 @@ impl<'a> ConfigApplyTxn<'a> {
             client_signed_write_dispatched: AtomicBool::new(false),
             relationship_grants: Mutex::new(Vec::new()),
             publication_observer: None,
+            pack_approval: None,
             operation: Some(operation.as_str()),
         })
     }
@@ -253,6 +283,35 @@ impl<'a> ConfigApplyTxn<'a> {
         cancellation_rollback_scheduled: Arc<AtomicBool>,
         read_only: bool,
     ) -> Result<Self> {
+        if let Some(replay) = &endpoint.pack_replay {
+            if read_only {
+                return Err(ConfigClientError::ClientAgentTransportRequired);
+            }
+            let client = tokio::task::spawn_blocking(reqwest::Client::new)
+                .await
+                .map_err(ConfigClientError::BeginTask)?;
+            let rollback_on_drop = RollbackOnDrop::PackReplay {
+                runtime: crate::runtime::drop_cleanup::DropCleanup::current(),
+                replay: replay.clone(),
+                armed: true,
+            };
+            cancellation_rollback_scheduled.store(true, std::sync::atomic::Ordering::Release);
+            return Ok(Self {
+                backend: TxnBackend::Http {
+                    endpoint,
+                    id: String::new(),
+                    client,
+                },
+                rollback_on_drop: Some(rollback_on_drop),
+                affected_documents: AtomicU64::new(0),
+                contends_with_request_siblings: AtomicBool::new(false),
+                client_signed_write_dispatched: AtomicBool::new(false),
+                relationship_grants: Mutex::new(Vec::new()),
+                publication_observer: None,
+                pack_approval: None,
+                operation: None,
+            });
+        }
         let (client, id, rollback_on_drop) = tokio::spawn(begin_http_owned(
             endpoint.clone(),
             cancellation_rollback_scheduled,
@@ -272,6 +331,7 @@ impl<'a> ConfigApplyTxn<'a> {
             client_signed_write_dispatched: AtomicBool::new(false),
             relationship_grants: Mutex::new(Vec::new()),
             publication_observer: None,
+            pack_approval: None,
             operation: None,
         };
         Ok(txn)

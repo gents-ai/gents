@@ -9,7 +9,7 @@ pub(super) mod task_selection;
 pub(super) mod validate;
 mod workspace_selection;
 
-use super::{mint_recreate_identity, ConfigApplyTxn, ConfigRelationshipGrant};
+use super::{ConfigApplyTxn, ConfigRelationshipGrant};
 use crate::store::graphql::escape_graphql_string;
 use crate::Collection;
 use anyhow::{Context, Result};
@@ -245,7 +245,13 @@ pub(crate) async fn apply_desired_state_plan_with_node_binding(
                 format!(
                     "mutation($input: {name}MutationInputArg!) {{ create_{name}(input: $input) {{ _docID }} }}"
                 ),
-                mint_recreate_identity(&document.add),
+                {
+                    let mut add = document.add.clone();
+                    if let Some(object) = add.as_object_mut() {
+                        object.insert("updated_at".to_owned(), txn.pack_timestamp("document").await?.into());
+                    }
+                    add
+                },
             )
         };
         match document.collection {
@@ -306,12 +312,22 @@ pub(crate) async fn apply_desired_state_plan_with_node_binding(
             if created {
                 match document.collection {
                     Collection::Node => {
-                        txn.queue_relationship_grant(ConfigRelationshipGrant::Actor {
-                            collection: name.to_owned(),
-                            doc_id,
-                            relation: "runtime_reader".to_owned(),
-                            target: owner.to_owned(),
-                        })?;
+                        if txn.has_pack_interpreter() {
+                            txn.add_actor_relationship(
+                                name,
+                                &doc_id,
+                                "runtime_reader",
+                                &identity::Did::new(owner)?,
+                            )
+                            .await?;
+                        } else {
+                            txn.queue_relationship_grant(ConfigRelationshipGrant::Actor {
+                                collection: name.to_owned(),
+                                doc_id,
+                                relation: "runtime_reader".to_owned(),
+                                target: owner.to_owned(),
+                            })?;
+                        }
                     }
                     Collection::Agent => {
                         created_agents.push((owner.to_owned(), id.to_owned(), doc_id))
@@ -364,7 +380,7 @@ pub(crate) async fn apply_desired_state_plan_with_node_binding(
         let node_doc = configuration_node_doc(txn, &node_did, binding).await?;
         super::publish_node_managers_in_txn(txn, "Agent", &agent_doc, "administrator", &node_doc)
             .await?;
-        if txn.managed_agent_signer().is_some() {
+        if txn.managed_agent_signer().is_some() || txn.has_pack_interpreter() {
             txn.add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
                 .await?;
             txn.add_actor_relationship(

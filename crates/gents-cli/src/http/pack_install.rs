@@ -19,6 +19,8 @@ use crate::cli::output_format::OutputFormat;
 use crate::cli::{PackDriftArgs, PackInstallArgs, ScopeArgs};
 use crate::commands::pack::PackSource;
 
+pub(crate) mod session;
+
 const PATH: &str = "/packs/install";
 /// The root and its dependencies share one pack's compressed bound, so a
 /// remote install never buffers more archive bytes than one maximal pack.
@@ -136,6 +138,41 @@ pub(crate) async fn install_remote(
         .strip_suffix("/api/v0/graphql")
         .context("remote pack install requires a Gents runtime GraphQL endpoint")?;
     url.set_path(&format!("{prefix}{PATH}"));
+    let body = encode_install_request(pack, dependencies, args, owner, explicit).await?;
+    let client = tokio::task::spawn_blocking(|| {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+    })
+    .await??;
+    let response = endpoint
+        .authorize(client.post(url))?
+        .json(&body)
+        .send()
+        .await
+        .context(
+            "remote pack install outcome is unconfirmed; inspect the runtime before retrying",
+        )?;
+    let status = response.status();
+    let body = response.bytes().await.context(
+        "remote pack install response was unreadable; inspect the runtime before retrying",
+    )?;
+    anyhow::ensure!(
+        status.is_success(),
+        "remote pack install returned HTTP {status}: {}",
+        String::from_utf8_lossy(&body)
+    );
+    serde_json::from_slice(&body)
+        .context("remote pack install response was unreadable; inspect the runtime before retrying")
+}
+
+pub(crate) async fn encode_install_request(
+    pack: &PackSource,
+    dependencies: &[PackSource],
+    args: &PackInstallArgs,
+    owner: &str,
+    explicit: bool,
+) -> Result<serde_json::Value> {
     let root = pack.shared_archive();
     let dependencies = dependencies
         .iter()
@@ -168,32 +205,7 @@ pub(crate) async fn install_remote(
     })
     .await
     .context("packing remote document archives")??;
-    let client = tokio::task::spawn_blocking(|| {
-        reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-    })
-    .await??;
-    let response = endpoint
-        .authorize(client.post(url))?
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(body)
-        .send()
-        .await
-        .context(
-            "remote pack install outcome is unconfirmed; inspect the runtime before retrying",
-        )?;
-    let status = response.status();
-    let body = response.bytes().await.context(
-        "remote pack install response was unreadable; inspect the runtime before retrying",
-    )?;
-    anyhow::ensure!(
-        status.is_success(),
-        "remote pack install returned HTTP {status}: {}",
-        String::from_utf8_lossy(&body)
-    );
-    serde_json::from_slice(&body)
-        .context("remote pack install response was unreadable; inspect the runtime before retrying")
+    Ok(serde_json::from_slice(&body)?)
 }
 
 fn refused(status: StatusCode, error: impl std::fmt::Display) -> Response {
@@ -304,8 +316,12 @@ struct Received {
 }
 
 fn decode_request(body: &[u8], node_did: &str) -> Result<Received> {
-    let mut request: InstallRequest =
+    let request: InstallRequest =
         serde_json::from_slice(body).context("decoding pack install request")?;
+    decode_install_request(request, node_did)
+}
+
+fn decode_install_request(mut request: InstallRequest, node_did: &str) -> Result<Received> {
     anyhow::ensure!(
         request.node_did == node_did,
         "endpoint serves a different node"

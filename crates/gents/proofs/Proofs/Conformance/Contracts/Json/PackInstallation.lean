@@ -48,7 +48,8 @@ def pinCasesJson : String := jsonArray [
 
 def wireLockCasesJson : String := jsonArray ([false, true].map fun held =>
   "{\"held\":" ++ toString held ++ ",\"publish_allowed\":" ++
-    toString (Configuration.wireAndPluginPublishAllowed held) ++ "}")
+    toString (Configuration.wireAndPluginPublishAllowed held) ++
+    ",\"resolve_allowed\":" ++ toString (Configuration.stagedPluginResolutionAllowed held) ++ "}")
 
 def wireTargetCasesJson : String := jsonArray (
   [false, true].flatMap fun localTarget => [false, true].flatMap fun preview =>

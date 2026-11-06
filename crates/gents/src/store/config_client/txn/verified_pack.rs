@@ -16,7 +16,7 @@ use crate::store::config_client::write_telemetry::WriteBackend;
 
 /// A User transaction exposes reads and client-approved effects only.
 pub struct VerifiedPackTxn<'txn, 'access> {
-    inner: &'txn ConfigApplyTxn<'access>,
+    pub(super) inner: &'txn ConfigApplyTxn<'access>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -36,6 +36,9 @@ where
 }
 
 impl VerifiedPackTxn<'_, '_> {
+    pub(crate) fn interpreter(&self) -> &ConfigApplyTxn<'_> {
+        self.inner
+    }
     pub async fn read(&self, document: &str) -> Result<Value> {
         self.read_with_variables(document, &serde_json::json!({}))
             .await
@@ -62,6 +65,7 @@ impl VerifiedPackTxn<'_, '_> {
     pub async fn apply_relationship(
         &self,
         scope: &PackApprovalScope,
+        expected: &crate::store::config_client::PackRelationship,
         evidence: PackRelationshipEvidence,
     ) -> std::result::Result<(), PackEvidenceError> {
         self.require_scope_node(scope)?;
@@ -74,35 +78,36 @@ impl VerifiedPackTxn<'_, '_> {
         let relationship =
             tokio::task::spawn_blocking(move || verify_pack_relationship(&actor, &scope, evidence))
                 .await??;
+        if &relationship != expected {
+            return Err(PackEvidenceError::Mismatch);
+        }
         if super::super::client_signed_agent::trusted_delete_schema(&relationship.collection)
             .is_none()
         {
             return Err(PackEvidenceError::UnsupportedCollection);
         }
-        let PackRelationshipTarget::Actor { did } = &relationship.target else {
-            return self.apply_resource_relationship(relationship).await;
+        let target = match &relationship.target {
+            PackRelationshipTarget::Actor { did } => identity::Did::new(did)
+                .map_err(ConfigClientError::RelationshipTargetIdentity)?
+                .to_string(),
+            PackRelationshipTarget::Resource { resource, doc_id } => {
+                super::super::relationships::resource_target(resource, doc_id)?
+            }
+            PackRelationshipTarget::EntitySet {
+                resource,
+                doc_id,
+                relation,
+            } => super::super::relationships::entity_set_target(resource, doc_id, relation)?,
         };
-        let target =
-            identity::Did::new(did).map_err(ConfigClientError::RelationshipTargetIdentity)?;
-        if relationship.delete {
-            self.inner
-                .delete_actor_relationship(
-                    &relationship.collection,
-                    &relationship.doc_id,
-                    &relationship.relation,
-                    &target,
-                )
-                .await?;
-        } else {
-            self.inner
-                .add_actor_relationship(
-                    &relationship.collection,
-                    &relationship.doc_id,
-                    &relationship.relation,
-                    &target,
-                )
-                .await?;
-        }
+        self.inner
+            .change_document_relationship_unchecked(
+                &relationship.collection,
+                &relationship.doc_id,
+                &relationship.relation,
+                &target,
+                relationship.delete,
+            )
+            .await?;
         Ok(())
     }
 
@@ -119,67 +124,6 @@ impl VerifiedPackTxn<'_, '_> {
             _ => Err(PackEvidenceError::Mismatch),
         }
     }
-
-    async fn apply_resource_relationship(
-        &self,
-        relationship: crate::store::config_client::client_pack_evidence::PackRelationship,
-    ) -> std::result::Result<(), PackEvidenceError> {
-        let collection = &relationship.collection;
-        let doc = &relationship.doc_id;
-        let relation = &relationship.relation;
-        match (&relationship.target, relationship.delete) {
-            (PackRelationshipTarget::Resource { resource, doc_id }, false) => {
-                self.inner
-                    .add_resource_relationship(collection, doc, relation, resource, doc_id)
-                    .await?
-            }
-            (PackRelationshipTarget::Resource { resource, doc_id }, true) => {
-                self.inner
-                    .delete_resource_relationship(collection, doc, relation, resource, doc_id)
-                    .await?
-            }
-            (
-                PackRelationshipTarget::EntitySet {
-                    resource,
-                    doc_id,
-                    relation: target_relation,
-                },
-                false,
-            ) => {
-                self.inner
-                    .add_entity_set_relationship(
-                        collection,
-                        doc,
-                        relation,
-                        resource,
-                        doc_id,
-                        target_relation,
-                    )
-                    .await?
-            }
-            (
-                PackRelationshipTarget::EntitySet {
-                    resource,
-                    doc_id,
-                    relation: target_relation,
-                },
-                true,
-            ) => {
-                self.inner
-                    .delete_entity_set_relationship(
-                        collection,
-                        doc,
-                        relation,
-                        resource,
-                        doc_id,
-                        target_relation,
-                    )
-                    .await?
-            }
-            (PackRelationshipTarget::Actor { .. }, _) => return Err(PackEvidenceError::Mismatch),
-        }
-        Ok(())
-    }
 }
 
 impl ConfigAccess {
@@ -188,6 +132,44 @@ impl ConfigAccess {
     pub async fn transact_verified_pack<'a, T, E, F>(
         &'a self,
         operation: &'static str,
+        callback: F,
+    ) -> std::result::Result<T, VerifiedPackTransactionError<E>>
+    where
+        T: Send + 'a,
+        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+        F: for<'txn> Fn(&'txn VerifiedPackTxn<'txn, 'a>) -> BoxFuture<'txn, Result<T, E>>
+            + Send
+            + Sync
+            + 'a,
+    {
+        self.transact_verified_pack_inner(operation, None, callback)
+            .await
+    }
+
+    pub async fn transact_verified_pack_with_approver<'a, T, E, F>(
+        &'a self,
+        operation: &'static str,
+        scope: PackApprovalScope,
+        approver: Arc<dyn super::super::PackEffectApprover>,
+        callback: F,
+    ) -> std::result::Result<T, VerifiedPackTransactionError<E>>
+    where
+        T: Send + 'a,
+        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+        F: for<'txn> Fn(&'txn VerifiedPackTxn<'txn, 'a>) -> BoxFuture<'txn, Result<T, E>>
+            + Send
+            + Sync
+            + 'a,
+    {
+        let approval = super::super::pack_effect::PackInterpreterApproval { scope, approver };
+        self.transact_verified_pack_inner(operation, Some(Arc::new(approval)), callback)
+            .await
+    }
+
+    async fn transact_verified_pack_inner<'a, T, E, F>(
+        &'a self,
+        operation: &'static str,
+        approval: Option<Arc<super::super::pack_effect::PackInterpreterApproval>>,
         callback: F,
     ) -> std::result::Result<T, VerifiedPackTransactionError<E>>
     where
@@ -217,22 +199,30 @@ impl ConfigAccess {
             });
         }
         let unconfirmed = Arc::new(AtomicBool::new(false));
+        let mode = if approval.is_some() {
+            TransactionMode::SingleAttempt
+        } else {
+            TransactionMode::ConflictRetry
+        };
         let callback = Arc::new(callback);
         let result = transact_owned_with_finality(
             operation,
             WriteBackend::Embedded,
-            TransactionMode::ConflictRetry,
+            mode,
             move |operation, rollback| {
                 let actor = actor.clone();
+                let approval = approval.clone();
                 Box::pin(async move {
-                    ConfigApplyTxn::begin_local_owned(
+                    let mut txn = ConfigApplyTxn::begin_local_owned(
                         local.node(),
                         Some(actor),
                         operation,
                         rollback,
                         EmbeddedTransactionPurpose::VerifiedClient,
                     )
-                    .await
+                    .await?;
+                    txn.pack_approval = approval;
+                    Ok(txn)
                 })
             },
             move |txn| {

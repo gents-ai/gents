@@ -7,6 +7,10 @@ use super::write_telemetry::{ConflictSource, WriteTelemetryError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigClientError {
+    #[error(transparent)]
+    PackApproval(#[from] super::PackApprovalError),
+    #[error("verified pack effect failed")]
+    PackEvidence(#[source] Box<super::PackEvidenceError>),
     #[error("client Agent publication journal could not be recorded")]
     ClientAgentJournal(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("client Agent publication is interrupted or unconfirmed; inspect the retained publication journal before repair")]

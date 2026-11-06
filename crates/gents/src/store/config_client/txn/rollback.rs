@@ -33,6 +33,11 @@ where
 // Cleanup owners may drop on threads without a Tokio context, so each retains
 // the runtime that created it.
 pub(super) enum RollbackOnDrop {
+    PackReplay {
+        runtime: DropCleanup,
+        replay: super::super::pack_effect::PackReplayHandle,
+        armed: bool,
+    },
     Http {
         runtime: DropCleanup,
         endpoint: GraphqlEndpoint,
@@ -62,7 +67,9 @@ pub(crate) struct RollbackDropCleanupPause {
 impl RollbackOnDrop {
     pub(super) fn disarm(&mut self) {
         match self {
-            Self::Http { armed, .. } | Self::Embedded { armed, .. } => *armed = false,
+            Self::Http { armed, .. }
+            | Self::Embedded { armed, .. }
+            | Self::PackReplay { armed, .. } => *armed = false,
         }
     }
 }
@@ -70,6 +77,20 @@ impl RollbackOnDrop {
 impl Drop for RollbackOnDrop {
     fn drop(&mut self) {
         match self {
+            Self::PackReplay {
+                runtime,
+                replay,
+                armed,
+            } => {
+                if *armed {
+                    let replay = replay.clone();
+                    runtime.spawn(async move {
+                        if let Err(error) = replay.0.abort().await {
+                            tracing::debug!(%error, "aborting cancelled pack replay");
+                        }
+                    });
+                }
+            }
             Self::Http {
                 runtime,
                 endpoint,

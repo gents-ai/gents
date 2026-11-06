@@ -8,6 +8,7 @@ mod fault_injection;
 mod finalize;
 mod gate;
 mod native;
+mod pack_interpreter;
 mod rollback;
 mod telemetry;
 mod transact;

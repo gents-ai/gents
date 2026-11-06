@@ -802,6 +802,11 @@ def caseCoverage : List CoverageEntry :=
       "store::config_client::client_pack_evidence::tests::verified_pack_evidence_binds_mutation_actor_and_snapshot"
       "Binds client signer, exact create and update graphs, and relationship scope to an embedded transaction. Full plan validation, deletion and native denial remain to be exercised.")
       "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "pack_wire_lock_cases"
+      "PackWireLockCases"
+      "plugin::tests::executor::staged_plugin_resolution_conforms_to_lean")
+      "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "agent_steer_disposition_cases"
       "AgentSteerDispositionCases"

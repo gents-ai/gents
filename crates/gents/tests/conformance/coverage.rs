@@ -821,6 +821,9 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     if !snapshot.pack_finality_cases.is_empty() {
         emitted.insert(("pack_finality_cases".into(), "PackFinalityCases".into()));
     }
+    if !snapshot.pack_wire_lock_cases.is_empty() {
+        emitted.insert(("pack_wire_lock_cases".into(), "PackWireLockCases".into()));
+    }
     if !snapshot.hosted_pack_evidence_cases.is_empty() {
         emitted.insert(("hosted_pack_evidence_cases".into(), "HostedPackEvidenceCases".into()));
     }

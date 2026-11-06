@@ -633,6 +633,7 @@ async fn cancellation_after_embedded_begin_abandons_before_releasing_the_gate() 
                     client_signed_write_dispatched: std::sync::atomic::AtomicBool::new(false),
                     relationship_grants: std::sync::Mutex::new(Vec::new()),
                     publication_observer: None,
+                    pack_approval: None,
                 })
             })
         },

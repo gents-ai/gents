@@ -11,6 +11,22 @@ pub(crate) fn installed_echo() -> (tempfile::TempDir, InstalledPlugin) {
     installed_plugin(ECHO_WAT, None)
 }
 
+#[test]
+fn staged_plugin_resolution_conforms_to_lean() {
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().pack_wire_lock_cases;
+    let (home, _) = installed_echo();
+    let executor = PluginExecutor::new(Some(home.path().to_owned()));
+    for case in cases {
+        let held = case["held"].as_bool().unwrap();
+        let _stage = held.then(|| store::try_lock_store(home.path()).unwrap());
+        assert_eq!(
+            executor.resolve("team/plugin", None).is_ok(),
+            case["resolve_allowed"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
+}
+
 pub(crate) fn installed_plugin(
     wat: &str,
     access: Option<crate::pack::BindAccess>,
@@ -1402,12 +1418,7 @@ mod data_calls {
     const NODE: &str = "did:key:z6Mknode";
 
     async fn node_with(rows: &[(&str, &str)]) -> Arc<crate::defra_node::Node> {
-        let node = Arc::new(
-            crate::defra_node::Node::builder()
-                .build()
-                .await
-                .unwrap(),
-        );
+        let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
         node.add_collection("type Note { owner: String body: String }")
             .await
             .unwrap();

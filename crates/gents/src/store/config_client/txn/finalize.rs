@@ -28,6 +28,18 @@ pub(super) struct CommitFailure {
 impl ConfigApplyTxn<'_> {
     pub(super) async fn commit_inner(&mut self) -> std::result::Result<(), CommitFailure> {
         match &self.backend {
+            TxnBackend::Http { endpoint, .. } if endpoint.pack_replay.is_some() => endpoint
+                .pack_replay
+                .as_ref()
+                .expect("checked replay")
+                .0
+                .commit()
+                .await
+                .map_err(|error| CommitFailure {
+                    error: ConfigClientError::from(error),
+                    cleanup: CommitCleanup::NotNeeded,
+                    definitely_not_committed: false,
+                }),
             TxnBackend::Http {
                 endpoint,
                 id,
@@ -148,6 +160,14 @@ impl ConfigApplyTxn<'_> {
             return Err(ConfigClientError::InjectedRollbackFailure);
         }
         let result = match &self.backend {
+            TxnBackend::Http { endpoint, .. } if endpoint.pack_replay.is_some() => endpoint
+                .pack_replay
+                .as_ref()
+                .expect("checked replay")
+                .0
+                .abort()
+                .await
+                .map_err(ConfigClientError::from),
             TxnBackend::Http {
                 endpoint,
                 id,

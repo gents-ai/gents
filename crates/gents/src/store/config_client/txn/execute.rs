@@ -46,6 +46,17 @@ impl ConfigApplyTxn<'_> {
             r#"mutation {{ delete_{collection}(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
             crate::store::graphql::escape_graphql_string(doc_id),
         );
+        if self.has_pack_interpreter() {
+            let response = self
+                .apply_pack_interpreter_effect(crate::store::config_client::PackMutation::Delete {
+                    collection: collection.to_owned(),
+                    doc_id: doc_id.to_owned(),
+                })
+                .await?;
+            return super::delete_confirmation::confirm_configuration_delete(
+                &response, collection, doc_id,
+            );
+        }
         let response = match &self.backend {
             TxnBackend::Http { endpoint, id, .. } if endpoint.client_signed_agent_creates => {
                 super::super::client_signed_agent::client_signer(endpoint)?;
@@ -93,7 +104,9 @@ impl ConfigApplyTxn<'_> {
         };
         let (intent, http) = match &self.backend {
             TxnBackend::Http { endpoint, .. } => (endpoint.client_signed_agent_creates, true),
-            TxnBackend::Embedded { .. } => (false, false),
+            TxnBackend::Embedded { .. } => {
+                (self.pack_approval.is_some(), self.pack_approval.is_some())
+            }
         };
         if intent && trusted_create_schema(collection).is_none() {
             return Err(ConfigClientError::ClientConfigurationUpdateUnsupported);
@@ -135,6 +148,22 @@ impl ConfigApplyTxn<'_> {
         variables: &Value,
         trusted_schema: &str,
     ) -> Result<Value> {
+        if self.has_pack_interpreter() {
+            let schemas = query::parse_sdl(trusted_schema)?;
+            if schemas.len() != 1 {
+                return Err(ConfigClientError::ClientConfigurationUpdateInvalid);
+            }
+            let input = variables
+                .get("input")
+                .cloned()
+                .ok_or(ConfigClientError::VariablesNotObject)?;
+            return self
+                .apply_pack_interpreter_effect(crate::store::config_client::PackMutation::Create {
+                    collection: schemas[0].name.clone(),
+                    input,
+                })
+                .await;
+        }
         let TxnBackend::Http { endpoint, id, .. } = &self.backend else {
             return self.execute_with_variables(document, variables).await;
         };
@@ -169,6 +198,26 @@ impl ConfigApplyTxn<'_> {
         variables: &Value,
         trusted_schema: &str,
     ) -> Result<Value> {
+        if self.has_pack_interpreter() {
+            let schemas = query::parse_sdl(trusted_schema)?;
+            if schemas.len() != 1 {
+                return Err(ConfigClientError::ClientConfigurationUpdateInvalid);
+            }
+            let collection = schemas[0].name.clone();
+            let doc_id =
+                super::super::client_signed_agent::update_target(document, variables, &collection)?;
+            let input = variables
+                .get("input")
+                .cloned()
+                .ok_or(ConfigClientError::VariablesNotObject)?;
+            return self
+                .apply_pack_interpreter_effect(crate::store::config_client::PackMutation::Update {
+                    collection,
+                    doc_id,
+                    input,
+                })
+                .await;
+        }
         let TxnBackend::Http { endpoint, id, .. } = &self.backend else {
             return self.execute_with_variables(document, variables).await;
         };
@@ -309,6 +358,24 @@ impl ConfigApplyTxn<'_> {
         delete: bool,
     ) -> Result<()> {
         crate::store::graphql::validate_collection_identifier(collection)?;
+        if self.has_pack_interpreter() {
+            let relationship = super::pack_interpreter::relationship(
+                collection, doc_id, relation, target, delete,
+            )?;
+            return self.apply_pack_interpreter_relationship(relationship).await;
+        }
+        self.change_document_relationship_unchecked(collection, doc_id, relation, target, delete)
+            .await
+    }
+
+    pub(super) async fn change_document_relationship_unchecked(
+        &self,
+        collection: &str,
+        doc_id: &str,
+        relation: &str,
+        target: &str,
+        delete: bool,
+    ) -> Result<()> {
         match &self.backend {
             TxnBackend::Embedded {
                 node,
@@ -460,6 +527,14 @@ impl ConfigApplyTxn<'_> {
     pub async fn execute_with_variables(&self, document: &str, variables: &Value) -> Result<Value> {
         if !variables.is_object() {
             return Err(ConfigClientError::VariablesNotObject);
+        }
+        if self.has_pack_interpreter() {
+            graphql::ensure_query_document(document)?;
+            if let TxnBackend::Http { endpoint, .. } = &self.backend {
+                if let Some(replay) = &endpoint.pack_replay {
+                    return Ok(replay.0.read(document, variables).await?);
+                }
+            }
         }
         #[cfg(test)]
         if !document.trim_start().starts_with("mutation")

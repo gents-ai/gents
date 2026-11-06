@@ -22,9 +22,9 @@ mod client_agent_publication;
 mod client_pack_evidence;
 mod client_signed_agent;
 pub use client_pack_evidence::{
-    prepare_pack_evidence, prepare_pack_evidence_in_txn, prepare_pack_relationship,
-    PackApprovalScope, PackEvidence, PackEvidenceError, PackMutation, PackRelationship,
-    PackRelationshipEvidence, PackRelationshipTarget,
+    prepare_pack_evidence, prepare_pack_evidence_from_history, prepare_pack_evidence_in_txn,
+    prepare_pack_relationship, PackApprovalScope, PackEvidence, PackEvidenceError, PackMutation,
+    PackRelationship, PackRelationshipEvidence, PackRelationshipTarget,
 };
 pub use client_signed_agent::prepare_request_evidence;
 pub use client_signed_agent::ClientSigningCapability;
@@ -47,6 +47,7 @@ mod inference_profile;
 mod node_deferred_operation;
 mod node_document_publication;
 mod node_permissions;
+mod pack_effect;
 mod pairing_reader;
 mod profile_switch;
 #[cfg(test)]
@@ -61,6 +62,7 @@ mod subscription;
 pub(crate) mod transport_publication;
 mod txn;
 pub use acp::nac::NodePermission;
+pub use pack_effect::{PackApprovalError, PackEffectApprover, PackReplayTransport};
 pub use subscription::GraphqlSubscription;
 pub use txn::TRACING_TARGET as TXN_TRACING_TARGET;
 pub use txn::{VerifiedPackTransactionError, VerifiedPackTxn};
@@ -171,6 +173,7 @@ pub struct GraphqlEndpoint {
     delegated_authorization: Option<reqwest::header::HeaderValue>,
     client_signed_agent_creates: bool,
     client_signing_capability: Option<ClientSigningCapability>,
+    pack_replay: Option<pack_effect::PackReplayHandle>,
 }
 
 impl GraphqlEndpoint {
@@ -181,6 +184,7 @@ impl GraphqlEndpoint {
             delegated_authorization: None,
             client_signed_agent_creates: false,
             client_signing_capability: None,
+            pack_replay: None,
         }
     }
 
@@ -191,6 +195,7 @@ impl GraphqlEndpoint {
             delegated_authorization: None,
             client_signed_agent_creates: false,
             client_signing_capability: None,
+            pack_replay: None,
         }
     }
 
@@ -211,6 +216,7 @@ impl GraphqlEndpoint {
             delegated_authorization: Some(header),
             client_signed_agent_creates: false,
             client_signing_capability: None,
+            pack_replay: None,
         })
     }
 
@@ -265,6 +271,14 @@ impl GraphqlEndpoint {
             return Err(ConfigClientError::ClientSignerMismatch);
         }
         Ok(capability)
+    }
+
+    /// Bind the existing client actor to one runtime-hosted pack interpreter.
+    pub fn with_pack_replay(mut self, replay: Arc<dyn PackReplayTransport>) -> Result<Self> {
+        self.held_client_signing_capability()?;
+        self.pack_replay = Some(pack_effect::PackReplayHandle(replay));
+        self.client_signed_agent_creates = true;
+        Ok(self)
     }
 
     pub fn is_anonymous(&self) -> bool {

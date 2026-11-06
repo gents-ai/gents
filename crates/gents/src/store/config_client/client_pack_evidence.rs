@@ -57,7 +57,7 @@ pub struct PackApprovalScope {
     pub nonce: String,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PackRelationshipTarget {
     Actor {
@@ -74,7 +74,7 @@ pub enum PackRelationshipTarget {
     },
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackRelationship {
     pub collection: String,
@@ -307,6 +307,36 @@ pub async fn prepare_pack_evidence_in_txn(
     prepare_pack_evidence_observed(actor, scope, mutation, observed).await
 }
 
+/// Build from the transaction's history response, verifying its native blocks
+/// before the held client key signs the exact operation.
+pub async fn prepare_pack_evidence_from_history(
+    actor: &ClientSigningCapability,
+    scope: &PackApprovalScope,
+    mutation: &PackMutation,
+    history: Option<Value>,
+) -> Result<PackEvidence, PackEvidenceError> {
+    let observed = match (mutation, history) {
+        (PackMutation::Create { .. }, None) => None,
+        (
+            PackMutation::Update { doc_id, .. } | PackMutation::Delete { doc_id, .. },
+            Some(history),
+        ) => {
+            let doc_id = doc_id.clone();
+            Some(
+                tokio::task::spawn_blocking(move || {
+                    let response: query::QueryResponse = serde_json::from_value(history)
+                        .map_err(ConfigClientError::ClientSignedSnapshotDecode)?;
+                    defra_http::client_signed_update::snapshot_from_response(&doc_id, &response)
+                        .map_err(ConfigClientError::ClientConfigurationGraph)
+                })
+                .await??,
+            )
+        }
+        _ => return Err(PackEvidenceError::Mismatch),
+    };
+    prepare_pack_evidence_observed(actor, scope, mutation, observed).await
+}
+
 async fn prepare_pack_evidence_observed(
     actor: &ClientSigningCapability,
     scope: &PackApprovalScope,
@@ -488,7 +518,7 @@ pub(super) async fn apply_pack_evidence(
         (PackMutation::Delete { collection, doc_id }, VerifiedPackEvidence::Mutation(graph)) => {
             txn.delete_verified_configuration_document(collection, doc_id, graph)
                 .await?;
-            Value::Null
+            serde_json::json!({"data": {(format!("delete_{collection}")): [{"_docID": doc_id}]}})
         }
         _ => return Err(PackEvidenceError::Mismatch),
     };
@@ -631,7 +661,9 @@ mod tests {
                         .as_bool()
                         .unwrap();
                     assert_eq!(
-                        txn.apply_relationship(scope, altered).await.is_ok(),
+                        txn.apply_relationship(scope, &parent, altered)
+                            .await
+                            .is_ok(),
                         expected
                     );
                     let other_signed = prepare_pack_relationship(other, scope, &parent).await?;
@@ -646,7 +678,9 @@ mod tests {
                         .as_bool()
                         .unwrap();
                     assert_eq!(
-                        txn.apply_relationship(scope, other_signed).await.is_ok(),
+                        txn.apply_relationship(scope, &parent, other_signed)
+                            .await
+                            .is_ok(),
                         expected
                     );
                     let mut wrong_scope = (*scope).clone();
@@ -662,12 +696,12 @@ mod tests {
                         .as_bool()
                         .unwrap();
                     assert_eq!(
-                        txn.apply_relationship(&wrong_scope, signed.clone())
+                        txn.apply_relationship(&wrong_scope, &parent, signed.clone())
                             .await
                             .is_ok(),
                         expected
                     );
-                    txn.apply_relationship(scope, signed).await?;
+                    txn.apply_relationship(scope, &parent, signed).await?;
                     Ok::<_, anyhow::Error>(created)
                 })
             })

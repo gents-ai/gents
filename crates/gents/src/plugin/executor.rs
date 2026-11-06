@@ -554,6 +554,7 @@ impl PluginExecutor {
         let home = self.home.as_deref().with_context(|| {
             format!("plugin {coordinate} is not installed: this runtime has no plugin directory")
         })?;
+        let _store = store::try_lock_store_shared(home)?;
         let record = store::read_record(home, namespace, name)
             .with_context(|| format!("plugin {coordinate} is not installed"))?;
         if let Some(pinned) = pinned {

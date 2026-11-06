@@ -50,6 +50,7 @@ pub(crate) enum TransactionOutcome<T> {
 #[derive(Debug, Clone, Copy)]
 pub(super) enum TransactionMode {
     ConflictRetry,
+    SingleAttempt,
     Idempotent(IdempotentTransactionRetry),
     #[cfg(test)]
     ObserveConflict,
@@ -59,6 +60,7 @@ impl TransactionMode {
     const fn max_attempts(self) -> u32 {
         match self {
             Self::ConflictRetry => retry::TRANSACT_CONFLICT_MAX_RETRIES + 1,
+            Self::SingleAttempt => 1,
             Self::Idempotent(policy) => policy.max_attempts(),
             #[cfg(test)]
             Self::ObserveConflict => 1,
@@ -68,7 +70,7 @@ impl TransactionMode {
     const fn retry_owner(self) -> RetryOwner {
         match self {
             Self::Idempotent(_) => RetryOwner::GentsIdempotentTransaction,
-            Self::ConflictRetry => RetryOwner::GentsTransaction,
+            Self::ConflictRetry | Self::SingleAttempt => RetryOwner::GentsTransaction,
             #[cfg(test)]
             Self::ObserveConflict => RetryOwner::GentsTransaction,
         }
@@ -97,7 +99,7 @@ impl TransactionMode {
         match self {
             #[cfg(test)]
             Self::ObserveConflict => true,
-            Self::ConflictRetry | Self::Idempotent(_) => false,
+            Self::ConflictRetry | Self::SingleAttempt | Self::Idempotent(_) => false,
         }
     }
 }

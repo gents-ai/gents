@@ -89,10 +89,16 @@ impl ConfigAccess {
         E: TransactionFailure + From<ConfigClientError> + Send + 'a,
         F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
     {
+        let mode = match self {
+            Self::Graphql(endpoint) if endpoint.pack_replay.is_some() => {
+                TransactionMode::SingleAttempt
+            }
+            _ => TransactionMode::ConflictRetry,
+        };
         transact_owned(
             operation,
             backend_for_access(self),
-            TransactionMode::ConflictRetry,
+            mode,
             move |operation, rollback| {
                 Box::pin(async move { self.begin_apply_txn(operation, rollback).await })
             },

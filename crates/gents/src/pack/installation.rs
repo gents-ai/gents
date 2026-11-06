@@ -16,17 +16,20 @@ use crate::Collection;
 mod catalog;
 mod dependencies;
 mod documents;
+mod hosted;
 pub(crate) use documents::{prepare_document_pack_archive_with_provisioner, sdl_paths};
 mod removal;
 mod scope_preview;
 pub use catalog::{installed_catalog, InstalledCatalogEntry};
 pub use documents::{
-    apply_hosted_document_graph, apply_prepared_dependency_schemas, document_pack_schema_paths,
-    hosted_document_graph, install_documents_with_plugins, install_prepared_document_graph,
-    install_prepared_document_pack, plugin_data_unique_keys, prepare_document_pack_archive,
-    prepare_document_pack_install, prepare_hosted_document_pack_archive, HostedDocumentGraph,
-    HostedPackPreparation, PreparedDependency, PreparedDocumentPackInstall,
+    apply_hosted_document_graph, apply_prepared_dependency_schemas, assemble_document_graph_report,
+    document_pack_schema_paths, hosted_document_graph, install_documents_with_plugins,
+    install_prepared_document_graph, install_prepared_document_pack, plugin_data_unique_keys,
+    prepare_document_pack_archive, prepare_document_pack_install,
+    prepare_hosted_document_pack_archive, HostedDocumentGraph, HostedPackPreparation,
+    PreparedDependency, PreparedDocumentPackInstall,
 };
+pub use hosted::{stage_hosted_pack, HostedPackStage, HostedPackStageError};
 pub use removal::ensure_plugins_unreferenced;
 pub use scope_preview::{preview_installed_pack_scope, InstalledPackScopePreview};
 const RECORD: &str = "PackInstallation";
@@ -318,7 +321,7 @@ async fn write_record_in_txn(
         // A remove immediately followed by a reinstall must not regenerate
         // the just-tombstoned record's content-addressed docID (see
         // `mint_recreate_identity_timestamp`).
-        "installed_at": crate::store::config_client::mint_recreate_identity_timestamp(),
+        "installed_at": txn.pack_timestamp("pack_installation").await?,
         "required_by": if required_by.is_empty() { Value::Null } else { json!(required_by) },
         "explicit": prior.explicit || explicit,
         "plugin_store": plugin_store,

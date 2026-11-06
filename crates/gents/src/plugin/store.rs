@@ -279,6 +279,14 @@ pub fn lock_store(home: &Path, exclusive: bool) -> Result<StoreGuard> {
 
 /// Async mutation owners use a nonblocking lock attempt to avoid parking a Tokio worker.
 pub fn try_lock_store(home: &Path) -> Result<StoreGuard> {
+    try_lock_store_mode(home, true)
+}
+
+pub(crate) fn try_lock_store_shared(home: &Path) -> Result<StoreGuard> {
+    try_lock_store_mode(home, false)
+}
+
+fn try_lock_store_mode(home: &Path, exclusive: bool) -> Result<StoreGuard> {
     let path = plugins_root(home).join(".store.lock");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -291,7 +299,12 @@ pub fn try_lock_store(home: &Path) -> Result<StoreGuard> {
         .truncate(false)
         .open(&path)
         .with_context(|| format!("opening {}", path.display()))?;
-    let lock = match crate::store::local::file_lock::FileLock::try_exclusive(file) {
+    let result = if exclusive {
+        crate::store::local::file_lock::FileLock::try_exclusive(file)
+    } else {
+        crate::store::local::file_lock::FileLock::try_shared(file)
+    };
+    let lock = match result {
         Ok(lock) => lock,
         Err(std::fs::TryLockError::WouldBlock) => {
             anyhow::bail!("plugin store is busy; retry this pack operation")

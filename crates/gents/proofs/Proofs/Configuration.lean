@@ -630,6 +630,15 @@ theorem hosted_effect_requires_approved_plan (actor graph native : Bool) :
     hostedPackEffectAllowed actor graph false native = false := by
   simp [hostedPackEffectAllowed]
 
+/-- A hosted graph reaches native commit only after the User's independent
+replay matches every proposed effect and signals that its plan is complete. -/
+def hostedPackCommitAllowed (effectsMatched clientFinished : Bool) : Bool :=
+  effectsMatched && clientFinished
+
+theorem hosted_pack_disconnect_before_finish_cannot_commit (effectsMatched : Bool) :
+    hostedPackCommitAllowed effectsMatched false = false := by
+  simp [hostedPackCommitAllowed]
+
 def hostedPackEffectCases : List (Bool × Bool × Bool) :=
   [(false, false, true), (false, true, true), (true, false, true),
     (true, true, false), (true, true, true)]
@@ -660,6 +669,12 @@ def installedPinCommitAllowed (pin : Option String) (underLock : String) : Bool 
 /-- Wiring holds the shared plugin store lock from reading the digest through
 configuration publication. Competing store mutation cannot publish in that interval. -/
 def wireAndPluginPublishAllowed (wireHoldsLock : Bool) : Bool := !wireHoldsLock
+
+/-- A staged replacement is not available to plugin execution until the
+publisher releases the store lock after native transaction finality. -/
+def stagedPluginResolutionAllowed (publisherHoldsLock : Bool) : Bool := !publisherHoldsLock
+
+theorem staged_plugin_cannot_be_resolved : stagedPluginResolutionAllowed true = false := by decide
 
 theorem plugin_publish_blocked_during_wire :
     wireAndPluginPublishAllowed true = false := by decide

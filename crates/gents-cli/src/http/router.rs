@@ -189,6 +189,10 @@ pub(crate) fn runtime_contract_router(
                 axum::extract::DefaultBodyLimit::max(crate::http::pack_install::MAX_BODY),
             ),
         )
+        .route(
+            "/packs/install/session",
+            get(crate::http::pack_install::session::install_session),
+        )
         .route("/version", get(version_handler))
         .route(
             gents_protocol::agent_identity::AGENT_IDENTITY_PATH,
