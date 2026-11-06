@@ -17,8 +17,7 @@ fn bind_test_evaluator(spec: &mut TrialSpec, home: &mut EmbeddedHome) {
 #[tokio::test]
 async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_arrivals() {
     use crate::request::lifecycle::{
-        build_signed_request, task_fire_key, write_task_delivery, ExecutionOrigin, RequestSigner,
-        TriggerLineage,
+        build_signed_request, task_fire_key, ExecutionOrigin, RequestSigner, TriggerLineage,
     };
     use crate::store::config_client::event_source_cursor::checkpoint_prefix;
     use gents_protocol::event_delivery::EventConsumer;
@@ -92,6 +91,7 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
     }
     async fn admit(
         access: &ConfigAccess,
+        node: &std::sync::Arc<crate::defra_node::Node>,
         owner: &str,
         agent: &dyn crate::NodeIdentity,
         source_doc: &str,
@@ -121,8 +121,15 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
             attempt: None,
             created_at: "2026-01-01T00:00:00Z".into(),
         };
-        let response = access.execute("{ Trigger { _docID } }").await.unwrap();
+        let response = access
+            .execute("{ Trigger { _docID } EventSource { _docID } Task { _docID } }")
+            .await
+            .unwrap();
         let trigger_doc = response["data"]["Trigger"][0]["_docID"].as_str().unwrap();
+        let source_doc_id = response["data"]["EventSource"][0]["_docID"]
+            .as_str()
+            .unwrap();
+        let task_doc_id = response["data"]["Task"][0]["_docID"].as_str().unwrap();
         let spec = crate::request::lifecycle::materialize::pending_agent_request_spec(
             owner,
             agent.did(),
@@ -147,9 +154,31 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
         let create = build_signed_request(spec, RequestSigner::Identity(agent))
             .await
             .unwrap();
-        write_task_delivery(access, &fire, false, &create)
-            .await
-            .unwrap();
+        let generation = crate::triggers::engine::event_delivery::event_admission_generation(
+            &serde_json::from_value(json!({"node_did":owner, "event_source_id":"source", "source_collection":"CheckpointWork", "event_kind":"created"})).unwrap(),
+            &serde_json::from_value(json!({"node_did":owner, "trigger_id":"trigger", "task_id":"task", "enabled":true, "concurrency":"queued_serial", "source":{"kind":"event", "event_source_id":"source"}})).unwrap(),
+            &serde_json::from_value(json!({"node_did":owner, "task_id":"task", "agent_did":agent.did(), "prompt_template":"work"})).unwrap(),
+            &crate::triggers::engine::event_delivery::EventConfigDocIds {
+                trigger: trigger_doc,
+                source: source_doc_id,
+                task: task_doc_id,
+            },
+        ).unwrap();
+        let prepared = crate::triggers::engine::durable::PreparedFire {
+            receipt: fire,
+            target_existing: false,
+            replace_prior: false,
+            event_source_generation: Some(generation),
+        };
+        crate::request::lifecycle::materialize::write_trigger_delivery_with_identity(
+            node,
+            ::identity::Did::new(agent.did()).unwrap(),
+            &prepared,
+            &create,
+            Some(agent),
+        )
+        .await
+        .unwrap();
     }
 
     let first = source(&evaluator, "first").await;
@@ -159,7 +188,14 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
             .unwrap()
             .is_none()
     );
-    admit(&agent, home.did(), agent_identity.as_ref(), &first).await;
+    admit(
+        &agent,
+        &home.node,
+        home.did(),
+        agent_identity.as_ref(),
+        &first,
+    )
+    .await;
     assert!(
         super::super::submit::fired_request(&evaluator, home.did(), &first)
             .await
@@ -192,6 +228,7 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
         if case.through == 2 && case.receipt {
             admit(
                 &agent,
+                &home.node,
                 home.did(),
                 agent_identity.as_ref(),
                 second.as_deref().unwrap(),
@@ -308,7 +345,7 @@ async fn installing_a_pack_binds_its_inference_slot_to_the_frozen_profile() {
         ::identity::Did::new(&spec.evaluator_did).unwrap(),
     );
     let response = evaluator
-        .execute("query { Agent { agent_did inference_profile_id } }")
+        .execute("query { Agent { agent_did creation_nonce inference_profile_id } }")
         .await
         .unwrap();
     let rows = response["data"]["Agent"].as_array().unwrap().clone();
@@ -384,8 +421,18 @@ async fn installing_a_pack_binds_its_inference_slot_to_the_frozen_profile() {
     )
     .await
     .unwrap();
-    let actor =
-        ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(&agent_did).unwrap());
+    let binding: gents_protocol::agent_identity::AgentIdentityBinding = serde_json::from_value(
+        json!({"agent_did":agent_did, "creation_nonce":rows[0]["creation_nonce"]}),
+    )
+    .unwrap();
+    let agent_identity =
+        crate::store::identity::resolve_agent_identity(home.identity.as_ref(), &binding).unwrap();
+    let actor = ConfigAccess::local_managed_agent(
+        home.node.clone(),
+        ::identity::Did::new(&agent_did).unwrap(),
+        agent_identity.as_ref(),
+    )
+    .unwrap();
     let session = actor
         .execute("{ AgentSession { session_id requester_did agent_did relationships_pending } }")
         .await
@@ -451,7 +498,7 @@ async fn installing_a_pack_binds_its_inference_slot_to_the_frozen_profile() {
             .unwrap()
             .is_none()
     );
-    evaluator.write("eval.test.complete_request", r#"mutation { update_AgentRequest(filter: {request_id: {_eq: "eval-request"}}, input: {lifecycle_state: "completed"}) { _docID } }"#).await.unwrap();
+    actor.write("eval.test.complete_request", r#"mutation { update_AgentRequest(filter: {request_id: {_eq: "eval-request"}}, input: {lifecycle_state: "completed"}) { _docID } }"#).await.unwrap();
     let terminal = crate::eval::runner::embedded::observe::await_terminal_with_access(
         &home.node,
         &evaluator,
