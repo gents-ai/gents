@@ -1,4 +1,4 @@
-use super::tests::{build_agent_node, call_config_tool, config, node_identity, SelfConfigFixture};
+use super::tests::{call_config_tool, config, node_identity, SelfConfigFixture};
 use super::*;
 
 type Tools = Vec<Box<dyn ToolDyn>>;
@@ -424,23 +424,12 @@ async fn execution_deadlines_are_bounded_where_a_claim_can_represent_them() {
 
 #[tokio::test]
 async fn help_is_layered_and_its_recipes_run_as_written() {
-    let node = build_agent_node().await;
-    let identity = node_identity("recipes");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "setup").await;
-    crate::test_support::install_test_agent(&node, &owner, &format!("{owner}:worker")).await;
-    let mut grants = config(&["node", "tools", "profile", "automation"]);
-    grants.agent_did = "setup".into();
-    grants.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity.clone()),
-        &grants,
-        std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
-    );
-
+    let (fixture, tools) =
+        authenticated_setup("recipes", &["node", "tools", "profile", "automation"]).await;
+    let owner = fixture.node_did();
+    let agent = fixture.agent_did();
+    let backend = format!("{agent}:backend");
+    fixture.grant_agent_schema().await;
     let index = call_config_tool(&tools, vec!["help".into()]).await.unwrap();
     assert!(index.len() < 2_000, "help index is {} chars", index.len());
     for resource in [
@@ -475,24 +464,31 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
             .unwrap_or_else(|error| panic!("{alias}: {error}"));
     }
 
-    let substitute = |call: &Value| -> Value {
-        let text = call
-            .to_string()
-            .replace("<BACKEND_ID>", "setup:backend")
-            .replace("<AGENT_DID>", "setup")
-            .replace("<MODEL>", "test-model")
-            .replace("<PROMPT>", "Lead the work.")
-            .replace("<DID>", &owner);
-        serde_json::from_str(&text).unwrap()
-    };
+    let mut created_agent: Option<String> = None;
+
     for resource in ["agent", "execution", "datastore", "automation", "profile"] {
         for (title, steps) in command::help::recipes(resource) {
             for (call, _) in steps {
-                let call = substitute(&call);
+                let mut text = call
+                    .to_string()
+                    .replace("<BACKEND_ID>", &backend)
+                    .replace("<AGENT_DID>", agent)
+                    .replace("<MODEL>", "test-model")
+                    .replace("<PROMPT>", "Lead the work.")
+                    .replace("<DID>", owner);
+                if text.contains("<CREATED_AGENT_DID>") {
+                    text = text.replace(
+                        "<CREATED_AGENT_DID>",
+                        created_agent
+                            .as_deref()
+                            .expect("the previous create receipt supplied an Agent DID"),
+                    );
+                }
+                let call: Value = serde_json::from_str(&text).unwrap();
+                let creates_agent = call["argv"] == json!(["agent", "create"]);
                 let result = if call["tool"] == "schema" {
                     let args = call["args"].clone();
-                    let schema_tool =
-                        crate::tools::builtin::schema_help::SchemaTool::new(node.clone());
+                    let schema_tool = fixture.schema_tool();
                     let preview = Tool::call(&schema_tool, serde_json::from_value(args).unwrap())
                         .await
                         .unwrap();
@@ -508,14 +504,20 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
                     ok(&tools, call.clone()).await
                 };
                 assert!(!result.is_null(), "{resource} recipe {title}");
+                if creates_agent {
+                    created_agent = Some(
+                        result["agent_did"]
+                            .as_str()
+                            .expect("agent create receipt has a DID")
+                            .to_owned(),
+                    );
+                }
             }
         }
     }
-    let lead = ok(&tools, json!({"argv":["agent","get","lead"]})).await;
-    assert!(
-        lead.to_string().contains(&format!("{owner}:lead")),
-        "{lead}"
-    );
+    let lead_did = created_agent.expect("agent recipe created a helper");
+    let lead = ok(&tools, json!({"argv":["agent","get",lead_did]})).await;
+    assert_eq!(lead["agent_did"], lead_did);
 }
 
 #[tokio::test]

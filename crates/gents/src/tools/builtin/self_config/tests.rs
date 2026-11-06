@@ -181,6 +181,31 @@ impl SelfConfigFixture {
         .unwrap();
     }
 
+    pub(super) async fn grant_agent_schema(&self) {
+        let admin = crate::ConfigAccess::local_as(
+            self.db.node.clone(),
+            identity::Did::new(self.db.node_identity.did()).unwrap(),
+        );
+        let actor = identity::Did::new(&self.agent_did).unwrap();
+        for permission in [
+            crate::store::config_client::NodePermission::CollectionGet,
+            crate::store::config_client::NodePermission::CollectionPatch,
+        ] {
+            admin
+                .grant_node_permission(&actor, permission)
+                .await
+                .unwrap();
+        }
+    }
+
+    pub(super) fn schema_tool(&self) -> crate::tools::builtin::schema_help::SchemaTool {
+        crate::tools::builtin::schema_help::SchemaTool::for_managed_agent(
+            self.db.node.clone(),
+            self.agent.as_ref(),
+        )
+        .unwrap()
+    }
+
     pub(super) async fn grant_sibling_configuration(&self, sibling: &str) {
         let admin = crate::ConfigAccess::local_as(
             self.db.node.clone(),
@@ -660,7 +685,7 @@ async fn build_registers_gated_family() {
     );
     for core in [
         "native API",
-        "\"<DID>:<slug>\"",
+        "copy the exact agent_did",
         "Preview writes nothing.",
         "[\"validate\"] audits saved configuration",
         "[\"help\"] lists granted resources",

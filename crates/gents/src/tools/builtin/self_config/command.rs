@@ -295,7 +295,7 @@ impl Tool for ConfigCommandTool {
             name: Self::NAME.to_owned(),
             description: r#"Read and change Gents configuration through a native API, not a shell. Collection definitions and migrations use the separate schema tool.
 Call {"argv":[RESOURCE,VERB],"target_id"?:ID,"set"?:{field:value},"clear"?:[field],"options"?:{name:value}}. Documents share list, get, create, update, delete. Writes validate and commit immediately. ["validate"] audits saved configuration; fix reported errors before reporting completion. Preview writes nothing.
-Agent IDs are "<DID>:<slug>"; the slug alone works. ["help"] lists granted resources; ["help",RESOURCE] explains fields and exceptions."#.to_owned(),
+Agent IDs are DIDs; copy the exact agent_did from a creation receipt or ["agent","list"]. ["help"] lists granted resources; ["help",RESOURCE] explains fields and exceptions."#.to_owned(),
             parameters: json!({
                 "type": "object",
                 "properties": {

@@ -52,7 +52,7 @@ impl std::fmt::Display for MissingAgent {
         match self.suggestions.as_slice() {
             [] => write!(
                 f,
-                "copy an exact ID from [\"agent\",\"list\"] (agent create returns \"<DID>:<slug>\")"
+                "copy an exact DID from [\"agent\",\"list\"] or an agent create receipt"
             ),
             [only] => write!(f, "did you mean {only:?}?"),
             several => write!(f, "did you mean one of {several:?}?"),

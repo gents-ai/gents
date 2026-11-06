@@ -264,7 +264,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
         "agent-target" => Page {
             what: "a named route to an agent for agent_new (tools grant). TARGET_ID goes in target_id or argv.",
             commands: &["agent-target list", "agent-target get TARGET_ID", "agent-target [preview] create|edit TARGET_ID  set: target fields"],
-            notes: "Choose an existing agent or create a helper. A new session does not require cloning the role. name is passed to agent_new; agent_did selects the helper. Omit target_node_did on create for a local helper; set it explicitly for a remote node. Updates preserve the destination when omitted. Local slugs resolve; never copy a DID from another document ID. Dispatch acceptance does not prove the helper started or replied.",
+            notes: "Choose an existing agent or create a helper. A new session does not require cloning the role. name is passed to agent_new; agent_did selects the helper. Use the exact Agent DID from its creation receipt or agent list. Omit target_node_did on create for a local helper; set it explicitly for a remote node. Updates preserve the destination when omitted. Dispatch acceptance does not prove the helper started or replied.",
             next: "read tools get, then tools update: preserve set.agents, set enabled true and add this ID to target_ids. Selecting targets alone leaves delegation disabled. Use options.agent to grant another caller; tools apply next request.",
         },
         "execution" => Page {
@@ -285,7 +285,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "agent [preview] edit AGENT_DID  set/clear: agent fields",
                 "agent context get|preview|edit  options.agent; set/clear: context fields",
             ],
-            notes: "Create derives agent_did <DID>:<slug of display-name> (a collision appends -2) and returns it; it takes no id. The slug alone resolves wherever an agent ID is accepted. Change the prompt through context update; set.system_prompt replaces it. A profile or backend pick may keep the current account, use an account-free backend, or move to another provider's default account; it never switches between accounts of one provider.",
+            notes: "Create allocates and returns an agent_did; it takes no id. Copy that exact DID from the receipt or agent list when selecting the agent. Change the prompt through context update; set.system_prompt replaces it. A profile or backend pick may keep the current account, use an account-free backend, or move to another provider's default account; it never switches between accounts of one provider.",
             next: "give it tools ([\"help\",\"tools\"]) and test it in a fresh session.",
         },
         "tools" => Page {
@@ -409,10 +409,10 @@ pub(crate) fn recipes(resource: &str) -> Vec<(&'static str, Vec<Step>)> {
                 ),
                 (
                     json!({"argv":["agent","create"],"options":{"display-name":"Lead","system-prompt":"<PROMPT>","preset":"readonly","profile":"lead"}}),
-                    Some("the receipt's agent_did is <DID>:lead; lead also works"),
+                    Some("copy agent_did from this receipt into <CREATED_AGENT_DID> in the next call"),
                 ),
                 (
-                    json!({"argv":["agent-target","create"],"target_id":"lead","set":{"name":"lead","agent_did":"lead"}}),
+                    json!({"argv":["agent-target","create"],"target_id":"lead","set":{"name":"lead","agent_did":"<CREATED_AGENT_DID>"}}),
                     None,
                 ),
                 (
@@ -438,8 +438,8 @@ pub(crate) fn recipes(resource: &str) -> Vec<(&'static str, Vec<Step>)> {
                     None,
                 ),
                 (
-                    json!({"argv":["profile","update"],"options":{"agent":"worker"},"set":{"execution_id":"worker-exec"}}),
-                    Some("the receipt's agent_did and target_id name the profile that changed"),
+                    json!({"argv":["profile","update"],"options":{"agent":"<AGENT_DID>"},"set":{"execution_id":"worker-exec"}}),
+                    Some("replace <AGENT_DID> with the exact DID from agent list; the receipt names the profile that changed"),
                 ),
             ],
         )],
@@ -460,11 +460,11 @@ pub(crate) fn recipes(resource: &str) -> Vec<(&'static str, Vec<Step>)> {
                     None,
                 ),
                 (
-                    json!({"argv":["tools","update"],"options":{"agent":"worker"},"set":{"datastore":{"datastore_tool_surface_ids":["handoff-tools"]}}}),
-                    Some("if tools get shows a datastore group, send it back with this ID added"),
+                    json!({"argv":["tools","update"],"options":{"agent":"<AGENT_DID>"},"set":{"datastore":{"datastore_tool_surface_ids":["handoff-tools"]}}}),
+                    Some("replace <AGENT_DID> with the exact DID from agent list; if tools get shows a datastore group, send it back with this ID added"),
                 ),
                 (
-                    json!({"argv":["agent","get","worker"]}),
+                    json!({"argv":["agent","get","<AGENT_DID>"]}),
                     Some("call create_handoff from a fresh session of worker to prove the chain"),
                 ),
             ],
