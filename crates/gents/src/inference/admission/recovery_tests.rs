@@ -720,52 +720,51 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
 #[tokio::test]
 async fn parent_recovery_lookup_uses_agent_native_authority() {
     use crate::store::config_client::{ConfigAccess, NodePermission};
-    use crate::store::identity::{KeyIdentity, NodeIdentity};
-    use std::sync::Arc;
+    use crate::store::identity::NodeIdentity;
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
 
-    let dir = tempfile::tempdir().unwrap();
-    let runtime = KeyIdentity::load_or_create(dir.path().join("runtime.key"), None).unwrap();
-    let user = KeyIdentity::load_or_create(dir.path().join("user.key"), None).unwrap();
-    let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
-    let agent = crate::store::identity::resolve_agent_identity(&runtime, &binding).unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(runtime.did())
-            .with_node_acp_enabled()
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let (db, user, owner, binding) =
+        crate::test_support::signed_test_node("inference-recovery-native-authority").await;
+    let node = db.node.clone();
+    let runtime = db.node_identity.clone();
+    let agent = crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
     let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
-    for did in [user.did(), agent.did()] {
-        for permission in [
-            NodePermission::DocumentRead,
-            NodePermission::DocumentUpdate,
-            NodePermission::DacRelationAdd,
-        ] {
-            admin
-                .grant_node_permission(&did.parse().unwrap(), permission)
-                .await
-                .unwrap();
-        }
-    }
-    let owner = ConfigAccess::local_as(node.clone(), user.did().parse().unwrap());
-    let created = owner.write("test.inference_recovery.request", &format!(
-        r#"mutation {{ create_AgentRequest(input: {{ request_id: "private-recovery", node_did: "{}", agent_did: "{}", lifecycle_state: "{}" }}) {{ _docID }} }}"#,
-        runtime.did(), agent.did(), RequestLifecycleState::Processing.as_str())).await.unwrap();
-    let request_doc = crate::store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
-    owner
-        .add_actor_relationship(
-            "AgentRequest",
-            &request_doc,
-            "working_agent",
-            &agent.did().parse().unwrap(),
+    let create = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        "private-recovery",
+        runtime.did(),
+        user.did(),
+        agent.did(),
+        "private-recovery-session",
+        "recover",
+        "interactive",
+        "2026-09-01T00:00:00Z",
+        AgentRequestAdmissionRecord::client(user.did()),
+    );
+    let lifecycle =
+        crate::tools::call::lifecycle::admission_fixture::pending_client_fixture_request(
+            &node,
+            &owner,
+            runtime.clone(),
+            &user,
+            agent.as_ref(),
+            create,
         )
         .await
         .unwrap();
+    let request_doc = lifecycle.request().doc_id.clone();
+    let agent_access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    agent_access.write("test.inference_recovery.processing", &format!(
+        r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "{}" }}) {{ _docID }} }}"#,
+        escape_graphql_string(&request_doc), RequestLifecycleState::Processing.as_str(),
+    )).await.unwrap();
     let row = StaleInferenceCallRow {
         doc_id: "call-doc".into(),
         call_id: "call".into(),
@@ -774,19 +773,13 @@ async fn parent_recovery_lookup_uses_agent_native_authority() {
         agent_did: agent.did().into(),
         call_state: "running".into(),
     };
-    let agent_access = ConfigAccess::local_managed_agent(
-        node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
     let found = lookup_parent_request(&agent_access, runtime.did(), &row)
         .await
         .unwrap_or_else(|error| panic!("authorized parent lookup failed: {error:#}"));
     let parent = found.unwrap();
     assert_eq!(parent.request_id, "private-recovery");
     assert!(recovery_outcome(&row, &parent).is_none());
-    owner.write("test.inference_recovery.terminal", &format!(
+    agent_access.write("test.inference_recovery.terminal", &format!(
         r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "{}" }}) {{ _docID }} }}"#,
         row.request_doc_id, RequestLifecycleState::Failed.as_str())).await.unwrap();
     let terminal = lookup_parent_request(&agent_access, runtime.did(), &row)
