@@ -1,4 +1,12 @@
-import { Inbox, LayoutGrid, ListTree, Play, Plus, Settings } from "lucide-react";
+import {
+  Inbox,
+  LayoutGrid,
+  ListTree,
+  Package,
+  Play,
+  Plus,
+  Settings,
+} from "lucide-react";
 import { navigate } from "@/lib/router";
 import { flag } from "@/preferences";
 import { registerCommand } from "./commands";
@@ -31,6 +39,14 @@ registerCommand({
   icon: Play,
   when: () => flag("automations"),
   run: () => navigate({ name: "automations" }),
+});
+registerCommand({
+  id: "page.packs",
+  title: "Go to packs",
+  group: "Pages",
+  icon: Package,
+  when: () => flag("packs"),
+  run: () => navigate({ name: "packs" }),
 });
 registerCommand({
   id: "page.mailbox",

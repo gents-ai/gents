@@ -14,6 +14,7 @@ import {
   Bell,
   Command as CommandIcon,
   Play,
+  Package,
   Search,
   Waypoints,
   Workflow,
@@ -59,6 +60,7 @@ import { SessionStatus } from "./SessionStatus";
 import { agentName } from "./behavior";
 import { Hint } from "./Hint";
 import { SEARCH_FIELD } from "@/lib/textAssist";
+import { readInstalledPacks, shortName, useInstalledPacks } from "./packs/model";
 
 const store = createStore<{ open: boolean; kind: SearchFilter; asked: number }>(() => ({
   open: false,
@@ -162,6 +164,9 @@ function useEntries(): SearchEntry[] {
   const commands = useCommands();
   const automationsOn = useFlag("automations");
   const hidden = useHidden();
+  const { actions } = useApp();
+  const packsOn = useFlag("packs");
+  const installed = useInstalledPacks().packs;
   const fleet = useFleet(
     useShallow((s) => ({
       nodes: s.nodes,
@@ -171,6 +176,12 @@ function useEntries(): SearchEntry[] {
       nodeKeys: s.nodeKeys,
     })),
   );
+  const selectedNode = fleet.nodes[selected ?? fleet.nodeKeys[0] ?? ""];
+  const packsHere =
+    packsOn && selectedNode !== undefined && isLocalNode(selectedNode, homeDid);
+  useEffect(() => {
+    if (packsHere && installed === null) void readInstalledPacks(actions);
+  }, [packsHere, installed, actions]);
   return useMemo(() => {
     const nodes = fleet.nodeKeys.flatMap((key) => fleet.nodes[key] ?? []);
     const nodeName = (nodeDid: string) => {
@@ -247,6 +258,15 @@ function useEntries(): SearchEntry[] {
           route: { name: "settings", section: s.id } as Route,
           icon: s.icon,
         })),
+        ...(packsHere && nodeDid
+          ? (installed ?? []).map((p) => ({
+              key: `setting:pack:${p.pack}`,
+              title: shortName(p.pack),
+              group: `${nodeName(nodeDid)} · Packs`,
+              route: { name: "packs", item: p.pack } as Route,
+              icon: Package,
+            }))
+          : []),
       ],
       /* every command that can run here, as the palette opens */
       actions: commands
@@ -259,7 +279,17 @@ function useEntries(): SearchEntry[] {
           run: () => void c.run(0),
         })),
     });
-  }, [fleet, selected, sections, homeDid, commands, automationsOn, hidden]);
+  }, [
+    fleet,
+    selected,
+    sections,
+    homeDid,
+    commands,
+    automationsOn,
+    hidden,
+    packsHere,
+    installed,
+  ]);
 }
 
 function PaletteBody({

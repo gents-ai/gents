@@ -32,7 +32,6 @@ function describe(record: UxPluginRecord): string {
 
 export function UxPluginsPanel() {
   const records = useUxPluginRecords();
-  const decisions = useUxDecisions();
   const [busy, setBusy] = useState(false);
   const rows = Object.values(records).sort((a, b) => a.id.localeCompare(b.id));
   const reveal = revealInFolderLabel();
@@ -97,20 +96,29 @@ export function UxPluginsPanel() {
                   {reveal}
                 </Button>
               )}
-              <Switch
-                aria-label={`Enable ${record.name}`}
-                checked={record.status === "loaded"}
-                disabled={record.status === "error" && !(record.id in decisions)}
-                onCheckedChange={(checked) =>
-                  void setUxPluginEnabled(record.id, checked).catch((error: unknown) =>
-                    toast.error(error instanceof Error ? error.message : String(error)),
-                  )
-                }
-              />
+              <UxPluginSwitch record={record} />
             </div>
           </Row>
         ))}
       </Group>
     </div>
+  );
+}
+
+/** A plugin's on/off switch. The choice is this device's, applied live in
+    every window; a plugin that failed can be switched only once chosen. */
+export function UxPluginSwitch({ record }: { record: UxPluginRecord }) {
+  const decisions = useUxDecisions();
+  return (
+    <Switch
+      aria-label={`Enable ${record.name}`}
+      checked={record.status === "loaded"}
+      disabled={record.status === "error" && !(record.id in decisions)}
+      onCheckedChange={(checked) =>
+        void setUxPluginEnabled(record.id, checked).catch((error: unknown) =>
+          toast.error(error instanceof Error ? error.message : String(error)),
+        )
+      }
+    />
   );
 }

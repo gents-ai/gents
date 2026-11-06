@@ -56,6 +56,7 @@ const TITLES: Partial<Record<Route["name"], string>> = {
   agents: "Nodes",
   mailbox: "Mailbox",
   automations: "Automations",
+  packs: "Packs",
 };
 
 export function useWindowTitle(route: Route) {

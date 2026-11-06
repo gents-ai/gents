@@ -46,9 +46,7 @@ export function PluginPageScreen({
       className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-auto p-2 md:p-3"
       data-testid="plugin-page"
     >
-      {!windowed && inNativeShell() && !isMobileTauriShell() && (
-        <OpenInWindow pluginId={pluginId} />
-      )}
+      {!windowed && canOpenPageWindows() && <OpenInWindow pluginId={pluginId} />}
       <ContribBoundary id={page.id} variant="pane">
         <ContribRender render={page.render} />
       </ContribBoundary>
@@ -69,15 +67,7 @@ function OpenInWindow({ pluginId }: { pluginId: string }) {
           className="text-muted-foreground hover:text-foreground"
           aria-label="Open in new window"
           data-testid="plugin-page-window"
-          onClick={() =>
-            void openPluginWindow({
-              pluginId,
-              nodeDid,
-              title: name.slice(0, 120),
-            }).catch((error) =>
-              toast.error(`Couldn't open ${name} in a new window: ${errorText(error)}`),
-            )
-          }
+          onClick={() => openPageWindow(pluginId, name, nodeDid)}
         >
           <SquareArrowOutUpRight />
         </Button>
@@ -85,3 +75,15 @@ function OpenInWindow({ pluginId }: { pluginId: string }) {
     </PaneBar>
   );
 }
+
+/** Opens a plugin's page in a window of its own on a node, or brings the
+    one already open forward; a failure says so instead of throwing. */
+export function openPageWindow(pluginId: string, name: string, nodeDid: string | null) {
+  void openPluginWindow({ pluginId, nodeDid, title: name.slice(0, 120) }).catch(
+    (error) =>
+      toast.error(`Couldn't open ${name} in a new window: ${errorText(error)}`),
+  );
+}
+
+/** Whether this shell can open a page in a window of its own. */
+export const canOpenPageWindows = () => inNativeShell() && !isMobileTauriShell();
