@@ -74,6 +74,17 @@ export const FLAGS = [
       "What a pack's notification may carry outside the app is decided, and they ship to everyone or are dropped.",
     restart: false,
   },
+  {
+    id: "browser",
+    name: "Browser",
+    description:
+      "A Browser panel that shows web pages beside a session, with the app's menus and dialogs drawn over them. macOS only.",
+    default: false,
+    owner: "david-on-github",
+    removeBy: "2027-03-01",
+    removeWhen: "The browser panel ships to everyone, or is removed.",
+    restart: true,
+  },
 ] as const satisfies readonly Flag[];
 
 export type FlagId = (typeof FLAGS)[number]["id"];

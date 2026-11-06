@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+mod browser;
 #[cfg(desktop)]
 mod links;
 #[cfg(target_os = "macos")]
@@ -123,6 +125,11 @@ pub fn run() {
         links::desktop_take_links,
         plugin_window::desktop_open_plugin_window,
         notifications::desktop_post_notification,
+        browser::browser_open,
+        browser::browser_place,
+        browser::browser_hide,
+        browser::browser_go,
+        browser::browser_close,
         product_telemetry::product_telemetry_app_opened,
         product_telemetry::product_telemetry_status,
         product_telemetry::product_telemetry_set_enabled
