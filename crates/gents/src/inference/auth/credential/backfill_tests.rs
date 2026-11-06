@@ -376,7 +376,7 @@ async fn seed_upgraded_row(
             ).await?;
             let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")?;
             crate::store::config_client::publish_secret_configuration_in_txn(txn, "OAuthCredential", &doc, did).await?;
-            Ok(())
+            Ok::<(), anyhow::Error>(())
         })
     }).await.unwrap();
 }
