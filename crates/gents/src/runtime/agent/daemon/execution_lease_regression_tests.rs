@@ -105,9 +105,11 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(
+            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 node.clone(),
-            ),
+                agent_config.agent_identity.as_ref(),
+            )
+            .unwrap(),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -499,9 +501,11 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(
+            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 node.clone(),
-            ),
+                agent_config.agent_identity.as_ref(),
+            )
+            .unwrap(),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -670,9 +674,11 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(
+            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 node.clone(),
-            ),
+                agent_config.agent_identity.as_ref(),
+            )
+            .unwrap(),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -895,9 +901,11 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(
+            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 node.clone(),
-            ),
+                agent_config.agent_identity.as_ref(),
+            )
+            .unwrap(),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -1063,9 +1071,11 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(
+            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 node.clone(),
-            ),
+                agent_config.agent_identity.as_ref(),
+            )
+            .unwrap(),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -1179,9 +1189,11 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(
+            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 node.clone(),
-            ),
+                agent_config.agent_identity.as_ref(),
+            )
+            .unwrap(),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),

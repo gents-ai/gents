@@ -367,9 +367,11 @@ impl Harness {
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                     self.node.clone(),
-                ),
+                    self.agent_config.agent_identity.as_ref(),
+                )
+                .unwrap(),
             ),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_execution_registry: executions,
