@@ -195,7 +195,11 @@ def documentCreateRoute (input : DocumentCreateInput) : Route :=
 
 theorem remote_document_schema_refused (input : DocumentCreateInput)
     (remote : input.source = .remote) : documentCreateRoute input = .refuse := by
-  simp [documentCreateRoute, remote]
+  cases input with
+  | mk source single application live signer http =>
+    cases source with
+    | authored => cases remote
+    | remote => rfl
 
 theorem document_create_has_no_native_fallback (input : DocumentCreateInput) :
     documentCreateRoute input ≠ .native := by
