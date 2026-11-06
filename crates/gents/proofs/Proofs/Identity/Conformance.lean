@@ -997,6 +997,13 @@ def selectionManagerCaseJson (name : String) (granted revoked : Bool) : Json :=
       ⟨"configuration", "skill", "selected_by", .entitySet "configuration" "context" "selected_by"⟩)),
     ("reader", toJson (mayManage state "delegate" ⟨"configuration", "skill", "reader", .actor "delegate"⟩)),
     ("update", toJson (allowed 8 state "delegate" "configuration" "skill" "update"))]
+
+def nodeManagerCaseJson (name actor resource id relation : String) (revokeAdmin : Bool) : Json :=
+  let state := if revokeAdmin then apply nodeManagerFixture
+    (.revoke ⟨"nodes", "node", "administrator", .actor "admin"⟩) else nodeManagerFixture
+  Json.mkObj [("name", toJson name), ("actor", toJson actor), ("resource", toJson resource),
+    ("relation", toJson relation), ("revoke_admin", toJson revokeAdmin),
+    ("expected", toJson (mayManage state actor ⟨resource, id, relation, .actor "selected-agent"⟩))]
 def packInstallationCaseJson (name installer : String) (commit revoke retryFresh direct : Bool) : Json :=
   let initial : State :=
     { objects := [⟨"nodes", "home", userDid⟩],
@@ -1670,6 +1677,17 @@ def json : Json := Json.mkObj
       [selectionManagerCaseJson "denied" false false,
        selectionManagerCaseJson "granted" true false,
        selectionManagerCaseJson "revoked" true true]),
+   ("configuration_node_manager_cases", toJson
+      [nodeManagerCaseJson "node-owner" "user" "configuration" "config" "selected_by" false,
+       nodeManagerCaseJson "node-admin" "admin" "configuration" "config" "selected_by" false,
+       nodeManagerCaseJson "creator" "creator-agent" "configuration" "config" "selected_by" false,
+       nodeManagerCaseJson "other-admin" "other-admin" "configuration" "config" "selected_by" false,
+       nodeManagerCaseJson "revoked-admin" "admin" "configuration" "config" "selected_by" true,
+       nodeManagerCaseJson "admin-cannot-grant-writer" "admin" "configuration" "config" "writer" false,
+       nodeManagerCaseJson "root-owner" "user" "workspace_roots" "root" "reader" false,
+       nodeManagerCaseJson "root-admin" "admin" "workspace_roots" "root" "reader" false,
+       nodeManagerCaseJson "root-other-admin" "other-admin" "workspace_roots" "root" "reader" false,
+       nodeManagerCaseJson "root-revoked-admin" "admin" "workspace_roots" "root" "reader" true]),
    ("mcp_service_use_cases", toJson
       ([(true, true, true, true, true, true),
         (false, true, true, true, true, true),

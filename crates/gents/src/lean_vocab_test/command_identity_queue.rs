@@ -563,6 +563,8 @@ pub(crate) struct LeanIdentityHouseholdCase {
     #[serde(default)]
     pub(crate) configuration_selection_manager_cases: Vec<serde_json::Value>,
     #[serde(default)]
+    pub(crate) configuration_node_manager_cases: Vec<serde_json::Value>,
+    #[serde(default)]
     pub(crate) mcp_service_use_cases: Vec<serde_json::Value>,
     #[serde(default)]
     pub(crate) configuration_schedule_cases: Vec<serde_json::Value>,
