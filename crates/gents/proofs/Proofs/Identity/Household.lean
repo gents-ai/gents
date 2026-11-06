@@ -85,13 +85,14 @@ def policy : List ResourceDefinition :=
   , { name := "configuration"
       relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
         ⟨"selected_by", ["agents->executor", "configuration->selected_by"], []⟩,
-        ⟨"selection_manager", ["actor"], ["selected_by"]⟩,
+        ⟨"selection_manager", ["actor", "nodes->owner", "nodes->administrator"], ["selected_by"]⟩,
         ⟨"writer", ["actor"], []⟩]
       permissions := [permission "read" ["reader", "writer", "selected_by"] [("parent", "read")],
         permission "update" ["writer"] [("parent", "update")],
         permission "delete" [] [("parent", "delete")]] }
   , { name := "workspace_roots"
-      relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩]
+      relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
+        ⟨"reader_manager", ["nodes->owner", "nodes->administrator"], ["reader"]⟩]
       permissions := [permission "read" ["reader"] [("parent", "read")],
         permission "update" [] [("parent", "update")],
         permission "delete" [] [("parent", "delete")]] }
@@ -361,7 +362,8 @@ def allowedIn : List ResourceDefinition → Nat → State → DID → String →
         | .entitySet .. => false
         | .object parentResource parentId =>
           allowedIn definitions fuel state actor parentResource parentId inherited))
-    | some _, none =>
+    | some object, none =>
+      if permission == "owner" then object.owner == actor else
       ((definitions.find? (·.name == resource)).map (fun definition =>
         definition.relations.any (·.name == permission))).getD false &&
         state.relations.any (fun fact => fact.resource == resource && fact.id == id &&
@@ -455,19 +457,45 @@ theorem enrollment_grants_no_document_access (fuel : Nat) (state : State)
       allowed fuel state actor resource id permission :=
   enrollment_grants_no_document_access_in policy fuel state enrolled actor resource id permission
 
-/-- ACP1 grants relationship management to the document owner and actors with
-an explicitly declared direct manager relation on that same document. Inherited
-read, update and delete permissions do not manage relationships. -/
+/-- Native relationship management accepts the document owner or a subject
+of an explicitly declared manager relation on the same document. Entity-set
+managers use the same native relation evaluation as document reads. -/
 def mayManage (state : State) (actor : DID) (relation : Relation) : Bool :=
   match policy.find? (·.name == relation.resource),
       state.objects.find? (fun object => object.resource == relation.resource && object.id == relation.id) with
   | some definition, some object =>
       relation.relation != "owner" &&
         (object.owner == actor || definition.relations.any (fun manager =>
-          manager.manages.contains relation.relation && state.relations.any (fun fact =>
-            fact.resource == relation.resource && fact.id == relation.id &&
-            fact.relation == manager.name && fact.subject == .actor actor)))
+          manager.manages.contains relation.relation &&
+          allowed 8 state actor relation.resource relation.id manager.name))
   | _, _ => false
+
+/-- The two manager usersets are published with the exact physical Node on
+creation. Removing either tuple or a Node administrator grant is a native
+revocation; an ordinary update does not recreate it. -/
+def nodeManagerFixture : State :=
+  { objects := [⟨"nodes", "node", "user"⟩, ⟨"nodes", "other-node", "other-user"⟩,
+      ⟨"configuration", "config", "creator-agent"⟩,
+      ⟨"workspace_roots", "root", "creator-agent"⟩],
+    relations := [⟨"nodes", "node", "administrator", .actor "admin"⟩,
+      ⟨"nodes", "other-node", "administrator", .actor "other-admin"⟩,
+      ⟨"configuration", "config", "parent", .object "nodes" "node"⟩,
+      ⟨"configuration", "config", "selection_manager", .entitySet "nodes" "node" "owner"⟩,
+      ⟨"configuration", "config", "selection_manager", .entitySet "nodes" "node" "administrator"⟩,
+      ⟨"workspace_roots", "root", "parent", .object "nodes" "node"⟩,
+      ⟨"workspace_roots", "root", "reader_manager", .entitySet "nodes" "node" "owner"⟩,
+      ⟨"workspace_roots", "root", "reader_manager", .entitySet "nodes" "node" "administrator"⟩],
+    enrolled := [] }
+
+theorem node_owner_and_admin_manage_selection :
+    mayManage nodeManagerFixture "user" ⟨"configuration", "config", "selected_by", .actor "agent"⟩ = true ∧
+    mayManage nodeManagerFixture "admin" ⟨"configuration", "config", "selected_by", .actor "agent"⟩ = true := by
+  native_decide
+
+theorem manager_does_not_control_other_relations :
+    mayManage nodeManagerFixture "admin" ⟨"configuration", "config", "writer", .actor "agent"⟩ = false ∧
+    mayManage nodeManagerFixture "other-admin" ⟨"workspace_roots", "root", "reader", .actor "agent"⟩ = false := by
+  native_decide
 
 inductive Action where
   | grant (relation : Relation)
