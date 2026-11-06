@@ -134,7 +134,7 @@ fn data_plane_gate_rejects_self_endpoint_from_both_sources() {
 }
 
 #[test]
-fn data_plane_desired_uses_signed_endpoint_address_and_requester_did() {
+fn data_plane_desired_uses_signed_endpoint_address_and_owner_scope() {
     let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-b".to_string(),
         node_did: "did:key:peer-b".to_string(),
@@ -149,7 +149,7 @@ fn data_plane_desired_uses_signed_endpoint_address_and_requester_did() {
             node_did: None,
             collections: None,
             replicator_addresses: Some(vec!["/ip4/192.0.2.1/tcp/9999/p2p/forged".to_string()]),
-            template: Some("conversation".to_string()),
+            template: Some("machine".to_string()),
             ..Default::default()
         },
         &signed_endpoint,
@@ -165,9 +165,10 @@ fn data_plane_desired_uses_signed_endpoint_address_and_requester_did() {
     assert_eq!(
         desired
             .replicator_filter
-            .get("AgentRequest")
+            .get(crate::runtime::agent::p2p_reconcile::templates::NODE_DIRECTORY_COLLECTION)
             .and_then(single_string_eq),
-        Some(("requester_did", "did:key:peer-b"))
+        Some(("source_did", "did:key:self")),
+        "the signed endpoint address is used, and the scope stays on the local directory"
     );
 }
 
@@ -197,19 +198,15 @@ fn enrolled_client_outbound_route_preserves_directional_authority() {
     .expect("client data-plane desired")
     .expect("some client data-plane layer");
 
-    assert!(desired.replicator_collections.contains("AgentRequest"));
-    assert!(!desired.replicator_collections.contains("Agent"));
-    let encoded = serde_json::to_string(
+    assert_eq!(desired.replicator_collections, set(&["PeerRegistry"]));
+    assert_eq!(
         desired
             .replicator_filter
-            .get("AgentRequest")
-            .expect("request filter"),
-    )
-    .unwrap();
-    assert!(encoded.contains("requester_did"));
-    assert!(encoded.contains("did:key:phone"));
-    assert!(encoded.contains("node_did"));
-    assert!(encoded.contains("did:key:runtime"));
+            .get("PeerRegistry")
+            .and_then(single_string_eq),
+        Some(("node_did", "did:key:phone")),
+        "a client-to-runtime route is scoped to the requesting client"
+    );
 }
 
 #[test]
