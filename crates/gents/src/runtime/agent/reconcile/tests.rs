@@ -45,6 +45,27 @@ fn stub_runtime_node() -> Arc<RuntimeNode> {
     })
 }
 
+/// Revisions of one Agent share its provisioned binding and root identity, so they
+/// resolve to the same agent DID. Each fresh provisioning is a different Agent.
+struct AgentLineage {
+    root: Arc<dyn crate::store::identity::NodeIdentity>,
+    binding: gents_protocol::agent_identity::AgentIdentityBinding,
+}
+
+impl AgentLineage {
+    fn provision(name: &str) -> Self {
+        let root: Arc<dyn crate::store::identity::NodeIdentity> = Arc::new(test_identity(name));
+        let binding = crate::store::identity::provision_agent_identity(root.as_ref()).unwrap();
+        Self { root, binding }
+    }
+
+    fn revision(&self, name: &str) -> ResolvedAgent {
+        PendingAgent::new(name)
+            .with_identity_binding_for_test(self.binding.clone())
+            .build_with_identity_arc_for_test(self.root.clone())
+    }
+}
+
 async fn snapshot_for_agents(
     node: &Arc<defra_node::Node>,
     default_agent_did: &str,
@@ -158,11 +179,10 @@ fn background_child_request(index: usize, agent_did: &str) -> AgentRequest {
 async fn operator_write_changes_snapshot_fingerprint() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let mut initial_agent = PendingAgent::new("general")
-        .build_with_identity_for_test(test_identity("pairing-contract-initial"));
+    let lineage = AgentLineage::provision("pairing-contract");
+    let mut initial_agent = lineage.revision("general");
     initial_agent.system_prompt = "before operator write".to_string();
-    let mut updated_agent = PendingAgent::new("general")
-        .build_with_identity_for_test(test_identity("pairing-contract-updated"));
+    let mut updated_agent = lineage.revision("general");
     updated_agent.system_prompt = "after operator write".to_string();
     let current_resolved =
         snapshot_for_agents(&node, "general", vec![Arc::new(initial_agent)]).await;
@@ -1101,11 +1121,10 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
     let runtime_status = RuntimeStatusHandle::new(node.clone(), node_did);
 
     let starts = Arc::new(StdMutex::new(RapidHashMap::<String, usize>::new()));
-    let mut initial_agent =
-        PendingAgent::new("general").build_with_identity_for_test(test_identity("general"));
+    let lineage = AgentLineage::provision("general");
+    let mut initial_agent = lineage.revision("general");
     initial_agent.system_prompt = "initial prompt".to_string();
-    let mut updated_agent =
-        PendingAgent::new("general").build_with_identity_for_test(test_identity("general"));
+    let mut updated_agent = lineage.revision("general");
     updated_agent.system_prompt = "updated prompt".to_string();
 
     let initial_snapshot =
@@ -1249,10 +1268,9 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     let node_did = "did:test:reconcile-failure-test";
     let runtime_status = RuntimeStatusHandle::new(node.clone(), node_did);
 
-    let initial_agent =
-        PendingAgent::new("general").build_with_identity_for_test(test_identity("general-initial"));
-    let mut updated_agent =
-        PendingAgent::new("general").build_with_identity_for_test(test_identity("general-updated"));
+    let lineage = AgentLineage::provision("general");
+    let initial_agent = lineage.revision("general");
+    let mut updated_agent = lineage.revision("general");
     updated_agent.system_prompt = "updated prompt".to_string();
 
     let initial_snapshot =
@@ -1471,12 +1489,9 @@ impl SlotFailurePolicy for FailSecondRegistrationPolicy {
 async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let initial = Arc::new(
-        PendingAgent::new("general")
-            .build_with_identity_for_test(test_identity("register-failure-initial")),
-    );
-    let mut changed = PendingAgent::new("general")
-        .build_with_identity_for_test(test_identity("register-failure-changed"));
+    let lineage = AgentLineage::provision("register-failure");
+    let initial = Arc::new(lineage.revision("general"));
+    let mut changed = lineage.revision("general");
     changed.system_prompt = "changed".to_string();
     let added = Arc::new(
         PendingAgent::new("second")
@@ -1647,12 +1662,9 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
 async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let initial = Arc::new(
-        PendingAgent::new("general")
-            .build_with_identity_for_test(test_identity("source-failure-initial")),
-    );
-    let mut replacement = PendingAgent::new("general")
-        .build_with_identity_for_test(test_identity("source-failure-replacement"));
+    let lineage = AgentLineage::provision("source-failure");
+    let initial = Arc::new(lineage.revision("general"));
+    let mut replacement = lineage.revision("general");
     replacement.system_prompt = "replacement".to_string();
     let initial_snapshot = snapshot_for_agents(&node, "general", vec![initial]).await;
     let replacement_snapshot =
@@ -1811,12 +1823,9 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
         }),
         Duration::from_millis(1),
     );
-    let initial = Arc::new(
-        PendingAgent::new("general")
-            .build_with_identity_for_test(test_identity("closed-watch-initial")),
-    );
-    let mut replacement = PendingAgent::new("general")
-        .build_with_identity_for_test(test_identity("closed-watch-replacement"));
+    let lineage = AgentLineage::provision("closed-watch");
+    let initial = Arc::new(lineage.revision("general"));
+    let mut replacement = lineage.revision("general");
     replacement.system_prompt = "replacement".to_string();
     let initial_snapshot = snapshot_for_agents(&node, "general", vec![initial]).await;
     let replacement_snapshot =
