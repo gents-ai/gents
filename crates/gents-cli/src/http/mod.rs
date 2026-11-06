@@ -15,6 +15,7 @@ pub(crate) mod mcp_pool;
 pub(crate) mod mcp_server;
 pub(crate) mod metrics_scrape;
 pub(crate) mod pack_install;
+pub(crate) mod pack_install_client;
 mod pack_watch;
 pub(crate) mod process_control;
 pub(crate) mod prometheus;

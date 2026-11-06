@@ -407,6 +407,56 @@ impl PackReplayTransport for PackReplaySession {
     }
 }
 
+pub(crate) async fn install_remote(
+    endpoint: &GraphqlEndpoint,
+    owner: &str,
+    pack: &crate::commands::pack::PackSource,
+    dependencies: &[crate::commands::pack::PackSource],
+    args: &crate::cli::PackInstallArgs,
+    explicit: bool,
+) -> Result<Value> {
+    let request =
+        super::pack_install::encode_install_request(pack, dependencies, args, owner, explicit)
+            .await?;
+    let digests = std::iter::once(pack)
+        .chain(dependencies.iter())
+        .map(|source| source.digest().to_owned())
+        .collect::<Vec<_>>();
+    let session = PackInstallSession::start(endpoint, request, owner, &digests).await?;
+    let preparation = session.preparation().clone();
+    let access = gents::store::config_client::ConfigAccess::Graphql(endpoint.clone());
+    let requested = crate::commands::pack::parse_inference_slot_bindings(&args.inference_slots)?;
+    let prepared = gents::pack::prepare_hosted_document_pack_archive(
+        &access,
+        owner,
+        pack.archive(),
+        &requested,
+        &dependencies
+            .iter()
+            .map(crate::commands::pack::PackSource::archive)
+            .collect::<Vec<_>>(),
+        &|name| std::env::var(name).ok(),
+        &preparation,
+    )
+    .await?;
+    let graph = gents::pack::hosted_document_graph(pack.archive(), &prepared, explicit)?;
+    let replay = std::sync::Arc::new(PackReplaySession::new(session));
+    let access = gents::store::config_client::ConfigAccess::Graphql(
+        endpoint.clone().with_pack_replay(replay.clone())?,
+    );
+    let policy = args.drift.policy();
+    access
+        .transact_write("pack.hosted_document_graph.replay", |txn| {
+            let graph = &graph;
+            Box::pin(async move {
+                gents::pack::apply_hosted_document_graph(txn, owner, graph, policy).await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await?;
+    replay.result().await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

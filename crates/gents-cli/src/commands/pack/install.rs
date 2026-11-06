@@ -56,8 +56,19 @@ pub(crate) async fn install_documents_pack(
                 }
             }
         }
-        if needs_runtime_store {
+        if needs_runtime_store && args.preview {
             return crate::http::pack_install::install_remote(
+                endpoint,
+                owner,
+                pack,
+                &dependencies,
+                args,
+                explicit,
+            )
+            .await;
+        }
+        if needs_runtime_store {
+            return crate::http::pack_install_client::install_remote(
                 endpoint,
                 owner,
                 pack,
