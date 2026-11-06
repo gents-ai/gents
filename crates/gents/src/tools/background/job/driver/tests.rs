@@ -369,8 +369,9 @@ async fn settled_job_row_holds_exactly_one_receipt() {
         serde_json::from_value(row["plugin_execution_receipt"].clone()).unwrap();
     assert_eq!(stored, evidence("step"));
 
-    let mut late = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
+    let mut late = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
         admission.node.clone(),
+        admission.tool.actor().clone(),
         admission.tool.doc_id().unwrap(),
         admission.tool.node_did(),
         admission.tool.session_id(),
@@ -460,8 +461,9 @@ async fn settle_of_a_lifecycle_loaded_by_doc_id_publishes_the_persisted_evidence
     let admission = bare_job_row("driver-persisted-evidence").await;
     store_running_progress(&admission).await;
     persist_step_state(&admission, &evidence("persisted")).await;
-    let mut loaded = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
+    let mut loaded = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
         admission.node.clone(),
+        admission.tool.actor().clone(),
         admission.tool.doc_id().unwrap(),
         admission.tool.node_did(),
         admission.tool.session_id(),
@@ -762,11 +764,7 @@ fn install_engine_wat(job: &Job, wat: &str) -> InstalledPlugin {
 }
 
 pub(crate) async fn start_running(job: &Job, row: &str) {
-    let mut lifecycle =
-        ToolCallLifecycle::load_by_doc_id(job.node.clone(), row, node_did(), "session-1", None)
-            .await
-            .unwrap()
-            .unwrap();
+    let mut lifecycle = load_lifecycle(&job.access, row).await.unwrap();
     lifecycle.start_running().await.unwrap();
 }
 
