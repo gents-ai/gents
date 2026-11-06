@@ -17,6 +17,16 @@ namespace PluginJob
 
 open ToolPolicy
 
+/-- A staged plugin record is not a published availability observation. A reader
+that cannot acquire the publication lock defers the job operation; the running
+row and its failure counter remain unchanged. -/
+def deferPublishedPluginRead (publicationInProgress : Bool) : Bool :=
+  publicationInProgress
+
+theorem staged_plugin_read_is_deferred :
+    deferPublishedPluginRead true = true ∧ deferPublishedPluginRead false = false :=
+  ⟨rfl, rfl⟩
+
 /-- The pack kinds that write an install record. -/
 inductive PackKind | documents | assets | plugins
   deriving DecidableEq, Repr

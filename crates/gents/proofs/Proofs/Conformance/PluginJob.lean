@@ -1139,10 +1139,16 @@ private def renderWire (c : WireCase) : Json :=
     ("expected", Json.mkObj [("policy", policyJson p), ("job_targets", targetsJson job),
       ("caller_targets", targetsJson caller)])]
 
+private def renderPublishedRead (publicationInProgress : Bool) : Json :=
+  Json.mkObj [("name", toJson (if publicationInProgress then "staged_read_deferred" else "published_read_observed")),
+    ("kind", toJson "published_read"), ("publication_in_progress", toJson publicationInProgress),
+    ("expected", Json.mkObj [("deferred", toJson (deferPublishedPluginRead publicationInProgress))])]
+
 def authorityCasesJson : String :=
   (toJson (provenanceCases.map renderProvenance ++ installCases.map renderInstall ++
     originCases.map renderOrigin ++ packBlockCases.map renderPackBlock ++
-    policyCases.map renderPolicy ++ wireCases.map renderWire)).compress
+    policyCases.map renderPolicy ++ wireCases.map renderWire ++
+    [true, false].map renderPublishedRead)).compress
 
 /-- A target's wire spelling is its AgentTarget id; the host resolves it to the
 `(node, agent)` pair. -/
