@@ -124,7 +124,12 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
         DefraSessionHook::with_identity(node.clone(), "did:test:owner", FailurePolicy::default())
             .with_background_execution_registry(registry.clone());
     let session_id = hook.session_id().await.unwrap();
-    crate::session::create_session_with_agent_did(&node, &session_id, "did:test:owner", "general")
+    crate::session::create_session_with_agent_did(
+        &node,
+        &session_id,
+        "did:test:owner",
+        &crate::triggers::callback::test_agent_did(),
+    )
         .await
         .unwrap();
     bind_interruptible_request(
@@ -1072,6 +1077,9 @@ async fn create_interruptible_request_with_fields(
     let request_id = crate::store::graphql::escape_graphql_string(request_id);
     let session_id = crate::store::graphql::escape_graphql_string(session_id);
     let node_did = crate::store::graphql::escape_graphql_string(node_did);
+    let agent_did = crate::store::graphql::escape_graphql_string(
+        &crate::triggers::callback::test_agent_did(),
+    );
     let created_at = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{
@@ -1079,7 +1087,7 @@ async fn create_interruptible_request_with_fields(
                 request_id: "{request_id}",
                 purpose: "normal",
                 node_did: "{node_did}",
-                agent_did: "general",
+                agent_did: "{agent_did}",
                 session_id: "{session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{request_id}",
@@ -1214,7 +1222,7 @@ async fn bind_interruptible_request_with_requester(
             .unwrap();
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         hook.node.clone(),
-        "general",
+        &crate::triggers::callback::test_agent_did(),
         &hook.node_did,
         row.try_into().unwrap(),
         60,
@@ -2342,7 +2350,7 @@ async fn claimed_authored_input_persists_context_once_before_prompt() {
         &node,
         &session_id,
         "did:test:general",
-        "general",
+        &crate::triggers::callback::test_agent_did(),
     )
     .await
     .unwrap();
@@ -2410,7 +2418,7 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
         &node,
         &session_id,
         "did:test:general",
-        "general",
+        &crate::triggers::callback::test_agent_did(),
     )
     .await
     .unwrap();
@@ -2503,7 +2511,7 @@ async fn steering_input_is_published_once_when_claimed_owner_runs() {
         &node,
         &session_id,
         "did:test:general",
-        "general",
+        &crate::triggers::callback::test_agent_did(),
     )
     .await
     .unwrap();
@@ -3250,7 +3258,7 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
         &node,
         &session_id,
         "did:test:general",
-        "general",
+        &crate::triggers::callback::test_agent_did(),
     )
     .await
     .unwrap();
@@ -3393,7 +3401,7 @@ async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
         &node,
         &session_id,
         "did:test:general",
-        "general",
+        &crate::triggers::callback::test_agent_did(),
     )
     .await
     .unwrap();
@@ -3468,7 +3476,7 @@ async fn read_file_result_persists_raw_output() {
         &node,
         &session_id,
         "did:test:general",
-        "general",
+        &crate::triggers::callback::test_agent_did(),
     )
     .await
     .unwrap();
@@ -3572,7 +3580,7 @@ async fn owned_tool_result_materializes_one_transcript_row() {
         &node,
         &session_id,
         "did:test:general",
-        "general",
+        &crate::triggers::callback::test_agent_did(),
     )
     .await
     .unwrap();
@@ -3738,7 +3746,7 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
         &node,
         &session_id,
         "did:test:general",
-        "general",
+        &crate::triggers::callback::test_agent_did(),
     )
     .await
     .unwrap();
@@ -3817,7 +3825,7 @@ async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
         &node,
         &session_id,
         "did:test:general",
-        "general",
+        &crate::triggers::callback::test_agent_did(),
     )
     .await
     .unwrap();

@@ -708,6 +708,7 @@ async fn owned_test_hook_with_identity_policy(
         .as_ref()
         .map_or("did:test:test", |identity| identity.did());
     let requester_did = identity.as_ref().map(|_| node_did);
+    let agent_did = crate::triggers::callback::test_agent_did();
     let data_path = std::env::temp_dir().join(format!("agent-owned-loop-{}", uuid::Uuid::new_v4()));
     let builder = match identity.as_ref() {
         Some(identity) => defra_node::Node::builder().with_node_identity_did(identity.did()),
@@ -721,7 +722,7 @@ async fn owned_test_hook_with_identity_policy(
         &node,
         &session_id,
         node_did,
-        "general",
+        &agent_did,
         requester_did,
     )
     .await
@@ -735,7 +736,7 @@ async fn owned_test_hook_with_identity_policy(
                     requester_did: requester_did.map(str::to_owned),
                     request_id: request_id.clone(),
                     node_did: node_did.to_owned(),
-                    agent_did: "general".to_owned(),
+                    agent_did: agent_did.clone(),
                     session_id: session_id.clone(),
                     content: "owned loop test".to_owned(),
                     execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
@@ -753,8 +754,9 @@ async fn owned_test_hook_with_identity_policy(
         .unwrap()
     } else {
         format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "did:test:test", agent_did: "general", session_id: "{}", request_hop: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "owned loop test", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "did:test:test", agent_did: "{}", session_id: "{}", request_hop: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "owned loop test", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
             crate::store::graphql::escape_graphql_string(&request_id),
+            crate::store::graphql::escape_graphql_string(&agent_did),
             crate::store::graphql::escape_graphql_string(&session_id),
             crate::store::graphql::escape_graphql_string(&request_id),
             crate::store::graphql::escape_graphql_string(&now),
@@ -781,7 +783,7 @@ async fn owned_test_hook_with_identity_policy(
                     requester_did: Some(node_did.to_owned()),
                     request_id: id.clone(),
                     node_did: node_did.to_owned(),
-                    agent_did: "general".into(),
+                    agent_did: agent_did.clone(),
                     session_id: session_id.clone(),
                     content: folded.content.clone(),
                     execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
@@ -860,7 +862,7 @@ async fn owned_test_hook_with_identity_policy(
         .await;
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
-        "general",
+        &agent_did,
         node_did,
         row.try_into().unwrap(),
         60,
