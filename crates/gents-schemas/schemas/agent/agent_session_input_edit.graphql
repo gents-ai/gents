@@ -1,7 +1,7 @@
 # Author-signed queue edit intent; the runtime verifies the immutable payload
 # and current enrollment before applying it — replication alone grants no
 # authority.
-type AgentSessionInputEdit @policy(id: "8d9e64ca014dddfb01e5a55a5018e0a56d238ea0da1df1b6b33d50b1ac23386a", resource: "goal_controls") {
+type AgentSessionInputEdit {
     command_id: String @index(unique: true) @immutable
     requester_did: String @index @immutable
     requester_peer_id: String @immutable
