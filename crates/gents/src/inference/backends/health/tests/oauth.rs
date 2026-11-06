@@ -624,7 +624,10 @@ async fn a_hung_token_endpoint_does_not_stall_the_next_backend_probe() {
 
 #[tokio::test]
 async fn oauth_kinds_missing_credential_fails_with_login_hint() {
-    let node = test_node().await;
+    let (db, _user, _user_access, _binding) =
+        crate::test_support::signed_test_node("health-missing").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
     let (options, client, health_map) = (
         probe_options(),
         reqwest::Client::new(),
@@ -644,7 +647,7 @@ async fn oauth_kinds_missing_credential_fails_with_login_hint() {
         &options,
         Some(OAuthProbeContext {
             node: node.clone(),
-            node_did: "did:key:z6MkNobody",
+            node_did: did,
         }),
     )
     .await;
@@ -654,7 +657,7 @@ async fn oauth_kinds_missing_credential_fails_with_login_hint() {
         .last_error
         .clone()
         .unwrap_or_default()
-        .contains("gents codex-login --node-did did:key:z6MkNobody"));
+        .contains(&format!("gents codex-login --node-did {did}")));
 }
 
 #[tokio::test]

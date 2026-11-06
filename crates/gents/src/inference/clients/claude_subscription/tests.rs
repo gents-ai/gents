@@ -158,18 +158,16 @@ async fn fixture_queue_serves_one_body_per_call_then_asks_the_bearer() {
 
 #[tokio::test]
 async fn build_without_a_credential_fails_closed_with_the_login_hint() {
-    let node = test_node().await;
-    let err = ClaudeSubscriptionClient::build(
-        std::sync::Arc::default(),
-        node,
-        "did:key:z6MkNobody",
-        None,
-    )
-    .await
-    .expect_err("missing");
+    let (db, _user, _user_access, _binding) =
+        crate::test_support::signed_test_node("claude-missing").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let err = ClaudeSubscriptionClient::build(std::sync::Arc::default(), node, did, None)
+        .await
+        .expect_err("missing");
     assert!(
         err.to_string()
-            .contains("gents claude-login --node-did did:key:z6MkNobody"),
+            .contains(&format!("gents claude-login --node-did {did}")),
         "{err:#}"
     );
 }
