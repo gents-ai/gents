@@ -769,6 +769,85 @@ mod turn_assignment_tests {
     }
 
     #[tokio::test]
+    async fn managed_parent_receives_child_completion_when_node_cannot_read_request() {
+        let PublishedSessionMessage {
+            admission,
+            caused_request_id,
+            ..
+        } = crate::tools::call::lifecycle::admission_fixture::published_session_message(
+            crate::tools::call::lifecycle::admission_fixture::PublishedAdmissionOptions {
+                name: "held-parent-child-completion".into(),
+                real_identity: true,
+                await_mode: AwaitMode::Background,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("publish managed parent and child");
+        let node = &admission.node;
+        let access = admission.tool.access().unwrap();
+        let parent_id = admission.tool.calling_request_id().await.unwrap();
+        let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
+        let parent = crate::request::binding::load_agent_request_with_access(&access, &parent_id)
+            .await
+            .unwrap()
+            .expect("the selected Agent can read its parent request");
+        assert_eq!(parent.agent_did, access.actor_did().unwrap());
+        assert!(
+            crate::request::binding::load_agent_request(node, &parent_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "the Node cannot substitute for the held Agent"
+        );
+        crate::tools::call::lifecycle::admission_fixture::complete_child_managed(
+            node,
+            &caused_request_id,
+            &admission.node_did,
+            "ECHO-2468",
+            &access.managed_agent_signer().unwrap(),
+        )
+        .await;
+        assert_eq!(
+            settle_running_session_message_rows_with_access(node, &access, &admission.node_did)
+                .await
+                .unwrap(),
+            1
+        );
+        let key = background_completion_notification_message_key(&tool_doc_id, "tool");
+        let query = format!(
+            r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}" }} }}) {{ _docID }} AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ status completion_notification_delivered_at }} }}"#,
+            escape_graphql_string(&key),
+            escape_graphql_string(&tool_doc_id),
+        );
+        let state = access.execute(&query).await.unwrap();
+        assert_eq!(state["data"]["AgentMessage"].as_array().unwrap().len(), 1);
+        let doc_id = state["data"]["AgentMessage"][0]["_docID"].as_str().unwrap();
+        let (_, notification) = crate::session::load_canonical_message(
+            &access,
+            doc_id,
+            &parent.node_did,
+            parent.requester_did.as_deref(),
+        )
+        .await
+        .unwrap();
+        assert!(notification.rag_text().unwrap().contains("ECHO-2468"));
+        let tool = &state["data"]["AgentToolCall"][0];
+        assert_eq!(tool["status"], "completed");
+        assert!(tool["completion_notification_delivered_at"]
+            .as_str()
+            .is_some());
+        settle_running_session_message_rows_with_access(node, &access, &admission.node_did)
+            .await
+            .unwrap();
+        let replay = access.execute(&query).await.unwrap();
+        assert_eq!(replay["data"]["AgentMessage"].as_array().unwrap().len(), 1);
+        assert_eq!(replay["data"]["AgentToolCall"][0], *tool);
+        node.shutdown().await.unwrap();
+        std::fs::remove_dir_all(&admission.path).unwrap();
+    }
+
+    #[tokio::test]
     async fn completed_turn_with_live_goal_hands_off_a_non_complete_reason() {
         let PublishedSessionMessage {
             admission,

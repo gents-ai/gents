@@ -629,9 +629,12 @@ impl ToolCallLifecycle {
             .request_doc_id
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("tool invocation lacks its calling request document"))?;
-        let request = crate::request::binding::load_agent_request_by_doc_id(&self.node, doc_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("tool invocation's calling request disappeared"))?;
+        let request = crate::request::binding::load_agent_request_by_doc_id_with_access(
+            &self.access()?,
+            doc_id,
+        )
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("tool invocation's calling request disappeared"))?;
         anyhow::ensure!(
             request.node_did == self.node_did
                 && request.session_id == self.session_id

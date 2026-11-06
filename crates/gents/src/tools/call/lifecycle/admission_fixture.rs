@@ -174,14 +174,18 @@ pub(crate) async fn complete_child_managed(
     identity: &dyn NodeIdentity,
 ) {
     let child_id_escaped = crate::store::graphql::escape_graphql_string(child_id);
-    let response = node.execute(&format!(
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(identity.did()).unwrap(),
+        identity,
+    )
+    .unwrap();
+    let response = access.execute(&format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{child_id_escaped}" }} }}) {{ {} }} }}"#,
         crate::request::watcher::AGENT_REQUEST_FIELDS,
-    )).await;
+    )).await.unwrap();
     let row: gents_protocol::row::AgentRequestRow =
-        crate::store::graphql::first_row(&response, "AgentRequest")
-            .unwrap()
-            .unwrap();
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
     let selected_agent = row
         .agent_did
         .clone()

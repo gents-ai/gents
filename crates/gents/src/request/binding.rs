@@ -35,6 +35,34 @@ pub(crate) async fn load_agent_request_by_doc_id_with_access(
     Ok(Some(AgentRequest::try_from(row)?))
 }
 
+pub(crate) async fn load_agent_request_with_access(
+    access: &crate::ConfigAccess,
+    request_id: &str,
+) -> Result<Option<AgentRequest>> {
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{ {} }} }}"#,
+            escape_graphql_string(request_id),
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
+        ))
+        .await?;
+    let mut matches: Vec<AgentRequestRow> =
+        serde_json::from_value(response["data"]["AgentRequest"].clone())?;
+    anyhow::ensure!(
+        matches.len() <= 1,
+        "AgentRequest logical binding is ambiguous"
+    );
+    let Some(row) = matches.pop() else {
+        return Ok(None);
+    };
+    let request = AgentRequest::try_from(row)?;
+    anyhow::ensure!(
+        request.request_id == request_id,
+        "AgentRequest logical binding changed"
+    );
+    Ok(Some(request))
+}
+
 pub(crate) async fn resolve_request_doc_id(
     node: &EmbeddedNode,
     request_id: &str,
@@ -74,6 +102,7 @@ pub(crate) async fn require_request_doc_id(
         .ok_or_else(|| anyhow::anyhow!("AgentRequest request_id={request_id} not found"))
 }
 
+#[cfg(test)]
 pub(crate) async fn load_agent_request(
     node: &EmbeddedNode,
     request_id: &str,

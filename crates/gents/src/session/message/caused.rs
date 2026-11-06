@@ -12,16 +12,13 @@ pub(crate) enum CausedObservation {
 }
 
 pub(crate) async fn observe_caused_request(
-    node: &std::sync::Arc<EmbeddedNode>,
+    _node: &std::sync::Arc<EmbeddedNode>,
     lifecycle: &crate::tools::call::lifecycle::ToolCallLifecycle,
 ) -> Result<CausedObservation> {
     let tool_call_doc_id = lifecycle
         .doc_id()
         .context("session-message row lacks physical identity")?;
-    let access = crate::store::config_client::ConfigAccess::local_as(
-        node.clone(),
-        lifecycle.actor().clone(),
-    );
+    let access = lifecycle.access()?;
     let Some(receipt) = load_receipt(
         &access,
         tool_call_doc_id,
@@ -104,10 +101,7 @@ pub(crate) async fn kill_caused_request(
         .context("caused request lacks node_did")?;
     let local = node_did == lifecycle.node_did();
     if !terminal {
-        let access = crate::store::config_client::ConfigAccess::local_as(
-            node.clone(),
-            lifecycle.actor().clone(),
-        );
+        let access = lifecycle.access()?;
         let interrupted = if local {
             crate::request::interrupt::interrupt_request_by_doc_id_with_access(
                 &access,

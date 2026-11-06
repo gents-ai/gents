@@ -18,9 +18,10 @@ pub(crate) async fn append_background_tool_completion(
     reason: Option<&str>,
     wake: crate::request::lifecycle::RequestHopCause,
 ) -> Result<()> {
-    let parent_request = crate::request::binding::load_agent_request(node, parent_request_id)
-        .await?
-        .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
+    let parent_request =
+        crate::request::binding::load_agent_request_with_access(access, parent_request_id)
+            .await?
+            .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
 
     append_with_parent(
         node,
@@ -101,8 +102,8 @@ async fn append_with_parent(
         "background completion parent session mismatch"
     );
     let existing =
-        existing_tool_completion_notification(node, parent_request, tool_call_doc_id).await?;
-    let tool_call_id = load_tool_call_id(node, tool_call_doc_id).await?;
+        existing_tool_completion_notification(access, parent_request, tool_call_doc_id).await?;
+    let tool_call_id = load_tool_call_id(access, tool_call_doc_id).await?;
     let existing_text = match &existing {
         Some(existing) => {
             Some(stored_notification_text(access, parent_request, &existing.doc_id).await?)
@@ -134,15 +135,15 @@ async fn append_with_parent(
         access,
         parent_request,
         existing,
-        &notification,
-        &key,
         wake,
-        Some(
-            crate::request::lifecycle::queue::ToolNotificationPublication {
+        NotificationDelivery {
+            content: &notification,
+            message_key: &key,
+            native: crate::request::lifecycle::queue::ToolNotificationPublication {
                 tool_call_doc_id: tool_call_doc_id.to_owned(),
                 presentation,
             },
-        ),
+        },
     )
     .await?;
     mark_background_tool_notification_delivered(
@@ -152,7 +153,7 @@ async fn append_with_parent(
         tool_call_doc_id,
     )
     .await?;
-    mark_background_tool_completion_side_effects_done(node, access, tool_call_doc_id).await?;
+    mark_background_tool_completion_side_effects_done(access, tool_call_doc_id).await?;
     tracing::debug!(
         parent_session_id, parent_request_id, tool_call_doc_id,
         wake_request_id = ?effects.wake_request_id,
@@ -200,15 +201,14 @@ fn published_notification_budget(
         .find(|budget| render(*budget).0 == stored)
 }
 
-async fn load_tool_call_id(node: &EmbeddedNode, tool_call_doc_id: &str) -> Result<String> {
+async fn load_tool_call_id(access: &crate::ConfigAccess, tool_call_doc_id: &str) -> Result<String> {
     let doc_id = escape_graphql_string(tool_call_doc_id);
     let query = format!(
         r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 2) {{ _docID tool_call_id }} }}"#
     );
-    let response =
-        crate::store::graphql::graphql_with_transaction_retry(node, &query, "load_tool_call_id")
-            .await?;
-    let rows = crate::store::graphql::rows::<serde_json::Value>(&response, "AgentToolCall")?;
+    let response = access.execute(&query).await?;
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_value(response["data"]["AgentToolCall"].clone())?;
     anyhow::ensure!(
         rows.len() == 1,
         "background tool notification requires one exact physical lifecycle row"
@@ -221,24 +221,27 @@ async fn load_tool_call_id(node: &EmbeddedNode, tool_call_doc_id: &str) -> Resul
         .context("background tool notification lifecycle omitted tool_call_id")
 }
 
-pub(super) async fn ensure_notification_delivery(
+struct NotificationDelivery<'a> {
+    content: &'a str,
+    message_key: &'a str,
+    native: crate::request::lifecycle::queue::ToolNotificationPublication,
+}
+
+async fn ensure_notification_delivery(
     node: &std::sync::Arc<EmbeddedNode>,
     access: &crate::ConfigAccess,
     parent: &crate::AgentRequest,
     existing: Option<side_effects::ExistingNotification>,
-    content: &str,
-    message_key: &str,
     wake: crate::request::lifecycle::RequestHopCause,
-    native: Option<crate::request::lifecycle::queue::ToolNotificationPublication>,
+    delivery: NotificationDelivery<'_>,
 ) -> Result<SideEffects> {
-    let native = native.context("background notification requires its canonical provenance")?;
     let enqueued =
         crate::request::lifecycle::queue::persist_background_completion_with_message_canonical_with_access(
             access,
             node,
             parent,
-            content,
-            message_key,
+            delivery.content,
+            delivery.message_key,
             BACKGROUND_COMPLETION_WAKE_PROMPT,
             RequestQueue {
                 delivery: Default::default(),
@@ -251,7 +254,7 @@ pub(super) async fn ensure_notification_delivery(
                 background_completion_wake_version: None,
             },
             existing.as_ref().map(|receipt| receipt.doc_id.as_str()),
-            &native,
+            &delivery.native,
             wake,
         )
         .await?;
@@ -293,7 +296,6 @@ async fn mark_background_tool_notification_delivered(
 }
 
 async fn mark_background_tool_completion_side_effects_done(
-    node: &std::sync::Arc<EmbeddedNode>,
     access: &crate::ConfigAccess,
     tool_call_doc_id: &str,
 ) -> Result<()> {
@@ -306,15 +308,9 @@ async fn mark_background_tool_completion_side_effects_done(
             ) {{ _docID status lifecycle_state }}
         }}"#
     );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "mark_background_tool_completion_side_effects_done",
-    )
-    .await?;
+    let response = access.execute(&query).await?;
     let row = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("AgentToolCall"))
         .and_then(serde_json::Value::as_array)
         .and_then(|rows| rows.first())
@@ -346,7 +342,7 @@ async fn mark_background_tool_completion_side_effects_done(
     }
     let escaped_doc_id = escape_graphql_string(doc_id);
     let escaped_status = escape_graphql_string(status);
-    let datetime_fields = agent_tool_call_datetime_update_fragment(node, doc_id, &[]).await?;
+    let datetime_fields = agent_tool_call_datetime_update_fragment(access, doc_id, &[]).await?;
     let mutation = format!(
         r#"mutation {{
             update_AgentToolCall(
