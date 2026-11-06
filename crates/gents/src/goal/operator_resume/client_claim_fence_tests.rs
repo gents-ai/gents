@@ -98,20 +98,29 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
             let changed = agent.write("test.goal.changed_edge", &format!(
                 r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ {fields} }}) {{ _docID }} }}"#,
                 escape_graphql_string(&request.doc_id),
-            )).await.unwrap();
-            assert_eq!(
-                changed["data"]["update_AgentRequest"]
-                    .as_array()
-                    .unwrap()
-                    .len(),
-                1
+            )).await;
+            assert!(
+                changed.is_err(),
+                "{scenario}: signed field change was accepted"
             );
-            assert!(verifier
+            let current = request_rows(&agent)
+                .await
+                .into_iter()
+                .find(|row| row.request_id == request.request_id)
+                .unwrap();
+            assert_eq!(
+                current.caused_by_parent_request_doc_id,
+                request.caused_by_parent_request_doc_id
+            );
+            assert_eq!(
+                current.session_id.as_deref(),
+                Some(request.session_id.as_str())
+            );
+            let (_, still_admitted) = verifier
                 .verify_fresh_for_claim_with_identity(&request, f.agent.as_ref())
                 .await
-                .is_err());
-            f.node.shutdown().await.unwrap();
-            continue;
+                .unwrap();
+            assert!(still_admitted.is_some());
         }
 
         if scenario == "rootless" || scenario == "dangling-root" {
@@ -200,7 +209,9 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
         lifecycle.set_client_claim_admission(client_claim);
         let result = lifecycle.claim_with_identity().await;
         match scenario {
-            "valid" => assert_eq!(result.unwrap(), ClaimOutcome::Claimed),
+            "valid" | "changed-edge" | "changed-session" => {
+                assert_eq!(result.unwrap(), ClaimOutcome::Claimed)
+            }
             "stale" => assert_ne!(result.unwrap(), ClaimOutcome::Claimed),
             _ => assert!(result.is_err(), "{scenario}: {result:?}"),
         }
@@ -214,7 +225,7 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
                 current.lifecycle_state,
                 Some(RequestLifecycleState::Superseded)
             );
-        } else if scenario != "valid" {
+        } else if !matches!(scenario, "valid" | "changed-edge" | "changed-session") {
             assert_eq!(current.lifecycle_state, Some(RequestLifecycleState::Failed));
         }
         drop(lifecycle);
