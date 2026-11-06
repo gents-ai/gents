@@ -379,8 +379,22 @@ pub(crate) async fn recover_task_hook_records(
                 .iter()
                 .find(|identity| identity.did() == guard.agent_did)
             {
-                Some(identity) => Some(identity.clone()),
-                None => {
+                Some(identity)
+                    if identity::Did::new(&guard.agent_did)
+                        .ok()
+                        .and_then(|actor| {
+                            crate::ConfigAccess::local_managed_agent(
+                                node.clone(),
+                                actor,
+                                identity.as_ref(),
+                            )
+                            .ok()
+                        })
+                        .is_some() =>
+                {
+                    Some(identity.clone())
+                }
+                _ => {
                     tracing::warn!(agent_did = %guard.agent_did, "task hook recovery requires the selected Agent identity");
                     continue;
                 }
