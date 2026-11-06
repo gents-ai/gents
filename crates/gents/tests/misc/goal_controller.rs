@@ -3786,66 +3786,63 @@ async fn openrouter_credits_402_moves_active_goal_to_usage_limited() {
 #[tokio::test]
 async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
     let db = test_db("goal-wrapup-retry-bound").await;
-    seed_completed_request(&db, "parent-wrapup-retry").await;
-    set_goal(
-        &db.node,
+    let (_user, agent, access) =
+        goal_recovery_actors(&db, "parent-wrapup-retry", "completed").await;
+    let parent_doc = access
+        .execute("{AgentRequest(filter: {request_id: {_eq: \"parent-wrapup-retry\"}}) {_docID}}")
+        .await
+        .unwrap()["data"]["AgentRequest"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    set_goal_from_access(
+        &access,
         db.node_identity.did(),
         SESSION,
         Some("Bound failed wrap-up retries"),
         Some(GoalStatus::Active),
         Some(Some(1)),
+        None,
     )
     .await
     .expect("set goal");
-    let usage_request_doc = escape_graphql_string(
-        &crate::support::exact_request_doc_id(db.node.as_ref(), "parent-wrapup-retry").await,
-    );
-    let response = db
-        .node
-        .execute(&format!(
-            r#"mutation {{
-                add_InferenceCall(input: {{
-                    call_id: "wrapup-budget-call",
-                    backend_id: "backend-test",
-                    request_id: "parent-wrapup-retry",
-                    request_doc_id: "{usage_request_doc}",
-                    node_did: "{}",
-                    call_seq: 1,
-                    attempt: 1,
-                    call_state: "completed",
-                    prompt_tokens: 2,
-                    completion_tokens: 0,
-                    cached_input_tokens: 0
-                }}) {{ _docID }}
-            }}"#,
-            db.node_identity.did()
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "seed wrapup usage: {:?}",
-        response.errors
-    );
+    goal_fixture_usage(
+        &db,
+        &agent,
+        "parent-wrapup-retry",
+        &parent_doc,
+        "wrapup-budget-call",
+        2,
+        0,
+    )
+    .await;
 
-    let (mut source, _snapshot_tx) = source(&db).await;
+    let (mut source, _snapshot_tx) = source_for_agent(&db, &agent).await;
     for expected_children in 1..=3 {
         tokio::time::timeout(Duration::from_secs(2), source.next_fire())
             .await
             .unwrap_or_else(|_| panic!("goal source timed out before child {expected_children}"))
             .expect("wrapup or retry intent");
-        let children = goal_children(&db).await;
+        let children = goal_children_from_access(&access).await;
         assert_eq!(children.len(), expected_children);
         let child = children
             .iter()
             .find(|child| child.lifecycle_state.as_deref() == Some("pending"))
             .expect("new pending wrap-up child");
-        set_request_lifecycle_state(db.node.as_ref(), &child.doc_id, "failed").await;
+        set_request_state_as(&access, &child.doc_id, "failed").await;
     }
 
-    let goal = wait_for_goal_transition(&db, &mut source, "failed wrap-up abandonment", |goal| {
-        goal.parsed_status() == Some(GoalStatus::BudgetLimited)
-            && goal.wrapup_completed == Some(true)
-    })
+    let goal = wait_for_goal_transition_as(
+        &access,
+        &db.node,
+        db.node_identity.did(),
+        &mut source,
+        "failed wrap-up abandonment",
+        |goal| {
+            goal.parsed_status() == Some(GoalStatus::BudgetLimited)
+                && goal.wrapup_completed == Some(true)
+        },
+    )
     .await;
     assert_eq!(goal.infrastructure_retry_count, Some(2));
     assert!(goal
@@ -3858,7 +3855,7 @@ async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
             .is_err(),
         "bounded failed wrap-up must not spawn a fourth child"
     );
-    assert_eq!(goal_children(&db).await.len(), 3);
+    assert_eq!(goal_children_from_access(&access).await.len(), 3);
 }
 
 #[tokio::test]
@@ -5416,11 +5413,19 @@ async fn publish_owned_terminal_activity(
     let session_id = row["session_id"].as_str().unwrap();
     let session_doc = row["session_doc_id"].as_str().unwrap();
     assert_eq!(row["agent_did"], agent.did());
+    let existing = access.execute(&format!(r#"{{AgentMessage(filter: {{session_doc_id: {{_eq: "{}"}}}}, order: {{sequence: DESC}}, limit: 1) {{sequence}}}}"#, escape_graphql_string(session_doc))).await.unwrap();
+    let sequence = existing["data"]["AgentMessage"]
+        .as_array()
+        .unwrap()
+        .first()
+        .and_then(|row| row["sequence"].as_u64())
+        .unwrap_or(0) as u32
+        + 1;
     let generation = format!("goal-observation-{request_doc_id}");
     let source = OutputSource::ProviderTurn {
         scope: CaptureScope {
             kind: CaptureScopeKind::Inference,
-            seq: 1,
+            seq: u64::from(sequence),
         },
         turn_index: 0,
         attempt: 0,
@@ -5467,10 +5472,10 @@ async fn publish_owned_terminal_activity(
             txn.add_resource_relationship("AgentOutputSegment", &close_doc_id, "parent", "sessions", session_doc).await?;
             txn.add_actor_relationship("AgentOutputSegment", &close_doc_id, "working_agent", &agent.did().parse()?).await?;
             let message = TranscriptMessage {
-                native_request_id: None, message_key: gents::session::sequence_message_key(node_did, session_id, requester_did, 1),
+                native_request_id: None, message_key: gents::session::sequence_message_key(node_did, session_id, requester_did, sequence),
                 session_id: session_id.into(), node_did: node_did.into(), requester_did: requester_did.map(Into::into),
                 request_doc_id: Some(request_doc_id.into()), publication: MessagePublication::RequestExecution {execution_generation: generation.clone()},
-                outcome: OutputOutcome::Complete, sequence: 1, role: MessageRole::Assistant, native_id: Some("goal-terminal-1".into()),
+                outcome: OutputOutcome::Complete, sequence, role: MessageRole::Assistant, native_id: Some(format!("goal-terminal-{sequence}")),
                 blocks: vec![MessageBlock::Text { text: PresentedPayload {output: PayloadRef {close_doc_id, stream: 0}, presentation: PayloadPresentation::Full} }],
                 created_at: chrono::Utc::now().to_rfc3339(),
             };
@@ -5769,4 +5774,18 @@ async fn create_visible_foreign_collision(
         foreign_node.did()
     );
     doc
+}
+
+async fn set_request_state_as(access: &ConfigAccess, doc: &str, state: &str) {
+    let response = access.write("test.goal_request_state", &format!(
+        r#"mutation {{update_AgentRequest(docID: "{}", input: {{lifecycle_state: "{}"}}) {{_docID}}}}"#,
+        escape_graphql_string(doc), escape_graphql_string(state),
+    )).await.unwrap();
+    assert_eq!(
+        response["data"]["update_AgentRequest"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }
