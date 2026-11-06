@@ -289,7 +289,7 @@ fn resolve_event_trigger(
         return;
     }
     let (expected_count, expected_count_field, group_timeout_secs, group_min_count) =
-        group_projection(source);
+        source.group_projection();
 
     active_event_triggers.insert(
         trigger_id.to_string(),
@@ -319,40 +319,6 @@ fn resolve_event_trigger(
                 .map(|authority| authority.as_str().to_string()),
         },
     );
-}
-
-pub(crate) fn group_projection(
-    source: &crate::documents::EventSource,
-) -> (Option<usize>, Option<String>, Option<u64>, usize) {
-    let Some(group) = source.group.as_ref() else {
-        return (None, None, None, 1);
-    };
-    let expected_count = match group.expected_count {
-        Some(crate::documents::EventGroupCount::Fixed(count)) => usize::try_from(count).ok(),
-        Some(crate::documents::EventGroupCount::SourceField { .. }) => None,
-        None => None,
-    };
-    let expected_count_field = match &group.expected_count {
-        Some(crate::documents::EventGroupCount::Fixed(_)) => None,
-        Some(crate::documents::EventGroupCount::SourceField { source_field }) => {
-            Some(source_field.clone())
-        }
-        None => None,
-    };
-    let group_timeout_secs = group
-        .timeout_secs
-        .and_then(|value| u64::try_from(value).ok())
-        .filter(|value| *value > 0);
-    let group_min_count = group
-        .min_count
-        .and_then(|value| usize::try_from(value).ok())
-        .unwrap_or(1);
-    (
-        expected_count,
-        expected_count_field,
-        group_timeout_secs,
-        group_min_count,
-    )
 }
 
 fn task_template_references_group(template: &str) -> bool {

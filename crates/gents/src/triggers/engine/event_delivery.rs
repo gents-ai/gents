@@ -13,8 +13,7 @@ pub(crate) const GROUP_RECOVERY_PAGE_SIZE: usize = 256;
 
 pub(crate) fn event_source_generation(source: &EventSource) -> Result<Value> {
     source.validate()?;
-    let (expected_count, expected_field, timeout, minimum) =
-        crate::runtime::agent::document_view::group_projection(source);
+    let (expected_count, expected_field, timeout, minimum) = source.group_projection();
     Ok(json!({
         "collection": source.source_collection,
         "event_kind": source.event_kind.as_deref().map(str::trim).filter(|value| !value.is_empty()).unwrap_or("created"),
