@@ -5,15 +5,10 @@ const ARGS: &str = r#"{"file_path":"/tmp/transcript-contract.txt"}"#;
 async fn fixture(name: &str) -> (Arc<defra_node::Node>, DefraSessionHook, String, String) {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
-    crate::session::create_session_with_agent_did(&node, &session, "did:test:general", "general")
-        .await
-        .unwrap();
     let request = format!("native-transcript-{name}");
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         &request,
         &session,
@@ -98,10 +93,8 @@ async fn complete(hook: &DefraSessionHook, call_id: usize, provider_id: &str, pa
     ));
 }
 
-async fn history(node: &defra_node::Node, session: &str) -> Vec<Message> {
-    crate::session::load_history(node, session, "did:test:general", None)
-        .await
-        .unwrap()
+async fn history(hook: &DefraSessionHook, session: &str) -> Vec<Message> {
+    hook_history(hook, session).await.unwrap()
 }
 
 fn results(messages: &[Message]) -> Vec<&str> {
@@ -152,7 +145,7 @@ async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
     let ordering =
         crate::lean_vocab_test::lean_transcript_case("ordering_user_assistant_tool_result");
     let (node, hook, session) = completed(&ordering.name).await;
-    let rows = history(&node, &session).await;
+    let rows = history(&hook, &session).await;
     assert_eq!(rows.len(), ordering.post_message_count);
     assert!(matches!(
         rows.as_slice(),
@@ -164,7 +157,7 @@ async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
     ));
     let ordering_id = format!("result-{}", ordering.logical_result_id);
     assert_eq!(results(&rows), vec![ordering_id.as_str()]);
-    let ordering_call = fetch_tool_call_row(&node, &session, &ordering_id).await;
+    let ordering_call = fetch_tool_call_row(&hook, &session, &ordering_id).await;
     assert_eq!(
         ordering_call["message_sequence"]
             .as_u64()
@@ -227,14 +220,14 @@ async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
         dispatch(&hook, call_id, id).await;
         complete(&hook, call_id, id, &format!("payload-{payload_hash}")).await;
     }
-    let rows = history(&node, &session).await;
+    let rows = history(&hook, &session).await;
     assert_eq!(rows.len(), parallel.post_message_count);
     assert_eq!(
         results(&rows),
         ids.iter().map(String::as_str).collect::<Vec<_>>()
     );
     for (id, payload_hash) in ids.iter().zip(&parallel.action_payload_hashes) {
-        let row = fetch_tool_call_row(&node, &session, id).await;
+        let row = fetch_tool_call_row(&hook, &session, id).await;
         assert_eq!(
             row["message_sequence"].as_u64().map(|value| value as usize),
             Some(parallel.assistant_sequence)
@@ -250,10 +243,10 @@ async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
     let (node, hook, session) = completed(&pair.name).await;
     let id = format!("result-{}", pair.logical_result_id);
     assert_eq!(
-        fetch_tool_call_row(&node, &session, &id).await["lifecycle_state"].as_str(),
+        fetch_tool_call_row(&hook, &session, &id).await["lifecycle_state"].as_str(),
         Some("completed")
     );
-    assert_eq!(results(&history(&node, &session).await), vec![id.as_str()]);
+    assert_eq!(results(&history(&hook, &session).await), vec![id.as_str()]);
     assert_eq!(
         hook.cancel_in_flight_tool_calls().await.unwrap(),
         pair.post_in_flight_count
@@ -269,9 +262,10 @@ async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
     .await;
     assert_eq!(ids.len(), 1);
     dispatch(&hook, abandon.action_call_ids[0], &ids[0]).await;
+    let reader = hook.actor_access().unwrap();
     drop(hook);
     assert_eq!(
-        fetch_tool_call_row(&node, &session, &ids[0]).await["lifecycle_state"].as_str(),
+        fetch_tool_call_row_as(&reader, &session, &ids[0]).await["lifecycle_state"].as_str(),
         Some("running")
     );
 }

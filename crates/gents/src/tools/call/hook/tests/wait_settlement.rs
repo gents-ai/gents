@@ -164,13 +164,11 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
 async fn wait_process_refuses_a_job_row_with_the_completion_message_text() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
-    let agent = "did:test:wait-job-row";
-    let hook = DefraSessionHook::with_identity(node.clone(), agent, FailurePolicy::FailClosed);
+    let hook = signed_hook(&node, FailurePolicy::FailClosed).await;
     hook.on_completion_call(&user_text_message("Wait on a job"), &[])
         .await;
     let session = hook.session_id().await.unwrap();
     bind_interruptible_request(
-        &node,
         &hook,
         "job-wait-request",
         &session,
@@ -178,7 +176,7 @@ async fn wait_process_refuses_a_job_row_with_the_completion_message_text() {
     )
     .await;
     accept_hook_tool_call(&hook, "job-call", "plugin_job_tool", "{}", None).await;
-    let job = fetch_tool_call_row(&node, &session, "job-call").await;
+    let job = fetch_tool_call_row(&hook, &session, "job-call").await;
     let job_doc = job["_docID"].as_str().unwrap();
     let flipped = node
         .execute(&format!(

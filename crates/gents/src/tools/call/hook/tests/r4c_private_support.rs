@@ -8,10 +8,12 @@ pub(super) async fn setup_private_hook(
 ) -> DefraSessionHook {
     let node_did = db.node_identity.did();
     let binding = crate::test_support::ensure_test_default_agent(&db.node, node_did).await;
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .expect("resolve the fixture's default Agent from its runtime root");
     setup_private_hook_for_agent(
         &db.node,
         node_did,
-        &binding.agent_did,
+        agent.as_ref(),
         request_id,
         session_id,
         registry,
@@ -22,13 +24,16 @@ pub(super) async fn setup_private_hook(
 pub(super) async fn setup_private_hook_for_agent(
     node: &Arc<defra_node::Node>,
     node_did: &str,
-    agent_did: &str,
+    agent_identity: &dyn NodeIdentity,
     request_id: &str,
     session_id: &str,
     registry: BackgroundToolRegistry,
 ) -> DefraSessionHook {
+    let agent_did = agent_identity.did();
     let actor = identity::Did::new(agent_did).expect("fixture agent DID");
-    let access = crate::ConfigAccess::local_as(node.clone(), actor.clone());
+    let access =
+        crate::ConfigAccess::local_managed_agent(node.clone(), actor.clone(), agent_identity)
+            .expect("fixture Agent's managed access");
     let session = crate::store::graphql::escape_graphql_string(session_id);
     let escaped_node = crate::store::graphql::escape_graphql_string(node_did);
     let agent = crate::store::graphql::escape_graphql_string(agent_did);
@@ -45,6 +50,8 @@ pub(super) async fn setup_private_hook_for_agent(
     )
     .await
     .expect("resume R4C agent-owned session")
+    .with_managed_identity(agent_identity)
+    .expect("bind the hook to its Agent's managed signer")
     .with_background_tool_registry(registry);
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
@@ -58,7 +65,7 @@ pub(super) async fn setup_private_hook_for_agent(
         now,
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent_did),
     );
-    crate::sign_agent_request_create_as_registered_target(&mut create)
+    crate::sign_agent_request_create(agent_identity, &mut create)
         .await
         .expect("sign R4C request as selected agent");
     let created = access
@@ -98,15 +105,19 @@ pub(super) async fn setup_private_hook_for_agent(
         row.try_into().expect("canonical R4C request"),
         60,
     );
+    lifecycle
+        .bind_managed_agent(agent_identity)
+        .expect("bind the request to its Agent's managed signer");
     assert_eq!(
         lifecycle.claim().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed
     );
-    let writer = crate::request::streaming::DefraStreamWriter::new(
+    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
         node.clone(),
-        agent_did,
+        &lifecycle,
         std::time::Duration::ZERO,
-    );
+    )
+    .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     hook.set_active_request_binding(
         Some(request_id.to_owned()),

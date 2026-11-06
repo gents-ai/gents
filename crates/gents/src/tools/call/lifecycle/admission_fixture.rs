@@ -277,7 +277,7 @@ async fn complete_child_managed_inner(
     assert_eq!(terminal, crate::request::lifecycle::TerminalizeResult::Won);
 }
 
-async fn ensure_managed_fixture_session(
+pub(crate) async fn ensure_managed_fixture_session(
     node: &Arc<EmbeddedNode>,
     session_id: &str,
     root: &dyn NodeIdentity,
@@ -406,6 +406,19 @@ pub(crate) async fn claimed_signed_request_create(
         &create.created_at,
     )
     .await;
+    claimed_signed_request_create_as_agent(node, identity, agent_identity.as_ref(), create).await
+}
+
+/// [`claimed_signed_request_create`] for a session that `agent_identity`
+/// already owns. A session created by its Agent is invisible to the unsigned
+/// lookup [`ensure_managed_fixture_session`] performs, so a caller that holds
+/// the owning Agent selects it directly.
+pub(crate) async fn claimed_signed_request_create_as_agent(
+    node: &Arc<EmbeddedNode>,
+    identity: &dyn NodeIdentity,
+    agent_identity: &dyn NodeIdentity,
+    mut create: gents_protocol::request_admission::AgentRequestCreate,
+) -> RequestLifecycle {
     create.agent_did = agent_identity.did().to_owned();
     if create.admission.kind
         == gents_protocol::request_admission::AgentRequestAdmissionKind::LocalSelf
@@ -415,7 +428,7 @@ pub(crate) async fn claimed_signed_request_create(
             gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
                 &create.agent_did,
             );
-        crate::sign_agent_request_create(agent_identity.as_ref(), &mut create)
+        crate::sign_agent_request_create(agent_identity, &mut create)
             .await
             .expect("sign fixture request as selected agent");
     } else {
@@ -428,7 +441,7 @@ pub(crate) async fn claimed_signed_request_create(
     let actor_access = crate::ConfigAccess::local_managed_agent(
         node.clone(),
         identity::Did::new(create.agent_did.as_str()).unwrap(),
-        agent_identity.as_ref(),
+        agent_identity,
     )
     .unwrap();
     if local_self {
@@ -468,9 +481,7 @@ pub(crate) async fn claimed_signed_request_create(
         row.try_into().unwrap(),
         60,
     );
-    lifecycle
-        .bind_managed_agent(agent_identity.as_ref())
-        .unwrap();
+    lifecycle.bind_managed_agent(agent_identity).unwrap();
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     lifecycle
 }
