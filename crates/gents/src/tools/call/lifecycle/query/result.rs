@@ -1163,7 +1163,7 @@ mod tests {
         let child_doc = child.doc_id().unwrap().to_owned();
         let node_did = parent.node_did().to_owned();
         let session_id = parent.session_id().to_owned();
-        let access = ConfigAccess::local(node.clone());
+        let access = ConfigAccess::local_as(node.clone(), child.actor().clone());
         assert_eq!(
             load_tool_call_arguments(&access, &child_doc, &node_did, &session_id, None)
                 .await
@@ -1303,8 +1303,11 @@ mod tests {
         let child_doc = child.doc_id().unwrap().to_owned();
         let node_did = child.node_did().to_owned();
         let session_id = child.session_id().to_owned();
-        let read =
-            ConfigAccess::transact_local_write(&node, None, "test.plugin_child_timeout", |txn| {
+        let read = ConfigAccess::transact_local_write(
+            &node,
+            Some(child.actor().clone()),
+            "test.plugin_child_timeout",
+            |txn| {
                 Box::pin(load_tool_call_read_in_txn(
                     txn,
                     &child_doc,
@@ -1312,7 +1315,8 @@ mod tests {
                     &session_id,
                     None,
                 ))
-            })
+            },
+        )
             .await
             .unwrap();
         assert_eq!(read.raw_result.as_deref(), Some("partial output"));
@@ -1394,7 +1398,8 @@ mod tests {
         let node_did = tool.node_did().to_owned();
         let session_id = tool.session_id().to_owned();
         let request_doc_id = tool.request_doc_id().unwrap().to_owned();
-        let read = ConfigAccess::transact_local_write(&node, None, "tool_result.txn_read", |txn| {
+        let actor = tool.actor().clone();
+        let read = ConfigAccess::transact_local_write(&node, Some(actor.clone()), "tool_result.txn_read", |txn| {
             Box::pin(load_tool_call_read_in_txn(
                 txn,
                 &doc_id,
@@ -1418,7 +1423,7 @@ mod tests {
         );
         assert_eq!(read.raw_result.as_deref(), Some(raw));
 
-        ConfigAccess::transact_local_write(&node, None, "tool_result.ambiguous_reply", |txn| {
+        ConfigAccess::transact_local_write(&node, Some(actor), "tool_result.ambiguous_reply", |txn| {
             Box::pin(async {
                 let headers =
                     scoped_canonical_headers(ReadSource::Txn(txn), &node_did, &session_id, None)
@@ -1459,7 +1464,7 @@ mod tests {
         let doc_id = tool.doc_id().unwrap().to_owned();
         let node_did = tool.node_did().to_owned();
         let session_id = tool.session_id().to_owned();
-        ConfigAccess::transact_local_write(&node, None, "tool_result.malformed_reply", |txn| {
+        ConfigAccess::transact_local_write(&node, Some(tool.actor().clone()), "tool_result.malformed_reply", |txn| {
             Box::pin(async {
                 let headers =
                     scoped_canonical_headers(ReadSource::Txn(txn), &node_did, &session_id, None)
