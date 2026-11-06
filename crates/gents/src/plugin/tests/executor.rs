@@ -1413,7 +1413,6 @@ mod data_calls {
     use super::*;
     use crate::plugin::data::DataCaller;
     use crate::plugin::PluginVerdict;
-    use crate::store::config_client::ConfigAccess;
 
     const NODE: &str = "did:key:z6Mknode";
 
