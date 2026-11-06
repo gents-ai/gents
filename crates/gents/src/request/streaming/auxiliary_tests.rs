@@ -356,9 +356,11 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
     let request_id = format!("auxiliary-{name}-{}", uuid::Uuid::new_v4());
     let session_id = format!("session-{request_id}");
     let now = chrono::Utc::now().to_rfc3339();
+    let agent_did = crate::triggers::callback::test_agent_did();
     let mutation = format!(
-        r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "did:test:test", agent_did: "did:test:agent", session_id: "{}", retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#,
+        r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "did:test:test", agent_did: "{}", session_id: "{}", retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#,
         crate::store::graphql::escape_graphql_string(&request_id),
+        crate::store::graphql::escape_graphql_string(&agent_did),
         crate::store::graphql::escape_graphql_string(&session_id),
         crate::store::graphql::escape_graphql_string(&request_id),
         crate::store::graphql::escape_graphql_string(&now),
@@ -378,7 +380,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
-        "did:test:agent",
+        &agent_did,
         "did:test:test",
         row.try_into().unwrap(),
         60,

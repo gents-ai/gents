@@ -952,7 +952,9 @@ mod tests {
     use super::*;
 
     const TEST_NODE_DID: &str = "did:test:claim-order-test";
-    const TEST_AGENT_DID: &str = "did:test:agent";
+    fn test_agent_did() -> String {
+        crate::triggers::callback::test_agent_did()
+    }
     const TEST_BACKEND_ID: &str = "backend-order";
 
     async fn test_node() -> Arc<EmbeddedNode> {
@@ -1089,13 +1091,14 @@ mod tests {
             gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(input).unwrap())
                 .unwrap();
         let escaped_execution_origin = escape_graphql_string(execution_origin);
+        let escaped_agent_did = escape_graphql_string(&test_agent_did());
         let mutation = format!(
             r#"mutation {{
                 create_AgentRequest(input: {{
                     request_id: "{escaped_request_id}",
                     purpose: "normal",
                     node_did: "{escaped_owner}",
-                    agent_did: "{TEST_AGENT_DID}",
+                    agent_did: "{escaped_agent_did}",
                     session_id: "{escaped_session_id}",
                     retry_parent_request: "",
                     retry_root_request: "{escaped_request_id}",
@@ -1163,7 +1166,7 @@ mod tests {
         let doc_id = request.doc_id.clone();
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            TEST_AGENT_DID,
+            &test_agent_did(),
             TEST_NODE_DID,
             request,
             60,
@@ -1488,7 +1491,7 @@ mod tests {
         }).await.unwrap();
                 let mut first_lifecycle = RequestLifecycle::new_with_execution_binding(
                     node.clone(),
-                    TEST_AGENT_DID,
+                    &test_agent_did(),
                     TEST_NODE_DID,
                     first,
                     60,
@@ -1497,7 +1500,7 @@ mod tests {
                 );
                 let mut second_lifecycle = RequestLifecycle::new_with_execution_binding(
                     node.clone(),
-                    TEST_AGENT_DID,
+                    &test_agent_did(),
                     TEST_NODE_DID,
                     second,
                     60,
@@ -1590,7 +1593,7 @@ mod tests {
                 assert_eq!(
                     crate::goal::refresh_goal_usage(
                         &node,
-                        &identity::Did::new("did:test:agent").unwrap(),
+                        &identity::Did::new(test_agent_did()).unwrap(),
                         &assigned
                     )
                     .await
@@ -1599,7 +1602,7 @@ mod tests {
                 );
                 assert!(!crate::goal::update_goal_fields_if_status(
                     &node,
-                    &identity::Did::new("did:test:agent").unwrap(),
+                    &identity::Did::new(test_agent_did()).unwrap(),
                     &original,
                     crate::goal::GoalStatus::Active,
                     "objective: \"stale controller\""
@@ -1660,7 +1663,7 @@ mod tests {
         let second_doc_id = second.doc_id.clone();
         let mut first_lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            TEST_AGENT_DID,
+            &test_agent_did(),
             TEST_NODE_DID,
             first,
             60,
@@ -1669,7 +1672,7 @@ mod tests {
         );
         let mut second_lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            TEST_AGENT_DID,
+            &test_agent_did(),
             TEST_NODE_DID,
             second,
             60,
@@ -1747,7 +1750,7 @@ mod tests {
 
         let mut first_lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            TEST_AGENT_DID,
+            &test_agent_did(),
             TEST_NODE_DID,
             first,
             60,
@@ -1756,7 +1759,7 @@ mod tests {
         );
         let mut second_lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            TEST_AGENT_DID,
+            &test_agent_did(),
             TEST_NODE_DID,
             second,
             60,
@@ -1815,7 +1818,7 @@ mod tests {
             node,
             session,
             identity.did(),
-            TEST_AGENT_DID,
+            &test_agent_did(),
             Some(identity.did()),
         )
         .await
@@ -1825,7 +1828,7 @@ mod tests {
             "snapshot-parent",
             identity.did(),
             identity.did(),
-            TEST_AGENT_DID,
+            &test_agent_did(),
             session,
             "Prior work",
             "interactive",
@@ -1849,7 +1852,7 @@ mod tests {
             "snapshot-wake",
             identity.did(),
             identity.did(),
-            TEST_AGENT_DID,
+            &test_agent_did(),
             session,
             "Review background results",
             "scheduled",
@@ -1932,7 +1935,7 @@ mod tests {
         let request_doc_id = request.doc_id.clone();
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            TEST_AGENT_DID,
+            &test_agent_did(),
             identity.did(),
             request,
             60,
@@ -2071,7 +2074,7 @@ mod tests {
         let doc_id = request.doc_id.clone();
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            TEST_AGENT_DID,
+            &test_agent_did(),
             identity.did(),
             request,
             60,
@@ -2130,7 +2133,7 @@ mod tests {
             request.max_total_tokens = Some(999);
             let mut first = RequestLifecycle::new_with_execution_binding(
                 node.clone(),
-                TEST_AGENT_DID,
+                &test_agent_did(),
                 TEST_NODE_DID,
                 request,
                 3600,
@@ -2165,7 +2168,7 @@ mod tests {
             resumed_request.max_total_tokens = expected;
             let mut resumed = RequestLifecycle::new_with_execution_binding(
                 node.clone(),
-                TEST_AGENT_DID,
+                &test_agent_did(),
                 TEST_NODE_DID,
                 resumed_request,
                 3600,

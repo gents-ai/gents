@@ -20,9 +20,20 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let session = case.session_id.to_string();
-    let owner = "did:test:drain-owner";
-    let foreign_owner = "did:test:foreign-owner";
-    let requester = "did:test:foreign-requester";
+    use crate::store::identity::NodeIdentity as _;
+    let root = crate::triggers::callback::test_root_identity();
+    let derived_did = |nonce: char| {
+        crate::store::identity::derive_agent_identity(&root, &nonce.to_string().repeat(64))
+            .unwrap()
+            .did()
+            .to_owned()
+    };
+    let owner_did = root.did().to_owned();
+    let foreign_owner_did = derived_did('d');
+    let requester_did = derived_did('e');
+    let owner = owner_did.as_str();
+    let foreign_owner = foreign_owner_did.as_str();
+    let requester = requester_did.as_str();
     async fn create(
         node: &Arc<EmbeddedNode>,
         id: &str,

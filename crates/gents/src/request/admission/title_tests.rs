@@ -107,6 +107,24 @@ async fn update_request_field(node: &Arc<EmbeddedNode>, doc_id: &str, field: &st
     );
 }
 
+/// Maps a modeled agent label to a valid Agent DID. Equal labels map to equal DIDs
+/// and distinct labels to distinct DIDs, so the model's agent relations are kept.
+fn modeled_agent_did(label: &str) -> String {
+    let root = crate::triggers::callback::test_root_identity();
+    let nonce: String = label
+        .bytes()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+        .chars()
+        .chain(std::iter::repeat('0'))
+        .take(64)
+        .collect();
+    crate::store::identity::derive_agent_identity(&root, &nonce)
+        .expect("derive modeled agent identity")
+        .did()
+        .to_owned()
+}
+
 async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
     let temp = tempfile::tempdir().expect("temporary identity directory");
     let identity = Arc::new(
@@ -160,7 +178,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
         parent_request_id,
         target,
         target,
-        &parent.agent_did,
+        &modeled_agent_did(&parent.agent_did),
         &parent.session_id,
         &case.request.content,
         "interactive",
@@ -203,7 +221,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
         &case.request.request_id,
         target,
         requester,
-        &case.request.agent_did,
+        &modeled_agent_did(&case.request.agent_did),
         &case.request.session_id,
         &case.request.content,
         "interactive",
@@ -259,7 +277,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
     }
     let (_owner, enrollment) = enrollment_authority_channel();
     let verifier = AgentRequestAdmissionVerifier::new(node.clone(), identity, enrollment);
-    let result = verifier.verify_fresh(&queued, &case.session_agent).await;
+    let result = verifier.verify_fresh(&queued, &modeled_agent_did(&case.session_agent)).await;
     let actual_disposition = match &result {
         Ok(_) => "admit",
         Err(AgentRequestAdmissionError::Denied(_)) => "deny",

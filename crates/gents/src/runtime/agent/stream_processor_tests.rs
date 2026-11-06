@@ -173,7 +173,7 @@ fn fixture_agent_request(
         request_id: request_id.to_string(),
         node_did: "did:test:test".to_string(),
         requester_did: None,
-        agent_did: "general".to_string(),
+        agent_did: crate::triggers::callback::test_agent_did(),
         session_id: session_id.to_string(),
         content: content.to_string(),
         max_total_tokens: None,
@@ -229,7 +229,7 @@ async fn first_visible_flushes_immediately_and_followup_waits_for_cadence() {
     let request = fixture_agent_request(request_doc_id, &request_id, &session_id, "cadence");
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        "test-agent",
+        &crate::triggers::callback::test_agent_did(),
         "did:test:test",
         request,
         30,
@@ -353,7 +353,7 @@ async fn pre_stream_failures_do_not_fabricate_provider_attempt_closures() {
     let request = fixture_agent_request(request_doc_id, &request_id, &session_id, "retry provider");
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        "test-agent",
+        &crate::triggers::callback::test_agent_did(),
         "did:test:test",
         request,
         30,
@@ -458,7 +458,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
         fixture_agent_request(request_doc_id, &request_id, &session_id, "Inspect the repo");
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        "test-agent",
+        &crate::triggers::callback::test_agent_did(),
         "did:test:test",
         request,
         30,
@@ -554,7 +554,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
             request_id: request_id.clone(),
             node_did: "did:test:test".into(),
             requester_did: String::new(),
-            agent_did: "general".into(),
+            agent_did: crate::triggers::callback::test_agent_did().into(),
             session_id: session_id.clone(),
             model_name: "claude".into(),
             provider_family: None,
@@ -716,6 +716,7 @@ async fn create_pending_request_with_input(
     let request_id = crate::store::graphql::escape_graphql_string(request_id);
     let session_id = crate::store::graphql::escape_graphql_string(session_id);
     let created_at = crate::store::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let agent_did = crate::store::graphql::escape_graphql_string(&{A});
     let input =
         gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(input).unwrap())
             .unwrap();
@@ -725,7 +726,7 @@ async fn create_pending_request_with_input(
                 request_id: "{request_id}",
                 purpose: "normal",
                 node_did: "did:test:test",
-                agent_did: "general",
+                agent_did: "{agent_did}",
                 session_id: "{session_id}",
                 request_hop: 0,
                 retry_parent_request: "",
@@ -964,7 +965,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
 
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        "general",
+        &crate::triggers::callback::test_agent_did(),
         "did:test:test",
         request,
         30,
@@ -1240,7 +1241,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         "concurrent-notification-wake",
         identity.did(),
         identity.did(),
-        "general",
+        &crate::triggers::callback::test_agent_did(),
         &session_id,
         "Review background completion",
         "scheduled",
@@ -1383,7 +1384,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
     );
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        "general",
+        &crate::triggers::callback::test_agent_did(),
         "did:test:test",
         request,
         30,
@@ -1543,7 +1544,7 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
 
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        "general",
+        &crate::triggers::callback::test_agent_did(),
         "did:test:test",
         request,
         30,
@@ -1706,7 +1707,7 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
     let request = fixture_agent_request(request_doc_id, &request_id, &session_id, "test prompt");
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        "general",
+        &crate::triggers::callback::test_agent_did(),
         "did:test:test",
         request,
         30,
@@ -1904,7 +1905,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
     );
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        "general",
+        &crate::triggers::callback::test_agent_did(),
         "did:test:test",
         request,
         30,

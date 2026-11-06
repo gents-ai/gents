@@ -1965,12 +1965,14 @@ mod tests {
         );
         ensure_runtime_schemas(&node).await.unwrap();
         let owner = crate::store::graphql::escape_graphql_string(identity.did());
+        let agent_did = crate::triggers::callback::test_agent_did();
+        let agent = crate::store::graphql::escape_graphql_string(&agent_did);
         for mutation in [
             format!(
                 r#"mutation {{ create_AgentContext(input: {{ context_id: "context", node_did: "{owner}", skill_ids: ["allowed"] }}) {{ _docID }} }}"#
             ),
             format!(
-                r#"mutation {{ create_Agent(input: {{ agent_did: "agent", node_did: "{owner}", context_id: "context", inference_profile_id: "inference", enabled: true }}) {{ _docID }} }}"#
+                r#"mutation {{ create_Agent(input: {{ agent_did: "{agent}", node_did: "{owner}", context_id: "context", inference_profile_id: "inference", enabled: true }}) {{ _docID }} }}"#
             ),
         ] {
             let result = node.execute(&mutation).await;
@@ -2003,7 +2005,7 @@ mod tests {
                 format!("input-{index}"),
                 identity.did(),
                 identity.did(),
-                "agent",
+                agent_did.as_str(),
                 "session",
                 "work",
                 "interactive",
@@ -2027,7 +2029,7 @@ mod tests {
                 .await
                 .unwrap();
             let admitted =
-                super::verify_fresh_local_self_request(&node, &identity, &request, "agent").await;
+                super::verify_fresh_local_self_request(&node, &identity, &request, &agent_did).await;
             assert_eq!(admitted.is_ok(), allowed, "case {index}: {admitted:?}");
         }
     }
@@ -2619,7 +2621,9 @@ mod tests {
         ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
         let owner = crate::store::graphql::escape_graphql_string(identity.did());
-        let seeded = node.execute(&format!(r#"mutation {{ create_Agent(input: {{agent_did:"agent-1",node_did:"{owner}",inference_profile_id:"inference",enabled:true}}) {{_docID}} }}"#)).await;
+        let agent_did = crate::triggers::callback::test_agent_did();
+        let agent = crate::store::graphql::escape_graphql_string(&agent_did);
+        let seeded = node.execute(&format!(r#"mutation {{ create_Agent(input: {{agent_did:"{agent}",node_did:"{owner}",inference_profile_id:"inference",enabled:true}}) {{_docID}} }}"#)).await;
         assert!(!seeded.has_errors(), "{:?}", seeded.errors);
         let request_id = uuid::Uuid::new_v4().to_string();
         let mut create = AgentRequestCreate::base(
@@ -2627,7 +2631,7 @@ mod tests {
             request_id,
             identity.did(),
             identity.did(),
-            "agent-1",
+            agent_did.as_str(),
             uuid::Uuid::new_v4().to_string(),
             "durable signed content",
             "interactive",
@@ -2675,7 +2679,7 @@ mod tests {
         assert!(!runtime_state.has_errors(), "{:?}", runtime_state.errors);
         let (_authority_owner, authority) = enrollment_authority_channel();
         let verifier = AgentRequestAdmissionVerifier::new(node.clone(), identity, authority);
-        let verified = verifier.verify_fresh(&queued, "agent-1").await.unwrap();
+        let verified = verifier.verify_fresh(&queued, &agent_did).await.unwrap();
         assert_eq!(verified.content, "durable signed content");
         assert_ne!(verified.content, queued.content);
         assert_eq!(
@@ -2695,7 +2699,7 @@ mod tests {
             "inject preclaim deadline: {:?}",
             response.errors
         );
-        let error = verifier.verify_fresh(&queued, "agent-1").await.unwrap_err();
+        let error = verifier.verify_fresh(&queued, &agent_did).await.unwrap_err();
         assert!(error
             .to_string()
             .contains("caller-authored execution deadline"));
