@@ -669,6 +669,7 @@ async fn signed_run(name: &str, batch_interval: Duration) -> SignedRun {
 }
 
 /// Binds the hook to the claimed request before its first provider attempt.
+/// Mirrors the daemon: tool-call persistence requires the claimed deadline.
 async fn bind_active_request(hook: &DefraSessionHook, lifecycle: &RequestLifecycle) {
     let request = lifecycle.request();
     hook.set_active_request_binding(
@@ -677,6 +678,8 @@ async fn bind_active_request(hook: &DefraSessionHook, lifecycle: &RequestLifecyc
         request.requester_did.clone(),
     )
     .await;
+    hook.set_request_deadline_at(lifecycle.claimed_deadline_at())
+        .await;
 }
 
 /// A read through the Agent's managed access, shaped like the node's GraphQL response.
