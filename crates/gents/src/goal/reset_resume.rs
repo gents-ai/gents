@@ -1,12 +1,12 @@
 use super::*;
 use crate::goal::blocked_turn::{goal_stopped_in_txn, served_profile};
-use crate::inference::auth::credential::resolve_oauth_credential_in_txn;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::identity::NodeIdentity;
 use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
 
 pub async fn resume_at_reset(
     node: &std::sync::Arc<EmbeddedNode>,
+    runtime: &dyn NodeIdentity,
     identity: &dyn NodeIdentity,
     goal: &GoalDocument,
     now: DateTime<Utc>,
@@ -24,13 +24,16 @@ pub async fn resume_at_reset(
     )?;
     access
         .transact_write("goal.resume_at_reset", move |txn| {
-            Box::pin(stage_reset_resume(txn, identity, node_did, session_id, now))
+            Box::pin(stage_reset_resume(
+                txn, runtime, identity, node_did, session_id, now,
+            ))
         })
         .await
 }
 
 async fn stage_reset_resume(
     txn: &ConfigApplyTxn<'_>,
+    runtime: &dyn NodeIdentity,
     identity: &dyn NodeIdentity,
     node_did: &str,
     session_id: &str,
@@ -91,11 +94,8 @@ async fn stage_reset_resume(
                 let Some(provider) = backend.provider_kind.oauth_provider() else {
                     return Ok(None);
                 };
-                resolve_oauth_credential_in_txn(txn, node_did, provider, pick)
+                txn.runtime_oauth_account_served_before(runtime, node_did, provider, pick, started)
                     .await?
-                    .is_some_and(|row| {
-                        row.enabled && row.connected_at.is_none_or(|since| since <= started)
-                    })
             }
             None => backend.enabled,
         };

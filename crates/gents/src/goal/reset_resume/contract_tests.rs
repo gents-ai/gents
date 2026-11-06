@@ -220,9 +220,15 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
         assert_eq!(f.observe().await, case.before, "{} initial", case.name);
 
         let goal = f.current_goal().await;
-        let result = resume_at_reset(&f.node, f.agent.as_ref(), &goal, at(facts.now))
-            .await
-            .unwrap();
+        let result = resume_at_reset(
+            &f.node,
+            f.identity.as_ref(),
+            f.agent.as_ref(),
+            &goal,
+            at(facts.now),
+        )
+        .await
+        .unwrap();
         match case.outcome.as_str() {
             "created" => {
                 let receipt = result.unwrap_or_else(|| panic!("{}: no resume", case.name));

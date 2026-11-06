@@ -5,17 +5,19 @@ use defra_node::QueryRequest;
 use super::apply_txn::TxnBackend;
 use super::native::execute_owned_native;
 use super::{retry, ConfigApplyTxn, ConfigClientError};
+use crate::inference::auth::credential::{AccountPick, RuntimeAccountSelection};
 use crate::store::config_client::write_telemetry::ConflictSource;
+use crate::store::identity::NodeIdentity;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum RuntimeDefaultAccountError {
-    #[error("default account lookup requires the bound runtime and a managed Agent transaction")]
+pub(crate) enum RuntimeAccountMetadataError {
+    #[error("account lookup requires the bound runtime and a managed Agent transaction")]
     RuntimeScope,
     #[error(transparent)]
     Access(#[from] ConfigClientError),
-    #[error("decoding runtime-visible default account metadata")]
+    #[error("decoding runtime-visible account metadata")]
     Decode,
-    #[error("runtime default account read was not authorized")]
+    #[error("runtime account read was not authorized")]
     ReadNotAuthorized,
 }
 
@@ -27,24 +29,58 @@ impl ConfigApplyTxn<'_> {
         &self,
         node_did: &str,
         provider: &str,
-    ) -> Result<Option<String>, RuntimeDefaultAccountError> {
+    ) -> Result<Option<String>, RuntimeAccountMetadataError> {
+        Ok(self
+            .runtime_oauth_account_selection(node_did, provider, AccountPick::ProviderDefault)
+            .await?
+            .and_then(|selected| selected.account_ref))
+    }
+
+    /// Reset scheduling observes only whether the selected enabled account was
+    /// connected at the failed call. The held Node is bound to this managed
+    /// Agent transaction, and native ACP still authorizes its metadata read.
+    pub(crate) async fn runtime_oauth_account_served_before(
+        &self,
+        runtime: &dyn NodeIdentity,
+        node_did: &str,
+        provider: &str,
+        pick: AccountPick<'_>,
+        started: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, RuntimeAccountMetadataError> {
+        if runtime.did() != node_did || runtime.agent_derivation_root().is_none() {
+            return Err(RuntimeAccountMetadataError::RuntimeScope);
+        }
+        Ok(self
+            .runtime_oauth_account_selection(node_did, provider, pick)
+            .await?
+            .is_some_and(|selected| selected.connected_at.is_none_or(|since| since <= started)))
+    }
+
+    async fn runtime_oauth_account_selection(
+        &self,
+        node_did: &str,
+        provider: &str,
+        pick: AccountPick<'_>,
+    ) -> Result<Option<RuntimeAccountSelection>, RuntimeAccountMetadataError> {
         let TxnBackend::Embedded {
             node,
             handle,
-            agent_signer: Some(_),
+            agent_signer: Some(agent_signer),
             native_operations,
             ..
         } = &self.backend
         else {
-            return Err(RuntimeDefaultAccountError::RuntimeScope);
+            return Err(RuntimeAccountMetadataError::RuntimeScope);
         };
-        if node.node_identity_did() != Some(node_did) {
-            return Err(RuntimeDefaultAccountError::RuntimeScope);
+        if node.node_identity_did() != Some(node_did)
+            || agent_signer.node_did() != node_did
+            || self.actor_did() != Some(agent_signer.did())
+        {
+            return Err(RuntimeAccountMetadataError::RuntimeScope);
         }
         let runtime =
             identity::Did::new(node_did).map_err(ConfigClientError::RelationshipTargetIdentity)?;
-        let query =
-            crate::inference::auth::credential::runtime_default_account_query(node_did, provider);
+        let query = crate::inference::auth::credential::runtime_account_query(node_did, provider);
         let node = Arc::clone(node);
         let handle = handle.clone();
         let request = QueryRequest::new(&query).with_identity(Some(runtime.clone()));
@@ -66,24 +102,24 @@ impl ConfigApplyTxn<'_> {
             .into());
         }
         let response = crate::store::graphql::into_data_envelope(response.data);
-        let selected = crate::inference::auth::credential::runtime_default_account_from_response(
-            &response, node_did, provider,
+        let selected = crate::inference::auth::credential::runtime_account_from_response(
+            &response, node_did, provider, pick,
         )
-        .map_err(|_| RuntimeDefaultAccountError::Decode)?;
-        let Some((doc_id, account_ref)) = selected else {
+        .map_err(|_| RuntimeAccountMetadataError::Decode)?;
+        let Some(selected) = selected else {
             return Ok(None);
         };
         let decisions = self
             .observe_document_access(
                 &runtime,
                 "OAuthCredential",
-                &[doc_id],
+                std::slice::from_ref(&selected.doc_id),
                 defra_node::DocumentAccessMode::DelegatedRead,
             )
             .await?;
         match decisions.as_slice() {
-            [defra_node::DocumentAccessDecision::Allowed] => Ok(account_ref),
-            _ => Err(RuntimeDefaultAccountError::ReadNotAuthorized),
+            [defra_node::DocumentAccessDecision::Allowed] => Ok(Some(selected)),
+            _ => Err(RuntimeAccountMetadataError::ReadNotAuthorized),
         }
     }
 }
@@ -130,11 +166,14 @@ mod tests {
                 .unwrap()
         };
         let provider = "default-account-test";
-        let metadata_query = crate::inference::auth::credential::runtime_default_account_query(
-            runtime.did(),
-            provider,
-        );
-        for secret_field in ["access_token", "refresh_token", "id_token"] {
+        let metadata_query =
+            crate::inference::auth::credential::runtime_account_query(runtime.did(), provider);
+        for secret_field in [
+            "access_token",
+            "refresh_token",
+            "id_token",
+            "provider_account_key",
+        ] {
             assert!(!metadata_query.contains(secret_field));
         }
         let credential = crate::inference::auth::credential::OAuthCredential {
@@ -152,7 +191,7 @@ mod tests {
             last_refresh: None,
             enabled: true,
             account_ref: Some("named".into()),
-            connected_at: Some(chrono::Utc::now()),
+            connected_at: Some(chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap()),
             provider_account_key: None,
             label: None,
         };
@@ -168,6 +207,93 @@ mod tests {
             .as_array()
             .unwrap()
             .is_empty());
+
+        let connected = credential.connected_at.unwrap();
+        for (pick, started, expected) in [
+            (
+                crate::inference::auth::credential::AccountPick::ProviderDefault,
+                connected,
+                true,
+            ),
+            (
+                crate::inference::auth::credential::AccountPick::Reference(Some("named")),
+                connected,
+                true,
+            ),
+            (
+                crate::inference::auth::credential::AccountPick::Reference(Some("named")),
+                connected - chrono::Duration::seconds(1),
+                false,
+            ),
+            (
+                crate::inference::auth::credential::AccountPick::Reference(Some("missing")),
+                connected,
+                false,
+            ),
+            (
+                crate::inference::auth::credential::AccountPick::Reference(None),
+                connected,
+                false,
+            ),
+        ] {
+            let observed = agent
+                .transact_readonly("test.reset_account.selection", |txn| {
+                    Box::pin(async move {
+                        Ok::<_, anyhow::Error>(
+                            txn.runtime_oauth_account_served_before(
+                                runtime,
+                                runtime.did(),
+                                provider,
+                                pick,
+                                started,
+                            )
+                            .await?,
+                        )
+                    })
+                })
+                .await?;
+            assert_eq!(observed, expected);
+        }
+        let foreign = agent
+            .transact_readonly("test.reset_account.foreign_runtime", |txn| {
+                let user = &user;
+                Box::pin(async move {
+                    txn.runtime_oauth_account_served_before(
+                        user,
+                        runtime.did(),
+                        provider,
+                        crate::inference::auth::credential::AccountPick::ProviderDefault,
+                        connected,
+                    )
+                    .await
+                    .map_err(anyhow::Error::from)
+                })
+            })
+            .await;
+        assert!(foreign.is_err());
+
+        let mut disabled = credential.clone();
+        disabled.enabled = false;
+        crate::inference::auth::credential::upsert_oauth_credential_on(&user_access, &disabled)
+            .await?;
+        let disabled = agent
+            .transact_readonly("test.reset_account.disabled", |txn| {
+                Box::pin(async move {
+                    txn.runtime_oauth_account_served_before(
+                        runtime,
+                        runtime.did(),
+                        provider,
+                        crate::inference::auth::credential::AccountPick::ProviderDefault,
+                        connected,
+                    )
+                    .await
+                    .map_err(anyhow::Error::from)
+                })
+            })
+            .await?;
+        assert!(!disabled);
+        crate::inference::auth::credential::upsert_oauth_credential_on(&user_access, &credential)
+            .await?;
 
         let result = agent
             .transact_write("test.default_account.agent_write", |txn| {
@@ -255,6 +381,22 @@ mod tests {
             case("visible-empty")["allowed"].as_bool().unwrap()
         );
         assert_eq!(empty?, None);
+        let unavailable = agent
+            .transact_readonly("test.reset_account.revoked", |txn| {
+                Box::pin(async move {
+                    txn.runtime_oauth_account_served_before(
+                        runtime,
+                        runtime.did(),
+                        provider,
+                        crate::inference::auth::credential::AccountPick::ProviderDefault,
+                        connected,
+                    )
+                    .await
+                    .map_err(anyhow::Error::from)
+                })
+            })
+            .await?;
+        assert!(!unavailable);
         Ok(())
     }
 }

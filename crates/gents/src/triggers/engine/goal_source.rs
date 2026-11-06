@@ -210,14 +210,28 @@ impl GoalSource {
         };
         for goal in goals {
             let resumed = async {
-                let identity = self
-                    .snapshot_rx
-                    .borrow()
+                let snapshot = self.snapshot_rx.borrow().clone();
+                let runtime = snapshot
+                    .node
+                    .as_ref()
+                    .context("goal reset runtime identity is unavailable")?;
+                anyhow::ensure!(
+                    runtime.node_did == node_did,
+                    "goal reset runtime identity changed"
+                );
+                let identity = snapshot
                     .watcher_identities()?
                     .into_iter()
                     .find(|identity| identity.did() == actor.as_str())
                     .context("goal reset agent identity is unavailable")?;
-                resume_at_reset(&self.node, identity.as_ref(), &goal, Utc::now()).await
+                resume_at_reset(
+                    &self.node,
+                    runtime.identity.as_ref(),
+                    identity.as_ref(),
+                    &goal,
+                    Utc::now(),
+                )
+                .await
             }
             .await;
             match resumed {

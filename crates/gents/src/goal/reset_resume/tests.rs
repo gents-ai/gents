@@ -94,9 +94,15 @@ impl Reset {
     }
 
     async fn resume_with(&self, goal: &GoalDocument, now: i64) -> Option<GoalResumeReceipt> {
-        resume_at_reset(&self.f.node, self.f.agent.as_ref(), goal, at(now))
-            .await
-            .unwrap()
+        resume_at_reset(
+            &self.f.node,
+            self.f.identity.as_ref(),
+            self.f.agent.as_ref(),
+            goal,
+            at(now),
+        )
+        .await
+        .unwrap()
     }
 
     async fn waits(&self) {

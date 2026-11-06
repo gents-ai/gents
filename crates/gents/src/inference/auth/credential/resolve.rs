@@ -111,27 +111,40 @@ pub(crate) async fn provider_default_account_ref(
     )
 }
 
-pub(crate) fn runtime_default_account_query(node_did: &str, provider: &str) -> String {
-    enabled_oauth_credentials_query(node_did, provider, OAUTH_PICK_FIELDS)
+pub(crate) fn runtime_account_query(node_did: &str, provider: &str) -> String {
+    enabled_oauth_credentials_query(
+        node_did,
+        provider,
+        "_docID credential_id node_did provider enabled account_ref connected_at",
+    )
 }
 
-pub(crate) fn runtime_default_account_from_response(
+pub(crate) struct RuntimeAccountSelection {
+    pub(crate) doc_id: String,
+    pub(crate) account_ref: Option<String>,
+    pub(crate) connected_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+pub(crate) fn runtime_account_from_response(
     response: &Value,
     node_did: &str,
     provider: &str,
-) -> Result<Option<(String, Option<String>)>> {
+    pick: AccountPick<'_>,
+) -> Result<Option<RuntimeAccountSelection>> {
     let rows = gents_protocol::graphql::graphql_rows_from_response(response, "OAuthCredential")
         .into_iter()
         .map(pick_row_from_value)
         .collect::<Result<Vec<_>>>()?;
-    pick_oauth_credential(&rows, node_did, provider, AccountPick::ProviderDefault)
+    pick_oauth_credential(&rows, node_did, provider, pick)
         .map(|row| {
-            Ok((
-                row.doc_id
+            Ok(RuntimeAccountSelection {
+                doc_id: row
+                    .doc_id
                     .clone()
-                    .ok_or_else(|| anyhow::anyhow!("default account has no document ID"))?,
-                row.account_ref.clone(),
-            ))
+                    .ok_or_else(|| anyhow::anyhow!("selected account has no document ID"))?,
+                account_ref: row.account_ref.clone(),
+                connected_at: row.connected_at,
+            })
         })
         .transpose()
 }

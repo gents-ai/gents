@@ -46,8 +46,8 @@ pub use resolve::{
     AccountPick,
 };
 pub(crate) use resolve::{
-    provider_default_account_ref, resolve_oauth_credential_in_txn,
-    runtime_default_account_from_response, runtime_default_account_query,
+    provider_default_account_ref, resolve_oauth_credential_in_txn, runtime_account_from_response,
+    runtime_account_query, RuntimeAccountSelection,
 };
 pub(crate) use rows::runtime_credential_access;
 pub use rows::{
