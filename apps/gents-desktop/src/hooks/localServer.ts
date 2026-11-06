@@ -142,6 +142,11 @@ export function createLocalServer({ api, store, client }: LocalServerParams) {
         ]),
       ).then(settled);
     },
+    enrollLocalServer() {
+      const enroll = api.enrollManagedServer;
+      if (!enroll) return unavailable("Connect this desktop");
+      return operate("start", () => enroll());
+    },
     stopLocalServer() {
       const stop = api.stopManagedServer;
       if (!stop) return unavailable("Stop Node");

@@ -88,6 +88,19 @@ where
 }
 
 #[tauri::command]
+pub async fn desktop_managed_server_enroll(
+    state: State<'_, DesktopAppState>,
+) -> Result<(), BridgeError> {
+    ensure_allowed(&state)?;
+    let _lifecycle = state.managed_server_lifecycle.lock().await;
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    pairing::enroll_managed_runtime(&state, core)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))
+}
+
+#[tauri::command]
 pub async fn desktop_managed_server_reset<R>(
     request: ManagedServerResetRequest,
     app: AppHandle<R>,

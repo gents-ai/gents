@@ -213,6 +213,22 @@ export function LocalServer() {
           </Badge>
         </span>
       </Row>
+      {running && !status?.pairingReady && (
+        <Row
+          label="Desktop connection"
+          description="Connect this desktop to the local node with the node owner's approval."
+        >
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() =>
+              void act("Desktop connected", () => actions.enrollLocalServer())
+            }
+          >
+            Connect this desktop
+          </Button>
+        </Row>
+      )}
       <Row
         label="Desktop app"
         description="Closing the window keeps controls in the menu bar. Quitting stops the local node unless background running is enabled."

@@ -9,6 +9,7 @@ const COMMANDS: &[&str] = &[
     "desktop_app_quit",
     "desktop_managed_server_status",
     "desktop_managed_server_start",
+    "desktop_managed_server_enroll",
     "desktop_managed_server_stop",
     "desktop_managed_server_set_auto_start",
     "desktop_managed_server_restart",

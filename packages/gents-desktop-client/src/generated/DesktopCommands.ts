@@ -207,6 +207,7 @@ export type DesktopCommands = {
   desktop_mailbox_list: { args: Record<string, never>; result: Array<MailboxItemView> };
   desktop_mailbox_observe: { args: { request: MailboxItemObservationRequest }; result: MailboxItemObservation | null };
   desktop_mailbox_start_request: { args: { request: MailboxItemRequest }; result: MailboxItemView };
+  desktop_managed_server_enroll: { args: Record<string, never>; result: void };
   desktop_managed_server_open_login_items: { args: Record<string, never>; result: void };
   desktop_managed_server_reset: { args: { request: ManagedServerResetRequest }; result: ManagedServerResetResult };
   desktop_managed_server_restart: { args: { request: ManagedServerRestartRequest }; result: ManagedServerStatus };

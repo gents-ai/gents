@@ -184,6 +184,7 @@ permissions = [
   "allow-desktop-init-local-standard",
   "allow-desktop-managed-server-status",
   "allow-desktop-managed-server-start",
+  "allow-desktop-managed-server-enroll",
   "allow-desktop-managed-server-stop",
   "allow-desktop-managed-server-set-auto-start",
   "allow-desktop-managed-server-restart",

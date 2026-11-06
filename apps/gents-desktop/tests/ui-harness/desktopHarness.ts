@@ -2196,6 +2196,9 @@ export function createDesktopUiHarness(
             };
             return clone(managedServer);
           },
+          async enrollManagedServer() {
+            managedServer = { ...managedServer, pairingReady: true };
+          },
           async commitManagedServerAutoStart(nodeName) {
             managedServer = { ...managedServer, autoStart: true, nodeName };
             return clone(managedServer);

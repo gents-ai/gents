@@ -1051,6 +1051,27 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         client
             .call(1, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
+        if matches!(journey, Journey::Conversation) && predecessor.is_none() {
+            let pending =
+                gents_server::server_host::pending_managed_enrollments(&node_home, graphql).await?;
+            let members =
+                gents_server::server_host::managed_enrollment_members(&node_home, graphql).await?;
+            ensure!(
+                pending
+                    .iter()
+                    .all(|entry| entry.candidate_did != client_did),
+                "ordinary local connect authored an enrollment request"
+            );
+            ensure!(
+                members
+                    .iter()
+                    .all(|entry| entry.candidate_did != client_did),
+                "ordinary local connect granted enrollment authority"
+            );
+        }
+        client
+            .call(2, "client_enroll_local", json!({"nodeHome":node_home}))
+            .await;
     } else {
         let pending = client
             .call(
@@ -1138,7 +1159,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             Journey::EditorDelivery | Journey::EditorGoalDelivery
         ) {
             client
-                .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+                .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
                 .await;
             id += 1;
             wait_chat_deployment(&mut client, &mut id, node_did, &access).await?;
@@ -1154,7 +1175,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     }
     let speech = if matches!(journey, Journey::Conversation) {
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         id += 1;
         let service = speech::SpeechService::start().await?;
@@ -1391,7 +1412,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         }));
         configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         let editor = run_editor_journey(
             root,
@@ -1558,7 +1579,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         }));
         configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         let approval_home = node_home.clone();
         let approval_path = root.join("approval-fixture.txt");
@@ -1947,7 +1968,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )?;
         configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         id += 1;
         let completion_path = root.join("finish-history-provider");
@@ -2059,7 +2080,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     ) {
         editor_related_work::configure(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         id += 1;
         let result = tokio::try_join!(
@@ -2098,7 +2119,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     if matches!(journey, Journey::EditorQuestions) {
         editor_related_work::configure(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         let editor_result = run_editor_journey(
             root,
@@ -2133,7 +2154,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     if matches!(journey, Journey::EditorImages) {
         configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         run_editor_journey(
             root,
@@ -2154,7 +2175,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     if matches!(journey, Journey::EditorWorkspace) {
         configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         run_editor_journey(
             root,
@@ -2396,7 +2417,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         editor_goal_replacement::prepare(root)?;
         configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         id += 1;
         let releases: Vec<_> = (0..3)
@@ -2451,7 +2472,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     if matches!(journey, Journey::EditorGoalRemoval) {
         configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         id += 1;
         let releases: Vec<_> = (0..2)
@@ -2504,7 +2525,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )?;
         configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         id += 1;
         let release = root.join("finish-recovered-goal-provider");
@@ -2630,7 +2651,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )?;
         configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         id += 1;
         let editor_result = run_editor_journey(

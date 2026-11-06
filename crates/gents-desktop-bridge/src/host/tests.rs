@@ -862,3 +862,25 @@ fn image_attachment_read_commands_keep_scope_index_and_cancellation() {
     )
     .is_err());
 }
+
+#[test]
+fn local_enrollment_is_a_distinct_explicit_host_command() {
+    let args = json!({"nodeHome": "/runtime"});
+    let connect: protocol::ClientCommand = serde_json::from_value(json!({
+        "name": "client_connect_local", "args": args,
+    }))
+    .unwrap();
+    let enroll: protocol::ClientCommand = serde_json::from_value(json!({
+        "name": "client_enroll_local", "args": {"nodeHome": "/runtime"},
+    }))
+    .unwrap();
+    assert!(matches!(
+        connect,
+        protocol::ClientCommand::ConnectLocal { .. }
+    ));
+    assert!(matches!(
+        enroll,
+        protocol::ClientCommand::EnrollLocal { .. }
+    ));
+    assert!(protocol::ClientCommand::NAMES.contains(&"client_enroll_local"));
+}

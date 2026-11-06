@@ -11,7 +11,7 @@ use crate::types::{
 /// Change the version for incompatible framing or operation semantics.
 /// Additional commands are negotiated through the initialization inventory.
 /// Typed captures require a host that preserves their submitted snapshots.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 pub const INSTALLATION_CONTROL_VERSION: u32 = 1;
 /// The private store-key channel completes before ordinary host framing begins.
 /// Its failures use the canonical bridge error contract and never raw causes.
@@ -241,6 +241,11 @@ pub enum ClientCommand {
         #[serde(rename = "nodeHome")]
         node_home: Option<String>,
     },
+    #[serde(rename = "client_enroll_local")]
+    EnrollLocal {
+        #[serde(rename = "nodeHome")]
+        node_home: Option<String>,
+    },
     #[serde(rename = "client_workspace_permissions")]
     WorkspacePermissions {
         request: super::permissions::WorkspacePermissionsRequest,
@@ -388,6 +393,7 @@ impl ClientCommand {
         "client_speech_recognize",
         "client_speech_synthesize",
         "client_connect_local",
+        "client_enroll_local",
         "client_workspace_permissions",
         "client_workspace_permissions_save",
         "client_workspace_permissions_forget_commands",

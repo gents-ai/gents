@@ -38,7 +38,7 @@ pub use crate::accounts::{CredentialSave, IssuedOAuthCredential, PendingOAuthCre
 #[derive(Default)]
 pub struct ManagedServerState {
     pub pairing_task: Option<JoinHandle<()>>,
-    /// Cancels `pairing_task` before any enrollment document is authored.
+    /// Lets shutdown drain an explicit enrollment before releasing its core.
     pub pairing_cancel: Option<tokio_util::sync::CancellationToken>,
     pub schema_observation_task: Option<JoinHandle<()>>,
     pub starting: bool,

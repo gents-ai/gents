@@ -430,6 +430,7 @@ describe("first-run local node startup", () => {
         },
       ),
       openManagedServerLoginItems: vi.fn(async () => undefined),
+      enrollManagedServer: vi.fn(async () => undefined),
       commitManagedServerAutoStart: vi.fn(async () => observed),
       fetchDesktopSnapshot: vi.fn(async () => ({
         bootstrap,

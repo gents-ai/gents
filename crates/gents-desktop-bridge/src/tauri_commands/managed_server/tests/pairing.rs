@@ -155,7 +155,8 @@ async fn a_request_whose_push_failed_is_pushed_again_when_reused() {
         "approved",
         "2026-09-24T12:00:00Z",
     ));
-    assert_eq!(attempt().await.unwrap(), "enroll-1");
+    assert!(attempt().await.is_err());
+    assert_eq!(authored.load(std::sync::atomic::Ordering::SeqCst), 2);
     assert_eq!(resent.lock().unwrap().len(), 1);
 }
 

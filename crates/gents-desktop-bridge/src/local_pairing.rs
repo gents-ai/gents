@@ -397,16 +397,13 @@ where
             "reading this desktop's enrollment requests: {error}"
         ))),
         Ok(None) => author().await,
-        Ok(Some(request)) => {
-            if request.state == "pending_approval" {
-                resend(request.request_id.clone()).await.map_err(|error| {
-                    PairingFailure::classify(format!(
-                        "resending managed runtime enrollment: {error}"
-                    ))
-                })?;
-            }
+        Ok(Some(request)) if request.state == "pending_approval" => {
+            resend(request.request_id.clone()).await.map_err(|error| {
+                PairingFailure::classify(format!("resending managed runtime enrollment: {error}"))
+            })?;
             Ok(request.request_id)
         }
+        Ok(Some(_)) => author().await,
     }
 }
 

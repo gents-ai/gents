@@ -176,6 +176,7 @@ export type DesktopApiAdapter = {
   startDesktopClient: () => Promise<DesktopClientSnapshot>;
   shutdownDesktopClient: () => Promise<DesktopClientSnapshot>;
   managedServerStatus?: () => Promise<ManagedServerStatus>;
+  enrollManagedServer?: () => Promise<void>;
   startManagedServer?: (
     nodeName: string,
     authority?: ManagedServerAuthorityInput,

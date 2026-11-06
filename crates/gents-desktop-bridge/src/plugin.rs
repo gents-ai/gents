@@ -150,6 +150,7 @@ where
             tauri_commands::lifecycle::desktop_app_quit,
             tauri_commands::managed_server::desktop_managed_server_status,
             tauri_commands::managed_server::desktop_managed_server_start,
+            tauri_commands::managed_server::desktop_managed_server_enroll,
             tauri_commands::managed_server::desktop_managed_server_stop,
             tauri_commands::managed_server::desktop_managed_server_set_auto_start,
             tauri_commands::managed_server::desktop_managed_server_restart,
