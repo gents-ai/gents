@@ -173,6 +173,28 @@ pub(crate) async fn complete_child_managed(
     text: &str,
     identity: &dyn NodeIdentity,
 ) {
+    complete_child_managed_inner(node, child_id, node_did, text, identity, None).await;
+}
+
+pub(crate) async fn complete_child_managed_verified(
+    node: &Arc<EmbeddedNode>,
+    child_id: &str,
+    node_did: &str,
+    text: &str,
+    identity: &dyn NodeIdentity,
+    runtime: Arc<dyn NodeIdentity>,
+) {
+    complete_child_managed_inner(node, child_id, node_did, text, identity, Some(runtime)).await;
+}
+
+async fn complete_child_managed_inner(
+    node: &Arc<EmbeddedNode>,
+    child_id: &str,
+    node_did: &str,
+    text: &str,
+    identity: &dyn NodeIdentity,
+    runtime: Option<Arc<dyn NodeIdentity>>,
+) {
     let child_id_escaped = crate::store::graphql::escape_graphql_string(child_id);
     let access = crate::ConfigAccess::local_managed_agent(
         node.clone(),
@@ -190,14 +212,25 @@ pub(crate) async fn complete_child_managed(
         .agent_did
         .clone()
         .expect("fixture request selects an agent");
-    let mut request = RequestLifecycle::new_with_node_did(
-        node.clone(),
-        &selected_agent,
-        node_did,
-        row.try_into().unwrap(),
-        60,
-    );
+    let request = row.try_into().unwrap();
+    let (request, admission) = if let Some(runtime) = runtime {
+        let (_, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+        let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+            node.clone(),
+            runtime,
+            authority,
+        );
+        verifier
+            .verify_fresh_for_claim_with_identity(&request, identity)
+            .await
+            .expect("verify the child request and its native claim admission")
+    } else {
+        (request, None)
+    };
+    let mut request =
+        RequestLifecycle::new_with_node_did(node.clone(), &selected_agent, node_did, request, 60);
     request.bind_managed_agent(identity).unwrap();
+    request.set_client_claim_admission(admission);
     assert_eq!(request.claim().await.unwrap(), ClaimOutcome::Claimed);
     let writer =
         DefraStreamWriter::new_for_lifecycle(node.clone(), &request, Duration::ZERO).unwrap();
