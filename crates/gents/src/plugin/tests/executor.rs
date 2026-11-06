@@ -1787,12 +1787,7 @@ mod tool_writes {
         })
         .await
         .expect("publish canonical native tool admission");
-        let (node, path, mut call, runtime) = (
-            admission.node,
-            admission.path,
-            admission.tool,
-            admission.runtime,
-        );
+        let (node, path, mut call) = (admission.node, admission.path, admission.tool);
         node.add_collection(
             "type Stamped { body: String job_row_doc_id: String } type Plain { body: String }",
         )
@@ -1806,12 +1801,12 @@ mod tool_writes {
         store::write_record(home.path(), &record).unwrap();
         let executor = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
         let node_did = node.node_identity_did().unwrap();
-        let binding = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
-        let agent_identity =
-            crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
+        // Plugin writes commit in the admitted call's own terminal transaction,
+        // so the data actor must be that call's Agent, not a fresh binding.
+        let agent_did = call.actor().as_str().to_owned();
         let tool = PluginTool::resolve(executor, &tool_ref(Some(&record.digest)), None)
             .unwrap()
-            .with_agent_data(node.clone(), node_did, Some(agent_identity.did()))
+            .with_agent_data(node.clone(), node_did, Some(agent_did.as_str()))
             .unwrap();
         let doc_id = call.doc_id().unwrap().to_owned();
         let registry = gents_loop::live_output::LiveToolOutputRegistry::default();
@@ -1876,7 +1871,10 @@ mod tool_writes {
                 ),
             "the first terminal transaction must have failed before the replay"
         );
-        let tool_row = ConfigAccess::local(node.clone())
+        // AgentToolCall rows are owned by the Agent; the node identity cannot read them.
+        let tool_row = call
+            .access()
+            .unwrap()
             .execute(&format!(
                 r#"{{ AgentToolCall(docID: "{doc_id}") {{ lifecycle_state }} }}"#
             ))
