@@ -325,7 +325,7 @@ impl UxDataWatch {
 /// initial read so a concurrent change remains pending for the next read.
 pub async fn watch_local(
     home: &Path,
-    node: Arc<crate::defra_node::EmbeddedNode>,
+    node: Arc<crate::defra_node::Node>,
     request: UxDataCall,
 ) -> Result<UxDataWatch> {
     anyhow::ensure!(

@@ -242,7 +242,7 @@ pub async fn read_client_replicated_schema(
 }
 
 pub async fn read_replicated_schema(
-    node: std::sync::Arc<defra_node::EmbeddedNode>,
+    node: std::sync::Arc<defra_node::Node>,
     collections: &[&str],
 ) -> anyhow::Result<ReplicatedSchema> {
     let access = crate::store::config_client::ConfigAccess::local(node);
