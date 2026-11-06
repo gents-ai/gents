@@ -1,6 +1,7 @@
 mod support;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use gents::documents::{EvalSplit, InferenceBackend, InferenceProfile};
 use gents::eval::checks::CheckRegistry;
@@ -825,18 +826,42 @@ impl Canary {
     }
 }
 async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
-    let home = EmbeddedHome::create_temp("eval-canary").await.unwrap();
+    use gents::store::config_client::NodePermission;
+    use gents::NodeIdentity;
+
+    let mut home = EmbeddedHome::create_temp("eval-canary").await.unwrap();
     let dirs = tempfile::tempdir().unwrap();
-    let evaluator = gents::store::identity::KeyIdentity::load_or_create(
-        dirs.path().join("evaluator.key"),
-        None,
-    )
-    .unwrap();
-    let evaluator_did = gents::store::identity::NodeIdentity::did(&evaluator).to_owned();
-    let access = ConfigAccess::local_as(
-        home.node.clone(),
-        ::identity::Did::new(evaluator_did.clone()).unwrap(),
+    let evaluator_path = dirs.path().join("evaluator.key");
+    let evaluator = Arc::new(
+        tokio::task::spawn_blocking(move || {
+            gents::store::identity::KeyIdentity::load_or_create(evaluator_path, None)
+        })
+        .await
+        .unwrap()
+        .unwrap(),
     );
+    let evaluator_did = evaluator.did().to_owned();
+    let capability = evaluator.client_signing_capability().unwrap();
+    home.set_evaluator(evaluator, capability);
+    let admin = ConfigAccess::local_as(
+        home.node.clone(),
+        ::identity::Did::new(home.did()).unwrap(),
+    );
+    let evaluator_actor = ::identity::Did::new(&evaluator_did).unwrap();
+    for permission in [
+        NodePermission::CollectionGet,
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::DocumentDelete,
+        NodePermission::DacRelationAdd,
+        NodePermission::DacRelationDelete,
+    ] {
+        admin
+            .grant_node_permission(&evaluator_actor, permission)
+            .await
+            .unwrap();
+    }
+    let access = home.client_access(&evaluator_did).unwrap();
     let owner = home.did().to_string();
     let canary = Canary {
         access,
