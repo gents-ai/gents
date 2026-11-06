@@ -165,14 +165,14 @@ impl PolicyDeniedOwner {
                 tools: vec![Box::new(crate::tools::mcp::meta::CallToolTool::new(
                     crate::tools::mcp::meta::MetaToolContext {
                         configuration: crate::inference::resolved::ResolvedConfiguration::Static,
-                        actor: identity::Did::new("did:test:actor").unwrap(),
+                        actor: identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
                         node: node.clone(),
                         mcp_pool: crate::tools::mcp::pool::McpPool::new()
-                            .for_agent("did:test:test"),
+                            .for_agent(node.node_identity_did().expect("fixture node has an identity")),
                         health: crate::tools::mcp::health::ServiceHealthMap::new(),
                         local_hostname: "local".into(),
                         local_subnet: None,
-                        node_did: "did:test:test".into(),
+                        node_did: node.node_identity_did().expect("fixture node has an identity").into(),
                         allowed_mcp_service_ids: vec!["selected-service".into()],
                         remote_tools: crate::documents::RemoteTools {
                             services: vec![crate::documents::RemoteServiceTools {
@@ -426,7 +426,7 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
         tool_doc_id,
         &lifecycle.request().doc_id,
         &lifecycle.request().session_id,
-        "did:test:test",
+        &lifecycle.request().node_did,
         None,
     )
     .await
@@ -733,7 +733,7 @@ async fn persisted_plugin_image_result_replay(image_bytes: usize) {
     assert_eq!(collected.final_text.as_deref(), Some("seen"));
 
     let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
+    let history = crate::session::load_history(&node, &session_id, &lifecycle.request().node_did, None)
         .await
         .unwrap();
     let replayed: Vec<String> = history
@@ -1190,7 +1190,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
     let (node, _hook, _writer, lifecycle) = owned_test_hook().await;
     let request_id = lifecycle.request().doc_id.clone();
     let template = gents_protocol::output::OutputSegment {
-        node_did: "did:test:owner".into(),
+        node_did: lifecycle.request().node_did.clone(),
         requester_did: None,
         session_id: "session".into(),
         request_doc_id: request_id.clone(),
@@ -1299,7 +1299,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
             "tool-doc",
             &request_id,
             "session",
-            "did:test:owner",
+            &lifecycle.request().node_did,
             None,
         )
         .await
@@ -1311,7 +1311,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
                 "tool-doc",
                 &request_id,
                 "session",
-                "did:test:owner",
+                &lifecycle.request().node_did,
                 None,
             )
             .await

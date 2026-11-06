@@ -111,7 +111,7 @@ async fn generated_schema_argument_repair_cases_drive_owned_loop() {
         let arguments = crate::tools::call::lifecycle::load_tool_call_arguments(
             &access,
             row["_docID"].as_str().unwrap(),
-            "did:test:test",
+            &lifecycle.request().node_did,
             &lifecycle.request().session_id,
             None,
         )
@@ -161,10 +161,11 @@ async fn config_container_repairs_preserve_native_validation_and_the_invalid_bud
     );
     let owner = identity.did().to_owned();
     let (node, hook, writer, mut lifecycle) = owned_test_hook_with_identity(identity.clone()).await;
-    crate::test_support::install_test_agent(&node, &owner, "general").await;
+    let binding = crate::test_support::install_test_agent(&node, &owner, "general").await;
+    let agent_did = binding.agent_did.clone();
     let grants = crate::tools::surface::SelfConfigToolConfig {
         enabled: true,
-        agent_did: "general".into(),
+        agent_did: agent_did.clone(),
         categories: ["profile".to_string()].into_iter().collect(),
         preview: true,
         no_lockout: false,
@@ -185,7 +186,7 @@ async fn config_container_repairs_preserve_native_validation_and_the_invalid_bud
                 serde_json::json!({
                     "argv": ["profile", "preview"],
                     "set": serde_json::json!({"display_name": "{\"literal\":true}"}).to_string(),
-                    "options": serde_json::json!({"agent": "general"}).to_string()
+                    "options": serde_json::json!({"agent": &agent_did}).to_string()
                 }),
             ))
         })
@@ -196,7 +197,7 @@ async fn config_container_repairs_preserve_native_validation_and_the_invalid_bud
         serde_json::json!({
             "argv": ["profile", "preview"],
             "set": serde_json::json!({"display_name": []}).to_string(),
-            "options": serde_json::json!({"agent": "general"}).to_string()
+            "options": serde_json::json!({"agent": &agent_did}).to_string()
         }),
     )));
     calls.push(RawStreamingChoice::FinalResponse(()));
