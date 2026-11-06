@@ -661,7 +661,7 @@ async fn named_run_source_boundaries_follow_the_model_and_preserve_accepted_argu
             row["_docID"].as_str().unwrap(),
             &step.hook.node_did,
             &step.session_id,
-            Some(&step.hook.node_did),
+            row["requester_did"].as_str(),
         )
         .await
         .unwrap();
@@ -837,16 +837,20 @@ fn adopting() -> Value {
 }
 
 async fn finish_job(step: &Step0, row: &str) {
-    let mut lifecycle = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
+    let mut lifecycle = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
         step.node.clone(),
+        step.caller.did().parse().unwrap(),
         row,
         &step.hook.node_did,
         &step.session_id,
-        Some(&step.hook.node_did),
+        step.hook.active_requester_did().await.as_deref(),
     )
     .await
     .unwrap()
     .unwrap();
+    lifecycle
+        .bind_agent_signer(step.access().managed_agent_signer())
+        .unwrap();
     settle_plugin_job(&mut lifecycle, Settlement::Result(json!("done")))
         .await
         .unwrap();
@@ -962,12 +966,13 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
     let root_id = root["_docID"].as_str().unwrap().to_owned();
     let root_pin = step.pin_of(&root).await;
     let child = step.child_request(&root_id, "s").await;
-    crate::tools::call::lifecycle::admission_fixture::complete_child_managed(
+    crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
         &step.node,
         child["request_id"].as_str().unwrap(),
         &step.hook.node_did,
         "done",
         step.worker.as_ref(),
+        step.db.node_identity.clone(),
     )
     .await;
     finish_job(&step, &root_id).await;
@@ -979,11 +984,8 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
         .and_then(|state| state.evidence)
         .expect("the finished root row keeps its last step's evidence");
     let guest = json!({"phase": "verify", "groups": 2});
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &step.node,
-        None,
-        "test.guest",
-        |txn| {
+    step.access()
+        .transact_write("test.guest", |txn| {
             let (root_id, evidence, guest) = (root_id.clone(), evidence.clone(), guest.clone());
             Box::pin(async move {
                 crate::tools::background::job::records::write_step_state_in_txn(
@@ -995,10 +997,9 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
                 )
                 .await
             })
-        },
-    )
-    .await
-    .unwrap();
+        })
+        .await
+        .unwrap();
 
     let resume = json!({"row_doc_id": root_id, "engine": "current"});
     step.reinstall(&json!({"effects": {
