@@ -10,7 +10,6 @@ mod p2p_ops;
 mod route_manager;
 mod supervisor;
 pub(super) mod sync_state;
-mod tool_control;
 mod writes;
 
 #[cfg(test)]

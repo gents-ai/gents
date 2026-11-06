@@ -187,6 +187,28 @@ impl BridgeError {
     }
 }
 
+/// A verified agent rejection is a denial; every unconfirmed control keeps its
+/// intent reference in the message because the action may still take effect.
+impl From<gents::tools::call::control::client::send::ControlSendError> for BridgeError {
+    fn from(error: gents::tools::call::control::client::send::ControlSendError) -> Self {
+        use gents::tools::call::control::client::send::ControlSendError;
+        let code = match &error {
+            ControlSendError::NotAuthorized
+            | ControlSendError::PermissionDenied
+            | ControlSendError::Rejected { .. } => BridgeErrorCode::PermissionDenied,
+            ControlSendError::NotFound => BridgeErrorCode::NotFound,
+            ControlSendError::RuntimeRequired => BridgeErrorCode::Unsupported,
+            ControlSendError::Unavailable(_)
+            | ControlSendError::Refused { .. }
+            | ControlSendError::Unconfirmed { .. } => BridgeErrorCode::Unknown,
+        };
+        Self::new(
+            code,
+            gents_protocol::error_chain::ErrorChain(&error).to_string(),
+        )
+    }
+}
+
 impl std::fmt::Display for BridgeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.code.as_str(), self.message)

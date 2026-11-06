@@ -1,4 +1,5 @@
 use crate::client::source_matches_node;
+use gents::inference::backends::registry::observation_binding;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -181,24 +182,30 @@ impl InferenceSetupState {
             .iter()
             .filter(|row| row.node_did == node_did)
             .map(|row| {
-                let observation = store
-                    .backend_observations
-                    .iter()
-                    .enumerate()
-                    .find(|(index, observation)| {
-                        observation.backend_id == row.backend_id
-                            && observation_belongs_to_backend(
-                                row.physical_doc_id.as_deref(),
-                                observation.metadata_doc_id.as_deref(),
-                            )
-                            && source_matches_node(
-                                &store.backend_observation_source_node_dids,
-                                *index,
-                                &row.node_did,
-                                true,
-                            )
-                    })
-                    .map(|(_, observation)| observation);
+                let observation = row.physical_doc_id.as_deref().and_then(|metadata_doc| {
+                    observation_binding::bind(
+                        &row.node_did,
+                        &row.backend_id,
+                        metadata_doc,
+                        store.backend_observations.iter().enumerate().map(
+                            |(index, observation)| {
+                                (
+                                    observation_binding::ObservationKey {
+                                        node_did: store
+                                            .backend_observation_source_node_dids
+                                            .get(index)
+                                            .and_then(Option::as_deref),
+                                        backend_id: &observation.backend_id,
+                                        metadata_doc_id: observation.metadata_doc_id.as_deref(),
+                                    },
+                                    observation,
+                                )
+                            },
+                        ),
+                    )
+                    .ok()
+                    .flatten()
+                });
                 backend_config_view(row, observation)
             })
             .collect::<Vec<_>>();
@@ -229,25 +236,6 @@ impl InferenceSetupState {
             inference_backends,
             inference_profiles,
         }
-    }
-}
-
-fn observation_belongs_to_backend(
-    metadata_doc: Option<&str>,
-    observation_parent: Option<&str>,
-) -> bool {
-    metadata_doc.is_some_and(|doc| observation_parent == Some(doc))
-}
-
-#[cfg(test)]
-mod backend_observation_binding_tests {
-    use super::observation_belongs_to_backend;
-
-    #[test]
-    fn requires_the_same_physical_metadata() {
-        assert!(observation_belongs_to_backend(Some("new"), Some("new")));
-        assert!(!observation_belongs_to_backend(Some("new"), Some("old")));
-        assert!(!observation_belongs_to_backend(None, None));
     }
 }
 

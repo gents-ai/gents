@@ -214,7 +214,8 @@ fn decode_fleet_slot_query_response(response: Value) -> Result<FleetSlotQueryEnv
     serde_json::from_value(data).context("decoding fleet slot snapshot query response")
 }
 
-/// Only a unique observation for the same Node and backend supplies status.
+/// Status comes only from the observation the inference owner binds to this
+/// metadata.
 pub(super) fn attach_backend_observations(data: &mut Value) {
     let observations = data
         .get("InferenceBackendObservation")
@@ -228,33 +229,32 @@ pub(super) fn attach_backend_observations(data: &mut Value) {
         return;
     };
     for backend in backends {
-        if let Some(object) = backend.as_object_mut() {
-            object.insert("probe_status".to_owned(), Value::Null);
-            object.insert("last_probe".to_owned(), Value::Null);
-        }
-        let (Some(node), Some(id), Some(doc)) = (
+        let observation = match (
             backend["node_did"].as_str(),
             backend["backend_id"].as_str(),
             backend["_docID"].as_str(),
-        ) else {
-            continue;
+        ) {
+            (Some(node), Some(id), Some(doc)) => {
+                gents::inference::backends::registry::observation_binding::bind_rows(
+                    node,
+                    id,
+                    doc,
+                    &observations,
+                )
+                .ok()
+                .flatten()
+                .cloned()
+            }
+            _ => None,
         };
-        let matches = observations
-            .iter()
-            .filter(|row| {
-                row["node_did"].as_str() == Some(node)
-                    && row["backend_id"].as_str() == Some(id)
-                    && row["metadata_doc_id"].as_str() == Some(doc)
-            })
-            .collect::<Vec<_>>();
         if let Some(object) = backend.as_object_mut() {
-            let [observation] = matches.as_slice() else {
-                continue;
-            };
             for field in ["probe_status", "last_probe"] {
-                if let Some(value) = observation.get(field) {
-                    object.insert(field.to_owned(), value.clone());
-                }
+                let value = observation
+                    .as_ref()
+                    .and_then(|observation| observation.get(field))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                object.insert(field.to_owned(), value);
             }
         }
     }

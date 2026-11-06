@@ -165,8 +165,9 @@ async fn job_control_uses_the_client_and_requires_a_matching_agent_receipt() {
     use gents_protocol::process_control::{
         ToolControlIntent, ToolControlReceipt, ToolControlReceiptOutcome,
     };
+    use gents_desktop_core::error::BridgeErrorCode;
     use wiremock::matchers::{
-        body_partial_json, body_string_contains, header_exists, method, path,
+        body_partial_json, body_string_contains, header, header_exists, method, path,
     };
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -216,6 +217,15 @@ async fn job_control_uses_the_client_and_requires_a_matching_agent_receipt() {
     intent["tool_call_doc_id"] = "runtime-only-doc".into();
     intent["action"] = "job_stop".into();
     intent["outcome_json"] = serde_json::to_string(&receipt).unwrap().into();
+    Mock::given(method("POST"))
+        .and(path("/api/v0/graphql"))
+        .and(header("accept", "text/event-stream"))
+        .and(body_string_contains("intent-job"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("", "text/event-stream"))
+        .with_priority(1)
+        .expect(2)
+        .mount(&server)
+        .await;
     Mock::given(method("POST"))
         .and(path("/api/v0/graphql"))
         .and(header_exists("authorization"))
@@ -288,19 +298,22 @@ async fn job_control_uses_the_client_and_requires_a_matching_agent_receipt() {
     assert_eq!(
         job_control(&core, &command("missing-doc"))
             .await
-            .unwrap_err(),
-        "not found"
+            .unwrap_err()
+            .code,
+        BridgeErrorCode::NotFound
     );
     assert_eq!(
         job_control(&core, &command("foreign-doc"))
             .await
-            .unwrap_err(),
-        "permission denied"
+            .unwrap_err()
+            .code,
+        BridgeErrorCode::PermissionDenied
     );
     let unsigned_error = job_control(&core, &command("unsigned-doc"))
         .await
-        .unwrap_err();
-    assert!(unsigned_error.contains("The runtime returned an unsigned outcome."));
+        .unwrap_err()
+        .message;
+    assert!(unsigned_error.contains("without a queued intent"), "{unsigned_error}");
     assert!(unsigned_error.contains("the action may still take effect"));
     let mut other = command("runtime-only-doc");
     other.node_did = "did:test:unknown-peer".into();

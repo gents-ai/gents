@@ -297,11 +297,11 @@ pub async fn desktop_job_control(
         Err(error) => tracing::warn!(
             target: "gents_desktop::job_control",
             tool_call_doc_id = %request.tool_call_doc_id,
-            error,
+            %error,
             "desktop job control failed"
         ),
     }
-    result.map_err(|error| BridgeError::untyped(error.to_string()))
+    result
 }
 
 #[tauri::command]
@@ -311,9 +311,7 @@ pub async fn desktop_process_control(
 ) -> Result<ProcessControlOutcome, BridgeError> {
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop bridge core not initialized"))?;
-    crate::process_control::process_control(&core, &request)
-        .await
-        .map_err(BridgeError::untyped)
+    crate::process_control::process_control(&core, &request).await
 }
 
 #[tauri::command]

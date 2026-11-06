@@ -120,6 +120,15 @@ async fn desktop_process_control_authenticates_client_and_requires_agent_receipt
         intent_row["outcome_json"] = serde_json::to_string(&receipt).unwrap().into();
         Mock::given(matchers::method("POST"))
             .and(matchers::path("/prefix/api/v0/graphql"))
+            .and(matchers::header("accept", "text/event-stream"))
+            .and(matchers::body_string_contains(&intent))
+            .respond_with(ResponseTemplate::new(200).set_body_raw("", "text/event-stream"))
+            .with_priority(1)
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/prefix/api/v0/graphql"))
             .and(matchers::header_regex("authorization", "^Bearer .+"))
             .and(matchers::body_string_contains(&intent))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -231,36 +240,29 @@ async fn desktop_process_control_authenticates_client_and_requires_agent_receipt
     }
     let forged_error = crate::process_control::process_control(&core, &command("forged"))
         .await
-        .unwrap_err();
-    assert!(
-        forged_error.contains("Control intent-forged could not be observed"),
-        "{forged_error}"
-    );
+        .unwrap_err()
+        .message;
     assert!(
         forged_error.contains("signature verification failed"),
         "{forged_error}"
     );
     assert!(
-        forged_error.contains("outcome is unconfirmed"),
+        forged_error.contains("the action may still take effect"),
         "{forged_error}"
     );
     let unsigned_error = crate::process_control::process_control(&core, &command("unsigned"))
         .await
-        .unwrap_err();
-    assert!(unsigned_error.contains("The runtime returned an unsigned or invalid outcome."));
+        .unwrap_err()
+        .message;
+    assert!(unsigned_error.contains("without a queued intent"), "{unsigned_error}");
     assert!(unsigned_error.contains("the action may still take effect"));
-    assert_eq!(
-        crate::process_control::process_control(&core, &command("conflict"))
+    for (id, detail) in [("conflict", "owner unavailable"), ("redirect", "redirect refused")] {
+        let error = crate::process_control::process_control(&core, &command(id))
             .await
-            .unwrap_err(),
-        "owner unavailable"
-    );
-    assert_eq!(
-        crate::process_control::process_control(&core, &command("redirect"))
-            .await
-            .unwrap_err(),
-        "redirect refused"
-    );
+            .unwrap_err();
+        assert!(error.message.contains("refused"), "{}", error.message);
+        assert!(error.message.ends_with(detail), "{}", error.message);
+    }
     let followed = redirect_target.received_requests().await.unwrap();
     assert!(
         followed.is_empty(),

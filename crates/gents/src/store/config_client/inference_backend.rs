@@ -27,17 +27,13 @@ pub(super) async fn remove_backend_metadata_in_txn(
         &response,
         "InferenceBackendObservation",
     );
-    anyhow::ensure!(
-        observations.len() == 1,
-        "backend observation is unavailable or ambiguous"
-    );
-    let observation = &observations[0];
-    anyhow::ensure!(
-        observation["node_did"] == node_did
-            && observation["backend_id"] == backend_id
-            && observation["metadata_doc_id"] == metadata_doc,
-        "backend observation does not match metadata"
-    );
+    let observation = crate::inference::backends::registry::observation_binding::bind_rows(
+        node_did,
+        backend_id,
+        metadata_doc,
+        &observations,
+    )?
+    .context("backend observation is unavailable")?;
     let observation_doc = observation["_docID"]
         .as_str()
         .filter(|doc| !doc.is_empty())

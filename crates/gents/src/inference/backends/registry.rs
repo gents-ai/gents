@@ -1,4 +1,5 @@
 mod catalog_freshness;
+pub mod observation_binding;
 pub use catalog_freshness::decode_backend_observation;
 
 pub use crate::documents::InferenceBackend;
@@ -476,25 +477,26 @@ pub async fn lookup_backend_observation_in_txn(
 ) -> Result<Option<InferenceBackendObservation>> {
     let filter = scope_filter(node_did, backend_id)?;
     let response = txn.execute(&format!(
-        "query {{ InferenceBackendMetadata(filter: {filter}, limit: 2) {{ _docID }} InferenceBackendObservation(filter: {filter}) {{ metadata_doc_id backend_id catalogs catalog_freshness probe_status last_probe }} }}"
+        "query {{ InferenceBackendMetadata(filter: {filter}, limit: 2) {{ _docID }} InferenceBackendObservation(filter: {filter}) {{ node_did metadata_doc_id backend_id catalogs catalog_freshness probe_status last_probe }} }}"
     )).await?;
     let rows = response
         .get("data")
         .and_then(|data| data.get("InferenceBackendObservation"))
         .and_then(serde_json::Value::as_array)
         .context("backend observation query did not return rows")?;
-    anyhow::ensure!(rows.len() <= 1, "ambiguous backend observation reference");
-    if let Some(observation) = rows.first() {
-        let metadata = gents_protocol::graphql::graphql_rows_from_response(
-            &response,
-            "InferenceBackendMetadata",
-        );
+    let metadata =
+        gents_protocol::graphql::graphql_rows_from_response(&response, "InferenceBackendMetadata");
+    let [metadata] = metadata.as_slice() else {
         anyhow::ensure!(
-            metadata.len() == 1 && observation["metadata_doc_id"] == metadata[0]["_docID"],
+            rows.is_empty(),
             "backend observation does not match current metadata"
         );
-    }
-    rows.first()
+        return Ok(None);
+    };
+    let metadata_doc = metadata["_docID"]
+        .as_str()
+        .context("backend metadata has no physical ID")?;
+    observation_binding::bind_rows(node_did, backend_id, metadata_doc, rows)?
         .map(|row| decode_backend_observation(row.clone()).context("decoding backend observation"))
         .transpose()
 }
@@ -711,7 +713,7 @@ async fn record_model_catalog_for_document_in_txn(
     }
     let filter = scope_filter(&backend.node_did, &backend.backend_id)?;
     let response = txn.execute(&format!(
-                    "{{ InferenceBackendMetadata(filter: {filter}, limit: 2) {{ _docID {BACKEND_CONFIG_FIELDS} }} InferenceBackendObservation(filter: {filter}, limit: 2) {{ _docID metadata_doc_id backend_id catalogs catalog_freshness }} }}"
+                    "{{ InferenceBackendMetadata(filter: {filter}, limit: 2) {{ _docID {BACKEND_CONFIG_FIELDS} }} InferenceBackendObservation(filter: {filter}, limit: 2) {{ _docID node_did metadata_doc_id backend_id catalogs catalog_freshness }} }}"
                 )).await?;
     let rows = response
         .get("data")
@@ -740,15 +742,16 @@ async fn record_model_catalog_for_document_in_txn(
         &response,
         "InferenceBackendObservation",
     );
-    anyhow::ensure!(
-        observations.len() == 1,
-        "backend observation is missing or ambiguous"
-    );
-    let observation = &observations[0];
-    anyhow::ensure!(
-        observation["metadata_doc_id"] == row["_docID"],
-        "backend observation does not match current metadata"
-    );
+    let metadata_doc = row["_docID"]
+        .as_str()
+        .context("backend metadata has no physical ID")?;
+    let observation = observation_binding::bind_rows(
+        &backend.node_did,
+        &backend.backend_id,
+        metadata_doc,
+        &observations,
+    )?
+    .context("backend observation is missing")?;
     let mut catalogs = serde_json::from_value::<InferenceBackendObservation>(observation.clone())
         .context("decoding backend catalogs")?
         .catalogs;
