@@ -710,13 +710,19 @@ impl PendingAgent {
         self
     }
 
-    pub(crate) fn build_with_identity_for_test<I>(mut self, identity: I) -> ResolvedAgent
+    pub(crate) fn build_with_identity_for_test<I>(self, identity: I) -> ResolvedAgent
     where
         I: NodeIdentity + 'static,
     {
+        self.build_with_identity_arc_for_test(Arc::new(identity))
+    }
+
+    pub(crate) fn build_with_identity_arc_for_test(
+        mut self,
+        identity: Arc<dyn NodeIdentity>,
+    ) -> ResolvedAgent {
         let backend_id = self.backend_id.clone();
         let backend_endpoint = self.backend_endpoint.clone();
-        let identity: Arc<dyn NodeIdentity> = Arc::new(identity);
         let binding = self.identity_binding.get_or_insert_with(|| {
             crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap()
         });
