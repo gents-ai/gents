@@ -1229,32 +1229,26 @@ pub(super) mod tests {
     }
 
     async fn persisted_request_by_doc_id(
-        node: &defra_node::Node,
+        access: &crate::ConfigAccess,
         doc_id: &str,
     ) -> serde_json::Value {
-        let response = node
+        let response = access
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason terminal_output }} }}"#,
                 crate::store::graphql::escape_graphql_string(doc_id)
             ))
-            .await;
-        assert!(
-            !response.has_errors(),
-            "request lifecycle query: {:?}",
-            response.errors
-        );
-        let rows = response.data.as_ref().unwrap()["AgentRequest"]
-            .as_array()
+            .await
             .unwrap();
+        let rows = response["data"]["AgentRequest"].as_array().unwrap();
         assert_eq!(rows.len(), 1);
         rows[0].clone()
     }
 
     async fn persisted_request_state(
-        node: &defra_node::Node,
+        access: &crate::ConfigAccess,
         doc_id: &str,
     ) -> gents_protocol::request_lifecycle::RequestLifecycleState {
-        let row = persisted_request_by_doc_id(node, doc_id).await;
+        let row = persisted_request_by_doc_id(access, doc_id).await;
         gents_protocol::request_lifecycle::RequestLifecycleState::parse(
             row["lifecycle_state"].as_str().unwrap(),
         )
@@ -1833,14 +1827,11 @@ pub(super) mod tests {
         let notification_text = selected.notification_text;
         let node = admission.node.clone();
         assert_eq!(
-            persisted_request_state(&node, &wake.doc_id).await,
+            persisted_request_state(&admission.client, &wake.doc_id).await,
             RequestLifecycleState::Pending,
             "watcher selection must not preclaim the wake"
         );
-        let identity: Arc<dyn NodeIdentity> = Arc::new(
-            KeyIdentity::load_existing(admission.path.join("node.key"), None)
-                .expect("load the signed fixture's original identity"),
-        );
+        let identity = admission.runtime.clone();
         let signer = admission
             .tool
             .access()
@@ -1883,7 +1874,7 @@ pub(super) mod tests {
         let request_identity = agent_config.node_identity().clone();
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: node.clone(),
-            agent_config,
+            agent_config: agent_config.clone(),
             provider_family: None,
             model: Arc::new(WakeInputModel {
                 provider_inputs: provider_inputs.clone(),
@@ -1903,9 +1894,9 @@ pub(super) mod tests {
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::inference::rendered_request::defra_rendered_request_capture_factory(
-                    node.clone(),
-                ),
+                crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                    node.clone(), agent_config.agent_identity.as_ref(),
+                ).unwrap(),
             ),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -1935,7 +1926,7 @@ pub(super) mod tests {
         );
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
-                let response = crate::store::config_client::ConfigAccess::local(node.clone())
+                let response = admission.client
                     .execute(&format!(
                         r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }}, purpose: {{ _eq: "{title_purpose}" }} }}) {{ lifecycle_state caused_by_parent_request_id caused_by_parent_request_doc_id }} }}"#
                     ))
@@ -1968,7 +1959,7 @@ pub(super) mod tests {
             "creator cannot update the title without watcher dispatch"
         );
 
-        let diagnostic = persisted_request_by_doc_id(&node, &wake.doc_id).await;
+        let diagnostic = persisted_request_by_doc_id(&admission.client, &wake.doc_id).await;
         {
             let captured = provider_inputs.lock().expect("wake provider input capture");
             assert_eq!(
@@ -1994,14 +1985,17 @@ pub(super) mod tests {
         }
 
         assert_eq!(
-            persisted_request_state(&node, &wake.doc_id).await,
+            persisted_request_state(&admission.client, &wake.doc_id).await,
             RequestLifecycleState::Completed,
             "wake must complete through the daemon's owned request path"
         );
 
-        let mut watcher =
-            crate::request::watcher::DefraWatcher::new_legacy(node.clone(), &admission.node_did)
-                .expect("request watcher");
+        let mut watcher = crate::request::watcher::DefraWatcher::for_agents(
+            node.clone(),
+            &admission.node_did,
+            vec![agent_config.agent_identity.clone()],
+        )
+        .expect("request watcher");
         let successor = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 let request = crate::request::watcher::Watcher::next_request(&mut watcher)
@@ -2065,8 +2059,8 @@ pub(super) mod tests {
             assert_eq!(input.matches("successor native output").count(), 1);
             assert_eq!(input.matches("durable native output").count(), 1);
         }
-        let history = crate::session::load_history(
-            &node,
+        let history = crate::session::load_history_with_access(
+            &admission.client,
             &wake.session_id,
             &admission.node_did,
             wake.requester_did.as_deref(),
