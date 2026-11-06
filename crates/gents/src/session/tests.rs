@@ -5,74 +5,82 @@ use crate::test_support::first_content;
 
 #[tokio::test]
 async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
+    use crate::store::identity::NodeIdentity;
+    use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
+    use crate::tools::call::lifecycle::AwaitMode;
+    let (db, user, client, binding) =
+        crate::test_support::signed_test_node("provider-history").await;
     let session_id = "session-steering-provider-history";
-    import_history_observation(
-        &node,
-        "doc-old",
+    publish_signed_history(
+        &db,
+        &user,
+        &client,
+        &binding,
         session_id,
-        "did:test:test",
-        None,
-        "older steering",
-        &canonical_rows::authored_message_key("doc-old", "prompt"),
-        1,
-        None,
+        &["older steering".into()],
     )
     .await;
-    let tool_result = Message::User {
-        content: vec![UserContent::ToolResult(ToolResult {
-            id: "call-current".to_string(),
-            call_id: Some("call-current".to_string()),
-            content: vec![ToolResultContent::Text(Text {
-                text: "tool finished".to_string(),
-            })],
-        })],
-    };
-    import_history_observation(
-        &node,
-        "doc-current",
+    let mut current = signed_claimed_authored_request(
+        &db,
+        &user,
+        &client,
+        &binding,
+        "current-steering",
         session_id,
-        "did:test:test",
-        None,
-        "tool finished",
-        "session-steering-provider-history:tool-result:current",
-        3,
-        Some(("physical-current-tool", "call-current")),
     )
     .await;
-    import_history_observation(
-        &node,
-        "doc-current",
-        session_id,
-        "did:test:test",
-        None,
-        "current steering",
-        &canonical_rows::authored_message_key("doc-current", "prompt"),
-        2,
-        None,
-    )
-    .await;
-
-    let history = history::load_history_projection(
-        &node,
-        session_id,
-        "did:test:test",
-        None,
-        None,
-        Some("doc-current"),
+    let mut tool = publish_accepted_on_claimed_request(
+        db.node.clone(),
+        &mut current,
+        db.node_identity.did(),
+        0,
+        "fixture",
+        "call-current",
+        serde_json::json!({}),
+        AwaitMode::Foreground,
+        true,
     )
     .await
     .unwrap();
-
-    assert_eq!(history.len(), 2);
-    assert!(matches!(
-        history.first(),
-        Some(Message::User { content })
-            if matches!(first_content(content), UserContent::Text(Text { text }) if text == "older steering")
-    ));
-    assert_eq!(history.get(1), Some(&tool_result));
-    node.shutdown().await.expect("shut down test node");
+    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+        db.node.clone(),
+        &current,
+        std::time::Duration::ZERO,
+    )
+    .unwrap();
+    writer
+        .publish_authored_message(&current, "prompt", &Message::user("current steering"))
+        .await
+        .unwrap();
+    tool.complete("tool finished").await.unwrap();
+    let history = history::load_history_projection(
+        &db.node,
+        session_id,
+        db.node_identity.did(),
+        Some(user.did()),
+        None,
+        Some(&current.request().doc_id),
+    )
+    .await
+    .unwrap();
+    assert_eq!(history.len(), 3);
+    assert!(matches!(history.first(), Some(Message::User {content})
+        if matches!(first_content(content), UserContent::Text(Text {text}) if text == "older steering")));
+    assert!(
+        matches!(&history[1], Message::Assistant {content, ..} if content.iter().any(|block|
+        matches!(block, crate::inference::llm::message::AssistantContent::ToolCall(call) if call.id == "call-current")))
+    );
+    let tool_result = Message::User {
+        content: vec![UserContent::ToolResult(ToolResult {
+            id: "call-current".into(),
+            call_id: Some("fixture-provider-call-0".into()),
+            content: vec![ToolResultContent::Text(Text {
+                text: "tool finished".into(),
+            })],
+        })],
+    };
+    assert_eq!(history.get(2), Some(&tool_result));
+    db.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
