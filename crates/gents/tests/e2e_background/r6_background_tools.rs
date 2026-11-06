@@ -4,7 +4,7 @@ use gents::inference::llm::message::{
 };
 use gents::store::graphql::escape_graphql_string;
 use gents::tools::call::lifecycle::{CancelCause, ToolCallLifecycle, ToolCallState};
-use gents::{interrupt_request, BackgroundExecutionRegistry, NodeIdentity};
+use gents::{BackgroundExecutionRegistry, NodeIdentity};
 use serde::Deserialize;
 use serde_json::Value;
 use std::fmt::Debug;
@@ -12,9 +12,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::support::accepted_turn::{
-    boot_prepared_accepted_turn, prepare_accepted_turn, AcceptedTurnRuntime, AcceptedTurnSpec,
+    boot_prepared_accepted_turn, prepare_managed_accepted_turn, AcceptedTurnRuntime,
+    AcceptedTurnSpec,
 };
-use crate::support::fixtures::configure_agent_tools;
+use crate::support::fixtures::configure_agent_tools_as;
 use crate::support::streaming_backend::StreamChunk;
 use crate::support::test_db;
 
@@ -39,12 +40,24 @@ struct MessageRow {
 
 struct AcceptedBackgroundTurn {
     db: crate::support::TestDb,
+    fixture: crate::support::ManagedAgentFixture,
     agent_identity: Arc<dyn NodeIdentity>,
     runtime: AcceptedTurnRuntime,
     executions: BackgroundExecutionRegistry,
     session_id: String,
     request_id: String,
     prompt: String,
+}
+
+impl AcceptedBackgroundTurn {
+    fn agent_access(&self) -> gents::ConfigAccess {
+        gents::ConfigAccess::local_managed_agent(
+            self.db.node.clone(),
+            ::identity::Did::new(self.agent_identity.did()).unwrap(),
+            self.agent_identity.as_ref(),
+        )
+        .expect("managed Agent access")
+    }
 }
 
 async fn boot_background_turn(
@@ -61,13 +74,15 @@ async fn boot_background_turn_with_bounds(
     execution_deadline_secs: Option<i64>,
 ) -> AcceptedBackgroundTurn {
     let db = test_db(test_name).await;
-    let agent_identity = crate::support::managed_agent(&db).await;
+    let fixture = crate::support::managed_agent_fixture(&db).await;
+    let agent_identity = fixture.agent.clone();
     let agent_did = agent_identity.did();
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-request");
     let prompt = format!("{test_name}-prompt");
-    let prepared = prepare_accepted_turn(
+    let prepared = prepare_managed_accepted_turn(
         &db,
+        &fixture,
         AcceptedTurnSpec {
             backend_id: R6_BACKEND_ID,
             model: R6_MODEL,
@@ -91,11 +106,9 @@ async fn boot_background_turn_with_bounds(
             DesiredStateApplyPlan,
         };
         let node_did = db.node_identity.did();
-        gents::ConfigAccess::transact_local_write(
-            &db.node,
-            None,
-            "test.configure_r6_execution_deadline",
-            |txn| {
+        fixture
+            .access
+            .transact_write("test.configure_r6_execution_deadline", |txn| {
                 Box::pin(async move {
                     let profile_id = format!("{agent_did}:inference");
                     let (_, mut profile) = read(
@@ -131,14 +144,13 @@ async fn boot_background_turn_with_bounds(
                         .await
                         .map(|_| ())
                 })
-            },
-        )
-        .await
-        .expect("configure R6 execution deadline");
+            })
+            .await
+            .expect("configure R6 execution deadline");
     }
     prepared.backend.enable_dynamic_followups(&prompt);
-    configure_agent_tools(
-        &db.node,
+    configure_agent_tools_as(
+        &fixture.access,
         db.node_identity.did(),
         agent_did,
         None,
@@ -178,6 +190,7 @@ async fn boot_background_turn_with_bounds(
     let runtime = boot_prepared_accepted_turn(&db, prepared, agent).await;
     AcceptedBackgroundTurn {
         db,
+        fixture,
         agent_identity,
         runtime,
         executions,
@@ -187,7 +200,7 @@ async fn boot_background_turn_with_bounds(
     }
 }
 
-async fn fetch_messages(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow> {
+async fn fetch_messages(access: &gents::ConfigAccess, session_id: &str) -> Vec<MessageRow> {
     let session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
@@ -200,15 +213,12 @@ async fn fetch_messages(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "fetch AgentMessage rows failed: {:?}",
-        response.errors
-    );
+    let response = access
+        .execute(&query)
+        .await
+        .expect("fetch AgentMessage rows");
     let request_ids = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("AgentRequest"))
         .and_then(Value::as_array)
         .into_iter()
@@ -221,8 +231,7 @@ async fn fetch_messages(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow
         })
         .collect::<rapidhash::RapidHashMap<_, _>>();
     let headers = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("AgentMessage"))
         .and_then(Value::as_array)
         .cloned()
@@ -233,14 +242,10 @@ async fn fetch_messages(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow
         let node_did = header["node_did"].as_str().expect("message header agent");
         let requester_did = header["requester_did"].as_str();
         let request_doc_id = header["request_doc_id"].as_str().map(str::to_owned);
-        let (_, message) = gents::session::load_canonical_message_from_node(
-            node,
-            header_doc_id,
-            node_did,
-            requester_did,
-        )
-        .await
-        .expect("reconstruct canonical message");
+        let (_, message) =
+            gents::session::load_canonical_message(access, header_doc_id, node_did, requester_did)
+                .await
+                .expect("reconstruct canonical message");
         let content = match message {
             Message::System { content } => content,
             Message::User { content } => content
@@ -287,6 +292,7 @@ where
 
 async fn wait_for_tool_completion_message(
     node: &EmbeddedNode,
+    access: &gents::ConfigAccess,
     session_id: &str,
     tool_call_id: &str,
 ) -> MessageRow {
@@ -294,7 +300,7 @@ async fn wait_for_tool_completion_message(
     let mut updates = node.subscribe(&[EventName::Update]);
     let wait = async {
         loop {
-            if let Some(message) = fetch_messages(node, session_id)
+            if let Some(message) = fetch_messages(access, session_id)
                 .await
                 .into_iter()
                 .find(|message| message.content.contains(&marker))
@@ -311,7 +317,8 @@ async fn wait_for_tool_completion_message(
         Ok(message) => message,
         Err(_) => {
             let messages =
-                bounded_diagnostic(Duration::from_secs(1), fetch_messages(node, session_id)).await;
+                bounded_diagnostic(Duration::from_secs(1), fetch_messages(access, session_id))
+                    .await;
             panic!(
                 "tool completion message for {tool_call_id} was not appended; \
                  last_messages={messages}"
@@ -320,7 +327,10 @@ async fn wait_for_tool_completion_message(
     }
 }
 
-async fn fetch_background_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<serde_json::Value> {
+async fn fetch_background_wakes(
+    access: &gents::ConfigAccess,
+    session_id: &str,
+) -> Vec<serde_json::Value> {
     let session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
@@ -332,28 +342,26 @@ async fn fetch_background_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<se
             ) {{ _docID request_id input }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "fetch background wake rows failed: {:?}",
-        response.errors
-    );
+    let response = access.execute(&query).await.expect("read background wakes");
     response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("AgentRequest"))
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_default()
 }
 
-async fn load_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &str) -> ToolCallRow {
-    fetch_tool_call(node, session_id, tool_call_id)
+async fn load_tool_call(
+    access: &gents::ConfigAccess,
+    session_id: &str,
+    tool_call_id: &str,
+) -> ToolCallRow {
+    fetch_tool_call(access, session_id, tool_call_id)
         .await
         .expect("AgentToolCall row")
 }
 
 async fn fetch_tool_call(
-    node: &EmbeddedNode,
+    access: &gents::ConfigAccess,
     session_id: &str,
     tool_call_id: &str,
 ) -> Option<ToolCallRow> {
@@ -376,45 +384,63 @@ async fn fetch_tool_call(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "fetch AgentToolCall failed: {:?}",
-        response.errors
-    );
+    let response = access.execute(&query).await.expect("read AgentToolCall");
     response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("AgentToolCall"))
         .and_then(serde_json::Value::as_array)
         .and_then(|rows| rows.first())
         .and_then(|row| serde_json::from_value(row.clone()).ok())
 }
 
-async fn canonical_tool_payload_json(
+async fn held_history(turn: &AcceptedBackgroundTurn, session_id: &str) -> Vec<Message> {
+    held_history_for(&turn.db, &turn.fixture, session_id).await
+}
+
+async fn held_history_for(
     db: &crate::support::TestDb,
+    fixture: &crate::support::ManagedAgentFixture,
+    session_id: &str,
+) -> Vec<Message> {
+    let session = escape_graphql_string(session_id);
+    let response = fixture.access.execute(&format!(
+        r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session}" }} }}, order: {{ sequence: ASC }}) {{ _docID }} }}"#,
+    )).await.expect("read held-user message headers");
+    let mut messages = Vec::new();
+    for header in response["data"]["AgentMessage"]
+        .as_array()
+        .expect("message headers")
+    {
+        let (_, message) = gents::session::load_canonical_message(
+            &fixture.access,
+            header["_docID"].as_str().expect("message document ID"),
+            db.node_identity.did(),
+            Some(fixture.user.did()),
+        )
+        .await
+        .expect("read held-user canonical message");
+        messages.push(message);
+    }
+    messages
+}
+
+async fn canonical_tool_payload_json(
+    turn: &AcceptedBackgroundTurn,
     session_id: &str,
     provider_call_id: &str,
 ) -> Value {
-    canonical_tool_payload_json_for(db, session_id, db.node_identity.did(), provider_call_id).await
+    canonical_tool_payload_json_for(&turn.db, &turn.fixture, session_id, provider_call_id).await
 }
 
 async fn canonical_tool_payload_json_for(
     db: &crate::support::TestDb,
+    fixture: &crate::support::ManagedAgentFixture,
     session_id: &str,
-    principal_did: &str,
     provider_call_id: &str,
 ) -> Value {
     let mut last_history = Vec::new();
     for _ in 0..200 {
-        let history = gents::load_history(
-            db.node.as_ref(),
-            session_id,
-            principal_did,
-            Some(principal_did),
-        )
-        .await
-        .expect("load canonical history");
+        let history = held_history_for(db, fixture, session_id).await;
         if let Some(payload) = history.iter().find_map(|message| match message {
             Message::User { content } => content.iter().find_map(|content| match content {
                 UserContent::ToolResult(result)
@@ -441,20 +467,13 @@ async fn canonical_tool_payload_json_for(
 }
 
 async fn canonical_tool_result_text(
-    db: &crate::support::TestDb,
+    turn: &AcceptedBackgroundTurn,
     session_id: &str,
     provider_call_id: &str,
 ) -> String {
     let mut last_history = Vec::new();
     for _ in 0..400 {
-        let history = gents::load_history(
-            db.node.as_ref(),
-            session_id,
-            db.node_identity.did(),
-            Some(db.node_identity.did()),
-        )
-        .await
-        .expect("load canonical history");
+        let history = held_history(turn, session_id).await;
         let results = history
             .iter()
             .flat_map(|message| match message {
@@ -492,19 +511,12 @@ async fn canonical_tool_result_text(
 }
 
 async fn canonical_latest_tool_payload_json(
-    db: &crate::support::TestDb,
+    turn: &AcceptedBackgroundTurn,
     session_id: &str,
     minimum_results: usize,
 ) -> Value {
     for _ in 0..200 {
-        let history = gents::load_history(
-            db.node.as_ref(),
-            session_id,
-            db.node_identity.did(),
-            Some(db.node_identity.did()),
-        )
-        .await
-        .expect("load canonical history");
+        let history = held_history(turn, session_id).await;
         let payloads = history
             .iter()
             .flat_map(|message| match message {
@@ -530,21 +542,20 @@ async fn canonical_latest_tool_payload_json(
 }
 
 async fn wait_for_named_tool_call(
-    node: &EmbeddedNode,
+    access: &gents::ConfigAccess,
     session_id: &str,
     tool_name: &str,
 ) -> ToolCallRow {
     let session_id = escape_graphql_string(session_id);
     let tool_name = escape_graphql_string(tool_name);
     for _ in 0..200 {
-        let response = node
+        let response = access
             .execute(&format!(
                 r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }}, tool_name: {{ _eq: "{tool_name}" }} }}, limit: 1) {{ tool_call_id tool_name lifecycle_state cancel_cause await_mode }} }}"#
             ))
-            .await;
+            .await.expect("read named tool call");
         if let Some(row) = response
-            .data
-            .as_ref()
+            .get("data")
             .and_then(|data| data.get("AgentToolCall"))
             .and_then(Value::as_array)
             .and_then(|rows| rows.first())
@@ -554,31 +565,31 @@ async fn wait_for_named_tool_call(
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    let requests = node
+    let requests = access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ _docID request_id lifecycle_state deadline valid_until claimed_at terminalized_at failure_reason }} }}"#
         ))
-        .await;
-    let tools = node
+        .await.expect("read request diagnostics");
+    let tools = access
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ _docID request_id tool_call_id tool_name lifecycle_state cancel_cause }} }}"#
         ))
-        .await;
+        .await.expect("read tool diagnostics");
     panic!(
         "tool {tool_name} was not durably persisted before provider follow-up; requests={:?}; tools={:?}",
-        requests.data,
-        tools.data,
+        requests,
+        tools,
     )
 }
 
 async fn wait_for_running_tool_call(
-    node: &EmbeddedNode,
+    access: &gents::ConfigAccess,
     session_id: &str,
     tool_call_id: &str,
 ) -> ToolCallRow {
     let timeout = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
-        let row = load_tool_call(node, session_id, tool_call_id).await;
+        let row = load_tool_call(access, session_id, tool_call_id).await;
         if row.lifecycle_state.as_deref() == Some("running") {
             return row;
         }
@@ -598,20 +609,14 @@ async fn wait_for_running_tool_call(
 async fn assert_accepted_rows_visible(turn: &AcceptedBackgroundTurn) {
     let session_id = escape_graphql_string(&turn.session_id);
     let response = turn
-        .db
-        .node
+        .fixture
+        .access
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ _docID request_id request_doc_id requester_did tool_call_id tool_name lifecycle_state spawned_by_tool_call_doc_id }} }}"#
         ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "accepted-row query failed: {:?}",
-        response.errors
-    );
+        .await.expect("read accepted rows");
     let rows = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("AgentToolCall"))
         .and_then(Value::as_array)
         .expect("AgentToolCall rows");
@@ -643,19 +648,36 @@ fn finish_dynamic_turn(turn: &AcceptedBackgroundTurn) {
 }
 
 async fn wait_for_initial_request_terminal(turn: &AcceptedBackgroundTurn) {
-    let state = crate::support::live_inference::wait_for_request_terminal(
-        turn.db.node.as_ref(),
-        &turn.request_id,
-        Duration::from_secs(10),
-    )
-    .await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let request_id = escape_graphql_string(&turn.request_id);
+    let state = loop {
+        let response = turn.fixture.access.execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 2) {{ lifecycle_state }} }}"#,
+        )).await.expect("read accepted request lifecycle");
+        let state = response["data"]["AgentRequest"]
+            .as_array()
+            .and_then(|rows| rows.first())
+            .and_then(|row| row["lifecycle_state"].as_str());
+        if gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(state) {
+            break state.unwrap().to_owned();
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "initial accepted request did not terminalize: {response}"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    };
     assert_eq!(
         state, "completed",
         "initial accepted request did not complete"
     );
 }
 
-async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_name: &str) -> usize {
+async fn count_tool_calls_by_name(
+    access: &gents::ConfigAccess,
+    session_id: &str,
+    tool_name: &str,
+) -> usize {
     let session_id = escape_graphql_string(session_id);
     let tool_name = escape_graphql_string(tool_name);
     let query = format!(
@@ -670,15 +692,12 @@ async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_na
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "count AgentToolCall by name failed: {:?}",
-        response.errors
-    );
+    let response = access
+        .execute(&query)
+        .await
+        .expect("count AgentToolCall by name");
     response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("AgentToolCall"))
         .and_then(|value| value.as_array())
         .map_or(0, Vec::len)
@@ -695,7 +714,7 @@ async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_e
         )],
     )
     .await;
-    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let row = wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "bash").await;
     let tool_call_id = row.tool_call_id.expect("background handle");
     assert_accepted_rows_visible(&turn).await;
     turn.runtime.backend.enqueue_response(
@@ -711,28 +730,32 @@ async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_e
     );
     wait_for_provider_requests(&turn, 3).await;
     finish_dynamic_turn(&turn);
-    let waited = canonical_latest_tool_payload_json(&turn.db, &turn.session_id, 2).await;
+    let waited = canonical_latest_tool_payload_json(&turn, &turn.session_id, 2).await;
     assert_eq!(waited["status"], "completed", "unexpected wait: {waited}");
     assert!(waited["result"]
         .as_str()
         .is_some_and(|value| value.contains("done")));
 
-    let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+    let row = load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
     assert_eq!(row.tool_name.as_deref(), Some("bash"));
     assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
     assert_eq!(row.await_mode.as_deref(), Some("background"));
     assert_eq!(
-        count_tool_calls_by_name(turn.db.node.as_ref(), &turn.session_id, "wait_process").await,
+        count_tool_calls_by_name(&turn.fixture.access, &turn.session_id, "wait_process").await,
         1
     );
 
-    let message =
-        wait_for_tool_completion_message(turn.db.node.as_ref(), &turn.session_id, &tool_call_id)
-            .await;
+    let message = wait_for_tool_completion_message(
+        turn.db.node.as_ref(),
+        &turn.fixture.access,
+        &turn.session_id,
+        &tool_call_id,
+    )
+    .await;
     assert!(message.content.contains(r#"tool_name="bash""#));
     assert!(message.content.contains(r#"status="completed""#));
     assert!(message.content.contains("done"));
-    let wakes = fetch_background_wakes(turn.db.node.as_ref(), &turn.session_id).await;
+    let wakes = fetch_background_wakes(&turn.fixture.access, &turn.session_id).await;
     assert_eq!(
         wakes.len(),
         1,
@@ -786,16 +809,16 @@ async fn background_tool_execution_survives_parent_request_deadline() {
     );
     let valid_until = (chrono::Utc::now() + chrono::Duration::seconds(2))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    crate::support::accepted_turn::enqueue_local_accepted_request_until(
+    crate::support::accepted_turn::enqueue_managed_accepted_request_until(
         &turn.db,
-        turn.agent_identity.did(),
+        &turn.fixture,
         "r6-background-outlives-deadline-request-2",
         &turn.session_id,
         prompt,
         Some(&valid_until),
     )
     .await;
-    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let row = wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "bash").await;
     let tool_call_id = row.tool_call_id.expect("background handle");
     tokio::time::timeout(Duration::from_secs(2), async {
         while !entered_path.exists() {
@@ -806,7 +829,7 @@ async fn background_tool_execution_survives_parent_request_deadline() {
     .expect("background process body entered");
     tokio::time::sleep(Duration::from_millis(2200)).await;
     assert_eq!(
-        load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id)
+        load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id)
             .await
             .lifecycle_state
             .as_deref(),
@@ -818,7 +841,7 @@ async fn background_tool_execution_survives_parent_request_deadline() {
     let marker = format!(r#"<tool-completion tool_call_id="{tool_call_id}""#);
     let mut message = None;
     for _ in 0..100 {
-        if let Some(found) = fetch_messages(turn.db.node.as_ref(), &turn.session_id)
+        if let Some(found) = fetch_messages(&turn.fixture.access, &turn.session_id)
             .await
             .into_iter()
             .find(|message| message.content.contains(&marker))
@@ -835,10 +858,10 @@ async fn background_tool_execution_survives_parent_request_deadline() {
         message.content
     );
 
-    let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+    let row = load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
     let timeline = gents::observe::run_timeline_fetch::load_run_timeline_rows(
-        &gents::store::config_client::ConfigAccess::local(turn.db.node.clone()),
+        &turn.fixture.access,
         "r6-background-outlives-deadline-request-2",
     )
     .await
@@ -865,7 +888,7 @@ async fn wait_process_bounded_wait_returns_still_running_without_cancelling() {
         )],
     )
     .await;
-    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let row = wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "bash").await;
     let tool_call_id = row.tool_call_id.expect("background handle");
     assert_accepted_rows_visible(&turn).await;
 
@@ -883,7 +906,7 @@ async fn wait_process_bounded_wait_returns_still_running_without_cancelling() {
     );
     wait_for_provider_requests(&turn, 3).await;
     finish_dynamic_turn(&turn);
-    let waited = canonical_latest_tool_payload_json(&turn.db, &turn.session_id, 2).await;
+    let waited = canonical_latest_tool_payload_json(&turn, &turn.session_id, 2).await;
     assert!(
         started.elapsed() < std::time::Duration::from_secs(4),
         "bounded wait must return promptly, took {:?}",
@@ -892,7 +915,7 @@ async fn wait_process_bounded_wait_returns_still_running_without_cancelling() {
     assert_eq!(waited["status"], "running", "unexpected wait: {waited}");
     assert_eq!(waited["error"]["reason"], "wait_timeout");
 
-    let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+    let row = load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
     assert_eq!(
         row.lifecycle_state.as_deref(),
         Some("running"),
@@ -930,13 +953,13 @@ async fn assert_runtime_recovery_preserves_registered_worker(test_name: &str, pa
         )],
     )
     .await;
-    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let row = wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "bash").await;
     let tool_call_id = row.tool_call_id.expect("registered process handle");
-    wait_for_running_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
-    set_parent_state(turn.db.node.as_ref(), &turn.request_id, parent_state).await;
+    wait_for_running_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
+    set_parent_state(&turn.agent_access(), &turn.request_id, parent_state).await;
     tokio::time::sleep(Duration::from_secs(6)).await;
     assert_eq!(
-        load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id)
+        load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id)
             .await
             .lifecycle_state
             .as_deref(),
@@ -956,21 +979,19 @@ async fn periodic_recovery_without_process_record_settles_orphan_lost() {
         )],
     )
     .await;
-    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let row = wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "bash").await;
     let tool_call_id = row.tool_call_id.expect("accepted background handle");
-    wait_for_running_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+    wait_for_running_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
     let expired = (chrono::Utc::now() - chrono::Duration::seconds(1))
         .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
-    let response = turn.db.node.execute(&format!(
+    let response = turn.agent_access().write("test.expire_background", &format!(
         r#"mutation {{ update_AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{}" }} }}, input: {{ deadline_at: "{}" }}) {{ _docID }} }}"#,
         escape_graphql_string(&tool_call_id), escape_graphql_string(&expired)
-    )).await;
-    assert!(
-        !response.has_errors(),
-        "expire accepted background row: {:?}",
-        response.errors
-    );
-    set_parent_state(turn.db.node.as_ref(), &turn.request_id, "completed").await;
+    )).await.expect("expire accepted background row");
+    assert!(gents::store::graphql::response_has_documents(
+        &response["data"]["update_AgentToolCall"]
+    ));
+    set_parent_state(&turn.agent_access(), &turn.request_id, "completed").await;
 
     gents::runtime::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
         &turn.db.node,
@@ -980,7 +1001,7 @@ async fn periodic_recovery_without_process_record_settles_orphan_lost() {
     )
     .await
     .unwrap();
-    let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+    let row = load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("failed"));
     assert_eq!(row.cancel_cause, None);
     turn.runtime.shutdown().await;
@@ -997,11 +1018,11 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
         )],
     )
     .await;
-    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let row = wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "bash").await;
     let tool_call_id = row.tool_call_id.expect("accepted valid orphan");
     finish_dynamic_turn(&turn);
     wait_for_initial_request_terminal(&turn).await;
-    set_parent_state(turn.db.node.as_ref(), &turn.request_id, "interrupted").await;
+    set_parent_state(&turn.agent_access(), &turn.request_id, "interrupted").await;
 
     let malformed = format!(
         r#"mutation {{
@@ -1014,14 +1035,12 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
         }}"#,
         escape_graphql_string(turn.db.node_identity.did())
     );
-    let response = turn.db.node.execute(&malformed).await;
-    assert!(
-        !response.has_errors(),
-        "failed to seed malformed recovery row: {:?}",
-        response.errors
-    );
+    turn.agent_access()
+        .write("test.malformed_recovery_row", &malformed)
+        .await
+        .expect("seed malformed recovery row");
 
-    let before = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+    let before = load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
     assert!(
         matches!(
             before.lifecycle_state.as_deref(),
@@ -1039,7 +1058,7 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
         )
         .await
         .unwrap();
-    let recovered = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+    let recovered = load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
     assert_eq!(
         recovered.lifecycle_state.as_deref(),
         Some("failed"),
@@ -1055,17 +1074,15 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
             "daemon-reconciled row cannot be terminalized twice"
         );
     }
-    let malformed_rows = turn.db.node.execute(r#"{ AgentToolCall(filter: { tool_call_key: { _eq: "malformed-recovery-row" } }) { lifecycle_state } }"#).await;
-    assert!(!malformed_rows.has_errors(), "{:#?}", malformed_rows.errors);
+    let malformed_rows = turn.agent_access().execute(r#"{ AgentToolCall(filter: { tool_call_key: { _eq: "malformed-recovery-row" } }) { lifecycle_state } }"#).await.expect("read malformed recovery row");
     assert_eq!(
-        malformed_rows.data.unwrap()["AgentToolCall"][0]["lifecycle_state"],
-        "running",
+        malformed_rows["data"]["AgentToolCall"][0]["lifecycle_state"], "running",
         "malformed row must remain untouched"
     );
     turn.runtime.shutdown().await;
 }
 
-async fn set_parent_state(node: &EmbeddedNode, request_id: &str, lifecycle_state: &str) {
+async fn set_parent_state(access: &gents::ConfigAccess, request_id: &str, lifecycle_state: &str) {
     let request_id = escape_graphql_string(request_id);
     let lifecycle_state = escape_graphql_string(lifecycle_state);
     let mutation = format!(
@@ -1076,12 +1093,10 @@ async fn set_parent_state(node: &EmbeddedNode, request_id: &str, lifecycle_state
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "failed to terminalize spawning request: {:?}",
-        response.errors
-    );
+    access
+        .write("test.set_parent_state", &mutation)
+        .await
+        .expect("terminalize spawning request");
 }
 
 #[tokio::test]
@@ -1105,7 +1120,7 @@ async fn wait_envelope_bounds_oversized_background_tool_result() {
         )],
     )
     .await;
-    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let row = wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "bash").await;
     let tool_call_id = row.tool_call_id.expect("background handle");
     turn.runtime.backend.enqueue_response(
         &turn.prompt,
@@ -1120,8 +1135,8 @@ async fn wait_envelope_bounds_oversized_background_tool_result() {
     );
     wait_for_provider_requests(&turn, 3).await;
     finish_dynamic_turn(&turn);
-    let waited = canonical_latest_tool_payload_json(&turn.db, &turn.session_id, 2).await;
-    let terminal_row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+    let waited = canonical_latest_tool_payload_json(&turn, &turn.session_id, 2).await;
+    let terminal_row = load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
     assert_eq!(
         waited["status"],
         "completed",
@@ -1143,10 +1158,10 @@ async fn wait_envelope_bounds_oversized_background_tool_result() {
         "bounded result must be non-empty"
     );
 
-    let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+    let row = load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
     let timeline = gents::observe::run_timeline_fetch::load_run_timeline_rows(
-        &gents::store::config_client::ConfigAccess::local(turn.db.node.clone()),
+        &turn.fixture.access,
         &turn.request_id,
     )
     .await
@@ -1175,7 +1190,7 @@ async fn background_tool_rejects_not_allowlisted_target() {
     wait_for_provider_requests(&turn, 2).await;
     assert_accepted_rows_visible(&turn).await;
     finish_dynamic_turn(&turn);
-    let error = canonical_tool_payload_json(&turn.db, &turn.session_id, "meta-bg-denied").await;
+    let error = canonical_tool_payload_json(&turn, &turn.session_id, "meta-bg-denied").await;
     assert_eq!(error["failure_class"], "tool_not_allowed");
     assert_eq!(error["requested_tool_name"], "other_tool");
     turn.runtime.shutdown().await;
@@ -1201,7 +1216,7 @@ async fn background_tool_rejects_when_parent_budget_is_exhausted() {
     wait_for_provider_requests(&turn, 2).await;
     assert_accepted_rows_visible(&turn).await;
     finish_dynamic_turn(&turn);
-    let denied = canonical_latest_tool_payload_json(&turn.db, &turn.session_id, 9).await;
+    let denied = canonical_latest_tool_payload_json(&turn, &turn.session_id, 9).await;
     assert_eq!(
         denied["code"], "background_tool_budget_exceeded",
         "unexpected budget denial: {denied}"
@@ -1209,7 +1224,7 @@ async fn background_tool_rejects_when_parent_budget_is_exhausted() {
     assert_eq!(denied["current_backgrounded"], 8);
     assert_eq!(denied["max_backgrounded"], 8);
     assert_eq!(
-        count_tool_calls_by_name(turn.db.node.as_ref(), &turn.session_id, "bash").await,
+        count_tool_calls_by_name(&turn.fixture.access, &turn.session_id, "bash").await,
         8
     );
     turn.runtime.shutdown().await;
@@ -1228,7 +1243,7 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
         Some(15),
     )
     .await;
-    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let row = wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "bash").await;
     let tool_call_id = row.tool_call_id.expect("accepted background handle");
     finish_dynamic_turn(&turn);
     wait_for_initial_request_terminal(&turn).await;
@@ -1253,9 +1268,9 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
     );
     let valid_until = (chrono::Utc::now() + chrono::Duration::minutes(1))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    crate::support::accepted_turn::enqueue_local_accepted_request_until(
+    crate::support::accepted_turn::enqueue_managed_accepted_request_until(
         &turn.db,
-        turn.agent_identity.did(),
+        &turn.fixture,
         "r6-background-wait-deadline-request-2",
         &turn.session_id,
         prompt,
@@ -1265,10 +1280,10 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
     let request_id = escape_graphql_string("r6-background-wait-deadline-request-2");
     let (request_doc_id, execution_generation, persisted_deadline_at) = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let response = turn.db.node.execute(&format!(
+            let response = turn.fixture.access.execute(&format!(
                 r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ _docID lifecycle_state deadline execution_generation }} }}"#,
-            )).await;
-            if let Some(request) = response.data.as_ref()
+            )).await.expect("read follow-up request");
+            if let Some(request) = response.get("data")
                 .and_then(|data| data["AgentRequest"].as_array())
                 .and_then(|rows| rows.first())
                 .filter(|row| row["lifecycle_state"] == "processing")
@@ -1285,7 +1300,7 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
         }
     }).await.expect("follow-up request was not claimed with an execution deadline");
     let request_doc_id = escape_graphql_string(&request_doc_id);
-    let access = gents::ConfigAccess::local(turn.db.node.clone());
+    let access = turn.fixture.access.clone();
     let renewal_bound = (persisted_deadline_at - chrono::Utc::now())
         .to_std()
         .expect("caller deadline remains open");
@@ -1310,7 +1325,7 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
     }).await.expect("caller lease did not renew beyond the execution deadline");
     turn.runtime.backend.release(prompt);
     let wait_row =
-        wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "wait_process").await;
+        wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "wait_process").await;
     let wait_tool_call_id = wait_row.tool_call_id.expect("accepted wait handle");
     let until_deadline = (persisted_deadline_at - chrono::Utc::now())
         .to_std()
@@ -1318,7 +1333,7 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
     let deadline = tokio::time::Instant::now() + until_deadline + Duration::from_secs(3);
     loop {
         let current =
-            load_tool_call(turn.db.node.as_ref(), &turn.session_id, &wait_tool_call_id).await;
+            load_tool_call(&turn.fixture.access, &turn.session_id, &wait_tool_call_id).await;
         if current.lifecycle_state.as_deref() == Some("timedOut") {
             assert!(
                 chrono::Utc::now() >= persisted_deadline_at - chrono::Duration::milliseconds(500),
@@ -1327,18 +1342,18 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
             break;
         }
         if tokio::time::Instant::now() >= deadline {
-            let requests = turn.db.node.execute(&format!(
+            let requests = turn.fixture.access.execute(&format!(
                 r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID request_id lifecycle_state valid_until terminalized_at failure_reason terminal_output execution_generation }} }}"#,
                 escape_graphql_string(&turn.session_id),
             )).await;
-            let tools = turn.db.node.execute(&format!(
+            let tools = turn.fixture.access.execute(&format!(
                 r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID request_id request_doc_id tool_call_id tool_name lifecycle_state cancel_cause tool_failure_class started_at completed_at message_sequence await_mode }} }}"#,
                 escape_graphql_string(&turn.session_id),
             )).await;
             panic!(
                 "accepted wait call did not follow the modeled request-deadline timeout owner: current={current:?}; requests={:?}; tools={:?}",
-                requests.data,
-                tools.data,
+                requests,
+                tools,
             );
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -1358,14 +1373,7 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     }).await.expect("caller deadline did not terminalize the owned request");
-    let history = gents::load_history(
-        &turn.db.node,
-        &turn.session_id,
-        turn.db.node_identity.did(),
-        None,
-    )
-    .await
-    .unwrap();
+    let history = held_history(&turn, &turn.session_id).await;
     assert!(
         history.iter().all(|message| !matches!(message,
             Message::User { content }
@@ -1374,11 +1382,11 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
         "an expired caller must not publish a successful late wait result"
     );
 
-    let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+    let row = load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("running"));
     assert_eq!(row.cancel_cause.as_deref(), None);
     assert_eq!(
-        count_tool_calls_by_name(turn.db.node.as_ref(), &turn.session_id, "wait_process").await,
+        count_tool_calls_by_name(&turn.fixture.access, &turn.session_id, "wait_process").await,
         1
     );
     turn.runtime.shutdown().await;
@@ -1402,7 +1410,7 @@ async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() 
         )],
     )
     .await;
-    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let row = wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "bash").await;
     let tool_call_id = row.tool_call_id.expect("accepted background handle");
     finish_dynamic_turn(&turn);
     wait_for_initial_request_terminal(&turn).await;
@@ -1424,28 +1432,39 @@ async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() 
         prompt,
         crate::support::streaming_backend::StreamResponse::completes(prompt, ["interrupt handled"]),
     );
-    crate::support::accepted_turn::enqueue_local_accepted_request(
+    crate::support::accepted_turn::enqueue_managed_accepted_request(
         &turn.db,
-        turn.agent_identity.did(),
+        &turn.fixture,
         request_id,
         &turn.session_id,
         prompt,
     )
     .await;
     let wait_row =
-        wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "wait_process").await;
+        wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "wait_process").await;
     assert_eq!(wait_row.tool_name.as_deref(), Some("wait_process"));
     assert_eq!(wait_row.await_mode.as_deref(), Some("foreground"));
     let wait_tool_call_id = wait_row.tool_call_id.expect("accepted wait handle");
-    wait_for_running_tool_call(turn.db.node.as_ref(), &turn.session_id, &wait_tool_call_id).await;
-    interrupt_request(&turn.db.node, request_id)
-        .await
-        .expect("interrupt caller request");
+    wait_for_running_tool_call(&turn.fixture.access, &turn.session_id, &wait_tool_call_id).await;
+    let response = turn.fixture.access.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
+        escape_graphql_string(request_id),
+    )).await.expect("read interrupt target");
+    let request_doc_id = response["data"]["AgentRequest"][0]["_docID"]
+        .as_str()
+        .expect("physical interrupt target");
+    gents::request::interrupt::interrupt_request_by_doc_id_with_access(
+        &turn.fixture.access,
+        request_doc_id,
+        turn.db.node_identity.did(),
+        Some(turn.fixture.user.did()),
+    )
+    .await
+    .expect("interrupt caller request");
 
     let result_text =
-        canonical_tool_result_text(&turn.db, &turn.session_id, "meta-wait-interrupt").await;
-    let wait_row =
-        load_tool_call(turn.db.node.as_ref(), &turn.session_id, &wait_tool_call_id).await;
+        canonical_tool_result_text(&turn, &turn.session_id, "meta-wait-interrupt").await;
+    let wait_row = load_tool_call(&turn.fixture.access, &turn.session_id, &wait_tool_call_id).await;
     let wait_state = wait_row
         .lifecycle_state
         .as_deref()
@@ -1484,7 +1503,7 @@ async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() 
         }
     }
 
-    let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+    let row = load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
     assert_eq!(
         row.lifecycle_state.as_deref(),
         interrupt_case.result.as_deref()
@@ -1497,9 +1516,9 @@ async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() 
     gents::tools::call::control::cancel_session_background_process(
         turn.db.node.clone(),
         &turn.executions,
+        turn.agent_identity.did(),
         turn.db.node_identity.did(),
-        turn.db.node_identity.did(),
-        Some(turn.db.node_identity.did()),
+        Some(turn.fixture.user.did()),
         &turn.session_id,
         &tool_call_id,
     )
@@ -1525,12 +1544,12 @@ async fn process_controls_manage_same_principal_job_across_request_turns() {
         )],
     )
     .await;
-    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let row = wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "bash").await;
     let tool_call_id = row.tool_call_id.expect("cross-turn handle");
     finish_dynamic_turn(&turn);
     wait_for_initial_request_terminal(&turn).await;
     let owner_after_first_turn =
-        load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+        load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
     assert_eq!(
         owner_after_first_turn.lifecycle_state.as_deref(),
         Some("running"),
@@ -1552,17 +1571,16 @@ async fn process_controls_manage_same_principal_job_across_request_turns() {
             ],
         ),
     );
-    crate::support::accepted_turn::enqueue_local_accepted_request(
+    crate::support::accepted_turn::enqueue_managed_accepted_request(
         &turn.db,
-        turn.agent_identity.did(),
+        &turn.fixture,
         "r6-background-cross-turn-controls-request-2",
         &turn.session_id,
         prompt,
     )
     .await;
     turn.runtime.backend.wait_for_chunks(prompt, 1).await;
-    let listed =
-        canonical_tool_payload_json(&turn.db, &turn.session_id, "meta-list-cross-turn").await;
+    let listed = canonical_tool_payload_json(&turn, &turn.session_id, "meta-list-cross-turn").await;
     assert!(
         listed["entries"]
             .as_array()
@@ -1572,11 +1590,10 @@ async fn process_controls_manage_same_principal_job_across_request_turns() {
         "list_processes lost accepted handle {tool_call_id}: {listed:#}"
     );
 
-    let read =
-        canonical_tool_payload_json(&turn.db, &turn.session_id, "meta-read-cross-turn").await;
+    let read = canonical_tool_payload_json(&turn, &turn.session_id, "meta-read-cross-turn").await;
     assert_eq!(read["status"], "running");
     assert_eq!(
-        load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id)
+        load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id)
             .await
             .lifecycle_state
             .as_deref(),
@@ -1599,7 +1616,7 @@ async fn process_controls_manage_same_principal_job_across_request_turns() {
         crate::support::streaming_backend::StreamResponse::completes(prompt, ["controlled"]),
     );
     let cancelled =
-        canonical_tool_payload_json(&turn.db, &turn.session_id, "meta-cancel-cross-turn").await;
+        canonical_tool_payload_json(&turn, &turn.session_id, "meta-cancel-cross-turn").await;
     assert_eq!(cancelled["status"], "cancelled");
     turn.runtime.shutdown().await;
 }
@@ -1615,90 +1632,110 @@ async fn second_signed_principal_runtime_is_denied_foreign_process_handle() {
         )],
     )
     .await;
-    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let row = wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "bash").await;
     let tool_call_id = row.tool_call_id.expect("owner background handle");
     finish_dynamic_turn(&turn);
     wait_for_initial_request_terminal(&turn).await;
 
-    let foreign = std::sync::Arc::new(crate::support::fixtures::test_identity(
-        "r6-foreign-requester",
-    ));
-    let foreign_behavior = "r6-background-foreign";
+    let foreign_user = tokio::task::spawn_blocking(|| {
+        crate::support::fixtures::test_identity("r6-foreign-requester")
+    })
+    .await
+    .unwrap();
+    let foreign_did = ::identity::Did::new(foreign_user.did()).unwrap();
+    let admin = gents::ConfigAccess::local_as(
+        turn.db.node.clone(),
+        ::identity::Did::new(turn.db.node_identity.did()).unwrap(),
+    );
+    for permission in [
+        gents::store::config_client::NodePermission::CollectionGet,
+        gents::store::config_client::NodePermission::DocumentRead,
+        gents::store::config_client::NodePermission::DocumentUpdate,
+        gents::store::config_client::NodePermission::DacRelationAdd,
+    ] {
+        admin
+            .grant_node_permission(&foreign_did, permission)
+            .await
+            .unwrap();
+    }
+    let node_did = turn.db.node_identity.did();
+    let agent_did = turn.fixture.binding.agent_did.as_str();
+    let agent_doc = turn
+        .fixture
+        .access
+        .transact_readonly("test.foreign.agent", |txn| {
+            Box::pin(async move {
+                Ok::<_, anyhow::Error>(
+                    gents::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        gents::Collection::Agent,
+                        node_did,
+                        agent_did,
+                    )
+                    .await?
+                    .expect("selected Agent")
+                    .0,
+                )
+            })
+        })
+        .await
+        .unwrap();
+    for relation in ["reader", "session_writer"] {
+        turn.fixture
+            .access
+            .add_actor_relationship("Agent", &agent_doc, relation, &foreign_did)
+            .await
+            .unwrap();
+    }
+    let foreign_fixture = crate::support::ManagedAgentFixture {
+        access: turn.db.client_access(&foreign_user),
+        user: foreign_user,
+        agent: turn.fixture.agent.clone(),
+        binding: turn.fixture.binding.clone(),
+    };
     let foreign_session = "r6-background-foreign-session";
     let foreign_prompt = "read a process owned by another principal";
-    let prepared = crate::support::accepted_turn::prepare_accepted_turn_as(
-        &turn.db,
-        foreign.as_ref(),
-        AcceptedTurnSpec {
-            backend_id: "r6-background-foreign-backend",
-            model: R6_MODEL,
-            parent_agent_did: foreign_behavior,
-            configured_agent_dids: &[foreign_behavior],
-            request_id: "r6-background-foreign-request",
-            session_id: foreign_session,
-            prompt: foreign_prompt,
-            accepted_chunks: vec![StreamChunk::tool_call(
+    turn.runtime
+        .backend
+        .enable_dynamic_followups(foreign_prompt);
+    turn.runtime.backend.enqueue_response(
+        foreign_prompt,
+        crate::support::streaming_backend::StreamResponse::streams(
+            foreign_prompt,
+            vec![StreamChunk::tool_call(
                 "meta-read-foreign-process",
                 "read_process",
                 serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
             )],
-            child_plans: Vec::new(),
-            valid_until: None,
-            request_hop: None,
-            request_setup: None,
-        },
+        ),
+    );
+    turn.runtime.backend.enqueue_response(
+        foreign_prompt,
+        crate::support::streaming_backend::StreamResponse::completes(foreign_prompt, ["done"]),
+    );
+    crate::support::accepted_turn::enqueue_managed_accepted_request(
+        &turn.db,
+        &foreign_fixture,
+        "r6-background-foreign-request",
+        foreign_session,
+        foreign_prompt,
     )
     .await;
-    configure_agent_tools(
-        &turn.db.node,
-        foreign.did(),
-        foreign_behavior,
-        None,
-        gents::documents::Tools {
-            tools_id: format!("{foreign_behavior}:tools"),
-            node_did: foreign.did().to_string(),
-            host: Some(gents::documents::HostTools {
-                bash: Some(gents::documents::BashTools {
-                    mode: gents::BashMode::ReadOnly,
-                    read_only_commands: Some(vec!["sleep".to_string()]),
-                    background_enabled: true,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-            ..Default::default()
-        },
-        Vec::new(),
-    )
-    .await;
-    let foreign_identity: Arc<dyn gents::NodeIdentity> = foreign.clone();
-    let foreign_agent = gents::Gents::from_default_agent_documents(
-        turn.db.node.clone(),
-        foreign_identity,
-        gents::DocumentRuntimeOptions {
-            tool_ceiling: gents::ToolCeiling::readonly(),
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("build foreign principal runtime");
-    let foreign_runtime = boot_prepared_accepted_turn(&turn.db, prepared, foreign_agent).await;
     let denied = canonical_tool_payload_json_for(
         &turn.db,
+        &foreign_fixture,
         foreign_session,
-        foreign.did(),
         "meta-read-foreign-process",
     )
     .await;
     assert_eq!(denied["ok"], false);
     assert_eq!(denied["failure_class"], "tool_not_allowed");
     assert_eq!(denied["path"], "/tool_call_id");
-    foreign_runtime.shutdown().await;
     assert_eq!(
-        count_tool_calls_by_name(turn.db.node.as_ref(), &turn.session_id, "list_processes").await,
+        count_tool_calls_by_name(&turn.fixture.access, &turn.session_id, "list_processes").await,
         0
     );
-    let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+    let row = load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("running"));
     assert_eq!(row.cancel_cause.as_deref(), None);
     turn.runtime.shutdown().await;
@@ -1715,7 +1752,7 @@ async fn list_processes_skips_malformed_legacy_rows_without_hiding_valid_jobs() 
         )],
     )
     .await;
-    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let row = wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "bash").await;
     let valid_tool_call_id = row.tool_call_id.expect("accepted valid process handle");
     finish_dynamic_turn(&turn);
     wait_for_initial_request_terminal(&turn).await;
@@ -1744,12 +1781,10 @@ async fn list_processes_skips_malformed_legacy_rows_without_hiding_valid_jobs() 
             }}) {{ _docID }}
         }}"#,
     );
-    let response = turn.db.node.execute(&malformed_rows).await;
-    assert!(
-        !response.has_errors(),
-        "seed malformed AgentToolCall rows failed: {:?}",
-        response.errors
-    );
+    turn.agent_access()
+        .write("test.malformed_process_rows", &malformed_rows)
+        .await
+        .expect("seed malformed AgentToolCall rows");
 
     let prompt = "list processes while malformed legacy rows exist";
     turn.runtime.backend.enable_dynamic_followups(prompt);
@@ -1768,16 +1803,15 @@ async fn list_processes_skips_malformed_legacy_rows_without_hiding_valid_jobs() 
         prompt,
         crate::support::streaming_backend::StreamResponse::completes(prompt, ["listed"]),
     );
-    crate::support::accepted_turn::enqueue_local_accepted_request(
+    crate::support::accepted_turn::enqueue_managed_accepted_request(
         &turn.db,
-        turn.agent_identity.did(),
+        &turn.fixture,
         "r6-background-list-malformed-rows-request-2",
         &turn.session_id,
         prompt,
     )
     .await;
-    let listed =
-        canonical_tool_payload_json(&turn.db, &turn.session_id, "meta-list-malformed").await;
+    let listed = canonical_tool_payload_json(&turn, &turn.session_id, "meta-list-malformed").await;
     let entries = listed["entries"]
         .as_array()
         .expect("list_processes must return entries despite malformed rows");
@@ -1831,10 +1865,10 @@ async fn same_tool_background_calls_execute_concurrently_without_registry_mutex(
     let session = escape_graphql_string(&turn.session_id);
     let handles = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let response = turn.db.node.execute(&format!(
+            let response = turn.fixture.access.execute(&format!(
                 r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }}, tool_name: {{ _eq: "bash" }}, lifecycle_state: {{ _eq: "running" }} }}) {{ tool_call_id }} }}"#
-            )).await;
-            let handles = response.data.as_ref()
+            )).await.expect("read running tool calls");
+            let handles = response.get("data")
                 .and_then(|data| data["AgentToolCall"].as_array())
                 .map(|rows| rows.iter().filter_map(|row| row["tool_call_id"].as_str().map(str::to_owned)).collect::<Vec<_>>())
                 .unwrap_or_default();
@@ -1884,31 +1918,37 @@ async fn same_tool_background_calls_execute_concurrently_without_registry_mutex(
         prompt,
         crate::support::streaming_backend::StreamResponse::completes(prompt, ["observed"]),
     );
-    crate::support::accepted_turn::enqueue_local_accepted_request(
+    crate::support::accepted_turn::enqueue_managed_accepted_request(
         &turn.db,
-        turn.agent_identity.did(),
+        &turn.fixture,
         "r6-background-concurrent-tool-request-2",
         &turn.session_id,
         prompt,
     )
     .await;
     let first =
-        canonical_tool_payload_json(&turn.db, &turn.session_id, "meta-read-concurrent-1").await;
+        canonical_tool_payload_json(&turn, &turn.session_id, "meta-read-concurrent-1").await;
     let second =
-        canonical_tool_payload_json(&turn.db, &turn.session_id, "meta-read-concurrent-2").await;
+        canonical_tool_payload_json(&turn, &turn.session_id, "meta-read-concurrent-2").await;
     let open_outputs = [first["output"].as_str(), second["output"].as_str()];
     assert!(open_outputs.contains(&Some("entered-one\n")));
     assert!(open_outputs.contains(&Some("entered-two\n")));
     std::fs::write(&release_path, b"release").unwrap();
     assert_eq!(
-        count_tool_calls_by_name(turn.db.node.as_ref(), &turn.session_id, "bash").await,
+        count_tool_calls_by_name(&turn.fixture.access, &turn.session_id, "bash").await,
         2
     );
     for handle in &handles {
-        wait_for_tool_completion_message(turn.db.node.as_ref(), &turn.session_id, handle).await;
+        wait_for_tool_completion_message(
+            turn.db.node.as_ref(),
+            &turn.fixture.access,
+            &turn.session_id,
+            handle,
+        )
+        .await;
     }
     let timeline = gents::observe::run_timeline_fetch::load_run_timeline_rows(
-        &gents::store::config_client::ConfigAccess::local(turn.db.node.clone()),
+        &turn.fixture.access,
         &turn.request_id,
     )
     .await
@@ -1940,7 +1980,7 @@ async fn cancel_tool_cancels_running_background_row_through_canonical_control_ca
         )],
     )
     .await;
-    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let row = wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "bash").await;
     let tool_call_id = row.tool_call_id.expect("background handle");
     assert_accepted_rows_visible(&turn).await;
     turn.runtime.backend.enqueue_response(
@@ -1956,25 +1996,29 @@ async fn cancel_tool_cancels_running_background_row_through_canonical_control_ca
     );
     wait_for_provider_requests(&turn, 3).await;
     finish_dynamic_turn(&turn);
-    let cancelled = canonical_latest_tool_payload_json(&turn.db, &turn.session_id, 2).await;
+    let cancelled = canonical_latest_tool_payload_json(&turn, &turn.session_id, 2).await;
     assert_eq!(cancelled["status"], "cancelled");
 
-    let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+    let row = load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("cancelled"));
     assert_eq!(row.cancel_cause.as_deref(), Some("userCancelled"));
     assert_eq!(
-        count_tool_calls_by_name(turn.db.node.as_ref(), &turn.session_id, "cancel_process").await,
+        count_tool_calls_by_name(&turn.fixture.access, &turn.session_id, "cancel_process").await,
         1
     );
 
-    let message =
-        wait_for_tool_completion_message(turn.db.node.as_ref(), &turn.session_id, &tool_call_id)
-            .await;
+    let message = wait_for_tool_completion_message(
+        turn.db.node.as_ref(),
+        &turn.fixture.access,
+        &turn.session_id,
+        &tool_call_id,
+    )
+    .await;
     assert!(message.content.contains(r#"status="cancelled""#));
     assert!(message.content.contains("<reason>explicit_cancel</reason>"));
 
     assert_eq!(
-        fetch_background_wakes(turn.db.node.as_ref(), &turn.session_id)
+        fetch_background_wakes(&turn.fixture.access, &turn.session_id)
             .await
             .len(),
         1,
@@ -1998,7 +2042,7 @@ async fn cancel_tool_unknown_handle_returns_tool_error_instead_of_failing_turn()
     wait_for_provider_requests(&turn, 2).await;
     assert_accepted_rows_visible(&turn).await;
     finish_dynamic_turn(&turn);
-    let cancelled = canonical_latest_tool_payload_json(&turn.db, &turn.session_id, 1).await;
+    let cancelled = canonical_latest_tool_payload_json(&turn, &turn.session_id, 1).await;
 
     assert_eq!(cancelled["ok"], false);
     assert_eq!(cancelled["tool_name"], "cancel_process");
@@ -2024,7 +2068,7 @@ async fn wait_tool_unknown_handle_returns_tool_error_instead_of_failing_turn() {
     wait_for_provider_requests(&turn, 2).await;
     assert_accepted_rows_visible(&turn).await;
     finish_dynamic_turn(&turn);
-    let waited = canonical_latest_tool_payload_json(&turn.db, &turn.session_id, 1).await;
+    let waited = canonical_latest_tool_payload_json(&turn, &turn.session_id, 1).await;
 
     assert_eq!(waited["ok"], false);
     assert_eq!(waited["tool_name"], "wait_process");
