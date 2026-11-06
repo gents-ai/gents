@@ -25,11 +25,13 @@ impl Launching {
     pub(crate) async fn new() -> Self {
         let mut home = EmbeddedHome::create_temp("freeze").await.unwrap();
         let dirs = tempfile::tempdir().unwrap();
+        let evaluator_path = dirs.path().join("evaluator.key");
         let evaluator = Arc::new(
-            crate::store::identity::KeyIdentity::load_or_create(
-                dirs.path().join("evaluator.key"),
-                None,
-            )
+            tokio::task::spawn_blocking(move || {
+                crate::store::identity::KeyIdentity::load_or_create(evaluator_path, None)
+            })
+            .await
+            .unwrap()
             .unwrap(),
         );
         let evaluator_did = evaluator.did().to_owned();
@@ -190,10 +192,12 @@ async fn launching_fixture_commits_user_signed_node_and_denies_ungranted_client(
     );
     assert_ne!(launching.owner(), evaluator);
 
-    let stranger = crate::store::identity::KeyIdentity::load_or_create(
-        launching.dirs.path().join("ungranted.key"),
-        None,
-    )
+    let stranger_path = launching.dirs.path().join("ungranted.key");
+    let stranger = tokio::task::spawn_blocking(move || {
+        crate::store::identity::KeyIdentity::load_or_create(stranger_path, None)
+    })
+    .await
+    .unwrap()
     .unwrap();
     let outsider = ConfigAccess::Graphql(
         crate::store::config_client::GraphqlEndpoint::as_principal(
