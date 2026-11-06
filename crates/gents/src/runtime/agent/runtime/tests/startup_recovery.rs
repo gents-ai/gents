@@ -1,6 +1,6 @@
 use super::support::*;
 use super::*;
-use crate::store::identity::{KeyIdentity, NodeIdentity};
+use crate::store::identity::NodeIdentity;
 
 const STARTUP_DEADLOCK_GUARD: Duration = Duration::from_secs(30);
 
@@ -1143,12 +1143,10 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
 }
 
 async fn write_runtime_documents(
-    node: &Arc<defra_node::Node>,
+    access: &crate::ConfigAccess,
     documents: Vec<(crate::Collection, Value)>,
 ) {
-    use crate::store::config_client::{
-        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
+    use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let plan = DesiredStateApplyPlan::new(
         documents
             .into_iter()
@@ -1160,52 +1158,38 @@ async fn write_runtime_documents(
             .collect(),
     )
     .unwrap();
-    ConfigAccess::transact_local_write(node, None, "test.runtime.configure", |txn| {
-        let plan = &plan;
-        Box::pin(
-            async move { crate::store::config_client::apply_desired_state_plan(txn, plan).await },
-        )
-    })
-    .await
-    .unwrap();
+    access
+        .transact_write("test.runtime.configure", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .unwrap();
 }
 
 /// A node with runtime schemas, an identity and a default agent backend
 /// bound to the returned model endpoint, which the caller keeps alive.
-async fn missing_plugin_node(
-    label: &str,
-) -> (
-    Arc<defra_node::Node>,
-    Arc<KeyIdentity>,
-    String,
-    MockModelEndpoint,
-) {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity(&format!("startup-{label}")));
+async fn missing_plugin_node(label: &str) -> (HeldRuntimeFixture, String, MockModelEndpoint) {
     let endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture(
+        &format!("startup-{label}"),
         &format!("backend-{label}"),
         endpoint.endpoint(),
     )
     .await;
-    let node_did = identity.did().to_string();
-    (node, identity, node_did, endpoint)
+    let node_did = fixture.db.node_identity.did().to_owned();
+    (fixture, node_did, endpoint)
 }
 
-/// An agent loaded from the node's documents with a meta-only tool ceiling
-/// and an empty plugin home, which the caller keeps alive.
-async fn documents_agent(
-    node: &Arc<defra_node::Node>,
-    identity: &Arc<KeyIdentity>,
-) -> (crate::Gents, tempfile::TempDir) {
+async fn documents_agent(fixture: &HeldRuntimeFixture) -> (crate::Gents, tempfile::TempDir) {
     let plugin_home = tempfile::tempdir().unwrap();
     let agent = crate::Gents::from_default_agent_documents(
-        node.clone(),
-        identity.clone(),
+        fixture.db.node.clone(),
+        fixture.db.node_identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             plugin_home: Some(plugin_home.path().to_path_buf()),
             ..Default::default()
@@ -1249,15 +1233,20 @@ fn tools_naming_missing_plugin(node_did: &str, tools_id: &str) -> (crate::Collec
 
 #[tokio::test]
 async fn run_agent_starts_without_an_agent_whose_tools_name_a_missing_plugin() {
-    let (node, identity, node_did, _endpoint) = missing_plugin_node("missing-plugin").await;
-    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, &node_did)
-        .await
-        .agent_did;
-    let broken_binding =
-        crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+    let (fixture, node_did, _endpoint) = missing_plugin_node("missing-plugin").await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let default_agent_did = fixture.agent.did().to_owned();
+    let broken_binding = crate::store::identity::provision_agent_identity_authorized(
+        &node,
+        identity.as_ref(),
+        &fixture.user.did().parse().unwrap(),
+    )
+    .await
+    .unwrap();
     let broken = broken_binding.agent_did.as_str();
     write_runtime_documents(
-        &node,
+        &fixture.user_access,
         vec![
             agent_document(&node_did, &broken_binding, &default_agent_did),
             context_document(&node_did, broken),
@@ -1265,7 +1254,7 @@ async fn run_agent_starts_without_an_agent_whose_tools_name_a_missing_plugin() {
         ],
     )
     .await;
-    let (agent, _plugin_home) = documents_agent(&node, &identity).await;
+    let (agent, _plugin_home) = documents_agent(&fixture).await;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
@@ -1288,17 +1277,26 @@ async fn run_agent_starts_without_an_agent_whose_tools_name_a_missing_plugin() {
         Some(AgentReadinessUnavailableReason::ToolSurfaceUnavailable)
     );
 
-    let request_doc_id = create_agent_request_for_agent(
-        node.as_ref(),
+    let broken_identity =
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &broken_binding).unwrap();
+    grant_held_agent_operations(&node, identity.as_ref(), broken_identity.as_ref()).await;
+    let broken_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        broken.parse().unwrap(),
+        broken_identity.as_ref(),
+    )
+    .unwrap();
+    let request_doc_id = create_held_agent_request(
+        &node,
         &node_did,
-        Some(broken),
+        broken_identity.as_ref(),
         "req-missing-plugin",
         "session-missing-plugin",
         "hello",
     )
     .await;
-    wait_for_request_state(node.as_ref(), &request_doc_id, "failed").await;
-    let response = crate::store::config_client::ConfigAccess::local(node.clone())
+    wait_for_held_request_state(&broken_access, &request_doc_id, "failed").await;
+    let response = broken_access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ failure_reason }} }}"#,
             escape_graphql_string(&request_doc_id),
@@ -1320,19 +1318,14 @@ async fn run_agent_starts_without_an_agent_whose_tools_name_a_missing_plugin() {
 
 #[tokio::test]
 async fn run_agent_fails_when_every_agent_names_a_missing_plugin() {
-    let (node, identity, node_did, _endpoint) = missing_plugin_node("all-missing-plugin").await;
-    let tools_id = format!(
-        "{}:tools",
-        crate::test_support::ensure_test_default_agent(&node, &node_did)
-            .await
-            .agent_did
-    );
+    let (fixture, node_did, _endpoint) = missing_plugin_node("all-missing-plugin").await;
+    let tools_id = format!("{}:tools", fixture.agent.did());
     write_runtime_documents(
-        &node,
+        &fixture.user_access,
         vec![tools_naming_missing_plugin(&node_did, &tools_id)],
     )
     .await;
-    let (agent, _plugin_home) = documents_agent(&node, &identity).await;
+    let (agent, _plugin_home) = documents_agent(&fixture).await;
 
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
     let error = agent
@@ -1353,18 +1346,28 @@ async fn run_agent_fails_when_every_agent_names_a_missing_plugin() {
 
 #[tokio::test]
 async fn startup_demotion_cascades_to_targets_schedules_and_tasks() {
-    let (node, identity, node_did, _endpoint) = missing_plugin_node("demotion-cascade").await;
-    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, &node_did)
-        .await
-        .agent_did;
-    let broken_binding =
-        crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
-    let caller_binding =
-        crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+    let (fixture, node_did, _endpoint) = missing_plugin_node("demotion-cascade").await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let default_agent_did = fixture.agent.did().to_owned();
+    let broken_binding = crate::store::identity::provision_agent_identity_authorized(
+        &node,
+        identity.as_ref(),
+        &fixture.user.did().parse().unwrap(),
+    )
+    .await
+    .unwrap();
+    let caller_binding = crate::store::identity::provision_agent_identity_authorized(
+        &node,
+        identity.as_ref(),
+        &fixture.user.did().parse().unwrap(),
+    )
+    .await
+    .unwrap();
     let broken = broken_binding.agent_did.as_str();
     let caller = caller_binding.agent_did.as_str();
     write_runtime_documents(
-        &node,
+        &fixture.user_access,
         vec![
             agent_document(&node_did, &broken_binding, &default_agent_did),
             context_document(&node_did, broken),
@@ -1399,7 +1402,7 @@ async fn startup_demotion_cascades_to_targets_schedules_and_tasks() {
         ],
     )
     .await;
-    let (agent, _plugin_home) = documents_agent(&node, &identity).await;
+    let (agent, _plugin_home) = documents_agent(&fixture).await;
     let tool_runtime = crate::tools::surface::ToolRuntimeContext::new_with_node_did(
         agent.node.clone(),
         agent.mcp_pool.clone(),
