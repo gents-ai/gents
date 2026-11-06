@@ -61,9 +61,10 @@ pub use installation::{
 };
 pub(crate) use installation::{
     prepare_document_pack_archive_with_provisioner,
-    record_plugin_store_change_as_with_node_binding,
     record_staged_plugin_store_change_as_with_node_binding, sdl_paths, PluginStageContext,
 };
+#[cfg(test)]
+pub(crate) use installation::record_plugin_store_change_as_with_node_binding;
 pub use installation::{
     stage_hosted_pack, HostedHomePublication, HostedPackStage, HostedPackStageError,
 };
