@@ -160,6 +160,49 @@ pub(super) async fn run(case: &Value) {
     if start["first_request_valid"] == false {
         initial.admission.signature[0] ^= 1;
     }
+    let wrong_session = if start["expected_session_document"] != "session-document" {
+        assert_eq!(start["expected_session_document"], "stale-session");
+        let alternate = access
+            .transact_write("test.replacement.alternate_session", |txn| {
+                let identity = identity.as_ref();
+                let user = fixture.user.as_ref();
+                let agent_did = &session.session.agent_did;
+                Box::pin(async move {
+                    crate::session::ensure_session_in_txn(
+                        txn,
+                        "replacement-alternate-session",
+                        identity.did(),
+                        agent_did,
+                        Some(user.did()),
+                        None,
+                        None,
+                        "2026-01-01T00:00:01Z",
+                    )
+                    .await?;
+                    crate::session::load_agent_session_owner_in_txn(
+                        txn,
+                        identity.did(),
+                        "replacement-alternate-session",
+                    )
+                    .await?
+                    .context("alternate session is missing")
+                })
+            })
+            .await
+            .unwrap();
+        assert_ne!(alternate.doc_id, session.doc_id);
+        crate::session::grant_created_session_relationships(
+            &access,
+            &alternate.doc_id,
+            &fixture.agent_doc_id,
+            &session.session.agent_did,
+        )
+        .await
+        .unwrap();
+        Some(alternate)
+    } else {
+        None
+    };
     let now = Utc::now();
     let mut command = SessionGoalControl {
         version: SESSION_GOAL_CONTROL_VERSION,
@@ -176,11 +219,11 @@ pub(super) async fn run(case: &Value) {
         .await,
         session_id: SESSION.into(),
         session_doc_id: Some(
-            if start["expected_session_document"] == "session-document" {
-                session.doc_id.clone()
-            } else {
-                "stale-session".into()
-            },
+            wrong_session
+                .as_ref()
+                .map(|alternate| &alternate.doc_id)
+                .unwrap_or(&session.doc_id)
+                .clone(),
         ),
         issued_at: (now - chrono::Duration::seconds(20)).to_rfc3339(),
         expires_at: (now
@@ -243,20 +286,106 @@ pub(super) async fn run(case: &Value) {
         command.signature[0] ^= 1;
     }
     let accepted = !c["expected"].is_null();
-    if start["expected_session_document"] != "session-document" {
+    if let Some(alternate) = &wrong_session {
         assert!(!accepted, "{}", case["name"]);
+        assert_eq!(start["signature_valid"], true);
+        assert_eq!(start["first_request_valid"], true);
+        let initial = command.initial_request.as_deref().unwrap();
+        assert_eq!(
+            initial.session_doc_id.as_deref(),
+            Some(session.doc_id.as_str())
+        );
+        assert_eq!(
+            command.session_doc_id.as_deref(),
+            Some(alternate.doc_id.as_str())
+        );
+        assert_eq!(initial.session_id, session.session.session_id);
+        assert_eq!(initial.node_did, session.session.node_did);
+        assert_eq!(initial.agent_did, session.session.agent_did);
+        assert_eq!(
+            Some(initial.requester_did.as_str()),
+            session.session.requester_did.as_deref()
+        );
+        assert!(fixture
+            .user
+            .verify(
+                fixture.user.did(),
+                &initial.signing_payload(),
+                &initial.admission.signature
+            )
+            .await
+            .unwrap());
+        assert!(fixture
+            .user
+            .verify(
+                fixture.user.did(),
+                &command.signing_payload().unwrap(),
+                &command.signature
+            )
+            .await
+            .unwrap());
         let doc_id = persist_command(&access, &command).await;
+        for target in [&session.doc_id, &alternate.doc_id] {
+            let visible = agent_access
+                .execute(&format!(
+                    r#"{{ AgentSession(docID: "{}") {{ _docID }} }}"#,
+                    escape_graphql_string(target)
+                ))
+                .await
+                .unwrap();
+            assert_eq!(visible["data"]["AgentSession"][0]["_docID"], *target);
+        }
+        let visible_command = agent_access
+            .execute(&format!(
+                r#"{{ AgentSessionGoalControl(docID: "{}") {{ _docID }} }}"#,
+                escape_graphql_string(&doc_id)
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            visible_command["data"]["AgentSessionGoalControl"][0]["_docID"],
+            doc_id
+        );
+        let before_effects = agent_access
+            .execute("{ GoalCreationClaim { _docID creation_key goal_id } AgentRequest { _docID request_id } }")
+            .await
+            .unwrap();
+        assert!(!before_effects["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["request_id"] == "replacement-first"));
         process_command(node, &identity, &doc_id, fixture.agent.as_ref())
             .await
             .unwrap();
         assert!(
-            matches!(
-                receipt(&access, &doc_id).await.unwrap().outcome,
-                GoalControlOutcome::Rejected { .. }
-            ),
+            receipt(&agent_access, &doc_id).await.is_none(),
             "{}",
             case["name"]
         );
+        assert!(
+            receipt(&access, &doc_id).await.is_none(),
+            "{}",
+            case["name"]
+        );
+        assert_eq!(agent_access.execute("{ GoalCreationClaim { _docID creation_key goal_id } AgentRequest { _docID request_id } }").await.unwrap(), before_effects);
+        assert_eq!(
+            serde_json::to_value(fixture.current_goal().await).unwrap(),
+            serde_json::to_value(&original).unwrap()
+        );
+        let after = access
+            .transact_readonly("test.replacement.current_session_after", |txn| {
+                Box::pin(crate::session::load_agent_session_owner_in_txn(
+                    txn,
+                    identity.did(),
+                    SESSION,
+                ))
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.doc_id, session.doc_id);
+        assert_eq!(after.session, session.session);
         node.shutdown().await.expect("node shutdown");
         return;
     }
