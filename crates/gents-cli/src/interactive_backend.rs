@@ -231,7 +231,7 @@ async fn prompt_secret(text: &str) -> Result<String> {
 }
 
 fn set_terminal_echo(on: bool) -> bool {
-    std::process::Command::new("stty")
+    gents::tools::exec::native_spawn::std_command("stty")
         .arg(if on { "echo" } else { "-echo" })
         .status()
         .map(|status| status.success())

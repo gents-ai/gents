@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use tempfile::TempDir;
 
@@ -53,7 +52,7 @@ fn cleanup_caps() -> BTreeSet<String> {
 }
 
 fn git(cwd: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = gents::tools::exec::native_spawn::std_command("git")
         .args(args)
         .current_dir(cwd)
         .env_remove("GIT_DIR")
@@ -2500,7 +2499,7 @@ fn generated_noncanonical_git_delta_is_rejected_without_filesystem_traversal() {
     for byte in blob.as_bytes().as_chunks::<2>().0 {
         tree.push(u8::from_str_radix(std::str::from_utf8(byte).unwrap(), 16).unwrap());
     }
-    let mut child = Command::new("git")
+    let mut child = gents::tools::exec::native_spawn::std_command("git")
         .args(["hash-object", "--literally", "-t", "tree", "-w", "--stdin"])
         .current_dir(&fx.repo)
         .stdin(Stdio::piped())

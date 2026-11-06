@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 
 use gents::store::graphql::escape_graphql_string;
 use gents_protocol::row::{
@@ -25,7 +25,7 @@ pub(super) fn spawn_server_with_args_and_env(
 ) -> Result<Child> {
     let file = std::fs::File::create(log).with_context(|| format!("creating {}", log.display()))?;
     let errfile = file.try_clone()?;
-    let mut cmd = Command::new(bin);
+    let mut cmd = tokio::process::Command::from(gents::tools::exec::native_spawn::std_command(bin));
     cmd.args([
         "server",
         "--home",

@@ -93,13 +93,13 @@ fn is_git_url(source: &str) -> bool {
 }
 
 fn clone(url: &str, into: &Path) -> Result<String> {
-    let status = std::process::Command::new("git")
+    let status = gents::tools::exec::native_spawn::std_command("git")
         .args(["clone", "--depth", "1", "--quiet", url])
         .arg(into)
         .status()
         .context("running git clone")?;
     anyhow::ensure!(status.success(), "git clone of {url} failed");
-    let output = std::process::Command::new("git")
+    let output = gents::tools::exec::native_spawn::std_command("git")
         .arg("-C")
         .arg(into)
         .args(["rev-parse", "HEAD"])

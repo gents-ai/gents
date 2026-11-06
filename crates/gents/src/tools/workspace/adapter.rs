@@ -1099,14 +1099,18 @@ pub(crate) fn artifacts_complete(source: &Path, dest: &Path, artifacts: &[String
 
 fn clone_dir(src: &Path, dst: &Path, label: &str) -> Result<()> {
     tracing::info!(label, "cloning artifact directory");
-    let clonefile = Command::new("cp").args(["-Rc"]).arg(src).arg(dst).status();
+    let clonefile = crate::tools::exec::native_spawn::std_command("cp")
+        .args(["-Rc"])
+        .arg(src)
+        .arg(dst)
+        .status();
     match clonefile {
         Ok(status) if status.success() => return Ok(()),
         Ok(_) | Err(_) => {
             let _ = fs::remove_dir_all(dst);
         }
     }
-    let copied = Command::new("cp")
+    let copied = crate::tools::exec::native_spawn::std_command("cp")
         .args(["-R"])
         .arg(src)
         .arg(dst)
@@ -1197,7 +1201,7 @@ const GIT_ENV_SET: [(&str, &str); 3] = [
 ];
 
 fn git_command(cwd: &Path, args: &[&str]) -> Command {
-    let mut cmd = Command::new("git");
+    let mut cmd = crate::tools::exec::native_spawn::std_command("git");
     cmd.args(args).current_dir(cwd);
     for key in GIT_ENV_REMOVED {
         cmd.env_remove(key);

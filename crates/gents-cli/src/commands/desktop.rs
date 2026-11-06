@@ -211,7 +211,7 @@ fn notify(message: &str) {
     tracing::info!(message, "desktop reset finished");
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("/usr/bin/osascript")
+        let _ = gents::tools::exec::native_spawn::std_command("/usr/bin/osascript")
             .args([
                 "-e",
                 "on run argv\ndisplay alert \"Gents reset\" message (item 1 of argv)\nend run",
@@ -292,14 +292,14 @@ fn run_browser_helper(
     timeout: std::time::Duration,
 ) -> Result<()> {
     use std::io::{Read as _, Seek as _, SeekFrom};
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use wait_timeout::ChildExt as _;
     let temporary = tempfile::tempdir().context("creating browser clearing receipt directory")?;
     let receipt = temporary.path().join("browser-clear.json");
     let mut stderr = tempfile::tempfile().context("creating browser clearing stderr capture")?;
     // Launch the executable directly so timeout cleanup owns the exact process,
     // including an older app that does not recognize the headless command.
-    let mut command = Command::new(executable);
+    let mut command = gents::tools::exec::native_spawn::std_command(executable);
     command.arg("__clear-browser-data");
     if matches!(helper, BrowserHelper::Check) {
         command.arg("--check");

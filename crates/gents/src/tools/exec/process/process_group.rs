@@ -133,7 +133,8 @@ mod tests {
 
     #[tokio::test]
     async fn leader_term_exit_does_not_leave_term_ignoring_child() {
-        let mut command = tokio::process::Command::new("/bin/sh");
+        let mut command =
+            tokio::process::Command::from(crate::tools::exec::native_spawn::std_command("/bin/sh"));
         command.args(["-c", "trap 'exit 0' TERM; (trap '' TERM; printf 'ready\\n'; while :; do sleep 60; done) & wait"])
             .process_group(0)
             .stdout(std::process::Stdio::piped())

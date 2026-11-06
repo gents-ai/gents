@@ -349,3 +349,54 @@ fn exercise_concurrent_spawns(root: &Path, permission_search: bool) {
     second.join().unwrap();
     assert_eq!(complete_output(outcome), b"finite");
 }
+
+/// Darwin's posix_spawn file actions reject dup2 sources at or above OPEN_MAX
+/// with EBADF. The CLI raises the soft descriptor limit above that bound, so
+/// the owner must still spawn with piped stdio once pipes land past it.
+#[tokio::test]
+async fn spawn_succeeds_when_pipes_exceed_open_max() {
+    const OPEN_MAX: usize = 10_240;
+    let mut limits = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: limits points to initialized storage for one rlimit value.
+    assert_eq!(
+        unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limits) },
+        0
+    );
+    let target = ((OPEN_MAX + 64) as libc::rlim_t).min(limits.rlim_max);
+    if limits.rlim_cur < target {
+        limits.rlim_cur = target;
+        // SAFETY: limits is a valid rlimit; only the soft limit increases.
+        assert_eq!(
+            unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limits) },
+            0,
+            "raise the soft descriptor limit"
+        );
+    }
+    let mut held = Vec::new();
+    while held.len() < OPEN_MAX + 64 {
+        held.push(std::fs::File::open("/dev/null").unwrap());
+    }
+    let (reader, writer) = std::io::pipe().unwrap();
+    let pipe_fd = std::os::fd::AsRawFd::as_raw_fd(&writer);
+    assert!(
+        pipe_fd as usize >= OPEN_MAX,
+        "precondition: pipe descriptor {pipe_fd} must reach OPEN_MAX"
+    );
+    drop((reader, writer));
+
+    let root = tempfile::tempdir().unwrap();
+    let output = complete_output(
+        capture(
+            root.path().to_path_buf(),
+            "/bin:/usr/bin",
+            "/bin/sh",
+            "printf ok",
+        )
+        .await,
+    );
+    assert_eq!(output, b"ok");
+    drop(held);
+}
