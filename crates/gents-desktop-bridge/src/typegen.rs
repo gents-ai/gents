@@ -225,6 +225,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ManagedServerRestartRequest,
         ManagedServerResetRequest,
         ManagedServerRootValidationRequest,
+        AgentWorkspaceRootSelectRequest,
+        gents_desktop_core::workspace_root::AgentWorkspaceRoot,
         PeerStatusFetchRequest,
         EnrollmentStatusRequest,
         ChatSendRequest,

@@ -17,12 +17,13 @@ use crate::state::{current_core, DesktopAppState};
 use crate::types::{
     HomeResetDisposition, ManagedServerResetRequest, ManagedServerResetResult,
     ManagedServerRestartRequest, ManagedServerRootValidation, ManagedServerRootValidationRequest,
-    ManagedServerStartRequest, ManagedServerStatus,
+    AgentWorkspaceRootSelectRequest, ManagedServerStartRequest, ManagedServerStatus,
 };
 use authority::{
     runtime_tool_ceiling, validate_ready_runtime, validate_tool_root, EffectiveManagedAuthority,
 };
 use gents_desktop_core::local_runtime::OperatorIdentityInteraction;
+use gents_desktop_core::workspace_root::{select_agent_workspace_root, AgentWorkspaceRoot};
 use gents_desktop_core::preference::StoredManagedServer;
 use launch::{fail_managed_start, install_then_launch, LaunchFailure, NativeLaunch};
 use native::{
@@ -58,6 +59,32 @@ pub async fn desktop_managed_server_validate_root(
     Ok(ManagedServerRootValidation {
         canonical_path: canonical.to_string_lossy().into_owned(),
     })
+}
+
+/// Publishes the chosen folder for an agent through the operator's signed
+/// access and retargets that agent's host root. The runtime still has to be
+/// restarted with the reviewed ceiling afterwards: serve admits only published
+/// roots, so this runs first while the runtime answers.
+#[tauri::command]
+pub async fn desktop_agent_workspace_root_select(
+    request: AgentWorkspaceRootSelectRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<AgentWorkspaceRoot, BridgeError> {
+    ensure_allowed(&state)?;
+    let canonical = validate_tool_root(Path::new(request.path.trim()))?;
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    let access = core
+        .operator_access(&request.node_did)
+        .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
+    select_agent_workspace_root(
+        &access,
+        &request.node_did,
+        &request.agent_did,
+        &canonical.to_string_lossy(),
+    )
+    .await
+    .map_err(|error| BridgeError::untyped(format!("{error:#}")))
 }
 
 #[tauri::command]

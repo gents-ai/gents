@@ -32,6 +32,7 @@ import type { EventSourceSaveRequest } from "../generated/EventSourceSaveRequest
 import type { EventSourceDeleteRequest } from "../generated/EventSourceDeleteRequest.js";
 import type { BackendHealth } from "../types/backendHealth.js";
 import type { ManagedServerStatus } from "../generated/ManagedServerStatus.js";
+import type { AgentWorkspaceRoot } from "../generated/AgentWorkspaceRoot.js";
 import type { ManagedServerResetResult } from "../generated/ManagedServerResetResult.js";
 import type { HomeResetDisposition } from "../generated/HomeResetDisposition.js";
 import type { ManagedServerToolCeiling } from "../generated/ManagedServerToolCeiling.js";
@@ -192,6 +193,11 @@ export type DesktopApiAdapter = {
   ) => Promise<ManagedServerResetResult>;
   quitDesktop?: () => Promise<void>;
   validateManagedServerRoot?: (path: string) => Promise<string>;
+  selectAgentWorkspaceRoot?: (
+    nodeDid: string,
+    agentDid: string,
+    path: string,
+  ) => Promise<AgentWorkspaceRoot>;
   openManagedServerLoginItems?: () => Promise<void>;
   commitManagedServerAutoStart?: (
     nodeName: string,

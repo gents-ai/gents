@@ -34,6 +34,14 @@ pub struct ManagedServerRootValidationRequest {
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct AgentWorkspaceRootSelectRequest {
+    pub node_did: String,
+    pub agent_did: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct ManagedServerRestartRequest {
     pub node_name: String,
     pub tool_ceiling: ManagedServerToolCeiling,

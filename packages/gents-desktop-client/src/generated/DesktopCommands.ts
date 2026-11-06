@@ -72,6 +72,8 @@ import type { ManagedServerResetRequest } from "./ManagedServerResetRequest.js";
 import type { ManagedServerResetResult } from "./ManagedServerResetResult.js";
 import type { ManagedServerRestartRequest } from "./ManagedServerRestartRequest.js";
 import type { ManagedServerRootValidation } from "./ManagedServerRootValidation.js";
+import type { AgentWorkspaceRoot } from "./AgentWorkspaceRoot.js";
+import type { AgentWorkspaceRootSelectRequest } from "./AgentWorkspaceRootSelectRequest.js";
 import type { ManagedServerRootValidationRequest } from "./ManagedServerRootValidationRequest.js";
 import type { ManagedServerStartRequest } from "./ManagedServerStartRequest.js";
 import type { ManagedServerStatus } from "./ManagedServerStatus.js";
@@ -216,6 +218,7 @@ export type DesktopCommands = {
   desktop_managed_server_status: { args: Record<string, never>; result: ManagedServerStatus };
   desktop_managed_server_stop: { args: { disableAutoStart: boolean }; result: ManagedServerStatus };
   desktop_managed_server_validate_root: { args: { request: ManagedServerRootValidationRequest }; result: ManagedServerRootValidation };
+  desktop_agent_workspace_root_select: { args: { request: AgentWorkspaceRootSelectRequest }; result: AgentWorkspaceRoot };
   desktop_native_e2e_config: { args: Record<string, never>; result: NativeE2eConfig | null };
   desktop_native_e2e_status: { args: { status: NativeE2eStatus }; result: void };
   desktop_network_status: { args: Record<string, never>; result: NetworkStatusView };

@@ -8,6 +8,7 @@ type ManagedServerCommand =
   | "restartManagedServer"
   | "resetManagedServer"
   | "validateManagedServerRoot"
+  | "selectAgentWorkspaceRoot"
   | "openManagedServerLoginItems"
   | "commitManagedServerAutoStart"
   | "stopManagedServer"
@@ -43,6 +44,10 @@ export function createManagedServerCommands(
       invokeDesktop("desktop_managed_server_validate_root", {
         request: { path },
       }).then((result) => result.canonicalPath),
+    selectAgentWorkspaceRoot: (nodeDid, agentDid, path) =>
+      invokeDesktop("desktop_agent_workspace_root_select", {
+        request: { nodeDid, agentDid, path },
+      }),
     openManagedServerLoginItems: () =>
       invokeDesktop("desktop_managed_server_open_login_items"),
     commitManagedServerAutoStart: (_nodeName) =>
