@@ -518,25 +518,6 @@ async fn publish_node_readiness_for_agent(
     }
 }
 
-async fn publish_reconcile_phase(db: &TestDb, phase: &str) {
-    let did = gents::store::graphql::escape_graphql_string(db.node_identity.did());
-    let response = db
-        .node
-        .execute(&format!(
-            r#"mutation {{ upsert_NodeRuntime(
-                filter: {{ node_did: {{ _eq: "{did}" }} }},
-                add: {{ node_did: "{did}", reconcile_phase: "{phase}", last_reconcile_result: "applied" }},
-                update: {{ reconcile_phase: "{phase}", last_reconcile_result: "applied" }}
-            ) {{ _docID }} }}"#
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "publish reconcile phase: {:?}",
-        response.errors
-    );
-}
-
 async fn source(db: &TestDb) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
     publish_node_readiness(
         db,
@@ -5008,36 +4989,16 @@ async fn operator_resume_accepts_same_second_child_that_sorts_before_root() {
     }
 }
 
-async fn canonical_goal_json(db: &TestDb) -> serde_json::Value {
-    serde_json::to_value(
-        load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
-            .await
-            .unwrap()
-            .unwrap(),
-    )
-    .unwrap()
-}
-
-async fn reject_before_claim(db: &TestDb, doc_id: &str, reason: &str) {
-    let doc_id = gents::store::graphql::escape_graphql_string(doc_id);
-    let reason = gents::store::graphql::escape_graphql_string(reason);
-    let response = db
-        .node
-        .execute(&format!(
-            r#"mutation {{ update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "pending" }} }},
-                input: {{ lifecycle_state: "failed", failure_reason: "{reason}", terminalized_at: "{}" }}
-            ) {{ _docID execution_generation }} }}"#,
-            chrono::Utc::now().to_rfc3339()
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "reject goal child: {:?}",
-        response.errors
-    );
-    let rows = response.data.unwrap()["update_AgentRequest"].clone();
-    assert_eq!(rows.as_array().map(Vec::len), Some(1), "{rows}");
+async fn reject_before_claim(access: &ConfigAccess, doc_id: &str, reason: &str) {
+    let doc_id = escape_graphql_string(doc_id);
+    let reason = escape_graphql_string(reason);
+    let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let response = access.write("test.goal_readiness_rejection", &format!(r#"mutation {{ update_AgentRequest(
+        filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "pending" }} }},
+        input: {{ lifecycle_state: "failed", failure_reason: "{reason}", terminalized_at: "{terminalized_at}" }}
+    ) {{ _docID execution_generation }} }}"#)).await.unwrap();
+    let rows = response["data"]["update_AgentRequest"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
     assert!(rows[0]["execution_generation"].is_null());
 }
 
@@ -5047,49 +5008,44 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
         AgentReadinessUnavailableReason as Reason, NodeReadinessProcessState as Process,
     };
     let db = test_db("goal-readiness-wait").await;
-    seed_completed_request(&db, "parent-waits-for-readiness").await;
-    set_goal(
-        &db.node,
+    let (_user, agent, access) =
+        goal_recovery_actors(&db, "parent-waits-for-readiness", "completed").await;
+    set_goal_from_access(
+        &access,
         db.node_identity.did(),
         SESSION,
         Some("Wait for the behavior instead of spending retries"),
         Some(GoalStatus::Active),
         None,
+        None,
     )
     .await
     .expect("set goal");
-    publish_node_readiness(&db, Process::Recovering, None).await;
-    publish_reconcile_phase(&db, "idle").await;
-    let before = canonical_goal_json(&db).await;
-    let (mut source, _tx) = unready_source(&db);
+    publish_node_readiness_for_agent(&db, Process::Recovering, None, agent.did()).await;
+    let before =
+        serde_json::to_value(load_goal_as(&access, db.node_identity.did()).await.unwrap()).unwrap();
+    let (mut source, _tx) = unready_source_for_agent(&db, &agent);
 
-    for (process, reason, phase) in [
-        (Process::Recovering, None, "idle"),
-        (
-            Process::Ready,
-            Some(Reason::RuntimeConfigurationInvalid),
-            "debouncing",
-        ),
-        (
-            Process::Ready,
-            Some(Reason::BackendTemporarilyUnavailable),
-            "idle",
-        ),
+    for (process, reason) in [
+        (Process::Recovering, None),
+        (Process::Ready, Some(Reason::RuntimeConfigurationInvalid)),
+        (Process::Ready, Some(Reason::BackendTemporarilyUnavailable)),
     ] {
-        publish_node_readiness(&db, process, reason).await;
-        publish_reconcile_phase(&db, phase).await;
+        publish_node_readiness_for_agent(&db, process, reason, agent.did()).await;
         assert!(
             tokio::time::timeout(Duration::from_millis(300), source.next_fire())
                 .await
                 .is_err(),
-            "{process:?}/{reason:?}/{phase}: an unready behavior must not receive a continuation"
+            "{process:?}/{reason:?}: an unready behavior must not receive a continuation"
         );
-        let waiting = canonical_goal_json(&db).await;
+        let waiting =
+            serde_json::to_value(load_goal_as(&access, db.node_identity.did()).await.unwrap())
+                .unwrap();
         assert!(
             waiting["last_failure"]
                 .as_str()
                 .is_some_and(|reason| reason.starts_with(gents::goal::GOAL_READINESS_WAIT_PREFIX)),
-            "{process:?}/{reason:?}/{phase}: the wait must be recorded: {waiting}"
+            "{process:?}/{reason:?}: the wait must be recorded: {waiting}"
         );
         for field in [
             "status",
@@ -5099,7 +5055,7 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
         ] {
             assert_eq!(
                 waiting[field], before[field],
-                "{process:?}/{reason:?}/{phase}: {field}"
+                "{process:?}/{reason:?}: {field}"
             );
         }
         assert!(
@@ -5108,47 +5064,42 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
                 .is_err()
         );
         assert_eq!(
-            canonical_goal_json(&db).await,
+            serde_json::to_value(load_goal_as(&access, db.node_identity.did()).await.unwrap())
+                .unwrap(),
             waiting,
-            "{process:?}/{reason:?}/{phase}: an unchanged wait must not rewrite the Goal"
+            "{process:?}/{reason:?}: an unchanged wait must not rewrite the Goal"
         );
-        assert!(goal_children(&db).await.is_empty());
+        assert!(goal_children_from_access(&access).await.is_empty());
     }
 
-    publish_node_readiness(&db, Process::Ready, None).await;
+    publish_node_readiness_for_agent(&db, Process::Ready, None, agent.did()).await;
     tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
         .expect("goal source timed out after readiness recovered")
         .expect("goal continuation intent");
-    let children = goal_children(&db).await;
+    let children = goal_children_from_access(&access).await;
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].session_id, SESSION);
-    assert_eq!(
-        children[0].agent_did.as_deref(),
-        Some(crate::support::AGENT_NAME)
-    );
+    assert_eq!(children[0].agent_did.as_deref(), Some(agent.did()));
     assert_eq!(
         children[0].caused_by_parent_request_id.as_deref(),
         Some("parent-waits-for-readiness")
     );
-    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
-        .await
-        .unwrap()
-        .unwrap();
+    let goal = load_goal_as(&access, db.node_identity.did()).await.unwrap();
     assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
     assert_eq!(goal.continuation_sequence(), 1);
     assert_eq!(goal.infrastructure_retry_count.unwrap_or_default(), 0);
     assert_eq!(goal.last_failure, None);
 
     drop(source);
-    let (mut restarted, _restart_tx) = self::source(&db).await;
+    let (mut restarted, _restart_tx) = source_for_agent(&db, &agent).await;
     assert!(
         tokio::time::timeout(Duration::from_millis(200), restarted.next_fire())
             .await
             .is_err(),
         "restart must not duplicate the recovered continuation"
     );
-    assert_eq!(goal_children(&db).await.len(), 1);
+    assert_eq!(goal_children_from_access(&access).await.len(), 1);
 }
 
 #[tokio::test]
@@ -5157,25 +5108,26 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
         AgentReadinessUnavailableReason as Reason, NodeReadinessProcessState as Process,
     };
     let db = test_db("goal-readiness-race").await;
-    seed_completed_request(&db, "parent-before-race").await;
-    set_goal(
-        &db.node,
+    let (_user, agent, access) = goal_recovery_actors(&db, "parent-before-race", "completed").await;
+    set_goal_from_access(
+        &access,
         db.node_identity.did(),
         SESSION,
         Some("Survive readiness races"),
         Some(GoalStatus::Active),
         None,
+        None,
     )
     .await
     .expect("set goal");
-    let (mut source, _tx) = source(&db).await;
+    let (mut source, _tx) = source_for_agent(&db, &agent).await;
 
     for round in 1..=(gents::goal::MAX_INFRASTRUCTURE_RETRIES as usize + 1) {
         tokio::time::timeout(Duration::from_secs(2), source.next_fire())
             .await
             .unwrap_or_else(|_| panic!("round {round}: goal source timed out"))
             .expect("goal continuation intent");
-        let children = goal_children(&db).await;
+        let children = goal_children_from_access(&access).await;
         assert_eq!(children.len(), round);
         let pending = children
             .iter()
@@ -5186,15 +5138,15 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
             false
         );
 
-        publish_node_readiness(
+        publish_node_readiness_for_agent(
             &db,
             Process::Ready,
             Some(Reason::RuntimeConfigurationInvalid),
+            agent.did(),
         )
         .await;
-        publish_reconcile_phase(&db, "debouncing").await;
         reject_before_claim(
-            &db,
+            &access,
             &pending.doc_id,
             Reason::RuntimeConfigurationInvalid.public_message(),
         )
@@ -5205,10 +5157,7 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
                 .is_err(),
             "round {round}: a rejected child must wait for readiness"
         );
-        let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
-            .await
-            .unwrap()
-            .unwrap();
+        let goal = load_goal_as(&access, db.node_identity.did()).await.unwrap();
         assert_eq!(
             goal.parsed_status(),
             Some(GoalStatus::Active),
@@ -5219,21 +5168,20 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
             0,
             "round {round}"
         );
-        publish_node_readiness(&db, Process::Ready, None).await;
-        publish_reconcile_phase(&db, "idle").await;
+        publish_node_readiness_for_agent(&db, Process::Ready, None, agent.did()).await;
     }
 
     tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
         .expect("goal source timed out after the final race")
         .expect("goal continuation intent");
-    let children = goal_children(&db).await;
+    let children = goal_children_from_access(&access).await;
     let pending = children
         .iter()
         .find(|child| child.lifecycle_state.as_deref() == Some("pending"))
         .expect("pending goal child");
     reject_before_claim(
-        &db,
+        &access,
         &pending.doc_id,
         Reason::RuntimeConfigurationInvalid.public_message(),
     )
@@ -5244,27 +5192,27 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
             .is_err(),
         "stale readiness must not re-issue a rejected child"
     );
-    assert_eq!(goal_children(&db).await.len(), children.len());
-    let waiting = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
-        .await
-        .unwrap()
-        .unwrap();
+    assert_eq!(
+        goal_children_from_access(&access).await.len(),
+        children.len()
+    );
+    let waiting = load_goal_as(&access, db.node_identity.did()).await.unwrap();
     assert_eq!(waiting.parsed_status(), Some(GoalStatus::Active));
     assert_eq!(waiting.infrastructure_retry_count.unwrap_or_default(), 0);
     assert!(waiting
         .last_failure
         .as_deref()
         .is_some_and(|reason| reason.contains("not been republished since its rejection")));
-    publish_node_readiness(&db, Process::Ready, None).await;
+    publish_node_readiness_for_agent(&db, Process::Ready, None, agent.did()).await;
     tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
         .expect("goal source timed out after readiness was republished")
         .expect("goal continuation intent");
-    assert_eq!(goal_children(&db).await.len(), children.len() + 1);
-    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
-        .await
-        .unwrap()
-        .unwrap();
+    assert_eq!(
+        goal_children_from_access(&access).await.len(),
+        children.len() + 1
+    );
+    let goal = load_goal_as(&access, db.node_identity.did()).await.unwrap();
     assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
     assert_eq!(goal.infrastructure_retry_count.unwrap_or_default(), 0);
     assert_eq!(goal.last_failure, None);
