@@ -188,14 +188,16 @@ mod tests {
             crate::ensure_runtime_schemas(&node).await.unwrap();
             let terminal = modeled["terminal"].as_bool().unwrap();
             let state = if terminal { "completed" } else { "pending" };
+            let agent_did = crate::triggers::callback::test_agent_did();
             let request_mutation = format!(
                 r#"mutation {{create_AgentRequest(input: {{
-                request_id: "{}", node_did: "{}", session_id: "{}", agent_did: "did:test:agent",
+                request_id: "{}", node_did: "{}", session_id: "{}", agent_did: "{}",
                 purpose: "normal", lifecycle_state: "{state}", created_at: "2026-01-01T00:00:00Z"
             }}) {{_docID}} }}"#,
                 crate::store::graphql::escape_graphql_string(&fire.request_id),
                 crate::store::graphql::escape_graphql_string(&fire.identity.owner_did),
-                crate::store::graphql::escape_graphql_string(&session)
+                crate::store::graphql::escape_graphql_string(&session),
+                crate::store::graphql::escape_graphql_string(&agent_did)
             );
             ConfigAccess::transact_local_write(&node, None, "test.seed_terminal_outcome_boundary", |txn| {
                 let fire = &fire;
@@ -233,14 +235,14 @@ mod tests {
             let expected = case["post"]["outcomes"].as_array().unwrap().len();
             let before = case["pre"]["outcomes"].as_array().unwrap().len();
             assert_eq!(
-                recover_outcomes(&node, &fire.identity.owner_did, "did:test:agent")
+                recover_outcomes(&node, &fire.identity.owner_did, &agent_did)
                     .await
                     .unwrap(),
                 expected - before,
                 "{name}"
             );
             assert_eq!(
-                recover_outcomes(&node, &fire.identity.owner_did, "did:test:agent")
+                recover_outcomes(&node, &fire.identity.owner_did, &agent_did)
                     .await
                     .unwrap(),
                 0,

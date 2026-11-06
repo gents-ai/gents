@@ -245,7 +245,7 @@ impl Delivery {
 
     async fn trigger_status(&self, status: &str) -> serde_json::Value {
         for _ in 0..100 {
-            let trigger = observed_trigger(self.node.as_ref(), "ping-trigger").await;
+            let trigger = observed_trigger(self.node.as_ref(), crate::request::lifecycle::test_support::PIN_FIXED_DID, "ping-trigger").await;
             if trigger["last_status"].as_str() == Some(status) {
                 return trigger;
             }
@@ -433,7 +433,7 @@ async fn an_acknowledged_fire_records_no_unacknowledged_status() {
     });
     let trigger = delivery.trigger_status("error").await;
     tokio::time::sleep(Duration::from_millis(150)).await;
-    let settled = observed_trigger(delivery.node.as_ref(), "ping-trigger").await;
+    let settled = observed_trigger(delivery.node.as_ref(), crate::request::lifecycle::test_support::PIN_FIXED_DID, "ping-trigger").await;
     assert_ne!(
         settled["last_status"].as_str(),
         Some(crate::triggers::engine::UNACKNOWLEDGED_STATUS),
