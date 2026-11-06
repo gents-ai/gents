@@ -89,7 +89,7 @@ describe("SessionScreen transcript render boundary", () => {
         executionMode: null,
         networkMode: null,
         stdout: "unshared output",
-        stderr: null,
+        stderr: "",
         fallbackOutput: null,
       },
     };

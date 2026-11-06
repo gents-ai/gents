@@ -1578,44 +1578,6 @@ export function createDesktopUiHarness(
       ],
     };
   }
-  if (scenario === "session-hydration") {
-    sessions.set("session-remote", {
-      sessionId: "session-remote",
-      nodeDid: NODE_DID,
-      agentDid: DEFAULT_AGENT_DID,
-      title: "Desktop-started session",
-      previewText: "hello from desktop",
-      status: "active",
-      turnState: "completed",
-      latestRequestId: "request-remote",
-      goal: null,
-      retryEligibility: { eligible: false, denialReason: null },
-      latestRequestOutcome: null,
-      pendingTurn: null,
-      queuedTurns: [],
-      foldedInputs: [],
-      context: harnessSessionContext(),
-      timelineItems: [
-        {
-          kind: "userMessage",
-          itemKey: "remote-user",
-          ownsTurn: true,
-          sequence: 1,
-          content: "hello from desktop",
-          timestamp: THIRTY_DAYS_AGO,
-          reconstruction: HARNESS_READY_RECONSTRUCTION,
-        },
-      ],
-      hydration: {
-        sessionId: "session-remote",
-        nodeDid: NODE_DID,
-        phase: "requested",
-        mergedCount: 1,
-        coveredCount: 1,
-        servedCount: null,
-      },
-    });
-  }
   if (scenario === "mobile-performance") {
     sessions.set(
       "session-large",
