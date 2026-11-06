@@ -152,11 +152,76 @@ struct ScopedWatcherFixture {
 
 impl ScopedWatcherFixture {
     async fn new() -> Self {
+        use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use crate::store::identity::NodeIdentity;
+
         let db = crate::support::test_db("scoped-watcher").await;
-        let (home, _user, client_access, binding) =
-            crate::test_support::signed_test_node_from_db(db, "scoped-watcher-user").await;
+        let (home, user, client_access) =
+            crate::test_support::signed_test_node_without_agent_from_db(db, "scoped-watcher-user")
+                .await;
         let node = home.node.clone();
         let runtime = home.node_identity.clone();
+        let binding = crate::store::identity::provision_agent_identity_authorized(
+            &node,
+            runtime.as_ref(),
+            &identity::Did::new(user.did()).unwrap(),
+        )
+        .await
+        .unwrap();
+        let profile_id = format!("{}:inference", binding.agent_did);
+        let backend_id = format!("{}:backend", binding.agent_did);
+        let plan = DesiredStateApplyPlan::new(
+            [
+                (
+                    crate::Collection::InferenceBackend,
+                    serde_json::json!({
+                        "node_did": runtime.did(),
+                        "backend_id": backend_id,
+                        "name": "Scoped watcher inference",
+                        "provider_kind": "OpenAiCompatible",
+                        "endpoint": "http://127.0.0.1:1/v1",
+                        "auth": {"kind": "unauthenticated"},
+                    }),
+                ),
+                (
+                    crate::Collection::InferenceProfile,
+                    serde_json::json!({
+                        "node_did": runtime.did(),
+                        "profile_id": profile_id,
+                        "backend_id": backend_id,
+                        "model_name": "test-model",
+                    }),
+                ),
+                (
+                    crate::Collection::Agent,
+                    serde_json::json!({
+                        "node_did": runtime.did(),
+                        "agent_did": binding.agent_did,
+                        "creation_nonce": binding.creation_nonce,
+                        "display_name": "Scoped watcher agent",
+                        "inference_profile_id": profile_id,
+                        "enabled": true,
+                    }),
+                ),
+            ]
+            .into_iter()
+            .map(|(collection, value)| DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            })
+            .collect(),
+        )
+        .unwrap();
+        client_access
+            .transact_write("test.scoped_watcher.agent", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                })
+            })
+            .await
+            .unwrap();
         let agent =
             crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
         let access = crate::ConfigAccess::local_managed_agent(
@@ -890,6 +955,9 @@ async fn later_request_cannot_overtake_delivered_native_session_head() {
         ExecutionOrigin::Interactive,
         "backend",
     );
+    lifecycle
+        .bind_managed_agent(fixture.agent.as_ref())
+        .unwrap();
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     assert!(watcher.pending_requests().await.unwrap().is_empty());
     let doc = crate::store::graphql::escape_graphql_string(&continuation_doc);
