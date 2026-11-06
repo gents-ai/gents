@@ -195,6 +195,17 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
             )
             .await
             .unwrap();
+            if case.name == "wrong_signed_agent" {
+                session_access
+                    .add_actor_relationship(
+                        "AgentSession",
+                        &session_doc,
+                        "reader",
+                        &::identity::Did::new(&other_binding.agent_did).unwrap(),
+                    )
+                    .await
+                    .unwrap();
+            }
         }
         let session_before = access
             .transact_readonly("test.session_before", |txn| {
@@ -241,8 +252,13 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                 .await
                 .unwrap()
         };
+        let signed_agent = if case.name == "wrong_signed_agent" {
+            other_binding.agent_did.clone()
+        } else {
+            agent(&case.requested)
+        };
         let signed_agent_doc_id =
-            super::agent_document_for_test(&access, identity.did(), &agent(&case.requested)).await;
+            super::agent_document_for_test(&access, identity.did(), &signed_agent).await;
         if session_before
             .as_ref()
             .is_none_or(|session| session.doc_id != signed_session_doc_id)
@@ -347,7 +363,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
             "first",
             identity.did(),
             user.did(),
-            agent(&case.requested),
+            &signed_agent,
             SESSION,
             "Work on this goal",
             "interactive",
