@@ -136,6 +136,10 @@ impl SelfConfigFixture {
             .expect("User grants selected configuration to the Agent");
     }
 
+    pub(super) fn agent_did(&self) -> &str {
+        &self.agent_did
+    }
+
     pub(super) fn tools(&self, categories: &[&str]) -> Vec<Box<dyn ToolDyn>> {
         let mut grants = config(categories);
         grants.agent_did = self.agent_did.clone();

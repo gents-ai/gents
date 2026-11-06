@@ -126,21 +126,22 @@ async fn agent_dids_resolve_from_their_node_local_slug() {
 
 #[tokio::test]
 async fn profile_receipts_name_the_default_target_and_preview_edit_means_preview() {
-    let (_node, _owner, tools) = setup("profile-target", &["node", "profile"]).await;
+    let (fixture, tools) = authenticated_setup("profile-target", &["node", "profile"]).await;
+    let agent_did = fixture.agent_did();
     let receipt = ok(
         &tools,
         json!({"argv":["profile","preview"],"set":{"display_name":"Mine"}}),
     )
     .await;
-    assert_eq!(receipt["agent_did"], "beh-test");
-    assert_eq!(receipt["target_id"], "beh-test:inference");
+    assert_eq!(receipt["agent_did"], agent_did);
+    assert_eq!(receipt["target_id"], format!("{agent_did}:inference"));
     let aliased = ok(
         &tools,
         json!({"argv":["profile","preview","edit"],"set":{"display_name":"Mine"}}),
     )
     .await;
     assert_eq!(aliased["committed"], false);
-    assert_eq!(aliased["target_id"], "beh-test:inference");
+    assert_eq!(aliased["target_id"], format!("{agent_did}:inference"));
 }
 
 #[tokio::test]
@@ -666,28 +667,31 @@ async fn lists_include_unselected_documents() {
 
 #[tokio::test]
 async fn target_id_fills_a_positional_id() {
-    let (_node, _owner, tools) = setup("positional", &["node", "tools"]).await;
+    let (fixture, tools) = authenticated_setup("positional", &["node", "tools"]).await;
+    let agent_did = fixture.agent_did();
     for args in [
-        json!({"argv":["agent","get"],"target_id":"beh-test"}),
-        json!({"argv":["agent","get","beh-test"],"target_id":"beh-test"}),
+        json!({"argv":["agent","get"],"target_id":agent_did}),
+        json!({"argv":["agent","get",agent_did],"target_id":agent_did}),
     ] {
         let read = ok(&tools, args.clone()).await;
-        assert_eq!(read["agent_did"], "beh-test", "{args}");
+        assert_eq!(read["agent_did"], agent_did, "{args}");
     }
     let conflict = refused(
         &tools,
-        json!({"argv":["agent","get","beh-test"],"target_id":"other"}),
+        json!({"argv":["agent","get",agent_did],"target_id":"other"}),
     )
     .await;
     assert!(
-        conflict.contains(r#"target ID \"beh-test\" in argv conflicts with target_id \"other\""#),
+        conflict.contains(&format!(
+            r#"target ID \"{agent_did}\" in argv conflicts with target_id \"other\""#
+        )),
         "{conflict}"
     );
     let unsupported = refused(&tools, json!({"argv":["tools","get"],"target_id":"x"})).await;
     assert!(unsupported.contains("no owned Tools"), "{unsupported}");
     let recovered = ok(
         &tools,
-        json!({"argv":["tools","get"],"options":{"agent":"beh-test"}}),
+        json!({"argv":["tools","get"],"options":{"agent":agent_did}}),
     )
     .await;
     assert_eq!(recovered["document"]["tools_id"], "beh-test:tools");
@@ -1491,17 +1495,18 @@ async fn local_target_creation_defaults_identity_but_updates_preserve_remote_des
 
 #[tokio::test]
 async fn profile_receipt_selects_current_agent_without_changing_original_profile() {
-    let (_node, _owner, tools) = setup("selection-receipt", &["node", "profile"]).await;
+    let (fixture, tools) = authenticated_setup("selection-receipt", &["node", "profile"]).await;
+    let agent_did = fixture.agent_did();
     let before = ok(
         &tools,
-        json!({"argv":["profile","get","beh-test:inference"]}),
+        json!({"argv":["profile","get",format!("{agent_did}:inference")]}),
     )
     .await;
-    let receipt = ok(&tools, json!({"argv":["profile","create"],"target_id":"research","set":{"backend_id":"beh-test:backend","model_name":"test-model"}})).await;
-    assert_eq!(receipt["connection"]["agent_did"], "beh-test");
+    let receipt = ok(&tools, json!({"argv":["profile","create"],"target_id":"research","set":{"backend_id":format!("{agent_did}:backend"),"model_name":"test-model"}})).await;
+    assert_eq!(receipt["connection"]["agent_did"], agent_did);
     assert_eq!(
         receipt["connection"]["selected_profile_id"],
-        "beh-test:inference"
+        format!("{agent_did}:inference")
     );
     assert_eq!(receipt["connection"]["selected"], false);
     ok(&tools, receipt["connection"]["select_with"].clone()).await;
@@ -1510,7 +1515,7 @@ async fn profile_receipt_selects_current_agent_without_changing_original_profile
     assert!(changed["connection"].get("select_with").is_none());
     let after = ok(
         &tools,
-        json!({"argv":["profile","get","beh-test:inference"]}),
+        json!({"argv":["profile","get",format!("{agent_did}:inference")]}),
     )
     .await;
     assert_eq!(before["document"], after["document"]);
@@ -1531,14 +1536,16 @@ async fn structured_failure(tools: &Tools, args: Value) -> Value {
 
 #[tokio::test]
 async fn config_usage_errors_return_executable_resource_verb_recovery() {
-    let (_node, _owner, tools) = setup("usage-recovery", &["node", "tools", "automation"]).await;
+    let (fixture, tools) =
+        authenticated_setup("usage-recovery", &["node", "tools", "automation"]).await;
+    let agent_did = fixture.agent_did();
     for args in [
-        json!({"argv":["get"],"target_id":"beh-test"}),
-        json!({"argv":["get","beh-test"]}),
+        json!({"argv":["get"],"target_id":agent_did}),
+        json!({"argv":["get",agent_did]}),
         json!({"argv":["trigger","state","t"]}),
         json!({"argv":["schema","list"]}),
-        json!({"argv":["agent","clone","beh-test"]}),
-        json!({"argv":["agent","clone"],"options":{"source":"beh-test"}}),
+        json!({"argv":["agent","clone",agent_did]}),
+        json!({"argv":["agent","clone"],"options":{"source":agent_did}}),
     ] {
         let failure = structured_failure(&tools, args).await;
         assert_eq!(failure["config_execution"]["mutation_entered"], false);
@@ -1548,7 +1555,7 @@ async fn config_usage_errors_return_executable_resource_verb_recovery() {
     }
     let failure = structured_failure(
         &tools,
-        json!({"argv":["batch"],"options":{"operations":[{"argv":["get","beh-test"]}]}}),
+        json!({"argv":["batch"],"options":{"operations":[{"argv":["get",agent_did]}]}}),
     )
     .await;
     ok(
@@ -1645,11 +1652,12 @@ async fn saved_config_audit_is_node_scoped_and_does_not_require_preview() {
 
 #[tokio::test]
 async fn config_error_recovery_is_executable_for_single_and_batch_calls() {
-    let (_node, _owner, tools) = setup(
+    let (fixture, tools) = authenticated_setup(
         "error-guidance",
         &["node", "tools", "profile", "automation"],
     )
     .await;
+    let agent_did = fixture.agent_did();
     let before = ok(&tools, json!({"argv":["agent","get"]})).await;
     for args in [
         json!({"argv":["agent","create"],"set":{"display_name":"Helper"}}),
@@ -1658,13 +1666,13 @@ async fn config_error_recovery_is_executable_for_single_and_batch_calls() {
         json!({"argv":["tools","preview","update"],"target_id":"absent-tools","set":{"display_name":"Missing"}}),
         json!({"argv":["task","preview","remove","absent-task"]}),
         json!({"argv":["tools","update"],"set":{"bash":{}}}),
-        json!({"argv":["agent","update"],"target_id":"beh-test","set":{"system_prompt":"new instructions"}}),
+        json!({"argv":["agent","update"],"target_id":agent_did,"set":{"system_prompt":"new instructions"}}),
     ] {
         let failure = structured_failure(&tools, args.clone()).await;
         let recovery = failure["recovery"]["next_call"].clone();
         assert!(recovery.is_object(), "{failure}");
         ok(&tools, recovery.clone()).await;
-        let batch = structured_failure(&tools, json!({"argv":["batch"],"options":{"operations":[args, {"argv":["agent","update"],"target_id":"beh-test","set":{"display_name":"must not execute"}}]}})).await;
+        let batch = structured_failure(&tools, json!({"argv":["batch"],"options":{"operations":[args, {"argv":["agent","update"],"target_id":agent_did,"set":{"display_name":"must not execute"}}]}})).await;
         assert_eq!(batch["batch"]["failed_index"], 0);
         assert_eq!(batch["batch"]["unattempted"], 1);
         assert_eq!(
@@ -1733,14 +1741,15 @@ async fn delete_recovery_previews_the_same_resource_before_committing() {
 
 #[tokio::test]
 async fn composition_help_and_field_placement_match_the_accepted_calls() {
-    let (_node, _owner, tools) = setup(
+    let (fixture, tools) = authenticated_setup(
         "composition-help",
         &["node", "tools", "profile", "automation"],
     )
     .await;
+    let agent_did = fixture.agent_did();
     let bound = ok(
         &tools,
-        json!({"argv":["context","get"],"options":{"agent":"beh-test"}}),
+        json!({"argv":["context","get"],"options":{"agent":agent_did}}),
     )
     .await;
     let exact = ok(
