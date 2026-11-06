@@ -6045,6 +6045,26 @@ async fn modeled_resource_reads_use_resource_category_and_native_access() {
     fixture.grant_node_reader().await;
     fixture.grant_selected_configuration().await;
     let backend_id = format!("{}:backend", fixture.agent_did());
+    let task = json!({"node_did": fixture.node_did(), "task_id": "read-exposure-task",
+        "agent_did": fixture.agent_did(), "prompt_template": "Do the work"});
+    let task_plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::Task,
+            add: task.clone(),
+            update: task,
+        },
+    ])
+    .unwrap();
+    fixture
+        .user_access()
+        .transact_write("test.read_exposure.task", |txn| {
+            let task_plan = &task_plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, task_plan).await
+            })
+        })
+        .await
+        .unwrap();
     let cases =
         &crate::lean_vocab_test::lean_contract_snapshot().self_config_resource_read_exposure_cases;
     assert!(!cases.is_empty());
@@ -6068,11 +6088,40 @@ async fn modeled_resource_reads_use_resource_category_and_native_access() {
                 vec!["profile".into(), "list".into()],
                 vec!["profile".into(), "get".into()],
             ],
+            "automation" => vec![
+                vec!["automation".into(), "list".into(), "task".into()],
+                vec![
+                    "automation".into(),
+                    "get".into(),
+                    "task".into(),
+                    "read-exposure-task".into(),
+                ],
+            ],
+            "effective" => vec![
+                vec!["get".into()],
+                vec![
+                    "get".into(),
+                    "--agent".into(),
+                    fixture.agent_did().to_owned(),
+                ],
+            ],
             other => panic!("unexpected modeled read resource {other}"),
         };
         for command in commands {
             let result = call_config_tool(&tools, command.clone()).await;
             assert_eq!(result.is_ok(), expected, "{case}: {command:?}: {result:?}");
+            if expected && case["resource"] == "effective" {
+                let value: Value = serde_json::from_str(result.as_ref().unwrap()).unwrap();
+                assert_eq!(value["agent_did"], fixture.agent_did());
+            }
+            if expected
+                && command.first().is_some_and(|part| part == "automation")
+                && command.get(1).is_some_and(|part| part == "get")
+            {
+                let value: Value = serde_json::from_str(result.as_ref().unwrap()).unwrap();
+                assert_eq!(value["document"]["agent_did"], fixture.agent_did());
+                assert_eq!(value["document"]["task_id"], "read-exposure-task");
+            }
         }
     }
 }
