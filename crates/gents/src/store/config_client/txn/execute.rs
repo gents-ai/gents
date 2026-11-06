@@ -943,7 +943,10 @@ impl ConfigApplyTxn<'_> {
                 .transpose()
                 .map_err(ConfigClientError::SerializeCollectionVersion),
             TxnBackend::Http {
-                endpoint, client, id, ..
+                endpoint,
+                client,
+                id,
+                ..
             } => {
                 let url = format!(
                     "{}/collections?get_inactive=true",
