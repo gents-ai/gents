@@ -317,7 +317,13 @@ async fn write(
     report: UsageReport,
     read: Option<(DateTime<Utc>, Option<String>)>,
 ) -> Result<()> {
-    if let Some(target) = target(&ConfigAccess::local(node.clone()), account).await? {
+    let node_did = match account {
+        UsageAccount::Credential { node_did, .. } | UsageAccount::Backend { node_did, .. } => {
+            node_did
+        }
+    };
+    let access = crate::inference::auth::credential::runtime_credential_access(node, node_did)?;
+    if let Some(target) = target(&access, account).await? {
         cache.record(&target, report, read).await;
     }
     Ok(())
@@ -459,6 +465,7 @@ pub async fn read_account_usage(
     now: DateTime<Utc>,
 ) -> Result<UsageRead> {
     use crate::inference::backends::provider::BackendProviderKind as Kind;
+    let access = crate::inference::auth::credential::runtime_credential_access(&node, node_did)?;
     let kind = backend.provider_kind;
     if !backend.enabled {
         return Ok(UsageRead::Disabled);
@@ -486,7 +493,6 @@ pub async fn read_account_usage(
         },
         _ => None,
     };
-    let access = ConfigAccess::local(node.clone());
     let mut account = UsageAccount::for_backend(node_did, backend);
     let Some(target) = target(&access, &account).await? else {
         return Ok(unavailable("no enabled account"));
@@ -626,6 +632,7 @@ impl AccountUsageRead {
     }
 }
 
+/// Uses the held Node identity for operational credential and metadata reads.
 pub async fn read_node_usage(
     cache: &UsageCache,
     node: Arc<EmbeddedNode>,
@@ -635,7 +642,7 @@ pub async fn read_node_usage(
     endpoints: &UsageEndpoints,
     now: DateTime<Utc>,
 ) -> Result<Vec<AccountUsageRead>> {
-    let access = ConfigAccess::local(node.clone());
+    let access = crate::inference::auth::credential::runtime_credential_access(&node, node_did)?;
     let accounts = crate::inference::auth::credential::list_accounts(&access, node_did).await?;
     let backends = access
         .transact_readonly("usage_observation.read_node", |txn| {
@@ -699,6 +706,7 @@ pub async fn read_node_usage(
     }
     let reads = jobs.into_iter().map(|(entry, account_enabled, backend)| {
         let node = node.clone();
+        let access = access.clone();
         async move {
             if !account_enabled {
                 return entry;
@@ -714,7 +722,7 @@ pub async fn read_node_usage(
             )
             .await
             .unwrap_or_else(|_| unavailable("account unavailable"));
-            let stored = usage_for_backend(cache, &ConfigAccess::local(node), node_did, &backend)
+            let stored = usage_for_backend(cache, &access, node_did, &backend)
                 .await
                 .ok()
                 .flatten();
