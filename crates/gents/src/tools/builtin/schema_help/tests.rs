@@ -107,7 +107,6 @@ async fn node() -> Arc<EmbeddedNode> {
 #[tokio::test]
 async fn schema_preview_and_publication_expose_ignored_native_directives() {
     use crate::store::config_client::NodePermission;
-    use crate::store::identity::NodeIdentity;
 
     let (db, _user, _user_access, binding) =
         crate::test_support::signed_test_node("schema-native-warnings").await;

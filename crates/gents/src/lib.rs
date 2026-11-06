@@ -164,47 +164,6 @@ pub(crate) mod test_support {
             .agent_did
     }
 
-    pub(crate) async fn bootstrap_test_node(
-        node: &std::sync::Arc<defra_node::Node>,
-        runtime: &dyn crate::store::identity::NodeIdentity,
-        user: &dyn crate::store::identity::NodeIdentity,
-    ) -> crate::store::config_client::ConfigAccess {
-        use crate::store::config_client::{ConfigAccess, NodePermission};
-
-        assert_eq!(node.node_identity_did(), Some(runtime.did()));
-        assert_ne!(runtime.did(), user.did());
-        let runtime_did = identity::Did::new(runtime.did()).unwrap();
-        let user_did = identity::Did::new(user.did()).unwrap();
-        let admin = ConfigAccess::local_as(node.clone(), runtime_did.clone());
-        for permission in [
-            NodePermission::DocumentRead,
-            NodePermission::DocumentUpdate,
-            NodePermission::DacRelationAdd,
-        ] {
-            admin
-                .grant_node_permission(&user_did, permission)
-                .await
-                .unwrap();
-        }
-        let access = ConfigAccess::local_as(node.clone(), user_did);
-        let escaped = crate::store::graphql::escape_graphql_string(runtime.did());
-        let created = access
-            .write(
-                "test.bootstrap_node",
-                &format!(
-                    r#"mutation {{ create_Node(input: {{ node_did: "{escaped}" }}) {{ _docID }} }}"#
-                ),
-            )
-            .await
-            .unwrap();
-        let doc_id = crate::store::graphql::created_doc_id(&created, "Node").unwrap();
-        access
-            .add_actor_relationship("Node", &doc_id, "runtime_reader", &runtime_did)
-            .await
-            .unwrap();
-        access
-    }
-
     pub(crate) async fn bootstrap_signed_test_node(
         access: &crate::store::config_client::ConfigAccess,
         node_did: &str,

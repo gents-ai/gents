@@ -5,7 +5,7 @@ use super::support::*;
 use crate::tools::surface::ToolCeiling;
 
 #[tokio::test]
-async fn builder_rejects_node_without_signing_did() {
+async fn builder_requires_backend_admission_before_checking_node_identity() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     let identity = Arc::new(test_identity("builder-unsigned-node"));
 
@@ -17,13 +17,14 @@ async fn builder_rejects_node_without_signing_did() {
         .build()
         .await
     {
-        Ok(_) => panic!("builder should reject an unsigned node"),
+        Ok(_) => panic!("builder should reject a node without backend protection admission"),
         Err(error) => error,
     };
 
-    assert!(error
-        .to_string()
-        .contains("EmbeddedNode configured with a node signing DID"));
+    assert_eq!(
+        error.to_string(),
+        "fresh backend protection provenance is required"
+    );
 }
 
 #[tokio::test]
