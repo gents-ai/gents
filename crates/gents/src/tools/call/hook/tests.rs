@@ -1841,34 +1841,15 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
 async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias() {
     use crate::documents::{RemoteServiceTools, RemoteToolStyle, RemoteTools};
 
-    let home = tempfile::tempdir().unwrap();
-    let runtime = KeyIdentity::load_or_create(home.path().join("node.key"), None).unwrap();
-    let client = KeyIdentity::load_or_create(home.path().join("client.key"), None).unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .data_path(home.path().join("data"))
-            .with_node_identity_did(runtime.did())
-            .with_node_acp_enabled()
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::bootstrap_test_node(&node, &runtime, &client).await;
-    let binding =
-        crate::test_support::install_test_agent_as(&node, &runtime, &client, "Selected tool agent")
-            .await;
-    let session_id = "hook-selected-tool-session";
-    let hook = r4c_private_support::setup_private_hook_for_agent(
-        &node,
-        runtime.did(),
-        &binding.agent_did,
-        "request-selected-tool",
-        session_id,
+    let fixture = background_budget::budget_hook_fixture(
+        "selected-tool-dispatch",
         BackgroundToolRegistry::default(),
+        BackgroundExecutionRegistry::default(),
     )
-    .await
-    .with_remote_tools(Some(RemoteTools {
+    .await;
+    let node = fixture.db.node.clone();
+    let session_id = fixture.session_id.clone();
+    let hook = fixture.hook.with_remote_tools(Some(RemoteTools {
         services: vec![RemoteServiceTools {
             mcp_service_id: "metrics-prod".into(),
             tool_names: vec!["query_metrics".into()],
@@ -1913,7 +1894,7 @@ async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias()
             .await,
         ToolCallHookAction::Continue
     ));
-    let selected = selected_row(&access, session_id, "call-selected").await;
+    let selected = selected_row(&access, &session_id, "call-selected").await;
     assert_eq!(
         selected
             .get("selected_service_id")
@@ -1933,7 +1914,7 @@ async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias()
             .await,
         ToolCallHookAction::Continue
     ));
-    let native = selected_row(&access, session_id, "call-native").await;
+    let native = selected_row(&access, &session_id, "call-native").await;
     assert!(native
         .get("selected_service_id")
         .is_none_or(serde_json::Value::is_null));
