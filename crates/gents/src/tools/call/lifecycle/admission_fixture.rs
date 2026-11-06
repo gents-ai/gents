@@ -1040,11 +1040,15 @@ mod lifecycle_tests {
         let (node, path, tool) = published_spawn_parent("native-load").await;
         let access = tool.access().unwrap();
         let expected_deadline = tool.deadline_at;
-        let mut loaded =
-            ToolCallLifecycle::load(node.clone(), "session-native-load", "spawn-native-tool")
-                .await
-                .unwrap()
-                .expect("admitted tool loads");
+        let mut loaded = ToolCallLifecycle::load_as(
+            node.clone(),
+            tool.actor().clone(),
+            "session-native-load",
+            "spawn-native-tool",
+        )
+        .await
+        .unwrap()
+        .expect("admitted tool loads");
         loaded.timeout().await.unwrap();
         let row = row(&access, "session-native-load").await;
         assert_eq!(row["lifecycle_state"], "timedOut");
@@ -1060,10 +1064,12 @@ mod lifecycle_tests {
     async fn admitted_native_load_returns_persisted_failure() {
         let (node, path, mut tool) = published_spawn_parent("native-load-failure").await;
         let access = tool.access().unwrap();
+        let actor = tool.actor().clone();
         tool.fail("oops", FailureClass::Transport).await.unwrap();
         drop(tool);
-        let loaded = ToolCallLifecycle::load(
+        let loaded = ToolCallLifecycle::load_as(
             node.clone(),
+            actor,
             "session-native-load-failure",
             "spawn-native-tool",
         )
@@ -1091,10 +1097,12 @@ mod lifecycle_tests {
 
         let (node, path, tool) = published_spawn_parent("native-cancel-load").await;
         let access = tool.access().unwrap();
+        let actor = tool.actor().clone();
         assert!(row(&access, "session-native-cancel-load").await["cancel_cause"].is_null());
         drop(tool);
-        let mut loaded = ToolCallLifecycle::load(
+        let mut loaded = ToolCallLifecycle::load_as(
             node.clone(),
+            actor,
             "session-native-cancel-load",
             "spawn-native-tool",
         )
