@@ -166,12 +166,6 @@ pub(crate) fn runtime_contract_router(
 
     let operator_routes = Router::new()
         .route("/packs/ux/watch", post(crate::http::pack_watch::watch))
-        .route(
-            "/packs/install",
-            post(crate::http::pack_install::install_handler).layer(
-                axum::extract::DefaultBodyLimit::max(crate::http::pack_install::MAX_BODY),
-            ),
-        )
         .route("/metrics", get(metrics_handler))
         .route("/healthz", get(healthz_handler))
         .route("/activation", get(activation_handler))
