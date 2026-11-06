@@ -10,7 +10,7 @@ pub enum OpenAiWireApiError {
 
 type Result<T, E = OpenAiWireApiError> = std::result::Result<T, E>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum OpenAiWireApi {
     #[serde(rename = "responses")]

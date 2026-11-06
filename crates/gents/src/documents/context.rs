@@ -5,7 +5,7 @@ use super::references::ConfigReferences;
 /// This document describes how context is assembled; conversation messages,
 /// activated skills, and generated compaction entries remain session state.
 /// References identify documents, not pinned revisions.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct AgentContext {
@@ -37,6 +37,7 @@ pub struct AgentContext {
     )]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub skill_ids: Vec<String>,
     #[serde(
         default,
@@ -44,6 +45,7 @@ pub struct AgentContext {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
 }
 

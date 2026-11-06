@@ -1,6 +1,6 @@
-import { useState, type ReactElement } from "react";
+import { useState, type ReactElement, type ReactNode } from "react";
 import { NodeAvatar, nodeAvatarOf } from "./AgentAvatar";
-import { ArrowUpRight, Copy, MessageSquarePlus } from "lucide-react";
+import { ArrowUpRight, Copy, MessageSquarePlus, Play } from "lucide-react";
 import { toast } from "sonner";
 import type { NodeView } from "../../hooks/fleetStore";
 import {
@@ -20,7 +20,9 @@ import { closestWindow, resetsIn, usageLevel, UsageRing } from "./agent/Provider
 import { Skeleton } from "@gents/ui/components/skeleton";
 import { SUBSCRIPTION } from "./agent/inferenceKinds";
 import { InferenceSummary, OnlineStatus } from "./NodeFacts";
-import { useNodeReach } from "@/hooks/useClient";
+import { useHomeDid, useNodeReach } from "@/hooks/useClient";
+import { isLocalNode } from "@/lib/firstRun";
+import { useLocalServerRun } from "./agent/LocalServer";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { shortPath } from "@/lib/paths";
 
@@ -115,6 +117,7 @@ function CardActions({
   enabled,
   settings,
   onStart,
+  lead,
 }: {
   nodeDid: string;
   /** the node's default agent when none */
@@ -122,9 +125,12 @@ function CardActions({
   enabled: boolean;
   settings: Route;
   onStart: () => void;
+  /** first in the row, where the card has more to offer */
+  lead?: ReactNode;
 }) {
   return (
     <div className="mt-3 flex items-center gap-4 text-xs">
+      {lead}
       <NewSessionWith
         nodeDid={nodeDid}
         agentDid={agentDid}
@@ -305,6 +311,7 @@ export function NodeHoverCard({
           enabled={deployment.node.enabled !== false}
           settings={page}
           onStart={() => setOpen(false)}
+          lead={<StartLocalNode deployment={deployment} />}
         />
       </HoverCardContent>
     </HoverCard>
@@ -436,6 +443,30 @@ export function AgentHoverCard({
         />
       </HoverCardContent>
     </HoverCard>
+  );
+}
+
+/* this machine's node while it is stopped: starting it is safe from a
+   glance, so the card offers it; stopping stays on the node's page, since
+   it ends the node's running sessions */
+function StartLocalNode({ deployment }: { deployment: NodeView }) {
+  const homeDid = useHomeDid();
+  const node = useLocalServerRun();
+  if (!isLocalNode(deployment, homeDid) || !node.offered || !node.known || node.running)
+    return null;
+  const busy = node.busy || node.starting;
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={node.start}
+      className={cn(
+        "inline-flex cursor-pointer items-center gap-1 text-foreground disabled:cursor-default disabled:text-muted-foreground disabled:no-underline",
+        LINK,
+      )}
+    >
+      <Play className="size-3" /> {busy ? "Starting…" : "Start node"}
+    </button>
   );
 }
 

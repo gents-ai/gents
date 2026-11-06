@@ -68,6 +68,7 @@ fn normalize_generated_types(dir: &Path) -> Result<(), String> {
             .map(|line| {
                 let trimmed = line.trim_end();
                 if trimmed.starts_with("import type ")
+                    && (trimmed.contains(" from \"./") || trimmed.contains(" from \"../"))
                     && trimmed.ends_with("\";")
                     && !trimmed.ends_with(".js\";")
                     && trimmed.rsplit_once(" from \"").is_some_and(|(_, module)| {

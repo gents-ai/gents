@@ -218,13 +218,18 @@ fn own_plugin(
     )))
 }
 
+/// The field `bind_owner` fills on every document that omits it.
+const OWNER_FIELD: &str = "node_did";
+/// The eval definition field whose `./` entries `hydrate_eval_cases` reads.
+const EVAL_CASES_FIELD: &str = "cases";
+
 fn bind_owner(value: &mut Value, owner: &str, location: &str) -> Result<()> {
     let object = value
         .as_object_mut()
         .with_context(|| format!("{location} must be a document object"))?;
-    match object.get("node_did") {
+    match object.get(OWNER_FIELD) {
         None => {
-            object.insert("node_did".into(), owner.into());
+            object.insert(OWNER_FIELD.into(), owner.into());
         }
         Some(value) => anyhow::ensure!(
             value.as_str() == Some(owner),
@@ -250,7 +255,10 @@ fn hydrate_eval_cases(
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned();
-        let Some(cases) = definition.get_mut("cases").and_then(Value::as_array_mut) else {
+        let Some(cases) = definition
+            .get_mut(EVAL_CASES_FIELD)
+            .and_then(Value::as_array_mut)
+        else {
             continue;
         };
         for case in cases {
@@ -330,6 +338,9 @@ fn hydrate_sidecar(
         String::from_utf8(bytes).with_context(|| format!("pack sidecar {path} is not UTF-8"))?;
     Ok(())
 }
+
+mod authored_schema;
+pub use authored_schema::{authored_document_schema, authored_pack_config_schema};
 
 #[cfg(test)]
 mod tests;

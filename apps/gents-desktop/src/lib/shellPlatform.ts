@@ -1,9 +1,9 @@
 import { inNativeShell as inTauri, windowLabel } from "./nativeShell";
 
-// On macOS main stays alive while a runtime or sibling view still needs it.
-// It is the sole automatic startup/recovery owner for the shared backend.
+// Main stays alive while a runtime or another window still needs it. It is
+// the sole automatic startup/recovery owner for the shared backend.
 export function ownsAutomaticRecovery(): boolean {
-  return !isMacTauriShell() || windowLabel() === "main";
+  return !inTauri() || isMobileTauriShell() || windowLabel() === "main";
 }
 
 // iPadOS also reports MacIntel, so a touch screen rules macOS out.

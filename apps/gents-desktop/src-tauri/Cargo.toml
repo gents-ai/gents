@@ -31,6 +31,7 @@ tauri = { version = "2", features = ["image-png", "tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
+tauri-plugin-notification = "=2.3.3"
 serde.workspace = true
 serde_json.workspace = true
 tempfile = "3"

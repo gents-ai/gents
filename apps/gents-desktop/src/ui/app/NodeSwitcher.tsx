@@ -17,7 +17,9 @@ import { useApp } from "@/app/AppContext";
 import { useFleet } from "@/hooks/useFleet";
 import { useHomeDid } from "@/hooks/useClient";
 import { isLocalNode } from "@/lib/firstRun";
-import { navigate, reviewNavigation, type Route } from "@/lib/router";
+import { currentRoute, navigate, reviewNavigation, type Route } from "@/lib/router";
+import { useAriaKeys, useKeysHint } from "@/commands/commands";
+import { Hint } from "@/screens/Hint";
 import { fleetNodes } from "@/lib/scope";
 import { shownNodes, useHidden } from "@/lib/hidden";
 import { NodeAvatar, nodeAvatarOf } from "@/screens/AgentAvatar";
@@ -32,6 +34,21 @@ export function switchedRoute(route: Route, nodeDid: string): Route | null {
   if (route.name === "session" && route.sessionId !== null)
     return { name: "session", sessionId: null };
   return null;
+}
+
+/** Makes `nodeDid` the node the app works with, from `route`, asked first
+    like a link to the node's page, since a draft stays with the node it was
+    written for. The switcher, search and the node keys all switch this way. */
+export function switchToNode(
+  nodeDid: string,
+  selectNode: (nodeDid: string) => void,
+  route: Route | null = currentRoute(),
+) {
+  const next = route ? switchedRoute(route, nodeDid) : null;
+  reviewNavigation({ name: "sessions", nodeDid }, () => {
+    selectNode(nodeDid);
+    if (next) navigate(next);
+  });
 }
 
 /** The nav's way to change the node the app works with, and the node
@@ -50,6 +67,8 @@ export function NodeSwitcher({
   trigger?: ReactElement;
   children?: ReactNode;
 }) {
+  const keys = useKeysHint("node.switch");
+  const aria = useAriaKeys("node.switch");
   const { actions } = useApp();
   const homeDid = useHomeDid();
   const hidden = useHidden();
@@ -60,31 +79,34 @@ export function NodeSwitcher({
     { label: "Remote", nodes: nodes.filter((n) => !isLocalNode(n, homeDid)) },
   ].filter((group) => group.nodes.length > 0);
   const choose = (nodeDid: string) => {
-    if (nodeDid === current) return;
-    const next = switchedRoute(route, nodeDid);
-    /* asked first like a link to the node's page, since a draft stays
-       with the node it was written for */
-    reviewNavigation({ name: "sessions", nodeDid }, () => {
-      actions.selectNode(nodeDid);
-      if (next) navigate(next);
-    });
+    if (nodeDid !== current) switchToNode(nodeDid, actions.selectNode, route);
   };
+  const opener = (
+    <DropdownMenuTrigger
+      render={
+        trigger ?? (
+          <Button
+            variant="quiet"
+            size="icon-xs"
+            aria-label="Switch node"
+            aria-keyshortcuts={aria}
+            className={cn("shrink-0 text-muted-foreground", className)}
+          />
+        )
+      }
+    >
+      {children ?? <ChevronsUpDown />}
+    </DropdownMenuTrigger>
+  );
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger
-        render={
-          trigger ?? (
-            <Button
-              variant="quiet"
-              size="icon-xs"
-              aria-label="Switch node"
-              className={cn("shrink-0 text-muted-foreground", className)}
-            />
-          )
-        }
-      >
-        {children ?? <ChevronsUpDown />}
-      </DropdownMenuTrigger>
+      {trigger ? (
+        opener
+      ) : (
+        <Hint label="Switch node" keys={keys}>
+          {opener}
+        </Hint>
+      )}
       <DropdownMenuContent align="start" className="w-64">
         <DropdownMenuRadioGroup
           value={current}

@@ -1,3 +1,9 @@
+/// Matches exactly the strings in which [`interpolate_with`] substitutes at
+/// least one `${NAME}` or `${NAME:-default}`: a `${`, not escaped by `$$`,
+/// with a closing `}`. ECMA-262 syntax, for JSON Schema `pattern`; the docs
+/// bundle conformance test checks it against this parser.
+pub const SUBSTITUTION_PATTERN: &str = r"(^|[^$])(\$\$)*\$\{[^}]*\}";
+
 pub fn interpolate_with(
     input: &str,
     lookup: &dyn Fn(&str) -> Option<String>,

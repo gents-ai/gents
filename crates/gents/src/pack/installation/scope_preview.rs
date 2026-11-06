@@ -5,8 +5,8 @@ use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
 use crate::pack::store::PackStore;
-use crate::runtime::agent::p2p_reconcile::templates::admit_app_collections;
 use crate::store::config_client::{preview_schema_install, ConfigAccess};
+use gents_protocol::peer_schema::admit_app_collections;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InstalledPackScopePreview {
@@ -57,7 +57,7 @@ pub async fn preview_installed_pack_scope(
     }
     ensure!(
         admit_app_collections(contracts.keys().cloned().collect()).is_some(),
-        "pack declares no application collections or includes a protocol collection"
+        "application collection replication is unavailable for thin clients"
     );
     ensure!(
         super::read_installed_pack(access, owner, coordinate).await? == Some(installed.clone()),
@@ -216,7 +216,7 @@ mod tests {
 
         let sdl = std::fs::read_to_string(root.join("schemas/fixture_job.graphql")).unwrap();
         runtime_access.add_collection(&sdl).await.unwrap();
-        let result = preview_installed_pack_scope(
+        let error = preview_installed_pack_scope(
             &access,
             home.path(),
             owner,
@@ -224,14 +224,8 @@ mod tests {
             &stored.header.digest,
         )
         .await
-        .unwrap();
-        assert_eq!(result.coordinate, coordinate);
-        assert_eq!(result.version, stored.header.version);
-        assert_eq!(result.digest, stored.header.digest);
-        assert_eq!(
-            result.collection_contracts.keys().collect::<Vec<_>>(),
-            vec!["FixtureJob"]
-        );
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("application collection replication is unavailable"));
     }
 
     #[tokio::test]

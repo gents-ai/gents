@@ -259,7 +259,9 @@ fn resolve_max_turns(configured: Option<i64>) -> Result<ResolvedMaxTurns> {
     Ok(ResolvedMaxTurns { value, provenance })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum ReasoningEffort {

@@ -9,7 +9,7 @@ use crate::documents::OutputObligationDecision;
 use crate::store::graphql::{canonical_positive_count, escape_graphql_string};
 
 use gents_loop::output_obligation::OutputObligationCheck;
-pub(crate) use gents_loop::output_obligation::{continuation_message, UnmetOutputObligation};
+pub(crate) use gents_loop::output_obligation::UnmetOutputObligation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ActiveOutputObligation {

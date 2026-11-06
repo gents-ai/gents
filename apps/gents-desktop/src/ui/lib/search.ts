@@ -3,16 +3,27 @@ import type { MailboxItemView, SessionSummary } from "@source-inc/gents-desktop-
 import type { Route } from "./router";
 
 export type SearchKind =
-  "attention" | "node" | "session" | "agent" | "setting" | "action";
+  "attention" | "node" | "session" | "agent" | "automation" | "setting" | "action";
 
 type Icon = ComponentType<{ className?: string }>;
 
 export type SearchTarget =
   | { kind: "attention"; item: MailboxItemView }
-  | { kind: "node"; nodeDid: string; name: string; avatar: string | null }
+  | {
+      kind: "node";
+      nodeDid: string;
+      name: string;
+      avatar: string | null;
+      /** the node the app works with now */
+      current?: boolean;
+      /** the one before it, which the last-node key goes back to */
+      last?: boolean;
+    }
   | { kind: "session"; session: SessionSummary }
   | { kind: "agent"; route: Route; agentDid: string; nodeDid: string }
-  | { kind: "setting" | "action"; route: Route; icon: Icon };
+  | { kind: "automation"; route: Route; icon: Icon }
+  | { kind: "setting"; route: Route; icon: Icon }
+  | { kind: "action"; run: () => void; icon: Icon; keys?: string };
 
 export type SearchEntry = SearchTarget & {
   key: string;
@@ -82,7 +93,8 @@ export type SearchSources = {
     node: string;
     pack: string | null;
   }[];
-  /** every node, with what it is to this app and whether it answers */
+  /** every node, with what it is to this app and whether it answers, in the
+      order a Nodes view lists them before anything is typed */
   nodes: readonly {
     nodeDid: string;
     name: string;
@@ -90,7 +102,11 @@ export type SearchSources = {
     avatar: string | null;
     place: string;
     offline: boolean;
+    current?: boolean;
+    last?: boolean;
   }[];
+  /** the active node's automations, while the Automations page is on */
+  automations: readonly { id: string; name: string; when: string; icon: Icon }[];
   agentName: (session: SessionSummary) => string;
   nodeName: (nodeDid: string) => string;
   places: readonly {
@@ -100,7 +116,13 @@ export type SearchSources = {
     route: Route;
     icon: Icon;
   }[];
-  actions: readonly { key: string; title: string; route: Route; icon: Icon }[];
+  actions: readonly {
+    key: string;
+    title: string;
+    run: () => void;
+    icon: Icon;
+    keys?: string;
+  }[];
 };
 
 export function searchEntries(src: SearchSources): SearchEntry[] {
@@ -117,7 +139,14 @@ export function searchEntries(src: SearchSources): SearchEntry[] {
     ),
     ...src.nodes.map((n) =>
       entry(
-        { kind: "node", nodeDid: n.nodeDid, name: n.name, avatar: n.avatar },
+        {
+          kind: "node",
+          nodeDid: n.nodeDid,
+          name: n.name,
+          avatar: n.avatar,
+          current: n.current,
+          last: n.last,
+        },
         `node:${n.nodeDid}`,
         n.name,
         [n.place, n.offline && "Offline"].filter(Boolean).join(" · "),
@@ -155,6 +184,19 @@ export function searchEntries(src: SearchSources): SearchEntry[] {
         a.pack ? [a.node, a.pack] : [a.node],
       ),
     ),
+    ...src.automations.map((a) =>
+      entry(
+        {
+          kind: "automation",
+          route: { name: "automations", item: a.id },
+          icon: a.icon,
+        },
+        `automation:${a.id}`,
+        a.name,
+        a.when,
+        [a.when],
+      ),
+    ),
     ...src.places.map((p) =>
       entry(
         { kind: "setting", route: p.route, icon: p.icon },
@@ -165,7 +207,13 @@ export function searchEntries(src: SearchSources): SearchEntry[] {
       ),
     ),
     ...src.actions.map((a) =>
-      entry({ kind: "action", route: a.route, icon: a.icon }, a.key, a.title, "", []),
+      entry(
+        { kind: "action", run: a.run, icon: a.icon, keys: a.keys },
+        a.key,
+        a.title,
+        "",
+        [],
+      ),
     ),
   ];
 }
@@ -184,6 +232,7 @@ const LABEL: Record<SearchKind, string> = {
   node: "Nodes",
   session: "Sessions",
   agent: "Agents",
+  automation: "Automations",
   setting: "Settings",
   action: "Actions",
 };
@@ -192,6 +241,7 @@ const ORDER: SearchKind[] = [
   "node",
   "session",
   "agent",
+  "automation",
   "setting",
   "action",
 ];

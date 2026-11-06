@@ -722,7 +722,7 @@ function whenItRuns(deployment: NodeView, t: TaskView) {
   };
 }
 
-function taskDocument(deployment: NodeView, t: TaskView) {
+export function taskDocument(deployment: NodeView, t: TaskView) {
   return {
     node_did: deployment.nodeDid,
     task_id: t.taskId,
