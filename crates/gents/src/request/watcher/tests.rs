@@ -151,38 +151,26 @@ struct ScopedWatcherFixture {
     agent: Arc<dyn crate::store::identity::NodeIdentity>,
     access: crate::ConfigAccess,
     client_access: crate::ConfigAccess,
-    _home: tempfile::TempDir,
+    _home: crate::support::TestDb,
 }
 
 impl ScopedWatcherFixture {
     async fn new() -> Self {
         use crate::store::identity::NodeIdentity;
 
-        let home = tempfile::tempdir().unwrap();
-        let runtime =
-            crate::KeyIdentity::load_or_create(home.path().join("node.key"), None).unwrap();
-        let client =
-            crate::KeyIdentity::load_or_create(home.path().join("client.key"), None).unwrap();
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(runtime.did())
-                .with_node_acp_enabled()
-                .build()
-                .await
-                .unwrap(),
-        );
-        crate::ensure_runtime_schemas(&node).await.unwrap();
-        let client_access =
-            crate::test_support::bootstrap_test_node(&node, &runtime, &client).await;
-        let binding = crate::test_support::install_test_agent_as(
-            &node,
-            &runtime,
-            &client,
-            "Watcher fixture agent",
+        let db = crate::support::test_signed_db("scoped-watcher").await;
+        let (home, _user, client_access, binding) =
+            crate::test_support::signed_test_node_from_db(db, "scoped-watcher-user").await;
+        let node = home.node.clone();
+        let runtime = home.node_identity.clone();
+        let agent =
+            crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
+        let access = crate::ConfigAccess::local_managed_agent(
+            node.clone(),
+            agent.did().parse().unwrap(),
+            agent.as_ref(),
         )
-        .await;
-        let agent = crate::store::identity::resolve_agent_identity(&runtime, &binding).unwrap();
-        let access = crate::ConfigAccess::local_as(node.clone(), agent.did().parse().unwrap());
+        .unwrap();
         Self {
             node,
             node_did: runtime.did().to_owned(),
@@ -819,13 +807,19 @@ async fn revoked_request_is_not_rejected_or_reported_as_terminalized() {
     let mut input = fixture.request_input("req-revoked", "sess-revoked");
     input["request_hop"] = serde_json::json!(1);
     input["caused_by_parent_request_id"] = serde_json::json!("parent-req-exists");
-    let input = gents_protocol::graphql::graphql_input_literal(&input).unwrap();
     let created = fixture
         .client_access
-        .write(
-            "test.watcher.client_request",
-            &format!("mutation {{ create_AgentRequest(input: {input}) {{ _docID }} }}"),
-        )
+        .transact_write("test.watcher.client_request", |txn| {
+            let input = &input;
+            Box::pin(async move {
+                txn.execute_client_signed_create(
+                    "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                    &serde_json::json!({"input": input}),
+                    gents_protocol::schemas::AGENT_REQUEST,
+                )
+                .await
+            })
+        })
         .await
         .unwrap();
     let revoked = crate::store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
@@ -855,20 +849,19 @@ async fn revoked_request_is_not_rejected_or_reported_as_terminalized() {
         .unwrap()
         .is_empty());
 
-    let absent_input = fixture.request_input("req-absent", "sess-absent");
-    let absent_input = gents_protocol::graphql::graphql_input_literal(&absent_input).unwrap();
-    let created = fixture
-        .client_access
-        .write(
-            "test.watcher.absent",
-            &format!("mutation {{ create_AgentRequest(input: {absent_input}) {{ _docID }} }}"),
+    admin
+        .grant_node_permission(
+            &actor,
+            crate::store::config_client::NodePermission::DocumentDelete,
         )
         .await
         .unwrap();
-    let absent = crate::store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
+    let absent = fixture
+        .create_request(fixture.request_input("req-absent", "sess-absent"))
+        .await;
     let absent_doc = crate::store::graphql::escape_graphql_string(&absent);
     let deleted = fixture
-        .client_access
+        .access
         .write(
             "test.watcher.delete_absent",
             &format!(r#"mutation {{ delete_AgentRequest(docID: "{absent_doc}") {{ _docID }} }}"#),
