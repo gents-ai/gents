@@ -1,3 +1,5 @@
+#[path = "cli_enrollment/live_plugin_denial.rs"]
+mod live_plugin_denial;
 #[path = "cli_enrollment/live_delegation.rs"]
 mod live_delegation;
 #[path = "cli_enrollment/live_two_agent.rs"]
