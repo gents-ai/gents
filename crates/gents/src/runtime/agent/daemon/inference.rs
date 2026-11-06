@@ -1733,6 +1733,12 @@ pub(super) mod tests {
             agent_config.node_did().to_string(),
         );
         let request_identity = agent_config.node_identity().clone();
+        let rendered_request_capture_factory =
+            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                node.clone(),
+                agent_config.agent_identity.as_ref(),
+            )
+            .unwrap();
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: node.clone(),
             agent_config,
@@ -1742,11 +1748,7 @@ pub(super) mod tests {
             loop_tools,
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
-            rendered_request_capture_factory: Some(
-                crate::inference::rendered_request::defra_rendered_request_capture_factory(
-                    node.clone(),
-                ),
-            ),
+            rendered_request_capture_factory: Some(rendered_request_capture_factory),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_execution_registry: BackgroundExecutionRegistry::default(),
             startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
@@ -2192,9 +2194,11 @@ pub(super) mod tests {
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                     node.clone(),
-                ),
+                    agent_config.agent_identity.as_ref(),
+                )
+                .unwrap(),
             ),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -2337,9 +2341,11 @@ pub(super) mod tests {
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                     node.clone(),
-                ),
+                    agent_config.agent_identity.as_ref(),
+                )
+                .unwrap(),
             ),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_execution_registry: BackgroundExecutionRegistry::default(),

@@ -86,7 +86,11 @@ async fn admission_gate_waits_for_durable_ready_retry_ack() {
 async fn shutdown_wins_over_a_late_startup_barrier_release() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let status = RuntimeStatusHandle::new(node.clone(), "did:test:lifecycle-race");
+    let node_did = node
+        .node_identity_did()
+        .expect("fixture node has an identity")
+        .to_owned();
+    let status = RuntimeStatusHandle::new(node.clone(), node_did);
     status.initialize_startup("general").await.unwrap();
     let gate = super::super::router::RuntimeAdmissionGate::closed();
     let observer = Arc::new(RecordingObserver::default());
