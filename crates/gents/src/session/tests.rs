@@ -1927,13 +1927,15 @@ async fn concurrent_keyed_appends_resolve_sequence_conflicts_without_duplicates(
 
 #[tokio::test]
 async fn single_header_transaction_matches_bulk_coordinate_validation() {
-    use crate::store::config_client::ConfigAccess;
+    use crate::store::identity::NodeIdentity;
     use canonical_rows::{
         decode_transcript_message_row, transcript_message_create_variables, AGENT_MESSAGE_FIELDS,
         CREATE_AGENT_MESSAGE_MUTATION,
     };
     use gents_protocol::output::MessagePublication;
 
+    let (foreign_db, foreign_user, _foreign_client, _foreign_binding) =
+        crate::test_support::signed_test_node("header-coordinate-foreign").await;
     for case in [
         "unrelated",
         "key",
@@ -1943,25 +1945,32 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
         "requester",
         "fork",
     ] {
-        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        ensure_runtime_schemas(&node).await.unwrap();
-        import_history_observation(
-            &node,
-            "request",
+        let (db, user, client, binding) =
+            crate::test_support::signed_test_node(&format!("header-coordinate-{case}")).await;
+        let node_did = db.node_identity.did();
+        let foreign_did = foreign_db.node_identity.did();
+        let user_did = user.did();
+        let foreign_user_did = foreign_user.did();
+        let agent =
+            crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+                .unwrap();
+        let access = crate::ConfigAccess::local_managed_agent(
+            db.node.clone(),
+            identity::Did::new(agent.did()).unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
+        publish_signed_history(
+            &db,
+            &user,
+            &client,
+            &binding,
             "session",
-            "did:test:owner",
-            None,
-            "accepted",
-            "accepted-key",
-            1,
-            None,
+            &["accepted".into()],
         )
         .await;
-        let result = ConfigAccess::transact_local_write(
-            &node,
-            None,
-            "test.single_header_coordinates",
-            |txn| {
+        let result = access
+            .transact_write("test.single_header_coordinates", |txn| {
                 Box::pin(async move {
                     let response = txn
                         .execute(&format!("{{ AgentMessage {{ {AGENT_MESSAGE_FIELDS} }} }}"))
@@ -1986,9 +1995,9 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
                         "key" => other.sequence = 2,
                         "sequence" => other.message_key = "sequence-twin".into(),
                         "both" => other.native_id = Some("distinct-physical-twin".into()),
-                        "foreign" => other.node_did = "did:test:foreign".into(),
+                        "foreign" => other.node_did = foreign_did.into(),
                         "requester" => {
-                            other.requester_did = Some("did:test:requester".into());
+                            other.requester_did = Some(foreign_user_did.into());
                             other.sequence = 2;
                         }
                         "fork" => {
@@ -2020,30 +2029,35 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
                     let single = output::reader::load_canonical_message_in_txn(
                         txn,
                         &target,
-                        "did:test:owner",
-                        None,
+                        node_did,
+                        Some(user_did),
                     )
                     .await
                     .map_err(|error| format!("{error:#}"));
-                    let bulk = output::reader::TxnCanonicalReader::new(txn, "did:test:owner", None)
-                        .load_message(&target)
-                        .await
-                        .map_err(|error| format!("{error:#}"));
+                    let bulk =
+                        output::reader::TxnCanonicalReader::new(txn, node_did, Some(user_did))
+                            .load_message(&target)
+                            .await
+                            .map_err(|error| format!("{error:#}"));
                     assert_eq!(single, bulk, "single/bulk mismatch for {case}");
                     assert_eq!(single.is_err(), case == "key", "{case}");
                     Ok::<_, anyhow::Error>(())
                 })
-            },
-        )
-        .await;
+            })
+            .await;
         if matches!(case, "sequence" | "both") {
             let error = result.expect_err("the existing session sequence is already occupied");
             assert!(format!("{error:#}").contains("unique index"), "{error:#}");
         } else {
             result.unwrap();
         }
-        node.shutdown().await.expect("shut down test node");
+        db.node.shutdown().await.expect("shut down test node");
     }
+    foreign_db
+        .node
+        .shutdown()
+        .await
+        .expect("shut down foreign test node");
 }
 
 #[tokio::test]
