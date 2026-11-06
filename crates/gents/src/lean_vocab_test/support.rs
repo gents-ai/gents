@@ -441,6 +441,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) pack_wire_lock_cases: Vec<serde_json::Value>,
     pub(crate) pack_wire_target_cases: Vec<serde_json::Value>,
     pub(crate) pack_finality_cases: Vec<serde_json::Value>,
+    pub(crate) hosted_pack_evidence_cases: Vec<serde_json::Value>,
     pub(crate) readiness_publication_cases: Vec<LeanReadinessPublicationCase>,
     pub(crate) apply_reconcile_cases: Vec<LeanApplyReconcileCase>,
     pub(crate) eval_outcome_cases: Vec<LeanEvalOutcomeCase>,

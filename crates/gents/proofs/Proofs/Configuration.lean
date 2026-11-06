@@ -616,6 +616,23 @@ def retainPluginPublication : PackDocumentOutcome → Bool
 theorem rejected_document_restores_plugin : retainPluginPublication .callbackRejected = false := rfl
 theorem unknown_commit_keeps_plugin : retainPluginPublication .unconfirmed = true := rfl
 
+/-- A hosted document effect is admitted only for the authenticated client,
+after verifying its signed graph against this transaction's snapshot and the
+client-approved pack plan. Native document ACP remains authoritative. -/
+def hostedPackEffectAllowed (actorMatches graphVerified planApproved nativeAuthorized : Bool) : Bool :=
+  actorMatches && graphVerified && planApproved && nativeAuthorized
+
+theorem hosted_effect_requires_verified_graph (actor plan native : Bool) :
+    hostedPackEffectAllowed actor false plan native = false := by
+  simp [hostedPackEffectAllowed]
+
+theorem hosted_effect_requires_approved_plan (actor graph native : Bool) :
+    hostedPackEffectAllowed actor graph false native = false := by
+  simp [hostedPackEffectAllowed]
+
+def hostedPackEffectCases : List (Bool × Bool) :=
+  [(false, false), (false, true), (true, false), (true, true)]
+
 /-- Once a commit request may have succeeded, later failed attempts cannot
 prove that the earlier attempt did not commit. A successful receipt resolves
 the operation; otherwise only histories with no uncertain commit may restore. -/

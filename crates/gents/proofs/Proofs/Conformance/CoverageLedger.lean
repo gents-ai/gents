@@ -797,6 +797,12 @@ def caseCoverage : List CoverageEntry :=
       "Binds callback rejection, lost receipt and a later failed retry to the shared transaction owner.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "hosted_pack_evidence_cases"
+      "HostedPackEvidenceCases"
+      "store::config_client::client_pack_evidence::tests::verified_pack_evidence_binds_mutation_actor_and_snapshot"
+      "Binds client signer and exact create graph to an embedded transaction. Plan approval, native denial, update and delete coverage remain to be exercised.")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "agent_steer_disposition_cases"
       "AgentSteerDispositionCases"
       "session_message::agent_tools_tests::explicit_steer_checks_the_physical_head_at_publication"

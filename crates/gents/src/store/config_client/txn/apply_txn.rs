@@ -46,6 +46,7 @@ pub struct ConfigApplyTxn<'a> {
 
 pub(super) enum EmbeddedTransactionPurpose {
     Mutation,
+    VerifiedClient,
     ExecutionRenewal(Arc<NativeOperationTracker>),
     ReadOnly,
 }
@@ -136,12 +137,12 @@ impl<'a> ConfigApplyTxn<'a> {
     ) -> Result<ConfigApplyTxn<'txn>> {
         let read_only = matches!(&purpose, EmbeddedTransactionPurpose::ReadOnly);
         super::gate::validate_managed_signer(node, identity.as_ref(), agent_signer.as_ref())?;
-        if !read_only {
+        if !read_only && !matches!(&purpose, EmbeddedTransactionPurpose::VerifiedClient) {
             super::gate::require_mutation_signer(node, identity.as_ref(), agent_signer.as_ref())?;
         }
         let native_gate = mutation_write_gate(node);
         let write_guard = match &purpose {
-            EmbeddedTransactionPurpose::Mutation => {
+            EmbeddedTransactionPurpose::Mutation | EmbeddedTransactionPurpose::VerifiedClient => {
                 Some(Arc::clone(&native_gate).acquire(operation).await?)
             }
             EmbeddedTransactionPurpose::ExecutionRenewal(_)
@@ -149,7 +150,9 @@ impl<'a> ConfigApplyTxn<'a> {
         };
         let native_operations = match purpose {
             EmbeddedTransactionPurpose::ExecutionRenewal(native_operations) => native_operations,
-            EmbeddedTransactionPurpose::Mutation | EmbeddedTransactionPurpose::ReadOnly => {
+            EmbeddedTransactionPurpose::Mutation
+            | EmbeddedTransactionPurpose::VerifiedClient
+            | EmbeddedTransactionPurpose::ReadOnly => {
                 Arc::new(NativeOperationTracker::default())
             }
         };

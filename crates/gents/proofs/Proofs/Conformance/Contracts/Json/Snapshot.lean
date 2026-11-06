@@ -747,6 +747,7 @@ def snapshotClientCasesJson : String :=
     ++ "\"pack_wire_lock_cases\":" ++ PackInstallation.wireLockCasesJson ++ ","
     ++ "\"pack_wire_target_cases\":" ++ PackInstallation.wireTargetCasesJson ++ ","
     ++ "\"pack_finality_cases\":" ++ PackInstallation.finalityCasesJson ++ ","
+    ++ "\"hosted_pack_evidence_cases\":" ++ PackInstallation.evidenceCasesJson ++ ","
     ++ "\"pack_identity_cases\":" ++ PackInstallation.identityCasesJson ++ ","
     ++ "\"pack_identity_reference_cases\":" ++ PackInstallation.identityReferenceCasesJson ++ ","
     ++ "\"pack_eval_subject_cases\":" ++ PackInstallation.evalSubjectCasesJson ++ ","

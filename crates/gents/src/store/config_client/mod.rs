@@ -19,7 +19,12 @@ mod agent_behavior;
 mod agent_signer_conformance;
 mod application_failure;
 mod client_agent_publication;
+mod client_pack_evidence;
 mod client_signed_agent;
+pub use client_pack_evidence::{
+    apply_pack_evidence, prepare_pack_evidence, verify_pack_evidence, PackEvidence, PackEvidenceError,
+    PackMutation, VerifiedPackEvidence,
+};
 pub use client_signed_agent::prepare_request_evidence;
 pub use client_signed_agent::ClientSigningCapability;
 pub(crate) use client_signed_agent::{
@@ -57,6 +62,7 @@ mod txn;
 pub use acp::nac::NodePermission;
 pub use subscription::GraphqlSubscription;
 pub use txn::TRACING_TARGET as TXN_TRACING_TARGET;
+pub use txn::{VerifiedPackTransactionError, VerifiedPackTxn};
 pub(crate) mod write_telemetry;
 
 pub(crate) fn is_transaction_step_unavailable<E>(error: &E) -> bool

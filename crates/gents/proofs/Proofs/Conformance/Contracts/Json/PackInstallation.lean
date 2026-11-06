@@ -3,6 +3,13 @@ import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.Contracts.PackInstallation
 
+def evidenceCasesJson : String := jsonArray (Configuration.hostedPackEffectCases.map fun
+    (actor, graph) =>
+  "{\"actor_matches\":" ++ toString actor ++
+    ",\"graph_verified\":" ++ toString graph ++
+    ",\"allowed\":" ++ toString
+      (Configuration.hostedPackEffectAllowed actor graph true true) ++ "}")
+
 def finalityCasesJson : String := jsonArray (Configuration.packFinalityCases.map fun attempts =>
   let name := fun event : Configuration.PackAttemptEvidence => match event with
     | .noCommit => "no_commit" | .unknownCommit => "unknown_commit"

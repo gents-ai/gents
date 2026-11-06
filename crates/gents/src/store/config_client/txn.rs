@@ -13,6 +13,7 @@ mod telemetry;
 mod transact;
 mod transact_entry;
 mod verified_edit_request;
+mod verified_pack;
 mod verified_request;
 
 use std::time::Duration;
@@ -30,6 +31,7 @@ pub use native::{NativeOperationAbandoned, ReentrantEmbeddedWrite};
 #[cfg(test)]
 pub(super) use transact::client_signed_write_may_retry;
 pub use transact::IdempotentTransactionRetry;
+pub use verified_pack::{VerifiedPackTransactionError, VerifiedPackTxn};
 
 /// Tracing target of DefraDB transaction and read telemetry; tests observe it by this name.
 pub const TRACING_TARGET: &str = module_path!();
