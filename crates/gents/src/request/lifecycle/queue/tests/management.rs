@@ -105,7 +105,7 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             .await;
             bound.insert(
                 active,
-                response["create_AgentRequest"][0]["_docID"].as_str().map(str::to_owned).unwrap(),
+                crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap(),
             );
             names.insert(active, active.to_string());
         }
@@ -132,7 +132,7 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
                     );
                 }
                 let response = agent_write(&db, "test.management.seed", &mutation).await;
-                response["create_AgentRequest"][0]["_docID"].as_str().map(str::to_owned).unwrap()
+                crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
             };
             bound.insert(entry.request_id, id);
         }
