@@ -2400,3 +2400,149 @@ async fn signed_http_advertisement_activates_an_iroh_only_runtime_endpoint() {
     );
     Arc::new(core).shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn thin_client_publishes_signed_enrollment_without_a_node_document() -> Result<()> {
+    use gents::defra_node::{AcpIdentity, DocumentPermission};
+    use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
+
+    let directory = tempfile::tempdir()?;
+    let address = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?;
+    let mut options = super::super::ClientCoreOptions::local_only();
+    options.http_addr = Some(address);
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(directory.path().join("client")),
+        options,
+    )
+    .await?;
+    if let Some(supervisor) = core.p2p_supervisor.lock().await.take() {
+        supervisor.abort();
+        let _ = supervisor.await;
+    }
+    let admin =
+        PrincipalIdentity::load_or_create(&DesktopPaths::from_root(directory.path().join("admin")))
+            .await?;
+    let user =
+        PrincipalIdentity::load_or_create(&DesktopPaths::from_root(directory.path().join("user")))
+            .await?;
+    let agent =
+        PrincipalIdentity::load_or_create(&DesktopPaths::from_root(directory.path().join("agent")))
+            .await?;
+    let outsider = PrincipalIdentity::load_or_create(&DesktopPaths::from_root(
+        directory.path().join("outsider"),
+    ))
+    .await?;
+    let authority = signed_enrollment_authority_with_owner_at(
+        &admin,
+        core.node_identity(),
+        core.local_peer_id(),
+        Utc::now(),
+        "thin-client",
+        admin.did(),
+    );
+    assert!(
+        core.node_identity()
+            .verify(
+                admin.did(),
+                &authority.offer.signing_payload(),
+                &authority.offer.admin_sig
+            )
+            .await?
+    );
+    assert!(
+        core.node_identity()
+            .verify(
+                core.node_identity().did(),
+                &authority.request.signing_payload(),
+                &authority.request.candidate_sig
+            )
+            .await?
+    );
+    let runtime = identity::Did::new(core.node_identity().did())?;
+    let local = ConfigAccess::local_as(core.node_arc(), runtime.clone());
+    let nodes = local.execute("{ Node { _docID } }").await?;
+    assert!(gents_protocol::graphql::graphql_rows_from_response(&nodes, "Node").is_empty());
+    let doc = write_enrollment_request(&core.node, &authority.request).await?;
+    let snapshot: Value = gents_lean_contract::load_contract_snapshot()?;
+    let cases = snapshot["identity_enrollment_policy_cases"]
+        .as_array()
+        .context("missing enrollment policy cases")?;
+    let expected = |name: &str| -> Result<bool> {
+        cases
+            .iter()
+            .find(|case| case["name"] == name)
+            .and_then(|case| case["allowed"].as_bool())
+            .with_context(|| format!("missing enrollment policy case {name}"))
+    };
+    let acp = core.node.document_acp();
+    let policy = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
+    assert_eq!(
+        acp.get_doc_owner(policy, "enrollment_records", &doc)
+            .await?,
+        Some(runtime)
+    );
+    let access = |actor: &PrincipalIdentity| -> Result<ConfigAccess> {
+        Ok(ConfigAccess::Graphql(
+            GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())
+                .with_client_signing_capability(actor.client_signing_capability()?)?,
+        ))
+    };
+    let query = format!(
+        r#"{{ NetworkEnrollmentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID offer_token}} }}"#,
+        escape_graphql_string(&doc)
+    );
+    for (name, actor, permission) in [
+        (
+            "thin-client-write",
+            core.node_identity(),
+            DocumentPermission::Update,
+        ),
+        ("thin-admin-read", &admin, DocumentPermission::Read),
+        ("thin-admin-write", &admin, DocumentPermission::Update),
+        ("thin-user-read", &user, DocumentPermission::Read),
+        ("thin-agent-read", &agent, DocumentPermission::Read),
+        ("thin-outsider-read", &outsider, DocumentPermission::Read),
+    ] {
+        let actual = acp
+            .check_doc_access(
+                &AcpIdentity::Authenticated(identity::Did::new(actor.did())?),
+                permission,
+                policy,
+                "enrollment_records",
+                &doc,
+            )
+            .await?;
+        assert_eq!(actual, expected(name)?, "{name}");
+    }
+    for (name, actor) in [
+        ("thin-admin-read", &admin),
+        ("thin-user-read", &user),
+        ("thin-agent-read", &agent),
+        ("thin-outsider-read", &outsider),
+    ] {
+        let response = access(actor)?.execute(&query).await?;
+        assert_eq!(
+            !gents_protocol::graphql::graphql_rows_from_response(
+                &response,
+                "NetworkEnrollmentRequest"
+            )
+            .is_empty(),
+            expected(name)?,
+            "{name}"
+        );
+    }
+    let mutation = format!(
+        r#"mutation {{ update_NetworkEnrollmentRequest(docID: "{}", input: {{offer_token: "{}"}}) {{_docID}} }}"#,
+        escape_graphql_string(&doc),
+        escape_graphql_string(&authority.offer_token)
+    );
+    let denied = access(&admin)?
+        .write("test.enrollment.client_denied_write", &mutation)
+        .await;
+    assert!(!denied.as_ref().is_ok_and(|response| {
+        gents_protocol::graphql::extract_mutation_doc_id(response, "NetworkEnrollmentRequest")
+            .is_ok()
+    }));
+    Arc::new(core).shutdown().await?;
+    Ok(())
+}
