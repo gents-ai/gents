@@ -43,16 +43,7 @@ pub(super) async fn profile_set_account(args: InferenceProfileSetAccountArgs) ->
         &args.profile,
     )?;
     let output = match args.account.as_deref() {
-        None => {
-            list_candidates(
-                &access,
-                &node_did,
-                &args.profile,
-                &slots,
-                args.home.as_deref(),
-            )
-            .await?
-        }
+        None => list_candidates(&access, &node_did, &args.profile, &slots).await?,
         Some(account) => {
             set_account(
                 &access,
@@ -90,12 +81,11 @@ async fn list_candidates(
     node_did: &str,
     profile_id: &str,
     plugin_slots: &[String],
-    home: Option<&std::path::Path>,
 ) -> Result<Value> {
     let observations = if let ConfigAccess::Graphql(graphql) = access {
-        let identity = crate::commands::p2p::enrollment_admin::resolve_home_identity(home)?;
+        let identity = crate::load_client_identity().await?;
         crate::commands::accounts::request_usage_reads(
-            identity.as_ref(),
+            &identity,
             graphql,
             gents::inference::usage_observation::UsageTrigger::Cached,
             None,
@@ -869,11 +859,11 @@ mod tests {
             ),
             (
                 gents::Collection::Agent,
-                json!({"node_did": DID, "agent_id": "x", "context_id": "context-x", "inference_profile_id": "p-original"}),
+                json!({"node_did": DID, "agent_did": "x", "context_id": "context-x", "inference_profile_id": "p-original"}),
             ),
             (
                 gents::Collection::Agent,
-                json!({"node_did": DID, "agent_id": "y", "inference_profile_id": "p-original"}),
+                json!({"node_did": DID, "agent_did": "y", "inference_profile_id": "p-original"}),
             ),
         ]
         .into_iter()
@@ -901,7 +891,7 @@ mod tests {
     async fn set_account_without_an_account_lists_the_candidates() {
         let (access, b_backend, _) = seeded().await;
         with_agents(&access).await;
-        let output = list_candidates(&access, DID, "p-original", &[], None)
+        let output = list_candidates(&access, DID, "p-original", &[])
             .await
             .unwrap();
         assert_eq!(output["profile"], json!("p-original"));

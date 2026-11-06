@@ -23,7 +23,7 @@ def participant_key(value: dict[str, Any]) -> tuple[Any, ...]:
     return (
         value.get("role"),
         value.get("node_did"),
-        value.get("agent_id"),
+        value.get("agent_did"),
     )
 
 
@@ -41,7 +41,7 @@ def delegation_key(value: dict[str, Any]) -> tuple[Any, ...]:
         value.get("child_request_id"),
         value.get("parent_tool_call_id"),
         value.get("node_did"),
-        value.get("agent_id"),
+        value.get("agent_did"),
         value.get("status"),
     )
 
@@ -83,7 +83,7 @@ def verify_capture_export(capture_path: Path, export_dir: Path) -> None:
     assert export["projection_id"] == "multi_agent_task", export
     assert export["source_request_id"] == mapping["request_id"], export
     assert export["redaction_mode"] == capture["envelope"]["redaction_mode"], export
-    for key in ("source_session_id", "source_agent_id"):
+    for key in ("source_session_id", "source_agent_did"):
         assert export.get(key) == capture["envelope"].get(key), (
             f"{key} mismatch: expected {capture['envelope'].get(key)!r}, "
             f"got {export.get(key)!r}"

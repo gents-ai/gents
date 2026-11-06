@@ -1,9 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
-import { bridgeCommand } from "@source-inc/gents-desktop-client";
+import {
+  bridgeCommand,
+  type DesktopClientSnapshot,
+} from "@source-inc/gents-desktop-client";
 import { runNativeLocalE2e, type NativeLocalSetup } from "./nativeLocalE2e";
 
 import {
   sessionRowCount,
+  completedReconnectSession,
   findAgentChatButton,
   findAgentDeploymentControl,
   findAssistantResponseMarker,
@@ -28,6 +32,7 @@ type NativeE2eConfig = {
   expectedResponse: string;
   expectEmptySessionSlice: boolean;
   correlationId: string;
+  reconnectRealInference: boolean;
   measurePerformance: boolean;
   localSetup?: NativeLocalSetup | null;
 };
@@ -108,7 +113,9 @@ async function runNativeSimulatorE2e() {
     await reportStatus({ stage: "starting" });
     await waitFor(
       () =>
-        /Sessions|Let’s get set up|Nodes/.test(document.body.textContent ?? "")
+        /Sessions|Let’s get set up|Connect to your node|Nodes/.test(
+          document.body.textContent ?? "",
+        )
           ? document.body
           : null,
       30_000,
@@ -127,10 +134,19 @@ async function runNativeSimulatorE2e() {
       await reportStatus({ stage: "enrollment" });
       await enrollNode(config);
       await waitFor(
-        () => findAgentDeploymentControl(config.agentLabel),
+        () =>
+          findAgentDeploymentControl(config.agentLabel) ??
+          (config.correlationId.startsWith("ios-reconnect-")
+            ? findNewSessionScreen(config.agentLabel)
+            : null),
         300_000,
         `${config.agentLabel} deployment`,
       );
+    }
+    if (config.correlationId.startsWith("ios-reconnect-")) {
+      await runReconnectScenario(config);
+      await reportStatus({ stage: "passed" });
+      return;
     }
     await reportStatus({ stage: "waiting-ready" });
     const currentChatButton = await waitFor(
@@ -215,24 +231,6 @@ async function runNativeSimulatorE2e() {
       `${config.agentLabel} terminal turn state`,
     );
 
-    await reportStatus({ stage: "waiting-hydration" });
-    await waitFor(
-      () => {
-        const status = document.querySelector<HTMLElement>(
-          '[data-testid="session-loading-status"]',
-        );
-        if (
-          status?.dataset.loadingLayer === "sessionSync" &&
-          status.dataset.loadingPhase === "failed"
-        ) {
-          throw new Error(status.textContent?.trim() || "Session hydration failed");
-        }
-        return status?.dataset.loadingLayer === "sessionSync" ? null : document.body;
-      },
-      180_000,
-      `${config.agentLabel} completed session hydration`,
-    );
-
     await reportStatus({ stage: "passed" });
   } catch (error) {
     const detail = errorText(error);
@@ -240,48 +238,312 @@ async function runNativeSimulatorE2e() {
   }
 }
 
-async function enrollNode(config: NativeE2eConfig) {
-  const disclosure = await waitFor(
-    () =>
-      document.querySelector<HTMLElement>(
-        '[data-testid="fleet-remote-disclosure"] summary',
-      ),
+async function runReconnectScenario(config: NativeE2eConfig) {
+  const snapshot = () =>
+    invoke<DesktopClientSnapshot>(bridgeCommand("desktop_client_snapshot"));
+  const metrics = () =>
+    invoke<{ events_received: number } | null>(
+      bridgeCommand("desktop_observer_metrics"),
+    );
+  const initial = await waitForAsync(async () => {
+    const deployments = (await snapshot()).client?.deployments ?? [];
+    const matches = deployments.filter(
+      (deployment) => deployment.label === config.agentLabel,
+    );
+    return matches.length === 1 && matches[0].runtimeConnection === "connected"
+      ? matches[0]
+      : null;
+  }, "connected isolated runtime");
+  const nodeDid = initial.nodeDid;
+  const agent = initial.agentConfigs.find(
+    (row) => row.agent_did === initial.node.defaultAgentDid,
+  );
+  if (!agent) throw new Error("Isolated reconnect agent is missing");
+  if (!findNewSessionScreen(config.agentLabel)) {
+    const chat = await waitFor(
+      () => findAgentChatButton(config.agentLabel),
+      180_000,
+      "isolated runtime chat control",
+    );
+    chat.click();
+    const newSession = await waitFor(
+      () =>
+        document.querySelector<HTMLButtonElement>(
+          '[data-testid="session-new"]:not(:disabled)',
+        ),
+      180_000,
+      "isolated runtime new-session control",
+    );
+    newSession.click();
+    const newChat = await waitFor(
+      () => findNewChatButton(config.agentLabel),
+      180_000,
+      "isolated runtime new-chat control",
+    );
+    newChat.click();
+  }
+  await waitFor(
+    () => findNewSessionScreen(config.agentLabel),
     30_000,
-    "remote-node disclosure",
+    "new-session screen",
   );
-  disclosure.click();
+  if (config.reconnectRealInference) {
+    await runReconnectInferenceTurn(config, nodeDid, agent.agent_did, "before");
+    await returnToNewSession(config.agentLabel);
+  }
+  const offlineName = `${config.correlationId}-offline`;
+  const liveName = `${config.correlationId}-live`;
+  const deployment = async () =>
+    (await snapshot()).client?.deployments.find((row) => row.nodeDid === nodeDid);
 
-  const serverAddressInput = await waitFor(
-    () =>
-      document.querySelector<HTMLInputElement>(
-        '[data-testid="fleet-add-server-address"]',
-      ),
-    10_000,
-    "server address input",
+  await reportStatus({ stage: "reconnect-arm" });
+  await waitForAsync(
+    async () =>
+      (await deployment())?.runtimeConnection === "disconnected" ? true : null,
+    "runtime disconnection",
   );
-  setControlledValue(serverAddressInput, config.serverAddress);
+  await reportStatus({ stage: "reconnect-offline" });
+  await waitForAsync(async () => {
+    const row = await deployment();
+    return row?.runtimeConnection === "connected" &&
+      row.agentConfigs.some(
+        (item) =>
+          item.agent_did === agent.agent_did && item.display_name === offlineName,
+      ) &&
+      document
+        .querySelector('[data-testid="session-screen"]')
+        ?.textContent?.includes(offlineName)
+      ? true
+      : null;
+  }, "offline change in the reconnected snapshot and UI");
+  const baseline = await metrics();
+  if (!baseline) throw new Error("Observer metrics are unavailable");
+  await reportStatus({ stage: "reconnect-caught-up" });
+  await waitForAsync(async () => {
+    const row = await deployment();
+    const observed = await metrics();
+    return row?.runtimeConnection === "connected" &&
+      row.agentConfigs.some(
+        (item) => item.agent_did === agent.agent_did && item.display_name === liveName,
+      ) &&
+      document
+        .querySelector('[data-testid="session-screen"]')
+        ?.textContent?.includes(liveName) &&
+      observed &&
+      observed.events_received > baseline.events_received
+      ? true
+      : null;
+  }, "post-reconnect live change in the snapshot and UI");
+  if (config.reconnectRealInference) {
+    await runReconnectInferenceTurn(config, nodeDid, agent.agent_did, "after");
+  }
+}
 
-  const submit = await waitFor(
+async function runReconnectInferenceTurn(
+  config: NativeE2eConfig,
+  nodeDid: string,
+  agentDid: string,
+  phase: "before" | "after",
+) {
+  const initial = await invoke<DesktopClientSnapshot>(
+    bridgeCommand("desktop_client_snapshot"),
+  );
+  const clientDid = initial.client?.clientDid;
+  const deployment = initial.client?.deployments.find((row) => row.nodeDid === nodeDid);
+  if (!clientDid || !deployment)
+    throw new Error("Held client or runtime is unavailable");
+  if (clientDid === nodeDid || clientDid === agentDid)
+    throw new Error("Reconnect inference requires a distinct held client identity");
+  const existingSessions = new Set(
+    deployment.sessions.map((session) => session.sessionId),
+  );
+  const suffix = config.correlationId.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  const marker = `GENTS_RECONNECT_${phase.toUpperCase()}_${suffix}`;
+  const prompt = `Reply with exactly this text and nothing else: ${marker}`;
+  const editor = await waitFor(
+    () => {
+      const field = document.querySelector<HTMLElement>(
+        '[data-testid="composer"] [contenteditable="true"]',
+      );
+      return field && !field.closest("[inert]") ? field : null;
+    },
+    30_000,
+    `${phase} reconnect chat composer`,
+  );
+  editor.focus();
+  const selection = window.getSelection();
+  if (!selection) throw new Error("Cannot select the chat composer");
+  const range = document.createRange();
+  range.selectNodeContents(editor);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  if (!document.execCommand("insertText", false, prompt)) {
+    throw new Error("Could not enter the reconnect inference prompt");
+  }
+  const send = await waitFor(
     () => {
       const button = document.querySelector<HTMLButtonElement>(
-        '[data-testid="fleet-fetch-status"]',
+        '[data-testid="composer"] button[aria-label="Send"]',
       );
       return button && !button.disabled ? button : null;
     },
+    30_000,
+    `${phase} reconnect send button`,
+  );
+  send.click();
+  let lastEvidence: {
+    runtimeConnection: string | null;
+    newSessions: Array<{
+      sessionId: string;
+      agentDid: string | null;
+      requesterDid: string | null;
+      requestId: string | null;
+      turnState: string | null;
+    }>;
+    assistantMarkerVisible: boolean;
+  } = { runtimeConnection: null, newSessions: [], assistantMarkerVisible: false };
+  let completed: {
+    nodeDid: string;
+    clientDid: string;
+    agentDid: string;
+    sessionId: string;
+    requestId: string | null;
+  };
+  try {
+    completed = await waitForAsync(async () => {
+      const snapshot = await invoke<DesktopClientSnapshot>(
+        bridgeCommand("desktop_client_snapshot"),
+      );
+      const current = snapshot.client?.deployments.find(
+        (row) => row.nodeDid === nodeDid,
+      );
+      const sessions = current?.sessions ?? [];
+      const assistantMarkerVisible = Boolean(
+        findAssistantResponseMarker(document, marker),
+      );
+      lastEvidence = {
+        runtimeConnection: current?.runtimeConnection ?? null,
+        newSessions: sessions
+          .filter((session) => !existingSessions.has(session.sessionId))
+          .map((session) => ({
+            sessionId: session.sessionId,
+            agentDid: session.agentDid ?? null,
+            requesterDid: session.requesterDid ?? null,
+            requestId: session.latestRequestId ?? null,
+            turnState: session.turnState ?? null,
+          })),
+        assistantMarkerVisible,
+      };
+      const session = completedReconnectSession(
+        sessions,
+        existingSessions,
+        agentDid,
+        clientDid,
+      );
+      if (!session || !assistantMarkerVisible) return null;
+      return {
+        nodeDid,
+        clientDid,
+        agentDid,
+        sessionId: session.sessionId,
+        requestId: session.latestRequestId,
+      };
+    }, `${phase} reconnect inference completion`);
+  } catch (error) {
+    throw new Error(
+      `${errorText(error)}; last observation: ${JSON.stringify(lastEvidence)}`,
+    );
+  }
+  await reportStatus({
+    stage: `reconnect-${phase}-turn`,
+    detail: JSON.stringify(completed),
+  });
+}
+
+async function returnToNewSession(label: string) {
+  const menu = await waitFor(
+    () => document.querySelector<HTMLButtonElement>('button[aria-label="Menu"]'),
+    30_000,
+    "mobile navigation menu",
+  );
+  menu.click();
+  const newSession = await waitFor(
+    () =>
+      Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"] a span'))
+        .find((label) => label.textContent?.trim() === "New session")
+        ?.closest<HTMLAnchorElement>("a") ?? null,
+    30_000,
+    "new-session navigation",
+  );
+  newSession.click();
+  await waitFor(
+    () => findNewSessionScreen(label),
+    30_000,
+    "new-session screen after inference",
+  );
+}
+
+function findNewSessionScreen(label: string): HTMLElement | null {
+  const screen = document.querySelector<HTMLElement>('[data-testid="session-screen"]');
+  return screen?.textContent?.includes(label) ? screen : null;
+}
+
+async function waitForAsync<T>(
+  sample: () => Promise<T | null>,
+  description: string,
+): Promise<T> {
+  const deadline = window.performance.now() + 180_000;
+  while (window.performance.now() < deadline) {
+    const value = await sample();
+    if (value) return value;
+    await delay(250);
+  }
+  throw new Error(`Timed out waiting for ${description}`);
+}
+
+async function enrollNode(config: NativeE2eConfig) {
+  const onboardingInput = await waitFor(
+    () =>
+      document.querySelector<HTMLInputElement>(
+        'input[placeholder="https://gents.example.net:8787"]',
+      ),
+    30_000,
+    "server address input",
+  );
+  setControlledValue(onboardingInput, config.serverAddress);
+
+  const submit = await waitFor(
+    () => findEnabledButton("Request access"),
     10_000,
     "enabled enrollment request button",
   );
   submit.click();
 
   const requestId = await waitFor(
-    () =>
-      document
-        .querySelector<HTMLElement>('[data-testid="fleet-import-status"]')
-        ?.textContent?.match(/Enrollment request (\S+) sent/)?.[1] ?? null,
+    () => {
+      const label = Array.from(document.querySelectorAll("dt")).find(
+        (item) => item.textContent?.trim() === "Request",
+      );
+      return label?.nextElementSibling?.textContent?.trim() || null;
+    },
     30_000,
     "enrollment request ID",
   );
   await reportStatus({ stage: "enrollment-pending", detail: requestId });
+  const proceed = await waitFor(
+    () => findEnabledButton("Continue"),
+    300_000,
+    "approved enrollment continuation",
+  );
+  proceed.click();
+}
+
+function findEnabledButton(label: string): HTMLButtonElement | null {
+  return (
+    Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === label && !button.disabled,
+    ) ?? null
+  );
 }
 
 function setControlledValue(
@@ -312,9 +574,7 @@ async function waitFor<T>(
     if (value) {
       return value;
     }
-    const enrollmentError = document.querySelector<HTMLElement>(
-      '[data-testid="fleet-import-status"].fleet-inline-error',
-    );
+    const enrollmentError = document.querySelector<HTMLElement>('[role="alert"]');
     if (enrollmentError?.textContent?.trim()) {
       throw new Error(enrollmentError.textContent.trim());
     }

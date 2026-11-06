@@ -16,8 +16,6 @@ pub(crate) use file_tools::change_capture::{FileChanges, VerifiedUnchanged};
 pub(crate) use file_tools::file_contents;
 mod goal;
 pub(crate) mod lsp;
-#[cfg(feature = "agent-memory")]
-mod memory;
 mod native_runner;
 pub use native_runner::enable_self_runner;
 pub(crate) mod session_history;
@@ -28,6 +26,7 @@ pub use title_audit_usage::{ParentAuditUsage, ParentAuditUsageObservation};
 mod shared;
 pub(crate) use shared::is_secret_env_name;
 mod session_message;
+pub(crate) mod skills;
 #[cfg(test)]
 mod tests;
 
@@ -67,13 +66,6 @@ pub(crate) fn write_capable_bash_for_test(
 }
 
 #[cfg(test)]
-pub(crate) fn write_file_for_test(root: &std::path::Path) -> Box<dyn ToolDyn> {
-    Box::new(WriteFileTool::new(
-        ToolContext::new(root.to_path_buf(), false).unwrap(),
-    ))
-}
-
-#[cfg(test)]
 pub(crate) fn cli_tool_for_test(
     config: CliToolConfig,
 ) -> Box<dyn crate::inference::llm::tool::ToolDyn> {
@@ -95,8 +87,6 @@ pub use lsp::{
     lsp_action_authorized, lsp_advertised, lsp_apply_authorized, result_looks_failed,
     result_path_matches, LspAction, LspMutationSource,
 };
-#[cfg(feature = "agent-memory")]
-pub use memory::{build_memory_tool, MEMORY_TOOL_NAME};
 pub use session_history::{
     build_session_history_tool, load_latest_session_context_calls,
     load_pinned_request_context_observation, load_request_context_observation,

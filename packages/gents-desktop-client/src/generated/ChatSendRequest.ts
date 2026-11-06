@@ -13,7 +13,7 @@ requestId?: string | null,
  * Existing local client DID captured with the operation, so switching
  * history identities cannot reinterpret an unresolved caller operation.
  */
-clientDid?: string | null, nodeDid: string, agentId?: string | null, sessionId?: string | null, content: string, capturedContext?: Array<CapturedContext> | null, attachments?: Array<RequestAttachment> | null, delivery?: QueueDelivery | null, causedBySourceDocId?: string | null, answer?: MailboxQuestionAnswer | null, cwd?: string | null,
+clientDid?: string | null, nodeDid: string, agentDid?: string | null, sessionId?: string | null, content: string, capturedContext?: Array<CapturedContext> | null, attachments?: Array<RequestAttachment> | null, delivery?: QueueDelivery | null, causedBySourceDocId?: string | null, answer?: MailboxQuestionAnswer | null, cwd?: string | null,
 /**
  * Reconcile this earlier send whose delivery is unknown instead of sending
  * a new request; the original signed request is replayed or confirmed.

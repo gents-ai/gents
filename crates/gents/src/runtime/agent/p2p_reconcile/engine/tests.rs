@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use events::Bus;
 use tokio_util::sync::CancellationToken;
 
@@ -33,4 +33,3 @@ include!("tests/reconnect.rs");
 include!("tests/topology.rs");
 include!("tests/applied_state.rs");
 include!("tests/convergence.rs");
-include!("tests/delivery.rs");

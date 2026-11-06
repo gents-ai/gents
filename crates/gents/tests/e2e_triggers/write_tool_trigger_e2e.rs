@@ -1,19 +1,19 @@
-use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::EmbeddedNode;
 use gents::documents::{WriteToolDecl, WriteToolField};
 use gents::inference::llm::tool::Tool;
 use gents::store::graphql::escape_graphql_string;
 use gents::tools::builtin::defra_write::BoundedWriteTool;
-use gents::{Collection, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
+use gents::{Collection, ConfigAccess, DocumentRuntimeOptions, Gents, ToolCeiling};
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};
 
-use crate::support::fixtures::{bind_default_agent_backend, test_identity};
+use crate::support::fixtures::bind_managed_agent_backend;
 use crate::support::mock_endpoint::MockModelEndpoint;
-use crate::support::snapshots::{fetch_runtime_snapshot, is_routed_ready_after, RuntimeSnapshot};
-use crate::support::test_db;
+use crate::support::snapshots::{
+    fetch_runtime_snapshot_as, is_routed_ready_after, RuntimeSnapshot,
+};
+use crate::support::{managed_agent_fixture, test_db, ManagedAgentFixture};
 
 const DRIFT_SIG: &str = "drift:host-doc:9f2c";
 const SUMMARY: &str = "studio-1 host doc is stale vs runtime";
@@ -21,27 +21,30 @@ const TARGET_PATHS: &str = "infra/hosts/studio-1/host.md";
 const PROMPT_TEMPLATE: &str =
     "drift={{ doc.drift_sig }} summary={{ doc.summary }} paths={{ doc.target_paths }}";
 
-async fn register_action_request_schema(node: &EmbeddedNode) {
-    let sdl = r#"
-        type ActionRequest {
-            drift_sig: String
-            summary: String
-            target_paths: String
-            status: String @index
-        }
-    "#;
-    node.add_collection(sdl)
+const ACTION_REQUEST_SDL: &str = r#"
+    type ActionRequest {
+        drift_sig: String
+        summary: String
+        target_paths: String
+        status: String @index
+    }
+"#;
+
+async fn register_action_request_schema(access: &ConfigAccess) {
+    let plan = gents::store::config_client::preview_schema_install(access, ACTION_REQUEST_SDL)
         .await
-        .expect("add_collection for ActionRequest");
+        .expect("preview ActionRequest schema");
+    gents::store::config_client::apply_schema_install(
+        access,
+        ACTION_REQUEST_SDL,
+        &plan.artifact_digest,
+    )
+    .await
+    .expect("install ActionRequest schema");
 }
 
-async fn apply_documents(
-    node: &Arc<EmbeddedNode>,
-    documents: Vec<(Collection, serde_json::Value)>,
-) {
-    use gents::store::config_client::{
-        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
+async fn apply_documents(access: &ConfigAccess, documents: Vec<(Collection, serde_json::Value)>) {
+    use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let plan = DesiredStateApplyPlan::new(
         documents
             .into_iter()
@@ -53,28 +56,29 @@ async fn apply_documents(
             .collect(),
     )
     .unwrap();
-    ConfigAccess::transact_local_write(node, None, "test.automation_configuration", |txn| {
-        let plan = &plan;
-        Box::pin(
-            async move { gents::store::config_client::apply_desired_state_plan(txn, plan).await },
-        )
-    })
-    .await
-    .unwrap();
+    access
+        .transact_write("test.automation_configuration", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                gents::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .unwrap();
 }
 
 async fn configure_action_trigger(
-    node: &Arc<EmbeddedNode>,
+    access: &ConfigAccess,
     owner: &str,
     task_id: &str,
     trigger_id: &str,
-    agent_id: &str,
+    agent_did: &str,
     prompt_template: &str,
 ) {
-    apply_documents(node, vec![
+    apply_documents(access, vec![
         (
             Collection::Task,
-            serde_json::json!({"node_did":owner,"task_id":task_id,"agent_id":agent_id,"prompt_template":prompt_template}),
+            serde_json::json!({"node_did":owner,"task_id":task_id,"agent_did":agent_did,"prompt_template":prompt_template}),
         ),
         (
             Collection::EventSource,
@@ -89,7 +93,7 @@ async fn configure_action_trigger(
 }
 
 async fn wait_for_runtime_snapshot<F>(
-    node: &EmbeddedNode,
+    access: &ConfigAccess,
     node_did: &str,
     runtime: &tokio::task::JoinHandle<anyhow::Result<()>>,
     predicate: F,
@@ -99,7 +103,7 @@ where
 {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let last_snapshot = fetch_runtime_snapshot(node, node_did).await;
+        let last_snapshot = fetch_runtime_snapshot_as(access, node_did).await;
         if let Some(snapshot) = last_snapshot.as_ref() {
             if predicate(snapshot) {
                 return snapshot.clone();
@@ -122,7 +126,7 @@ fn routed_readiness_uses_generation_not_transient_reconcile_label() {
         reconcile_phase: "idle".into(),
         active_generation: 2,
         router_generation: 2,
-        default_agent_id: "behavior".into(),
+        default_agent_did: "behavior".into(),
         last_reconcile_result: "noop".into(),
         last_reconcile_error: String::new(),
     };
@@ -150,7 +154,7 @@ fn routed_readiness_uses_generation_not_transient_reconcile_label() {
 }
 
 async fn query_agent_requests_for_trigger(
-    node: &EmbeddedNode,
+    access: &ConfigAccess,
     trigger_id: &str,
 ) -> Vec<AgentRequestRow> {
     let escaped_trigger_id = escape_graphql_string(trigger_id);
@@ -167,15 +171,12 @@ async fn query_agent_requests_for_trigger(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "AgentRequest query failed: {:?}",
-        response.errors
-    );
+    let response = access
+        .execute(&query)
+        .await
+        .expect("read triggered AgentRequest");
     let rows = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("AgentRequest"))
         .and_then(Value::as_array)
         .cloned()
@@ -185,10 +186,10 @@ async fn query_agent_requests_for_trigger(
         .collect()
 }
 
-async fn wait_for_one_agent_request(node: &EmbeddedNode, trigger_id: &str) -> AgentRequestRow {
+async fn wait_for_one_agent_request(access: &ConfigAccess, trigger_id: &str) -> AgentRequestRow {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let mut requests = loop {
-        let rows = query_agent_requests_for_trigger(node, trigger_id).await;
+        let rows = query_agent_requests_for_trigger(access, trigger_id).await;
         if !rows.is_empty() {
             break rows;
         }
@@ -261,6 +262,7 @@ fn assert_multi_field_render(request: &AgentRequestRow, trigger_id: &str) {
 
 async fn boot_agent_with_action_trigger(
     db: &crate::support::TestDb,
+    fixture: &ManagedAgentFixture,
     test_name: &str,
     task_id: &str,
     trigger_id: &str,
@@ -268,13 +270,14 @@ async fn boot_agent_with_action_trigger(
     tokio::task::JoinHandle<anyhow::Result<()>>,
     tokio::sync::watch::Sender<bool>,
 ) {
-    let identity = Arc::new(test_identity(test_name));
+    let identity = db.node_identity.clone();
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        &db.node,
-        identity.did(),
+    bind_managed_agent_backend(
+        db,
+        fixture,
         &format!("backend-{test_name}"),
         mock_endpoint.endpoint(),
+        "default",
     )
     .await;
 
@@ -289,12 +292,12 @@ async fn boot_agent_with_action_trigger(
     .await
     .unwrap();
     let node_did = agent.node_did().to_string();
-    let default_agent_id = agent.default_agent_id().to_string();
+    let default_agent_did = agent.default_agent_did().to_string();
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    let startup = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, &handle, |snapshot| {
+    let startup = wait_for_runtime_snapshot(&fixture.access, &node_did, &handle, |snapshot| {
         is_routed_ready_after(snapshot, 0)
     })
     .await;
@@ -306,16 +309,16 @@ async fn boot_agent_with_action_trigger(
     );
 
     configure_action_trigger(
-        &db.node,
+        &fixture.access,
         &node_did,
         task_id,
         trigger_id,
-        &default_agent_id,
+        &default_agent_did,
         PROMPT_TEMPLATE,
     )
     .await;
 
-    let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, &handle, |snapshot| {
+    let reconciled = wait_for_runtime_snapshot(&fixture.access, &node_did, &handle, |snapshot| {
         is_routed_ready_after(snapshot, initial_generation)
     })
     .await;
@@ -364,34 +367,23 @@ fn request_action_decl() -> WriteToolDecl {
 async fn multi_field_template_renders_all_referenced_doc_fields() {
     let _guard = crate::P2P_E2E_LOCK.lock().await;
     let db = test_db("write-tool-trigger-multifield").await;
-    register_action_request_schema(db.node.as_ref()).await;
+    let fixture = managed_agent_fixture(&db).await;
+    register_action_request_schema(&fixture.access).await;
 
     let task_id = "task-b6-multifield";
     let trigger_id = "trigger-b6-multifield";
     let (handle, shutdown_tx) =
-        boot_agent_with_action_trigger(&db, "b6-multifield", task_id, trigger_id).await;
+        boot_agent_with_action_trigger(&db, &fixture, "b6-multifield", task_id, trigger_id).await;
 
-    let escaped_drift = escape_graphql_string(DRIFT_SIG);
-    let escaped_summary = escape_graphql_string(SUMMARY);
-    let escaped_paths = escape_graphql_string(TARGET_PATHS);
-    let mutation = format!(
-        r#"mutation {{
-            add_ActionRequest(input: {{
-                drift_sig: "{escaped_drift}",
-                summary: "{escaped_summary}",
-                target_paths: "{escaped_paths}",
-                status: "open"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let resp = db.node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "add_ActionRequest failed: {:?}",
-        resp.errors
-    );
+    gents::store::config_client::create_authored_document(
+        &fixture.access,
+        "ActionRequest",
+        &json!({"drift_sig": DRIFT_SIG, "summary": SUMMARY, "target_paths": TARGET_PATHS, "status": "open"}),
+        gents::store::config_client::DocumentSchemaSource::UserAuthored,
+        ACTION_REQUEST_SDL,
+    ).await.expect("create User-signed ActionRequest");
 
-    let request = wait_for_one_agent_request(db.node.as_ref(), trigger_id).await;
+    let request = wait_for_one_agent_request(&fixture.access, trigger_id).await;
     assert_multi_field_render(&request, trigger_id);
 
     let _ = shutdown_tx.send(true);
@@ -402,15 +394,21 @@ async fn multi_field_template_renders_all_referenced_doc_fields() {
 async fn declared_write_tool_call_fires_event_trigger() {
     let _guard = crate::P2P_E2E_LOCK.lock().await;
     let db = test_db("write-tool-trigger-tooldriven").await;
-    register_action_request_schema(db.node.as_ref()).await;
+    let fixture = managed_agent_fixture(&db).await;
+    register_action_request_schema(&fixture.access).await;
 
     let task_id = "task-b6-tooldriven";
     let trigger_id = "trigger-b6-tooldriven";
     let (handle, shutdown_tx) =
-        boot_agent_with_action_trigger(&db, "b6-tooldriven", task_id, trigger_id).await;
+        boot_agent_with_action_trigger(&db, &fixture, "b6-tooldriven", task_id, trigger_id).await;
 
     let tool = BoundedWriteTool::new(
-        gents::ConfigAccess::local(db.node.clone()),
+        gents::ConfigAccess::local_managed_agent(
+            db.node.clone(),
+            ::identity::Did::new(fixture.agent.did()).unwrap(),
+            fixture.agent.as_ref(),
+        )
+        .unwrap(),
         request_action_decl(),
     );
     assert_eq!(
@@ -435,15 +433,13 @@ async fn declared_write_tool_call_fires_event_trigger() {
         "tool should report the ActionRequest it created: {out}"
     );
 
-    let action_rows = db
-        .node
+    let action_rows = fixture
+        .access
         .execute("{ ActionRequest { drift_sig summary target_paths status } }")
-        .await;
-    let rows = action_rows
-        .data
-        .as_ref()
-        .and_then(|d| d.get("ActionRequest"))
-        .and_then(Value::as_array)
+        .await
+        .expect("read ActionRequest rows");
+    let rows = action_rows["data"]["ActionRequest"]
+        .as_array()
         .cloned()
         .unwrap_or_default();
     assert_eq!(
@@ -464,7 +460,7 @@ async fn declared_write_tool_call_fires_event_trigger() {
         Some(TARGET_PATHS)
     );
 
-    let request = wait_for_one_agent_request(db.node.as_ref(), trigger_id).await;
+    let request = wait_for_one_agent_request(&fixture.access, trigger_id).await;
     assert_multi_field_render(&request, trigger_id);
 
     let _ = shutdown_tx.send(true);

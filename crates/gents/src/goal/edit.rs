@@ -40,16 +40,51 @@ impl GoalEdit {
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn edit_active_goal(
     node: &std::sync::Arc<EmbeddedNode>,
     observed: &GoalDocument,
     fields: &GoalEdit,
 ) -> Result<Option<GoalDocument>> {
-    fields.validate()?;
-    crate::ConfigAccess::transact_local_write(node, None, "goal.edit_active", |txn| {
-        Box::pin(async move { stage_goal_edit(txn, observed, fields, GoalEditOrigin::Agent).await })
-    })
+    let actor =
+        crate::session::load_session_agent_did(node, &observed.node_did, &observed.session_id)
+            .await?;
+    edit_active_goal_from_access(
+        &crate::ConfigAccess::local_as(node.clone(), actor),
+        observed,
+        fields,
+    )
     .await
+}
+
+pub(crate) async fn edit_active_goal_from_access(
+    access: &crate::ConfigAccess,
+    observed: &GoalDocument,
+    fields: &GoalEdit,
+) -> Result<Option<GoalDocument>> {
+    fields.validate()?;
+    let actor = access
+        .actor_did()
+        .context("Goal edit requires an authenticated actor")?;
+    access
+        .transact_write("goal.edit_active", |txn| {
+            let actor = &actor;
+            Box::pin(async move {
+                let session = crate::session::load_agent_session_owner_in_txn(
+                    txn,
+                    &observed.node_did,
+                    &observed.session_id,
+                )
+                .await?
+                .context("cannot edit a Goal without its session")?;
+                anyhow::ensure!(
+                    actor == &session.session.agent_did,
+                    "Goal edit actor differs from session agent"
+                );
+                stage_goal_edit(txn, observed, fields, GoalEditOrigin::Agent).await
+            })
+        })
+        .await
 }
 
 pub(super) async fn stage_goal_edit(

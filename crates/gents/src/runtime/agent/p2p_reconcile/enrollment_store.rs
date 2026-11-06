@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use defra_p2p_adapter::{P2pDocumentRequest, TransportPeerId};
 use gents_protocol::enrollment::{
     decode_offer, derive_decision_id, derive_revision_id, derive_route_receipt_id,
@@ -17,7 +17,7 @@ use gents_protocol::enrollment::{
 use gents_protocol::network_token::NetworkRecord;
 use p2p::iroh::parse_public_peer_addr;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
@@ -35,21 +35,21 @@ const ENROLLMENT_DOCUMENT_QUERY: &str = r#"{
   NetworkEnrollmentRequest {
     _docID protocol_version request_id request_digest offer_id offer_token challenge
     network_id admin_did server_peer candidate_did candidate_peer candidate_ticket
-    owner_agent profile client_nonce issued_at expires_at candidate_sig
+    owner_node_did profile client_nonce issued_at expires_at candidate_sig
   }
   NetworkEnrollmentDecision {
     _docID protocol_version decision_id request_id request_digest network_id admin_did
-    candidate_did candidate_peer owner_agent decision authorization_sequence
+    candidate_did candidate_peer owner_node_did decision authorization_sequence
     authorization_expires_at decided_at
     signer_did admin_sig
   }
   NetworkAuthorizationRevision {
     _docID protocol_version revision_id request_id request_digest network_id admin_did
-    member_did member_peer owner_agent sequence authorization_expires_at kind issued_at signer_did admin_sig
+    member_did member_peer owner_node_did sequence authorization_expires_at kind issued_at signer_did admin_sig
   }
   NetworkEnrollmentRouteReceipt {
     _docID protocol_version receipt_id request_id request_digest network_id admin_did
-    member_did member_peer server_peer owner_agent authorization_sequence authorization_expires_at direction
+    member_did member_peer server_peer owner_node_did authorization_sequence authorization_expires_at direction
     applied_at signer_did admin_sig
   }
 }"#;
@@ -231,6 +231,65 @@ impl GraphqlEnrollmentStore {
         }
     }
 
+    async fn publish_records(
+        &self,
+        operation: &'static str,
+        mutation: &str,
+        collections: &[&str],
+        recipient: &str,
+    ) -> Result<Value> {
+        use crate::store::config_client::ConfigAccess;
+        use crate::store::graphql::escape_graphql_string;
+
+        anyhow::ensure!(
+            self.node.node_identity_did() == Some(self.identity.did()),
+            "enrollment publication requires the local runtime identity"
+        );
+        let runtime = identity::Did::new(self.identity.did())?;
+        let reader = identity::Did::new(recipient)?;
+        let access = ConfigAccess::local_as(self.node.clone(), runtime.clone());
+        access
+            .transact_write(operation, |txn| {
+                let runtime = &runtime;
+                let reader = &reader;
+                Box::pin(async move {
+                    txn.validate_runtime_actor(runtime)?;
+                    let query = format!(
+                        r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
+                        escape_graphql_string(runtime.as_str())
+                    );
+                    let nodes = txn.execute(&query).await?;
+                    let nodes = gents_protocol::graphql::graphql_rows_from_response(&nodes, "Node");
+                    let [parent] = nodes.as_slice() else {
+                        anyhow::bail!(
+                            "enrollment publication requires exactly one visible local Node"
+                        );
+                    };
+                    let parent = parent["_docID"]
+                        .as_str()
+                        .filter(|id| !id.is_empty())
+                        .context("enrollment publication Node has no document ID")?;
+                    let owners = txn.document_owners("Node", &[parent.to_owned()]).await?;
+                    anyhow::ensure!(
+                        owners.len() == 1 && owners[0].visible && owners[0].owner.is_some(),
+                        "enrollment publication Node has no visible native owner"
+                    );
+                    let response = txn.execute(mutation).await?;
+                    for collection in collections {
+                        let doc = gents_protocol::graphql::extract_mutation_doc_id(
+                            &response, collection,
+                        )?;
+                        txn.add_resource_relationship(collection, &doc, "parent", "nodes", parent)
+                            .await?;
+                        txn.add_actor_relationship(collection, &doc, "reader", reader)
+                            .await?;
+                    }
+                    Ok::<_, anyhow::Error>(response)
+                })
+            })
+            .await
+    }
+
     pub async fn decide_request(
         &self,
         request_id: &str,
@@ -347,7 +406,7 @@ impl GraphqlEnrollmentStore {
             admin_did: pending.request.admin_did.clone(),
             candidate_did: pending.request.candidate_did.clone(),
             candidate_peer: pending.request.candidate_peer.clone(),
-            owner_agent: pending.request.owner_agent.clone(),
+            owner_node_did: pending.request.owner_node_did.clone(),
             decision: kind.clone(),
             authorization_sequence: sequence,
             authorization_expires_at: authorization_expires_at.clone(),
@@ -375,7 +434,7 @@ impl GraphqlEnrollmentStore {
                 admin_did: pending.request.admin_did.clone(),
                 member_did: pending.request.candidate_did.clone(),
                 member_peer: pending.request.candidate_peer.clone(),
-                owner_agent: pending.request.owner_agent.clone(),
+                owner_node_did: pending.request.owner_node_did.clone(),
                 sequence,
                 authorization_expires_at: authorization_expires_at.clone(),
                 kind: revision_kind,
@@ -391,13 +450,18 @@ impl GraphqlEnrollmentStore {
 
         let mutation = decision_mutation(&decision, revision.as_ref());
         let committed = async {
-            let response = crate::store::config_client::ConfigAccess::write_local_response(
-                &self.node,
-                "p2p.write_enrollment_decision",
-                &mutation,
-            )
-            .await?;
-            let response = json!({ "data": response.data.unwrap_or_default() });
+            let mut collections = vec!["NetworkEnrollmentDecision"];
+            if revision.is_some() {
+                collections.push("NetworkAuthorizationRevision");
+            }
+            let response = self
+                .publish_records(
+                    "p2p.write_enrollment_decision",
+                    &mutation,
+                    &collections,
+                    &pending.request.candidate_did,
+                )
+                .await?;
             let decision_doc_id = gents_protocol::graphql::extract_mutation_doc_id(
                 &response,
                 "NetworkEnrollmentDecision",
@@ -520,7 +584,7 @@ impl GraphqlEnrollmentStore {
             admin_did: active.request.admin_did.clone(),
             member_did: active.request.candidate_did.clone(),
             member_peer: active.request.candidate_peer.clone(),
-            owner_agent: active.request.owner_agent.clone(),
+            owner_node_did: active.request.owner_node_did.clone(),
             sequence,
             authorization_expires_at: active.decision.authorization_expires_at.clone(),
             kind,
@@ -531,20 +595,19 @@ impl GraphqlEnrollmentStore {
         revision.admin_sig = self.identity.sign(&revision.signing_payload()).await?;
         revision.validate_against_approval(&active.request, &active.decision)?;
         let mutation = revision_mutation(&revision);
-        let response = crate::store::config_client::ConfigAccess::write_local_response(
-            &self.node,
-            "p2p.write_enrollment_revocation",
-            &mutation,
-        )
-        .await;
+        let response = self
+            .publish_records(
+                "p2p.write_enrollment_revocation",
+                &mutation,
+                &["NetworkAuthorizationRevision"],
+                &active.request.candidate_did,
+            )
+            .await;
         let revision_doc_id = match response {
-            Ok(response) => {
-                let response = json!({ "data": response.data.unwrap_or_default() });
-                gents_protocol::graphql::extract_mutation_doc_id(
-                    &response,
-                    "NetworkAuthorizationRevision",
-                )?
-            }
+            Ok(response) => gents_protocol::graphql::extract_mutation_doc_id(
+                &response,
+                "NetworkAuthorizationRevision",
+            )?,
             Err(commit_error) => {
                 let recovered = self.load_projection().await?;
                 recovered
@@ -686,7 +749,7 @@ impl GraphqlEnrollmentStore {
             member_did: active.request.candidate_did.clone(),
             member_peer: active.request.candidate_peer.clone(),
             server_peer: active.request.server_peer.clone(),
-            owner_agent: active.request.owner_agent.clone(),
+            owner_node_did: active.request.owner_node_did.clone(),
             authorization_sequence: active.decision.authorization_sequence,
             authorization_expires_at: active.decision.authorization_expires_at.clone(),
             direction,
@@ -697,20 +760,28 @@ impl GraphqlEnrollmentStore {
         receipt.admin_sig = self.identity.sign(&receipt.signing_payload()).await?;
         receipt.validate_against_approval(&active.request, &active.decision)?;
         let mutation = route_receipt_mutation(&receipt);
-        let committed = crate::store::config_client::ConfigAccess::write_local_response(
-            &self.node,
-            "p2p.write_enrollment_route_receipt",
-            &mutation,
-        )
-        .await;
+        let recipient = if self.identity.did() == active.request.admin_did {
+            &active.request.candidate_did
+        } else {
+            anyhow::ensure!(
+                self.identity.did() == active.request.candidate_did,
+                "route receipt author is not an enrollment participant"
+            );
+            &active.request.admin_did
+        };
+        let committed = self
+            .publish_records(
+                "p2p.write_enrollment_route_receipt",
+                &mutation,
+                &["NetworkEnrollmentRouteReceipt"],
+                recipient,
+            )
+            .await;
         match committed {
-            Ok(response) => {
-                let response = json!({ "data": response.data.unwrap_or_default() });
-                Ok(gents_protocol::graphql::extract_mutation_doc_id(
-                    &response,
-                    "NetworkEnrollmentRouteReceipt",
-                )?)
-            }
+            Ok(response) => Ok(gents_protocol::graphql::extract_mutation_doc_id(
+                &response,
+                "NetworkEnrollmentRouteReceipt",
+            )?),
             Err(commit_error) => {
                 let projection = self.load_projection().await?;
                 projection
@@ -1485,7 +1556,7 @@ impl GraphqlEnrollmentStore {
             for other in &projection.active[index + 1..] {
                 if active.request.candidate_peer == other.request.candidate_peer
                     && (active.request.candidate_did != other.request.candidate_did
-                        || active.request.owner_agent != other.request.owner_agent)
+                        || active.request.owner_node_did != other.request.owner_node_did)
                 {
                     collision_scopes.insert((
                         active.request.network_id.clone(),
@@ -1575,7 +1646,7 @@ impl GraphqlEnrollmentStore {
                 server_peer: offer.server_peer.clone(),
                 server_ticket_peer: server_ticket_peer.to_string(),
                 resolved_server_did: offer.admin_did,
-                owner_node: offer.owner_agent,
+                owner_node: offer.owner_node_did,
                 profile: offer.profile,
                 schema_compatible: offer.schema_fingerprint == enrollment_schema_fingerprint(),
                 admin_signed: offer_signed,
@@ -1821,7 +1892,7 @@ impl VerifiedRequest {
                 Default::default()
             },
             candidate_ticket_peer: self.record.candidate_peer.clone(),
-            owner_node: self.record.owner_agent.clone(),
+            owner_node: self.record.owner_node_did.clone(),
             profile: self.record.profile.clone(),
             client_nonce: self.record.client_nonce.clone(),
             issued_at: self.record.issued_at.clone(),
@@ -1852,7 +1923,7 @@ impl VerifiedDecision {
             admin_did: self.record.admin_did.clone(),
             candidate_did: self.record.candidate_did.clone(),
             candidate_peer: self.record.candidate_peer.clone(),
-            owner_node: self.record.owner_agent.clone(),
+            owner_node: self.record.owner_node_did.clone(),
             kind: match self.record.decision {
                 WireDecisionKind::Approved => EnrollmentDecisionKind::Approved,
                 WireDecisionKind::Denied => EnrollmentDecisionKind::Denied,
@@ -1889,7 +1960,7 @@ impl VerifiedRouteReceipt {
             member_did: self.record.member_did.clone(),
             member_peer: self.record.member_peer.clone(),
             server_peer: self.record.server_peer.clone(),
-            owner_node: self.record.owner_agent.clone(),
+            owner_node: self.record.owner_node_did.clone(),
             authorization_sequence: self.record.authorization_sequence as usize,
             authorization_expires_at: self.record.authorization_expires_at.clone(),
             direction: EnrollmentRouteDirection::ClientToServer,
@@ -1909,7 +1980,7 @@ impl VerifiedRevision {
             admin_did: self.record.admin_did.clone(),
             member_did: self.record.member_did.clone(),
             member_peer: self.record.member_peer.clone(),
-            owner_node: self.record.owner_agent.clone(),
+            owner_node: self.record.owner_node_did.clone(),
             sequence: self.record.sequence as usize,
             authorization_expires_at: self.record.authorization_expires_at.clone(),
             kind: match self.record.kind {
@@ -1968,7 +2039,7 @@ fn decision_mutation(
         r#"{{
           protocol_version: {}, decision_id: "{}", request_id: "{}",
           request_digest: "{}", network_id: "{}", admin_did: "{}",
-          candidate_did: "{}", candidate_peer: "{}", owner_agent: "{}",
+          candidate_did: "{}", candidate_peer: "{}", owner_node_did: "{}",
           decision: "{}", authorization_sequence: {}, authorization_expires_at: "{}", decided_at: "{}",
           signer_did: "{}", admin_sig: "{}"
         }}"#,
@@ -1980,7 +2051,7 @@ fn decision_mutation(
         escaped(&decision.admin_did),
         escaped(&decision.candidate_did),
         escaped(&decision.candidate_peer),
-        escaped(&decision.owner_agent),
+        escaped(&decision.owner_node_did),
         decision.decision.as_str(),
         decision.authorization_sequence,
         escaped(&decision.authorization_expires_at),
@@ -1995,7 +2066,7 @@ fn decision_mutation(
               create_NetworkAuthorizationRevision(input: {{
                 protocol_version: {}, revision_id: "{}", request_id: "{}",
                 request_digest: "{}", network_id: "{}", admin_did: "{}",
-                member_did: "{}", member_peer: "{}", owner_agent: "{}",
+                member_did: "{}", member_peer: "{}", owner_node_did: "{}",
                 sequence: {}, authorization_expires_at: "{}", kind: "{}", issued_at: "{}", signer_did: "{}",
                 admin_sig: "{}"
               }}) {{ _docID }}"#,
@@ -2007,7 +2078,7 @@ fn decision_mutation(
             escaped(&revision.admin_did),
             escaped(&revision.member_did),
             escaped(&revision.member_peer),
-            escaped(&revision.owner_agent),
+            escaped(&revision.owner_node_did),
             revision.sequence,
             escaped(&revision.authorization_expires_at),
             revision.kind.as_str(),
@@ -2032,7 +2103,7 @@ fn revision_mutation(revision: &AuthorizationRevisionRecord) -> String {
           create_NetworkAuthorizationRevision(input: {{
             protocol_version: {}, revision_id: "{}", request_id: "{}",
             request_digest: "{}", network_id: "{}", admin_did: "{}",
-            member_did: "{}", member_peer: "{}", owner_agent: "{}",
+            member_did: "{}", member_peer: "{}", owner_node_did: "{}",
             sequence: {}, authorization_expires_at: "{}", kind: "{}",
             issued_at: "{}", signer_did: "{}", admin_sig: "{}"
           }}) {{ _docID }}
@@ -2045,7 +2116,7 @@ fn revision_mutation(revision: &AuthorizationRevisionRecord) -> String {
         escaped(&revision.admin_did),
         escaped(&revision.member_did),
         escaped(&revision.member_peer),
-        escaped(&revision.owner_agent),
+        escaped(&revision.owner_node_did),
         revision.sequence,
         escaped(&revision.authorization_expires_at),
         revision.kind.as_str(),
@@ -2064,7 +2135,7 @@ fn route_receipt_mutation(receipt: &EnrollmentRouteReceiptRecord) -> String {
             protocol_version: {}, receipt_id: "{}", request_id: "{}",
             request_digest: "{}", network_id: "{}", admin_did: "{}",
             member_did: "{}", member_peer: "{}", server_peer: "{}",
-            owner_agent: "{}", authorization_sequence: {}, authorization_expires_at: "{}", direction: "{}",
+            owner_node_did: "{}", authorization_sequence: {}, authorization_expires_at: "{}", direction: "{}",
             applied_at: "{}", signer_did: "{}", admin_sig: "{}"
           }}) {{ _docID }}
         }}"#,
@@ -2077,7 +2148,7 @@ fn route_receipt_mutation(receipt: &EnrollmentRouteReceiptRecord) -> String {
         escaped(&receipt.member_did),
         escaped(&receipt.member_peer),
         escaped(&receipt.server_peer),
-        escaped(&receipt.owner_agent),
+        escaped(&receipt.owner_node_did),
         receipt.authorization_sequence,
         escaped(&receipt.authorization_expires_at),
         receipt.direction.as_str(),
@@ -2126,7 +2197,7 @@ pub(super) struct RequestRow {
     candidate_did: String,
     candidate_peer: String,
     candidate_ticket: String,
-    owner_agent: String,
+    owner_node_did: String,
     profile: String,
     client_nonce: String,
     issued_at: String,
@@ -2149,7 +2220,7 @@ impl RequestRow {
             candidate_did: self.candidate_did.clone(),
             candidate_peer: self.candidate_peer.clone(),
             candidate_ticket: self.candidate_ticket.clone(),
-            owner_agent: self.owner_agent.clone(),
+            owner_node_did: self.owner_node_did.clone(),
             profile: self.profile.clone(),
             client_nonce: self.client_nonce.clone(),
             issued_at: self.issued_at.clone(),
@@ -2174,7 +2245,7 @@ struct DecisionRow {
     admin_did: String,
     candidate_did: String,
     candidate_peer: String,
-    owner_agent: String,
+    owner_node_did: String,
     decision: String,
     authorization_sequence: i64,
     authorization_expires_at: String,
@@ -2194,7 +2265,7 @@ impl DecisionRow {
             admin_did: self.admin_did.clone(),
             candidate_did: self.candidate_did.clone(),
             candidate_peer: self.candidate_peer.clone(),
-            owner_agent: self.owner_agent.clone(),
+            owner_node_did: self.owner_node_did.clone(),
             decision: match self.decision.as_str() {
                 "approved" => WireDecisionKind::Approved,
                 "denied" => WireDecisionKind::Denied,
@@ -2222,7 +2293,7 @@ struct RevisionRow {
     admin_did: String,
     member_did: String,
     member_peer: String,
-    owner_agent: String,
+    owner_node_did: String,
     sequence: i64,
     authorization_expires_at: String,
     kind: String,
@@ -2244,7 +2315,7 @@ struct RouteReceiptRow {
     member_did: String,
     member_peer: String,
     server_peer: String,
-    owner_agent: String,
+    owner_node_did: String,
     authorization_sequence: i64,
     authorization_expires_at: String,
     direction: String,
@@ -2265,7 +2336,7 @@ impl RouteReceiptRow {
             member_did: self.member_did.clone(),
             member_peer: self.member_peer.clone(),
             server_peer: self.server_peer.clone(),
-            owner_agent: self.owner_agent.clone(),
+            owner_node_did: self.owner_node_did.clone(),
             authorization_sequence: u64::try_from(self.authorization_sequence)
                 .context("negative route receipt authorization sequence")?,
             authorization_expires_at: self.authorization_expires_at.clone(),
@@ -2294,7 +2365,7 @@ impl RevisionRow {
             admin_did: self.admin_did.clone(),
             member_did: self.member_did.clone(),
             member_peer: self.member_peer.clone(),
-            owner_agent: self.owner_agent.clone(),
+            owner_node_did: self.owner_node_did.clone(),
             sequence: u64::try_from(self.sequence).context("negative authorization sequence")?,
             authorization_expires_at: self.authorization_expires_at.clone(),
             kind: match self.kind.as_str() {

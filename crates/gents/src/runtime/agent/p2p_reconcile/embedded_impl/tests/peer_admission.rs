@@ -30,13 +30,26 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
     let host_did = host_identity.did().to_string();
     let coordinator_did = coordinator_identity.did().to_string();
     let parent_request_id = "remote-parent-1";
+    let binding =
+        crate::store::identity::provision_agent_identity(coordinator_identity.as_ref()).unwrap();
+    crate::test_support::install_test_agent_binding(
+        &coordinator,
+        &coordinator_did,
+        "parent-behavior",
+        &binding,
+    )
+    .await;
+    let parent_identity =
+        crate::store::identity::resolve_agent_identity(coordinator_identity.as_ref(), &binding)
+            .unwrap();
+    let parent_agent_did = parent_identity.did();
 
     let parent_response = coordinator
         .execute(&format!(
             r#"mutation {{ create_AgentRequest(input: {{
                 request_id: "{parent_request_id}", node_did: "{coordinator_did}",
                 purpose: "normal",
-                requester_did: "{coordinator_did}", agent_id: "parent-behavior",
+                requester_did: "{coordinator_did}", agent_did: "{parent_agent_did}",
                 session_id: "remote-session", retry_root_request: "{parent_request_id}",
                 content: "remote parent", lifecycle_state: "pending",
                 execution_origin: "interactive", created_at: "2026-08-30T00:00:00Z",
@@ -74,20 +87,24 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
             .unwrap();
     let mut parent_lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         coordinator.clone(),
-        "parent-behavior",
+        parent_agent_did,
         &coordinator_did,
         parent_request,
         120,
     );
+    parent_lifecycle
+        .bind_managed_agent(parent_identity.as_ref())
+        .unwrap();
     assert_eq!(
         parent_lifecycle.claim().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed
     );
-    let parent_writer = crate::request::streaming::DefraStreamWriter::new(
+    let parent_writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
         coordinator.clone(),
-        &coordinator_did,
+        &parent_lifecycle,
         Duration::ZERO,
-    );
+    )
+    .unwrap();
     parent_lifecycle
         .begin_owned_execution(&parent_writer)
         .await
@@ -124,7 +141,7 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
     }))
     .unwrap();
     let behavior: crate::documents::Agent = serde_json::from_value(serde_json::json!({
-        "agent_id":"behavior-1","node_did":host_did,"context_id":"host-context",
+        "agent_did":"behavior-1","node_did":host_did,"context_id":"host-context",
         "inference_profile_id":"host-profile"
     }))
     .unwrap();
@@ -261,7 +278,7 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
     let caller = parent_lifecycle.request();
     let cause = crate::request::lifecycle::SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
-        caller_agent_id: caller.agent_id.clone(),
+        caller_agent_did: caller.agent_did.clone(),
         caller_session_id: caller.session_id.clone(),
         caller_requester_did: caller.requester_did.clone(),
         caller_request_id: caller.request_id.clone(),
@@ -273,7 +290,7 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
     };
     let target = crate::request::lifecycle::SessionMessageTarget {
         node_did: host_did.clone(),
-        agent_id: active.agent_id.clone(),
+        agent_did: active.agent_did.clone(),
         session_id: active.session_id.clone(),
     };
     let plan = crate::session::message::plan_with_delivery(
@@ -286,6 +303,7 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
         },
         None,
         crate::session::message::AgentMessageDelivery::Interrupt,
+        &parent_lifecycle.managed_agent_signer().unwrap(),
     )
     .await
     .unwrap()
@@ -436,6 +454,6 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
         .await
         .expect("join enrollment authority")
         .expect("enrollment authority shutdown");
-    coordinator.shutdown().await;
-    host.shutdown().await;
+    coordinator.shutdown().await.expect("node shutdown");
+    host.shutdown().await.expect("node shutdown");
 }

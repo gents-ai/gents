@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use super::AgentRequest;
 
 const MAX_PROCESSED_IDS: usize = 10_000;
-pub(super) const GOSSIP_FALLBACK_POLL: Duration = Duration::from_secs(30);
+pub(crate) const GOSSIP_FALLBACK_POLL: Duration = Duration::from_secs(30);
 pub(super) const PROCESSED_REQUEST_COOLDOWN: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Eq)]

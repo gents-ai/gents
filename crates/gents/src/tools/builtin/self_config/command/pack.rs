@@ -62,6 +62,7 @@ impl ConfigCommandTool {
         let installer = PackInstaller {
             core: self.core.clone(),
             node: self.node.clone(),
+            actor: self.identity.clone(),
             home: self.plugins.home().map(std::path::Path::to_path_buf),
         };
         let verb = argv

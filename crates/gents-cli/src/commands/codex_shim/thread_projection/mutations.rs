@@ -65,7 +65,7 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_name(
             .await?
             .context("thread session vanished during rename")?;
             anyhow::ensure!(
-                row.session.agent_id == state.agent_id.as_ref(),
+                row.session.agent_did == state.agent_did.as_ref(),
                 "thread agent changed during rename"
             );
             gents::session::apply_title_in_txn(

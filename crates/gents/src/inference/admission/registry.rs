@@ -1,7 +1,7 @@
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::{Arc, Mutex};
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use super::client::{current_context, AdmissionError};
 #[cfg(test)]
@@ -108,44 +108,25 @@ impl AdmissionRegistry {
     }
 
     #[cfg(test)]
-    pub(crate) async fn acquire_for_test(
+    pub(crate) async fn acquire_with_connection_and_signer_for_test(
         &self,
         request_id: impl Into<String>,
         backend_id: impl Into<String>,
-        agent_id: impl Into<String>,
-        node_did: impl Into<String>,
-        call_kind: CallKind,
-    ) -> Result<AdmissionPermit, AdmissionError> {
-        let backend_id = backend_id.into();
-        self.acquire_with_connection_for_test(
-            request_id,
-            backend_id,
-            agent_id,
-            node_did,
-            call_kind,
-            TEST_SLOT_CONNECTION,
-        )
-        .await
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn acquire_with_connection_for_test(
-        &self,
-        request_id: impl Into<String>,
-        backend_id: impl Into<String>,
-        agent_id: impl Into<String>,
-        node_did: impl Into<String>,
+        agent: &crate::inference::resolved::ResolvedAgent,
         call_kind: CallKind,
         connection: &str,
+        signer: Option<crate::store::identity::ManagedAgentSigner>,
     ) -> Result<AdmissionPermit, AdmissionError> {
         use std::sync::atomic::AtomicU64;
         let context = AdmissionCallContext {
             request_id: request_id.into(),
             request_doc_id: "doc-test".to_string(),
             backend_id: backend_id.into(),
-            agent_id: agent_id.into(),
-            node_did: node_did.into(),
+            agent_did: agent.agent_did.clone(),
+            node_did: agent.node_did().to_owned(),
             session_id: "session-test".to_string(),
+            requester_did: None,
+            request_purpose: gents_protocol::request_admission::RequestPurpose::Normal,
             call_kind,
             attempt: 1,
             call_seq: Arc::new(AtomicU64::new(0)),
@@ -154,17 +135,10 @@ impl AdmissionRegistry {
             terminal_failure_reason: None,
         };
         scope_request(context, async {
-            self.acquire_current_call(connection, None, None).await
+            self.acquire_current_call_with_signer(connection, None, None, signer)
+                .await
         })
         .await
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn acquire_current_call_for_test(
-        &self,
-    ) -> Result<AdmissionPermit, AdmissionError> {
-        self.acquire_current_call(TEST_SLOT_CONNECTION, None, None)
-            .await
     }
 
     #[cfg(test)]
@@ -184,20 +158,37 @@ impl AdmissionRegistry {
             .map(|entry| entry.pool.clone())
     }
 
-    pub(super) async fn acquire_current_call(
+    pub(super) async fn acquire_current_call_with_signer(
         &self,
         connection: &str,
         model_name: Option<&str>,
         profile_id: Option<&str>,
+        agent_signer: Option<crate::store::identity::ManagedAgentSigner>,
     ) -> Result<AdmissionPermit, AdmissionError> {
         let context = current_context()?;
+        if let Some(signer) = &agent_signer {
+            if signer.did() != context.agent_did || signer.node_did() != context.node_did {
+                return Err(AdmissionError(
+                    "inference call differs from managed Agent signer".into(),
+                ));
+            }
+        } else {
+            return Err(AdmissionError(
+                "inference call requires a managed Agent signer".into(),
+            ));
+        }
         let cancel_observer = context.inference_token.clone();
         let terminal_failure_observer = context.terminal_failure_reason.clone();
-        let pending = context.next_call(&self.inner.runtime_instance_id, model_name, profile_id);
+        let pending = context.next_call(
+            &self.inner.runtime_instance_id,
+            model_name,
+            profile_id,
+            agent_signer,
+        );
         if pending.backend_id.trim().is_empty() {
             return Err(AdmissionError(format!(
                 "agent {} has no backend binding",
-                pending.agent_id
+                pending.agent_did
             )));
         }
 

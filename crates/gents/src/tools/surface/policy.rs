@@ -196,7 +196,6 @@ pub struct ToolPolicySurface {
     pub goal_create: bool,
     pub defra_query: bool,
     pub self_config: bool,
-    pub memory: bool,
     pub schema_management: bool,
     pub p2p_read: bool,
     pub p2p_mutate: bool,
@@ -217,7 +216,123 @@ pub struct ToolPolicySurface {
     pub plugin_tools: EndpointScope<String, ()>,
 }
 
+pub(crate) fn configured_self_config_category_set(categories: &[String]) -> BTreeSet<String> {
+    self_config_category_scope(categories)
+        .keys()
+        .into_iter()
+        .collect()
+}
+
+fn self_config_category_scope(categories: &[String]) -> EndpointScope<String, ()> {
+    EndpointScope::<String, ()>::only_units(
+        categories
+            .iter()
+            .map(|category| category.trim().to_string()),
+    )
+}
+
+/// A native node operation attributable to one independently removable tool
+/// source. Document ACP and native grant authorization remain independent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolNodeOperationSource {
+    pub purpose: &'static str,
+    pub permission: acp::nac::NodePermission,
+}
+
 impl ToolPolicySurface {
+    /// Project the native operations required by configured tools after the
+    /// stable ceiling is applied.
+    /// For self-config and pack this covers selection-replacement DAC removal
+    /// and document deletion; other operations need separate mappings.
+    /// Transient service availability does not revoke standing native authority.
+    pub fn covered_node_operation_sources(
+        &self,
+        pack_install: bool,
+    ) -> Vec<ToolNodeOperationSource> {
+        use acp::nac::NodePermission;
+
+        let mut sources = Vec::new();
+        let mut emit =
+            |purpose, permissions: &[NodePermission]| {
+                sources.extend(permissions.iter().copied().map(|permission| {
+                    ToolNodeOperationSource {
+                        purpose,
+                        permission,
+                    }
+                }));
+            };
+        if self.schema_management {
+            emit(
+                "schema",
+                &[
+                    NodePermission::CollectionGet,
+                    NodePermission::CollectionPatch,
+                    NodePermission::MigrationSet,
+                    NodePermission::ViewAdd,
+                ],
+            );
+        }
+        if !self.query_tools.is_deny_all() {
+            emit("datastore-query", &[NodePermission::CollectionGet]);
+        }
+        if !self.write_tools.is_deny_all() {
+            emit("datastore-write", &[NodePermission::CollectionGet]);
+        }
+        if self.session_history {
+            emit("session-history", &[NodePermission::DocumentRead]);
+        }
+        if self.include_goal_tools() {
+            emit(
+                "goal",
+                &[NodePermission::DocumentRead, NodePermission::DocumentUpdate],
+            );
+        }
+        if self.include_goal_creation() {
+            emit(
+                "goal-create",
+                &[
+                    NodePermission::DocumentRead,
+                    NodePermission::DocumentUpdate,
+                    NodePermission::DacRelationAdd,
+                ],
+            );
+        }
+        if self.include_self_config() {
+            for (purpose, category) in [
+                ("self-config:agent", "agent"),
+                ("self-config:node", "node"),
+                ("self-config:tools", "tools"),
+                ("self-config:profile", "profile"),
+            ] {
+                if self.self_config_categories.permits(&category.to_owned()) {
+                    emit(purpose, &[NodePermission::DacRelationDelete]);
+                }
+            }
+            for (purpose, category) in [
+                ("self-config:node", "node"),
+                ("self-config:tools", "tools"),
+                ("self-config:profile", "profile"),
+                ("self-config:backend", "backend"),
+                ("self-config:mcp-service", "mcp_service"),
+                ("self-config:automation", "automation"),
+            ] {
+                if self.self_config_categories.permits(&category.to_owned()) {
+                    emit(purpose, &[NodePermission::DocumentDelete]);
+                }
+            }
+            if pack_install {
+                emit(
+                    "pack-install",
+                    &[
+                        NodePermission::DacRelationDelete,
+                        NodePermission::DocumentDelete,
+                    ],
+                );
+            }
+        }
+        sources
+    }
+
     pub fn permits_p2p_mutation(&self) -> bool {
         self.p2p_read && self.p2p_mutate
     }
@@ -235,7 +350,6 @@ impl ToolPolicySurface {
             goal_create: false,
             defra_query: false,
             self_config: false,
-            memory: false,
             schema_management: false,
             p2p_read: false,
             p2p_mutate: false,
@@ -278,7 +392,6 @@ impl ToolPolicySurface {
             goal_create: true,
             defra_query: true,
             self_config: true,
-            memory: true,
             schema_management: true,
             p2p_read: true,
             p2p_mutate: true,
@@ -353,11 +466,7 @@ impl ToolPolicySurface {
                         .iter()
                         .map(|category| category.to_string()),
                 ),
-                Some(categories) => EndpointScope::<String, ()>::only_units(
-                    categories
-                        .iter()
-                        .map(|category| category.trim().to_string()),
-                ),
+                Some(categories) => self_config_category_scope(categories),
             }
         };
 
@@ -400,7 +509,6 @@ impl ToolPolicySurface {
             goal_create: selection.enable_goal_creation,
             defra_query: selection.enable_defra_query,
             self_config: selection.enable_self_config,
-            memory: selection.enable_memory,
             schema_management: selection.enable_schema_tool,
             p2p_read: selection.enable_p2p_tool,
             p2p_mutate: selection.enable_p2p_mutations,
@@ -449,7 +557,6 @@ impl ToolPolicySurface {
             goal_create: self.goal_create && other.goal_create,
             defra_query: self.defra_query && other.defra_query,
             self_config: self.self_config && other.self_config,
-            memory: self.memory && other.memory,
             schema_management: self.schema_management && other.schema_management,
             p2p_read: self.p2p_read && other.p2p_read,
             p2p_mutate: self.p2p_mutate && other.p2p_mutate,
@@ -765,7 +872,7 @@ fn query_scope_from_decls(
 fn agent_target_key(target: &AgentTargetDocument) -> (String, String) {
     (
         target.target_node_did.trim().to_string(),
-        target.agent_id.trim().to_string(),
+        target.agent_did.trim().to_string(),
     )
 }
 

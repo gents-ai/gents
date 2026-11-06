@@ -134,6 +134,8 @@ pub struct OutputSegment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester_did: Option<String>,
     pub session_id: String,
+    /// The owning request, or for a fork copy the logical closing record it
+    /// reproduces within `session_id`.
     pub request_doc_id: String,
     pub source: OutputSource,
     /// The source's producer, the same on every record of the source.
@@ -248,8 +250,11 @@ pub enum MessagePublication {
     ToolDelivery {
         tool_call_doc_id: String,
     },
-    /// No live request membership; all referenced payloads remain at origin.
-    /// Forks retain origin tool IDs as provenance, never copied executable rows.
+    /// No live request membership. References keep their logical closing
+    /// records; fork publication copies each referenced closure into the
+    /// destination session under that logical coordinate, so the fork reads
+    /// without its origin. Forks retain origin tool IDs as provenance, never
+    /// copied executable rows.
     Fork {
         origin_message_doc_id: String,
     },

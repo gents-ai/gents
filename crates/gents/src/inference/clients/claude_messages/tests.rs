@@ -837,7 +837,7 @@ async fn cancellation_drains_received_signature_without_polling_provider_again()
             request_id: "req-audit".into(),
             node_did: "did:key:agent".into(),
             requester_did: String::new(),
-            agent_id: "behavior".into(),
+            agent_did: "behavior".into(),
             session_id: "session".into(),
             model_name: "claude".into(),
             provider_family: None,
@@ -1167,8 +1167,8 @@ fn claude_code_header_names(request: &str) -> Vec<String> {
         "x-app",
         "user-agent",
         "x-claude-code-session-id",
-        "x-claude-code-agent-id",
-        "x-claude-code-parent-agent-id",
+        "x-claude-code-agent-did",
+        "x-claude-code-parent-agent-did",
         "x-claude-code-request-class",
         "x-claude-code-agent-type",
         "x-claude-code-prompt-id",
@@ -1222,8 +1222,8 @@ fn context_of(
         prompt_key: "request-wire".into(),
         parent_session_id: None,
         agent: Some(gents_loop::claude_messages_body::ClaudeAgentIdentity {
-            agent_id: "worker".into(),
-            parent_agent_id: Some("lead".into()),
+            agent_did: "worker".into(),
+            parent_agent_did: Some("lead".into()),
         }),
     }
 }
@@ -1325,7 +1325,7 @@ fn a_subagent_turn_adds_the_agent_headers() {
         + 1;
     expected.splice(
         at..at,
-        ["x-claude-code-agent-id", "x-claude-code-parent-agent-id"],
+        ["x-claude-code-agent-did", "x-claude-code-parent-agent-did"],
     );
     let class = expected
         .iter()
@@ -1343,11 +1343,11 @@ fn a_subagent_turn_adds_the_agent_headers() {
         Some("custom")
     );
     assert_eq!(
-        header_value(&request, "x-claude-code-agent-id").as_deref(),
+        header_value(&request, "x-claude-code-agent-did").as_deref(),
         Some("worker")
     );
     assert_eq!(
-        header_value(&request, "x-claude-code-parent-agent-id").as_deref(),
+        header_value(&request, "x-claude-code-parent-agent-did").as_deref(),
         Some("lead")
     );
     assert_eq!(
@@ -1487,11 +1487,12 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
         .build()
         .expect("runtime")
         .block_on(async {
-            let node = crate::inference::auth::credential::test_support::test_node().await;
+            let db = crate::support::test_db("claude-live-usage").await;
+            let node = db.node.clone();
             let cache: std::sync::Arc<crate::inference::usage_observation::UsageCache> =
                 std::sync::Arc::default();
             let account = crate::inference::usage_observation::UsageAccount::Backend {
-                node_did: "did:key:z6MkUsageWireClaudeLive".into(),
+                node_did: db.node_identity.did().to_owned(),
                 provider: "ClaudeCliSubscription".into(),
                 backend_id: "backend-usage-claude".into(),
                 connection: "connection-claude".into(),

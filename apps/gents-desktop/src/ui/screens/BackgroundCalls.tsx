@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useStore } from "zustand";
 import type { SurfaceContext } from "@/app/surfaces";
 import {
   ArrowLeft,
@@ -22,7 +21,6 @@ import { useApp } from "@/app/AppContext";
 import { openAt } from "@/app/messagePlaces";
 import { useSelectedSessionValue, useSessionFacts } from "@/hooks/useSelectedSession";
 import { toastFailure } from "@/lib/failure";
-import { configIsRead } from "@/lib/firstRun";
 import {
   isActive,
   nextWrite,
@@ -80,15 +78,12 @@ const stoppable = (call: BackgroundCall) =>
   isActive(call) && Boolean(call.tool?.toolCallDocId);
 
 function Stop({ call, sessionId }: { call: BackgroundCall; sessionId: string | null }) {
-  const { actions, stores } = useApp();
+  const { actions } = useApp();
   const nodeDid = call.tool?.nodeDid;
   const toolCallDocId = call.tool?.toolCallDocId;
-  const operator = useStore(stores.client, (state) =>
-    state.snapshot ? configIsRead(state.snapshot, nodeDid) : false,
-  );
   const isJob = job(call);
   if (!nodeDid || !sessionId || !toolCallDocId || !stoppable(call)) return null;
-  if (!isJob && (!operator || call.view?.job !== false)) return null;
+  if (!isJob && call.view?.job !== false) return null;
   const stop = async () => {
     try {
       const result = isJob
@@ -104,6 +99,7 @@ function Stop({ call, sessionId }: { call: BackgroundCall; sessionId: string | n
         .replace(/_/g, "");
       if (tag === "cancelled" || tag === "applied")
         toast.success(`Stopped ${call.runs}`);
+      else if (tag === "queued") toast.info(`Stop requested for ${call.runs}.`);
       else if (tag === "alreadyterminal")
         toast.info(`${call.runs} has already finished.`);
       else if (tag === "unverified")

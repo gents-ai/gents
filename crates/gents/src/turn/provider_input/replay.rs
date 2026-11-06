@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_loop::loop_stream::{
     LoopReplayInput, ReplayEvidenceResolveError, ReplayEvidenceViolation, TaggedMessage,
 };
@@ -26,9 +26,16 @@ pub(crate) fn owned_replay_input(
             let request_commit_cid = request_commit_cid.clone();
             let recording_seed = recording_seed.clone();
             Box::pin(async move {
+                let actor = identity::Did::new(request.agent_did.clone()).map_err(|error| {
+                    ReplayEvidenceResolveError::Storage {
+                        source: error.into(),
+                    }
+                })?;
+                let access =
+                    crate::store::config_client::ConfigAccess::local_as(node.clone(), actor);
                 let started = std::time::Instant::now();
                 let boundary = crate::turn::provider_context_reduction::capture_source_boundary(
-                    &node,
+                    &access,
                     &request.session_id,
                     &request.node_did,
                     request.requester_did.as_deref(),
@@ -40,8 +47,8 @@ pub(crate) fn owned_replay_input(
                     source: error.into(),
                 })?;
                 let boundary_elapsed_ms = started.elapsed().as_millis() as u64;
-                let resolved = crate::session::resolve_canonical_replay_tags(
-                    &node,
+                let resolved = crate::session::resolve_canonical_replay_tags_on(
+                    &access,
                     crate::session::CanonicalReplayScope {
                         node_did: &request.node_did,
                         requester_did: request.requester_did.as_deref(),

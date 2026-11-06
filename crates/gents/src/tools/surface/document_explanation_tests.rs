@@ -12,7 +12,7 @@ fn document_explanation_resolves_target_owner_separately_from_destination() {
         "agents":{"enabled":true,"target_ids":["target"]}}))
     .unwrap();
     let target = serde_json::from_value(json!({"target_id":"target","node_did":"owner",
-        "target_node_did":"remote","agent_id":"worker","name":"worker"}))
+        "target_node_did":"remote","agent_did":"worker","name":"worker"}))
     .unwrap();
     let build = |targets: &[crate::documents::AgentTargetDocument]| {
         AgentToolSurfaceConfig::from_tools_documents(
@@ -40,7 +40,8 @@ fn document_explanation_resolves_target_owner_separately_from_destination() {
 
 #[tokio::test]
 async fn measured_explanation_uses_scoped_endpoint_health_not_registry_presence() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    crate::test_support::acp_policies::install_identity_acp_policies(&node).await.unwrap();
     node.add_collection(gents_protocol::schemas::TOOL_SERVICE_HEALTH_STATE)
         .await
         .unwrap();

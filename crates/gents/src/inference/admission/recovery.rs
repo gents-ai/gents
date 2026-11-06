@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::escape_graphql_string;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct InferenceCallRecoveryReport {
@@ -20,6 +20,8 @@ struct StaleInferenceCallRow {
     doc_id: String,
     call_id: String,
     request_id: String,
+    request_doc_id: String,
+    agent_did: String,
     call_state: String,
 }
 
@@ -29,94 +31,123 @@ enum InferenceRecoveryOutcome {
 }
 
 impl InferenceCall {
-    pub async fn recover_all(
+    pub async fn recover_all_with_identities(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
+        identities: &[std::sync::Arc<dyn crate::store::identity::NodeIdentity>],
     ) -> Result<InferenceCallRecoveryReport> {
-        let rows = load_stale_inference_calls(node, node_did).await?;
+        anyhow::ensure!(
+            node.node_identity_did() == Some(node_did),
+            "inference recovery node identity mismatch"
+        );
         let mut calls_recovered = 0;
-
-        for row in rows {
-            let Some(parent) = lookup_parent_request(node, node_did, &row.request_id).await? else {
-                continue;
-            };
-            let Some(outcome) = recovery_outcome(&row, &parent) else {
-                continue;
-            };
-
-            match recover_inference_call_row(node, &row, outcome).await {
-                Ok(true) => {}
-                Ok(false) => continue,
+        for identity in identities {
+            anyhow::ensure!(
+                identity.did() != node_did,
+                "runtime identity cannot recover agent inference"
+            );
+            let actor = identity::Did::new(identity.did())?;
+            let access = match crate::ConfigAccess::local_managed_agent(
+                node.clone(),
+                actor,
+                identity.as_ref(),
+            ) {
+                Ok(access) => access,
                 Err(error) => {
-                    tracing::warn!(
-                        call_id = %row.call_id,
-                        request_id = %row.request_id,
-                        call_state = %row.call_state,
-                        error = %error,
-                        "failed to recover stale inference call"
-                    );
+                    tracing::warn!(agent_did = identity.did(), %error, "inference recovery signer unavailable");
                     continue;
                 }
+            };
+            let rows = load_stale_inference_calls(&access, node_did, identity.did()).await?;
+            for row in rows {
+                let Some(parent) = lookup_parent_request(&access, node_did, &row).await? else {
+                    continue;
+                };
+                let Some(outcome) = recovery_outcome(&row, &parent) else {
+                    continue;
+                };
+
+                match recover_inference_call_row(&access, &row, outcome).await {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(error) => {
+                        tracing::warn!(
+                            call_id = %row.call_id,
+                            request_id = %row.request_id,
+                            call_state = %row.call_state,
+                            error = %gents_protocol::error_chain::ErrorChain(error.as_ref()),
+                            "failed to recover stale inference call"
+                        );
+                        continue;
+                    }
+                }
+
+                calls_recovered += 1;
+                tracing::info!(
+                    call_id = %row.call_id,
+                    request_id = %row.request_id,
+                    "recovered stale inference call"
+                );
             }
-
-            calls_recovered += 1;
-            tracing::info!(
-                call_id = %row.call_id,
-                request_id = %row.request_id,
-                "recovered stale inference call"
-            );
         }
-
         Ok(InferenceCallRecoveryReport { calls_recovered })
     }
 }
 
 async fn load_stale_inference_calls(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     node_did: &str,
+    agent_did: &str,
 ) -> Result<Vec<StaleInferenceCallRow>> {
     let escaped_node_did = escape_graphql_string(node_did);
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let query = format!(
         r#"{{
             InferenceCall(
                 filter: {{
                     node_did: {{ _eq: "{escaped_node_did}" }},
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
                     call_state: {{ _in: ["queued", "running"] }}
                 }}
             ) {{
                 _docID
                 call_id
                 request_id
+                request_doc_id
+                agent_did
                 call_state
             }}
         }}"#
     );
 
-    let resp =
-        graphql_with_transaction_retry(node, &query, "querying stale InferenceCall rows").await?;
-
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("InferenceCall"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
-    Ok(rows)
+    let resp = access.execute(&query).await?;
+    Ok(serde_json::from_value(
+        resp["data"]["InferenceCall"].clone(),
+    )?)
 }
 
 async fn lookup_parent_request(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     node_did: &str,
-    request_id: &str,
+    row: &StaleInferenceCallRow,
 ) -> Result<Option<AgentRequestRow>> {
     let escaped_node_did = escape_graphql_string(node_did);
+    let request_id = &row.request_id;
     let escaped_request_id = escape_graphql_string(request_id);
+    let request_doc_id = escape_graphql_string(&row.request_doc_id);
+    let agent_did = escape_graphql_string(&row.agent_did);
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(row.agent_did.as_str()),
+        "inference recovery actor mismatch"
+    );
     let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{
                     node_did: {{ _eq: "{escaped_node_did}" }},
+                    agent_did: {{ _eq: "{agent_did}" }},
                     request_id: {{ _eq: "{escaped_request_id}" }}
+                    _docID: {{ _eq: "{request_doc_id}" }}
                 }},
                 limit: 1
             ) {{
@@ -126,17 +157,17 @@ async fn lookup_parent_request(
         }}"#
     );
 
-    let resp = graphql_with_transaction_retry(
-        node,
-        &query,
-        "querying parent request for inference recovery",
-    )
-    .await
-    .with_context(|| {
-        format!("querying parent request for inference recovery request_id={request_id}")
-    })?;
+    let resp = access
+        .transact_readonly("inference.recovery_parent", |txn| {
+            let query = &query;
+            Box::pin(async move { txn.execute_local_response(query).await })
+        })
+        .await
+        .with_context(|| {
+            format!("querying parent request for inference recovery request_id={request_id}")
+        })?;
 
-    let rows: Vec<AgentRequestRow> = crate::store::graphql::rows(&resp, "AgentRequest")?;
+    let rows: Vec<AgentRequestRow> = crate::store::graphql::required_rows(&resp, "AgentRequest")?;
     Ok(rows.into_iter().next())
 }
 
@@ -159,7 +190,7 @@ fn recovery_outcome(
 }
 
 async fn recover_inference_call_row(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     row: &StaleInferenceCallRow,
     outcome: InferenceRecoveryOutcome,
 ) -> Result<bool> {
@@ -187,17 +218,18 @@ async fn recover_inference_call_row(
         }}"#,
     );
 
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "recover_inference_call",
-        &mutation,
-    )
-    .await
-    .context("recover inference call mutation")?;
-    Ok(
-        !crate::store::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?
-            .is_empty(),
-    )
+    let response = access
+        .transact_write("recover_inference_call", |txn| {
+            let mutation = &mutation;
+            Box::pin(async move { txn.execute_local_response(mutation).await })
+        })
+        .await
+        .context("recover inference call mutation")?;
+    Ok(!crate::store::graphql::required_rows::<serde_json::Value>(
+        &response,
+        "update_InferenceCall",
+    )?
+    .is_empty())
 }
 
 fn request_is_interrupted(parent: &AgentRequestRow) -> bool {

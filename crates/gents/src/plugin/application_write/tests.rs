@@ -35,13 +35,8 @@ fn call(operation: &str, input: Value, filter: Option<Value>) -> WriteParams {
         options,
     }
 }
-async fn fixture() -> (Arc<crate::defra_node::EmbeddedNode>, WriteTool) {
-    let node = Arc::new(
-        crate::defra_node::EmbeddedNode::builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+async fn fixture() -> (Arc<crate::defra_node::Node>, WriteTool) {
+    let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
     node.add_collection(
         "type Parcel { reference: String status: String tags: [String] payload: JSON }",
     )
@@ -110,7 +105,7 @@ async fn preview_create_update_delete_and_fresh_reads_preserve_json() {
         access.execute("{Parcel{_docID}}").await.unwrap()["data"]["Parcel"],
         json!([])
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -178,7 +173,7 @@ async fn changed_targets_and_overbroad_selection_never_apply() {
         let error = tool.execute(&malformed).await.unwrap_err();
         assert!(format!("{error:#}").contains("unknown filter field/operator"));
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -201,17 +196,12 @@ async fn managed_credentials_scope_and_injection_are_refused() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("identifier"), "{error}");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn native_relationship_input_uses_the_target_document_id() {
-    let node = Arc::new(
-        crate::defra_node::EmbeddedNode::builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
     node.add_collection(
         "type Writer { name: String books: [Volume] } type Volume { title: String author: Writer }",
     )
@@ -236,46 +226,117 @@ async fn native_relationship_input_uses_the_target_document_id() {
         .await
         .unwrap();
     assert_eq!(rows["data"]["Volume"][0]["author"]["name"], "Nora");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn a_collection_grant_cannot_bypass_native_document_acp() {
-    const OWNER: &str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
-    const READER: &str = "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR";
+    use crate::store::identity::NodeIdentity;
+    let home = tempfile::tempdir().unwrap();
+    let runtime_path = home.path().join("runtime.key");
+    let runtime = crate::KeyIdentity::load_or_create(&runtime_path, None).unwrap();
+    let user = crate::KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
+    let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
+    let reader = crate::store::identity::resolve_agent_identity(&runtime, &binding).unwrap();
+    let key = crate::store::identity::load_file_identity(&runtime_path)
+        .unwrap()
+        .private_key_bytes();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
     let node = Arc::new(
-        crate::defra_node::EmbeddedNode::builder()
+        crate::defra_node::Node::builder()
+            .with_node_identity_did(runtime.did())
+            .with_signing_key(crate::defra_node::SigningKey::Ed25519(key))
+            .with_node_acp_enabled()
+            .with_http(crate::defra_node::HttpConfig::with_listener(listener).unwrap())
             .build()
             .await
             .unwrap(),
     );
-    let policy = node.add_dac_policy(OWNER, "name: Application write ACP\nresources:\n  - name: parcels\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n").await.unwrap();
-    node.add_collection(&format!("type Parcel @policy(id: \"{}\", resource: \"parcels\") {{ reference: String status: String }}",crate::store::graphql::escape_graphql_string(&policy))).await.unwrap();
-    let owner = WriteTool::new(
-        ConfigAccess::local(node.clone()),
-        BTreeSet::from(["Parcel".into()]),
-        Some(identity::Did::new(OWNER).unwrap()),
-    );
-    let created = apply(
-        &owner,
-        call(
-            "create",
-            json!({"reference":"PRIVATE","status":"queued"}),
-            None,
-        ),
-    )
-    .await
-    .unwrap();
-    let doc_id = created["effect"]["documents"][0]["_docID"]
-        .as_str()
-        .unwrap();
-    node.add_dac_actor_relationship(OWNER, "Parcel", doc_id, "reader", READER)
+    let administrator =
+        ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
+    for did in [user.did(), reader.did()] {
+        for permission in [
+            acp::NodePermission::CollectionGet,
+            acp::NodePermission::DocumentRead,
+            acp::NodePermission::DocumentUpdate,
+            acp::NodePermission::DocumentDelete,
+            acp::NodePermission::DacRelationAdd,
+        ] {
+            administrator
+                .grant_node_permission(&identity::Did::new(did).unwrap(), permission)
+                .await
+                .unwrap();
+        }
+    }
+    let policy = node
+        .add_dac_policy_as(
+            &defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned())),
+            "name: Application write ACP\nresources:\n  - name: parcels\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n",
+        )
         .await
         .unwrap();
+    let schema = format!("type Parcel @policy(id: \"{}\", resource: \"parcels\") {{ reference: String status: String }}",crate::store::graphql::escape_graphql_string(&policy));
+    node.add_collection(&schema).await.unwrap();
+    let owner = ConfigAccess::Graphql(
+        crate::store::config_client::GraphqlEndpoint::as_principal(endpoint, user.did())
+            .with_client_signing_capability(user.client_signing_capability().unwrap())
+            .unwrap()
+            .with_client_signed_agent_creates(),
+    );
+    let created = owner
+        .transact_write("test.application_acp.create", |txn| {
+            let schema = &schema;
+            Box::pin(async move {
+                txn.execute_client_signed_create(
+            "mutation($input: ParcelMutationInputArg!) { create_Parcel(input:$input) {_docID} }",
+            &json!({"input":{"reference":"PRIVATE","status":"queued"}}), schema,
+        ).await
+            })
+        })
+        .await
+        .unwrap();
+    let doc_id = crate::store::graphql::created_doc_id(&created, "Parcel").unwrap();
+    let owners = owner
+        .transact_readonly("test.application_acp.owner", |txn| {
+            let doc_id = &doc_id;
+            Box::pin(async move {
+                txn.document_owners("Parcel", std::slice::from_ref(doc_id))
+                    .await
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        owners[0].owner.as_ref().map(|did| did.as_str()),
+        Some(user.did())
+    );
+    let reader_did = identity::Did::new(reader.did()).unwrap();
+    owner
+        .add_actor_relationship("Parcel", &doc_id, "reader", &reader_did)
+        .await
+        .unwrap();
+    let reader_actor = crate::defra_node::AcpIdentity::Authenticated(reader_did.clone());
+    for (permission, expected) in [
+        (crate::defra_node::DocumentPermission::Read, true),
+        (crate::defra_node::DocumentPermission::Update, false),
+        (crate::defra_node::DocumentPermission::Delete, false),
+    ] {
+        assert_eq!(
+            node.document_acp()
+                .check_doc_access(&reader_actor, permission, &policy, "parcels", &doc_id)
+                .await
+                .unwrap(),
+            expected
+        );
+    }
+    let reader_access =
+        ConfigAccess::local_managed_agent(node.clone(), reader_did.clone(), reader.as_ref())
+            .unwrap();
     let reader = WriteTool::new(
-        ConfigAccess::local(node.clone()),
+        reader_access,
         BTreeSet::from(["Parcel".into()]),
-        Some(identity::Did::new(READER).unwrap()),
+        Some(reader_did),
     );
     let filter = json!({"reference":{"_eq":"PRIVATE"}});
     assert!(apply(
@@ -287,16 +348,9 @@ async fn a_collection_grant_cannot_bypass_native_document_acp() {
     assert!(apply(&reader, call("delete", Value::Null, Some(filter)))
         .await
         .is_err());
-    let rows = ConfigAccess::transact_local_write(
-        &node,
-        Some(identity::Did::new(OWNER).unwrap()),
-        "verify_application_acp",
-        |txn| Box::pin(async move { txn.execute("{Parcel{reference status}}").await }),
-    )
-    .await
-    .unwrap();
+    let rows = owner.execute("{Parcel{reference status}}").await.unwrap();
     assert_eq!(rows["data"]["Parcel"][0]["status"], "queued");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 mod plugin {
@@ -305,15 +359,52 @@ mod plugin {
     use gents_protocol::job::{DataOp, DataWrite, PluginDataDeclaration};
     use std::collections::BTreeMap;
 
-    const NODE: &str = "did:key:z6Mknode";
+    struct Fixture {
+        node: Arc<crate::defra_node::Node>,
+        runtime: identity::Did,
+        agent: Arc<dyn crate::store::identity::NodeIdentity>,
+        _home: tempfile::TempDir,
+    }
 
-    async fn node() -> Arc<crate::defra_node::EmbeddedNode> {
+    impl std::ops::Deref for Fixture {
+        type Target = Arc<crate::defra_node::Node>;
+        fn deref(&self) -> &Self::Target {
+            &self.node
+        }
+    }
+
+    async fn node() -> Fixture {
+        use crate::store::identity::NodeIdentity;
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("runtime.key");
+        let runtime = crate::KeyIdentity::load_or_create(&path, None).unwrap();
+        let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
+        let agent = crate::store::identity::resolve_agent_identity(&runtime, &binding).unwrap();
+        let key = crate::store::identity::load_file_identity(&path)
+            .unwrap()
+            .private_key_bytes();
         let node = Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
+            crate::defra_node::Node::builder()
+                .with_node_identity_did(runtime.did())
+                .with_signing_key(crate::defra_node::SigningKey::Ed25519(key))
+                .with_node_acp_enabled()
                 .build()
                 .await
                 .unwrap(),
         );
+        let runtime_did = identity::Did::new(runtime.did()).unwrap();
+        let owner = ConfigAccess::local_as(node.clone(), runtime_did.clone());
+        for permission in [
+            acp::NodePermission::CollectionGet,
+            acp::NodePermission::DocumentRead,
+            acp::NodePermission::DocumentUpdate,
+            acp::NodePermission::DocumentDelete,
+        ] {
+            owner
+                .grant_node_permission(&identity::Did::new(agent.did()).unwrap(), permission)
+                .await
+                .unwrap();
+        }
         node.add_collection(
             "type Note { owner: String body: String tags: [String] }
              type Keyed { owner: String key: String @index(unique: true) body: String created_at: String }
@@ -321,7 +412,12 @@ mod plugin {
         )
         .await
         .unwrap();
-        node
+        Fixture {
+            node,
+            runtime: runtime_did,
+            agent,
+            _home: home,
+        }
     }
 
     fn grant(collections: &[&str]) -> PluginData {
@@ -329,7 +425,7 @@ mod plugin {
             declaration: PluginDataDeclaration {
                 collections: collections.iter().map(|c| (*c).into()).collect(),
                 ops: vec!["insert".into(), "update".into(), "delete".into()],
-                stamped: BTreeMap::from([("owner".to_owned(), Stamp::NodeDid)]),
+                stamped: BTreeMap::from([("owner".to_owned(), Stamp::CallerDid)]),
             },
             collection_fields: collections
                 .iter()
@@ -363,17 +459,17 @@ mod plugin {
         }
     }
 
-    async fn rows(node: &Arc<crate::defra_node::EmbeddedNode>, collection: &str) -> Value {
-        ConfigAccess::local(node.clone())
+    async fn rows(node: &Fixture, collection: &str) -> Value {
+        ConfigAccess::local_as(node.node.clone(), node.runtime.clone())
             .execute(&format!("{{{collection}{{_docID body created_at}}}}"))
             .await
             .unwrap()["data"][collection]
             .clone()
     }
 
-    fn stamps() -> StampContext {
+    fn stamps(node: &Fixture) -> StampContext {
         StampContext::Callback {
-            node_did: NODE.into(),
+            caller_did: node.agent.did().into(),
         }
     }
 
@@ -388,19 +484,31 @@ mod plugin {
     }
 
     async fn apply_all(
-        node: &Arc<crate::defra_node::EmbeddedNode>,
+        node: &Fixture,
         grant: &PluginData,
         writes: Vec<DataWrite>,
     ) -> Result<Vec<Value>> {
-        ConfigAccess::transact_local_write(node, None, "plugin_writes_test", |txn| {
-            let writes = writes.clone();
-            Box::pin(async move { apply_plugin_writes_in_txn(txn, grant, &stamps(), writes).await })
-        })
-        .await
+        let actor = identity::Did::new(node.agent.did())?;
+        let access = ConfigAccess::local_managed_agent(
+            node.node.clone(),
+            actor.clone(),
+            node.agent.as_ref(),
+        )?;
+        let stamps = stamps(node);
+        access
+            .transact_write("plugin_writes_test", |txn| {
+                let writes = writes.clone();
+                let actor = actor.clone();
+                let stamps = stamps.clone();
+                Box::pin(async move {
+                    apply_plugin_writes_in_txn(txn, &actor, grant, &stamps, writes).await
+                })
+            })
+            .await
     }
 
-    async fn notes(node: &Arc<crate::defra_node::EmbeddedNode>) -> Value {
-        ConfigAccess::local(node.clone())
+    async fn notes(node: &Fixture) -> Value {
+        ConfigAccess::local_as(node.node.clone(), node.runtime.clone())
             .execute("{Note{_docID owner body tags}}")
             .await
             .unwrap()["data"]["Note"]
@@ -447,13 +555,19 @@ mod plugin {
         .await
         .unwrap();
         assert_eq!(notes(&node).await, json!([]));
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
     async fn plugin_write_to_a_protected_collection_is_refused() {
         let node = node().await;
-        for collection in [gents_protocol::schemas::EVAL_RUN_NAME, "AgentRequest"] {
+        let publication = &crate::lean_vocab_test::lean_contract_snapshot()
+            .client_publication_protected_collection;
+        for collection in [
+            gents_protocol::schemas::EVAL_RUN_NAME,
+            "AgentRequest",
+            publication.as_str(),
+        ] {
             let grant = grant(&[collection]);
             let error = apply_all(
                 &node,
@@ -472,7 +586,7 @@ mod plugin {
                 "{error:#}"
             );
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -490,7 +604,7 @@ mod plugin {
             "{error:#}"
         );
         assert_eq!(notes(&node).await, json!([]));
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -508,7 +622,7 @@ mod plugin {
         .unwrap_err();
         assert!(error.to_string().contains("missing_field"), "{error:#}");
         assert_eq!(notes(&node).await, json!([]));
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -522,7 +636,7 @@ mod plugin {
         )
         .await
         .unwrap();
-        assert_eq!(notes(&node).await[0]["owner"], NODE);
+        assert_eq!(notes(&node).await[0]["owner"], node.agent.did());
         let forged = apply_all(
             &node,
             &grant,
@@ -536,7 +650,7 @@ mod plugin {
         .await;
         assert!(forged.is_err());
         assert_eq!(notes(&node).await.as_array().unwrap().len(), 1);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
     #[tokio::test]
     async fn on_conflict_ignore_with_an_equal_row_is_a_no_op() {
@@ -552,7 +666,7 @@ mod plugin {
         assert_eq!(second[0]["_docID"], first[0]["_docID"]);
         assert!(second[0].get("duplicate").is_none());
         assert_eq!(rows(&node, "Keyed").await.as_array().unwrap().len(), 1);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -572,7 +686,7 @@ mod plugin {
         let stored = rows(&node, "Keyed").await;
         assert_eq!(stored.as_array().unwrap().len(), 1);
         assert_eq!(stored[0]["body"], "x");
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -594,7 +708,7 @@ mod plugin {
             .unwrap_err();
         assert!(error.to_string().contains("duplicate Keyed a"), "{error:#}");
         assert_eq!(rows(&node, "Keyed").await.as_array().unwrap().len(), 1);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -620,7 +734,7 @@ mod plugin {
             .unwrap_err();
         assert!(error.to_string().contains("key"), "{error:#}");
         assert_eq!(rows(&node, "Keyed").await, json!([]));
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -681,6 +795,6 @@ mod plugin {
             .await
             .unwrap();
         assert_eq!(other[0], json!({"duplicate": true}));
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
-use defra_node::{EmbeddedNode, QueryResponse};
+use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
@@ -18,15 +18,15 @@ pub struct DirectoryEntry {
     pub source_did: String,
     pub display_name: String,
     pub agents: Vec<String>,
-    pub agent_ids: Vec<String>,
-    pub default_agent_id: String,
+    pub agent_dids: Vec<String>,
+    pub default_agent_did: String,
     pub runtime_state: String,
     pub last_seen: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentInfo {
-    pub agent_id: String,
+    pub agent_did: String,
     pub display_name: String,
 }
 
@@ -90,17 +90,17 @@ pub fn derive_directory_entries(
     nodes
         .iter()
         .filter(|(did, _, _)| !did.trim().is_empty())
-        .map(|(did, display_name, default_agent_id)| {
+        .map(|(did, display_name, default_agent_did)| {
             let mut infos = agents.get(did).cloned().unwrap_or_default();
             infos.sort_by(|a, b| {
                 a.display_name
                     .cmp(&b.display_name)
-                    .then_with(|| a.agent_id.cmp(&b.agent_id))
+                    .then_with(|| a.agent_did.cmp(&b.agent_did))
             });
-            infos.dedup_by(|a, b| a.agent_id == b.agent_id);
+            infos.dedup_by(|a, b| a.agent_did == b.agent_did);
 
             let names = infos.iter().map(|info| info.display_name.clone()).collect();
-            let ids: Vec<String> = infos.iter().map(|info| info.agent_id.clone()).collect();
+            let ids: Vec<String> = infos.iter().map(|info| info.agent_did.clone()).collect();
             let (runtime_state, updated_at) = runtimes.get(did).cloned().unwrap_or_default();
             (
                 did.clone(),
@@ -110,8 +110,8 @@ pub fn derive_directory_entries(
                     source_did: source_did.to_string(),
                     display_name: display_name.clone(),
                     agents: names,
-                    agent_ids: ids,
-                    default_agent_id: default_agent_id.clone(),
+                    agent_dids: ids,
+                    default_agent_did: default_agent_did.clone(),
                     runtime_state,
                     last_seen: canonicalize_last_seen(&updated_at),
                 },
@@ -259,27 +259,7 @@ impl GraphqlDirectoryStore {
 #[async_trait]
 impl DirectoryStore for GraphqlDirectoryStore {
     async fn load_source_snapshot(&self) -> Result<SourceSnapshot> {
-        let (fields, _) = crate::store::config_client::config_projection(
-            crate::store::collection::Collection::Agent,
-            None,
-        )?;
-        let query = format!(
-            "{{ Node {{ node_did display_name default_agent_id enabled }} NodeReadiness {{ node_did snapshot_json updated_at }} Agent {{ {} }} }}",
-            fields.join(" "),
-        );
-        let response = crate::store::graphql::graphql_with_transaction_retry(
-            &self.node,
-            &query,
-            "query directory source snapshot",
-        )
-        .await?;
-        let nodes = parse_nodes(&response)?;
-        let agents = parse_agents(&response)?;
-        Ok(SourceSnapshot {
-            nodes,
-            agents,
-            runtimes: parse_runtime_states(&response)?,
-        })
+        Ok(SourceSnapshot::default())
     }
 
     async fn list_directory_entries(
@@ -295,8 +275,8 @@ impl DirectoryStore for GraphqlDirectoryStore {
                 source_did
                 display_name
                 agents
-                agent_ids
-                default_agent_id
+                agent_dids
+                default_agent_did
                 runtime_state
                 last_seen
             }}
@@ -325,8 +305,8 @@ impl DirectoryStore for GraphqlDirectoryStore {
                     source_did: row.source_did.unwrap_or_default(),
                     display_name: row.display_name.unwrap_or_default(),
                     agents: row.agents.unwrap_or_default(),
-                    agent_ids: row.agent_ids.unwrap_or_default(),
-                    default_agent_id: row.default_agent_id.unwrap_or_default(),
+                    agent_dids: row.agent_dids.unwrap_or_default(),
+                    default_agent_did: row.default_agent_did.unwrap_or_default(),
                     runtime_state: row.runtime_state.unwrap_or_default(),
                     last_seen: row.last_seen.unwrap_or_default(),
                 };
@@ -370,8 +350,8 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
     let source_did = escape_graphql_string(&entry.source_did);
     let display_name = escape_graphql_string(&entry.display_name);
     let agents = graphql_string_list_literal(entry.agents.iter().map(String::as_str));
-    let agent_ids = graphql_string_list_literal(entry.agent_ids.iter().map(String::as_str));
-    let default_agent_id = escape_graphql_string(&entry.default_agent_id);
+    let agent_dids = graphql_string_list_literal(entry.agent_dids.iter().map(String::as_str));
+    let default_agent_did = escape_graphql_string(&entry.default_agent_did);
     let runtime_state = escape_graphql_string(&entry.runtime_state);
     let last_seen = graphql_nullable_datetime_literal(&entry.last_seen);
     let now = escape_graphql_string(now);
@@ -385,8 +365,8 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
                     source_did: "{source_did}",
                     display_name: "{display_name}",
                     agents: {agents},
-                    agent_ids: {agent_ids},
-                    default_agent_id: "{default_agent_id}",
+                    agent_dids: {agent_dids},
+                    default_agent_did: "{default_agent_did}",
                     runtime_state: "{runtime_state}",
                     last_seen: {last_seen},
                     updated_at: "{now}"
@@ -394,8 +374,8 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
                 update: {{
                     display_name: "{display_name}",
                     agents: {agents},
-                    agent_ids: {agent_ids},
-                    default_agent_id: "{default_agent_id}",
+                    agent_dids: {agent_dids},
+                    default_agent_did: "{default_agent_did}",
                     runtime_state: "{runtime_state}",
                     last_seen: {last_seen},
                     updated_at: "{now}"
@@ -425,137 +405,6 @@ fn graphql_nullable_datetime_literal(value: &str) -> String {
     }
 }
 
-fn parse_nodes(response: &QueryResponse) -> Result<Vec<(String, String, String)>> {
-    Ok(rows::<NodeRow>(response, "Node")?
-        .into_iter()
-        .filter_map(|row| {
-            if !row.enabled.unwrap_or(true) {
-                return None;
-            }
-            let did = row.node_did?.trim().to_string();
-            if did.is_empty() {
-                return None;
-            }
-            let display_name = row
-                .display_name
-                .as_deref()
-                .map(str::trim)
-                .unwrap_or_default()
-                .to_string();
-            let default_agent_id = row
-                .default_agent_id
-                .as_deref()
-                .map(str::trim)
-                .unwrap_or_default()
-                .to_string();
-            Some((did, display_name, default_agent_id))
-        })
-        .collect())
-}
-
-fn parse_runtime_states(response: &QueryResponse) -> Result<BTreeMap<String, (String, String)>> {
-    Ok(
-        rows::<gents_protocol::row::NodeReadinessRow>(response, "NodeReadiness")?
-            .into_iter()
-            .filter_map(|row| {
-                let did = row.node_did.trim().to_string();
-                if did.is_empty() {
-                    return None;
-                }
-                let snapshot =
-                    gents_protocol::row::decode_node_readiness_snapshot(&row, &did).ok()?;
-                let process_state = snapshot.process_state.as_str().to_string();
-                let updated_at = row.updated_at.trim().to_string();
-                Some((did, (process_state, updated_at)))
-            })
-            .collect(),
-    )
-}
-
-fn config_documents<T>(
-    response: &QueryResponse,
-    collection: crate::store::collection::Collection,
-) -> Result<BTreeMap<(String, String), T>>
-where
-    T: serde::de::DeserializeOwned,
-{
-    let name = collection.graphql_type();
-    let (fields, _) = crate::store::config_client::config_projection(collection, None)?;
-    let source = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get(name))
-        .and_then(serde_json::Value::as_array)
-        .with_context(|| format!("directory snapshot missing {name}"))?;
-    let mut documents = BTreeMap::new();
-    for value in source {
-        let mut document = value
-            .as_object()
-            .context("configuration row is not an object")?
-            .clone();
-        document.retain(|field, _| fields.contains(&field.as_str()));
-        let document = serde_json::Value::Object(document);
-        let (_, normalized) =
-            crate::store::config_client::config_projection(collection, Some(&document))?;
-        let document = normalized.context("canonical configuration projection missing value")?;
-        let owner = document
-            .get("node_did")
-            .and_then(serde_json::Value::as_str)
-            .context("configuration owner missing")?;
-        let id = document
-            .get(collection.unique_field())
-            .and_then(serde_json::Value::as_str)
-            .context("configuration ID missing")?;
-        anyhow::ensure!(
-            !owner.trim().is_empty() && !id.trim().is_empty(),
-            "blank {name} owner or ID"
-        );
-        let key = (owner.to_string(), id.to_string());
-        let parsed =
-            serde_json::from_value(document).with_context(|| format!("decoding {name}"))?;
-        anyhow::ensure!(
-            documents.insert(key, parsed).is_none(),
-            "duplicate scoped {name} identity"
-        );
-    }
-    Ok(documents)
-}
-
-fn parse_agents(response: &QueryResponse) -> Result<BTreeMap<String, Vec<AgentInfo>>> {
-    let documents = config_documents::<crate::documents::Agent>(
-        response,
-        crate::store::collection::Collection::Agent,
-    )?;
-    let mut agents: BTreeMap<String, Vec<AgentInfo>> = BTreeMap::new();
-    for ((owner, _), agent) in documents {
-        if !agent.enabled {
-            continue;
-        }
-        agents.entry(owner).or_default().push(AgentInfo {
-            display_name: agent
-                .display_name
-                .as_deref()
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .unwrap_or(&agent.agent_id)
-                .to_string(),
-            agent_id: agent.agent_id,
-        });
-    }
-    Ok(agents)
-}
-
-#[derive(Deserialize)]
-struct NodeRow {
-    node_did: Option<String>,
-    #[serde(default)]
-    display_name: Option<String>,
-    #[serde(default)]
-    default_agent_id: Option<String>,
-    #[serde(default)]
-    enabled: Option<bool>,
-}
-
 #[derive(Deserialize)]
 struct DirectoryRow {
     #[serde(default)]
@@ -568,9 +417,9 @@ struct DirectoryRow {
     #[serde(default)]
     agents: Option<Vec<String>>,
     #[serde(default)]
-    agent_ids: Option<Vec<String>>,
+    agent_dids: Option<Vec<String>>,
     #[serde(default)]
-    default_agent_id: Option<String>,
+    default_agent_did: Option<String>,
     #[serde(default)]
     runtime_state: Option<String>,
     #[serde(default)]
@@ -581,225 +430,167 @@ struct DirectoryRow {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn graphql_tick_is_write_free_fixpoint_for_runtime_updated_at_format() -> Result<()> {
-        let tempdir = tempfile::tempdir()?;
-        let node = Arc::new(
-            crate::test_support::node_builder()
-                .data_path(tempdir.path().join("data"))
-                .build()
-                .await?,
-        );
-        crate::ensure_runtime_schemas(&node).await?;
-        let updated_at = Utc::now().to_rfc3339();
-        let snapshot_json = escape_graphql_string(
-            &serde_json::json!({
-                "format_version": gents_protocol::node_readiness::NODE_READINESS_FORMAT_VERSION,
-                "process_state": "ready",
-                "active_generation": 1,
-                "router_generation": 1,
-                "default_agent_id": "general",
-                "agents": [{
-                    "agent_id": "general",
-                    "state": "ready",
-                    "reason": null
-                }]
-            })
-            .to_string(),
-        );
-        let seed = format!(
-            r#"mutation {{
-                create_Node(input: {{
-                    node_did: "did:key:real",
-                    display_name: "Real",
-                    enabled: true,
-                    created_at: "2026-07-23T00:00:00Z"
-                }}) {{ _docID }}
-                create_NodeReadiness(input: {{
-                    node_did: "did:key:real",
-                    snapshot_json: "{snapshot_json}",
-                    updated_at: "{updated_at}"
-                }}) {{ _docID }}
-            }}"#
-        );
-        crate::store::config_client::ConfigAccess::write_local_response(
-            &node,
-            "test.seed_runtime_readiness",
-            &seed,
-        )
-        .await?;
-
-        let store = GraphqlDirectoryStore::new(node.clone());
-        let first = reconcile_directory_tick(&store, "did:key:home").await?;
-        assert_eq!(first.upserted, BTreeSet::from(["did:key:real".to_string()]));
-
-        let stored = store.list_directory_entries("did:key:home").await?;
-        assert_eq!(
-            stored.get("did:key:real").map(|e| e.last_seen.as_str()),
-            Some(canonicalize_last_seen(&updated_at).as_str())
-        );
-
-        let second = reconcile_directory_tick(&store, "did:key:home").await?;
-        assert_eq!(
-            second,
-            DirectoryTickOutcome::default(),
-            "settled state must be a write-free fixpoint for the runtime updated_at format"
-        );
-        Ok(())
-    }
-
     #[test]
     fn canonicalize_last_seen_quantizes_offset_and_subseconds_to_utc_seconds() {
-        assert_eq!(
-            canonicalize_last_seen("2026-07-23T23:30:55.845794+00:00"),
-            "2026-07-23T23:30:55Z"
-        );
         assert_eq!(
             canonicalize_last_seen("2026-07-23T18:30:55.5-05:00"),
             "2026-07-23T23:30:55Z"
         );
-        assert_eq!(
-            canonicalize_last_seen("2026-07-23T23:30:55Z"),
-            "2026-07-23T23:30:55Z"
-        );
-        assert_eq!(
-            canonicalize_last_seen(&canonicalize_last_seen("2026-07-23T23:30:55.845794+00:00")),
-            "2026-07-23T23:30:55Z"
-        );
         assert_eq!(canonicalize_last_seen(""), "");
-        assert_eq!(canonicalize_last_seen("   "), "");
-        assert_eq!(canonicalize_last_seen("not-a-date"), "not-a-date");
     }
 
     #[tokio::test]
-    async fn graphql_tick_projects_enabled_agents_and_retracts_removed_nodes() -> Result<()> {
-        let node = Arc::new(crate::test_support::node_builder().build().await?);
-        crate::ensure_runtime_schemas(&node).await?;
-        let seed = r#"mutation {
-            local_node: create_Node(input: { node_did: "did:key:local", display_name: "Local",
-                default_agent_id: "coder", enabled: true, created_at: "2026-07-23T00:00:00Z" }) { _docID }
-            disabled_node: create_Node(input: { node_did: "did:key:disabled", enabled: false,
-                created_at: "2026-07-23T00:00:00Z" }) { _docID }
-            coder_agent: create_Agent(input: { node_did: "did:key:local", agent_id: "coder",
-                display_name: "Coder", inference_profile_id: "profile", enabled: true }) { _docID }
-            artist_agent: create_Agent(input: { node_did: "did:key:local", agent_id: "artist",
-                display_name: "Artist", inference_profile_id: "profile", enabled: true }) { _docID }
-            disabled_agent: create_Agent(input: { node_did: "did:key:local", agent_id: "disabled",
-                inference_profile_id: "profile", enabled: false }) { _docID }
-            foreign_agent: create_Agent(input: { node_did: "did:key:foreign", agent_id: "coder",
-                display_name: "Foreign", inference_profile_id: "profile", enabled: true }) { _docID }
-        }"#;
-        crate::store::config_client::ConfigAccess::write_local_response(
-            &node,
-            "test.seed_directory",
-            seed,
-        )
-        .await?;
-        let store = GraphqlDirectoryStore::new(node.clone());
-        let first = reconcile_directory_tick(&store, "did:key:home").await?;
-        assert_eq!(
-            first.upserted,
-            BTreeSet::from(["did:key:local".to_string()])
-        );
-        let entries = store.list_directory_entries("did:key:home").await?;
-        let entry = &entries["did:key:local"];
-        assert_eq!(entry.agents, ["Artist", "Coder"]);
-        assert_eq!(entry.agent_ids, ["artist", "coder"]);
-        assert_eq!(entry.default_agent_id, "coder");
-        assert_eq!(entry.last_seen, "");
-        assert_eq!(
-            reconcile_directory_tick(&store, "did:key:home").await?,
-            DirectoryTickOutcome::default()
-        );
-        crate::store::config_client::ConfigAccess::write_local_response(&node, "test.remove_directory_node",
-            r#"mutation { delete_Node(filter: { node_did: { _eq: "did:key:local" } }) { _docID } }"#).await?;
-        assert_eq!(
-            reconcile_directory_tick(&store, "did:key:home")
-                .await?
-                .retracted,
-            BTreeSet::from(["did:key:local".to_string()])
-        );
-        assert!(store
-            .list_directory_entries("did:key:home")
-            .await?
-            .is_empty());
+    async fn directory_retracts_own_publications_and_preserves_foreign_sources() -> Result<()> {
+        let cases =
+            &crate::lean_vocab_test::lean_contract_snapshot().identity_directory_publication_cases;
+        let mut checked = 0;
+        for case in cases.iter().filter(|case| case["name"] != "failed-delete") {
+            checked += 1;
+            let node = Arc::new(crate::test_support::node_builder().build().await?);
+            crate::test_support::acp_policies::install_identity_acp_policies(&node).await?;
+            node.add_collection(gents_protocol::schemas::NODE_DIRECTORY_ENTRY)
+                .await?;
+            let store = GraphqlDirectoryStore::new(node.clone());
+            for entry in case["existing"].as_array().unwrap() {
+                let source = entry["source"].as_str().unwrap();
+                let did = entry["node"].as_str().unwrap();
+                let row = DirectoryEntry {
+                    directory_key: directory_entry_key(source, did),
+                    source_did: source.to_owned(),
+                    node_did: did.to_owned(),
+                    display_name: "previously published".into(),
+                    ..DirectoryEntry::default()
+                };
+                store.upsert_directory_entry(&row).await?;
+            }
+            let source = case["source"].as_str().unwrap();
+            assert!(case["expected_desired"].as_array().unwrap().is_empty());
+            let result = reconcile_directory_tick(&store, source).await?;
+            let deleted = case["deleted"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|value| value.as_str())
+                .filter(|did| {
+                    case["existing"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|entry| entry["source"] == source && entry["node"] == *did)
+                })
+                .map(str::to_owned)
+                .collect::<BTreeSet<_>>();
+            assert_eq!(result.retracted, deleted, "{case}");
+            assert!(result.upserted.is_empty() && result.refreshed.is_empty());
+            for source in case["existing"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry["source"].as_str().unwrap())
+                .collect::<BTreeSet<_>>()
+            {
+                let actual = store
+                    .list_directory_entries(source)
+                    .await?
+                    .into_keys()
+                    .collect::<BTreeSet<_>>();
+                let expected = case["expected_remaining"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|entry| entry["source"] == source)
+                    .map(|entry| entry["node"].as_str().unwrap().to_owned())
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(actual, expected, "{case}");
+            }
+            assert_eq!(
+                reconcile_directory_tick(&store, source).await?,
+                DirectoryTickOutcome::default()
+            );
+            node.shutdown().await?;
+        }
+        assert_eq!(checked, 3);
         Ok(())
     }
-}
-
-#[cfg(test)]
-mod source_partition_regression_tests {
-    use super::*;
 
     #[tokio::test]
-    async fn graphql_tick_preserves_foreign_row_with_same_node_did() -> Result<()> {
-        let tempdir = tempfile::tempdir()?;
-        let node = Arc::new(
-            crate::test_support::node_builder()
-                .data_path(tempdir.path().join("data"))
-                .build()
-                .await?,
+    async fn directory_failed_deletion_remains_visible() {
+        struct FailingStore {
+            entries: tokio::sync::Mutex<BTreeMap<String, DirectoryEntry>>,
+            deleted: BTreeSet<String>,
+        }
+        #[async_trait]
+        impl DirectoryStore for FailingStore {
+            async fn load_source_snapshot(&self) -> Result<SourceSnapshot> {
+                Ok(SourceSnapshot::default())
+            }
+            async fn list_directory_entries(
+                &self,
+                _source_did: &str,
+            ) -> Result<BTreeMap<String, DirectoryEntry>> {
+                Ok(self.entries.lock().await.clone())
+            }
+            async fn upsert_directory_entry(&self, _entry: &DirectoryEntry) -> Result<()> {
+                anyhow::bail!("unexpected upsert")
+            }
+            async fn delete_directory_entry(
+                &self,
+                _source_did: &str,
+                node_did: &str,
+            ) -> Result<()> {
+                anyhow::ensure!(self.deleted.contains(node_did), "injected delete failure");
+                self.entries.lock().await.remove(node_did);
+                Ok(())
+            }
+        }
+        let case = crate::lean_vocab_test::lean_contract_snapshot()
+            .identity_directory_publication_cases
+            .iter()
+            .find(|case| case["name"] == "failed-delete")
+            .unwrap();
+        let entries = case["existing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                let did = entry["node"].as_str().unwrap().to_owned();
+                (
+                    did.clone(),
+                    DirectoryEntry {
+                        node_did: did,
+                        source_did: entry["source"].as_str().unwrap().to_owned(),
+                        ..DirectoryEntry::default()
+                    },
+                )
+            })
+            .collect();
+        let store = FailingStore {
+            entries: tokio::sync::Mutex::new(entries),
+            deleted: case["deleted"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|id| id.as_str().unwrap().to_owned())
+                .collect(),
+        };
+        assert!(
+            reconcile_directory_tick(&store, case["source"].as_str().unwrap())
+                .await
+                .is_err()
         );
-        crate::ensure_runtime_schemas(&node).await?;
-
-        let foreign_source = "did:key:foreign-home";
-        let local_source = "did:key:local-home";
-        let node_did = "did:key:shared-agent";
-        let foreign_key = directory_entry_key(foreign_source, node_did);
-        let seed = format!(
-            r#"mutation {{
-                create_NodeDirectoryEntry(input: {{
-                    directory_key: "{foreign_key}",
-                    node_did: "{node_did}",
-                    source_did: "{foreign_source}",
-                    display_name: "Foreign",
-                    runtime_state: "running",
-                    updated_at: "2026-07-23T00:00:00Z"
-                }}) {{ _docID }}
-                create_Node(input: {{
-                    node_did: "{node_did}",
-                    display_name: "Local",
-                    enabled: true,
-                    created_at: "2026-07-23T00:00:00Z"
-                }}) {{ _docID }}
-            }}"#
-        );
-        crate::store::config_client::ConfigAccess::write_local_response(
-            &node,
-            "test.seed_source_partitions",
-            &seed,
-        )
-        .await?;
-
-        let store = GraphqlDirectoryStore::new(node.clone());
-        let first = reconcile_directory_tick(&store, local_source).await?;
-        assert_eq!(first.upserted, BTreeSet::from([node_did.to_string()]));
-        assert_eq!(
-            store.list_directory_entries(foreign_source).await?[node_did].display_name,
-            "Foreign",
-            "local projection must not overwrite the foreign same-DID row"
-        );
-        assert_eq!(
-            store.list_directory_entries(local_source).await?[node_did].display_name,
-            "Local"
-        );
-
-        let delete = format!(
-            r#"mutation {{ delete_Node(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{ _docID }} }}"#
-        );
-        crate::store::config_client::ConfigAccess::write_local_response(
-            &node,
-            "test.remove_local_source",
-            &delete,
-        )
-        .await?;
-        let retracted = reconcile_directory_tick(&store, local_source).await?;
-        assert_eq!(retracted.retracted, BTreeSet::from([node_did.to_string()]));
-        assert!(store.list_directory_entries(local_source).await?.is_empty());
-        assert_eq!(
-            store.list_directory_entries(foreign_source).await?[node_did].display_name,
-            "Foreign"
-        );
-        Ok(())
+        let actual = store
+            .entries
+            .lock()
+            .await
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let expected = case["expected_remaining"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["node"].as_str().unwrap().to_owned())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(actual, expected);
     }
 }

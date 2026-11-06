@@ -58,13 +58,13 @@ async fn config_apply_prunes_live_only_task_from_canonical_bundle() -> Result<()
     )?;
     let path = root.join("pack_config.json");
     let mut config = read_json_file(&path)?;
-    let agent_id = config["node"]["default_agent_id"]
+    let agent_did = config["node"]["default_agent_did"]
         .as_str()
         .context("default agent")?
         .to_string();
     config["tasks"] = json!([{
         "task_id": "temporary-task",
-        "agent_id": agent_id,
+        "agent_did": agent_did,
         "prompt_template": "temporary"
     }]);
     write_json_file(&path, &config)?;

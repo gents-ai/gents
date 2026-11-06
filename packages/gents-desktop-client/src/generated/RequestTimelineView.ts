@@ -2,4 +2,4 @@
 import type { JsonValue } from "./serde_json/JsonValue.js";
 import type { RunTimelineEventView } from "./RunTimelineEventView.js";
 
-export type RequestTimelineView = { request_id: string, session_id?: string | null, node_did?: string | null, agent_id?: string | null, child_request_ids: Array<string>, events: Array<RunTimelineEventView>, [key: string]: JsonValue | undefined };
+export type RequestTimelineView = { request_id: string, session_id?: string | null, node_did?: string | null, agent_did?: string | null, child_request_ids: Array<string>, events: Array<RunTimelineEventView>, [key: string]: JsonValue | undefined };

@@ -1,14 +1,12 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
 use gents::request::lifecycle::{ExecutionOrigin, DEFAULT_REQUEST_MAX_RETRIES};
 use gents::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
-use gents::{build_signed_request, RequestIdentity, RequestSigner, RequestSpec, RetryLink};
+use gents::{RequestIdentity, RequestSigner, RequestSpec, RetryLink};
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
-use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::client::store::ClientStore;
@@ -21,7 +19,7 @@ use super::prepare::{canonical_request_created_at_after, normalize_authored_cont
 use super::SubmittedRequest;
 
 pub async fn retry_request(
-    node: &Arc<EmbeddedNode>,
+    access: &ConfigAccess,
     store: &ClientStore,
     parent: &AgentRequestRow,
     requester_did: &str,
@@ -29,7 +27,7 @@ pub async fn retry_request(
     admission: AgentRequestAdmissionRecord,
 ) -> Result<SubmittedRequest> {
     retry_request_with_request_id(
-        node,
+        access,
         store,
         parent,
         requester_did,
@@ -41,7 +39,7 @@ pub async fn retry_request(
 }
 
 pub(super) async fn retry_request_with_request_id(
-    node: &Arc<EmbeddedNode>,
+    access: &ConfigAccess,
     store: &ClientStore,
     parent: &AgentRequestRow,
     requester_did: &str,
@@ -60,30 +58,49 @@ pub(super) async fn retry_request_with_request_id(
     )?;
     let requester_did = normalize_required("requester_did", requester_did)?;
 
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(signer.did())
+            && admission.signer_did == signer.did()
+            && admission.kind
+                == gents_protocol::request_admission::AgentRequestAdmissionKind::Client,
+        "retry requires the authenticated client signer"
+    );
     let request_id_ref = &request_id;
-    ConfigAccess::transact_local_idempotent(
-        node,
-        None,
-        IdempotentTransactionRetry::FiveAttempts,
-        "desktop.request.retry",
-        move |txn| {
-            let admission = admission.clone();
-            Box::pin(async move {
-                retry_request_in_txn(
-                    txn,
-                    store,
-                    parent_request_id,
-                    node_did,
-                    requester_did,
-                    signer,
-                    admission,
-                    request_id_ref,
-                )
-                .await
-            })
-        },
+    let (submitted, parent_doc_id) = access
+        .transact_idempotent(
+            IdempotentTransactionRetry::FiveAttempts,
+            "desktop.request.retry",
+            move |txn| {
+                let admission = admission.clone();
+                Box::pin(async move {
+                    retry_request_in_txn(
+                        txn,
+                        store,
+                        parent_request_id,
+                        node_did,
+                        requester_did,
+                        signer,
+                        admission,
+                        request_id_ref,
+                    )
+                    .await
+                })
+            },
+        )
+        .await?;
+    let recovered = gents::request::lifecycle::reconcile_client_retry(
+        access,
+        node_did,
+        &submitted.session_id,
+        requester_did,
+        &parent_doc_id,
     )
-    .await
+    .await?;
+    anyhow::ensure!(
+        recovered.as_deref() == Some(submitted.request_id.as_str()),
+        "retry publication is not yet confirmed"
+    );
+    Ok(submitted)
 }
 
 #[expect(
@@ -99,12 +116,12 @@ async fn retry_request_in_txn(
     signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     candidate_request_id: &str,
-) -> Result<SubmittedRequest> {
+) -> Result<(SubmittedRequest, String)> {
     let (parent_doc_id, parent) =
         load_retry_parent_in_txn(txn, parent_request_id, node_did, requester_did).await?;
     let retry_key = retry_successor_key(&parent_doc_id);
     if let Some(existing) = load_retry_successor_in_txn(txn, &retry_key).await? {
-        return Ok(existing);
+        return Ok((existing, parent_doc_id));
     }
     let parent_session_id = normalize_required(
         "session_id",
@@ -147,16 +164,17 @@ async fn retry_request_in_txn(
     }
     ensure_retry_candidate_is_fresh_in_txn(txn, parent_session_id, candidate_request_id).await?;
 
-    let agent_id = normalize_optional_string(parent.agent_id.as_deref());
+    let agent_did = normalize_optional_string(parent.agent_did.as_deref());
     let retry_root_request = normalize_optional_string(parent.retry_root_request.as_deref())
         .unwrap_or(parent_request_id);
     let created_at = canonical_request_created_at_after(parent.created_at.as_deref())?;
-    let binding = resolve_agent_binding(store, node_did, agent_id, Some(parent_session_id))?;
-    let create = build_signed_request(
+    let binding = resolve_agent_binding(store, node_did, agent_did, Some(parent_session_id))?;
+    let create = gents::request::lifecycle::build_signed_client_request_in_txn(
+        txn,
         RequestSpec {
             retry: Some(RetryLink {
                 parent_request_id: Some(parent_request_id.to_string()),
-                parent_request_doc_id: Some(parent_doc_id),
+                parent_request_doc_id: Some(parent_doc_id.clone()),
                 root_request_id: retry_root_request.to_string(),
                 retry_count,
                 max_retries,
@@ -169,7 +187,7 @@ async fn retry_request_in_txn(
                     request_id: candidate_request_id.to_string(),
                     node_did: node_did.to_string(),
                     requester_did: Some(requester_did.to_string()),
-                    agent_id: binding.agent_id.clone().unwrap_or_default(),
+                    agent_did: binding.agent_did.clone().unwrap_or_default(),
                     session_id: parent_session_id.to_string(),
                     content: content.to_string(),
                     execution_origin: ExecutionOrigin::from_persisted(Some(execution_origin))?,
@@ -181,15 +199,22 @@ async fn retry_request_in_txn(
         RequestSigner::Identity(signer),
     )
     .await?;
-    txn.execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
-        .await?;
+    txn.execute(
+        &create
+            .graphql_client_publication_mutation()
+            .map_err(anyhow::Error::msg)?,
+    )
+    .await?;
 
-    Ok(SubmittedRequest {
-        request_id: candidate_request_id.to_string(),
-        session_id: parent_session_id.to_string(),
-        node_did: node_did.to_string(),
-        agent_id: binding.agent_id,
-    })
+    Ok((
+        SubmittedRequest {
+            request_id: candidate_request_id.to_string(),
+            session_id: parent_session_id.to_string(),
+            node_did: node_did.to_string(),
+            agent_did: binding.agent_did,
+        },
+        parent_doc_id,
+    ))
 }
 
 fn retry_successor_key(parent_request_doc_id: &str) -> String {
@@ -205,12 +230,12 @@ async fn load_retry_successor_in_txn(
         r#"{{
             AgentRequest(
                 filter: {{ retry_key: {{ _eq: "{retry_key}" }} }},
-                limit: 1
+                limit: 2
             ) {{
                 request_id
                 session_id
                 node_did
-                agent_id
+                agent_did
             }}
         }}"#
     );
@@ -239,8 +264,8 @@ async fn load_retry_successor_in_txn(
             .and_then(Value::as_str)
             .context("retry successor has no node_did")?
             .to_string(),
-        agent_id: row
-            .get("agent_id")
+        agent_did: row
+            .get("agent_did")
             .and_then(Value::as_str)
             .and_then(|value| normalize_optional_string(Some(value)))
             .map(str::to_string),
@@ -270,7 +295,7 @@ async fn load_retry_parent_in_txn(
                 request_id
                 node_did
                 requester_did
-                agent_id
+                agent_did
                 session_id
                 retry_parent_request
                 retry_root_request

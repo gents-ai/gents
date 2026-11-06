@@ -15,8 +15,11 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.HttpAccess,
   `Proofs.Conformance.MetricsScrapeAccess,
   `Proofs.Conformance.ClientObservationOrdering,
+  `Proofs.Conformance.RuntimeConnectionObservation,
+  `Proofs.Conformance.RuntimeConnectionReprobe,
   `Proofs.Conformance.EnrollmentActivation,
   `Proofs.Conformance.DocumentPackUx,
+  `Proofs.Conformance.PluginDelete,
   `Proofs.Conformance.ClientSubmissionReceipt,
   `Proofs.Conformance.GoalClientDelivery,
   `Proofs.Conformance.ClientVoice,
@@ -36,6 +39,7 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.EvalRequestOutcome,
   `Proofs.Conformance.ToolArgumentFailure,
   `Proofs.Conformance.ParallelToolBatch,
+  `Proofs.Conformance.ConfigurationAffected,
   `Proofs.Conformance.ResponsesTermination,
   `Proofs.Conformance.StorageWriteGateStreamWaiter]
 

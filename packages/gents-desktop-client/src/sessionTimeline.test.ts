@@ -6,7 +6,7 @@ function session(): DesktopSessionSnapshot {
   return {
     sessionId: "session",
     nodeDid: "node",
-    agentId: null,
+    agentDid: null,
     title: null,
     previewText: null,
     status: null,

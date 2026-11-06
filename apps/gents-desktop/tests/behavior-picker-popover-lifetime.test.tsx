@@ -96,7 +96,7 @@ function Harness({ showPicker = true }: { showPicker?: boolean }) {
     <>
       <AgentPicker
         deployment={showPicker ? deployment : { ...deployment, agents: [] }}
-        agentId="default"
+        agentDid="default"
         onChange={vi.fn()}
       />
       <SyncHealth syncHealth={healthy} />

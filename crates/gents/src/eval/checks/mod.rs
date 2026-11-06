@@ -22,7 +22,7 @@ use crate::eval::runner::executor::StageEvidence;
 use crate::eval::OutcomeKind;
 
 /// Frozen into every run's origin; bump when the builtin set changes in a way that could move a score.
-pub const CHECK_REGISTRY_VERSION: &str = "4";
+pub const CHECK_REGISTRY_VERSION: &str = "6";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CheckVerdict {
@@ -76,6 +76,23 @@ impl CheckRegistry {
 
     pub fn get(&self, name: &str) -> Option<&dyn Check> {
         self.checks.get(name).map(AsRef::as_ref)
+    }
+
+    pub fn evaluate_bound(
+        &self,
+        name: &str,
+        params: &Value,
+        stage: &StageEvidence,
+    ) -> Option<CheckVerdict> {
+        let check = self.get(name)?;
+        let mut params = params.clone();
+        if let Err(error) = crate::eval::runner::subject_binding::bind_subject_references(
+            &mut params,
+            stage.subject_agent.as_ref(),
+        ) {
+            return Some(grader("unbound_subject", error.to_string()));
+        }
+        Some(check.evaluate(&params, stage))
     }
 
     pub fn names(&self) -> Vec<&'static str> {

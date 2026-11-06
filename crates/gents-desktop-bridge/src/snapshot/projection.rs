@@ -117,6 +117,8 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
         deployment.addr = String::new();
         deployment.graphql = None;
         deployment.dial_succeeded = false;
+        deployment.runtime_connection = None;
+        deployment.pairing_ready = None;
         deployment.last_error = None;
         for route in &mut deployment.routes {
             route.transport_peer_id = None;
@@ -305,7 +307,9 @@ mod tests {
                     source: Some("local".into()),
                     graphql: Some("http://127.0.0.1/graphql".into()),
                     dial_succeeded: true,
+                    runtime_connection: Some("connected".to_owned()),
                     chat_safe: true,
+                    pairing_ready: Some(true),
                     pairing: vec![PairingCollectionStatusView {
                         collection_id: "AgentSession".into(),
                         pairing_retry_count: 2,
@@ -336,7 +340,7 @@ mod tests {
                     node: NodeView {
                         node_did: "did:test:local".into(),
                         display_name: Some("Local".into()),
-                        default_agent_id: Some("default".into()),
+                        default_agent_did: Some("default".into()),
                         enabled: Some(true),
                         created_at: None,
                         created_by: None,
@@ -345,13 +349,14 @@ mod tests {
                         "node_did":"did:test:agent","tags":["private-node"]
                     })).unwrap()),
                     agent_configs: vec![serde_json::from_value(serde_json::json!({
-                        "node_did":"did:test:agent","agent_id":"agent",
+                        "node_did":"did:test:agent","agent_did":"agent",
                         "inference_profile_id":"profile","tags":["private-agent"]
                     })).unwrap()],
                     runtime: None,
                     node_readiness: Default::default(),
                     agents: vec![AgentView {
-                        agent_id: "default".into(),
+                        creation_nonce: "a".repeat(64),
+            agent_did: "default".into(),
                         node_did: "did:test:agent".into(),
                         display_name: "Default".into(),
                         description: Some("PRIVATE CONFIG DESCRIPTION".into()),
@@ -363,7 +368,7 @@ mod tests {
                         created_at: None,
                     }],
                     agent_environments: vec![AgentEnvironmentView {
-                        agent_id: "default".into(),
+                        agent_did: "default".into(),
                         display_name: "Default".into(),
                         enabled: true,
                         is_default: true,
@@ -416,7 +421,7 @@ mod tests {
                         preview_text: Some("hi".into()),
                         reply_preview: None,
                         status: None,
-                        agent_id: None,
+                        agent_did: None,
                         latest_request_id: None,
                         task_id: None,
                         task_name: None,
@@ -446,7 +451,7 @@ mod tests {
                         request_id: Some("request-1".into()),
                         cause_doc_id: None,
                         target_node_did: "did:test:local".into(),
-                        target_agent_id: "default".into(),
+                        target_agent_did: "default".into(),
                         expected_collection: None,
                         parent_item_id: None,
                         deadline_at: None,

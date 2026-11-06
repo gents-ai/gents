@@ -6,11 +6,12 @@ async fn test_service_with_graphql(node: Arc<EmbeddedNode>, graphql: String) -> 
         .expect("test signing identity");
     let node_did = gents::NodeIdentity::did(&identity).to_string();
     let actor = ::identity::Did::new(node_did.clone()).expect("fixture creator DID");
-    let agent_id = gents::default_agent_id_for_node(&node_did);
+    let binding = gents::store::identity::provision_agent_identity(&identity).unwrap();
+    let agent_did = binding.agent_did.clone();
     let config = AcpServiceConfig {
         node,
         node_did: Arc::from(node_did.as_str()),
-        agent_id: Arc::from(agent_id.as_str()),
+        agent_did: Arc::from(agent_did.as_str()),
         current_model: bound_model(),
         grok_home: None,
         plugin_home: std::path::PathBuf::new(),
@@ -21,8 +22,8 @@ async fn test_service_with_graphql(node: Arc<EmbeddedNode>, graphql: String) -> 
     crate::commands::grok_shim::seed_test_agent_configuration(
         &config.node,
         &node_did,
-        &agent_id,
-        &agent_id,
+        &binding,
+        &agent_did,
         &config.current_model.model_id,
         true,
     )
@@ -32,11 +33,13 @@ async fn test_service_with_graphql(node: Arc<EmbeddedNode>, graphql: String) -> 
         crate::commands::grok_shim::turn::TurnManagerConfig {
             actor,
             node_did: config.node_did.to_string(),
-            agent_id: config.agent_id.to_string(),
-            graphql,
+            agent_did: config.agent_did.to_string(),
+            graphql: gents::store::config_client::GraphqlEndpoint::as_principal(graphql, &node_did)
+                .with_client_signing_capability(identity.client_signing_capability().unwrap())
+                .unwrap(),
         },
     ));
-    let projections = Arc::new(ProjectionEngine::new(
+    let projections = Arc::new(ProjectionEngine::new_for_test(
         config.node.clone(),
         crate::commands::grok_shim::projection::BoundModelContext::new(
             config.current_model.model_id.clone(),

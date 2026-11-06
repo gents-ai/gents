@@ -10,9 +10,6 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
-use gents::runtime::agent::p2p_reconcile::session_hydration::{
-    ClientHydrationPhase, ClientHydrationProgress, SESSION_OWNERSHIP_MISMATCH,
-};
 use gents_desktop_core::client::{
     load_peer_records, project_sync_health, ClientCore, ClientSyncStateSnapshot, DesktopPaths,
     P2PHealth, PairingCollectionStatus, SyncHealth,
@@ -22,8 +19,7 @@ use gents_desktop_core::remote_admin::PairingErrorClass;
 use super::config::ResolvedBridgePolicy;
 use super::types::{
     normalize_optional, DesktopBootstrapSummary, DesktopClientSnapshot, InitConfigStatus,
-    P2PHealthView, PairingCollectionStatusView, SavedPeerView, SessionHydrationView,
-    SyncHealthView,
+    P2PHealthView, PairingCollectionStatusView, SavedPeerView, SyncHealthView,
 };
 use projection::{project_bootstrap_summary, project_client_snapshot, SnapshotGrants};
 
@@ -36,64 +32,6 @@ fn to_health_view(health: &P2PHealth) -> P2PHealthView {
         last_error: health.last_error.clone(),
         last_ok_at: system_time_rfc3339(health.last_ok_at),
         last_failure_at: system_time_rfc3339(health.last_failure_at),
-    }
-}
-
-/// A refusal because another requester owns the session is not a sync
-/// failure to retry: it is presented as a session this client cannot read.
-pub(crate) fn to_hydration_view(
-    progress: &ClientHydrationProgress,
-    rejection_detail: Option<String>,
-) -> SessionHydrationView {
-    let ownership_refused = progress.phase == ClientHydrationPhase::Failed
-        && rejection_detail.as_deref() == Some(SESSION_OWNERSHIP_MISMATCH);
-    SessionHydrationView {
-        session_id: progress.session_id.clone(),
-        node_did: progress.node_did.clone(),
-        phase: if ownership_refused {
-            "unreadable".to_string()
-        } else {
-            progress.phase.as_str().to_string()
-        },
-        merged_count: progress.merged_count,
-        covered_count: progress.covered_count,
-        served_count: progress.served_count,
-        detail: if ownership_refused {
-            Some(UNREADABLE_OWNERSHIP_REASON.to_string())
-        } else {
-            rejection_detail.filter(|_| progress.phase == ClientHydrationPhase::Failed)
-        },
-    }
-}
-
-pub(crate) fn scoped_hydration_observation_view(
-    observation: Option<(ClientHydrationProgress, Option<String>)>,
-    session_id: &str,
-    node_did: &str,
-) -> Option<SessionHydrationView> {
-    let (progress, detail) = observation?;
-    (progress.session_id == session_id && progress.node_did == node_did)
-        .then(|| to_hydration_view(&progress, detail))
-}
-
-const UNREADABLE_OWNERSHIP_REASON: &str =
-    "The node reports that this session belongs to another requester, so this client cannot read it.";
-
-/// A session whose replicated header already shows this client cannot read
-/// it. No hydration request is made for it (`SessionHydration.canStart`).
-pub(crate) fn unreadable_hydration_view(
-    session_id: &str,
-    node_did: &str,
-    reason: &str,
-) -> SessionHydrationView {
-    SessionHydrationView {
-        session_id: session_id.to_string(),
-        node_did: node_did.to_string(),
-        phase: "unreadable".to_string(),
-        merged_count: 0,
-        covered_count: 0,
-        served_count: None,
-        detail: Some(reason.to_string()),
     }
 }
 

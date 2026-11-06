@@ -297,7 +297,8 @@ mod tests {
                     )
                     .await?;
                     assert_eq!(value["name"], "Updated");
-                    assert_eq!(value["auth"]["key"], "private-test-credential");
+                    assert_eq!(value["auth"]["kind"], "credential");
+                    assert!(value["auth"].get("key").is_none());
                     Ok::<_, anyhow::Error>(())
                 })
             })
@@ -391,7 +392,10 @@ mod tests {
         .await?;
         let (current, saved) =
             read_backend_authentication_on(&access, "did:test:editor", "backend").await?;
-        assert_eq!(saved.auth, replacement);
+        assert!(matches!(
+            saved.auth,
+            gents::documents::BackendAuth::Credential { .. }
+        ));
         assert_eq!(saved.endpoint, original.endpoint);
         assert_eq!(saved.name, original.name);
         assert!(save_backend_authentication_on(
@@ -537,7 +541,7 @@ mod tests {
         assert_eq!(after, revision);
         assert!(matches!(
             stored.auth,
-            gents::documents::BackendAuth::ApiKey { .. }
+            gents::documents::BackendAuth::Credential { .. }
         ));
         let missing =
             set_backend_rotation_on(&access, did, "absent", None, BackendRotation::Single)

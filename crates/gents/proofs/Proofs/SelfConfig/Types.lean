@@ -18,6 +18,19 @@ abbrev Target.category (t : Target) := ConfigDocuments.Collection.category t
 def selfConfigCategories : List String :=
   ["node", "agent", "tools", "profile", "backend", "mcp_service", "automation"]
 def defaultCategories : List String := ["agent", "tools", "profile"]
+
+/-- A resource category exposes its read commands. Document access remains
+subject to native authorization for the invoking actor. -/
+def resourceReadExposed (categories : List String) (target : Target) : Bool :=
+  categories.contains target.category
+
+/-- An enabled config tool exposes its own effective read; native document
+authorization still determines which selected documents are visible. -/
+def effectiveReadExposed (_categories : List String) : Bool := true
+
+theorem backend_read_does_not_require_agent_catalog :
+    resourceReadExposed ["backend"] .inferenceBackend = true := by decide
+
 abbrev FieldKey := String
 abbrev allFields := ConfigDocuments.Collection.fields
 
@@ -25,7 +38,8 @@ abbrev allFields := ConfigDocuments.Collection.fields
 references stay editable and raw-key/OAuth-account protection is enforced by
 the Rust `validate` typed auth guard. -/
 def protectedKey (t : Target) (k : FieldKey) : Bool :=
-  (t == .task && k == "agent_id") || k == t.uniqueField || ["node_did", "created_at", "updated_at", "created_by",
+  (t == .task && k == "agent_did") || (t == .agent && k == "creation_nonce") ||
+    k == t.uniqueField || ["node_did", "created_at", "updated_at", "created_by",
     "artifact_bytes", "canonical_args", "signer_did", "provenance"].contains k
 
 def writableFields (t : Target) : List FieldKey :=
@@ -48,6 +62,10 @@ theorem unique_field_protected :
 
 theorem node_did_never_writable :
     ∀ t ∈ allTargets, "node_did" ∉ writableFields t := by decide
+
+theorem agent_creation_nonce_protected :
+    "creation_nonce" ∈ protectedFields .agent ∧
+    "creation_nonce" ∉ writableFields .agent := by decide
 
 theorem auth_reference_editable : "auth" ∈ writableFields .inferenceBackend := by decide
 

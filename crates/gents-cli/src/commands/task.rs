@@ -9,8 +9,8 @@ use crate::commands::config::task_run::{config_task_run, resolve_task_id_for};
 use crate::config_writes::ConfigAccess;
 use crate::{print_json, resolve_config_access};
 
-const TASK_FIELDS: &str = "task_id node_did display_name description agent_id prompt_template emit_outcome goal_objective_template goal_token_budget hooks enabled output_schema_ref created_at updated_at tags";
-const BEHAVIOR_FIELDS: &str = "agent_id node_did display_name description context_id inference_profile_id enabled tags created_at updated_at";
+const TASK_FIELDS: &str = "task_id node_did display_name description agent_did prompt_template emit_outcome goal_objective_template goal_token_budget hooks enabled output_schema_ref created_at updated_at tags";
+const BEHAVIOR_FIELDS: &str = "agent_did: agent_did node_did display_name description context_id inference_profile_id enabled tags created_at updated_at";
 const TRIGGER_FIELDS: &str = "trigger_id node_did display_name description task_id source session_id_template enabled concurrency next_run_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count created_at updated_at tags";
 const SCHEDULE_FIELDS: &str =
     "schedule_id node_did display_name cadence created_at updated_at tags";
@@ -68,8 +68,10 @@ impl TaskInventory {
 
     fn task_summary(&self, task: &Value) -> Value {
         let task_id = string_field(task, "task_id").unwrap_or_default();
-        let agent_id = string_field(task, "agent_id");
-        let agent = agent_id.as_deref().and_then(|id| self.agents_by_id.get(id));
+        let agent_did = string_field(task, "agent_did");
+        let agent = agent_did
+            .as_deref()
+            .and_then(|id| self.agents_by_id.get(id));
         let triggers = self.triggers_for_task(&task_id);
         let (runnable, unavailable_reason) = runnable_status(task, agent);
 
@@ -77,7 +79,7 @@ impl TaskInventory {
             "task_id": task_id,
             "display_name": task.get("display_name").cloned().unwrap_or(Value::Null),
             "description": task.get("description").cloned().unwrap_or(Value::Null),
-            "agent_id": agent_id,
+            "agent_did": agent_did,
             "goal_objective_template": task.get("goal_objective_template").cloned().unwrap_or(Value::Null),
             "goal_token_budget": task.get("goal_token_budget").cloned().unwrap_or(Value::Null),
             "enabled": bool_field(task, "enabled").unwrap_or(false),
@@ -91,7 +93,7 @@ impl TaskInventory {
 
     fn task_detail(&self, task: &Value) -> Value {
         let task_id = string_field(task, "task_id").unwrap_or_default();
-        let agent = string_field(task, "agent_id")
+        let agent = string_field(task, "agent_did")
             .as_deref()
             .and_then(|id| self.agents_by_id.get(id));
         let triggers = self.triggers_for_task(&task_id);
@@ -154,7 +156,7 @@ async fn load_task_inventory(
 
     let agents_by_id = rows(&response, "Agent")
         .into_iter()
-        .filter_map(|row| string_field(&row, "agent_id").map(|id| (id, row)))
+        .filter_map(|row| string_field(&row, "agent_did").map(|id| (id, row)))
         .collect::<BTreeMap<_, _>>();
 
     let mut triggers = rows(&response, "Trigger");
@@ -256,9 +258,9 @@ fn sort_rows_by_string_field(rows: &mut [Value], field: &str) {
 }
 
 fn agent_summary(agent: &Value) -> Option<Value> {
-    let agent_id = string_field(agent, "agent_id")?;
+    let agent_did = string_field(agent, "agent_did")?;
     Some(json!({
-        "agent_id": agent_id,
+        "agent_did": agent_did,
         "node_did": agent.get("node_did").cloned().unwrap_or(Value::Null),
         "display_name": agent.get("display_name").cloned().unwrap_or(Value::Null),
         "enabled": bool_field(agent, "enabled").unwrap_or(false),
@@ -271,8 +273,8 @@ fn runnable_status(task: &Value, agent: Option<&Value>) -> (bool, Option<&'stati
     if !bool_field(task, "enabled").unwrap_or(false) {
         return (false, Some("task_disabled"));
     }
-    if string_field(task, "agent_id").is_none() {
-        return (false, Some("missing_agent_id"));
+    if string_field(task, "agent_did").is_none() {
+        return (false, Some("missing_agent_did"));
     }
     let Some(agent) = agent else {
         return (false, Some("agent_missing"));

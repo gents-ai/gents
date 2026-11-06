@@ -17,8 +17,10 @@ use gents_protocol::request_input::{
 };
 use tokio::sync::Notify;
 
-use crate::queue_management::{enqueue, insert_signed, row};
-use crate::support::fixtures::bind_agent_backend;
+use crate::queue_management::{
+    enqueue, enqueue_owned, insert_signed, insert_signed_as, row, row_as,
+};
+use crate::support::fixtures::{bind_agent_backend, bind_managed_agent_backend};
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::live_inference::wait_for_request_terminal;
 use crate::support::streaming_backend::{
@@ -57,6 +59,32 @@ impl ToolDyn for HeldTool {
     }
 }
 
+async fn wait_for_signed_request_terminal(
+    access: &ConfigAccess,
+    request_id: &str,
+    timeout: Duration,
+) -> String {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let escaped = escape_graphql_string(request_id);
+    loop {
+        let response = access.execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 2) {{ lifecycle_state }} }}"#,
+        )).await.expect("read steering request");
+        let state = response["data"]["AgentRequest"]
+            .as_array()
+            .and_then(|rows| rows.first())
+            .and_then(|row| row["lifecycle_state"].as_str());
+        if gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(state) {
+            return state.unwrap().to_owned();
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "steering request did not terminalize: {response}"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
 async fn steering_case(hold_tool: bool, promote: bool) {
     let name = if hold_tool {
         "steering-held-tool"
@@ -70,8 +98,11 @@ async fn steering_case(hold_tool: bool, promote: bool) {
     };
     let name = name.as_str();
     let db = test_db(name).await;
+    let fixture = crate::support::managed_agent_fixture(&db).await;
     let did = db.node_identity.did();
-    let access = ConfigAccess::local(db.node.clone());
+    let user_did = fixture.user.did();
+    let agent_did = fixture.binding.agent_did.as_str();
+    let access = fixture.access.clone();
     let first_response = if hold_tool {
         StreamResponse::streams(
             name,
@@ -91,33 +122,42 @@ async fn steering_case(hold_tool: bool, promote: bool) {
         )],
     )
     .unwrap();
-    bind_agent_backend(&db.node, did, AGENT, BACKEND, backend.endpoint(), MODEL).await;
-    let mut session = session_document(name, AGENT, &chrono::Utc::now().to_rfc3339());
-    session.node_did = did.into();
-    session.requester_did = Some(did.into());
-    session.title = Some(gents_protocol::session::SessionTitle {
-        text: "Steering test".into(),
-        source: gents_protocol::session::SessionTitleSource::Generated,
-    });
-    create_session_document(db.node.as_ref(), &session).await;
-    let active = enqueue(
+    bind_managed_agent_backend(&db, &fixture, BACKEND, backend.endpoint(), MODEL).await;
+    let active = enqueue_owned(
         &db,
-        AGENT,
+        &fixture,
         name,
         "active-steering-request",
         name,
         QueueDelivery::Steer,
     )
     .await;
+    access
+        .transact_write("test.steering.title", |txn| {
+            Box::pin(async move {
+                gents::session::apply_title_in_txn(
+                    txn,
+                    did,
+                    Some(user_did),
+                    name,
+                    Some("Steering test"),
+                    gents_protocol::session::SessionTitleSource::Generated,
+                    &chrono::Utc::now().to_rfc3339(),
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let runtime = Gents::builder()
         .node(db.node.clone())
         .identity(identity)
-        .default_agent_id(AGENT)
+        .default_agent_did(agent_did)
         .tool_ceiling(gents::ToolCeiling::meta_only())
-        .agent(AGENT)
+        .agent(agent_did)
         .backend_id(BACKEND)
         .model_name(MODEL)
         .stream_batch_ms(0)
@@ -141,11 +181,11 @@ async fn steering_case(hold_tool: bool, promote: bool) {
     } else {
         backend.wait_for_chunks(name, 1).await;
     }
-    let active_before = row(&db, &active).await;
+    let active_before = row_as(&fixture, &active).await;
     assert_eq!(active_before["lifecycle_state"], "processing");
-    let old = enqueue(
+    let old = enqueue_owned(
         &db,
-        AGENT,
+        &fixture,
         name,
         "old-steering",
         "withdrawn steering content",
@@ -156,9 +196,9 @@ async fn steering_case(hold_tool: bool, promote: bool) {
         },
     )
     .await;
-    let cancelled = enqueue(
+    let cancelled = enqueue_owned(
         &db,
-        AGENT,
+        &fixture,
         name,
         "cancelled-steering",
         "cancelled steering content",
@@ -169,7 +209,9 @@ async fn steering_case(hold_tool: bool, promote: bool) {
         },
     )
     .await;
-    let snapshot = pending_user_queue(&access, did, name, did).await.unwrap();
+    let snapshot = pending_user_queue(&access, did, name, user_did)
+        .await
+        .unwrap();
     let ids = snapshot
         .entries
         .iter()
@@ -178,8 +220,8 @@ async fn steering_case(hold_tool: bool, promote: bool) {
     let correction = format!("{name}: accepted correction");
     let mut replacement = submit_pending_user_edit(
         &access,
-        db.node_identity.as_ref(),
-        AgentRequestAdmissionRecord::local_self(did),
+        &fixture.user,
+        AgentRequestAdmissionRecord::client(user_did),
         None,
         did,
         name,
@@ -195,11 +237,13 @@ async fn steering_case(hold_tool: bool, promote: bool) {
     )
     .await
     .unwrap();
-    let snapshot = pending_user_queue(&access, did, name, did).await.unwrap();
+    let snapshot = pending_user_queue(&access, did, name, user_did)
+        .await
+        .unwrap();
     submit_pending_user_edit(
         &access,
-        db.node_identity.as_ref(),
-        AgentRequestAdmissionRecord::local_self(did),
+        &fixture.user,
+        AgentRequestAdmissionRecord::client(user_did),
         None,
         did,
         name,
@@ -216,7 +260,9 @@ async fn steering_case(hold_tool: bool, promote: bool) {
     .await
     .unwrap();
     if promote {
-        let snapshot = pending_user_queue(&access, did, name, did).await.unwrap();
+        let snapshot = pending_user_queue(&access, did, name, user_did)
+            .await
+            .unwrap();
         let selected = replacement.request_doc_ids[0].clone();
         assert!(
             snapshot
@@ -239,8 +285,8 @@ async fn steering_case(hold_tool: bool, promote: bool) {
         let promoted_request_id = uuid::Uuid::new_v4().to_string();
         replacement = submit_pending_user_steer(
             &access,
-            db.node_identity.as_ref(),
-            AgentRequestAdmissionRecord::local_self(did),
+            &fixture.user,
+            AgentRequestAdmissionRecord::client(user_did),
             None,
             did,
             name,
@@ -251,10 +297,19 @@ async fn steering_case(hold_tool: bool, promote: bool) {
         .await
         .unwrap();
         assert_eq!(replacement.request_ids.first(), Some(&promoted_request_id));
-        assert_eq!(row(&db, &selected).await["lifecycle_state"], "superseded");
+        assert_eq!(
+            row_as(&fixture, &selected).await["lifecycle_state"],
+            "superseded"
+        );
     }
-    assert_eq!(row(&db, &old).await["lifecycle_state"], "superseded");
-    assert_eq!(row(&db, &cancelled).await["lifecycle_state"], "interrupted");
+    assert_eq!(
+        row_as(&fixture, &old).await["lifecycle_state"],
+        "superseded"
+    );
+    assert_eq!(
+        row_as(&fixture, &cancelled).await["lifecycle_state"],
+        "interrupted"
+    );
     assert_eq!(
         backend.observed_completion_requests(),
         1,
@@ -266,16 +321,16 @@ async fn steering_case(hold_tool: bool, promote: bool) {
         backend.release(name);
     }
     assert_eq!(
-        wait_for_request_terminal(
-            db.node.as_ref(),
+        wait_for_signed_request_terminal(
+            &fixture.access,
             "active-steering-request",
             Duration::from_secs(60)
         )
         .await,
         "completed"
     );
-    assert_eq!(row(&db, &active).await["_docID"], active);
-    let consumed = row(&db, &replacement.request_doc_ids[0]).await;
+    assert_eq!(row_as(&fixture, &active).await["_docID"], active);
+    let consumed = row_as(&fixture, &replacement.request_doc_ids[0]).await;
     assert_eq!(consumed["lifecycle_state"], "superseded");
     assert_eq!(consumed["superseded_by_request_doc_id"], active);
     let bodies = backend.observed_completion_bodies();
@@ -323,7 +378,10 @@ async fn explicitly_promoted_queue_input_continues_the_same_request_after_termin
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn signed_request_cannot_forge_another_requests_queue_slot() {
     let db = test_db("forged-queue-slot").await;
+    let fixture = crate::support::managed_agent_fixture(&db).await;
     let did = db.node_identity.did();
+    let user_did = fixture.user.did();
+    let agent_did = fixture.binding.agent_did.as_str();
     let session_id = "forged-slot-session";
     let backend = MockStreamingBackend::start_with_plans(
         MODEL,
@@ -336,35 +394,45 @@ async fn signed_request_cannot_forge_another_requests_queue_slot() {
         )],
     )
     .unwrap();
-    bind_agent_backend(&db.node, did, AGENT, BACKEND, backend.endpoint(), MODEL).await;
-    let mut session = session_document(session_id, AGENT, &chrono::Utc::now().to_rfc3339());
-    session.node_did = did.into();
-    session.requester_did = Some(did.into());
-    session.title = Some(gents_protocol::session::SessionTitle {
-        text: "Slot test".into(),
-        source: gents_protocol::session::SessionTitleSource::Generated,
-    });
-    create_session_document(db.node.as_ref(), &session).await;
-    let legitimate = enqueue(
+    bind_managed_agent_backend(&db, &fixture, BACKEND, backend.endpoint(), MODEL).await;
+    let legitimate = enqueue_owned(
         &db,
-        AGENT,
+        &fixture,
         session_id,
         "legitimate-slot",
         "legitimate slot owner",
         QueueDelivery::Queue,
     )
     .await;
+    fixture
+        .access
+        .transact_write("test.forged_slot.title", |txn| {
+            Box::pin(async move {
+                gents::session::apply_title_in_txn(
+                    txn,
+                    did,
+                    Some(user_did),
+                    session_id,
+                    Some("Slot test"),
+                    gents_protocol::session::SessionTitleSource::Generated,
+                    &chrono::Utc::now().to_rfc3339(),
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
     let mut forged = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "forged-slot",
         did,
-        did,
-        AGENT,
+        user_did,
+        agent_did,
         session_id,
         "forged content must not execute",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::local_self(did),
+        AgentRequestAdmissionRecord::client(user_did),
     );
     forged.input.queue = Some(RequestQueue {
         source: QueueSource::User,
@@ -379,7 +447,7 @@ async fn signed_request_cannot_forge_another_requests_queue_slot() {
         interrupted_request_id: None,
         background_completion_wake_version: None,
     });
-    let forged_id = insert_signed(&db, forged).await;
+    let forged_id = insert_signed_as(&fixture, forged).await;
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let agent = Gents::from_default_agent_documents(
         db.node.clone(),
@@ -392,15 +460,20 @@ async fn signed_request_cannot_forge_another_requests_queue_slot() {
     let handle = tokio::spawn(agent.run(shutdown_rx));
     let runtime = BootedAgent::new(shutdown, handle, did.into());
     assert_eq!(
-        wait_for_request_terminal(db.node.as_ref(), "legitimate-slot", Duration::from_secs(60))
-            .await,
+        wait_for_signed_request_terminal(
+            &fixture.access,
+            "legitimate-slot",
+            Duration::from_secs(60)
+        )
+        .await,
         "completed"
     );
     assert_eq!(
-        wait_for_request_terminal(db.node.as_ref(), "forged-slot", Duration::from_secs(60)).await,
+        wait_for_signed_request_terminal(&fixture.access, "forged-slot", Duration::from_secs(60))
+            .await,
         "failed"
     );
-    let forged = row(&db, &forged_id).await;
+    let forged = row_as(&fixture, &forged_id).await;
     assert_eq!(forged["content"], "forged content must not execute");
     assert!(
         forged["failure_reason"]
@@ -414,13 +487,19 @@ async fn signed_request_cannot_forge_another_requests_queue_slot() {
             .is_some_and(|signature| !signature.is_empty()),
         "this is signed but unauthorized slot ownership, not a missing signature fixture"
     );
-    assert_eq!(row(&db, &legitimate).await["lifecycle_state"], "completed");
+    assert_eq!(
+        row_as(&fixture, &legitimate).await["lifecycle_state"],
+        "completed"
+    );
     assert_eq!(backend.observed_completion_requests(), 1);
     assert!(backend
         .observed_completion_bodies()
         .iter()
         .all(|body| !body.to_string().contains("forged content must not execute")));
-    let captures = ConfigAccess::local(db.node.clone()).execute(&format!(r#"{{ RenderedRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ request_doc_id }} }}"#, escape_graphql_string("forged-slot"))).await.unwrap();
+    let captures = fixture.access.execute(&format!(
+        r#"{{ RenderedRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ request_doc_id }} }}"#,
+        escape_graphql_string("forged-slot"),
+    )).await.unwrap();
     assert!(captures["data"]["RenderedRequest"]
         .as_array()
         .unwrap()
@@ -472,7 +551,7 @@ async fn signed_agent_steer_passes_a_queued_turn_after_a_held_tool() {
         name,
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::local_self(did),
+        AgentRequestAdmissionRecord::client(did),
     );
     head.request_hop = 1;
     head.caused_by_parent_request_id = Some("origin-request".into());
@@ -487,7 +566,7 @@ async fn signed_agent_steer_passes_a_queued_turn_after_a_held_tool() {
     let runtime = Gents::builder()
         .node(db.node.clone())
         .identity(identity)
-        .default_agent_id(AGENT)
+        .default_agent_did(AGENT)
         .tool_ceiling(gents::ToolCeiling::meta_only())
         .agent(AGENT)
         .backend_id(BACKEND)
@@ -533,7 +612,7 @@ async fn signed_agent_steer_passes_a_queued_turn_after_a_held_tool() {
         "steer at tool boundary",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::local_self(did),
+        AgentRequestAdmissionRecord::client(did),
     );
     steer.request_hop = 2;
     steer.caused_by_parent_request_id = Some("priority-head".into());
@@ -570,7 +649,7 @@ async fn signed_agent_steer_passes_a_queued_turn_after_a_held_tool() {
     let restarted = Gents::builder()
         .node(db.node.clone())
         .identity(identity)
-        .default_agent_id(AGENT)
+        .default_agent_did(AGENT)
         .tool_ceiling(gents::ToolCeiling::meta_only())
         .agent(AGENT)
         .backend_id(BACKEND)

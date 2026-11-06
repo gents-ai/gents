@@ -73,9 +73,9 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
     use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
     use gents_protocol::output::{OutputOutcome, PayloadRef, SourceClose, StreamPayload};
 
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let mut agent_config = test_agent();
+    let (db, user, access, mut agent_config) = held_daemon_fixture("daemon-lease").await;
+    let node = db.node.clone();
+    let agent_access = held_daemon_agent_access(&db, &agent_config);
     {
         let agent_config = Arc::get_mut(&mut agent_config).unwrap();
         agent_config.stream_batch_ms = 300_000;
@@ -90,7 +90,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
     };
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         &[],
         false,
         &[],
@@ -105,7 +105,11 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                node.clone(),
+                agent_config.agent_identity.as_ref(),
+            )
+            .unwrap(),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -122,35 +126,10 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         ),
     })
     .unwrap();
-    let request = create_routed_request(&node, &agent_config, &node_did).await;
+    let request =
+        create_held_routed_request(&db, &user, &access, &agent_config, Some("lease regression"))
+            .await;
     let doc_id = request.doc_id.clone();
-    let session = gents_protocol::session::AgentSession {
-        session_id: request.session_id.clone(),
-        node_did: node_did.clone(),
-        requester_did: request.requester_did.clone(),
-        agent_id: agent_config.agent_id.clone(),
-        created_at: request.created_at.clone(),
-        closed_at: None,
-        archived_at: None,
-        archive_revision: 0,
-        stopped_at: None,
-        title: Some(gents_protocol::session::SessionTitle {
-            text: "shutdown reasoning regression".into(),
-            source: gents_protocol::session::SessionTitleSource::Task,
-        }),
-        tags: vec![],
-        provenance: None,
-        observation: None,
-    };
-    let input =
-        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session).unwrap())
-            .unwrap();
-    let seeded = node
-        .execute(&format!(
-            "mutation {{ create_AgentSession(input: {input}) {{_docID}} }}"
-        ))
-        .await;
-    assert!(!seeded.has_errors(), "{:?}", seeded.errors);
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let process = daemon.process_request(request, shutdown_rx);
@@ -165,7 +144,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
     let query = format!(
         r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
     );
-    let before = node.execute(&query).await;
+    let before = held_daemon_query(&agent_access, &query).await;
     assert!(!before.has_errors(), "{:?}", before.errors);
     assert!(
         before.data.as_ref().unwrap().to_string().contains("first"),
@@ -193,7 +172,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
             }
             _ => panic!("unsupported ownership-loss fixture"),
         };
-        let access = crate::store::config_client::ConfigAccess::local(node.clone());
+        let access = agent_access.clone();
         access
             .write(
                 "test.shutdown_prior_ownership_loss",
@@ -250,7 +229,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
             after_rows, before_rows,
             "old execution must neither retain its buffered chunk nor claim a new close"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         return;
     }
 
@@ -275,7 +254,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
             error.is::<super::ShutdownDrainFailure>(),
             "unexpected failure: {error:#}"
         );
-        let persisted = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state terminal_output }} }}"#)).await;
+        let persisted = held_daemon_query(&agent_access, &format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state terminal_output }} }}"#)).await;
         assert!(!persisted.has_errors(), "{:?}", persisted.errors);
         let request = &persisted.data.as_ref().unwrap()["AgentRequest"][0];
         assert_eq!(
@@ -286,7 +265,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
             request["terminal_output"].is_null(),
             "failed drain must not claim saved terminal output"
         );
-        let after = node.execute(&query).await;
+        let after = held_daemon_query(&agent_access, &query).await;
         assert!(!after.has_errors(), "{:?}", after.errors);
         let mut before_rows = before.data.as_ref().unwrap()["AgentOutputSegment"]
             .as_array()
@@ -321,7 +300,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
             closed_ids(&before_rows),
             "failed drain must not add a claimed source close"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         return;
     }
 
@@ -330,7 +309,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         .await
         .expect("graceful shutdown must finish")
         .expect("received reasoning drain must succeed");
-    let after = node.execute(&query).await;
+    let after = held_daemon_query(&agent_access, &query).await;
     assert!(!after.has_errors(), "{:?}", after.errors);
     let rows = after.data.as_ref().unwrap()["AgentOutputSegment"]
         .as_array()
@@ -393,7 +372,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         assert_eq!(content.declaration.part_index, u32::try_from(part).unwrap());
         assert_eq!(content.text, text);
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -470,7 +449,8 @@ impl crate::inference::llm::tool::ToolDyn for LeaseBlockingTool {
     fn definition<'a>(
         &'a self,
         _: String,
-    ) -> crate::inference::llm::tool::BoxFuture<'a, crate::inference::llm::tool::ToolDefinition> {
+    ) -> crate::inference::llm::tool::BoxFuture<'a, crate::inference::llm::tool::ToolDefinition>
+    {
         Box::pin(async {
             crate::inference::llm::tool::ToolDefinition {
                 name: "lease_block".into(),
@@ -482,7 +462,10 @@ impl crate::inference::llm::tool::ToolDyn for LeaseBlockingTool {
     fn call<'a>(
         &'a self,
         _: String,
-    ) -> crate::inference::llm::tool::BoxFuture<'a, Result<String, crate::inference::llm::tool::ToolError>> {
+    ) -> crate::inference::llm::tool::BoxFuture<
+        'a,
+        Result<String, crate::inference::llm::tool::ToolError>,
+    > {
         let entered = self.entered.clone();
         Box::pin(async move {
             if let Some(entered) = entered {
@@ -495,14 +478,14 @@ impl crate::inference::llm::tool::ToolDyn for LeaseBlockingTool {
 
 #[tokio::test]
 async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let agent_config = test_agent();
+    let (db, user, access, agent_config) = held_daemon_fixture("daemon-lease").await;
+    let node = db.node.clone();
+    let agent_access = held_daemon_agent_access(&db, &agent_config);
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         &[],
         false,
         &[],
@@ -513,13 +496,16 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
         provider_family: None,
         model: Arc::new(LeaseLossProvider),
         preamble: prompt.preamble().to_owned(),
-        loop_tools: Arc::new(vec![
-            Box::new(LeaseBlockingTool { entered: None }) as Box<dyn crate::inference::llm::tool::ToolDyn>
-        ]),
+        loop_tools: Arc::new(vec![Box::new(LeaseBlockingTool { entered: None })
+            as Box<dyn crate::inference::llm::tool::ToolDyn>]),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                node.clone(),
+                agent_config.agent_identity.as_ref(),
+            )
+            .unwrap(),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -536,42 +522,17 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
         ),
     })
     .unwrap();
-    let request = create_routed_request(&node, &agent_config, &node_did).await;
+    let request =
+        create_held_routed_request(&db, &user, &access, &agent_config, Some("lease regression"))
+            .await;
     let request_doc_id = request.doc_id.clone();
-    let session = gents_protocol::session::AgentSession {
-        session_id: request.session_id.clone(),
-        node_did: node_did.clone(),
-        requester_did: request.requester_did.clone(),
-        agent_id: agent_config.agent_id.clone(),
-        created_at: request.created_at.clone(),
-        closed_at: None,
-        archived_at: None,
-        archive_revision: 0,
-        stopped_at: None,
-        title: Some(gents_protocol::session::SessionTitle {
-            text: "lease loss tool regression".into(),
-            source: gents_protocol::session::SessionTitleSource::Task,
-        }),
-        tags: vec![],
-        provenance: None,
-        observation: None,
-    };
-    let input =
-        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session).unwrap())
-            .unwrap();
-    let seeded = node
-        .execute(&format!(
-            "mutation {{ create_AgentSession(input: {input}) {{_docID}} }}"
-        ))
-        .await;
-    assert!(!seeded.has_errors(), "{:?}", seeded.errors);
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let process = daemon.process_request(request, shutdown_rx);
     tokio::pin!(process);
     tokio::time::timeout(Duration::from_secs(10), async {
         let observe_running = async {
             loop {
-                let response = node.execute("{ AgentToolCall(filter:{tool_name:{_eq:\"lease_block\"}}){_docID lifecycle_state tool_failure_class cancel_cause} }").await;
+                let response = held_daemon_query(&agent_access, "{ AgentToolCall(filter:{tool_name:{_eq:\"lease_block\"}}){_docID lifecycle_state tool_failure_class cancel_cause} }").await;
                 let rows = response.data.as_ref().unwrap()["AgentToolCall"].as_array().unwrap();
                 if rows.first().is_some_and(|row| row["lifecycle_state"] == "running") { break; }
                 tokio::time::sleep(Duration::from_millis(20)).await;
@@ -583,11 +544,11 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
             _ = &mut process => panic!("daemon exited before the accepted tool reached running"),
         }
         let escaped = crate::store::graphql::escape_graphql_string(&request_doc_id);
-        let replaced = node.execute(&format!(r#"mutation {{ update_AgentRequest(filter:{{_docID:{{_eq:"{escaped}"}}}},input:{{execution_generation:"replacement-generation"}}){{_docID}} }}"#)).await;
+        let replaced = held_daemon_query(&agent_access, &format!(r#"mutation {{ update_AgentRequest(filter:{{_docID:{{_eq:"{escaped}"}}}},input:{{execution_generation:"replacement-generation"}}){{_docID}} }}"#)).await;
         assert!(!replaced.has_errors(), "{:?}", replaced.errors);
         (&mut process).await.expect("lease replacement handling completes");
     }).await.expect("lease poll must observe replacement");
-    let response = node.execute("{ AgentToolCall(filter:{tool_name:{_eq:\"lease_block\"}}){lifecycle_state tool_failure_class cancel_cause} }").await;
+    let response = held_daemon_query(&agent_access, "{ AgentToolCall(filter:{tool_name:{_eq:\"lease_block\"}}){lifecycle_state tool_failure_class cancel_cause} }").await;
     let row = &response.data.as_ref().unwrap()["AgentToolCall"][0];
     assert_eq!(row["lifecycle_state"], "running");
     assert!(row["tool_failure_class"].is_null());
@@ -681,16 +642,9 @@ impl CompletionModel for NonTerminalProvider {
 }
 
 async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool) {
-    let data = tempfile::tempdir().unwrap();
-    let node = Arc::new(
-        crate::test_support::node_builder()
-            .data_path(data.path())
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let mut agent_config = test_agent();
+    let (db, user, access, mut agent_config) = held_daemon_fixture("daemon-lease").await;
+    let node = db.node.clone();
+    let agent_access = held_daemon_agent_access(&db, &agent_config);
     Arc::get_mut(&mut agent_config)
         .unwrap()
         .stream_liveness_timeout = Duration::from_secs(1);
@@ -705,7 +659,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
     };
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         &[],
         false,
         &[],
@@ -720,7 +674,11 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                node.clone(),
+                agent_config.agent_identity.as_ref(),
+            )
+            .unwrap(),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -739,35 +697,14 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
     .expect("construct daemon with valid execution configuration");
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     for _ in 0..8 {
-        let request = create_routed_request(&node, &agent_config, &node_did).await;
-        let session = gents_protocol::session::AgentSession {
-            session_id: request.session_id.clone(),
-            node_did: node_did.clone(),
-            requester_did: request.requester_did.clone(),
-            agent_id: agent_config.agent_id.clone(),
-            created_at: request.created_at.clone(),
-            closed_at: None,
-            archived_at: None,
-            archive_revision: 0,
-            stopped_at: None,
-            title: Some(gents_protocol::session::SessionTitle {
-                text: "lease regression".into(),
-                source: gents_protocol::session::SessionTitleSource::Task,
-            }),
-            tags: vec![],
-            provenance: None,
-            observation: None,
-        };
-        let input = gents_protocol::graphql::graphql_input_literal(
-            &serde_json::to_value(session).expect("canonical session fixture"),
+        let request = create_held_routed_request(
+            &db,
+            &user,
+            &access,
+            &agent_config,
+            Some("lease regression"),
         )
-        .expect("render canonical session input");
-        let seeded = node
-            .execute(&format!(
-                "mutation {{ create_AgentSession(input: {input}) {{_docID}} }}"
-            ))
-            .await;
-        assert!(!seeded.has_errors(), "{:?}", seeded.errors);
+        .await;
         let request_doc_id = request.doc_id.clone();
         let session_id = request.session_id.clone();
         let requester_did = request.requester_did.clone();
@@ -787,13 +724,13 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                         None;
                     loop {
                         tokio::time::sleep(Duration::from_millis(100)).await;
-                        let recovered = crate::RequestLifecycle::recover_all(&node, &node_did)
+                        let recovered = crate::RequestLifecycle::recover_all_with_identities(&node, &node_did, &[agent_config.agent_identity.clone()])
                             .await
                             .unwrap();
                         if !empty_forever || observed_renewal {
                             continue;
                         }
-                        let result = node.execute(&query).await;
+                        let result = held_daemon_query(&agent_access, &query).await;
                         assert!(!result.has_errors(), "{:?}", result.errors);
                         let row = &result.data.as_ref().unwrap()["AgentRequest"][0];
                         if row["lifecycle_state"] != "processing" {
@@ -826,8 +763,8 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                             "recovery must not steal a silently renewing owner"
                         );
                         observed_renewal = true;
-                        crate::request::interrupt::interrupt_request_by_doc_id(
-                            &node,
+                        crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+                            &agent_access,
                             &request_doc_id,
                             &node_did,
                             requester_did.as_deref(),
@@ -843,7 +780,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                 }
             }
             assert_eq!(observed_renewal, empty_forever);
-            let result = node.execute(&query).await;
+            let result = held_daemon_query(&agent_access, &query).await;
             assert!(!result.has_errors(), "{:?}", result.errors);
             let row = &result.data.as_ref().unwrap()["AgentRequest"][0];
             assert_eq!(
@@ -859,8 +796,8 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                 serde_json::from_value(row["terminal_output"].clone()).expect("terminal selection");
             match selected {
                 gents_protocol::output::TerminalOutput::Message { message_doc_id } => {
-                    let (header, native) = crate::session::load_canonical_message_from_node(
-                        &node, &message_doc_id, &node_did, requester_did.as_deref(),
+                    let (header, native) = crate::session::load_canonical_message(
+                        &agent_access, &message_doc_id, &node_did, requester_did.as_deref(),
                     ).await.unwrap();
                     assert_eq!(header.request_doc_id.as_deref(), Some(request_doc_id.as_str()));
                     assert_eq!(header.outcome, gents_protocol::output::OutputOutcome::Partial);
@@ -871,7 +808,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                     use gents_protocol::output::live::{project_live, LiveObservation, LiveTarget, LiveView, OwnerLiveness};
                     use gents_protocol::output::reconstruction::ObservedSegment;
                     use crate::session::canonical_rows::{AGENT_OUTPUT_SEGMENT_FIELDS, decode_output_segment_row};
-                    let result = node.execute(&format!(r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{escaped_doc}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#)).await;
+                    let result = held_daemon_query(&agent_access, &format!(r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{escaped_doc}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#)).await;
                     assert!(!result.has_errors(), "{:?}", result.errors);
                     let records = result.data.as_ref().unwrap()["AgentOutputSegment"].as_array().unwrap()
                         .iter().map(|row| decode_output_segment_row(row).unwrap()).collect::<Vec<_>>();
@@ -898,7 +835,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                     assert!(streams.iter().any(|stream| stream.text.contains("durable partial incident text")));
                 }
             }
-            let second = crate::RequestLifecycle::recover_all(&node, &node_did)
+            let second = crate::RequestLifecycle::recover_all_with_identities(&node, &node_did, &[agent_config.agent_identity.clone()])
                 .await
                 .unwrap();
             assert_eq!(second.requests_recovered, 0);
@@ -907,7 +844,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
         .expect("owned request must converge without restarting the daemon");
     }
     assert_eq!(model.stream_calls.load(Ordering::SeqCst), 8);
-    let captures = node.execute("{ RenderedRequest { _docID } }").await;
+    let captures = held_daemon_query(&agent_access, "{ RenderedRequest { _docID } }").await;
     assert!(!captures.has_errors(), "{:?}", captures.errors);
     assert_eq!(
         captures.data.as_ref().unwrap()["RenderedRequest"]
@@ -923,7 +860,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
             "provider emitted traffic after its last semantic progress"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -938,16 +875,15 @@ async fn eight_silent_provider_streams_renew_until_explicitly_interrupted_withou
 
 #[tokio::test]
 async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
-    let agent_config = test_agent();
+    let (db, user, access, agent_config) = held_daemon_fixture("daemon-lease").await;
+    let node = db.node.clone();
+    let agent_access = held_daemon_agent_access(&db, &agent_config);
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
     let tool_entered = Arc::new(AtomicBool::new(false));
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         &[],
         false,
         &[],
@@ -960,11 +896,16 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(vec![Box::new(LeaseBlockingTool {
             entered: Some(tool_entered.clone()),
-        }) as Box<dyn crate::inference::llm::tool::ToolDyn>]),
+        })
+            as Box<dyn crate::inference::llm::tool::ToolDyn>]),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                node.clone(),
+                agent_config.agent_identity.as_ref(),
+            )
+            .unwrap(),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -981,45 +922,12 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         ),
     })
     .unwrap();
-    let request = create_routed_request(&node, &agent_config, &node_did).await;
+    let request =
+        create_held_routed_request(&db, &user, &access, &agent_config, Some("lease regression"))
+            .await;
     let request_doc_id = request.doc_id.clone();
     let session_id = request.session_id.clone();
     let requester_did = request.requester_did.clone();
-    let session = gents_protocol::session::AgentSession {
-        session_id: session_id.clone(),
-        node_did: node_did.clone(),
-        requester_did: requester_did.clone(),
-        agent_id: agent_config.agent_id.clone(),
-        created_at: request.created_at.clone(),
-        closed_at: None,
-        archived_at: None,
-        archive_revision: 0,
-        stopped_at: None,
-        title: Some(gents_protocol::session::SessionTitle {
-            text: "late wake interrupt regression".into(),
-            source: gents_protocol::session::SessionTitleSource::Task,
-        }),
-        tags: vec![],
-        provenance: None,
-        observation: None,
-    };
-    let session_input =
-        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session).unwrap())
-            .unwrap();
-    access
-        .transact_write("test.daemon_post_latch_session", |txn| {
-            let session_input = &session_input;
-            Box::pin(async move {
-                txn.execute(&format!(
-                    "mutation {{ create_AgentSession(input: {session_input}) {{_docID}} }}"
-                ))
-                .await?;
-                Ok::<_, anyhow::Error>(())
-            })
-        })
-        .await
-        .unwrap();
-
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let process = daemon.process_request(request, shutdown_rx);
     tokio::pin!(process);
@@ -1059,8 +967,8 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
     .await
     .expect("accepted tool should block after its running state commits");
 
-    crate::request::interrupt::interrupt_request_by_doc_id(
-        &node,
+    crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+        &agent_access,
         &request_doc_id,
         &node_did,
         requester_did.as_deref(),
@@ -1073,7 +981,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         "node_did": node_did.clone(),
         "requester_did": requester_did.clone(),
         "session_id": session_id.clone(),
-        "agent_id": agent_config.agent_id.clone(),
+        "agent_did": agent_config.agent_did.clone(),
         "lifecycle_state": "pending",
         "execution_origin": "scheduled",
         "input": {"queue": {
@@ -1083,9 +991,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         }},
         "created_at": chrono::Utc::now().to_rfc3339(),
     });
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
+    agent_access.transact_write(
         "test.daemon_post_latch_wake",
         |txn| {
             let wake_input = wake_input.clone();
@@ -1107,7 +1013,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         .expect("interrupted daemon request should terminalize")
         .expect("interrupted request handling completes");
     let wake_id = crate::store::graphql::escape_graphql_string(wake_id);
-    let result = access
+    let result = agent_access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{wake_id}" }} }}) {{ lifecycle_state }} AgentRequestParent: AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_request_doc}" }} }}) {{ lifecycle_state terminal_output }} }}"#
         ))
@@ -1122,7 +1028,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         "interrupted"
     );
     assert!(!result["data"]["AgentRequestParent"][0]["terminal_output"].is_null());
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -1130,16 +1036,9 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     const ACTIVE_CHUNKS: usize = 40;
     let lease = Duration::from_secs(5);
     assert!(ACTIVE_STREAM_INTERVAL * ACTIVE_CHUNKS as u32 > lease * 2);
-    let data = tempfile::tempdir().unwrap();
-    let node = Arc::new(
-        crate::test_support::node_builder()
-            .data_path(data.path())
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let mut agent_config = test_agent();
+    let (db, user, access, mut agent_config) = held_daemon_fixture("daemon-lease").await;
+    let node = db.node.clone();
+    let agent_access = held_daemon_agent_access(&db, &agent_config);
     {
         let agent_config = Arc::get_mut(&mut agent_config).unwrap();
         agent_config.stream_batch_ms = crate::inference::resolved::DEFAULT_STREAM_BATCH_MS;
@@ -1157,7 +1056,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     };
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         &[],
         false,
         &[],
@@ -1172,7 +1071,11 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                node.clone(),
+                agent_config.agent_identity.as_ref(),
+            )
+            .unwrap(),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -1190,37 +1093,12 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     })
     .unwrap();
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let request = create_routed_request(&node, &agent_config, &node_did).await;
+    let request =
+        create_held_routed_request(&db, &user, &access, &agent_config, Some("lease regression"))
+            .await;
     let request_id = request.request_id.clone();
     let request_doc_id = request.doc_id.clone();
     let requester_did = request.requester_did.clone();
-    let session = gents_protocol::session::AgentSession {
-        session_id: request.session_id.clone(),
-        node_did: node_did.clone(),
-        requester_did: request.requester_did.clone(),
-        agent_id: agent_config.agent_id.clone(),
-        created_at: request.created_at.clone(),
-        closed_at: None,
-        archived_at: None,
-        archive_revision: 0,
-        stopped_at: None,
-        title: Some(gents_protocol::session::SessionTitle {
-            text: "active short lease".into(),
-            source: gents_protocol::session::SessionTitleSource::Task,
-        }),
-        tags: vec![],
-        provenance: None,
-        observation: None,
-    };
-    let input =
-        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session).unwrap())
-            .unwrap();
-    let seeded = node
-        .execute(&format!(
-            "mutation {{ create_AgentSession(input: {input}) {{_docID}} }}"
-        ))
-        .await;
-    assert!(!seeded.has_errors(), "{:?}", seeded.errors);
 
     tokio::time::timeout(
         Duration::from_secs(45),
@@ -1231,8 +1109,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     .expect("active request handling completes");
 
     let request_id = crate::store::graphql::escape_graphql_string(&request_id);
-    let result = node
-        .execute(&format!(
+    let result = held_daemon_query(&agent_access, &format!(
             r#"{{
                 AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ lifecycle_state terminal_output }}
             }}"#
@@ -1246,8 +1123,8 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     let gents_protocol::output::TerminalOutput::Message { message_doc_id } = selected else {
         panic!("completed streaming request must select its canonical message: {data}");
     };
-    let (header, message) = crate::session::load_canonical_message_from_node(
-        &node,
+    let (header, message) = crate::session::load_canonical_message(
+        &agent_access,
         &message_doc_id,
         &node_did,
         requester_did.as_deref(),
@@ -1268,7 +1145,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
         "final output was truncated: {data}"
     );
     assert_eq!(model.stream_calls.load(Ordering::SeqCst), 1);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -1277,9 +1154,9 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
     use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
     use gents_protocol::output::{OutputOutcome, PayloadRef, SourceClose};
 
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let mut agent_config = test_agent();
+    let (db, user, access, mut agent_config) = held_daemon_fixture("daemon-lease").await;
+    let node = db.node.clone();
+    let agent_access = held_daemon_agent_access(&db, &agent_config);
     {
         let agent_config = Arc::get_mut(&mut agent_config).unwrap();
         agent_config.deadline_duration = Duration::from_secs(3);
@@ -1297,7 +1174,7 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
     };
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         &[],
         false,
         &[],
@@ -1312,7 +1189,11 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                node.clone(),
+                agent_config.agent_identity.as_ref(),
+            )
+            .unwrap(),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -1329,35 +1210,10 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
         ),
     })
     .unwrap();
-    let request = create_routed_request(&node, &agent_config, &node_did).await;
+    let request =
+        create_held_routed_request(&db, &user, &access, &agent_config, Some("lease regression"))
+            .await;
     let doc_id = request.doc_id.clone();
-    let session = gents_protocol::session::AgentSession {
-        session_id: request.session_id.clone(),
-        node_did: node_did.clone(),
-        requester_did: request.requester_did.clone(),
-        agent_id: agent_config.agent_id.clone(),
-        created_at: request.created_at.clone(),
-        closed_at: None,
-        archived_at: None,
-        archive_revision: 0,
-        stopped_at: None,
-        title: Some(gents_protocol::session::SessionTitle {
-            text: "deadline reasoning regression".into(),
-            source: gents_protocol::session::SessionTitleSource::Task,
-        }),
-        tags: vec![],
-        provenance: None,
-        observation: None,
-    };
-    let input =
-        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session).unwrap())
-            .unwrap();
-    let seeded = node
-        .execute(&format!(
-            "mutation {{ create_AgentSession(input: {input}) {{_docID}} }}"
-        ))
-        .await;
-    assert!(!seeded.has_errors(), "{:?}", seeded.errors);
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     tokio::time::timeout(
         Duration::from_secs(10),
@@ -1368,8 +1224,7 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
     .expect("deadline request handling completes");
 
     let escaped = crate::store::graphql::escape_graphql_string(&doc_id);
-    let response = node
-        .execute(&format!(
+    let response = held_daemon_query(&agent_access, &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state }} }}"#
         ))
         .await;
@@ -1378,8 +1233,7 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
         response.data.as_ref().unwrap()["AgentRequest"][0]["lifecycle_state"],
         "failed"
     );
-    let result = node
-        .execute(&format!(
+    let result = held_daemon_query(&agent_access, &format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
         ))
         .await;
@@ -1430,5 +1284,5 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
         .is_ok_and(|content| content.text == "received deadline reasoning")
     }));
     assert_eq!(model.stream_calls.load(Ordering::SeqCst), 1);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

@@ -106,6 +106,9 @@ structure JobGuardRow where
   name : String
   operator : Bool
   selectedBefore : Bool
+  nativeAuthorized : Bool := true
+  nativeSourceAuthorized : Bool := true
+  addSchemaTool : Bool := false
   stored : Option FieldValue
   candidate : FieldValue
 
@@ -114,11 +117,10 @@ def jobGuardToolsDoc (integrations : Option FieldValue) : Doc :=
   Doc.ofList (("self_config", "{\"enable_self_config\":true}") ::
     integrations.toList.map (fun v => ("integrations", v)))
 
-/-- Operator writes do not pass through the guard (`keepsGrants`); a model
-write is judged by `keepsGrants` against the previously selected Tools, or by
-`reselectionKeepsGrants` when nothing was selected before. -/
+/-- Native document authorization governs every write. Model-facing writes also
+preserve the separately configured pack-install bound. -/
 def JobGuardRow.accepted (r : JobGuardRow) : Bool :=
-  if r.operator then true
+  r.nativeAuthorized && r.nativeSourceAuthorized && if r.operator then true
   else if r.selectedBefore then
     keepsGrants ContractCases.decodeGrants Grants.bot
       (jobGuardToolsDoc r.stored) (jobGuardToolsDoc (some r.candidate))
@@ -139,6 +141,21 @@ def jobGuardRows : List JobGuardRow :=
   , { name := "model_reselection_from_none_acquires_job", operator := false
     , selectedBefore := false, stored := none, candidate := J 4 "check" }
   , { name := "operator_job_ceiling_widening", operator := true, selectedBefore := true
-    , stored := some (J 4 "check"), candidate := J 8 "check" } ]
+    , stored := some (J 4 "check"), candidate := J 8 "check" }
+  , { name := "native_agent_update_authorized", operator := false, selectedBefore := true
+    , nativeAuthorized := true, stored := some (J 4 "check"), candidate := J 4 "run" }
+  , { name := "native_agent_update_denied", operator := false, selectedBefore := true
+    , nativeAuthorized := false, stored := some (J 4 "check"), candidate := J 4 "run" }
+  , { name := "native_agent_update_source_denied", operator := false, selectedBefore := true
+    , nativeAuthorized := true, nativeSourceAuthorized := false, addSchemaTool := true
+    , stored := some (J 4 "check"), candidate := J 4 "run" } ]
+
+theorem native_denial_refuses_job_write (r : JobGuardRow) (h : r.nativeAuthorized = false) :
+    r.accepted = false := by
+  simp [JobGuardRow.accepted, h]
+
+theorem native_source_denial_refuses_job_write (r : JobGuardRow)
+    (h : r.nativeSourceAuthorized = false) : r.accepted = false := by
+  simp [JobGuardRow.accepted, h]
 
 end SelfConfig

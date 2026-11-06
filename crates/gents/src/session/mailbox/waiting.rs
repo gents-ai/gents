@@ -24,7 +24,7 @@ pub fn awaiting_question_ids(
             && parent.requester_did.as_deref() == Some(item.requester_did.as_str())
             && item.session_id.is_some()
             && item.session_id == parent.session_id
-            && parent.agent_id.as_deref() == Some(item.target_agent_id.as_str());
+            && parent.agent_did.as_deref() == Some(item.target_agent_did.as_str());
         if !same_parent {
             continue;
         }
@@ -92,7 +92,7 @@ mod tests {
                     request_id: "parent".into(),
                     node_did: Some("node".into()),
                     requester_did: Some("person".into()),
-                    agent_id: Some("worker".into()),
+                    agent_did: Some("worker".into()),
                     session_id: Some("chat".into()),
                     lifecycle_state: Some(if wait["completed"] == true {
                         RequestLifecycleState::Completed
@@ -105,7 +105,7 @@ mod tests {
                     "_docID":"question", "item_key":"question", "requester_did":"person", "node_did":"node",
                     "status":if wait["open"] == true {"open"} else {"acted"}, "kind":"ask", "action":"start_request",
                     "title":"Plan", "payload":payload, "source_kind":"agent", "source_id":"source",
-                    "session_id":"chat", "request_id":"parent", "target_node_did":"node", "target_agent_id":"worker",
+                    "session_id":"chat", "request_id":"parent", "target_node_did":"node", "target_agent_did":"worker",
                     "created_at":"2030-01-01T00:00:00Z"
                 });
                 for field in [
@@ -114,7 +114,7 @@ mod tests {
                     "session_id",
                     "request_id",
                     "target_node_did",
-                    "target_agent_id",
+                    "target_agent_did",
                 ] {
                     let mut value = base.clone();
                     if wait["same_parent"] != true {

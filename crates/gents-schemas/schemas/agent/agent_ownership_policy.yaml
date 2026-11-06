@@ -1,0 +1,287 @@
+name: Gents identity ownership model
+resources:
+  - name: nodes
+    relations:
+      - name: administrator
+        types: [actor]
+        manages: [administrator, runtime_reader]
+      - name: runtime_reader
+        types: [actor]
+    permissions:
+      - name: read
+        expr: administrator + runtime_reader
+      - name: update
+        expr: administrator
+      - name: delete
+        expr: administrator
+  - name: operations
+    relations:
+      - name: parent
+        types: [nodes]
+    permissions:
+      - name: read
+        expr: parent->read
+      - name: update
+      - name: delete
+  - name: pairing_observations
+    relations:
+      - name: parent
+        types: [nodes]
+      - name: route_reader
+        types: [actor]
+      - name: tool_reader
+        types: [actor]
+      - name: reader_manager
+        types: [actor]
+        manages: [route_reader, tool_reader]
+    permissions:
+      - name: read
+        expr: route_reader + tool_reader + parent->read
+      - name: update
+      - name: delete
+  - name: discovery
+    relations:
+      - name: parent
+        types: [nodes]
+      - name: reader
+        types: [actor]
+      - name: reader_manager
+        types: [actor]
+        manages: [reader]
+      - name: writer
+        types: [actor]
+      - name: local_publication
+        types: [actor]
+      - name: pending_parent
+        types: [actor]
+    permissions:
+      - name: read
+        expr: reader + writer + parent->read
+      - name: update
+        expr: writer
+      - name: delete
+  - name: scoped_discovery
+    relations:
+      - name: parent
+        types: [nodes]
+      - name: reader
+        types: [actor]
+      - name: reader_manager
+        types: [actor]
+        manages: [reader]
+      - name: local_publication
+        types: [actor]
+      - name: pending_parent
+        types: [actor]
+    permissions:
+      - name: read
+        expr: reader + parent->read
+      - name: update
+      - name: delete
+  - name: enrollment_records
+    relations:
+      - name: parent
+        types: [nodes]
+      - name: reader
+        types: [actor]
+      - name: reader_manager
+        types: [actor]
+        manages: [reader]
+      - name: local_publication
+        types: [actor]
+      - name: pending_parent
+        types: [actor]
+    permissions:
+      - name: read
+        expr: reader + parent->read
+      - name: update
+      - name: delete
+  - name: configuration
+    relations:
+      - name: parent
+        types: [nodes]
+      - name: reader
+        types: [actor]
+      - name: selected_by
+        types: [agents->executor, configuration->selected_by]
+      - name: selection_manager
+        types: [actor, nodes->owner, nodes->administrator, agents->config_writer]
+        manages: [selected_by]
+      - name: writer
+        types: [actor, agents->config_writer]
+    permissions:
+      - name: read
+        expr: reader + writer + selected_by + parent->read
+      - name: update
+        expr: writer + parent->update
+      - name: delete
+        expr: parent->delete
+  - name: workspace_roots
+    relations:
+      - name: parent
+        types: [nodes]
+      - name: reader
+        types: [actor]
+      - name: reader_manager
+        types: [nodes->owner, nodes->administrator]
+        manages: [reader]
+    permissions:
+      - name: read
+        expr: reader + parent->read
+      - name: update
+        expr: parent->update
+      - name: delete
+        expr: parent->delete
+  - name: secret_configuration
+    relations:
+      - name: parent
+        types: [nodes]
+      - name: runtime_writer
+        types: [actor]
+    permissions:
+      - name: read
+        expr: runtime_writer + parent->read
+      - name: update
+        expr: runtime_writer + parent->update
+      - name: delete
+        expr: parent->delete
+  - name: agents
+    relations:
+      - name: parent
+        types: [nodes]
+      - name: reader
+        types: [actor]
+      - name: workspace_selected_by
+        types: [configuration->reader, agents->executor]
+      - name: session_writer
+        types: [actor]
+      - name: administrator
+        types: [actor, nodes->owner, nodes->administrator]
+        manages: [parent, reader, session_writer, administrator, executor, config_writer]
+      - name: executor
+        types: [actor]
+      - name: config_writer
+        types: [actor]
+    permissions:
+      - name: read
+        expr: reader + workspace_selected_by + session_writer + administrator + executor + config_writer + parent->read
+      - name: update
+        expr: administrator + config_writer + parent->update
+      - name: delete
+        expr: administrator + parent->delete
+      - name: invoke
+        expr: session_writer + executor + administrator + parent->delete
+      - name: session_read
+        expr: reader + administrator + parent->delete
+      - name: session_admin
+        expr: administrator + parent->delete
+  - name: sessions
+    relations:
+      - name: parent
+        types: [agents]
+      - name: reader
+        types: [actor]
+      - name: working_agent
+        types: [actor]
+    permissions:
+      - name: read
+        expr: reader + working_agent + parent->session_read
+      - name: update
+        expr: working_agent + parent->session_admin
+      - name: delete
+        expr: parent->session_admin
+  - name: delivered_requests
+    relations:
+      - name: parent
+        types: [agents]
+      - name: session
+        types: [sessions]
+      - name: working_agent
+        types: [actor]
+      - name: reader
+        types: [actor]
+    permissions:
+      - name: read
+        expr: working_agent + reader + parent->session_read + session->read
+      - name: update
+        expr: working_agent + parent->session_admin + session->delete
+      - name: delete
+        expr: parent->session_admin + session->delete
+  - name: goal_controls
+    relations:
+      - name: parent
+        types: [sessions]
+      - name: working_agent
+        types: [actor]
+    permissions:
+      - name: read
+        expr: working_agent + parent->read
+      - name: update
+        expr: working_agent + parent->delete
+      - name: delete
+        expr: parent->delete
+  - name: goal_receipts
+    relations:
+      - name: parent
+        types: [goal_controls]
+      - name: reader
+        types: [actor]
+    permissions:
+      - name: read
+        expr: reader + parent->read
+      - name: update
+      - name: delete
+  - name: agent_children
+    relations:
+      - name: parent
+        types: [agents]
+    permissions:
+      - name: read
+        expr: parent->session_read
+      - name: update
+        expr: parent->session_admin
+      - name: delete
+        expr: parent->session_admin
+  - name: workspaces
+    relations:
+      - name: parent
+        types: [agents]
+      - name: reader
+        types: [actor]
+      - name: writer
+        types: [actor]
+      - name: integrator
+        types: [actor]
+    permissions:
+      - name: read
+        expr: reader + writer + integrator + parent->session_read
+      - name: update
+        expr: writer + integrator + parent->session_admin
+      - name: delete
+        expr: parent->session_admin
+  - name: workspace_children
+    relations:
+      - name: parent
+        types: [workspaces]
+    permissions:
+      - name: read
+        expr: parent->read
+      - name: update
+        expr: parent->update
+      - name: delete
+        expr: parent->delete
+  - name: children
+    relations:
+      - name: parent
+        types: [sessions]
+      - name: reader
+        types: [actor]
+      - name: working_agent
+        types: [actor]
+    permissions:
+      - name: read
+        expr: reader + working_agent + parent->read
+      - name: update
+        expr: working_agent + parent->delete
+      - name: delete
+        expr: parent->delete

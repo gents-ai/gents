@@ -1,6 +1,6 @@
 use super::support::*;
 use super::*;
-use crate::store::identity::{KeyIdentity, NodeIdentity};
+use crate::store::identity::NodeIdentity;
 
 const STARTUP_DEADLOCK_GUARD: Duration = Duration::from_secs(30);
 
@@ -99,61 +99,36 @@ impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for ExhaustRe
     }
 }
 
-async fn wait_for_request_state(
-    node: &defra_node::EmbeddedNode,
-    doc_id: &str,
-    expected_lifecycle_state: &str,
-) {
-    let escaped_doc_id = escape_graphql_string(doc_id);
+async fn wait_for_held_request_state(access: &crate::ConfigAccess, doc_id: &str, expected: &str) {
+    let doc_id = escape_graphql_string(doc_id);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let query = format!(
-            r#"{{
-                AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 1) {{
-                    lifecycle_state
-                }}
-            }}"#
-        );
-        let response = node.execute(&query).await;
-        assert!(
-            !response.has_errors(),
-            "AgentRequest query failed: {:?}",
-            response.errors
-        );
-        let row = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRequest"))
-            .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
-            .cloned()
-            .expect("AgentRequest row");
-        let lifecycle_state = row
-            .get("lifecycle_state")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if lifecycle_state == expected_lifecycle_state {
+        let response = access.execute(&format!(
+            r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{doc_id}"}}}}, limit: 1) {{lifecycle_state}} }}"#
+        )).await.unwrap();
+        let rows = response["data"]["AgentRequest"].as_array().unwrap();
+        let [row] = rows.as_slice() else {
+            panic!("held Agent cannot read its request")
+        };
+        if row["lifecycle_state"] == expected {
             return;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for AgentRequest {} to reach lifecycle_state={}, last row={:?}",
-            doc_id,
-            expected_lifecycle_state,
-            row
+            "request {doc_id} did not reach {expected}: {row:?}"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
 async fn fetch_backend_probe_row(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     backend_id: &str,
 ) -> (String, Option<String>) {
     let escaped_backend_id = escape_graphql_string(backend_id);
     let query = format!(
         r#"{{
-            InferenceBackend(filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }}, limit: 1) {{
+            InferenceBackendObservation(filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }}, limit: 1) {{
                 probe_status
                 last_probe
             }}
@@ -162,17 +137,17 @@ async fn fetch_backend_probe_row(
     let response = node.execute(&query).await;
     assert!(
         !response.has_errors(),
-        "InferenceBackend probe row query failed: {:?}",
+        "InferenceBackendObservation probe row query failed: {:?}",
         response.errors
     );
     let row = response
         .data
         .as_ref()
-        .and_then(|data| data.get("InferenceBackend"))
+        .and_then(|data| data.get("InferenceBackendObservation"))
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
         .cloned()
-        .expect("InferenceBackend row");
+        .expect("InferenceBackendObservation row");
     let probe_status = row
         .get("probe_status")
         .and_then(Value::as_str)
@@ -186,7 +161,7 @@ async fn fetch_backend_probe_row(
 }
 
 async fn wait_for_backend_probe_status(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     backend_id: &str,
     expected_status: &str,
 ) -> (String, Option<String>) {
@@ -207,24 +182,23 @@ async fn wait_for_backend_probe_status(
 
 #[tokio::test]
 async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("startup-probe-discovers-model"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend_with_capacity_and_probe_status(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture_with_status(
+        "startup-probe-discovers-model",
         "backend-startup-probe",
         mock_endpoint.endpoint(),
         1,
         "unknown",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
     let observer = Arc::new(RecordingObserver::default());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             process_state_observer: Some(observer.clone()),
             ..Default::default()
@@ -241,11 +215,11 @@ async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
     assert!(status.active_generation >= 1);
     assert!(status.last_reconcile_error.is_empty());
     let readiness = fetch_node_readiness(node.as_ref(), identity.did()).await;
-    let default_agent_id = crate::default_agent_id_for_node(identity.did());
+    let default_agent_did = fixture.agent.did().to_owned();
     let agent = readiness
         .agents
         .iter()
-        .find(|entry| entry.agent_id == default_agent_id)
+        .find(|entry| entry.agent_did == default_agent_did)
         .expect("default agent readiness");
     assert_eq!(agent.state, AgentReadinessState::Ready);
     let (probe_status, last_probe) =
@@ -280,35 +254,37 @@ async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
 
 #[tokio::test]
 async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("startup-invalid-config"));
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture(
+        "startup-invalid-config",
         "backend-invalid-config",
         "http://127.0.0.1:9/v1",
     )
     .await;
-    let default_agent_id = crate::default_agent_id_for_node(identity.did());
-    let context_id = format!("{default_agent_id}:context");
-    let escaped_context_id = escape_graphql_string(&context_id);
-    let escaped_tools_id = escape_graphql_string("missing-tools");
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentContext(
-                filter: {{ context_id: {{ _eq: "{escaped_context_id}" }} }},
-                input: {{ tools_id: "{escaped_tools_id}" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let default_agent_did = fixture.agent.did().to_owned();
+    let context_id = escape_graphql_string(&format!("{default_agent_did}:context"));
+    let observed = fixture
+        .user_access
+        .execute(&format!(
+            r#"{{ AgentContext(filter: {{context_id: {{_eq: "{context_id}"}}}}) {{_docID}} }}"#
+        ))
+        .await
+        .unwrap();
+    let rows = observed["data"]["AgentContext"].as_array().unwrap();
+    let [row] = rows.as_slice() else {
+        panic!("fixture context must be unique")
+    };
+    let doc = escape_graphql_string(row["_docID"].as_str().unwrap());
+    fixture.user_access.write("test.invalid_context", &format!(
+        r#"mutation {{ update_AgentContext(docID: "{doc}", input: {{tools_id: "missing-tools"}}) {{_docID}} }}"#
+    )).await.unwrap();
 
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -319,7 +295,7 @@ async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config()
     assert_eq!(agent.unavailable_agents().len(), 1);
     let unavailable_reason = agent
         .unavailable_agents()
-        .get(&default_agent_id)
+        .get(&default_agent_did)
         .expect("default agent should be unavailable");
     assert!(
         unavailable_reason.diagnostic.contains("missing-tools"),
@@ -366,30 +342,38 @@ async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config()
 
 #[tokio::test]
 async fn router_generation_persistence_failure_terminates_run_agent_before_dispatch() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("router-generation-persistence-run-agent"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture_with_status(
+        "router-generation-persistence-run-agent",
         "backend-router-generation-persistence",
         mock_endpoint.endpoint(),
+        1,
+        "healthy",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
     )
     .await
     .unwrap();
-    let request_doc_id = create_agent_request(
-        node.as_ref(),
+    let agent_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        fixture.agent.did().parse().unwrap(),
+        fixture.agent.as_ref(),
+    )
+    .unwrap();
+    let request_doc_id = create_held_agent_request(
+        &node,
         identity.did(),
+        fixture.agent.as_ref(),
         "req-router-generation-persistence",
         "session-router-generation-persistence",
         "must remain pending",
@@ -417,26 +401,27 @@ async fn router_generation_persistence_failure_terminates_run_agent_before_dispa
         format!("{error:#}").contains("durably acknowledge router generation"),
         "runtime returned the wrong failure: {error:#}"
     );
-    wait_for_request_state(node.as_ref(), &request_doc_id, "pending").await;
+    wait_for_held_request_state(&agent_access, &request_doc_id, "pending").await;
 }
 
 #[tokio::test]
 async fn slot_drain_failure_reaches_run_agent_after_external_shutdown() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("slot-drain-failure"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture_with_status(
+        "slot-drain-failure",
         "backend-slot-drain-failure",
         mock_endpoint.endpoint(),
+        1,
+        "healthy",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -476,27 +461,28 @@ async fn slot_drain_failure_reaches_run_agent_after_external_shutdown() {
         format!("{error:#}").contains("injected slot drain failure"),
         "run_agent lost the slot drain failure: {error:#}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn startup_source_persistence_exhaustion_fails_closed_and_is_the_exact_run_error() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("startup-source-persistence-exhaustion"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture_with_status(
+        "startup-source-persistence-exhaustion",
         "backend-startup-source-persistence",
         mock_endpoint.endpoint(),
+        1,
+        "healthy",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
     let observer = Arc::new(RecordingObserver::default());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             process_state_observer: Some(observer.clone()),
             ..Default::default()
@@ -633,22 +619,23 @@ async fn startup_source_persistence_exhaustion_fails_closed_and_is_the_exact_run
 
 #[tokio::test]
 async fn ready_persistence_exhaustion_is_fatal_and_never_opens_runtime_readiness() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("ready-persistence-exhaustion"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture_with_status(
+        "ready-persistence-exhaustion",
         "backend-ready-persistence",
         mock_endpoint.endpoint(),
+        1,
+        "healthy",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
     let observer = Arc::new(RecordingObserver::default());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             process_state_observer: Some(observer.clone()),
             ..Default::default()
@@ -711,22 +698,21 @@ async fn ready_persistence_exhaustion_is_fatal_and_never_opens_runtime_readiness
 
 #[tokio::test]
 async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_runtime() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("startup-all-unavailable"));
-    bind_default_agent_backend_with_capacity_and_probe_status(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture_with_status(
+        "startup-all-unavailable",
         "backend-unavailable",
         "http://127.0.0.1:9/v1",
         1,
         "unknown",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -755,15 +741,22 @@ async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_ru
         Some(AgentReadinessUnavailableReason::BackendTemporarilyUnavailable)
     );
 
-    let request_doc_id = create_agent_request(
-        node.as_ref(),
+    let agent_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        fixture.agent.did().parse().unwrap(),
+        fixture.agent.as_ref(),
+    )
+    .unwrap();
+    let request_doc_id = create_held_agent_request(
+        &node,
         identity.did(),
+        fixture.agent.as_ref(),
         "req-unavailable-runtime",
         "session-unavailable-runtime",
         "hello",
     )
     .await;
-    wait_for_request_state(node.as_ref(), &request_doc_id, "failed").await;
+    wait_for_held_request_state(&agent_access, &request_doc_id, "failed").await;
 
     let request_query = format!(
         r#"{{
@@ -773,22 +766,10 @@ async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_ru
         }}"#,
         escape_graphql_string(&request_doc_id),
     );
-    let request_response = node.execute(&request_query).await;
-    assert!(
-        !request_response.has_errors(),
-        "AgentRequest failure query failed: {:?}",
-        request_response.errors
-    );
-    let failure_reason = request_response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("failure_reason"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
+    let request_response = agent_access.execute(&request_query).await.unwrap();
+    let failure_reason = request_response["data"]["AgentRequest"][0]["failure_reason"]
+        .as_str()
+        .unwrap_or_default();
     assert_eq!(
         failure_reason, "inference backend is temporarily unavailable",
         "runtime rejection must expose only the typed public readiness reason"
@@ -803,22 +784,21 @@ async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_ru
 
 #[tokio::test]
 async fn run_agent_recovers_backend_availability_without_restart() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("startup-backend-recovers"));
-    bind_default_agent_backend_with_capacity_and_probe_status(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture_with_status(
+        "startup-backend-recovers",
         "backend-recovers",
         "http://127.0.0.1:9/v1",
         1,
         "unknown",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -842,7 +822,7 @@ async fn run_agent_recovers_backend_availability_without_restart() {
         AgentReadinessState::Unavailable
     );
 
-    update_backend_probe_status(node.as_ref(), "backend-recovers", "healthy").await;
+    update_backend_probe_status(&node, identity.did(), "backend-recovers", "healthy").await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
     loop {
@@ -873,91 +853,173 @@ async fn run_agent_recovers_backend_availability_without_restart() {
         .expect("agent run should return ok");
 }
 
+async fn submit_capacity_request(
+    fixture: &HeldRuntimeFixture,
+    agent_did: &str,
+    request_id: &str,
+    session_id: &str,
+) -> String {
+    use crate::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    let user_did = fixture.user.did();
+    let node_did = fixture.db.node_identity.did();
+    let create = crate::request::lifecycle::build_signed_client_request(
+        &fixture.user_access,
+        RequestSpec::new(
+            RequestPurpose::Normal,
+            RequestIdentity {
+                request_id: request_id.to_owned(),
+                node_did: node_did.to_owned(),
+                requester_did: Some(user_did.to_owned()),
+                agent_did: agent_did.to_owned(),
+                session_id: session_id.to_owned(),
+                content: "hello".to_owned(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            },
+            AgentRequestAdmissionRecord::client(user_did),
+        ),
+        RequestSigner::Identity(&fixture.user),
+    )
+    .await
+    .unwrap();
+    crate::session::update_session_title_with_source(
+        &fixture.user_access,
+        node_did,
+        Some(user_did),
+        session_id,
+        "capacity shutdown test",
+        gents_protocol::session::SessionTitleSource::User,
+    )
+    .await
+    .unwrap();
+    crate::request::lifecycle::submit_client_request(&fixture.user_access, &create)
+        .await
+        .unwrap();
+    let request = escape_graphql_string(request_id);
+    let response = fixture
+        .user_access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{request}"}}}}) {{_docID}} }}"#
+        ))
+        .await
+        .unwrap();
+    let rows = response["data"]["AgentRequest"].as_array().unwrap();
+    let [row] = rows.as_slice() else {
+        panic!("submitted request must be unique")
+    };
+    row["_docID"].as_str().unwrap().to_owned()
+}
+
+async fn wait_for_held_inference_state(
+    access: &crate::ConfigAccess,
+    request_id: &str,
+    expected: &str,
+) {
+    let request = escape_graphql_string(request_id);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let response = access.execute(&format!(
+            r#"{{ InferenceCall(filter: {{request_id: {{_eq: "{request}"}}}}) {{call_state}} }}"#
+        )).await.unwrap();
+        let rows = response["data"]["InferenceCall"].as_array().unwrap();
+        if rows.iter().any(|row| row["call_state"] == expected) {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "inference call {request} did not reach {expected}: {rows:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 #[tokio::test]
 async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("shutdown-waiting-request"));
     let mock_endpoint = MockModelEndpoint::start_blocking_chat("default").unwrap();
-    for (session_id, agent_id) in [
-        ("session-shutdown-running", "general"),
-        ("session-shutdown-waiting", "code"),
-    ] {
-        crate::session::ensure_session_with_agent_id_and_requester_did(
-            &node,
-            session_id,
-            identity.did(),
-            agent_id,
-            Some(identity.did()),
-        )
-        .await
-        .unwrap();
-        crate::session::update_session_title_with_source(
-            &node,
-            identity.did(),
-            Some(identity.did()),
-            session_id,
-            "capacity shutdown test",
-            gents_protocol::session::SessionTitleSource::User,
-        )
-        .await
-        .unwrap();
-    }
-    bind_default_agent_backend_with_capacity(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture_with_status(
+        "shutdown-waiting-request",
         "backend-blocked",
         mock_endpoint.endpoint(),
         1,
+        "healthy",
     )
     .await;
-    crate::test_support::install_test_agent(&node, identity.did(), "general").await;
-    crate::test_support::install_test_agent(&node, identity.did(), "code").await;
-    let agent = crate::Gents::builder()
-        .node(node.clone())
-        .identity(identity.clone())
-        .default_agent_id("general")
-        .tool_ceiling(ToolCeiling::meta_only())
-        .agent("general")
-        .backend_id("backend-blocked")
-        .model_name("default")
-        .done()
-        .agent("code")
-        .backend_id("backend-blocked")
-        .model_name("default")
-        .done()
-        .build()
-        .await
-        .unwrap();
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let first_agent = fixture.agent.clone();
+    let second_binding = crate::store::identity::provision_agent_identity_authorized(
+        &node,
+        identity.as_ref(),
+        &fixture.user.did().parse().unwrap(),
+    )
+    .await
+    .unwrap();
+    let second_agent =
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &second_binding).unwrap();
+    grant_held_agent_operations(&node, identity.as_ref(), second_agent.as_ref()).await;
+    let first_did = first_agent.did().to_owned();
+    let second_did = second_agent.did().to_owned();
+    write_runtime_documents(
+        &fixture.user_access,
+        vec![(
+            crate::Collection::Agent,
+            serde_json::json!({
+                "node_did": identity.did(), "agent_did": second_did,
+                "creation_nonce": second_binding.creation_nonce,
+                "inference_profile_id": format!("{first_did}:inference"),
+            }),
+        )],
+    )
+    .await;
+    let first_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        first_did.parse().unwrap(),
+        first_agent.as_ref(),
+    )
+    .unwrap();
+    let second_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        second_did.parse().unwrap(),
+        second_agent.as_ref(),
+    )
+    .unwrap();
+    let agent = crate::Gents::from_default_agent_documents(
+        node.clone(),
+        identity.clone(),
+        crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
     wait_for_runtime_process_state(node.as_ref(), identity.did(), "ready").await;
 
-    let first_request_doc_id = create_agent_request_for_agent(
-        node.as_ref(),
-        identity.did(),
-        Some("general"),
+    let first_request_doc_id = submit_capacity_request(
+        &fixture,
+        &first_did,
         "req-shutdown-running",
         "session-shutdown-running",
-        "hello",
     )
     .await;
-    wait_for_request_state(node.as_ref(), &first_request_doc_id, "processing").await;
-    wait_for_inference_call_state(node.as_ref(), "req-shutdown-running", "running").await;
+    wait_for_held_request_state(&fixture.user_access, &first_request_doc_id, "processing").await;
+    wait_for_held_inference_state(&first_access, "req-shutdown-running", "running").await;
 
-    let queued_request_doc_id = create_agent_request_for_agent(
-        node.as_ref(),
-        identity.did(),
-        Some("code"),
+    let queued_request_doc_id = submit_capacity_request(
+        &fixture,
+        &second_did,
         "req-shutdown-waiting",
         "session-shutdown-waiting",
-        "hello",
     )
     .await;
-    wait_for_request_state(node.as_ref(), &queued_request_doc_id, "processing").await;
-    wait_for_inference_call_state(node.as_ref(), "req-shutdown-waiting", "queued").await;
+    wait_for_held_request_state(&fixture.user_access, &queued_request_doc_id, "processing").await;
+    wait_for_held_inference_state(&second_access, "req-shutdown-waiting", "queued").await;
 
     let _ = shutdown_tx.send(true);
     tokio::time::timeout(Duration::from_secs(2), handle)
@@ -966,17 +1028,14 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
         .expect("agent task should join")
         .expect("agent run should return ok");
 
-    wait_for_request_state(node.as_ref(), &first_request_doc_id, "failed").await;
-    wait_for_request_state(node.as_ref(), &queued_request_doc_id, "failed").await;
+    wait_for_held_request_state(&fixture.user_access, &first_request_doc_id, "failed").await;
+    wait_for_held_request_state(&fixture.user_access, &queued_request_doc_id, "failed").await;
     for request_doc_id in [&first_request_doc_id, &queued_request_doc_id] {
-        let response = node.execute(&format!(
+        let response = fixture.user_access.execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ request_id lifecycle_state terminalized_at terminal_output }} }}"#,
             crate::store::graphql::escape_graphql_string(request_doc_id),
-        )).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        let rows = response.data.as_ref().unwrap()["AgentRequest"]
-            .as_array()
-            .unwrap();
+        )).await.unwrap();
+        let rows = response["data"]["AgentRequest"].as_array().unwrap();
         assert_eq!(
             rows.len(),
             1,
@@ -1007,21 +1066,22 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
             .collect()
     }
 
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("snapshot-demotion"));
     let endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture_with_status(
+        "snapshot-demotion",
         "demotion-backend",
         endpoint.endpoint(),
+        1,
+        "healthy",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -1043,7 +1103,7 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
                 .iter()
                 .map(|id| {
                     let mut configured = template.as_ref().clone();
-                    configured.agent_id = id.clone();
+                    configured.agent_did = id.clone();
                     Arc::new(configured)
                 })
                 .collect(),
@@ -1098,7 +1158,7 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
             "{case}"
         );
         assert_eq!(
-            snapshot.default_agent_id,
+            snapshot.default_agent_did,
             case["post_default_agent"].as_u64().unwrap().to_string(),
             "{case}"
         );
@@ -1108,16 +1168,14 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
             "{case}"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 async fn write_runtime_documents(
-    node: &Arc<defra_node::EmbeddedNode>,
+    access: &crate::ConfigAccess,
     documents: Vec<(crate::Collection, Value)>,
 ) {
-    use crate::store::config_client::{
-        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
+    use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let plan = DesiredStateApplyPlan::new(
         documents
             .into_iter()
@@ -1129,52 +1187,38 @@ async fn write_runtime_documents(
             .collect(),
     )
     .unwrap();
-    ConfigAccess::transact_local_write(node, None, "test.runtime.configure", |txn| {
-        let plan = &plan;
-        Box::pin(
-            async move { crate::store::config_client::apply_desired_state_plan(txn, plan).await },
-        )
-    })
-    .await
-    .unwrap();
+    access
+        .transact_write("test.runtime.configure", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .unwrap();
 }
 
 /// A node with runtime schemas, an identity and a default agent backend
 /// bound to the returned model endpoint, which the caller keeps alive.
-async fn missing_plugin_node(
-    label: &str,
-) -> (
-    Arc<defra_node::EmbeddedNode>,
-    Arc<KeyIdentity>,
-    String,
-    MockModelEndpoint,
-) {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity(&format!("startup-{label}")));
+async fn missing_plugin_node(label: &str) -> (HeldRuntimeFixture, String, MockModelEndpoint) {
     let endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture(
+        &format!("startup-{label}"),
         &format!("backend-{label}"),
         endpoint.endpoint(),
     )
     .await;
-    let node_did = identity.did().to_string();
-    (node, identity, node_did, endpoint)
+    let node_did = fixture.db.node_identity.did().to_owned();
+    (fixture, node_did, endpoint)
 }
 
-/// An agent loaded from the node's documents with a meta-only tool ceiling
-/// and an empty plugin home, which the caller keeps alive.
-async fn documents_agent(
-    node: &Arc<defra_node::EmbeddedNode>,
-    identity: &Arc<KeyIdentity>,
-) -> (crate::Gents, tempfile::TempDir) {
+async fn documents_agent(fixture: &HeldRuntimeFixture) -> (crate::Gents, tempfile::TempDir) {
     let plugin_home = tempfile::tempdir().unwrap();
     let agent = crate::Gents::from_default_agent_documents(
-        node.clone(),
-        identity.clone(),
+        fixture.db.node.clone(),
+        fixture.db.node_identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             plugin_home: Some(plugin_home.path().to_path_buf()),
             ..Default::default()
@@ -1185,21 +1229,26 @@ async fn documents_agent(
     (agent, plugin_home)
 }
 
-fn agent_document(node_did: &str, agent_id: &str) -> (crate::Collection, Value) {
-    let default_agent_id = crate::default_agent_id_for_node(node_did);
+fn agent_document(
+    node_did: &str,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    default_agent_did: &str,
+) -> (crate::Collection, Value) {
+    let agent_did = &binding.agent_did;
     (
         crate::Collection::Agent,
-        serde_json::json!({"node_did": node_did, "agent_id": agent_id,
-            "context_id": format!("{agent_id}:context"),
-            "inference_profile_id": format!("{default_agent_id}:inference")}),
+        serde_json::json!({"node_did": node_did, "agent_did": agent_did,
+            "creation_nonce": binding.creation_nonce,
+            "context_id": format!("{agent_did}:context"),
+            "inference_profile_id": format!("{default_agent_did}:inference")}),
     )
 }
 
-fn context_document(node_did: &str, agent_id: &str) -> (crate::Collection, Value) {
+fn context_document(node_did: &str, agent_did: &str) -> (crate::Collection, Value) {
     (
         crate::Collection::AgentContext,
-        serde_json::json!({"node_did": node_did, "context_id": format!("{agent_id}:context"),
-            "tools_id": format!("{agent_id}:tools")}),
+        serde_json::json!({"node_did": node_did, "context_id": format!("{agent_did}:context"),
+            "tools_id": format!("{agent_did}:tools")}),
     )
 }
 
@@ -1213,34 +1262,43 @@ fn tools_naming_missing_plugin(node_did: &str, tools_id: &str) -> (crate::Collec
 
 #[tokio::test]
 async fn run_agent_starts_without_an_agent_whose_tools_name_a_missing_plugin() {
-    let (node, identity, node_did, _endpoint) = missing_plugin_node("missing-plugin").await;
-    let default_agent_id = crate::default_agent_id_for_node(&node_did);
-    let broken = "web_persona";
-    write_runtime_documents(
+    let (fixture, node_did, _endpoint) = missing_plugin_node("missing-plugin").await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let default_agent_did = fixture.agent.did().to_owned();
+    let broken_binding = crate::store::identity::provision_agent_identity_authorized(
         &node,
+        identity.as_ref(),
+        &fixture.user.did().parse().unwrap(),
+    )
+    .await
+    .unwrap();
+    let broken = broken_binding.agent_did.as_str();
+    write_runtime_documents(
+        &fixture.user_access,
         vec![
-            agent_document(&node_did, broken),
+            agent_document(&node_did, &broken_binding, &default_agent_did),
             context_document(&node_did, broken),
-            tools_naming_missing_plugin(&node_did, "web_persona:tools"),
+            tools_naming_missing_plugin(&node_did, &format!("{broken}:tools")),
         ],
     )
     .await;
-    let (agent, _plugin_home) = documents_agent(&node, &identity).await;
+    let (agent, _plugin_home) = documents_agent(&fixture).await;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
     wait_for_runtime_process_state(node.as_ref(), &node_did, "ready").await;
     let readiness = fetch_node_readiness(node.as_ref(), &node_did).await;
     assert_eq!(readiness.process_state, NodeReadinessProcessState::Ready);
-    let entry = |agent_id: &str| {
+    let entry = |agent_did: &str| {
         readiness
             .agents
             .iter()
-            .find(|entry| entry.agent_id == agent_id)
-            .unwrap_or_else(|| panic!("{agent_id} readiness in {readiness:?}"))
+            .find(|entry| entry.agent_did == agent_did)
+            .unwrap_or_else(|| panic!("{agent_did} readiness in {readiness:?}"))
             .clone()
     };
-    assert_eq!(entry(&default_agent_id).state, AgentReadinessState::Ready);
+    assert_eq!(entry(&default_agent_did).state, AgentReadinessState::Ready);
     let broken_entry = entry(broken);
     assert_eq!(broken_entry.state, AgentReadinessState::Unavailable);
     assert_eq!(
@@ -1248,17 +1306,26 @@ async fn run_agent_starts_without_an_agent_whose_tools_name_a_missing_plugin() {
         Some(AgentReadinessUnavailableReason::ToolSurfaceUnavailable)
     );
 
-    let request_doc_id = create_agent_request_for_agent(
-        node.as_ref(),
+    let broken_identity =
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &broken_binding).unwrap();
+    grant_held_agent_operations(&node, identity.as_ref(), broken_identity.as_ref()).await;
+    let broken_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        broken.parse().unwrap(),
+        broken_identity.as_ref(),
+    )
+    .unwrap();
+    let request_doc_id = create_held_agent_request(
+        &node,
         &node_did,
-        Some(broken),
+        broken_identity.as_ref(),
         "req-missing-plugin",
         "session-missing-plugin",
         "hello",
     )
     .await;
-    wait_for_request_state(node.as_ref(), &request_doc_id, "failed").await;
-    let response = crate::store::config_client::ConfigAccess::local(node.clone())
+    wait_for_held_request_state(&broken_access, &request_doc_id, "failed").await;
+    let response = broken_access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ failure_reason }} }}"#,
             escape_graphql_string(&request_doc_id),
@@ -1280,14 +1347,14 @@ async fn run_agent_starts_without_an_agent_whose_tools_name_a_missing_plugin() {
 
 #[tokio::test]
 async fn run_agent_fails_when_every_agent_names_a_missing_plugin() {
-    let (node, identity, node_did, _endpoint) = missing_plugin_node("all-missing-plugin").await;
-    let tools_id = format!("{}:tools", crate::default_agent_id_for_node(&node_did));
+    let (fixture, node_did, _endpoint) = missing_plugin_node("all-missing-plugin").await;
+    let tools_id = format!("{}:tools", fixture.agent.did());
     write_runtime_documents(
-        &node,
+        &fixture.user_access,
         vec![tools_naming_missing_plugin(&node_did, &tools_id)],
     )
     .await;
-    let (agent, _plugin_home) = documents_agent(&node, &identity).await;
+    let (agent, _plugin_home) = documents_agent(&fixture).await;
 
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
     let error = agent
@@ -1308,28 +1375,47 @@ async fn run_agent_fails_when_every_agent_names_a_missing_plugin() {
 
 #[tokio::test]
 async fn startup_demotion_cascades_to_targets_schedules_and_tasks() {
-    let (node, identity, node_did, _endpoint) = missing_plugin_node("demotion-cascade").await;
-    write_runtime_documents(
+    let (fixture, node_did, _endpoint) = missing_plugin_node("demotion-cascade").await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let default_agent_did = fixture.agent.did().to_owned();
+    let broken_binding = crate::store::identity::provision_agent_identity_authorized(
         &node,
+        identity.as_ref(),
+        &fixture.user.did().parse().unwrap(),
+    )
+    .await
+    .unwrap();
+    let caller_binding = crate::store::identity::provision_agent_identity_authorized(
+        &node,
+        identity.as_ref(),
+        &fixture.user.did().parse().unwrap(),
+    )
+    .await
+    .unwrap();
+    let broken = broken_binding.agent_did.as_str();
+    let caller = caller_binding.agent_did.as_str();
+    write_runtime_documents(
+        &fixture.user_access,
         vec![
-            agent_document(&node_did, "web_persona"),
-            context_document(&node_did, "web_persona"),
-            tools_naming_missing_plugin(&node_did, "web_persona:tools"),
-            agent_document(&node_did, "caller"),
-            context_document(&node_did, "caller"),
+            agent_document(&node_did, &broken_binding, &default_agent_did),
+            context_document(&node_did, broken),
+            tools_naming_missing_plugin(&node_did, &format!("{broken}:tools")),
+            agent_document(&node_did, &caller_binding, &default_agent_did),
+            context_document(&node_did, caller),
             (
                 crate::Collection::Tools,
-                serde_json::json!({"node_did": node_did, "tools_id": "caller:tools",
+                serde_json::json!({"node_did": node_did, "tools_id": format!("{caller}:tools"),
                     "agents": {"target_ids": ["target-web-persona"], "enabled": true}}),
             ),
             (
                 crate::Collection::AgentTarget,
                 serde_json::json!({"node_did": node_did, "target_id": "target-web-persona",
-                    "target_node_did": node_did, "agent_id": "web_persona", "name": "web"}),
+                    "target_node_did": node_did, "agent_did": broken, "name": "web"}),
             ),
             (
                 crate::Collection::Task,
-                serde_json::json!({"node_did": node_did, "task_id": "task-web", "agent_id": "web_persona",
+                serde_json::json!({"node_did": node_did, "task_id": "task-web", "agent_did": broken,
                     "prompt_template": "tick", "enabled": true}),
             ),
             (
@@ -1345,7 +1431,7 @@ async fn startup_demotion_cascades_to_targets_schedules_and_tasks() {
         ],
     )
     .await;
-    let (agent, _plugin_home) = documents_agent(&node, &identity).await;
+    let (agent, _plugin_home) = documents_agent(&fixture).await;
     let tool_runtime = crate::tools::surface::ToolRuntimeContext::new_with_node_did(
         agent.node.clone(),
         agent.mcp_pool.clone(),
@@ -1364,13 +1450,13 @@ async fn startup_demotion_cascades_to_targets_schedules_and_tasks() {
         .await
         .unwrap();
 
-    assert!(snapshot.unavailable_agents.contains_key("web_persona"));
-    assert!(snapshot.agents.contains_key("caller"));
+    assert!(snapshot.unavailable_agents.contains_key(broken));
+    assert!(snapshot.agents.contains_key(caller));
     assert!(
-        snapshot.tool_surfaces["caller"]
+        snapshot.tool_surfaces[caller]
             .agent_targets()
             .iter()
-            .all(|target| target.agent_id != "web_persona"),
+            .all(|target| target.agent_did != broken),
         "a demoted agent must not stay offered as a subagent target"
     );
     assert!(

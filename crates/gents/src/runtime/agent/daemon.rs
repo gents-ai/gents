@@ -68,11 +68,18 @@ fn permits_natural_finish(request: &AgentRequest, task_owned: bool) -> bool {
 /// queued snapshot never reaches provider execution.
 pub(crate) async fn verify_request_at_claim_boundary(
     verifier: &crate::request::admission::AgentRequestAdmissionVerifier,
-    node: Arc<defra_node::EmbeddedNode>,
-    agent_id: &str,
+    node: Arc<defra_node::Node>,
+    agent_identity: &dyn crate::store::identity::NodeIdentity,
     request: AgentRequest,
-) -> Option<AgentRequest> {
-    match verifier.verify_fresh(&request, agent_id).await {
+) -> Option<(
+    AgentRequest,
+    Option<crate::request::admission::ClientClaimAdmission>,
+)> {
+    let agent_did = agent_identity.did();
+    match verifier
+        .verify_fresh_for_claim_with_identity(&request, agent_identity)
+        .await
+    {
         Ok(verified) => Some(verified),
         Err(error) if error.is_denied() => {
             let reason = format!("request admission denied: {error:#}");
@@ -83,6 +90,8 @@ pub(crate) async fn verify_request_at_claim_boundary(
                     &node,
                     &request.doc_id,
                     &request.node_did,
+                    agent_did,
+                    agent_identity,
                     &reason,
                     "terminalize_request_admission_rejection",
                 )
@@ -113,7 +122,7 @@ pub(super) struct AgentDaemon<M>
 where
     M: ProviderModel,
 {
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
     agent_config: Arc<ResolvedAgent>,
     provider_family: Option<String>,
     replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
@@ -186,7 +195,7 @@ pub(super) struct AgentDaemonInit<M>
 where
     M: ProviderModel,
 {
-    pub(super) node: Arc<defra_node::EmbeddedNode>,
+    pub(super) node: Arc<defra_node::Node>,
     pub(super) agent_config: Arc<ResolvedAgent>,
     pub(super) provider_family: Option<String>,
     pub(super) model: Arc<M>,

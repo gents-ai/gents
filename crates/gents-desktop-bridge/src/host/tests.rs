@@ -328,7 +328,7 @@ async fn provider_usage_read_rejects_an_unconfigured_runtime() {
 #[test]
 fn agent_model_selection_is_scoped_and_not_cancellable() {
     let mut request = json!({
-        "nodeDid":"did:fixture", "agentId":"agent", "backendId":"backend",
+        "nodeDid":"did:fixture", "agentDid":"agent", "backendId":"backend",
         "modelName":"model", "reasoningEffort":"high", "serviceTier":"fast"
     });
     let command: protocol::ClientCommand = serde_json::from_value(json!({
@@ -567,7 +567,7 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
 #[test]
 fn workspace_permissions_reads_cannot_supply_an_identity_or_mutate_the_selection() {
     let mut request = json!({
-        "nodeDid": "did:key:runtime", "agentId": "engineer", "workspacePath": "/project"
+        "nodeDid": "did:key:runtime", "agentDid": "engineer", "workspacePath": "/project"
     });
     let decode = |request: Value| {
         serde_json::from_value::<protocol::ClientCommand>(json!({
@@ -580,7 +580,7 @@ fn workspace_permissions_reads_cannot_supply_an_identity_or_mutate_the_selection
         assert!(decode(request.clone()).is_err(), "accepted {field}");
         request.as_object_mut().unwrap().remove(field);
     }
-    for field in ["nodeDid", "agentId", "workspacePath"] {
+    for field in ["nodeDid", "agentDid", "workspacePath"] {
         let mut incomplete = request.clone();
         incomplete.as_object_mut().unwrap().remove(field);
         assert!(decode(incomplete).is_err(), "missing {field}");
@@ -590,7 +590,7 @@ fn workspace_permissions_reads_cannot_supply_an_identity_or_mutate_the_selection
 #[test]
 fn forgetting_commands_is_scoped_and_drains_the_native_write() {
     let request = json!({
-        "scope":{"nodeDid":"runtime","agentId":"agent","workspacePath":"/project"},
+        "scope":{"nodeDid":"runtime","agentDid":"agent","workspacePath":"/project"},
         "expectedRevision":"2","expectedWorkspacePath":"/project"
     });
     let decode = |request: Value| {
@@ -609,7 +609,7 @@ fn forgetting_commands_is_scoped_and_drains_the_native_write() {
 #[test]
 fn workspace_permission_saves_are_strict_and_finish_submitted_mutations() {
     let request = json!({
-        "scope":{"nodeDid":"runtime","agentId":"agent","workspacePath":"/project"},
+        "scope":{"nodeDid":"runtime","agentDid":"agent","workspacePath":"/project"},
         "expectedRevision":"0","expectedWorkspacePath":"/project","mode":"autoReview"
     });
     let decode = |request: Value| {
@@ -861,4 +861,26 @@ fn image_attachment_read_commands_keep_scope_index_and_cancellation() {
         json!({"name":"desktop_request_attachments", "args": negative})
     )
     .is_err());
+}
+
+#[test]
+fn local_enrollment_is_a_distinct_explicit_host_command() {
+    let args = json!({"nodeHome": "/runtime"});
+    let connect: protocol::ClientCommand = serde_json::from_value(json!({
+        "name": "client_connect_local", "args": args,
+    }))
+    .unwrap();
+    let enroll: protocol::ClientCommand = serde_json::from_value(json!({
+        "name": "client_enroll_local", "args": {"nodeHome": "/runtime"},
+    }))
+    .unwrap();
+    assert!(matches!(
+        connect,
+        protocol::ClientCommand::ConnectLocal { .. }
+    ));
+    assert!(matches!(
+        enroll,
+        protocol::ClientCommand::EnrollLocal { .. }
+    ));
+    assert!(protocol::ClientCommand::NAMES.contains(&"client_enroll_local"));
 }

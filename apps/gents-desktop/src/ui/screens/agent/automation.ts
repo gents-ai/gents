@@ -93,9 +93,9 @@ export function triggerReadiness(deployment: NodeView, t: TriggerView): Readines
   const task = deployment.tasks.find((x) => x.taskId === cfg.task_id);
   if (!task) return { ok: false, reason: "Task is missing" };
   if (task.enabled === false) return { ok: false, reason: "Task is disabled" };
-  const b = agentOf(deployment, task.agentId);
+  const b = agentOf(deployment, task.agentDid);
   if (!b) return { ok: false, reason: "Agent is missing" };
-  const readiness = agentReadiness(deployment, b.agentId);
+  const readiness = agentReadiness(deployment, b.agentDid);
   if (!readiness.ready)
     return { ok: false, reason: `${b.displayName}: ${readiness.reason}` };
   if (lastRunFailed(t))
@@ -111,7 +111,7 @@ export function triggerReadiness(deployment: NodeView, t: TriggerView): Readines
 export function actionInWords(deployment: NodeView, t: TriggerView): string {
   const task = deployment.tasks.find((x) => x.taskId === t.config.task_id);
   if (!task) return "run a missing task";
-  const b = agentOf(deployment, task.agentId);
+  const b = agentOf(deployment, task.agentDid);
   return `run ${task.name ?? task.taskId}${b ? ` with ${b.displayName}` : ""}`;
 }
 

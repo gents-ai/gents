@@ -59,7 +59,7 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
                     fixture.base_id(model.request),
                     identity.did(),
                     identity.did(),
-                    "head-behavior",
+                    identity.did(),
                     format!("session-{}", model.session),
                     "review notifications",
                     "scheduled",
@@ -114,7 +114,7 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
                         row.request_id.clone(),
                         fixture.identity(model.owner).did(),
                         fixture.identity(model.owner).did(),
-                        "head-behavior",
+                        fixture.identity(model.owner).did(),
                         "session-1",
                         "entry",
                         "interactive",
@@ -295,7 +295,7 @@ fn signed_row(create: &AgentRequestCreate, doc: u64) -> AgentRequestRow {
         request_id: create.request_id.clone(),
         node_did: Some(create.node_did.clone()),
         requester_did: Some(create.requester_did.clone()),
-        agent_id: Some(create.agent_id.clone()),
+        agent_did: Some(create.agent_did.clone()),
         session_id: Some(create.session_id.clone()),
         retry_parent_request: create.retry_parent_request.clone(),
         retry_parent_request_doc_id: create.retry_parent_request_doc_id.clone(),
@@ -372,122 +372,140 @@ impl Fixture<'_> {
             ))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     }
-    fn build<'a>(
-        &'a mut self,
-        model: ModelRow,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = AgentRequestRow> + 'a>> {
-        Box::pin(async move {
-            if let Some(row) = self.built.get(&model.request) {
-                return row.clone();
+    async fn build(&mut self, model: ModelRow) -> AgentRequestRow {
+        let requested = model.request;
+        let mut pending = Vec::new();
+        let mut next = Some(model);
+        while let Some(model) = next {
+            if self.built.contains_key(&model.request) {
+                break;
             }
-            let now = self.timestamp(model.request);
-            let mut create = if let Some(goal) = model.goal {
-                let parent_request = model.parent_request.unwrap();
-                let parent_model = self
-                    .case
+            assert!(
+                !pending
+                    .iter()
+                    .any(|row: &ModelRow| row.request == model.request),
+                "{}: cyclic fixture request ancestry",
+                self.case.name
+            );
+            next = model.goal.and(model.parent_request).and_then(|parent| {
+                self.case
                     .rows
                     .iter()
-                    .find(|row| row.request == parent_request)
-                    .cloned();
-                let mut parent = if let Some(parent_model) = parent_model {
-                    self.build(parent_model).await
-                } else {
-                    let identity = self.identity(model.owner);
-                    let base = AgentRequestCreate::base(
-                        gents_protocol::request_admission::RequestPurpose::Normal,
-                        self.base_id(parent_request),
-                        identity.did(),
-                        identity.did(),
-                        "head-behavior",
-                        format!("session-{}", model.session),
-                        "parent",
-                        "interactive",
-                        &now,
-                        AgentRequestAdmissionRecord::local_self(identity.did()),
-                    );
-                    signed_row(&base, model.parent_doc.unwrap())
-                };
-                parent.doc_id = model.parent_doc.map(|doc| format!("physical-{doc}"));
-                parent.node_did = Some(self.identity(model.owner).did().into());
-                parent.session_id = Some(format!("session-{}", model.session));
-                let parent = crate::request::watcher::AgentRequest::try_from(parent).unwrap();
-                prepare_goal_continuation(
-                    &parent,
-                    "head-behavior".into(),
-                    &format!("goal-{goal}"),
-                    "signed child",
-                    i64::try_from(model.sequence).unwrap(),
-                    false,
-                    &now,
-                    parent.request_hop,
-                )
-                .unwrap()
+                    .find(|row| row.request == parent)
+                    .cloned()
+            });
+            pending.push(model);
+        }
+        while let Some(model) = pending.pop() {
+            self.build_one(model).await;
+        }
+        self.built
+            .get(&requested)
+            .expect("fixture request built")
+            .clone()
+    }
+
+    async fn build_one(&mut self, model: ModelRow) {
+        let now = self.timestamp(model.request);
+        let mut create = if let Some(goal) = model.goal {
+            let parent_request = model.parent_request.unwrap();
+            let mut parent = if let Some(parent) = self.built.get(&parent_request) {
+                parent.clone()
             } else {
                 let identity = self.identity(model.owner);
-                let mut base = AgentRequestCreate::base(
+                let base = AgentRequestCreate::base(
                     gents_protocol::request_admission::RequestPurpose::Normal,
-                    self.base_id(model.request),
+                    self.base_id(parent_request),
                     identity.did(),
                     identity.did(),
-                    "head-behavior",
+                    identity.did(),
                     format!("session-{}", model.session),
-                    "signed root",
+                    "parent",
                     "interactive",
                     &now,
                     AgentRequestAdmissionRecord::local_self(identity.did()),
                 );
-                base.caused_by_parent_request_id =
-                    model.parent_request.map(|request| self.base_id(request));
-                base.caused_by_parent_request_doc_id =
-                    model.parent_doc.map(|doc| format!("physical-{doc}"));
-                base
+                signed_row(&base, model.parent_doc.unwrap())
             };
-            if self.case.name == "legacy_source_omission_keeps_physical_edge" {
-                create.caused_by_source_doc_id = if model.goal.is_none() {
-                    Some("original-event-source".into())
-                } else {
-                    None
-                };
-            }
-            create.purpose = model.purpose;
-            if !model.deterministic_identity {
-                create.request_id.push_str("-wrong-identity");
-            }
-            crate::sign_agent_request_create(self.identity(model.owner), &mut create)
-                .await
-                .unwrap();
-            let mut row = signed_row(&create, model.doc);
-            match model.input_disposition {
-                InputDisposition::Execution => {}
-                InputDisposition::Folded | InputDisposition::Replaced => {
-                    row.lifecycle_state = Some(RequestLifecycleState::Superseded);
-                    row.failure_reason = Some(
-                        match model.input_disposition {
-                            InputDisposition::Folded => crate::request::lifecycle::FOLDED_REASON,
-                            _ => crate::request::lifecycle::REPLACED_REASON,
-                        }
-                        .into(),
-                    );
-                    row.superseded_by_request = Some(self.base_id(100));
-                    row.superseded_by_request_doc_id = Some("physical-10".into());
-                }
-                InputDisposition::Removed => {
-                    row.lifecycle_state = Some(RequestLifecycleState::Interrupted);
-                    row.failure_reason = Some(crate::request::lifecycle::REMOVED_REASON.into());
-                }
-            }
-            if !model.receipt_valid {
-                row.content = Some("altered after signing".into());
-            }
-            assert_eq!(
-                verify_request_receipt_signature(&row).is_ok(),
-                model.receipt_valid,
-                "{}: actual signature",
-                self.case.name
+            parent.doc_id = model.parent_doc.map(|doc| format!("physical-{doc}"));
+            parent.node_did = Some(self.identity(model.owner).did().into());
+            parent.session_id = Some(format!("session-{}", model.session));
+            let parent = crate::request::watcher::AgentRequest::try_from(parent).unwrap();
+            prepare_goal_continuation(
+                &parent,
+                self.identity(model.owner).did().into(),
+                &format!("goal-{goal}"),
+                "signed child",
+                i64::try_from(model.sequence).unwrap(),
+                false,
+                &now,
+                parent.request_hop,
+            )
+            .unwrap()
+        } else {
+            let identity = self.identity(model.owner);
+            let mut base = AgentRequestCreate::base(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                self.base_id(model.request),
+                identity.did(),
+                identity.did(),
+                identity.did(),
+                format!("session-{}", model.session),
+                "signed root",
+                "interactive",
+                &now,
+                AgentRequestAdmissionRecord::local_self(identity.did()),
             );
-            self.built.insert(model.request, row.clone());
-            row
-        })
+            base.caused_by_parent_request_id =
+                model.parent_request.map(|request| self.base_id(request));
+            base.caused_by_parent_request_doc_id =
+                model.parent_doc.map(|doc| format!("physical-{doc}"));
+            base
+        };
+        if self.case.name == "legacy_source_omission_keeps_physical_edge" {
+            create.caused_by_source_doc_id = if model.goal.is_none() {
+                Some("original-event-source".into())
+            } else {
+                None
+            };
+        }
+        create.purpose = model.purpose;
+        if !model.deterministic_identity {
+            create.request_id.push_str("-wrong-identity");
+        }
+        crate::sign_agent_request_create(self.identity(model.owner), &mut create)
+            .await
+            .unwrap();
+        let mut row = signed_row(&create, model.doc);
+        match model.input_disposition {
+            InputDisposition::Execution => {}
+            InputDisposition::Folded | InputDisposition::Replaced => {
+                row.lifecycle_state = Some(RequestLifecycleState::Superseded);
+                row.failure_reason = Some(
+                    match model.input_disposition {
+                        InputDisposition::Folded => crate::request::lifecycle::FOLDED_REASON,
+                        _ => crate::request::lifecycle::REPLACED_REASON,
+                    }
+                    .into(),
+                );
+                row.superseded_by_request = Some(self.base_id(100));
+                row.superseded_by_request_doc_id = Some("physical-10".into());
+            }
+            InputDisposition::Removed => {
+                row.lifecycle_state = Some(RequestLifecycleState::Interrupted);
+                row.failure_reason = Some(crate::request::lifecycle::REMOVED_REASON.into());
+            }
+        }
+        if !model.receipt_valid {
+            row.content = Some("altered after signing".into());
+        }
+        assert_eq!(
+            verify_request_receipt_signature(&row).is_ok(),
+            model.receipt_valid,
+            "{}: actual signature",
+            self.case.name
+        );
+        self.built.insert(model.request, row);
     }
 }
 
@@ -573,22 +591,45 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
     use crate::store::config_client::ConfigAccess;
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
+    let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
+    let agent = crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
     let node = std::sync::Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .build()
             .await
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = ConfigAccess::local(node.clone());
-    let mut goal = set_goal(
-        &node,
+    let access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    access
+        .transact_write("test.assignment_session", |txn| {
+            Box::pin(crate::session::ensure_session_in_txn(
+                txn,
+                "bound-session",
+                identity.did(),
+                agent.did(),
+                Some(agent.did()),
+                None,
+                None,
+                "2026-01-01T00:00:00Z",
+            ))
+        })
+        .await
+        .unwrap();
+    let mut goal = set_goal_from_access(
+        &access,
         identity.did(),
         "bound-session",
         Some("next assignment"),
         Some(GoalStatus::Active),
         Some(None),
+        None,
     )
     .await
     .unwrap();
@@ -600,15 +641,15 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
             RequestPurpose::Normal,
             id,
             identity.did(),
-            identity.did(),
-            "head-behavior",
+            agent.did(),
+            agent.did(),
             "bound-session",
             "root",
             "interactive",
             created,
-            AgentRequestAdmissionRecord::local_self(identity.did()),
+            AgentRequestAdmissionRecord::local_self(agent.did()),
         );
-        crate::sign_agent_request_create(&identity, &mut create)
+        crate::sign_agent_request_create(agent.as_ref(), &mut create)
             .await
             .unwrap();
         access
@@ -639,7 +680,7 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
     for sequence in [1, 2] {
         let mut child = prepare_goal_continuation(
             &parent,
-            "head-behavior".into(),
+            agent.did().into(),
             &goal.goal_id,
             "old continuation",
             sequence,
@@ -648,7 +689,7 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
             parent.request_hop,
         )
         .unwrap();
-        crate::sign_agent_request_create(&identity, &mut child)
+        crate::sign_agent_request_create(agent.as_ref(), &mut child)
             .await
             .unwrap();
         access
@@ -667,16 +708,22 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
             .find(|row| row.request_id == child.request_id)
             .unwrap();
         let request = crate::request::watcher::AgentRequest::try_from(old_child.clone()).unwrap();
-        let allowed =
-            ConfigAccess::transact_local_write(&node, None, "test.late_goal_claim", |txn| {
+        let allowed = access
+            .transact_write("test.late_goal_claim", |txn| {
                 let request = &request;
                 Box::pin(async move {
-                    fence_goal_continuation_claim_in_txn(txn, request, "2026-01-01T00:00:03Z").await
+                    fence_goal_continuation_claim_in_txn(
+                        txn,
+                        request,
+                        "2026-01-01T00:00:03Z",
+                        false,
+                    )
+                    .await
                 })
             })
             .await
             .unwrap();
-        assert!(!allowed);
+        assert_eq!(allowed, crate::goal::GoalClaimFence::Retired);
         let response = access.execute(&query).await.unwrap();
         let rows: Vec<AgentRequestRow> =
             serde_json::from_value(response["data"]["AgentRequest"].clone()).unwrap();

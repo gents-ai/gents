@@ -28,11 +28,15 @@ pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
         P2pCommand::Diagnose(args) => connect::p2p_diagnose(args).await,
         P2pCommand::Pairings { command } => match command {
             P2pPairingsCommand::List(args) => pairings::p2p_pairings_list(args).await,
+            P2pPairingsCommand::ReaderTargets(args) => pairings::pairing_reader_targets(args).await,
+            P2pPairingsCommand::GrantReader(args) => pairings::pairing_reader(args, true).await,
+            P2pPairingsCommand::RevokeReader(args) => pairings::pairing_reader(args, false).await,
         },
         P2pCommand::Enrollment { command } => match command {
             P2pEnrollmentCommand::Pending(args) => {
                 enrollment_admin::pending_enrollments(args).await
             }
+            P2pEnrollmentCommand::Grant(args) => enrollment_admin::grant_pending_client(args).await,
             P2pEnrollmentCommand::Approve(args) => {
                 enrollment_admin::decide_enrollment(
                     args,

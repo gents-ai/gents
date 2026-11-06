@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
+#[cfg(test)]
 use gents::defra_node::NodeBuilder;
 use serde::de::DeserializeOwned;
 
@@ -135,7 +136,7 @@ Examples:
   gents init --write
   gents init --yolo
   gents init --inference-url $INFERENCE_ENDPOINT --model-name MODEL --write
-  gents init --enable-memory --defra-query-collection AgentRequest
+  gents init --defra-query-collection AgentRequest
   gents init --identity-only
   gents init --identity-only --identity-backend macos-keychain --keychain-label LABEL
   gents init --identity-only --identity-backend macos-secure-enclave --secure-enclave-label LABEL
@@ -345,7 +346,7 @@ Examples:
 const TOOLS_AFTER_HELP: &str = "\
 Examples:
   gents tools explain
-  gents tools explain --agent-id AGENT_ID
+  gents tools explain --agent-did AGENT_DID
   gents tools explain --graphql http://127.0.0.1:9191/api/v0/graphql
 
 The explain output separates model-callable tools from operator HTTP/MCP surfaces
@@ -366,12 +367,13 @@ pub(crate) const CONFIG_EXPORT_FORMAT: &str = "gents-config/v2";
 
 pub(crate) const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
     ("Node", "node_did"),
-    ("Agent", "agent_id"),
+    ("Agent", "agent_did"),
     ("AgentContext", "context_id"),
     ("NodeRuntime", "node_did"),
     ("Tools", "tools_id"),
     ("InferenceProfile", "profile_id"),
-    ("InferenceBackend", "backend_id"),
+    ("InferenceBackendMetadata", "backend_id"),
+    ("BackendCredential", "credential_id"),
     ("InferenceSampling", "sampling_id"),
     ("InferenceExecution", "execution_id"),
     ("InferenceRetryPolicy", "retry_policy_id"),
@@ -393,7 +395,8 @@ const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
     "Agent",
     "AgentContext",
     "Tools",
-    "InferenceBackend",
+    "InferenceBackendMetadata",
+    "BackendCredential",
     "InferenceProfile",
     "InferenceSampling",
     "InferenceExecution",
@@ -437,6 +440,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         }
         command => command,
     };
+    gents::enable_self_runner();
     if let Command::Eval { command } = &command {
         if let Some(message) = commands::eval::usage_error(command) {
             use clap::CommandFactory;
@@ -446,6 +450,38 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         }
     }
 
+    // Client-facing commands create their own principal before resolving an
+    // endpoint; runtime entry points never load this client key.
+    if matches!(
+        &command,
+        Command::Chat(_)
+            | Command::P2p { .. }
+            | Command::Schema { .. }
+            | Command::Trace { .. }
+            | Command::Status(_)
+            | Command::Query(_)
+            | Command::Export(_)
+            | Command::Write(_)
+            | Command::Document { .. }
+            | Command::Background { .. }
+            | Command::Mcp { .. }
+            | Command::Fleet { .. }
+            | Command::Task { .. }
+            | Command::Pack { .. }
+            | Command::Plugin { .. }
+            | Command::Ux { .. }
+            | Command::Diagnose(_)
+            | Command::Tools { .. }
+            | Command::Config { .. }
+            | Command::Request { .. }
+            | Command::Response { .. }
+            | Command::Session { .. }
+            | Command::Goal { .. }
+            | Command::Job { .. }
+            | Command::Mailbox { .. }
+    ) {
+        load_client_identity().await?;
+    }
     let telemetry = telemetry::init(DEFAULT_LOG_FILTER)?;
     let result = match command {
         Command::Version => {
@@ -627,45 +663,115 @@ pub(crate) async fn resolve_config_access(
     home: Option<&Path>,
     explicit_graphql: Option<&str>,
 ) -> Result<(ConfigAccess, PathBuf)> {
+    let (access, home, _) = resolve_config_access_inner(home, explicit_graphql, false).await?;
+    Ok((access, home))
+}
+
+pub(crate) async fn resolve_pack_config_access(
+    home: Option<&Path>,
+    explicit_graphql: Option<&str>,
+) -> Result<(
+    ConfigAccess,
+    PathBuf,
+    Option<gents::store::config_client::GraphqlEndpoint>,
+)> {
+    resolve_config_access_inner(home, explicit_graphql, true).await
+}
+
+async fn resolve_config_access_inner(
+    home: Option<&Path>,
+    explicit_graphql: Option<&str>,
+    local_http: bool,
+) -> Result<(
+    ConfigAccess,
+    PathBuf,
+    Option<gents::store::config_client::GraphqlEndpoint>,
+)> {
+    use gents::NodeIdentity as _;
     let home_dir = resolve_home_dir(home);
+    let client_identity = load_client_identity().await?;
     if let Some(graphql) = explicit_graphql
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
         let endpoint = resolve_graphql_endpoint(Some(graphql), home)?;
-        return Ok((ConfigAccess::Graphql(endpoint), home_dir));
+        return Ok((
+            ConfigAccess::Graphql(endpoint.with_client_signed_agent_creates()),
+            home_dir,
+            None,
+        ));
     }
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
         if graphql_endpoint_available(&runtime_state.graphql).await {
-            let endpoint = home_graphql_endpoint(&home_dir, runtime_state.graphql);
-            return Ok((ConfigAccess::Graphql(endpoint), home_dir));
+            let endpoint = home_graphql_endpoint(&home_dir, runtime_state.graphql)?;
+            return Ok((
+                ConfigAccess::Graphql(endpoint.with_client_signed_agent_creates()),
+                home_dir,
+                None,
+            ));
         }
     }
 
     let data_dir = default_data_dir(&home_dir);
-    fs::create_dir_all(&data_dir)
-        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let claim = gents::store::local::home::lock_store(&home_dir, &data_dir)?;
-    let node = std::sync::Arc::new(
-        persistent_node_builder_with_stored_identity(&home_dir, &data_dir)
-            .await?
-            .build()
+    anyhow::ensure!(
+        tokio::fs::metadata(&data_dir)
             .await
-            .with_context(|| {
-                format!("building embedded DefraDB node from {}", data_dir.display())
-            })?,
+            .is_ok_and(|metadata| metadata.is_dir()),
+        "the initialized data directory {} is unavailable",
+        data_dir.display()
     );
+    let claim = gents::store::local::home::lock_store(&home_dir, &data_dir)?;
+    let store_key =
+        gents::store::local::store_key::open_home_store_key(&home_dir, &data_dir).await?;
+    let protected = gents::store::local::backend_protection::ProtectedBackendStore::open(
+        &data_dir, &store_key, &claim,
+    )
+    .await?;
+    let config = read_init_config(&home_dir)?.context("home is not initialized")?;
+    let runtime_identity = load_initialized_home_identity(&home_dir, &config)?;
+    let protected = protected
+        .preflight(&store_key, Some(runtime_identity.did()))
+        .await?;
+    let (http, local_endpoint) = if local_http {
+        let (listener, address) = tokio::task::spawn_blocking(|| -> std::io::Result<_> {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+            let address = listener.local_addr()?;
+            Ok((listener, address))
+        })
+        .await??;
+        let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+            format!("http://{address}/api/v0/graphql"),
+            client_identity.did(),
+        )
+        .with_client_signing_capability(client_identity.client_signing_capability()?)?
+        .with_client_signed_agent_creates();
+        (
+            Some(gents::defra_node::HttpConfig::with_listener(listener)?),
+            Some(endpoint),
+        )
+    } else {
+        (None, None)
+    };
+    let (node, _admission) = protected
+        .start_node(&store_key, runtime_identity.clone(), http, None, &home_dir)
+        .await?;
     let migration_node = node.clone();
-    let access = ConfigAccess::claimed_local(node, claim)?;
+    let access = ConfigAccess::claimed_local_as(
+        node,
+        claim,
+        identity::Did::new(client_identity.did().to_owned())?,
+    )?
+    .with_client_signed_configuration();
     gents::store::schema::migration::ensure_all_runtime_migrations(migration_node)
         .await
         .map_err(|error| {
             gents::store::local::storage_backend::classify_store_error(error, &data_dir)
         })?;
     gents::store::local::store_key::upgrade::finish(&data_dir)?;
-    Ok((access, home_dir))
+    Ok((access, home_dir, local_endpoint))
 }
 
+#[cfg(test)]
 pub(crate) async fn persistent_node_builder(
     home_dir: &Path,
     data_dir: &Path,
@@ -677,6 +783,7 @@ pub(crate) async fn persistent_node_builder(
     )?)
 }
 
+#[cfg(test)]
 pub(crate) async fn persistent_node_builder_with_stored_identity(
     home_dir: &Path,
     data_dir: &Path,
@@ -919,14 +1026,24 @@ mod tests {
             gents_protocol::error_chain::ErrorChain(&error)
         );
 
-        access.local_node().unwrap().shutdown().await;
+        access
+            .local_node()
+            .unwrap()
+            .shutdown()
+            .await
+            .expect("node shutdown");
         drop(access);
         assert_eq!(node.strong_count(), 0, "the access held the only node");
         let (reopened, _) = resolve_config_access(Some(&home), None)
             .await
             .expect("a shut down and dropped access releases the store");
         assert_eq!(reopened.mode(), "local");
-        reopened.local_node().unwrap().shutdown().await;
+        reopened
+            .local_node()
+            .unwrap()
+            .shutdown()
+            .await
+            .expect("node shutdown");
     }
 
     #[tokio::test]

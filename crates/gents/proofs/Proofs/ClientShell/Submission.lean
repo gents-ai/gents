@@ -2,13 +2,13 @@ import Proofs.ClientShell.Types
 
 structure SubmitContext where
   clientAvailable   : Bool
-  requestedAgent : Option AgentId
+  requestedAgent : Option AgentDid
   deriving Repr
 
 def agentMismatch
     (store : LocalStore) (sid : SessionId)
-    (requested : Option AgentId) : Bool :=
-  match requested, (store.find sid).bind (·.agentId) with
+    (requested : Option AgentDid) : Bool :=
+  match requested, (store.find sid).bind (·.agentDid) with
   | some r, some e => decide (r ≠ e)
   | _, _           => false
 

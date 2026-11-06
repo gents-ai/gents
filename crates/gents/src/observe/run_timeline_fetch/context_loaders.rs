@@ -35,23 +35,9 @@ pub(super) async fn load_timeline_sessions(
             .collect::<Vec<_>>()
             .join("\n");
         let response = access.execute(&format!("{{ {selections} }}")).await?;
-        anyhow::ensure!(
-            response.get("errors").is_none_or(
-                |errors| errors.is_null() || errors.as_array().is_some_and(Vec::is_empty)
-            ),
-            "timeline AgentSession query failed: {}",
-            response["errors"]
-        );
-        let data = response
-            .get("data")
-            .context("timeline AgentSession query omitted data")?;
         for (index, (node_did, session_id, requester_did)) in batch.iter().enumerate() {
             let alias = format!("s{index}");
-            let rows = data
-                .get(alias.as_str())
-                .and_then(serde_json::Value::as_array)
-                .with_context(|| format!("timeline query omitted AgentSession scope s{index}"))?
-                .clone();
+            let rows = super::query_helpers::decode_rows(&response, &alias)?;
             if let Some(session) =
                 decode_timeline_session_rows(rows, node_did, session_id, requester_did.as_deref())?
             {
@@ -95,36 +81,97 @@ mod tests {
 
     #[tokio::test]
     async fn canonical_session_reads_require_exact_owner_and_requester_scope() {
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-        node.add_collection(gents_protocol::schemas::AGENT_SESSION)
-            .await
-            .unwrap();
-        for (owner, requester, behavior) in [
-            ("owner-a", "null", "behavior-a"),
-            ("owner-b", "\"requester-b\"", "behavior-b"),
+        use crate::store::identity::NodeIdentity;
+        use gents_protocol::session::{SessionProvenance, SessionTitle, SessionTitleSource};
+
+        let (first, user_a, access_a, binding_a) =
+            crate::test_support::signed_test_node("timeline-scope-a").await;
+        let (second, user_b, access_b, binding_b) =
+            crate::test_support::signed_test_node("timeline-scope-b").await;
+        let owner_a = first.node_identity.did();
+        let owner_b = second.node_identity.did();
+        assert_ne!(owner_a, owner_b);
+        assert_ne!(user_a.did(), user_b.did());
+        for (access, owner, user, binding) in [
+            (&access_a, owner_a, &user_a, &binding_a),
+            (&access_b, owner_b, &user_b, &binding_b),
         ] {
-            let query = format!(
-                r#"mutation {{ create_AgentSession(input: {{
-                session_id: "shared-label", node_did: "{owner}", requester_did: {requester},
-                agent_id: "{behavior}", created_at: "2026-01-01T00:00:00Z",
-                title: {{text: "A title", source: "user"}},
-                provenance: {{task_id: "task"}},
-                observation: {{last_activity_at: "2026-01-02T00:00:00Z", preview: "A preview"}}
-            }}) {{_docID}} }}"#
-            );
-            let response = node.execute(&query).await;
-            assert!(!response.has_errors(), "{:?}", response.errors);
-        }
-        let access = ConfigAccess::local(node.clone());
-        let owner_a = load_timeline_session(&access, "owner-a", "shared-label", None)
+            access
+                .transact_write("test.timeline_scope.session", |txn| {
+                    Box::pin(async move {
+                        crate::session::ensure_session_in_txn(
+                            txn,
+                            "shared-label",
+                            owner,
+                            &binding.agent_did,
+                            Some(user.did()),
+                            Some(SessionTitle {
+                                text: "A title".into(),
+                                source: SessionTitleSource::User,
+                            }),
+                            Some(SessionProvenance {
+                                task_id: Some("task".into()),
+                                ..Default::default()
+                            }),
+                            "2026-01-01T00:00:00Z",
+                        )
+                        .await?;
+                        Ok::<_, anyhow::Error>(())
+                    })
+                })
+                .await
+                .unwrap();
+            let (session_doc, agent_doc) = access
+                .transact_readonly("test.timeline_scope.targets", |txn| {
+                    Box::pin(async move {
+                        let session = crate::session::load_agent_session_owner_in_txn(
+                            txn,
+                            owner,
+                            "shared-label",
+                        )
+                        .await?
+                        .expect("session");
+                        let (agent, _) =
+                            crate::store::config_client::read_desired_state_record_in_txn(
+                                txn,
+                                crate::Collection::Agent,
+                                owner,
+                                &binding.agent_did,
+                            )
+                            .await?
+                            .expect("agent");
+                        Ok::<_, anyhow::Error>((session.doc_id, agent))
+                    })
+                })
+                .await
+                .unwrap();
+            crate::session::grant_created_session_relationships(
+                access,
+                &session_doc,
+                &agent_doc,
+                &binding.agent_did,
+            )
             .await
-            .unwrap()
             .unwrap();
-        assert_eq!(owner_a.session.agent_id, "behavior-a");
-        assert!(owner_a.doc_id.is_some());
-        assert_eq!(owner_a.session.title.as_ref().unwrap().text, "A title");
+        }
+        let first_row =
+            load_timeline_session(&access_a, owner_a, "shared-label", Some(user_a.did()))
+                .await
+                .unwrap()
+                .unwrap();
+        let second_row =
+            load_timeline_session(&access_b, owner_b, "shared-label", Some(user_b.did()))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(first_row.session.agent_did, binding_a.agent_did);
+        assert_eq!(second_row.session.agent_did, binding_b.agent_did);
+        assert!(first_row.doc_id.is_some());
+        assert!(second_row.doc_id.is_some());
+        assert_ne!(first_row.doc_id, second_row.doc_id);
+        assert_eq!(first_row.session.title.as_ref().unwrap().text, "A title");
         assert_eq!(
-            owner_a
+            first_row
                 .session
                 .provenance
                 .as_ref()
@@ -134,46 +181,48 @@ mod tests {
             Some("task")
         );
         assert!(
-            load_timeline_session(&access, "owner-b", "shared-label", None)
+            load_timeline_session(&access_a, owner_a, "shared-label", None)
                 .await
                 .unwrap()
                 .is_none()
         );
         assert!(
-            load_timeline_session(&access, "owner-a", "shared-label", Some("requester-b"))
+            load_timeline_session(&access_a, owner_a, "shared-label", Some(user_b.did()))
                 .await
                 .unwrap()
                 .is_none()
         );
-        let owner_b =
-            load_timeline_session(&access, "owner-b", "shared-label", Some("requester-b"))
-                .await
-                .unwrap()
-                .unwrap();
-        assert_eq!(owner_b.session.agent_id, "behavior-b");
-        assert_ne!(owner_a.doc_id, owner_b.doc_id);
-        let batched = load_timeline_sessions(
-            &access,
-            &[
-                ("owner-a".to_owned(), "shared-label".to_owned(), None),
-                (
-                    "owner-b".to_owned(),
-                    "shared-label".to_owned(),
-                    Some("requester-b".to_owned()),
-                ),
-            ],
-        )
-        .await
-        .unwrap();
-        assert_eq!(batched.len(), 2);
-        assert_eq!(batched[0].session.agent_id, "behavior-a");
-        assert_eq!(batched[1].session.agent_id, "behavior-b");
         assert!(
-            load_timeline_session(&access, "absent", "shared-label", None)
+            load_timeline_session(&access_a, owner_b, "shared-label", Some(user_b.did()))
                 .await
                 .unwrap()
                 .is_none()
         );
-        node.shutdown().await;
+        assert!(
+            load_timeline_session(&access_b, owner_a, "shared-label", Some(user_a.did()))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let scopes = [
+            (
+                owner_a.to_owned(),
+                "shared-label".to_owned(),
+                Some(user_a.did().to_owned()),
+            ),
+            (
+                owner_b.to_owned(),
+                "shared-label".to_owned(),
+                Some(user_b.did().to_owned()),
+            ),
+        ];
+        let a = load_timeline_sessions(&access_a, &scopes).await.unwrap();
+        let b = load_timeline_sessions(&access_b, &scopes).await.unwrap();
+        assert_eq!(a.len(), 1);
+        assert_eq!(b.len(), 1);
+        assert_eq!(a[0].session.agent_did, binding_a.agent_did);
+        assert_eq!(b[0].session.agent_did, binding_b.agent_did);
+        first.node.shutdown().await.expect("first node shutdown");
+        second.node.shutdown().await.expect("second node shutdown");
     }
 }

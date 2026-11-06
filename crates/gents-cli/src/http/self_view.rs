@@ -15,7 +15,7 @@ const RECENT_REQUEST_SCAN: usize = 200;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct SelfAgent {
-    pub(crate) agent_id: String,
+    pub(crate) agent_did: String,
     pub(crate) display_name: String,
     pub(crate) model_name: String,
     pub(crate) enabled: bool,
@@ -50,7 +50,7 @@ pub(crate) struct ContextIndicator {
 struct SelfViewEnvelope {
     #[serde(rename = "Agent", default)]
     agents: Vec<AgentRow>,
-    #[serde(rename = "InferenceBackend", default)]
+    #[serde(rename = "InferenceBackendMetadata", default)]
     backends: Vec<BackendRow>,
     #[serde(rename = "InferenceProfile", default)]
     profiles: Vec<ProfileRow>,
@@ -71,7 +71,7 @@ struct CompactionEnvelope {
 #[derive(Debug, Clone, Deserialize)]
 struct AgentRow {
     #[serde(default)]
-    agent_id: String,
+    agent_did: String,
     #[serde(default)]
     display_name: Option<String>,
     #[serde(default)]
@@ -164,14 +164,14 @@ fn self_view_query(node_did: &str) -> String {
     let node_did = escape_graphql_string(node_did);
     format!(
         r#"{{
-        Agent(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, order: {{ agent_id: ASC }}) {{
-            agent_id
+        Agent(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, order: {{ agent_did: ASC }}) {{
+            agent_did: agent_did
             display_name
             inference_profile_id
             context_id
             enabled
         }}
-        InferenceBackend(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, order: {{ backend_id: ASC }}) {{
+        InferenceBackendMetadata(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, order: {{ backend_id: ASC }}) {{
             backend_id
             provider_kind
             endpoint
@@ -272,8 +272,8 @@ fn build_agents(
     agents
         .into_iter()
         .filter_map(|agent_config| {
-            let agent_id = agent_config.agent_id.trim().to_string();
-            if agent_id.is_empty() {
+            let agent_did = agent_config.agent_did.trim().to_string();
+            if agent_did.is_empty() {
                 return None;
             }
             let inference_profile_id = agent_config
@@ -298,7 +298,7 @@ fn build_agents(
                 .to_string();
             let backend = backends.get(&backend_id);
             Some(SelfAgent {
-                agent_id,
+                agent_did,
                 display_name: agent_config.display_name.unwrap_or_default(),
                 model_name: profile
                     .and_then(|profile| profile.model_name.clone())

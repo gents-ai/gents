@@ -10,22 +10,34 @@ fn fixtures_merge_the_case_after_the_definition_and_read_assets_from_the_pack() 
         documents: Vec::new(),
         files: Vec::new(),
         schemas: vec!["type A {}".into()],
+        seed_schemas: vec!["type SeedA { value: String }".into()],
     };
     let per_case = EvalFixtures {
         assets: Vec::new(),
         documents: vec![EvalFixtureDocument {
             collection: "A".into(),
             document: json!({"id": 1}),
+            session_readers: Vec::new(),
+            session_agent_owned: false,
+            expired_client_request: false,
         }],
         files: vec![EvalFixtureFile {
             path: "inventory/edge-07.json".into(),
             contents: "{\"disk\": \"84%\"}\n".into(),
         }],
         schemas: vec!["type B {}".into()],
+        seed_schemas: vec!["type SeedB { value: String }".into()],
     };
 
     let merged = fixtures(pack.path(), Some(&shared), Some(&per_case)).unwrap();
     assert_eq!(merged.schemas, ["type A {}", "type B {}"]);
+    assert_eq!(
+        merged.seed_schemas,
+        [
+            "type SeedA { value: String }",
+            "type SeedB { value: String }"
+        ]
+    );
     assert_eq!(merged.documents.len(), 1);
     assert_eq!(
         merged.files,
@@ -154,6 +166,9 @@ fn a_stage_captures_what_it_declares_and_otherwise_what_the_run_requested() {
         Some(FixtureDocument {
             collection: "Event".into(),
             document: json!({"kind": "signup"}),
+            session_readers: Vec::new(),
+            session_agent_owned: false,
+            expired_client_request: false,
         })
     );
 }

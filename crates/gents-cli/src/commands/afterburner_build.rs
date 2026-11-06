@@ -427,7 +427,7 @@ mod tests {
                 result_bytes: 65536,
                 max_wall_secs: 1800,
             },
-            caller_agent_id: "caller".into(),
+            caller_agent_did: "caller".into(),
         };
         let home = tempfile::tempdir().unwrap();
         let dir = home.path().join("packs/promoted/rome");

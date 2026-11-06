@@ -1,13 +1,12 @@
 use super::*;
 
 use gents::__test_internals::{reconcile_coalesced_pending_request, QueueSource};
-use gents::{DefraWatcher, Watcher, TERMINAL_REDRIVE_CAP};
+use gents::{DefraWatcher, NodeIdentity, Watcher, TERMINAL_REDRIVE_CAP};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 const CONVERGENCE_CREATED_AT: &str = "2026-03-23T00:00:00Z";
 const OWNER_DID: &str = NODE_DID;
 const FOREIGN_DID: &str = "did:test:foreign-owner";
-const REQUESTER_DID: &str = "did:test:requester";
 
 #[derive(Debug, Deserialize)]
 struct ConvergenceRow {
@@ -37,9 +36,15 @@ async fn create_owned_request(
     .await
 }
 
-async fn seed_owned_request_projection(node: &EmbeddedNode, session_id: &str, request_id: &str) {
-    let mut session = support::session_document(session_id, AGENT_NAME, CONVERGENCE_CREATED_AT);
-    session.node_did = OWNER_DID.into();
+async fn seed_owned_request_projection(
+    node: &EmbeddedNode,
+    session_id: &str,
+    request_id: &str,
+    node_did: &str,
+    agent_did: &str,
+) {
+    let session =
+        support::session_document_in_scope(node_did, session_id, agent_did, CONVERGENCE_CREATED_AT);
     support::create_session_document(node, &session).await;
     support::seed_session_observation_from_request(node, session_id, request_id, "hello").await;
 }
@@ -68,29 +73,6 @@ async fn create_owned_request_with_times(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn create_routed_owned_request_with_times(
-    node: &EmbeddedNode,
-    request_id: &str,
-    session_id: &str,
-    node_did: &str,
-    lifecycle_state: &str,
-    created_at: &str,
-    terminalized_at: &str,
-) -> String {
-    create_owned_request_with_times_and_requester(
-        node,
-        request_id,
-        session_id,
-        node_did,
-        lifecycle_state,
-        created_at,
-        terminalized_at,
-        Some(REQUESTER_DID),
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
 async fn create_owned_request_with_times_and_requester(
     node: &EmbeddedNode,
     request_id: &str,
@@ -101,10 +83,37 @@ async fn create_owned_request_with_times_and_requester(
     terminalized_at: &str,
     requester_did: Option<&str>,
 ) -> String {
+    create_recovery_request(
+        node,
+        request_id,
+        session_id,
+        node_did,
+        AGENT_NAME,
+        lifecycle_state,
+        created_at,
+        terminalized_at,
+        requester_did,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn create_recovery_request(
+    node: &EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+    node_did: &str,
+    agent_did: &str,
+    lifecycle_state: &str,
+    created_at: &str,
+    terminalized_at: &str,
+    requester_did: Option<&str>,
+) -> String {
     let is_terminal = RequestLifecycleState::is_terminal_str(Some(lifecycle_state));
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_node_did = escape_graphql_string(node_did);
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_lifecycle_state = escape_graphql_string(lifecycle_state);
     let escaped_created_at = escape_graphql_string(created_at);
     let escaped_terminalized_at = escape_graphql_string(terminalized_at);
@@ -131,7 +140,7 @@ async fn create_owned_request_with_times_and_requester(
                 purpose: "normal",
                 node_did: "{escaped_node_did}",
                 {requester_field}
-                agent_id: "{AGENT_NAME}",
+                agent_did: "{escaped_agent_did}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{escaped_request_id}",
@@ -165,6 +174,28 @@ async fn create_owned_request_with_times_and_requester(
         }}"#
     );
     first_row::<support::DocIdRow>(&node.execute(&query).await, "AgentRequest").doc_id
+}
+
+async fn create_recovery_request_basic(
+    node: &EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+    node_did: &str,
+    agent_did: &str,
+    state: &str,
+) -> String {
+    create_recovery_request(
+        node,
+        request_id,
+        session_id,
+        node_did,
+        agent_did,
+        state,
+        CONVERGENCE_CREATED_AT,
+        CONVERGENCE_CREATED_AT,
+        None,
+    )
+    .await
 }
 
 #[derive(Debug, Deserialize)]
@@ -203,7 +234,7 @@ async fn create_queue_request(
                 request_id: "{escaped_request_id}",
                 purpose: "normal",
                 node_did: "{escaped_node_did}",
-                agent_id: "{AGENT_NAME}",
+                agent_did: "{AGENT_NAME}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{escaped_request_id}",
@@ -339,58 +370,78 @@ pub(super) async fn single_claimer_watcher_never_claims_foreign_replica() {
 
 pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal() {
     let db = test_db("convergence-terminal-redrive").await;
+    let agent = support::managed_agent(&db).await;
+    let owner_did = db.node_identity.did();
+    let foreign_db = test_db("convergence-terminal-redrive-foreign").await;
+    let foreign_agent = support::managed_agent(&foreign_db).await;
+    let foreign_did = foreign_db.node_identity.did();
+    let requester =
+        gents::KeyIdentity::load_or_create(db.data_path().join("requester.key"), None).unwrap();
 
-    create_routed_owned_request_with_times(
+    create_recovery_request(
         &db.node,
         "convergence-owned-failed",
         "convergence-owned-failed-session",
-        OWNER_DID,
+        owner_did,
+        agent.did(),
         "failed",
         CONVERGENCE_CREATED_AT,
         CONVERGENCE_CREATED_AT,
+        Some(requester.did()),
     )
     .await;
-    create_routed_owned_request_with_times(
-        &db.node,
-        "convergence-foreign-failed",
-        "convergence-foreign-failed-session",
-        FOREIGN_DID,
-        "failed",
-        CONVERGENCE_CREATED_AT,
-        CONVERGENCE_CREATED_AT,
-    )
-    .await;
-    create_owned_request(
+    for target in [&db.node, &foreign_db.node] {
+        create_recovery_request(
+            target,
+            "convergence-foreign-failed",
+            "convergence-foreign-failed-session",
+            foreign_did,
+            foreign_agent.did(),
+            "failed",
+            CONVERGENCE_CREATED_AT,
+            CONVERGENCE_CREATED_AT,
+            Some(requester.did()),
+        )
+        .await;
+    }
+    create_recovery_request_basic(
         &db.node,
         "convergence-owned-processing",
         "convergence-owned-processing-session",
-        OWNER_DID,
+        owner_did,
+        agent.did(),
         "processing",
     )
     .await;
-    create_owned_request(
+    create_recovery_request_basic(
         &db.node,
         "convergence-owned-local-terminal",
         "convergence-owned-local-terminal-session",
-        OWNER_DID,
+        owner_did,
+        agent.did(),
         "completed",
     )
     .await;
-    create_owned_request_with_times_and_requester(
+    create_recovery_request(
         &db.node,
         "convergence-owned-self-terminal",
         "convergence-owned-self-terminal-session",
-        OWNER_DID,
+        owner_did,
+        agent.did(),
         "completed",
         CONVERGENCE_CREATED_AT,
         CONVERGENCE_CREATED_AT,
-        Some(OWNER_DID),
+        Some(owner_did),
     )
     .await;
 
-    let first = RequestLifecycle::redrive_terminal_convergence(&db.node, OWNER_DID)
-        .await
-        .unwrap();
+    let first = RequestLifecycle::redrive_terminal_convergence_with_identities(
+        &db.node,
+        owner_did,
+        std::slice::from_ref(&agent),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         first.scanned, 1,
         "only the routed owned terminal request is a candidate (foreign, active and local-self excluded)"
@@ -406,26 +457,38 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
     assert_eq!(owned.terminal_redrive_attempts, Some(1));
     assert!(owned.terminalized_at.is_some());
     let foreign = fetch_convergence_row(&db.node, "convergence-foreign-failed").await;
-    assert_eq!(foreign.node_did, FOREIGN_DID);
+    assert_eq!(foreign.node_did, foreign_did);
     assert_eq!(foreign.lifecycle_state, RequestLifecycleState::Failed);
 
     for _ in 1..TERMINAL_REDRIVE_CAP {
-        let more = RequestLifecycle::redrive_terminal_convergence(&db.node, OWNER_DID)
-            .await
-            .unwrap();
-        assert_eq!(more.reasserted, 1, "each re-assert under the cap counts");
-    }
-    let exhausted = RequestLifecycle::redrive_terminal_convergence(&db.node, OWNER_DID)
+        let more = RequestLifecycle::redrive_terminal_convergence_with_identities(
+            &db.node,
+            owner_did,
+            std::slice::from_ref(&agent),
+        )
         .await
         .unwrap();
+        assert_eq!(more.reasserted, 1, "each re-assert under the cap counts");
+    }
+    let exhausted = RequestLifecycle::redrive_terminal_convergence_with_identities(
+        &db.node,
+        owner_did,
+        std::slice::from_ref(&agent),
+    )
+    .await
+    .unwrap();
     assert!(
         exhausted.is_noop(),
         "re-drive must self-terminate after {TERMINAL_REDRIVE_CAP} re-asserts, got {exhausted:?}"
     );
 
-    let foreign_run = RequestLifecycle::redrive_terminal_convergence(&db.node, FOREIGN_DID)
-        .await
-        .unwrap();
+    let foreign_run = RequestLifecycle::redrive_terminal_convergence_with_identities(
+        &foreign_db.node,
+        foreign_did,
+        std::slice::from_ref(&foreign_agent),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         foreign_run.scanned, 1,
         "the foreign owner's own terminal replica is its sole candidate"
@@ -435,43 +498,59 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
 
 pub(super) async fn terminal_redrive_window_advances_past_sixty_four_rows() {
     let db = test_db("convergence-terminal-window").await;
+    let agent = support::managed_agent(&db).await;
+    let owner_did = db.node_identity.did();
+    let requester =
+        gents::KeyIdentity::load_or_create(db.data_path().join("requester.key"), None).unwrap();
 
     for index in 0..65 {
-        create_routed_owned_request_with_times(
+        create_recovery_request(
             &db.node,
             &format!("convergence-newer-{index:02}"),
             &format!("convergence-newer-session-{index:02}"),
-            OWNER_DID,
+            owner_did,
+            agent.did(),
             "completed",
             "2026-03-23T00:00:00Z",
             "2026-03-23T00:00:01Z",
+            Some(requester.did()),
         )
         .await;
     }
-    create_routed_owned_request_with_times(
+    create_recovery_request(
         &db.node,
         "convergence-old-late-terminal",
         "convergence-old-late-terminal-session",
-        OWNER_DID,
+        owner_did,
+        agent.did(),
         "completed",
         "2020-01-01T00:00:00Z",
         "2026-03-23T00:00:02Z",
+        Some(requester.did()),
     )
     .await;
 
     for _ in 0..TERMINAL_REDRIVE_CAP {
-        let report = RequestLifecycle::redrive_terminal_convergence(&db.node, OWNER_DID)
-            .await
-            .unwrap();
+        let report = RequestLifecycle::redrive_terminal_convergence_with_identities(
+            &db.node,
+            owner_did,
+            std::slice::from_ref(&agent),
+        )
+        .await
+        .unwrap();
         assert_eq!(report.scanned, 64);
         assert_eq!(report.reasserted, 64);
         let old = fetch_convergence_row(&db.node, "convergence-old-late-terminal").await;
         assert_eq!(old.terminal_redrive_attempts, Some(0));
     }
 
-    let advanced = RequestLifecycle::redrive_terminal_convergence(&db.node, OWNER_DID)
-        .await
-        .unwrap();
+    let advanced = RequestLifecycle::redrive_terminal_convergence_with_identities(
+        &db.node,
+        owner_did,
+        std::slice::from_ref(&agent),
+    )
+    .await
+    .unwrap();
     assert_eq!(advanced.scanned, 2);
     assert_eq!(advanced.reasserted, 2);
     let old = fetch_convergence_row(&db.node, "convergence-old-late-terminal").await;
@@ -480,15 +559,28 @@ pub(super) async fn terminal_redrive_window_advances_past_sixty_four_rows() {
 
 pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_write_gap() {
     let db = test_db("convergence-terminal-repair").await;
+    let agent = support::managed_agent(&db).await;
+    let owner_did = db.node_identity.did();
     let request_id = "convergence-terminal-repair-request";
     let session_id = "convergence-terminal-repair-session";
-    let request_doc_id =
-        create_owned_request(&db.node, request_id, session_id, OWNER_DID, "processing").await;
-    seed_owned_request_projection(&db.node, session_id, request_id).await;
+    let request_doc_id = create_recovery_request_basic(
+        &db.node,
+        request_id,
+        session_id,
+        owner_did,
+        agent.did(),
+        "processing",
+    )
+    .await;
+    seed_owned_request_projection(&db.node, session_id, request_id, owner_did, agent.did()).await;
     let request_commits_before_repair = composite_commit_count(&db.node, &request_doc_id).await;
-    let repaired = RequestLifecycle::repair_terminal_requests(&db.node, OWNER_DID)
-        .await
-        .unwrap();
+    let repaired = RequestLifecycle::repair_terminal_requests_with_identities(
+        &db.node,
+        owner_did,
+        std::slice::from_ref(&agent),
+    )
+    .await
+    .unwrap();
     assert_eq!(repaired.repaired, 1);
     assert_eq!(repaired.failed, 0);
     assert_eq!(
@@ -505,25 +597,41 @@ pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_wr
     assert!(row.terminalized_at.is_some());
     assert_eq!(row.terminal_redrive_attempts, Some(0));
 
-    let duplicate = RequestLifecycle::repair_terminal_requests(&db.node, OWNER_DID)
-        .await
-        .unwrap();
+    let duplicate = RequestLifecycle::repair_terminal_requests_with_identities(
+        &db.node,
+        owner_did,
+        std::slice::from_ref(&agent),
+    )
+    .await
+    .unwrap();
     assert_eq!(duplicate.repaired, 0, "duplicate observation is idempotent");
 
     let provider_request_id = "convergence-no-interrupt-latch";
     let provider_session_id = "convergence-no-interrupt-latch-session";
-    create_owned_request(
+    create_recovery_request_basic(
         &db.node,
         provider_request_id,
         provider_session_id,
-        OWNER_DID,
+        owner_did,
+        agent.did(),
         "processing",
     )
     .await;
-    seed_owned_request_projection(&db.node, provider_session_id, provider_request_id).await;
-    let provider_repair = RequestLifecycle::repair_terminal_requests(&db.node, OWNER_DID)
-        .await
-        .unwrap();
+    seed_owned_request_projection(
+        &db.node,
+        provider_session_id,
+        provider_request_id,
+        owner_did,
+        agent.did(),
+    )
+    .await;
+    let provider_repair = RequestLifecycle::repair_terminal_requests_with_identities(
+        &db.node,
+        owner_did,
+        std::slice::from_ref(&agent),
+    )
+    .await
+    .unwrap();
     assert_eq!(provider_repair.repaired, 1);
     let provider_row = fetch_convergence_row(&db.node, provider_request_id).await;
     assert_eq!(provider_row.lifecycle_state, RequestLifecycleState::Failed);
@@ -535,11 +643,12 @@ pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_wr
 
     let runtime_interrupt_request_id = "convergence-runtime-interrupt-stamp";
     let runtime_interrupt_session_id = "convergence-runtime-interrupt-session";
-    let runtime_interrupt_doc_id = create_owned_request(
+    let runtime_interrupt_doc_id = create_recovery_request_basic(
         &db.node,
         runtime_interrupt_request_id,
         runtime_interrupt_session_id,
-        OWNER_DID,
+        owner_did,
+        agent.did(),
         "processing",
     )
     .await;
@@ -547,6 +656,8 @@ pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_wr
         &db.node,
         runtime_interrupt_session_id,
         runtime_interrupt_request_id,
+        owner_did,
+        agent.did(),
     )
     .await;
     let runtime_interrupt_doc_id = escape_graphql_string(&runtime_interrupt_doc_id);
@@ -567,9 +678,13 @@ pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_wr
         response.errors
     );
 
-    let runtime_interrupt_repair = RequestLifecycle::repair_terminal_requests(&db.node, OWNER_DID)
-        .await
-        .unwrap();
+    let runtime_interrupt_repair = RequestLifecycle::repair_terminal_requests_with_identities(
+        &db.node,
+        owner_did,
+        std::slice::from_ref(&agent),
+    )
+    .await
+    .unwrap();
     assert_eq!(runtime_interrupt_repair.repaired, 1);
     let runtime_interrupt_row = fetch_convergence_row(&db.node, runtime_interrupt_request_id).await;
     assert_eq!(
@@ -585,12 +700,15 @@ pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_wr
 
 pub(super) async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
     let db = test_db("convergence-recover-claimed").await;
+    let agent = support::managed_agent(&db).await;
+    let owner_did = db.node_identity.did();
 
-    create_owned_request(
+    create_recovery_request_basic(
         &db.node,
         "convergence-stuck-claimed",
         "convergence-stuck-claimed-session",
-        OWNER_DID,
+        owner_did,
+        agent.did(),
         "claimed",
     )
     .await;
@@ -598,11 +716,17 @@ pub(super) async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
         &db.node,
         "convergence-stuck-claimed-session",
         "convergence-stuck-claimed",
+        owner_did,
+        agent.did(),
     )
     .await;
-    let report = RequestLifecycle::recover_all(&db.node, OWNER_DID)
-        .await
-        .unwrap();
+    let report = RequestLifecycle::recover_all_with_identities(
+        &db.node,
+        owner_did,
+        std::slice::from_ref(&agent),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         report.requests_recovered, 1,
         "a claimed own-request must be recovered (Lean requestRecoveryStale = claimed ∨ processing)"
@@ -620,7 +744,6 @@ pub(super) async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
 }
 
 pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
-    use gents::NodeIdentity;
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
     };
@@ -706,6 +829,7 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
 
     let survivor = reconcile_coalesced_pending_request(
         &db.node,
+        AGENT_NAME,
         session_id,
         owner.did(),
         QueueSource::BackgroundCompletion,

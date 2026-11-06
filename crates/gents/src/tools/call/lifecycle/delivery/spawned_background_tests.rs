@@ -12,7 +12,7 @@ use crate::tools::call::lifecycle::admission_fixture::{
 use crate::tools::call::lifecycle::SpawnedBackgroundToolAdmission;
 use crate::tools::call::lifecycle::ToolCallLifecycle;
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, OutputOutcome, OutputSource, SourceClose,
@@ -128,7 +128,7 @@ async fn spawn_receipt_survives_modeled_publication_contention() {
         tool_delivery_rows(&node, &tool.session_id).await.len(),
         before + 1
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -178,7 +178,7 @@ async fn terminal_point_selection_retains_state_and_tool_identity_fences() {
             tool_delivery_rows(&node, &tool.session_id).await.len(),
             before
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);
     }
 }
@@ -282,7 +282,7 @@ async fn failed_streaming_tool_preserves_raw_prefix_and_publishes_terminal_failu
         1
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -298,8 +298,9 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
         append_tool_output(&binding, "stdout-before-terminal\n")
             .await
             .unwrap();
-        let mut replay = ToolCallLifecycle::load_by_doc_id(
+        let mut replay = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            tool.actor().clone(),
             &tool_doc_id,
             &tool.node_did,
             &tool.session_id,
@@ -312,8 +313,9 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
             None
         } else {
             Some(
-                ToolCallLifecycle::load_by_doc_id(
+                ToolCallLifecycle::load_by_doc_id_as(
                     node.clone(),
+                    tool.actor().clone(),
                     &tool_doc_id,
                     &tool.node_did,
                     &tool.session_id,
@@ -476,7 +478,7 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
             "terminal replay added raw output"
         );
 
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);
     }
 }
@@ -554,8 +556,9 @@ async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
             configure_bash_output_budget(&node, &tool.node_did, 5).await;
         }
         if reload {
-            tool = ToolCallLifecycle::load_by_doc_id(
+            tool = ToolCallLifecycle::load_by_doc_id_as(
                 node.clone(),
+                tool.actor().clone(),
                 tool.doc_id().unwrap(),
                 &tool.node_did,
                 &tool.session_id,
@@ -565,8 +568,9 @@ async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
             .unwrap()
             .expect("reloaded running tool");
         }
-        let mut replay = ToolCallLifecycle::load_by_doc_id(
+        let mut replay = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            tool.actor().clone(),
             tool.doc_id().unwrap(),
             &tool.node_did,
             &tool.session_id,
@@ -598,7 +602,7 @@ async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
             assert!(!replay.timeout().await.unwrap(), "{name}: replay");
             assert_eq!(interrupted_presentation(&node, &tool).await, presented);
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);
     }
 }
@@ -653,7 +657,7 @@ async fn completed_streaming_tool_still_rejects_a_non_extension() {
     );
     assert_eq!(tool.state, ToolCallState::Running);
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -701,8 +705,9 @@ async fn spawned_background_replays_parent_provenance_and_never_authors_a_child_
             .is_err(),
         "a replay cannot change the child deadline"
     );
-    let mut replay_parent = ToolCallLifecycle::load_by_doc_id(
+    let mut replay_parent = ToolCallLifecycle::load_by_doc_id_as(
         node.clone(),
+        parent.actor().clone(),
         &parent_doc_id,
         "did:test:test",
         &parent.session_id,
@@ -780,7 +785,7 @@ async fn spawned_background_replays_parent_provenance_and_never_authors_a_child_
         "spawned terminal output is read from its physical ToolOutput source, not a fabricated provider reply"
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -807,7 +812,7 @@ async fn spawned_background_admission_rejects_a_stale_parent_generation() {
         .as_array()
         .unwrap()
         .is_empty());
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -841,7 +846,7 @@ async fn background_bridge_receipt_is_authored_once_and_keeps_bridge_running() {
         response.data.as_ref().unwrap()["AgentToolCall"][0]["lifecycle_state"],
         "running"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -853,8 +858,9 @@ async fn background_bridge_completion_closes_its_source_and_notifies_without_a_s
     let final_bytes = "child terminal bytes";
 
     assert!(bridge.publish_background_receipt("started").await.unwrap());
-    bridge = ToolCallLifecycle::load_by_doc_id(
+    let mut reloaded = ToolCallLifecycle::load_by_doc_id_as(
         node.clone(),
+        bridge.actor().clone(),
         &tool_doc_id,
         &bridge.node_did,
         &bridge.session_id,
@@ -863,6 +869,8 @@ async fn background_bridge_completion_closes_its_source_and_notifies_without_a_s
     .await
     .unwrap()
     .expect("rehydrated background bridge");
+    reloaded.inherit_signer(&bridge).unwrap();
+    bridge = reloaded;
     assert!(bridge
         .settle_session_message(
             &crate::tools::call::lifecycle::CausedRequestTerminal::Completed {
@@ -876,6 +884,7 @@ async fn background_bridge_completion_closes_its_source_and_notifies_without_a_s
 
     crate::tools::background::completion::append_background_tool_completion(
         &node,
+        &bridge.access().unwrap(),
         &bridge.session_id,
         "request-receipt-completion",
         &tool_doc_id,
@@ -977,7 +986,7 @@ async fn background_bridge_completion_closes_its_source_and_notifies_without_a_s
         .unwrap()
         .contains(final_bytes));
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -987,8 +996,9 @@ async fn concurrent_background_bridge_completion_replays_one_exact_closure() {
     let tool_doc_id = bridge.doc_id().unwrap().to_owned();
     assert!(bridge.publish_background_receipt("started").await.unwrap());
     let load = || {
-        ToolCallLifecycle::load_by_doc_id(
+        ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            bridge.actor().clone(),
             &tool_doc_id,
             &bridge.node_did,
             &bridge.session_id,
@@ -997,6 +1007,8 @@ async fn concurrent_background_bridge_completion_replays_one_exact_closure() {
     };
     let mut first = load().await.unwrap().expect("first admitted bridge");
     let mut second = load().await.unwrap().expect("second admitted bridge");
+    first.inherit_signer(&bridge).unwrap();
+    second.inherit_signer(&bridge).unwrap();
     let one_result = crate::tools::call::lifecycle::CausedRequestTerminal::Completed {
         output: "one result".into(),
     };
@@ -1009,6 +1021,7 @@ async fn concurrent_background_bridge_completion_replays_one_exact_closure() {
     assert_ne!(left, right, "exactly one projector must commit");
 
     let mut replay = load().await.unwrap().expect("terminal admitted bridge");
+    replay.inherit_signer(&bridge).unwrap();
     assert!(!replay
         .settle_session_message(
             &crate::tools::call::lifecycle::CausedRequestTerminal::Completed {
@@ -1054,6 +1067,6 @@ async fn concurrent_background_bridge_completion_replays_one_exact_closure() {
         })
         .count();
     assert_eq!(closures, 1);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }

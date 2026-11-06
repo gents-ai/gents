@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{Duration, SecondsFormat, Utc};
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use gents::NodeIdentity;
 use gents_protocol::enrollment::{
@@ -88,7 +88,8 @@ impl EnrollmentDecisionService {
                     "network_id": pending.request.network_id,
                     "candidate_did": pending.request.candidate_did,
                     "candidate_peer": pending.request.candidate_peer,
-                    "owner_agent": pending.request.owner_agent,
+                    "owner_node_did": pending.request.owner_node_did,
+                    "signed_request": pending.request,
                     "profile": pending.request.profile,
                     "issued_at": pending.request.issued_at,
                     "expires_at": pending.request.expires_at,
@@ -156,7 +157,7 @@ impl EnrollmentDecisionService {
 }
 
 impl EnrollmentDecisionService {
-    pub(crate) async fn authenticate_signed(
+    pub(crate) async fn authenticate_node_reader(
         &self,
         signer_did: &str,
         payload: &[u8],
@@ -164,12 +165,24 @@ impl EnrollmentDecisionService {
         nonce: &str,
     ) -> Result<()> {
         anyhow::ensure!(
-            signer_did == self.identity.did(),
-            "operator command signer does not own this runtime"
-        );
-        anyhow::ensure!(
             self.identity.verify(signer_did, payload, sig).await?,
             "operator command signature is invalid"
+        );
+        let access = gents::store::config_client::ConfigAccess::local_as(
+            self.node.clone(),
+            identity::Did::new(signer_did)?,
+        );
+        let response = access
+            .execute(&format!(
+                "{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
+                gents::store::graphql::escape_graphql_string(self.identity.did()),
+            ))
+            .await?;
+        anyhow::ensure!(
+            response["data"]["Node"]
+                .as_array()
+                .is_some_and(|rows| rows.len() == 1),
+            "the client cannot read this Node"
         );
         consume_operator_nonce(&self.node, signer_did, nonce, Utc::now()).await
     }
@@ -186,6 +199,11 @@ async fn consume_operator_nonce(
     nonce: &str,
     now: chrono::DateTime<Utc>,
 ) -> Result<()> {
+    let runtime = identity::Did::new(
+        node.node_identity_did()
+            .context("enrollment nonce requires the configured runtime identity")?,
+    )?;
+    let access = gents::store::config_client::ConfigAccess::local_as(node.clone(), runtime.clone());
     let nonce_key = derive_enrollment_id("gents-enrollment-operator-nonce-v1", &[admin_did, nonce]);
     let now = now.to_rfc3339_opts(SecondsFormat::Secs, true);
     let expires_at = (chrono::DateTime::parse_from_rfc3339(&now)?
@@ -200,31 +218,44 @@ async fn consume_operator_nonce(
             delete_EnrollmentOperatorNonce(filter: {{ expires_at: {{ _lte: "{now_escaped}" }} }}) {{ _docID }}
             create_EnrollmentOperatorNonce(input: {{
                 nonce_key: "{nonce_key_escaped}", admin_did: "{admin_did}",
-                expires_at: "{expires_at}", consumed_at: "{now_escaped}"
+                expires_at: "{expires_at}", consumed_at: "{now_escaped}", parent_linked: false
             }}) {{ _docID }}
         }}"#
     );
-    match gents::store::config_client::ConfigAccess::write_local(
-        node,
-        "cli.enrollment.consume_operator_nonce",
-        &mutation,
-    )
-    .await
+    match access
+        .transact_write("cli.enrollment.consume_operator_nonce", |txn| {
+            let mutation = &mutation;
+            let runtime = &runtime;
+            Box::pin(async move {
+                let response = txn.execute(mutation).await?;
+                let doc = gents_protocol::graphql::extract_mutation_doc_id(
+                    &response,
+                    "EnrollmentOperatorNonce",
+                )?;
+                gents::store::config_client::maybe_link_deferred_operation_in_txn(
+                    txn,
+                    "EnrollmentOperatorNonce",
+                    &doc,
+                    runtime,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
     {
         Ok(_) => Ok(()),
         Err(write_error) => {
             let query = format!(
                 r#"{{ EnrollmentOperatorNonce(filter: {{ nonce_key: {{ _eq: "{nonce_key_escaped}" }} }}) {{ nonce_key expires_at }} }}"#
             );
-            let consumed = graphql_with_transaction_retry(
-                node,
-                &query,
-                "check consumed enrollment operator nonce",
-            )
-            .await
-            .is_ok_and(|response| {
-                rows::<ConsumedNonceRow>(&response, "EnrollmentOperatorNonce")
-                    .is_ok_and(|rows| rows.iter().any(|row| row.nonce_key == nonce_key))
+            let consumed = access.execute(&query).await.is_ok_and(|response| {
+                gents_protocol::graphql::graphql_rows_from_response(
+                    &response,
+                    "EnrollmentOperatorNonce",
+                )
+                .iter()
+                .any(|row| row["nonce_key"].as_str() == Some(nonce_key.as_str()))
             });
             if consumed {
                 anyhow::bail!("enrollment operator nonce was already consumed");
@@ -232,11 +263,6 @@ async fn consume_operator_nonce(
             Err(write_error).context("persisting enrollment operator nonce replay fence")
         }
     }
-}
-
-#[derive(Deserialize)]
-struct ConsumedNonceRow {
-    nonce_key: String,
 }
 
 async fn authenticate_operator_command(
@@ -385,6 +411,10 @@ pub async fn ensure_enrollment_network(
                     }}) {{ _docID }}
                 }}"#
             );
+            anyhow::ensure!(
+                node.node_identity_did() == Some(identity.did()),
+                "enrollment Network author must be the local runtime Node"
+            );
             gents::store::config_client::ConfigAccess::write_local(
                 node,
                 "cli.enrollment.create_agent_network",
@@ -400,8 +430,7 @@ pub async fn ensure_enrollment_network(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::defra_node::{EmbeddedNode, StorageBackend};
-    use gents::store::graphql::ensure_no_errors;
+    use gents::defra_node::{Node as EmbeddedNode, StorageBackend};
     use gents_protocol::enrollment::ENROLLMENT_PROTOCOL_VERSION;
     use gents_protocol::enrollment::{
         EnrollmentOperatorAction, EnrollmentOperatorQuery,
@@ -507,7 +536,7 @@ mod tests {
         let duplicate = first.err().or_else(|| second.err()).unwrap();
         assert!(duplicate.to_string().contains("already consumed"));
 
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         drop(node);
         let restarted = nonce_test_node(&node_path).await;
         let replay = consume_operator_nonce(&restarted, "did:key:admin", "nonce-concurrent", now)
@@ -535,14 +564,17 @@ mod tests {
         .await
         .unwrap();
 
-        let response = node
+        let actor = identity::Did::new(node.node_identity_did().unwrap()).unwrap();
+        let response = gents::store::config_client::ConfigAccess::local_as(node.clone(), actor)
             .execute("{ EnrollmentOperatorNonce { nonce_key } }")
-            .await;
-        ensure_no_errors(&response, "load retained enrollment operator nonces").unwrap();
+            .await
+            .unwrap();
         assert_eq!(
-            rows::<ConsumedNonceRow>(&response, "EnrollmentOperatorNonce")
-                .unwrap()
-                .len(),
+            gents_protocol::graphql::graphql_rows_from_response(
+                &response,
+                "EnrollmentOperatorNonce"
+            )
+            .len(),
             1
         );
     }

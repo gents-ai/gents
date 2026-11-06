@@ -1,8 +1,7 @@
 use super::*;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::store::identity::NodeIdentity;
 use std::io::Write;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 fn model(facts: &[ReuseFacts]) -> Vec<bool> {
     let mut source = tempfile::Builder::new().suffix(".lean").tempfile().unwrap();
@@ -89,26 +88,27 @@ impl ConfigRead for NativeReader<'_, '_> {
 
 #[tokio::test]
 async fn native_goal_projection_matches_full_history_with_fewer_reconstructions() {
-    let home = tempfile::tempdir().unwrap();
-    let path = home.path().join("node.key");
-    let key = tokio::task::spawn_blocking(move || crate::KeyIdentity::load_or_create(path, None))
-        .await
-        .unwrap()
+    let (db, _user, _client, binding) =
+        crate::test_support::signed_test_node("goal-history-projection").await;
+    let node = db.node.clone();
+    let owner = db.node_identity.did();
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();
-    let owner = key.did();
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .with_node_identity_did(owner)
-            .build()
+    let admin = ConfigAccess::local_as(node.clone(), ::identity::Did::new(owner).unwrap());
+    let agent_did = ::identity::Did::new(agent.did()).unwrap();
+    for permission in [
+        crate::store::config_client::NodePermission::CollectionGet,
+        crate::store::config_client::NodePermission::DocumentRead,
+        crate::store::config_client::NodePermission::DocumentUpdate,
+    ] {
+        admin
+            .grant_node_permission(&agent_did, permission)
             .await
-            .unwrap(),
-    );
-    let access = ConfigAccess::local(Arc::clone(&node));
-    access
-        .add_collection(gents_protocol::schemas::GOAL)
-        .await
-        .unwrap();
-    let id = ConfigAccess::transact_local_write(&node, None, "test.goal_projection.seed", |txn| {
+            .unwrap();
+    }
+    let access =
+        ConfigAccess::local_managed_agent(node.clone(), agent_did, agent.as_ref()).unwrap();
+    let id = access.transact_write("test.goal_projection.seed", |txn| {
         Box::pin(async move {
             let response = txn.execute_with_variables(
                 "mutation($input: GoalMutationInputArg!) {create_Goal(input:$input) {_docID}}",
@@ -129,7 +129,7 @@ async fn native_goal_projection_matches_full_history_with_fewer_reconstructions(
             .await
             .unwrap();
     }
-    let (profile, facts) = ConfigAccess::transact_local_readonly(&node, None, "test.goal_projection.compare", |txn| {
+    let (profile, facts) = access.transact_readonly("test.goal_projection.compare", |txn| {
         Box::pin(async move {
             let baseline = NativeReader::new(txn, true);
             let started = std::time::Instant::now();
@@ -160,7 +160,7 @@ async fn native_goal_projection_matches_full_history_with_fewer_reconstructions(
             ))
         })
     }).await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     let native = facts.iter().map(ReuseFacts::can_reuse).collect::<Vec<_>>();
     assert_eq!(
         native,

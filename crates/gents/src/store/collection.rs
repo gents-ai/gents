@@ -109,7 +109,7 @@ impl Collection {
             Self::DatastoreToolSurface => "DatastoreToolSurface",
             Self::Tools => "Tools",
             Self::AgentTarget => "AgentTarget",
-            Self::InferenceBackend => "InferenceBackend",
+            Self::InferenceBackend => "InferenceBackendMetadata",
             Self::InferenceProfile => "InferenceProfile",
             Self::InferenceSampling => "InferenceSampling",
             Self::InferenceExecution => "InferenceExecution",
@@ -128,11 +128,12 @@ impl Collection {
         }
     }
 
-    /// Logical document key within node_did, never global uniqueness.
+    /// Logical document key used alongside node_did. Agent keys are globally
+    /// unique DIDs; other configuration identifiers remain node-scoped.
     pub fn unique_field(self) -> &'static str {
         match self {
             Self::Node => "node_did",
-            Self::Agent => "agent_id",
+            Self::Agent => "agent_did",
             Self::AgentContext => "context_id",
             Self::Compaction => "compaction_id",
             Self::Skill => "skill_id",

@@ -145,16 +145,16 @@ def taskFireIdentity (nodeDid taskId fireKey : String) : TaskFireIdentity :=
 be removed without making an already-published request undiscoverable. -/
 structure TaskGoalRequestBinding where
   nodeDid : String
-  agentId : String
+  agentDid : String
   sessionId : String
   requestId : String
   retryKey : String
   deriving DecidableEq, Repr
 
-def expectedTaskGoalRequestBinding (nodeDid agentId taskId fireKey : String) :
+def expectedTaskGoalRequestBinding (nodeDid agentDid taskId fireKey : String) :
     TaskGoalRequestBinding :=
   let identity := taskFireIdentity nodeDid taskId fireKey
-  { nodeDid, agentId
+  { nodeDid, agentDid
   , sessionId := identity.sessionId
   , requestId := identity.requestId
   , retryKey := identity.retryKey }
@@ -284,8 +284,7 @@ inductive SubmissionAction where
 
 def submissionStep (state : SubmissionState) : SubmissionAction → SubmissionState
   | .stageGoal => { state with stagedGoal := true }
-  | .stageRequest =>
-      if state.stagedGoal ∨ state.durableGoal then { state with stagedRequest := true } else state
+  | .stageRequest => { state with stagedRequest := true }
   | .commit =>
       if state.stagedGoal ∧ state.stagedRequest then
         { durableGoal := true, runnableRequest := true,
@@ -308,6 +307,49 @@ theorem failure_between_writes_rolls_back (state : SubmissionState) :
     (submissionStep staged .crash).durableGoal = state.durableGoal ∧
       (submissionStep staged .crash).runnableRequest = state.runnableRequest := by
   simp [submissionStep]
+
+/-- The request can be staged first to provide the physical opening identity
+for a session before its Goal is staged. It is not runnable until both commit. -/
+theorem request_first_stays_unpublished (state : SubmissionState) :
+    (submissionStep state .stageRequest).runnableRequest = state.runnableRequest ∧
+    (submissionStep state .stageRequest).durableGoal = state.durableGoal := by
+  simp [submissionStep]
+
+/-- Both physical IDs are part of the signed request, and must match the
+session and selected Agent observed in the publication transaction. -/
+def requestPhysicalTargetsValid (session observedSession agent observedAgent : String) : Bool :=
+  session != "" && agent != "" && session == observedSession && agent == observedAgent
+
+structure RuntimeGoalPublication where
+  session : Bool
+  goal : Bool
+  request : Bool
+  grants : Bool
+  deriving DecidableEq, Repr
+
+/-- A fresh runtime Goal opening reserves the session, signs its physical
+targets, and commits session, Goal, request and request parents together.
+The native adapter supplies the relationship authority and transaction
+premises. A duplicate never restores a revoked relationship. -/
+def commitRuntimeGoalOpening (before : RuntimeGoalPublication)
+    (actor signer selected session observedSession agent observedAgent : String)
+    (fresh committed : Bool) : RuntimeGoalPublication :=
+  if actor == selected && signer == selected &&
+      requestPhysicalTargetsValid session observedSession agent observedAgent && fresh && committed then
+    ⟨true, true, true, true⟩
+  else before
+
+theorem runtime_goal_abort_unchanged (before : RuntimeGoalPublication)
+    (actor signer selected session observedSession agent observedAgent : String) (fresh : Bool) :
+    commitRuntimeGoalOpening before actor signer selected session observedSession agent observedAgent
+      fresh false = before := by
+  simp [commitRuntimeGoalOpening]
+
+theorem runtime_goal_duplicate_does_not_regrant (before : RuntimeGoalPublication)
+    (actor signer selected session observedSession agent observedAgent : String) (committed : Bool) :
+    commitRuntimeGoalOpening before actor signer selected session observedSession agent observedAgent
+      false committed = before := by
+  simp [commitRuntimeGoalOpening]
 
 inductive ContinuationPhase where
   | unclaimed

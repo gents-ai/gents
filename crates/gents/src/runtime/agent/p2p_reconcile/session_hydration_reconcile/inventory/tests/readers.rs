@@ -51,6 +51,13 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
     .unwrap();
     let node = fixture.node;
     let mut tool = fixture.tool;
+    grant_session_reader(
+        &fixture.client,
+        &fixture.node_did,
+        tool.session_id(),
+        &fixture.node_did,
+    )
+    .await;
     tool.complete("source terminal").await.unwrap();
     let key_path = fixture.path.join("independent-reader.key");
     let reader =
@@ -59,6 +66,13 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
             .unwrap()
             .unwrap();
     let reader_did: identity::Did = reader.did().parse().unwrap();
+    grant_session_reader(
+        &fixture.client,
+        &fixture.node_did,
+        tool.session_id(),
+        reader.did(),
+    )
+    .await;
     let session_id = tool.session_id().to_owned();
     let session =
         ConfigAccess::transact_local_readonly(&node, None, "test.inventory.shared_root", |txn| {
@@ -128,25 +142,22 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
         let permitted = step % 2 == 1;
         if step > 0 {
             if permitted {
-                node.add_dac_actor_relationship(
-                    &fixture.node_did,
-                    "ToolFileInventory",
-                    projection,
-                    "reader",
-                    reader.did(),
-                )
-                .await
-                .unwrap();
+                tool.access()
+                    .unwrap()
+                    .add_actor_relationship("ToolFileInventory", projection, "reader", &reader_did)
+                    .await
+                    .unwrap();
             } else {
-                node.delete_dac_actor_relationship(
-                    &fixture.node_did,
-                    "ToolFileInventory",
-                    projection,
-                    "reader",
-                    reader.did(),
-                )
-                .await
-                .unwrap();
+                tool.access()
+                    .unwrap()
+                    .delete_actor_relationship(
+                        "ToolFileInventory",
+                        projection,
+                        "reader",
+                        &reader_did,
+                    )
+                    .await
+                    .unwrap();
             }
         }
         let name = if permitted {
@@ -200,12 +211,19 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
         FileInventorySnapshot::load(&node, &admission).await,
     );
     admission.session_doc_id = real_session;
-    ensure_fixture_session(
-        &node,
-        "empty-shared-inventory",
+    reserve_inventory_session(
+        &fixture.client,
         &fixture.node_did,
-        tool.requester_did(),
+        tool.actor().as_str(),
+        "empty-shared-inventory",
         "2026-10-28T00:00:00Z",
+    )
+    .await;
+    grant_session_reader(
+        &fixture.client,
+        &fixture.node_did,
+        "empty-shared-inventory",
+        reader.did(),
     )
     .await;
     admission.request.session_id = "empty-shared-inventory".into();
@@ -244,6 +262,6 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
             .map(|case| case["name"].as_str().unwrap().to_owned())
             .collect()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }

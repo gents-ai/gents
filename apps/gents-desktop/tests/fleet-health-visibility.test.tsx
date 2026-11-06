@@ -42,19 +42,23 @@ describe("fleet health visibility", () => {
   it("labels statuses instead of relying on a hover dot", () => {
     expect(
       deploymentStatus({ ...deployment, dialSucceeded: true, lastError: null }).label,
-    ).toBe("Checking sync");
+    ).toBe("Online");
     expect(
       deploymentStatus(
         { ...deployment, dialSucceeded: true, lastError: null },
         syncHealth(),
       ).label,
     ).toBe("Online");
-    expect(deploymentStatus({ ...deployment, dialSucceeded: false }).label).toBe(
-      "Not connected",
-    );
-    expect(deploymentStatus({ ...deployment, lastError: "dial timeout" }).label).toBe(
-      "Error",
-    );
+    expect(
+      deploymentStatus({ ...deployment, runtimeConnection: "disconnected" }).label,
+    ).toBe("Connecting");
+    expect(
+      deploymentStatus({
+        ...deployment,
+        dialSucceeded: false,
+        lastError: "dial timeout",
+      }).label,
+    ).toBe("Online");
   });
 
   it("keeps enrolled chat available when current readiness has an old observation timestamp", () => {
@@ -74,14 +78,14 @@ describe("fleet health visibility", () => {
       pendingDagCount: 1,
       exhaustedFetchCount: 1,
     });
-    expect(deploymentStatus(stale, syncing).label).toBe("Syncing");
+    expect(deploymentStatus(stale, syncing).label).toBe("Online");
     renderRow(stale, syncing);
     expect(screen.getByTestId("fleet-chat-peer-1")).toBeEnabled();
   });
 
-  it("shows a visible error line with remediation-aware copy on failing rows", () => {
+  it("shows a separate P2P error alongside runtime status", () => {
     renderRow({ ...deployment, dialSucceeded: true, lastError: "dial timeout" });
-    expect(screen.getByTestId("fleet-status-peer-1")).toHaveTextContent("Error");
+    expect(screen.getByTestId("fleet-status-peer-1")).toHaveTextContent("Online");
     expect(screen.getByTestId("fleet-error-peer-1")).toHaveTextContent("dial timeout");
   });
 

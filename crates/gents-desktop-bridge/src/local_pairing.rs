@@ -98,6 +98,22 @@ pub(crate) enum PairingApproval {
     NotVisibleYet,
 }
 
+pub(crate) async fn grant_then_approve_managed<G, GF, A, AF>(
+    grant: G,
+    approve: A,
+) -> Result<PairingApproval, String>
+where
+    G: FnOnce() -> GF,
+    GF: Future<Output = Result<bool, String>>,
+    A: FnOnce() -> AF,
+    AF: Future<Output = Result<PairingApproval, String>>,
+{
+    if !grant().await? {
+        return Ok(PairingApproval::NotVisibleYet);
+    }
+    approve().await
+}
+
 pub(crate) async fn await_managed_pairing_approval<P, PF, A, AF, R, RF>(
     cancel: &tokio_util::sync::CancellationToken,
     window: Duration,
@@ -210,7 +226,7 @@ pub(crate) async fn ensure_managed_runtime_pairing(
         peer.node_did == target.node_did
             && peer.is_enrollment()
             && peer.is_managed_runtime()
-            && peer.is_chat_ready_at(chrono::Utc::now())
+            && peer.is_enrollment_ready_at(chrono::Utc::now())
     }) {
         return Ok(());
     }
@@ -270,31 +286,47 @@ pub(crate) async fn ensure_managed_runtime_pairing(
                 peer.node_did == target.node_did
                     && peer.is_enrollment()
                     && peer.is_managed_runtime()
-                    && peer.is_chat_ready_at(chrono::Utc::now())
+                    && peer.is_enrollment_ready_at(chrono::Utc::now())
             })
         },
         || async {
-            match gents_server::server_host::approve_managed_client_enrollment(
-                node_home,
-                &target.graphql,
-                &request_id,
+            grant_then_approve_managed(
+                || async {
+                    gents_server::server_host::grant_managed_client_enrollment(
+                        node_home,
+                        &target.graphql,
+                        &request_id,
+                        &target.node_did,
+                        core.node_identity().did(),
+                    )
+                    .await
+                    .map_err(|error| format!("granting desktop User access to managed Node: {error:#}"))
+                },
+                || async {
+                    match gents_server::server_host::approve_managed_client_enrollment(
+                        node_home,
+                        &target.graphql,
+                        &request_id,
+                    )
+                    .await
+                    {
+                        Ok(()) => Ok(PairingApproval::Committed),
+                        Err(error) => {
+                            let message = format!("{error:#}");
+                            if enrollment_request_is_not_visible_yet(&error) {
+                                tracing::debug!(
+                                    request_id = %request_id,
+                                    "managed enrollment request is not yet visible to operator approval"
+                                );
+                                Ok(PairingApproval::NotVisibleYet)
+                            } else {
+                                Err(format!("approving managed runtime enrollment: {message}"))
+                            }
+                        }
+                    }
+                },
             )
             .await
-            {
-                Ok(()) => Ok(PairingApproval::Committed),
-                Err(error) => {
-                    let message = format!("{error:#}");
-                    if enrollment_request_is_not_visible_yet(&error) {
-                        tracing::debug!(
-                            request_id = %request_id,
-                            "managed enrollment request is not yet visible to operator approval"
-                        );
-                        Ok(PairingApproval::NotVisibleYet)
-                    } else {
-                        Err(format!("approving managed runtime enrollment: {message}"))
-                    }
-                }
-            }
         },
         || async {
             core.request_p2p_repair()
@@ -365,16 +397,13 @@ where
             "reading this desktop's enrollment requests: {error}"
         ))),
         Ok(None) => author().await,
-        Ok(Some(request)) => {
-            if request.state == "pending_approval" {
-                resend(request.request_id.clone()).await.map_err(|error| {
-                    PairingFailure::classify(format!(
-                        "resending managed runtime enrollment: {error}"
-                    ))
-                })?;
-            }
+        Ok(Some(request)) if request.state == "pending_approval" => {
+            resend(request.request_id.clone()).await.map_err(|error| {
+                PairingFailure::classify(format!("resending managed runtime enrollment: {error}"))
+            })?;
             Ok(request.request_id)
         }
+        Ok(Some(_)) => author().await,
     }
 }
 

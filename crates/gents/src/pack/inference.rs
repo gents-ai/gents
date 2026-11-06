@@ -39,13 +39,25 @@ pub async fn inspect_pack_inference_bindings(
     node_did: &str,
     requested: &PackInferenceBindings,
 ) -> Result<PackInferenceBindingPreview> {
+    inspect_pack_inference_bindings_with_node_binding(access, manifest, node_did, requested, None)
+        .await
+}
+
+pub(crate) async fn inspect_pack_inference_bindings_with_node_binding(
+    access: &ConfigAccess,
+    manifest: &PackManifest,
+    node_did: &str,
+    requested: &PackInferenceBindings,
+    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+) -> Result<PackInferenceBindingPreview> {
     super::validate_pack_manifest(manifest)?;
     anyhow::ensure!(
         !node_did.trim().is_empty(),
         "pack owner DID must not be blank"
     );
 
-    let options = inference_profile_options(access, node_did).await?;
+    let options =
+        inference_profile_options_with_node_binding(access, node_did, node_binding).await?;
 
     let slots = manifest.metadata.inference_slots.clone();
     let slot_names = slots
@@ -90,16 +102,33 @@ pub async fn inference_profile_options(
     access: &ConfigAccess,
     node_did: &str,
 ) -> Result<Vec<PackInferenceProfileOption>> {
+    inference_profile_options_with_node_binding(access, node_did, None).await
+}
+
+async fn inference_profile_options_with_node_binding(
+    access: &ConfigAccess,
+    node_did: &str,
+    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+) -> Result<Vec<PackInferenceProfileOption>> {
     let (node_enabled, profiles, backends) = access
         .transact_readonly("pack.inference_binding_preview", |txn| {
             Box::pin(async move {
                 let refs = crate::ConfigReferences::load_in_txn(txn, node_did).await?;
-                let node_enabled = refs
-                    .documents()
-                    .find(|((collection, _), _)| *collection == Collection::Node)
-                    .and_then(|(_, value)| value.get("enabled"))
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false);
+                let node_enabled = if let Some(binding) = node_binding {
+                    crate::store::config_client::configuration_node_doc(
+                        txn,
+                        node_did,
+                        Some(binding),
+                    )
+                    .await?;
+                    binding.enabled
+                } else {
+                    refs.documents()
+                        .find(|((collection, _), _)| *collection == Collection::Node)
+                        .and_then(|(_, value)| value.get("enabled"))
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+                };
                 let profiles = refs
                     .documents()
                     .filter(|((collection, _), _)| *collection == Collection::InferenceProfile)
@@ -158,8 +187,25 @@ pub async fn preview_pack_inference_bindings(
     node_did: &str,
     requested: &PackInferenceBindings,
 ) -> Result<PackInferenceBindingPreview> {
-    let mut preview =
-        inspect_pack_inference_bindings(access, manifest, node_did, requested).await?;
+    preview_pack_inference_bindings_with_node_binding(access, manifest, node_did, requested, None)
+        .await
+}
+
+pub(crate) async fn preview_pack_inference_bindings_with_node_binding(
+    access: &ConfigAccess,
+    manifest: &PackManifest,
+    node_did: &str,
+    requested: &PackInferenceBindings,
+    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+) -> Result<PackInferenceBindingPreview> {
+    let mut preview = inspect_pack_inference_bindings_with_node_binding(
+        access,
+        manifest,
+        node_did,
+        requested,
+        node_binding,
+    )
+    .await?;
     use crate::plugin::model_calls::{AccessModels, ModelBinding, ModelResolver};
     let models = AccessModels(access);
     for slot in manifest
@@ -170,10 +216,13 @@ pub async fn preview_pack_inference_bindings(
     {
         if let Some(profile_id) = requested.get(slot) {
             models
-                .resolve(&ModelBinding {
-                    node_did: node_did.to_owned(),
-                    profile_id: profile_id.clone(),
-                })
+                .resolve(
+                    &ModelBinding {
+                        node_did: node_did.to_owned(),
+                        profile_id: profile_id.clone(),
+                    },
+                    None,
+                )
                 .await
                 .with_context(|| {
                     format!("profile {profile_id:?} cannot serve plugin slot {slot:?}")
@@ -296,7 +345,7 @@ pub(super) fn validate_pack_inference_authoring(
         .flat_map(|slot| {
             slot.agents
                 .iter()
-                .map(move |agent_id| (agent_id.as_str(), slot.name.as_str()))
+                .map(move |agent_did| (agent_did.as_str(), slot.name.as_str()))
         })
         .collect::<BTreeMap<_, _>>();
     anyhow::ensure!(
@@ -305,13 +354,16 @@ pub(super) fn validate_pack_inference_authoring(
         manifest.name
     );
     for agent in &config.agents {
-        let slot = declared.get(agent.agent_id.as_str()).with_context(|| {
-            format!("agent {:?} is missing from inference slots", agent.agent_id)
+        let slot = declared.get(agent.agent_did.as_str()).with_context(|| {
+            format!(
+                "agent {:?} is missing from inference slots",
+                agent.agent_did
+            )
         })?;
         anyhow::ensure!(
             agent.inference_profile_id == inference_slot_reference(slot),
             "agent {:?} must reference inference slot {:?}",
-            agent.agent_id,
+            agent.agent_did,
             slot
         );
     }
@@ -322,7 +374,6 @@ pub(super) fn validate_pack_inference_authoring(
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::sync::Arc;
 
     fn manifest(slots: serde_json::Value) -> PackManifest {
         serde_json::from_value(json!({
@@ -349,12 +400,9 @@ mod tests {
 
     #[tokio::test]
     async fn preview_auto_binds_only_the_unambiguous_one_to_one_case() {
-        let owner = "did:key:preview-owner";
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(&node).await.unwrap();
-        crate::documents::ensure_node(&node, owner).await.unwrap();
-        crate::test_support::install_test_agent(&node, owner, "only").await;
-        let access = ConfigAccess::local(node);
+        let (_directory, runtime, node, access) =
+            super::super::agent_bindings::tests::fixture().await;
+        let owner = crate::NodeIdentity::did(&runtime);
         let one = manifest(json!([
             {"name":"worker","description":"works","agents":["work"]}
         ]));
@@ -362,34 +410,77 @@ mod tests {
             .await
             .unwrap();
         assert!(preview.automatic);
-        assert_eq!(preview.bindings["worker"], "only:inference");
+        assert_eq!(preview.bindings["worker"], "profile");
         let error = preview_pack_inference_bindings(&access, &two_slots(), owner, &BTreeMap::new())
             .await
             .unwrap_err();
         assert!(error.to_string().contains("coordinator, worker"));
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
     async fn preview_accepts_shared_or_distinct_existing_profiles_and_rejects_foreign_ids() {
-        let owner = "did:key:binding-owner";
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(&node).await.unwrap();
-        crate::documents::ensure_node(&node, owner).await.unwrap();
-        crate::test_support::install_test_agent(&node, owner, "claude").await;
-        crate::test_support::install_test_agent(&node, owner, "glm").await;
-        let foreign_owner = "did:key:foreign-owner";
-        crate::documents::ensure_node(&node, foreign_owner)
+        let (directory, runtime, node, access) =
+            super::super::agent_bindings::tests::fixture().await;
+        let owner = crate::NodeIdentity::did(&runtime);
+        let foreign =
+            crate::KeyIdentity::load_or_create(directory.path().join("foreign"), None).unwrap();
+        let foreign_owner = crate::NodeIdentity::did(&foreign);
+        let backend = |owner: &str, id: &str, enabled: bool| {
+            json!({
+                "node_did":owner,"backend_id":id,"name":"Local","provider_kind":"OpenAiCompatible",
+                "endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"unauthenticated"},"enabled":enabled
+            })
+        };
+        let docs = [
+            (
+                crate::Collection::InferenceBackend,
+                backend(owner, "glm:backend", true),
+            ),
+            (
+                crate::Collection::InferenceProfile,
+                json!({"node_did":owner,"profile_id":"glm:inference","backend_id":"glm:backend","model_name":"glm"}),
+            ),
+            (crate::Collection::Node, json!({"node_did":foreign_owner})),
+            (
+                crate::Collection::InferenceBackend,
+                backend(foreign_owner, "foreign:backend", true),
+            ),
+            (
+                crate::Collection::InferenceProfile,
+                json!({"node_did":foreign_owner,"profile_id":"foreign:inference","backend_id":"foreign:backend","model_name":"foreign"}),
+            ),
+        ];
+        let plan = crate::store::config_client::DesiredStateApplyPlan::new(
+            docs.into_iter()
+                .map(
+                    |(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
+                        collection,
+                        add: value.clone(),
+                        update: value,
+                    },
+                )
+                .collect(),
+        )
+        .unwrap();
+        access
+            .transact_write("test.inference.preview", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    crate::store::config_client::apply_desired_state_plan(txn, plan)
+                        .await
+                        .map(|_| ())
+                })
+            })
             .await
             .unwrap();
-        crate::test_support::install_test_agent(&node, foreign_owner, "foreign").await;
-        let access = ConfigAccess::local(node.clone());
         for requested in [
             BTreeMap::from([
-                ("coordinator".into(), "claude:inference".into()),
-                ("worker".into(), "claude:inference".into()),
+                ("coordinator".into(), "profile".into()),
+                ("worker".into(), "profile".into()),
             ]),
             BTreeMap::from([
-                ("coordinator".into(), "claude:inference".into()),
+                ("coordinator".into(), "profile".into()),
                 ("worker".into(), "glm:inference".into()),
             ]),
         ] {
@@ -400,7 +491,7 @@ mod tests {
             assert_eq!(preview.bindings, requested);
         }
         let foreign = BTreeMap::from([
-            ("coordinator".into(), "claude:inference".into()),
+            ("coordinator".into(), "profile".into()),
             ("worker".into(), "foreign:inference".into()),
         ]);
         assert!(
@@ -410,17 +501,28 @@ mod tests {
                 .to_string()
                 .contains("unknown profile")
         );
-        let disabled = node
-            .execute(
-                r#"mutation { update_InferenceBackend(filter: {
-                    node_did: {_eq: "did:key:binding-owner"},
-                    backend_id: {_eq: "glm:backend"}
-                }, input: {enabled: false}) {_docID} }"#,
-            )
-            .await;
-        assert!(!disabled.has_errors(), "{:?}", disabled.errors);
+        let disabled = backend(owner, "glm:backend", false);
+        let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+            crate::store::config_client::DesiredStateApplyDocument {
+                collection: crate::Collection::InferenceBackend,
+                add: disabled.clone(),
+                update: disabled,
+            },
+        ])
+        .unwrap();
+        access
+            .transact_write("test.inference.disable", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    crate::store::config_client::apply_desired_state_plan(txn, plan)
+                        .await
+                        .map(|_| ())
+                })
+            })
+            .await
+            .unwrap();
         let disabled_binding = BTreeMap::from([
-            ("coordinator".into(), "claude:inference".into()),
+            ("coordinator".into(), "profile".into()),
             ("worker".into(), "glm:inference".into()),
         ]);
         assert!(
@@ -430,5 +532,6 @@ mod tests {
                 .to_string()
                 .contains("disabled")
         );
+        node.shutdown().await.expect("node shutdown");
     }
 }

@@ -5,7 +5,7 @@ fn fact(request_id: &str, created_at: &str, hop: u32) -> SessionRequestFact {
         node_did: "did:test:agent".into(),
         session_id: "session".into(),
         requester_did: None,
-        agent_id: "general".into(),
+        agent_did: "general".into(),
         created_at: created_at.into(),
         hop,
         observed: gents_protocol::session::SessionRequestObservation {

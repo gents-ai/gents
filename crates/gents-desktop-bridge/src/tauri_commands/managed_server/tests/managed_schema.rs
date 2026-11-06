@@ -122,7 +122,6 @@ async fn paired_managed_runtime_with_skewed_schema_projects_incompatible_sync() 
     start_managed_runtime_pairing(
         &state,
         Arc::clone(&core),
-        temp.path().join("agent"),
         ManagedPairingTarget {
             node_name: "Managed".to_string(),
             node_did: node_did.to_string(),
@@ -132,10 +131,6 @@ async fn paired_managed_runtime_with_skewed_schema_projects_incompatible_sync() 
     .await;
     {
         let managed = state.managed_server.lock().await;
-        assert!(
-            managed.pairing_task.is_none(),
-            "a chat-ready runtime is not re-paired"
-        );
         assert!(managed.schema_observation_task.is_some());
     }
     let health = tokio::time::timeout(Duration::from_secs(20), async {
@@ -167,7 +162,7 @@ async fn paired_managed_runtime_with_skewed_schema_projects_incompatible_sync() 
 }
 
 #[tokio::test]
-async fn drain_cancels_pairing_while_it_waits_for_the_runtime_status() {
+async fn drain_cancels_schema_observation_while_it_waits_for_the_runtime_status() {
     use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
 
     let (temp, state) = orchestration_state();
@@ -188,10 +183,13 @@ async fn drain_cancels_pairing_while_it_waits_for_the_runtime_status() {
         .to_string(),
     )
     .await;
+    core.add_managed_enrollment_peer_for_test(node_did, &server.graphql(), "/tmp/managed-home", 1)
+        .await
+        .expect("managed route");
+    server.hold.store(true, std::sync::atomic::Ordering::SeqCst);
     start_managed_runtime_pairing(
         &state,
         Arc::clone(&core),
-        temp.path().join("agent"),
         ManagedPairingTarget {
             node_name: "Starting".to_string(),
             node_did: node_did.to_string(),
@@ -199,14 +197,13 @@ async fn drain_cancels_pairing_while_it_waits_for_the_runtime_status() {
         },
     )
     .await;
-    assert!(state.managed_server.lock().await.pairing_task.is_some());
     tokio::time::timeout(Duration::from_secs(10), async {
         while server.requests.load(std::sync::atomic::Ordering::SeqCst) == 0 {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
     .await
-    .expect("pairing is waiting for the runtime status");
+    .expect("schema observation is waiting for the runtime status");
 
     tokio::time::timeout(
         Duration::from_secs(5),
@@ -215,8 +212,6 @@ async fn drain_cancels_pairing_while_it_waits_for_the_runtime_status() {
     .await
     .expect("drain does not wait out the status publish window");
     let managed = state.managed_server.lock().await;
-    assert!(managed.pairing_task.is_none());
-    assert!(managed.pairing_cancel.is_none());
     assert!(managed.schema_observation_task.is_none());
     drop(managed);
 
@@ -417,4 +412,59 @@ async fn managed_readiness_authenticates_explicit_start_and_keeps_passive_reads_
             .count(),
         count
     );
+}
+
+#[tokio::test]
+async fn generated_fresh_startup_preserves_enrollment_authority() {
+    use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
+
+    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let case = snapshot["enrollment_startup_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "fresh_startup")
+        .unwrap();
+    let (temp, state) = orchestration_state();
+    let core = Arc::new(
+        ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(temp.path().join("client")),
+            ClientCoreOptions::local_only(),
+        )
+        .await
+        .unwrap(),
+    );
+    let access = gents::ConfigAccess::local_as(
+        core.node_arc(),
+        ::identity::Did::new(core.node_identity().did()).unwrap(),
+    );
+    let query = "{ NetworkEnrollmentRequest { _docID } NetworkEnrollmentDecision { _docID } NetworkAuthorizationRevision { _docID } }";
+    let before = access.execute(query).await.unwrap();
+    for name in [
+        "NetworkEnrollmentRequest",
+        "NetworkEnrollmentDecision",
+        "NetworkAuthorizationRevision",
+    ] {
+        assert!(
+            before["data"][name].as_array().unwrap().is_empty(),
+            "{before}"
+        );
+    }
+    start_managed_runtime_pairing(
+        &state,
+        Arc::clone(&core),
+        ManagedPairingTarget {
+            node_name: "Fresh".into(),
+            node_did: "did:key:runtime".into(),
+            graphql: "http://127.0.0.1:1/api/v0/graphql".into(),
+        },
+    )
+    .await;
+    let after = access.execute(query).await.unwrap();
+    assert_eq!(
+        before["data"] == after["data"],
+        case["expected_authority_unchanged"].as_bool().unwrap(),
+    );
+    drain_managed_runtime_pairing(&state).await;
+    core.shutdown().await.unwrap();
 }

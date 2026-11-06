@@ -268,7 +268,7 @@ pub async fn load_run_activity_rows(
                     order: {{ started_at: ASC }}, limit: {limit}
                 ) {{
                     call_id request_id call_seq attempt call_state failure_reason
-                    queued_at started_at ended_at backend_id agent_id node_did call_kind
+                    queued_at started_at ended_at backend_id agent_did node_did call_kind
                     prompt_tokens completion_tokens cached_input_tokens cache_creation_input_tokens reasoning_output_tokens provider_total_tokens usage_completeness context_accounting_json
                 }}
                 AgentToolCall(
@@ -646,14 +646,14 @@ mod tests {
                     create_AgentSession(input: {
                         session_id: "activity-session"
                         node_did: "did:test:agent"
-                        agent_id: "review"
+                        agent_did: "review"
                         created_at: "2026-08-26T00:00:00Z"
                     }) { _docID }
                     create_AgentRequest(input: {
                         request_id: "activity-request"
                         purpose: "normal"
                         node_did: "did:test:agent"
-                        agent_id: "review"
+                        agent_did: "review"
                         session_id: "activity-session"
                         lifecycle_state: "completed"
                         created_at: "2026-08-26T00:00:00Z"
@@ -722,71 +722,67 @@ mod tests {
         );
         assert!(rows.tool_calls[0].args.is_empty());
         assert!(rows.tool_calls[0].result.is_none());
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
     async fn job_rows_keep_child_request_id_none() {
         use crate::tools::call::lifecycle::admission_fixture::{
-            claimed_request, publish_accepted_on_claimed_request, write_fixture_job_pin,
+            published_admission_with_owner, PublishedAdmissionOptions,
         };
         use crate::tools::call::lifecycle::AwaitMode;
 
-        const NODE_DID: &str = "did:test:job-timeline";
-        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let mut root = claimed_request(&node, "job-root", "job-root-session", NODE_DID).await;
-        let root_doc_id = root.request().doc_id.clone();
-        let call = publish_accepted_on_claimed_request(
-            node.clone(),
-            &mut root,
-            NODE_DID,
-            0,
-            "workflow",
-            "job-call",
-            serde_json::json!({"argv": ["run"]}),
-            AwaitMode::Background,
-            true,
-        )
+        let (fixture, root) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: "job-timeline".into(),
+            tool_name: Some("workflow".into()),
+            await_mode: AwaitMode::Background,
+            job_pin: true,
+            ..Default::default()
+        })
         .await
         .unwrap();
-        let tool_doc_id = call.doc_id().unwrap().to_owned();
-        write_fixture_job_pin(&node, &tool_doc_id).await.unwrap();
+        let node = &fixture.node;
+        let root_id = root.request().request_id.clone();
+        let root_doc_id = root.request().doc_id.clone();
+        let tool_doc_id = fixture.tool.doc_id().unwrap().to_owned();
+        let tool_call_id = fixture.tool.tool_call_id().to_owned();
         for slot in ["alpha", "beta"] {
-            let response = node
-                .execute(&format!(
-                    r#"mutation {{ create_AgentRequest(input: {{
-                        request_id: "job-child-{slot}", purpose: "normal", node_did: "{NODE_DID}",
-                        agent_id: "general", session_id: "job-child-session-{slot}",
-                        content: "child", lifecycle_state: "completed", backend_id: "",
-                        created_at: "2026-08-26T00:00:00Z", retry_count: 0, request_hop: 1,
-                        caused_by_parent_request_id: "job-root",
-                        caused_by_parent_request_doc_id: "{root_doc}",
-                        caused_by_parent_tool_call_id: "job-call",
-                        caused_by_parent_tool_call_doc_id: "{tool_doc}"
-                    }}) {{ _docID }} }}"#,
-                    root_doc = escape_graphql_string(&root_doc_id),
-                    tool_doc = escape_graphql_string(&tool_doc_id),
-                ))
-                .await;
-            assert!(
-                !response.has_errors(),
-                "seed child {slot}: {:?}",
-                response.errors
-            );
+            let input = serde_json::json!({
+                "request_id": format!("job-child-{slot}"),
+                "purpose": "normal", "node_did": fixture.node_did,
+                "agent_did": root.request().agent_did,
+                "session_id": format!("job-child-session-{slot}"),
+                "content": "child", "lifecycle_state": "completed", "backend_id": "",
+                "created_at": "2026-08-26T00:00:00Z", "retry_count": 0, "request_hop": 1,
+                "caused_by_parent_request_id": root_id,
+                "caused_by_parent_request_doc_id": root_doc_id,
+                "caused_by_parent_tool_call_id": tool_call_id,
+                "caused_by_parent_tool_call_doc_id": tool_doc_id,
+            });
+            fixture.client.transact_write("test.timeline.historical_child", |txn| {
+                let input = &input;
+                Box::pin(async move {
+                    let response = txn.execute_client_signed_create(
+                        "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                        &serde_json::json!({"input":input}), gents_protocol::schemas::AGENT_REQUEST,
+                    ).await?;
+                    crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            }).await.unwrap();
         }
-
-        let rows = load_run_timeline_rows(&ConfigAccess::local(node.clone()), "job-root")
+        let rows = load_run_timeline_rows(&fixture.client, &root_id)
             .await
             .unwrap();
 
         let job = rows
             .tool_calls
             .iter()
-            .find(|row| row.tool_call_id == "job-call")
+            .find(|row| row.tool_call_id == tool_call_id)
             .expect("the job row");
         assert_eq!(job.child_request_id, None);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
+        tokio::fs::remove_dir_all(fixture.path).await.unwrap();
     }
 
     #[tokio::test]
@@ -800,14 +796,14 @@ mod tests {
                     create_AgentSession(input: {
                         session_id: "session-timeline"
                         node_did: "did:test:agent"
-                        agent_id: "general"
+                        agent_did: "general"
                         created_at: "2026-08-14T12:00:00Z"
                     }) { _docID }
                     create_AgentRequest(input: {
                         request_id: "request-timeline"
                         purpose: "normal"
                         node_did: "did:test:agent"
-                        agent_id: "general"
+                        agent_did: "general"
                         session_id: "session-timeline"
                         content: "run"
                         lifecycle_state: "completed"
@@ -833,7 +829,7 @@ mod tests {
                         request_doc_id: "{request_doc_id}"
                         call_seq: 1
                         backend_id: "backend-a"
-                        agent_id: "general"
+                        agent_did: "general"
                         node_did: "did:test:agent"
                         call_kind: "inference"
                         attempt: 1
@@ -871,7 +867,7 @@ mod tests {
             .unwrap()
             .contains("synthetic-inline-secret"));
 
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -879,10 +875,51 @@ mod tests {
         use crate::inference::auth::credential::{
             list_accounts, remove_account_in_txn, store_sign_in,
         };
-        let did = "did:key:z6MkTestTimelineAccounts";
-        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let access = ConfigAccess::local(node.clone());
+        use crate::tools::call::lifecycle::admission_fixture::{
+            published_admission_with_owner, PublishedAdmissionOptions,
+        };
+        let (fixture, owner) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: "timeline-account-labels".into(),
+            start_running: false,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let node = fixture.node.clone();
+        let did = fixture.node_did.as_str();
+        let access = fixture.client.clone();
+        let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(did).unwrap());
+        admin
+            .grant_node_permission(
+                &identity::Did::new(fixture.requester_identity.did()).unwrap(),
+                crate::store::config_client::NodePermission::DocumentDelete,
+            )
+            .await
+            .unwrap();
+        let agent_access = ConfigAccess::local_with_agent_signer(
+            node.clone(),
+            identity::Did::new(&owner.request().agent_did).unwrap(),
+            owner.managed_agent_signer().unwrap(),
+        )
+        .unwrap();
+        let request_id = owner.request().request_id.clone();
+        let request_doc_id = owner.request().doc_id.clone();
+        let session_id = owner.request().session_id.clone();
+        let session = access
+            .execute(&format!(
+                r#"{{AgentSession(filter: {{session_id: {{_eq: "{}"}}}}, limit: 2) {{_docID}}}}"#,
+                escape_graphql_string(&session_id)
+            ))
+            .await
+            .unwrap();
+        let [session] = session["data"]["AgentSession"]
+            .as_array()
+            .unwrap()
+            .as_slice()
+        else {
+            panic!("one physical session")
+        };
+        let session_doc = session["_docID"].as_str().unwrap().to_owned();
         let spec = crate::inference::backends::setup::connection_spec(
             crate::inference::backends::setup::InferenceProviderId::Anthropic,
             crate::inference::backends::setup::InferenceAuthMethod::ClaudeOauth,
@@ -925,41 +962,42 @@ mod tests {
         );
         let at =
             |minutes: i64| (chrono::Utc::now() + chrono::Duration::minutes(minutes)).to_rfc3339();
-        let response = node
-            .execute(&format!(
-                r#"mutation {{
-                    create_AgentRequest(input: {{
-                        request_id: "request-accounts" purpose: "normal" node_did: "{did}"
-                        agent_id: "general" content: "run" lifecycle_state: "completed"
-                        created_at: "{}"
-                    }}) {{ _docID }}
-                }}"#,
-                at(0),
-            ))
-            .await;
-        assert!(!response.has_errors(), "seed: {:?}", response.errors);
-        let request_doc_id = created_doc_id(&response, "create_AgentRequest");
         let call = |call_id: &str, seq: i64, backend_id: &str, kind: &str, started_at: &str| {
-            format!(
-                r#"call_{seq}: create_InferenceCall(input: {{
-                    call_id: "{call_id}" request_id: "request-accounts"
-                    request_doc_id: "{request_doc_id}" call_seq: {seq}
-                    backend_id: "{backend_id}" node_did: "{did}" call_kind: "{kind}"
-                    attempt: 1 call_state: "completed" started_at: "{started_at}"
-                }}) {{ _docID }}"#
-            )
+            serde_json::json!({
+                "call_id": call_id, "request_id": request_id,
+                "request_doc_id": request_doc_id, "session_id": session_id,
+                "call_seq": seq, "backend_id": backend_id, "node_did": did,
+                "agent_did": owner.request().agent_did, "call_kind": kind,
+                "attempt": 1, "call_state": "completed", "started_at": started_at,
+            })
         };
-        let response = node
-            .execute(&format!(
-                "mutation {{ {} {} {} }}",
-                call("call-a", 1, "claude", "inference", &at(1)),
-                call("call-b", 2, &b_backend, "compaction", &at(1)),
-                call("call-gone", 3, "deleted-backend", "inference", &at(1)),
-            ))
-            .await;
-        assert!(!response.has_errors(), "seed: {:?}", response.errors);
+        let publish_call = |input: serde_json::Value| {
+            let access = &agent_access;
+            let session_doc = &session_doc;
+            async move {
+                access.transact_write("test.timeline.account_call", |txn| {
+                    let input = &input;
+                    Box::pin(async move {
+                        let response = txn.execute_with_variables(
+                            "mutation($input: InferenceCallMutationInputArg!) {create_InferenceCall(input: $input) {_docID}}",
+                            &serde_json::json!({"input": input}),
+                        ).await?;
+                        let doc = crate::store::graphql::created_doc_id(&response, "InferenceCall")?;
+                        txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc).await?;
+                        Ok::<_, anyhow::Error>(())
+                    })
+                }).await.unwrap();
+            }
+        };
+        for input in [
+            call("call-a", 1, "claude", "inference", &at(1)),
+            call("call-b", 2, &b_backend, "compaction", &at(1)),
+            call("call-gone", 3, "deleted-backend", "inference", &at(1)),
+        ] {
+            publish_call(input).await;
+        }
         let accounts = || async {
-            let timeline = load_run_timeline(&access, "request-accounts")
+            let timeline = load_run_timeline(&access, &request_id)
                 .await
                 .expect("load timeline");
             let text = serde_json::to_string(&timeline).unwrap();
@@ -1000,88 +1038,116 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(reused.credential.account_ref, None, "the original slot");
-        access
-            .write(
-                "test.connected_at",
-                &format!(
-                    r#"mutation {{ update_OAuthCredential(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ connected_at: "{}" }}) {{ _docID }} }}"#,
-                    reused.doc_id,
-                    at(60)
-                ),
-            )
-            .await
-            .unwrap();
-        let response = node
-            .execute(&format!(
-                "mutation {{ {} }}",
-                call("call-later", 4, "claude", "inference", &at(120))
-            ))
-            .await;
-        assert!(!response.has_errors(), "seed: {:?}", response.errors);
+        access.transact_write("test.connected_at", |txn| {
+            let doc = escape_graphql_string(&reused.doc_id);
+            let connected_at = at(60);
+            Box::pin(async move {
+                txn.execute_client_signed_update(
+                    &format!(r#"mutation($input: OAuthCredentialMutationInputArg!) {{update_OAuthCredential(filter: {{_docID: {{_eq: "{doc}"}}}}, input: $input) {{_docID}}}}"#),
+                    &serde_json::json!({"input": {"connected_at": connected_at}}),
+                    gents_protocol::schemas::OAUTH_CREDENTIAL,
+                ).await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        }).await.unwrap();
+        publish_call(call("call-later", 4, "claude", "inference", &at(120))).await;
         let after = accounts().await;
         assert_eq!(after["call-a"], None, "before the reused slot's sign-in");
         assert_eq!(after["call-later"], label("label-new"));
-        node.shutdown().await;
+        drop(owner);
+        node.shutdown().await.expect("node shutdown");
+        std::fs::remove_dir_all(fixture.path).unwrap();
     }
 
     #[tokio::test]
     async fn fetches_native_goal_history_without_projecting_usage_only_commits() {
-        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-
-        let response = node
-            .execute(
-                r#"mutation {
-                    create_AgentSession(input: {
-                        session_id: "session-goal-history"
-                        node_did: "did:test:agent"
-                        agent_id: "general"
-                        created_at: "2026-08-14T12:00:00Z"
-                    }) { _docID }
-                    create_AgentRequest(input: {
-                        request_id: "request-goal-history"
-                        purpose: "normal"
-                        node_did: "did:test:agent"
-                        agent_id: "general"
-                        session_id: "session-goal-history"
-                        content: "ship the timeline"
-                        lifecycle_state: "completed"
-                        created_at: "2026-08-14T12:00:00Z"
-                    }) { _docID }
-                }"#,
-            )
-            .await;
-        assert!(
-            !response.has_errors(),
-            "seed goal run: {:?}",
-            response.errors
+        use crate::store::identity::{KeyIdentity, NodeIdentity};
+        use gents_protocol::request_admission::{
+            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let root = KeyIdentity::load_or_create(directory.path().join("root.key"), None).unwrap();
+        let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
+        let agent = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
+        let node = std::sync::Arc::new(
+            crate::test_support::node_builder()
+                .with_node_identity_did(root.did())
+                .build()
+                .await
+                .unwrap(),
         );
-
-        let active = crate::goal::set_goal(
-            &node,
-            "did:test:agent",
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let access = ConfigAccess::local_managed_agent(
+            node.clone(),
+            identity::Did::new(agent.did()).unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
+        access
+            .transact_write("test.timeline_session", |txn| {
+                Box::pin(crate::session::ensure_session_in_txn(
+                    txn,
+                    "session-goal-history",
+                    root.did(),
+                    agent.did(),
+                    Some(agent.did()),
+                    None,
+                    None,
+                    "2026-08-14T12:00:00Z",
+                ))
+            })
+            .await
+            .unwrap();
+        let mut request = AgentRequestCreate::base(
+            RequestPurpose::Normal,
+            "request-goal-history",
+            root.did(),
+            agent.did(),
+            agent.did(),
+            "session-goal-history",
+            "ship the timeline",
+            "interactive",
+            "2026-08-14T12:00:00Z",
+            AgentRequestAdmissionRecord::local_self(agent.did()),
+        );
+        crate::sign_agent_request_create(agent.as_ref(), &mut request)
+            .await
+            .unwrap();
+        let response = access
+            .write(
+                "test.timeline_request",
+                &request.graphql_mutation().unwrap(),
+            )
+            .await
+            .unwrap();
+        let request_doc = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+        access.write("test.timeline_terminal", &format!(r#"mutation {{ update_AgentRequest(docID: "{}", input: {{lifecycle_state: "completed"}}) {{_docID}} }}"#, crate::store::graphql::escape_graphql_string(&request_doc))).await.unwrap();
+        let active = crate::goal::set_goal_from_access(
+            &access,
+            root.did(),
             "session-goal-history",
             Some("ship the timeline"),
             Some(crate::goal::GoalStatus::Active),
             None,
+            None,
         )
         .await
         .expect("create goal");
-        crate::goal::refresh_goal_usage(&node, &active)
+        crate::goal::refresh_goal_usage_from_access(&access, &active)
             .await
             .expect("refresh usage");
-        crate::goal::set_goal(
-            &node,
-            "did:test:agent",
+        crate::goal::set_goal_from_access(
+            &access,
+            root.did(),
             "session-goal-history",
             None,
             Some(crate::goal::GoalStatus::Paused),
+            None,
             None,
         )
         .await
         .expect("pause goal");
 
-        let access = ConfigAccess::local(node.clone());
         let timeline = load_run_timeline(&access, "request-goal-history")
             .await
             .expect("load timeline");
@@ -1107,6 +1173,6 @@ mod tests {
             "the semantic event must preserve its immediate native usage-only parent",
         );
 
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }

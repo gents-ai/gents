@@ -23,12 +23,20 @@ where
         Option<crate::request::task_hooks::TaskHookRecordHandle>,
         bool,
     )> {
+        let access = crate::ConfigAccess::local_managed_agent(
+            self.node.clone(),
+            identity::Did::new(&self.agent_config.agent_did)?,
+            self.agent_config.agent_identity.as_ref(),
+        )?;
         let (hooks, task_owned) =
-            crate::request::task_hooks::resolve_request_task_hooks(self.node.as_ref(), request)
-                .await?;
+            crate::request::task_hooks::resolve_request_task_hooks(&access, request).await?;
         if hooks.is_empty() {
             return Ok((hooks, PathBuf::new(), None, task_owned));
         }
+        anyhow::ensure!(
+            request.agent_did == self.agent_config.agent_did,
+            "task hook request does not belong to the selected Agent"
+        );
         let cwd = self.task_hook_cwd().await?;
         let record = self
             .background_execution_registry
@@ -37,6 +45,7 @@ where
                 request_doc_id: request.doc_id.clone(),
                 request_id: request.request_id.clone(),
                 node_did: request.node_did.clone(),
+                agent_did: self.agent_config.agent_did.clone(),
                 cwd: cwd.clone(),
                 root_guard: self.root_execution_guard.clone(),
                 hooks: hooks.clone(),
@@ -50,7 +59,9 @@ where
     /// overlay while workspace integration remains an open design question.
     async fn task_hook_cwd(&self) -> Result<PathBuf> {
         if let Some(guard) = &self.root_execution_guard {
-            guard.validate(&self.node).await?;
+            guard
+                .validate(&self.node, self.agent_config.agent_identity.as_ref())
+                .await?;
             if let Some(root) = guard.selected_root.clone() {
                 return Ok(root);
             }
@@ -73,9 +84,8 @@ where
     ) -> OwnedWorkOutcome {
         use crate::request::task_hooks::TaskAgentResult;
 
-        let result = self
-            .handle_request(lifecycle, stream_writer, shutdown, interrupt_rx)
-            .await;
+        let result =
+            Box::pin(self.handle_request(lifecycle, stream_writer, shutdown, interrupt_rx)).await;
 
         match result {
             Ok(HandleRequestOutcome::Completed) => {
@@ -89,6 +99,7 @@ where
                 }
                 if let Err(error) = crate::tools::workspace::seal_on_writer_success(
                     &self.node,
+                    self.agent_config.agent_identity.as_ref(),
                     request,
                     self.operator_tool_root.as_deref(),
                 )
@@ -112,6 +123,7 @@ where
                 }
                 if let Err(error) = crate::tools::workspace::integrate_on_integrator_success(
                     &self.node,
+                    self.agent_config.agent_identity.as_ref(),
                     request,
                     self.operator_tool_root.as_deref(),
                 )
@@ -145,7 +157,7 @@ where
                 record_current_request_outcome("failed_after_response");
                 record_current_failure_class(&error);
                 tracing::error!(
-                    agent_id = %self.agent_config.agent_id,
+                    agent_did = %self.agent_config.agent_did,
                     request_id = %request.request_id,
                     error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                     "request failed after response started"
@@ -160,7 +172,7 @@ where
                 record_current_request_outcome("shutdown_drain_failed");
                 record_current_failure_class(&error);
                 tracing::error!(
-                    agent_id = %self.agent_config.agent_id,
+                    agent_did = %self.agent_config.agent_did,
                     request_id = %request.request_id,
                     error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                     "graceful shutdown could not confirm provider output retention; leaving durable execution for recovery"
@@ -175,7 +187,7 @@ where
                 record_current_request_outcome("failed");
                 record_current_failure_class(&error);
                 tracing::error!(
-                    agent_id = %self.agent_config.agent_id,
+                    agent_did = %self.agent_config.agent_did,
                     request_id = %request.request_id,
                     error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                     "request handling failed"

@@ -57,15 +57,15 @@ pub async fn write_inference_profile_document(
 pub async fn agent_accounts(
     access: &ConfigAccess,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> Result<Vec<(String, ServingAccount)>> {
     let profile_backends = access
         .transact_readonly("config.agent_accounts", |txn| {
             Box::pin(async move {
                 let agent: crate::documents::Agent =
-                    read(txn, Collection::Agent, node_did, agent_id)
+                    read(txn, Collection::Agent, node_did, agent_did)
                         .await?
-                        .with_context(|| format!("agent {agent_id:?} not found"))?;
+                        .with_context(|| format!("agent {agent_did:?} not found"))?;
                 let mut profile_ids = vec![agent.inference_profile_id];
                 let context: Option<crate::documents::AgentContext> =
                     match agent.context_id.as_deref() {
@@ -136,6 +136,7 @@ mod tests {
         crate::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(node);
         for owner in ["did:key:owner", "did:key:other"] {
+            crate::test_support::bootstrap_signed_test_node(&access, owner).await;
             let backend = json!({"node_did":owner,"backend_id":"local","name":"Local",
                 "provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1",
                 "auth":{"kind":"unauthenticated"}});
@@ -223,14 +224,15 @@ mod tests {
         let did = "did:key:z6MkTestProfileEvents";
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
-        crate::ensure_node(&node, did).await?;
         let access = ConfigAccess::local(node);
+        crate::test_support::bootstrap_signed_test_node(&access, did).await;
         let spec = crate::inference::backends::setup::connection_spec(
             crate::inference::backends::setup::InferenceProviderId::Anthropic,
             crate::inference::backends::setup::InferenceAuthMethod::ClaudeOauth,
             "",
         )?;
         let original = crate::InferenceBackend {
+            physical_doc_id: None,
             node_did: did.to_owned(),
             backend_id: "claude".into(),
             name: "Claude".into(),
@@ -371,8 +373,8 @@ mod tests {
         let did = "did:key:z6MkTestAgentAccounts";
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
-        crate::ensure_node(&node, did).await?;
         let access = ConfigAccess::local(node);
+        crate::test_support::bootstrap_signed_test_node(&access, did).await;
         let spec = crate::inference::backends::setup::connection_spec(
             crate::inference::backends::setup::InferenceProviderId::Anthropic,
             crate::inference::backends::setup::InferenceAuthMethod::ClaudeOauth,
@@ -397,8 +399,8 @@ mod tests {
             (Collection::InferenceProfile, json!({"node_did": did, "profile_id": "profile-b", "backend_id": b_backend, "model_name": "model-x"})),
             (Collection::Compaction, json!({"node_did": did, "compaction_id": "compaction-a", "inference_profile_id": "profile-a"})),
             (Collection::AgentContext, json!({"node_did": did, "context_id": "context-x", "compaction_id": "compaction-a"})),
-            (Collection::Agent, json!({"node_did": did, "agent_id": "agent-x", "context_id": "context-x", "inference_profile_id": "profile-b"})),
-            (Collection::Agent, json!({"node_did": did, "agent_id": "agent-y", "inference_profile_id": "profile-a"})),
+            (Collection::Agent, json!({"node_did": did, "agent_did": "agent-x", "context_id": "context-x", "inference_profile_id": "profile-b"})),
+            (Collection::Agent, json!({"node_did": did, "agent_did": "agent-y", "inference_profile_id": "profile-a"})),
         ]
         .into_iter()
         .map(|(collection, value)| DesiredStateApplyDocument {

@@ -164,7 +164,7 @@ async fn an_errored_trigger_fails_a_completed_stage_as_runtime() {
         None,
         "another node's trigger is not this trial's"
     );
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -232,7 +232,7 @@ async fn a_seed_ignores_unrelated_and_stale_trigger_failures() {
         OutcomeKind::Runtime,
         crate::eval::EvidenceClass::Fail,
     );
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -247,7 +247,7 @@ async fn an_unreadable_seed_trigger_status_is_infrastructure() {
         "seed",
     )
     .await;
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
     assert_failure_class(
         failure,
         OutcomeKind::Infrastructure,
@@ -286,7 +286,7 @@ async fn a_seed_unacknowledged_trigger_is_infrastructure() {
         OutcomeKind::Infrastructure,
         crate::eval::EvidenceClass::NotEvidence,
     );
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -325,7 +325,7 @@ async fn an_unacknowledged_seed_fire_does_not_downgrade_a_recorded_error() {
         OutcomeKind::Runtime,
         crate::eval::EvidenceClass::Fail,
     );
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -345,5 +345,5 @@ async fn a_trigger_error_from_before_the_stage_does_not_fail_it() {
         .await,
         None
     );
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("shutdown node");
 }

@@ -1,12 +1,16 @@
 use tracing::instrument::WithSubscriber;
 
 #[derive(Clone, Default)]
-pub(in crate::runtime::agent::daemon) struct InterruptionCapture(Arc<std::sync::Mutex<Vec<String>>>);
+pub(in crate::runtime::agent::daemon) struct InterruptionCapture(
+    Arc<std::sync::Mutex<Vec<String>>>,
+);
 
 impl InterruptionCapture {
     /// Keep a global dispatcher registered so cross-thread interest rebuilds
     /// include this scoped subscriber instead of the rebuilding thread's default.
-    pub(in crate::runtime::agent::daemon) fn subscriber(&self) -> impl tracing::Subscriber + Send + Sync {
+    pub(in crate::runtime::agent::daemon) fn subscriber(
+        &self,
+    ) -> impl tracing::Subscriber + Send + Sync {
         use tracing_subscriber::layer::SubscriberExt;
         crate::test_support::enable_scoped_event_capture();
         tracing_subscriber::Registry::default().with(self.clone())
@@ -94,7 +98,8 @@ impl crate::inference::llm::tool::ToolDyn for PreInferenceBlockingTool {
     fn definition<'a>(
         &'a self,
         _: String,
-    ) -> crate::inference::llm::tool::BoxFuture<'a, crate::inference::llm::tool::ToolDefinition> {
+    ) -> crate::inference::llm::tool::BoxFuture<'a, crate::inference::llm::tool::ToolDefinition>
+    {
         Box::pin(async move {
             self.entered.notify_one();
             std::future::pending().await
@@ -104,7 +109,10 @@ impl crate::inference::llm::tool::ToolDyn for PreInferenceBlockingTool {
     fn call<'a>(
         &'a self,
         _: String,
-    ) -> crate::inference::llm::tool::BoxFuture<'a, Result<String, crate::inference::llm::tool::ToolError>> {
+    ) -> crate::inference::llm::tool::BoxFuture<
+        'a,
+        Result<String, crate::inference::llm::tool::ToolError>,
+    > {
         Box::pin(async { unreachable!("the pre-inference window never dispatches a tool") })
     }
 }
@@ -141,66 +149,29 @@ impl CompletionModel for ProviderCallCountingModel {
     }
 }
 
-fn pre_inference_agent() -> Arc<ResolvedAgent> {
-    let agent_config = test_agent();
+fn pre_inference_agent(agent_config: Arc<ResolvedAgent>) -> Arc<ResolvedAgent> {
     let mut agent_config = ResolvedAgent::clone(agent_config.as_ref());
     agent_config.stream_liveness_timeout = Duration::from_secs(600);
     agent_config.deadline_duration = Duration::from_secs(1_200);
     Arc::new(agent_config)
 }
 
-async fn seed_titled_session(
-    node: &Arc<defra_node::EmbeddedNode>,
-    request: &AgentRequest,
-    agent_config: &ResolvedAgent,
-) -> anyhow::Result<()> {
-    let title = gents_protocol::session::SessionTitle {
-        text: "pre-inference interrupt".into(),
-        source: gents_protocol::session::SessionTitleSource::Task,
-    };
-    let created = crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "session.create",
-        move |txn| {
-            let title = title.clone();
-            Box::pin(async move {
-                crate::session::ensure_session_in_txn(
-                    txn,
-                    &request.session_id,
-                    &request.node_did,
-                    &agent_config.agent_id,
-                    request.requester_did.as_deref(),
-                    Some(title),
-                    None,
-                    &request.created_at,
-                )
-                .await
-            })
-        },
-    )
-    .await?;
-    anyhow::ensure!(created, "seeded session already existed without this title");
-    Ok(())
-}
-
 async fn request_terminal_row(
-    node: &defra_node::EmbeddedNode,
+    access: &crate::ConfigAccess,
     request_doc_id: &str,
 ) -> anyhow::Result<serde_json::Value> {
     use anyhow::Context;
 
     let doc_id = crate::store::graphql::escape_graphql_string(request_doc_id);
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
+    let response = held_daemon_query(
+        access,
         &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
                 lifecycle_state failure_reason terminalized_at interrupt_requested_at stopped_before_running
             }} }}"#
         ),
-        "pre_inference_interrupt_request_row",
     )
-    .await?;
+    .await;
     response
         .data
         .as_ref()
@@ -213,14 +184,15 @@ async fn request_terminal_row(
 
 #[tokio::test]
 async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let agent_config = pre_inference_agent();
+    let (db, user, access, agent_config) = held_daemon_fixture("pre-inference-interrupt").await;
+    let node = db.node.clone();
+    let agent_config = pre_inference_agent(agent_config);
+    let agent_access = held_daemon_agent_access(&db, &agent_config);
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         &[],
         false,
         &[],
@@ -235,7 +207,8 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(vec![Box::new(PreInferenceBlockingTool {
             entered: entered.clone(),
-        }) as Box<dyn crate::inference::llm::tool::ToolDyn>]),
+        })
+            as Box<dyn crate::inference::llm::tool::ToolDyn>]),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: None,
@@ -254,12 +227,16 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         ),
     })
     .unwrap();
-    let request = create_routed_request(&node, &agent_config, &node_did).await;
+    let request = create_held_routed_request(
+        &db,
+        &user,
+        &access,
+        &agent_config,
+        Some("pre-inference interrupt"),
+    )
+    .await;
     let request_doc_id = request.doc_id.clone();
     let requester_did = request.requester_did.clone();
-    seed_titled_session(&node, &request, &agent_config)
-        .await
-        .expect("seed a titled session through the session writer");
 
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let capture = InterruptionCapture::default();
@@ -273,13 +250,13 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
             _ = entered.notified() => {},
             _ = &mut process => panic!("daemon exited before reaching the pre-inference window"),
         }
-        let row = request_terminal_row(node.as_ref(), &request_doc_id)
+        let row = request_terminal_row(&agent_access, &request_doc_id)
             .await
             .unwrap();
         assert_eq!(row["lifecycle_state"], "processing");
 
-        crate::request::interrupt::interrupt_request_by_doc_id(
-            &node,
+        crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+            &agent_access,
             &request_doc_id,
             &node_did,
             requester_did.as_deref(),
@@ -301,7 +278,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         crate::inference::resolved::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
     );
 
-    let row = request_terminal_row(node.as_ref(), &request_doc_id)
+    let row = request_terminal_row(&agent_access, &request_doc_id)
         .await
         .expect("read the terminalized request row");
     assert_eq!(row["lifecycle_state"], "interrupted");
@@ -320,19 +297,20 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         "no provider call may run in the pre-inference window"
     );
     capture.assert_source("preparation");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let agent_config = pre_inference_agent();
+    let (db, user, access, agent_config) = held_daemon_fixture("pre-inference-interrupt").await;
+    let node = db.node.clone();
+    let agent_config = pre_inference_agent(agent_config);
+    let agent_access = held_daemon_agent_access(&db, &agent_config);
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         &[],
         false,
         &[],
@@ -363,30 +341,38 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         ),
     })
     .unwrap();
-    let request = create_routed_request(&node, &agent_config, &node_did).await;
+    let request = create_held_routed_request(
+        &db,
+        &user,
+        &access,
+        &agent_config,
+        Some("pre-inference interrupt"),
+    )
+    .await;
     let request_doc_id = request.doc_id.clone();
     let requester_did = request.requester_did.clone();
-    seed_titled_session(&node, &request, &agent_config)
-        .await
-        .expect("seed a titled session through the session writer");
 
     let stream_writer = crate::request::streaming::DefraStreamWriter::new(
         node.clone(),
         agent_config.node_did(),
         Duration::from_millis(agent_config.stream_batch_ms),
     );
-    let origin =
-        crate::request::lifecycle::ExecutionOrigin::from_persisted(request.execution_origin.as_deref())
-            .expect("a created request carries a canonical execution origin");
+    let origin = crate::request::lifecycle::ExecutionOrigin::from_persisted(
+        request.execution_origin.as_deref(),
+    )
+    .expect("a created request carries a canonical execution origin");
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         agent_config.node_did(),
         request.clone(),
         agent_config.deadline_duration.as_secs(),
         origin,
         agent_config.backend_id.clone().unwrap_or_default(),
     );
+    lifecycle
+        .bind_managed_agent(agent_config.agent_identity.as_ref())
+        .unwrap();
     lifecycle.set_execution_lease_duration(agent_config.stream_liveness_timeout);
     lifecycle.set_configured_max_total_tokens(agent_config.max_total_tokens);
     assert_eq!(
@@ -397,7 +383,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         crate::request::lifecycle::ClaimOutcome::Claimed,
         "this runtime must win the claim to own the pre-execution window"
     );
-    let claimed = request_terminal_row(node.as_ref(), &request_doc_id)
+    let claimed = request_terminal_row(&agent_access, &request_doc_id)
         .await
         .expect("read the claimed request row");
     assert_eq!(
@@ -411,13 +397,14 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
     let _observer = tokio_util::task::AbortOnDropHandle::new(
         crate::request::interrupt::spawn_request_interrupt_observer(
             node.clone(),
+            agent_access.clone(),
             request_doc_id.clone(),
             interrupt_tx,
             shutdown_rx.clone(),
         ),
     );
-    crate::request::interrupt::interrupt_request_by_doc_id(
-        &node,
+    crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+        &agent_access,
         &request_doc_id,
         &node_did,
         requester_did.as_deref(),
@@ -434,7 +421,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
     .expect("the claim's observer must surface the durable latch")
     .expect("the observer channel stays open while the claim is held");
 
-    let latched = request_terminal_row(node.as_ref(), &request_doc_id)
+    let latched = request_terminal_row(&agent_access, &request_doc_id)
         .await
         .expect("read the latched request row");
     assert!(
@@ -462,7 +449,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         panic!("an observable latch must interrupt the claimed request");
     };
 
-    let undecided = request_terminal_row(node.as_ref(), &request_doc_id)
+    let undecided = request_terminal_row(&agent_access, &request_doc_id)
         .await
         .expect("read the pre-terminal request row");
     assert_eq!(
@@ -478,7 +465,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         .expect("owner terminalizes the request");
     capture.assert_source("claimed");
 
-    let terminal = request_terminal_row(node.as_ref(), &request_doc_id)
+    let terminal = request_terminal_row(&agent_access, &request_doc_id)
         .await
         .expect("read the terminalized request row");
     assert_eq!(terminal["stopped_before_running"], true);
@@ -499,19 +486,20 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         0,
         "no provider call may run before execution begins"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_the_owner() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let agent_config = pre_inference_agent();
+    let (db, user, access, agent_config) = held_daemon_fixture("pre-inference-interrupt").await;
+    let node = db.node.clone();
+    let agent_config = pre_inference_agent(agent_config);
+    let agent_access = held_daemon_agent_access(&db, &agent_config);
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         &[],
         false,
         &[],
@@ -542,12 +530,16 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
         ),
     })
     .unwrap();
-    let request = create_routed_request(&node, &agent_config, &node_did).await;
+    let request = create_held_routed_request(
+        &db,
+        &user,
+        &access,
+        &agent_config,
+        Some("pre-inference interrupt"),
+    )
+    .await;
     let request_doc_id = request.doc_id.clone();
     let requester_did = request.requester_did.clone();
-    seed_titled_session(&node, &request, &agent_config)
-        .await
-        .expect("seed a titled session through the session writer");
 
     let reached = Arc::new(tokio::sync::Notify::new());
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -565,13 +557,13 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
             _ = reached.notified() => {},
             _ = &mut process => panic!("daemon exited before restoring its provider checkpoint"),
         }
-        let row = request_terminal_row(node.as_ref(), &request_doc_id)
+        let row = request_terminal_row(&agent_access, &request_doc_id)
             .await
             .unwrap();
         assert_eq!(row["lifecycle_state"], "processing");
 
-        crate::request::interrupt::interrupt_request_by_doc_id(
-            &node,
+        crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+            &agent_access,
             &request_doc_id,
             &node_did,
             requester_did.as_deref(),
@@ -590,7 +582,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
         "owner terminalization took {settled_in:?}"
     );
 
-    let row = request_terminal_row(node.as_ref(), &request_doc_id)
+    let row = request_terminal_row(&agent_access, &request_doc_id)
         .await
         .expect("read the terminalized request row");
     assert_eq!(row["lifecycle_state"], "interrupted", "{row}");
@@ -599,7 +591,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
     assert!(!row["terminalized_at"].is_null(), "{row}");
     assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
     capture.assert_source("mid_flight");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[cfg(unix)]

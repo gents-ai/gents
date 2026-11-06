@@ -24,7 +24,7 @@ import {
 
 const readyNodeReadiness = {
   kind: "ready",
-  agentId: "general",
+  agentDid: "general",
   agentLabel: "General",
 } as const;
 
@@ -32,21 +32,22 @@ function operationalStateFor(
   decision: NodeReadinessDecision = readyNodeReadiness,
   routeReady = true,
 ) {
-  const agentId = decision.agentId ?? "general";
+  const agentDid = decision.agentDid ?? "general";
   const readinessStatus =
     decision.kind === "unavailable"
-      ? { state: "unavailable" as const, agentId, reason: decision.reason }
-      : { state: "ready" as const, agentId };
+      ? { state: "unavailable" as const, agentDid, reason: decision.reason }
+      : { state: "ready" as const, agentDid };
   return projectDeploymentOperationalState({
     nodeDid: "did:key:node",
     source: "enrollment",
     dialSucceeded: true,
+    runtimeConnection: "connected",
     chatSafe: routeReady,
     lastError: null,
     runtime: null,
     node: {
       nodeDid: "did:key:node",
-      defaultAgentId: agentId,
+      defaultAgentDid: agentDid,
     },
     nodeReadiness: {
       source:
@@ -60,7 +61,7 @@ function operationalStateFor(
     },
     agents: [
       {
-        agentId,
+        agentDid,
         displayName:
           decision.kind === "unknown" ? "General" : decision.agentLabel,
         enabled: true,
@@ -135,7 +136,7 @@ function session(
   return {
     sessionId: "session-1",
     nodeDid: "did:test:amy",
-    agentId: "default",
+    agentDid: "default",
     title: "conversation",
     previewText: "preview",
     status: "active",

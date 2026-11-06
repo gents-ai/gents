@@ -93,7 +93,7 @@ async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
                     "receipt loss must not roll back the committed dispatch"
                 );
             }
-            node.shutdown().await;
+            node.shutdown().await.expect("node shutdown");
         }
     }
 }
@@ -127,7 +127,7 @@ impl PolicyDeniedOwner {
 
     fn denied_call(
         &self,
-        node: &Arc<defra_node::EmbeddedNode>,
+        node: &Arc<defra_node::Node>,
         root: &std::path::Path,
     ) -> PolicyDeniedCall {
         match self {
@@ -164,8 +164,11 @@ impl PolicyDeniedOwner {
                 }),
                 tools: vec![Box::new(crate::tools::mcp::meta::CallToolTool::new(
                     crate::tools::mcp::meta::MetaToolContext {
+                        configuration: crate::inference::resolved::ResolvedConfiguration::Static,
+                        actor: identity::Did::new("did:test:actor").unwrap(),
                         node: node.clone(),
-                        mcp_pool: crate::tools::mcp::pool::McpPool::new().for_agent("did:test:test"),
+                        mcp_pool: crate::tools::mcp::pool::McpPool::new()
+                            .for_agent("did:test:test"),
                         health: crate::tools::mcp::health::ServiceHealthMap::new(),
                         local_hostname: "local".into(),
                         local_subnet: None,
@@ -293,7 +296,7 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
                     case.name,
                     owner.owner(),
                 );
-                node.shutdown().await;
+                node.shutdown().await.expect("node shutdown");
             }
         }
     }
@@ -586,7 +589,7 @@ async fn oversized_tool_result_is_bounded_before_threading() {
     );
     assert!(bounded_len > 0, "bounded result should be non-empty");
     assert_eq!(collected.final_text.as_deref(), Some("ok"));
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 fn plugin_image_tool(image_bytes: usize) -> (tempfile::TempDir, Box<dyn ToolDyn>) {
@@ -639,11 +642,12 @@ async fn plugin_image_result_seen_by(
     let tools: Vec<Box<dyn ToolDyn>> = vec![tool];
     let model = ScriptedModel::new_turns(plugin_call_then_text_turns()).without_capture();
     let mut config = config(4);
-    config.provider_input_counter = Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
-        provider,
-        crate::OpenAiWireApi::ChatCompletions,
-        "test-model",
-    ));
+    config.provider_input_counter =
+        Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
+            provider,
+            crate::OpenAiWireApi::ChatCompletions,
+            "test-model",
+        ));
     let stream = run_loop_stream(
         model.clone(),
         None::<gents_loop::session_hook::NoopSessionHook>,
@@ -754,7 +758,7 @@ async fn persisted_plugin_image_result_replay(image_bytes: usize) {
         )],
         "image of {image_bytes} bytes"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -1006,9 +1010,12 @@ async fn completed_terminalization_scans_request_output_once_for_many_tools() {
         None,
     ))
     .await;
-    assert_eq!(result.unwrap(), crate::request::lifecycle::TerminalizeResult::Won);
+    assert_eq!(
+        result.unwrap(),
+        crate::request::lifecycle::TerminalizeResult::Won
+    );
     assert_eq!(scans, 1, "request output scanned once per accepted tool");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 async fn terminalization_with_principal_output(
@@ -1135,7 +1142,10 @@ async fn terminalization_with_principal_output(
     )
     .await;
     let elapsed = started.elapsed();
-    assert_eq!(result.unwrap(), crate::request::lifecycle::TerminalizeResult::Won);
+    assert_eq!(
+        result.unwrap(),
+        crate::request::lifecycle::TerminalizeResult::Won
+    );
     drop(lifecycle);
     eprintln!(
         "terminalization turns={turns} bytes={output_bytes} noise={noise} segments={} messages={} terminalize_ms={}",
@@ -1143,7 +1153,7 @@ async fn terminalization_with_principal_output(
         messages.len(),
         elapsed.as_millis()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     elapsed
 }
 
@@ -1209,7 +1219,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
         created_at: "2026-10-02T00:00:00Z".into(),
     };
     async fn create(
-        node: &defra_node::EmbeddedNode,
+        node: &defra_node::Node,
         segment: &gents_protocol::output::OutputSegment,
     ) {
         let response = node
@@ -1315,7 +1325,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
     );
     assert!(work[0] > 0);
     drop(lifecycle);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 struct ComposedChild {
@@ -1436,7 +1446,7 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
             "{name} {state}: {rows}"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 struct ComposingParent {
@@ -1531,7 +1541,8 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
         ["child_admission"]
         .as_array()
         .unwrap();
-    let hook_owned = crate::tools::call::hook::persistence::HookOwnedTool::ROUTES.map(|(name, _)| name);
+    let hook_owned =
+        crate::tools::call::hook::persistence::HookOwnedTool::ROUTES.map(|(name, _)| name);
     for selected in [false, true] {
         let mut children = Vec::new();
         let mut expected = std::collections::BTreeMap::new();
@@ -1616,7 +1627,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
                 "durable child {case}"
             );
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }
 
@@ -1818,7 +1829,7 @@ async fn parallel_native_reads_publish_distinct_bound_unchanged_receipts() {
         assert_eq!(matches[0]["request_doc_id"], lifecycle.request().doc_id);
         assert_eq!(matches[0]["verified_unchanged"], true);
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 struct SerialReadMeasurement(Box<dyn ToolDyn>);

@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::job::DataWrite;
 use serde_json::{Map, Value};
 
@@ -22,7 +22,7 @@ use super::documents::{
     create_callback_result_mutation, update_invocation_mutation, CallbackInvocationDoc,
     CallbackResultDoc,
 };
-use super::run::{deny, encode_journal, persist_journal};
+use super::run::{deny, encode_journal, persist_journal, CallbackAccess};
 use super::{LIFECYCLE_FAILED, LIFECYCLE_RUNNING, LIFECYCLE_SUCCEEDED};
 use crate::documents::{PortCardinality, PortSpec};
 use crate::plugin::data::{DataCaller, PluginData, StampContext};
@@ -167,7 +167,7 @@ fn take_writes(output: &mut Value) -> Result<Vec<DataWrite>, String> {
 }
 
 pub(super) async fn execute(
-    node: &std::sync::Arc<EmbeddedNode>,
+    context: CallbackAccess<'_>,
     invocation: &mut CallbackInvocationDoc,
     handler: PluginHandler<'_>,
     source: &Value,
@@ -175,9 +175,11 @@ pub(super) async fn execute(
     journal: Vec<ActionJournalEntry>,
     data_node: Option<&Arc<EmbeddedNode>>,
 ) -> Result<()> {
+    let CallbackAccess { node, access } = context;
     if let Some(journal) = crate::tools::workspace::recover_running(&journal) {
         return persist_journal(
             node,
+            access,
             invocation,
             &journal,
             LIFECYCLE_FAILED,
@@ -187,7 +189,7 @@ pub(super) async fn execute(
     }
     let record = match plugins.resolve(handler.plugin, Some(handler.digest)) {
         Ok(record) => record,
-        Err(error) => return deny(node, invocation, &format!("{error:#}")).await,
+        Err(error) => return deny(node, access, invocation, &format!("{error:#}")).await,
     };
     let input = crate::triggers::callback::documents::strip_secret_fields(source.clone());
     let bound = match plugins
@@ -199,12 +201,12 @@ pub(super) async fn execute(
         .await
     {
         Ok(bound) => bound,
-        Err(reason) => return deny(node, invocation, &reason).await,
+        Err(reason) => return deny(node, access, invocation, &reason).await,
     };
     let mut journal = journal;
     advance(&mut journal, 0, ActionJournalState::Validated);
     advance(&mut journal, 0, ActionJournalState::Executing);
-    persist_journal(node, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
+    persist_journal(node, access, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
 
     // The invocation carries the correlation it was caused by; a grouped
     // delivery's input is an array, so the source itself cannot say it.
@@ -219,8 +221,32 @@ pub(super) async fn execute(
     let caller = grant
         .as_ref()
         .and(data_node)
-        .and_then(|node| DataCaller::new(node.clone(), &invocation.owner_node_did).ok());
-    let called = plugins.call_bound_data(&record, input, bound, caller).await;
+        .map(|node| {
+            DataCaller::for_agent(
+                node.clone(),
+                &invocation.owner_node_did,
+                &invocation.agent_did,
+            )
+        })
+        .transpose()?;
+    let actor = if record.model_binding.is_some() {
+        access.actor_did().map(identity::Did::new).transpose()?
+    } else {
+        None
+    };
+    let called = if record.model_binding.is_some()
+        && !actor
+            .as_ref()
+            .is_some_and(|actor| actor.as_str() == invocation.agent_did)
+    {
+        Err(anyhow::anyhow!(
+            "callback model requires the selected Agent actor"
+        ))
+    } else {
+        plugins
+            .call_bound_data_as(&record, input, bound, caller, actor)
+            .await
+    };
     let failure = match called {
         Err(error) => Some(format!("{error:#}")),
         Ok(call) if call.outcome.verdict != PluginVerdict::Success => Some(format!(
@@ -246,10 +272,20 @@ pub(super) async fn execute(
                     let mut written = journal.clone();
                     advance(&mut written, 0, ActionJournalState::EffectObserved);
                     advance(&mut written, 0, ActionJournalState::ResultDocsWritten);
-                    match commit_success(node, invocation, &written, documents, writes, correlation)
-                        .await
+                    match commit_success(
+                        access,
+                        invocation,
+                        &written,
+                        documents,
+                        writes,
+                        correlation,
+                    )
+                    .await
                     {
                         Ok(()) => return Ok(()),
+                        Err(error) if invocation.lifecycle_state == LIFECYCLE_SUCCEEDED => {
+                            return Err(error);
+                        }
                         Err(error) => {
                             Some(format!("writing the plugin's results failed: {error:#}"))
                         }
@@ -265,11 +301,19 @@ pub(super) async fn execute(
         %reason,
         "callback plugin invocation failed"
     );
-    persist_journal(node, invocation, &journal, LIFECYCLE_FAILED, Some(&reason)).await
+    persist_journal(
+        node,
+        access,
+        invocation,
+        &journal,
+        LIFECYCLE_FAILED,
+        Some(&reason),
+    )
+    .await
 }
 
 async fn commit_success(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     invocation: &mut CallbackInvocationDoc,
     journal: &[ActionJournalEntry],
     documents: Vec<(String, Value)>,
@@ -281,16 +325,17 @@ async fn commit_success(
     succeeded.lifecycle_state = LIFECYCLE_SUCCEEDED.to_owned();
     succeeded.error = None;
     let update = update_invocation_mutation(&succeeded, Some(LIFECYCLE_RUNNING));
-    let result = create_callback_result_mutation(&CallbackResultDoc {
+    let result = CallbackResultDoc {
         result_id: format!("res-{}", invocation.invocation_id),
         invocation_id: invocation.invocation_id.clone(),
         binding_id: Some(invocation.origin.binding_id().to_owned()),
         owner_node_did: invocation.owner_node_did.clone(),
+        agent_did: invocation.agent_did.clone(),
         workspace_id: None,
         work_unit_id: None,
         caused_by_correlation: correlation,
         created_at: None,
-    });
+    };
     let creates = documents
         .iter()
         .map(|(collection, document)| {
@@ -303,19 +348,22 @@ async fn commit_success(
         .collect::<Result<Vec<_>>>()?;
     let invocation_id = invocation.invocation_id.clone();
     let stamps = StampContext::Callback {
-        node_did: invocation.owner_node_did.clone(),
+        caller_did: invocation.agent_did.clone(),
     };
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "callback.plugin_result",
-        |txn| {
+    let data_actor = invocation.agent_did.clone();
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(invocation.agent_did.as_str()),
+        "callback plugin actor mismatch"
+    );
+    access
+        .transact_write("callback.plugin_result", |txn| {
             let creates = &creates;
             let update = &update;
             let result = &result;
             let invocation_id = &invocation_id;
             let writes = &writes;
             let stamps = &stamps;
+            let data_actor = &data_actor;
             Box::pin(async move {
                 let updated = txn.execute(update).await?;
                 anyhow::ensure!(
@@ -331,18 +379,33 @@ async fn commit_success(
                 if let Some((grant, writes)) = writes {
                     crate::plugin::application_write::apply_plugin_writes_in_txn(
                         txn,
+                        &identity::Did::new(data_actor.clone())?,
                         grant,
                         stamps,
                         writes.clone(),
                     )
                     .await?;
                 }
-                txn.execute(result).await?;
+                let parent = super::documents::callback_agent_parent_in_txn(
+                    txn,
+                    &result.owner_node_did,
+                    &result.agent_did,
+                )
+                .await?;
+                let response = txn
+                    .execute(&create_callback_result_mutation(result, &parent, true))
+                    .await?;
+                super::documents::stage_callback_child_parent(
+                    txn,
+                    "CallbackResult",
+                    &response,
+                    &parent,
+                )
+                .await?;
                 Ok(())
             })
-        },
-    )
-    .await?;
+        })
+        .await?;
     *invocation = succeeded;
     Ok(())
 }
@@ -491,7 +554,12 @@ mod tests {
         if let Some((allowed, access)) = allowed {
             crate::plugin::allowed::add(home.path(), allowed, access).unwrap();
         }
-        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let node = std::sync::Arc::new(
+            crate::triggers::callback::test_node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         node.add_collection(
             "type Job { job_run: String text: String path: String origin: String }
@@ -502,18 +570,17 @@ mod tests {
         )
         .await
         .unwrap();
-        let owner = "did:key:zPluginOwner";
-        let setup = format!(
-            r#"mutation {{
-                create_Callback(input: {{callback_id:"cb-echo",node_did:"{owner}",enabled:true,
-                    handler:{{kind:"plugin",plugin:"team/plugin",digest:"{digest}",correlation_field:"job_run",
-                        outputs:[{{name:"echoed",collection:"Echoed",schema:"Echoed/v1",correlation_field:"run_ref",cardinality:"one",required:true}}]}}}}) {{_docID}}
-                create_EventSource(input: {{event_source_id:"jobs",node_did:"{owner}",source_collection:"Job",event_kind:"created"}}) {{_docID}}
-                create_CallbackBinding(input: {{binding_id:"bind-echo",node_did:"{owner}",event_source_id:"jobs",callback_id:"cb-echo",input_fields:["job_run","text","path","origin"],enabled:true}}) {{_docID}}
-            }}"#
-        );
-        let response = node.execute(&setup).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
+        let owner = crate::request::lifecycle::test_support::PIN_FIXED_DID;
+        let agent = crate::triggers::callback::test_agent_did();
+        crate::triggers::callback::seed_test_agent(&node, owner).await;
+        crate::triggers::callback::seed_test_configuration(&node, owner, vec![
+            (crate::Collection::Callback, json!({"callback_id":"cb-echo","enabled":true,
+                "handler":{"kind":"plugin","plugin":"team/plugin","digest":digest,"correlation_field":"job_run",
+                    "outputs":[{"name":"echoed","collection":"Echoed","schema":"Echoed/v1","correlation_field":"run_ref","cardinality":"one","required":true}]}})),
+            (crate::Collection::EventSource, json!({"event_source_id":"jobs","source_collection":"Job","event_kind":"created"})),
+            (crate::Collection::CallbackBinding, json!({"binding_id":"bind-echo","agent_did":agent,"event_source_id":"jobs",
+                "callback_id":"cb-echo","input_fields":["job_run","text","path","origin"],"enabled":true})),
+        ]).await;
 
         let mut engine = super::super::CallbackEngine::new(
             node.clone(),
@@ -521,6 +588,7 @@ mod tests {
             None,
             tokio_util::sync::CancellationToken::new(),
         );
+        engine.snapshots = Some(crate::triggers::callback::test_snapshot());
         engine.plugins = std::sync::Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
         engine.reconcile_bindings().await;
         let created = node
@@ -534,8 +602,16 @@ mod tests {
         (node, home)
     }
 
-    async fn rows(node: &EmbeddedNode, query: &str, collection: &str) -> Vec<Value> {
-        crate::store::graphql::rows::<Value>(&node.execute(query).await, collection).unwrap()
+    async fn rows(
+        node: &std::sync::Arc<EmbeddedNode>,
+        query: &str,
+        collection: &str,
+    ) -> Vec<Value> {
+        let response = crate::triggers::callback::test_agent_access(node)
+            .execute(query)
+            .await
+            .unwrap();
+        serde_json::from_value(response["data"][collection].clone()).unwrap()
     }
 
     #[tokio::test]
@@ -594,7 +670,7 @@ mod tests {
         );
     }
 
-    async fn only_invocation(node: &EmbeddedNode) -> Value {
+    async fn only_invocation(node: &std::sync::Arc<EmbeddedNode>) -> Value {
         let mut invocations = rows(
             node,
             "{ CallbackInvocation { lifecycle_state error } }",
@@ -630,7 +706,7 @@ mod tests {
             ],
             ops: vec!["query".into(), "insert".into()],
             stamped: [
-                ("owner".to_owned(), StampedField::NodeDid),
+                ("owner".to_owned(), StampedField::CallerDid),
                 ("job_row_doc_id".to_owned(), StampedField::JobRowDocId),
             ]
             .into(),
@@ -691,7 +767,7 @@ mod tests {
         );
         assert_eq!(
             rows(&node, "{ PluginOwned { body owner } }", "PluginOwned").await,
-            vec![json!({"body": "x", "owner": "did:key:zPluginOwner"})]
+            vec![json!({"body": "x", "owner": crate::triggers::callback::test_agent_did()})]
         );
         assert_eq!(
             rows(&node, "{ CallbackResult { result_id } }", "CallbackResult")

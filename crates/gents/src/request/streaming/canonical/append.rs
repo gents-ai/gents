@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter};
 
 use crate::request::lifecycle::execution_policy::{authorize_output_append, LeaseObservation};
 use crate::session::canonical_rows::{
-    output_segment_create_variables, OutputSegmentRow, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    output_segment_bound_variables, OutputSegmentRow, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::store::graphql::created_doc_id;
@@ -16,36 +16,65 @@ use super::{
     ProviderAppendRejection,
 };
 
+#[cfg(test)]
 pub(crate) async fn append_provider_segment(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
     generation: &str,
     prepared: &OutputSegment,
 ) -> Result<String> {
-    ConfigAccess::transact_local_idempotent(
-        node,
-        None,
-        IdempotentTransactionRetry::Standard,
-        "streaming.append_provider_segment",
-        |txn| Box::pin(async move { append_in_txn(txn, generation, prepared).await }),
+    append_provider_segment_with_signer(node, actor, None, generation, prepared).await
+}
+
+pub(in crate::request::streaming) async fn append_provider_segment_with_signer(
+    node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
+    signer: Option<crate::store::identity::ManagedAgentSigner>,
+    generation: &str,
+    prepared: &OutputSegment,
+) -> Result<String> {
+    let access =
+        ConfigAccess::local_with_optional_agent_signer(node.clone(), actor.clone(), signer)?;
+    let result = access
+        .transact_idempotent(
+            IdempotentTransactionRetry::Standard,
+            "streaming.append_provider_segment",
+            |txn| Box::pin(async move { append_in_txn(txn, generation, prepared).await }),
+        )
+        .await?;
+    crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+        &access,
+        &prepared.node_did,
+        &actor,
+        &prepared.session_id,
     )
-    .await
+    .await?;
+    Ok(result)
 }
 
 #[cfg(test)]
-pub(crate) async fn append_provider_segment_at(
-    node: &std::sync::Arc<EmbeddedNode>,
+pub(crate) async fn append_provider_segment_at_with_access(
+    access: &ConfigAccess,
     generation: &str,
     prepared: &OutputSegment,
     now: DateTime<Utc>,
 ) -> Result<String> {
-    ConfigAccess::transact_local_idempotent(
-        node,
-        None,
-        IdempotentTransactionRetry::Standard,
-        "streaming.append_provider_segment",
-        |txn| Box::pin(async move { append_in_txn_at(txn, generation, prepared, now).await }),
+    let actor = identity::Did::new(access.actor_did().context("missing fixture actor")?)?;
+    let result = access
+        .transact_idempotent(
+            IdempotentTransactionRetry::Standard,
+            "streaming.append_provider_segment",
+            |txn| Box::pin(async move { append_in_txn_at(txn, generation, prepared, now).await }),
+        )
+        .await?;
+    crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+        access,
+        &prepared.node_did,
+        &actor,
+        &prepared.session_id,
     )
-    .await
+    .await?;
+    Ok(result)
 }
 
 pub(crate) async fn append_in_txn(
@@ -121,7 +150,7 @@ async fn append_in_txn_with_time(
     let result = txn
         .execute_with_variables(
             CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-            &output_segment_create_variables(prepared)?,
+            &output_segment_bound_variables(txn, prepared).await?,
         )
         .await?;
     let doc_id = created_doc_id(&result, "AgentOutputSegment")?;

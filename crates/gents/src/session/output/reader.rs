@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::{OutputSource, PayloadRef};
 use std::collections::BTreeMap;
@@ -11,7 +11,9 @@ use super::super::canonical_rows::{
 };
 use super::super::query::session_scope_filter;
 use super::access::{rows_value, ReadAccess, ReadCache};
-use super::reconstruct::{reconstruct_scoped_message, source_rows};
+use super::reconstruct::{
+    reconstruct_scoped_message, reconstruct_scoped_message_with_facts, source_rows,
+};
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 
 /// Resolve one exact header inside an existing authoritative transaction.  This
@@ -37,6 +39,30 @@ pub(crate) async fn load_canonical_message_in_txn(
         },
     )
     .await
+}
+
+/// The resolved header and the exact segment rows its reconstruction consumed.
+pub(crate) async fn load_canonical_message_segments_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    header_doc_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+) -> Result<(
+    gents_protocol::output::TranscriptMessage,
+    Vec<super::super::canonical_rows::OutputSegmentRow>,
+)> {
+    let reconstructed = reconstruct_scoped_message_with_facts(
+        ReadAccess::Txn(txn),
+        header_doc_id,
+        node_did,
+        requester_did,
+        &mut ReadCache {
+            source_reads: true,
+            ..ReadCache::default()
+        },
+    )
+    .await?;
+    Ok((reconstructed.header.message, reconstructed.segments))
 }
 
 /// Its cache is a transaction snapshot. A publication that appends exactly

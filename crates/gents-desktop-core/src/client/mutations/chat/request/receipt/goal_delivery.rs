@@ -39,6 +39,7 @@ pub struct Reference {
     pub command_digest: String,
     pub initial_request_id: Option<String>,
     pub requester_did: String,
+    pub agent_did: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -72,6 +73,7 @@ impl Record {
                 .as_ref()
                 .map(|row| row.request_id.clone()),
             requester_did: prepared.requester_did.clone(),
+            agent_did: prepared.agent_did.clone(),
         };
         let record = Self {
             intent,
@@ -92,6 +94,7 @@ impl Record {
             && receipt.command_digest == self.reference.command_digest
             && receipt.requester_did == self.reference.requester_did
             && receipt.node_did == self.intent.node_did
+            && receipt.agent_did == self.reference.agent_did
             && receipt.session_id == self.intent.session_id
     }
 
@@ -102,6 +105,7 @@ impl Record {
             &self.intent.command_id,
             &self.intent.session_id,
             &self.reference.requester_did,
+            &self.reference.agent_did,
         ]
         .iter()
         .any(|value| value.trim().is_empty())
@@ -124,6 +128,7 @@ impl Record {
                 && prepared.node_did == self.intent.node_did
                 && prepared.session_id == self.intent.session_id
                 && prepared.requester_did == self.reference.requester_did
+                && prepared.agent_did == self.reference.agent_did
                 && prepared.initial_request.as_ref().map(|row| &row.request_id)
                     == self.reference.initial_request_id.as_ref()
         })

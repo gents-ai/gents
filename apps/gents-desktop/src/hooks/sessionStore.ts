@@ -170,7 +170,7 @@ export type SessionHeader = Pick<
   DesktopSessionSnapshot,
   | "sessionId"
   | "nodeDid"
-  | "agentId"
+  | "agentDid"
   | "turnState"
   | "inferenceActivity"
   | "latestRequestId"
@@ -178,7 +178,6 @@ export type SessionHeader = Pick<
   | "queuedTurns"
   | "pendingQueue"
   | "foldedInputs"
-  | "hydration"
 >;
 
 export function headerOf(session: DesktopSessionSnapshot | null): SessionHeader | null {
@@ -186,7 +185,7 @@ export function headerOf(session: DesktopSessionSnapshot | null): SessionHeader 
   return {
     sessionId: session.sessionId,
     nodeDid: session.nodeDid,
-    agentId: session.agentId,
+    agentDid: session.agentDid,
     turnState: session.turnState,
     inferenceActivity: session.inferenceActivity,
     latestRequestId: session.latestRequestId,
@@ -194,7 +193,6 @@ export function headerOf(session: DesktopSessionSnapshot | null): SessionHeader 
     queuedTurns: session.queuedTurns,
     pendingQueue: session.pendingQueue,
     foldedInputs: session.foldedInputs,
-    hydration: session.hydration,
   };
 }
 

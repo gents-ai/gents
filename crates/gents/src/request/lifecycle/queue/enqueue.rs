@@ -37,14 +37,14 @@ pub(crate) async fn enqueue_steering_request(
         queue.background_completion_wake_version.is_none(),
         "steering enqueue must not carry the background wake marker"
     );
-    let agent_id = parent_agent_id(parent)?;
+    let agent_did = parent_agent_did(parent)?;
     let request_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let (agent_id, content, input, request_id, now) =
-        (&agent_id, content, &input, &request_id, &now);
+    let (agent_did, content, input, request_id, now) =
+        (&agent_did, content, &input, &request_id, &now);
     crate::store::config_client::ConfigAccess::transact_local_write(
         node,
-        None,
+        Some(identity::Did::new(parent.agent_did.clone())?),
         "lifecycle.enqueue_steering",
         move |txn| {
             Box::pin(async move {
@@ -60,7 +60,7 @@ pub(crate) async fn enqueue_steering_request(
                     parent,
                     hop,
                     SessionRequestFields {
-                        agent_id,
+                        agent_did,
                         content,
                         execution_origin: ExecutionOrigin::Interactive,
                         input: input.clone(),

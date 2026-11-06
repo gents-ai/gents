@@ -403,6 +403,15 @@ fn parse_production(root: &Path, sources: Vec<PathBuf>) -> Vec<(String, syn::Fil
 fn mentions_embedded_node(ty: &syn::Type) -> bool {
     struct Finder(bool);
     impl<'ast> Visit<'ast> for Finder {
+        fn visit_path(&mut self, path: &'ast syn::Path) {
+            self.0 |= path
+                .segments
+                .iter()
+                .zip(path.segments.iter().skip(1))
+                .any(|(module, ty)| module.ident == "defra_node" && ty.ident == "Node");
+            visit::visit_path(self, path);
+        }
+
         fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
             self.0 |= segment.ident == "EmbeddedNode";
             visit::visit_path_segment(self, segment);
@@ -577,9 +586,10 @@ impl<'ast> Visit<'ast> for ReadVisitor<'_> {
         if let Some(name) = path_name(call) {
             let mut segments = name.rsplit("::");
             let method = segments.next().unwrap_or_default();
-            if segments.next() == Some("EmbeddedNode")
-                && (method == "execute" || NODE_ONLY_METHODS.contains(&method))
-            {
+            let ty = segments.next();
+            let is_node = ty == Some("EmbeddedNode")
+                || (ty == Some("Node") && segments.next() == Some("defra_node"));
+            if is_node && (method == "execute" || NODE_ONLY_METHODS.contains(&method)) {
                 self.sites += 1;
             }
         }
@@ -682,13 +692,14 @@ fn read_fence_counts_direct_node_execution() {
     for source in [
         "fn f(node: &EmbeddedNode, q: &str) { node.execute(q); }",
         "fn f(db: &EmbeddedNode, q: &str) { db.execute(q); }",
-        "fn f(db: Arc<defra_node::EmbeddedNode>, q: &str) { db.as_ref().execute(q); }",
+        "fn f(db: Arc<defra_node::Node>, q: &str) { db.as_ref().execute(q); }",
         "impl S { fn f(&self, q: &str) { self.node.execute(q); } }",
         "struct S { store: Arc<EmbeddedNode> } impl S { fn f(&self, q: &str) { self.store.execute(q); } }",
         "fn f(node: &EmbeddedNode, q: &str) { node.clone().execute(q); }",
         "fn f(node: &EmbeddedNode, q: &str) { (&*node).execute(q); }",
         "fn f(core: &Core, q: &str) { core.node().execute(q); }",
         "fn f(node: &EmbeddedNode, q: &str) { EmbeddedNode::execute(&node, q); }",
+        "fn f(db: &defra_node::Node, q: &str) { defra_node::Node::execute(db, q); }",
         "fn f(node: &EmbeddedNode, q: &str) { let db = node.clone(); db.execute(q); }",
         "fn f(node: Arc<EmbeddedNode>, q: &str) { let db = Arc::clone(&node); db.execute(q); }",
         "impl S { fn f(&self, q: &str) { let db = &self.node; db.execute(q); } }",
@@ -705,6 +716,7 @@ fn read_fence_counts_direct_node_execution() {
 fn read_fence_ignores_owner_wrappers_and_tests() {
     for source in [
         "fn f(executor: &Executor, q: &str) { executor.execute(q); }",
+        "fn f(db: &domain::Node, q: &str) { db.execute(q); domain::Node::execute(db, q); }",
         "fn f(access: &ConfigAccess, q: &str) { access.execute(q); }",
         "fn f(access: &ConfigAccess, q: &str) { ConfigAccess::execute(access, q); }",
         "fn f(txn: &ConfigApplyTxn, q: &str) { txn.execute(q); }",
@@ -1759,16 +1771,12 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
 /// boundary, which then asks the owner enum it finds.
 #[rustfmt::skip]
 const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
-    ("crates/gents-cli/src/commands/config/backend.rs", 2),
     ("crates/gents-cli/src/commands/eval/manage.rs", 1),
     ("crates/gents-cli/src/commands/grok_shim/acp/errors.rs", 2),
     ("crates/gents-cli/src/commands/grok_shim/job_runs.rs", 2),
     ("crates/gents-cli/src/commands/grok_shim/workflow_command.rs", 1),
     ("crates/gents-cli/src/commands/prepare_runtime.rs", 1),
-    ("crates/gents-cli/src/http/file_inventory.rs", 1),
     ("crates/gents-client-host/src/editor_store.rs", 1),
-    ("crates/gents-desktop-bridge/src/commands/chat_resolve.rs", 3),
-    ("crates/gents-desktop-bridge/src/commands/session.rs", 1),
     ("crates/gents-desktop-bridge/src/host/local/windows.rs", 1),
     ("crates/gents-desktop-bridge/src/inference_setup.rs", 2),
     ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
@@ -1777,9 +1785,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/readiness.rs", 3),
     ("crates/gents-desktop-core/src/client/core/route_manager.rs", 2),
     ("crates/gents-desktop-core/src/client/core/sync_state.rs", 1),
-    ("crates/gents-desktop-core/src/client/core/writes/pending_submissions.rs", 2),
-    ("crates/gents-desktop-core/src/client/mutations/chat/request.rs", 1),
-    ("crates/gents-desktop-core/src/client/mutations/chat/request/receipt/delivery.rs", 1),
     ("crates/gents-desktop-core/src/error.rs", 1),
     ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", 4),
     ("crates/gents-protocol/src/database_error.rs", 1),
@@ -1790,7 +1795,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/runtime/agent/stream_processor.rs", 1),
     ("crates/gents/src/runtime/agent/daemon/request.rs", 1),
     ("crates/gents/src/runtime/agent/document_view/snapshot.rs", 1),
-    ("crates/gents/src/runtime/agent/p2p_reconcile/session_hydration_reconcile/inventory.rs", 1),
     ("crates/gents/src/runtime/agent/reconcile.rs", 1),
     ("crates/gents/src/plugin/application_write/mod.rs", 1),
     ("crates/gents/src/tools/background/status/final_output.rs", 1),
@@ -1803,7 +1807,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/eval/report/store.rs", 1),
     ("crates/gents/src/eval/runner/freeze.rs", 1),
     ("crates/gents/src/eval/runner/mod.rs", 1),
-    ("crates/gents/src/file_inventory/operator.rs", 1),
     ("crates/gents/src/goal/creation.rs", 2),
     ("crates/gents/src/store/graphql.rs", 1),
     ("crates/gents/src/store/local/home.rs", 3),
@@ -2403,7 +2406,7 @@ const PEER_TIER: usize = 3;
 #[rustfmt::skip]
 const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
     ("documents", "goal", 4),
-    ("documents", "inference", 10),
+    ("documents", "inference", 7),
     ("documents", "observe", 1),
     ("documents", "pack", 3),
     ("documents", "plugin", 4),
@@ -2421,9 +2424,8 @@ const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
     ("inference", "runtime", 3),
     ("inference", "tools", 1),
     ("inference", "turn", 1),
-    ("observe", "runtime", 2),
+    ("observe", "runtime", 1),
     ("pack", "plugin", 31),
-    ("pack", "runtime", 1),
     ("pack", "tools", 3),
     ("plugin", "pack", 40),
     ("plugin", "runtime", 2),
@@ -2431,7 +2433,7 @@ const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
     ("plugin", "tools", 29),
     ("plugin", "triggers", 2),
     ("request", "goal", 13),
-    ("request", "runtime", 7),
+    ("request", "runtime", 6),
     ("request", "session", 44),
     ("request", "tools", 32),
     ("request", "triggers", 32),

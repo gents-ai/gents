@@ -11,7 +11,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::{Barrier, Notify};
@@ -66,7 +66,7 @@ async fn tracked_transaction_finality_distinguishes_rejection_from_lost_receipt(
     .await;
     assert!(fired);
     assert_eq!(lost.unwrap_err().unconfirmed, expected(&["unknown_commit"]));
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 
     let (endpoint, _state, server) = fake_transaction_server(FirstCommit::Conflict).await;
     let access = ConfigAccess::graphql(endpoint);
@@ -128,10 +128,11 @@ async fn http_transaction_cursors_keep_all_pages() {
     )
     .await
     .unwrap();
-    let access = ConfigAccess::Graphql(super::GraphqlEndpoint::as_principal(
-        endpoint,
-        identity.did(),
-    ));
+    let access = ConfigAccess::Graphql(
+        super::GraphqlEndpoint::as_principal(endpoint, identity.did())
+            .with_client_signing_capability(identity.client_signing_capability().unwrap())
+            .unwrap(),
+    );
     let rows = access
         .transact_readonly("test.cursor_transport.read", |txn| {
             Box::pin(async move {
@@ -163,7 +164,7 @@ async fn http_transaction_cursors_keep_all_pages() {
         .await
         .unwrap();
     assert_eq!(lengths, [64, 2]);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -195,7 +196,7 @@ async fn config_access_readonly_does_not_wait_for_the_embedded_mutation_gate() {
     .unwrap();
     assert_eq!(response["data"]["ReadGateProbe"][0]["value"], "ready");
     drop(held);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -313,7 +314,7 @@ async fn clean_known_noop_commit_is_debug_but_mutation_is_info() {
         events[1].get("affected_documents").map(String::as_str),
         Some("1")
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test(start_paused = true)]
@@ -352,7 +353,7 @@ async fn queued_auto_commit_cancellation_is_not_reported_as_native_pending() {
         events[0].get("affected_documents").map(String::as_str),
         Some("0")
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -497,7 +498,7 @@ async fn successful_mutation_pause_is_one_shot_and_task_scoped() {
         "{}",
         ErrorChain(error.as_ref())
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -570,7 +571,7 @@ async fn armed_mutation_pause_does_not_consume_an_out_of_scope_write() {
         fired,
         "outside write consumed the armed first-mutation pause"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -623,12 +624,17 @@ async fn cancellation_after_embedded_begin_abandons_before_releasing_the_gate() 
                         node,
                         handle,
                         identity: None,
+                        agent_signer: None,
                         native_operations,
                     },
                     rollback_on_drop: Some(rollback_on_drop),
                     affected_documents: std::sync::atomic::AtomicU64::new(0),
                     operation: Some(operation.as_str()),
                     contends_with_request_siblings: std::sync::atomic::AtomicBool::new(false),
+                    client_signed_write_dispatched: std::sync::atomic::AtomicBool::new(false),
+                    relationship_grants: std::sync::Mutex::new(Vec::new()),
+                    publication_observer: None,
+                    pack_approval: None,
                 })
             })
         },
@@ -678,7 +684,7 @@ async fn cancellation_after_embedded_begin_abandons_before_releasing_the_gate() 
         events[0].get("rollback").map(String::as_str),
         Some("not_needed")
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -816,7 +822,7 @@ async fn abandoned_signed_statement_abandons_registry_but_holds_gate_until_drain
         .filter_map(|row| row["value"].as_str())
         .collect();
     assert_eq!(values, ["next"], "abandoned transaction leaked a write");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -914,7 +920,7 @@ async fn swallowed_abandoned_statement_cannot_start_another_statement_or_commit(
         json!([{"value":"after"}]),
         "the swallowed abandoned transaction committed"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test(start_paused = true)]
@@ -949,7 +955,7 @@ async fn cancellation_before_begin_reports_no_scheduled_rollback() {
         events[0].get("rollback").map(String::as_str),
         Some("not_needed")
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -1003,7 +1009,7 @@ async fn stalled_callback_releases_the_embedded_write_gate() {
         response.data.unwrap()["WriteAfterStall"][0]["value"],
         "committed"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -1057,7 +1063,7 @@ async fn nested_canonical_write_fails_fast_and_releases_the_embedded_write_gate(
         response.data.unwrap()["NestedWriteProbe"][0]["value"],
         "committed"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -1133,7 +1139,7 @@ async fn nested_idempotent_write_does_not_replay_the_ownership_violation() {
         Some("1")
     );
     drop(events);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test(start_paused = true)]
@@ -1376,7 +1382,7 @@ async fn failed_rollback_abandons_before_transaction_retry_backoff() {
         super::MUTATION_WRITE_GATE_CAPACITY
     );
     drop(transaction);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -1515,7 +1521,7 @@ async fn lean_cancelled_rollback_timeout_releases_actual_transaction_gate() {
         gate_held, scenario.expected_gate_held,
         "native gate observation must match the Lean cleanup-timeout state"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[derive(Deserialize)]
@@ -1697,13 +1703,13 @@ async fn lean_write_admission_traces_match_native_independent_leases_and_capacit
         held.clear();
         drop(access);
         drop(gate);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }
 
 #[tokio::test]
 async fn embedded_conflict_replays_complete_callback_with_fresh_snapshot() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     node.add_collection("type OwnedWriteFact { value: String }")
         .await
         .unwrap();
@@ -1769,7 +1775,7 @@ async fn embedded_conflict_replays_complete_callback_with_fresh_snapshot() {
         durable.data.unwrap()["OwnedWriteFact"][0]["value"],
         "canonical"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1856,13 +1862,11 @@ async fn thirty_two_hot_document_writers_converge_without_event_loss() {
     let durable = node.execute("{ HotMutationState { key value } }").await;
     assert!(!durable.has_errors(), "{:?}", durable.errors);
     assert_eq!(durable.data.unwrap()["HotMutationState"][0]["value"], 33);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn embedded_transaction_carries_the_supplied_did_to_document_acp() {
-    const OWNER: &str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
-    const READER: &str = "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR";
     const POLICY: &str = r#"
 name: Transaction identity test
 resources:
@@ -1876,17 +1880,48 @@ resources:
       - name: delete
 "#;
 
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    let policy_id = node.add_dac_policy(OWNER, POLICY).await.unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let key = root.path().join("identity-owner.key");
+    let (identity, reader, denied) = tokio::task::spawn_blocking(move || {
+        let identity = crate::KeyIdentity::load_or_create(key, None).unwrap();
+        let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
+        let reader = crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
+        let denied_binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
+        let denied =
+            crate::store::identity::resolve_agent_identity(&identity, &denied_binding).unwrap();
+        (identity, reader, denied)
+    })
+    .await
+    .unwrap();
+    let owner = identity.did();
+    let reader_did = reader.did();
+    let denied_did = denied.did();
+    assert_ne!(owner, reader_did);
+    assert_ne!(owner, denied_did);
+    assert_ne!(reader_did, denied_did);
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(owner)
+            .build()
+            .await
+            .unwrap(),
+    );
+    let policy_id = node
+        .add_dac_policy_as(
+            &defra_core::RequestContext::default().with_identity(Some(owner.to_owned())),
+            POLICY,
+        )
+        .await
+        .unwrap();
     node.add_collection(&format!(
         "type IdentityFact @policy(id: \"{policy_id}\", resource: \"facts\") {{ value: String }}"
     ))
     .await
     .unwrap();
-    let owner = identity::Did::new(OWNER).unwrap();
+    let owner_did = identity::Did::new(owner).unwrap();
     let doc_id = ConfigAccess::transact_local_write(
         &node,
-        Some(owner),
+        Some(owner_did),
         "test.identity_owner_create",
         |txn| {
             Box::pin(async move {
@@ -1906,9 +1941,21 @@ resources:
     )
     .await
     .unwrap();
-    node.add_dac_actor_relationship(OWNER, "IdentityFact", &doc_id, "reader", READER)
+    node.add_dac_actor_relationship(owner, "IdentityFact", &doc_id, "reader", reader_did)
         .await
         .unwrap();
+    let reader_access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(reader_did).unwrap(),
+        reader.as_ref(),
+    )
+    .unwrap();
+    let denied_access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(denied_did).unwrap(),
+        denied.as_ref(),
+    )
+    .unwrap();
 
     fn count_rows<'txn, 'node>(
         txn: &'txn ConfigApplyTxn<'node>,
@@ -1922,57 +1969,50 @@ resources:
         })
     }
     for read_only in [false, true] {
-        for (identity, expected) in [(Some(identity::Did::new(READER).unwrap()), 1), (None, 0)] {
+        for (access, expected) in [(&reader_access, 1), (&denied_access, 0)] {
             let visible = if read_only {
-                ConfigAccess::transact_local_readonly(
-                    &node,
-                    identity,
-                    "test.identity_readonly_query",
-                    count_rows,
-                )
-                .await
+                access
+                    .transact_readonly("test.identity_readonly_query", count_rows)
+                    .await
             } else {
-                ConfigAccess::transact_local_write(
-                    &node,
-                    identity,
-                    "test.identity_query",
-                    count_rows,
-                )
-                .await
+                access
+                    .transact_write("test.identity_query", count_rows)
+                    .await
             }
             .unwrap();
             assert_eq!(visible, expected, "read_only={read_only}");
         }
     }
-    for (actor, expected_owner) in [(Some(READER), Some(OWNER)), (None, None)] {
+    for (access, actor, authorized) in [
+        (&reader_access, reader_did, true),
+        (&denied_access, denied_did, false),
+    ] {
         let ids = vec![doc_id.clone()];
-        let observations = ConfigAccess::transact_local_readonly(
-            &node,
-            actor.map(|did| identity::Did::new(did).unwrap()),
-            "test.identity_owner_observation",
-            move |txn| {
+        let observations = access
+            .transact_readonly("test.identity_owner_observation", move |txn| {
                 let ids = ids.clone();
                 Box::pin(async move {
                     let rows = txn.execute("{ IdentityFact { _docID } }").await?;
+                    assert_eq!(txn.actor_did(), Some(actor));
                     let owners = txn.document_owners("IdentityFact", &ids).await?;
                     assert_eq!(owners.len(), 1);
                     assert_eq!(owners[0].doc_id, ids[0]);
                     assert_eq!(
                         rows["data"]["IdentityFact"].as_array().unwrap().len(),
-                        usize::from(expected_owner.is_some())
+                        usize::from(authorized)
                     );
                     Ok::<_, anyhow::Error>(owners)
                 })
-            },
-        )
-        .await
-        .unwrap();
+            })
+            .await
+            .unwrap();
+        assert_eq!(observations[0].visible, authorized);
         assert_eq!(
             observations[0].owner.as_ref().map(identity::Did::as_str),
-            expected_owner
+            authorized.then_some(owner)
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -1994,8 +2034,8 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
             .unwrap(),
     );
     let policy = node
-        .add_dac_policy(
-            owner,
+        .add_dac_policy_as(
+            &defra_core::RequestContext::default().with_identity(Some(owner.to_owned())),
             "name: Independent reader\nresources:\n  - name: facts\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n",
         )
         .await
@@ -2108,6 +2148,28 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
                         authorized.then_some(owner),
                         "source snapshot step {step}"
                     );
+                    let reader = identity::Did::new(READER).unwrap();
+                    let named = || defra_node::DocumentAccessMode::Named {
+                        permission: "read".to_owned(),
+                        node_permission: acp::nac::NodePermission::DocumentRead,
+                    };
+                    assert_eq!(
+                        txn.observe_document_access(&reader, "IndependentReadFact", &ids, named(),)
+                            .await?,
+                        [defra_node::DocumentAccessDecision::Unavailable],
+                        "disabled node ACP at step {step}"
+                    );
+                    assert_eq!(
+                        txn.observe_document_access(
+                            &reader,
+                            "IndependentReadFact",
+                            &["missing".to_owned()],
+                            named(),
+                        )
+                        .await?,
+                        [defra_node::DocumentAccessDecision::Unavailable]
+                    );
+                    assert_eq!(txn.actor_did(), Some(owner));
                     assert_eq!(
                         txn.document_owners("IndependentReadFact", &ids).await?,
                         source_before
@@ -2119,7 +2181,7 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
         .await
         .unwrap();
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -2193,7 +2255,7 @@ async fn readonly_transaction_preserves_snapshot_and_rejects_native_mutation() {
     .unwrap_err();
     assert!(
         format!("{}", ErrorChain(&error))
-            .contains("cannot execute mutation in read-only transaction"),
+            .contains("No sets or deletes are allowed in a read-only transaction"),
         "mutation must reach DefraDB's native read-only transaction guard: {}",
         ErrorChain(&error)
     );
@@ -2204,12 +2266,14 @@ async fn readonly_transaction_preserves_snapshot_and_rejects_native_mutation() {
         .await
         .unwrap();
     assert_eq!(after["data"]["ReadSnapshotProbe"][0]["value"], "after");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[derive(Clone, Copy)]
 enum FirstCommit {
     Conflict,
+    CanonicalUnconfirmed,
+    ConfirmedConflict,
     ServerError,
     Succeed,
 }
@@ -2276,6 +2340,18 @@ async fn commit_transaction(
                 return (
                     StatusCode::CONFLICT,
                     "transaction conflict; please retry the transaction",
+                );
+            }
+            FirstCommit::ConfirmedConflict => {
+                return (
+                    StatusCode::CONFLICT,
+                    r#"{"error":"transaction conflict. Please retry","outcome":"transaction_conflict_aborted"}"#,
+                );
+            }
+            FirstCommit::CanonicalUnconfirmed => {
+                return (
+                    StatusCode::CONFLICT,
+                    r#"{"error":"transaction conflict. Please retry"}"#,
                 );
             }
             FirstCommit::ServerError => {
@@ -2351,6 +2427,167 @@ async fn http_commit_conflict_replays_callback_under_new_transaction_id() {
     assert!(lock(&state.discarded_ids).is_empty());
     assert!(lock(&state.active_ids).is_empty());
     assert_eq!(state.next_id.load(Ordering::SeqCst), 2);
+    server.abort();
+}
+
+#[tokio::test]
+async fn signed_update_commit_conflict_does_not_replay_callback() {
+    let (endpoint, state, server) = fake_transaction_server(FirstCommit::Conflict).await;
+    let access = ConfigAccess::graphql(endpoint);
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&attempts);
+    let result = access
+        .transact_write("test.signed_update_no_replay", move |txn| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            txn.client_signed_write_dispatched
+                .store(true, Ordering::Release);
+            Box::pin(async { Ok::<_, TestError>(()) })
+        })
+        .await;
+    assert!(result.is_err());
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(state.next_id.load(Ordering::SeqCst), 1);
+    server.abort();
+}
+
+async fn held_fake_access(endpoint: String) -> ConfigAccess {
+    let identity =
+        tokio::task::spawn_blocking(|| crate::support::fixtures::test_identity("signed-conflict"))
+            .await
+            .unwrap();
+    let endpoint = super::GraphqlEndpoint::as_principal(endpoint, identity.did())
+        .with_client_signing_capability(identity.client_signing_capability().unwrap())
+        .unwrap();
+    ConfigAccess::Graphql(endpoint)
+}
+
+#[tokio::test]
+async fn confirmed_signed_conflict_rebuilds_on_a_fresh_transaction() {
+    let (endpoint, state, server) = fake_transaction_server(FirstCommit::ConfirmedConflict).await;
+    let access = held_fake_access(endpoint).await;
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let captured = attempts.clone();
+    let result = access
+        .transact_signed_conflict_rebuild("test.signed_confirmed_conflict", move |txn| {
+            lock(&captured).push(transaction_id(txn));
+            txn.client_signed_write_dispatched
+                .store(true, Ordering::Release);
+            Box::pin(async { Ok::<_, TestError>(()) })
+        })
+        .await;
+    result.unwrap();
+    assert_eq!(&*lock(&attempts), &["0", "1"]);
+    assert_eq!(state.next_id.load(Ordering::SeqCst), 2);
+    server.abort();
+}
+
+#[tokio::test]
+async fn signed_statement_conflict_rebuilds_only_after_successful_discard() {
+    let (endpoint, state, server) = fake_transaction_server(FirstCommit::Succeed).await;
+    let access = held_fake_access(endpoint).await;
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let captured = attempts.clone();
+    access
+        .transact_signed_conflict_rebuild("test.signed_statement_conflict", move |txn| {
+            let id = transaction_id(txn);
+            lock(&captured).push(id.clone());
+            txn.client_signed_write_dispatched.store(true, Ordering::Release);
+            Box::pin(async move {
+                if id == "0" {
+                    Err(super::retry::transaction_conflict(
+                        crate::store::config_client::write_telemetry::ConflictSource::StructuredCode,
+                    ))
+                } else {
+                    Ok(())
+                }
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(&*lock(&attempts), &["0", "1"]);
+    assert_eq!(&*lock(&state.discarded_ids), &["0"]);
+    assert_eq!(&*lock(&state.committed_ids), &["1"]);
+    server.abort();
+}
+
+#[tokio::test]
+async fn signed_conflict_without_held_signer_does_not_rebuild() {
+    let (endpoint, state, server) = fake_transaction_server(FirstCommit::ConfirmedConflict).await;
+    let access = ConfigAccess::graphql(endpoint);
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let captured = attempts.clone();
+    let result = access
+        .transact_signed_conflict_rebuild("test.signed_conflict_without_signer", move |txn| {
+            captured.fetch_add(1, Ordering::SeqCst);
+            txn.client_signed_write_dispatched
+                .store(true, Ordering::Release);
+            Box::pin(async { Ok::<_, TestError>(()) })
+        })
+        .await;
+    assert!(result.is_err());
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(state.next_id.load(Ordering::SeqCst), 1);
+    server.abort();
+}
+
+#[tokio::test]
+async fn ambiguous_signed_conflict_does_not_rebuild() {
+    for first_commit in [
+        FirstCommit::Conflict,
+        FirstCommit::CanonicalUnconfirmed,
+        FirstCommit::ServerError,
+    ] {
+        let (endpoint, state, server) = fake_transaction_server(first_commit).await;
+        let access = held_fake_access(endpoint).await;
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let captured = attempts.clone();
+        let result = access
+            .transact_signed_conflict_rebuild("test.signed_ambiguous_conflict", move |txn| {
+                captured.fetch_add(1, Ordering::SeqCst);
+                txn.client_signed_write_dispatched
+                    .store(true, Ordering::Release);
+                Box::pin(async { Ok::<_, TestError>(()) })
+            })
+            .await;
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(state.next_id.load(Ordering::SeqCst), 1);
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn canonical_conflict_without_receipt_has_unconfirmed_finality() {
+    let (endpoint, _state, server) =
+        fake_transaction_server(FirstCommit::CanonicalUnconfirmed).await;
+    let access = held_fake_access(endpoint).await;
+    let error = access
+        .transact_write_with_finality("test.signed_unconfirmed_conflict_finality", |txn| {
+            txn.client_signed_write_dispatched
+                .store(true, Ordering::Release);
+            Box::pin(async { Ok::<_, TestError>(()) })
+        })
+        .await
+        .unwrap_err();
+    assert!(error.unconfirmed);
+    assert!(crate::store::config_client::is_classified_transaction_conflict(&error.error));
+    server.abort();
+}
+
+#[tokio::test]
+async fn confirmed_signed_commit_conflict_reports_known_finality() {
+    let (endpoint, _state, server) = fake_transaction_server(FirstCommit::ConfirmedConflict).await;
+    let access = held_fake_access(endpoint).await;
+    let error = access
+        .transact_write_with_finality("test.signed_conflict_finality", |txn| {
+            txn.client_signed_write_dispatched
+                .store(true, Ordering::Release);
+            Box::pin(async { Ok::<_, TestError>(()) })
+        })
+        .await
+        .unwrap_err();
+    assert!(!error.unconfirmed);
+    assert!(crate::store::config_client::is_classified_transaction_conflict(&error.error));
     server.abort();
 }
 
@@ -2644,7 +2881,7 @@ async fn aborting_embedded_callback_discards_writes_and_releases_the_gate() {
     )
     .await
     .unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[test]
@@ -2692,7 +2929,7 @@ fn dropping_embedded_transaction_after_runtime_shutdown_abandons_synchronously()
         )
         .await
         .unwrap();
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     });
 }
 
@@ -2758,6 +2995,6 @@ async fn cancellation_at_embedded_finalization_boundaries_preserves_commit_outco
         )
         .await
         .unwrap();
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }

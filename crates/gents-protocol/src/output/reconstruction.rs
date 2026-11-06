@@ -374,6 +374,54 @@ pub fn reconstruct_stream(
         })
 }
 
+/// Whether `segment` is a fork copy of the logical closing record `logical`
+/// within `message`'s own session scope. Fork publication writes each record
+/// of a referenced closure into the destination session with `request_doc_id`
+/// naming that logical closing record instead of a request.
+pub fn is_fork_copy_for(message: &TranscriptMessage, segment: &OutputSegment, logical: &str) -> bool {
+    segment.session_id == message.session_id
+        && segment.node_did == message.node_did
+        && segment.requester_did == message.requester_did
+        && segment.request_doc_id == logical
+}
+
+/// The observations a fork header resolves, refining `SessionFork.resolveIn`:
+/// resolution never leaves the header's own session, so a reader granted only
+/// that session reads the fork without its origin. Each copied closing record
+/// is presented under the logical identity the immutable header names; other
+/// copied records keep their physical identity. `None` for a non-fork header
+/// and for a fork published before destination-owned copies, which observes
+/// no copy for any of its references.
+pub fn fork_copy_observations<'a>(
+    message: &TranscriptMessage,
+    records: &[ObservedSegment<'a>],
+) -> Option<Vec<ObservedSegment<'a>>> {
+    if !matches!(message.publication, super::MessagePublication::Fork { .. }) {
+        return None;
+    }
+    let logicals = message
+        .payload_references()
+        .into_iter()
+        .map(|reference| reference.close_doc_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let copies = records
+        .iter()
+        .filter(|record| {
+            logicals.contains(record.segment.request_doc_id.as_str())
+                && is_fork_copy_for(message, record.segment, &record.segment.request_doc_id)
+        })
+        .map(|record| ObservedSegment {
+            doc_id: if record.segment.close.is_some() {
+                record.segment.request_doc_id.as_str()
+            } else {
+                record.doc_id
+            },
+            segment: record.segment,
+        })
+        .collect::<Vec<_>>();
+    (logicals.is_empty() || !copies.is_empty()).then_some(copies)
+}
+
 /// Reconstruct one complete canonical transcript header into its native message.
 /// This is the sole protocol-level path for history, provider input, forks and
 /// exports: it validates immutable provenance before exposing any bytes.

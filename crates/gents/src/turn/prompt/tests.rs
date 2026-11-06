@@ -5,10 +5,10 @@ use gents_loop::claude_messages_body::ReplayTag;
 use gents_protocol::output::OutputSource;
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 
-fn test_builder(system_prompt: &str, agent_id: &str) -> LayeredPromptBuilder {
+fn test_builder(system_prompt: &str, agent_did: &str) -> LayeredPromptBuilder {
     LayeredPromptBuilder::for_agent(
         system_prompt,
-        agent_id,
+        agent_did,
         &["list_files", "read_file", "bash"],
         true,
         &[],

@@ -166,12 +166,7 @@ mod tests {
 
     #[tokio::test]
     async fn native_input_shapes_preserve_compounds_relationships_literals_and_aliases() {
-        let node = Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
-                .build()
-                .await
-                .unwrap(),
-        );
+        let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
         node.add_collection("type FilterAuthor { name: String } type FilterBook { title: String score: Int tags: [String] payload: JSON author: FilterAuthor }").await.unwrap();
         let access = ConfigAccess::local(node.clone());
         for filter in [
@@ -208,7 +203,7 @@ mod tests {
         for field in ["access_token", "refresh_token", "id_token"] {
             assert!(!diagnostic.contains(field), "{diagnostic}");
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -216,12 +211,7 @@ mod tests {
         let _ = tracing_subscriber::fmt()
             .with_env_filter("gents::tools::builtin::defra_query::native_filter=info")
             .try_init();
-        let node = Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
-                .build()
-                .await
-                .unwrap(),
-        );
+        let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
         node.add_collection("type CountFilterProbe { name: String score: Int }")
             .await
             .unwrap();
@@ -246,6 +236,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result["total_count"], 2);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 }

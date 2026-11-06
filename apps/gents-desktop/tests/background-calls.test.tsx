@@ -817,8 +817,10 @@ describe("the running in background group", () => {
     expect(screen.queryByRole("button", { name: /^Stop/ })).toBeNull();
   });
 
-  it("hides native Stop on an enrolled-only node", async () => {
-    const processControl = vi.fn();
+  it("submits native Stop from an enrolled client", async () => {
+    const processControl = vi
+      .fn()
+      .mockResolvedValue({ Queued: { intent_doc_id: "intent" } });
     const { app } = appWith(
       [command("build", "npm run build", { nodeDid: NODE })],
       [viewOf("build")],
@@ -839,8 +841,8 @@ describe("the running in background group", () => {
         },
       }),
     );
-    expect(screen.queryByRole("button", { name: "Stop npm run build" })).toBeNull();
-    expect(processControl).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Stop npm run build" }));
+    await waitFor(() => expect(processControl).toHaveBeenCalledOnce());
   });
 
   it("waits for call classification before offering native Stop", async () => {

@@ -112,13 +112,21 @@ async fn call_installed_inner(
         let writes: Vec<gents_protocol::job::DataWrite> = serde_json::from_value(writes)
             .context("plugin writes must be an array of data writes")?;
         if !writes.is_empty() {
-            let stamps = gents::plugin::data::StampContext::Ux { node_did };
+            let caller_did = access
+                .actor_did()
+                .context("plugin writes require the user's authenticated identity")?;
+            anyhow::ensure!(
+                caller_did != node_did,
+                "plugin writes require the user's identity"
+            );
+            let actor = identity::Did::new(caller_did.clone())?;
+            let stamps = gents::plugin::data::StampContext::Ux { caller_did };
             access
                 .transact_write("ux_plugin.writes", |txn| {
-                    let (grant, stamps, writes) = (&grant, &stamps, writes.clone());
+                    let (grant, stamps, writes, actor) = (&grant, &stamps, writes.clone(), &actor);
                     Box::pin(async move {
                         gents::plugin::application_write::apply_plugin_writes_in_txn(
-                            txn, grant, stamps, writes,
+                            txn, actor, grant, stamps, writes,
                         )
                         .await
                     })
@@ -256,12 +264,7 @@ mod tests {
 
     #[tokio::test]
     async fn ux_plugin_writes_are_scoped_and_atomic() {
-        let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
-                .build()
-                .await
-                .unwrap(),
-        );
+        let node = Arc::new(gents::defra_node::Node::builder().build().await.unwrap());
         node.add_collection("type UxNote { body: String }")
             .await
             .unwrap();

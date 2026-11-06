@@ -11,14 +11,14 @@ async fn seed_codex_account(
     key: Option<&str>,
 ) -> crate::inference::auth::credential::OAuthCredential {
     crate::inference::auth::credential::test_support::seed_credential(
-        node,
+        &crate::inference::auth::credential::runtime_credential_access(node, node_did).unwrap(),
         node_did,
         CHATGPT_CODEX_PROVIDER,
         Utc::now() + chrono::Duration::hours(1),
     )
     .await;
     let mut row = crate::inference::auth::credential::resolve_oauth_credential(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &crate::inference::auth::credential::runtime_credential_access(node, node_did).unwrap(),
         node_did,
         CHATGPT_CODEX_PROVIDER,
         crate::inference::auth::credential::AccountPick::Reference(None),
@@ -39,10 +39,12 @@ async fn seed_codex_account(
 async fn usage_wiring_codex_client_records_under_its_account_key() {
     use rig::client::CompletionClient;
     use rig::completion::CompletionModel;
-    let did = "did:key:z6MkUsageWireCodexA";
+    let (db, _user, _user_access, _binding) =
+        crate::test_support::signed_test_node("codex-usage").await;
+    let did = db.node_identity.did();
     let cache: std::sync::Arc<crate::inference::usage_observation::UsageCache> =
         std::sync::Arc::default();
-    let node = crate::inference::auth::credential::test_support::test_node().await;
+    let node = db.node.clone();
     let row = seed_codex_account(&node, did, Some("acct-key-a")).await;
     let url = crate::inference::clients::provider_http::tests::one_shot_server(
         "200 OK",
@@ -73,10 +75,12 @@ async fn usage_wiring_codex_client_records_under_its_account_key() {
 async fn usage_wiring_codex_key_backfill_lands_under_the_key() {
     use rig::client::CompletionClient;
     use rig::completion::CompletionModel;
-    let did = "did:key:z6MkUsageWireCodexKey";
+    let (db, _user, _user_access, _binding) =
+        crate::test_support::signed_test_node("codex-usage").await;
+    let did = db.node_identity.did();
     let cache: std::sync::Arc<crate::inference::usage_observation::UsageCache> =
         std::sync::Arc::default();
-    let node = crate::inference::auth::credential::test_support::test_node().await;
+    let node = db.node.clone();
     let mut row = seed_codex_account(&node, did, None).await;
     let url = crate::inference::clients::provider_http::tests::server_for(
         2,
@@ -111,7 +115,7 @@ async fn usage_wiring_codex_key_backfill_lands_under_the_key() {
     .unwrap();
     let stored = crate::inference::usage_observation::usage_for_backend(
         &cache,
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &crate::inference::auth::credential::runtime_credential_access(&node, did).unwrap(),
         did,
         &backend,
     )

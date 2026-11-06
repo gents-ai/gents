@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
-use defra_node::EmbeddedNode;
+use anyhow::{anyhow, Context, Result};
+use defra_node::Node as EmbeddedNode;
 use serde_json::Value;
 
 use crate::tools::workspace::journal::{advance, current_state};
@@ -16,14 +16,15 @@ use crate::tools::workspace::{
 
 use super::claim::{claim_invocation, invocation_is_claimable};
 use super::documents::{
-    create_callback_result, flush_workspace_docs, load_callback, load_callback_module,
-    load_callback_result, load_memory_workspace_docs, load_repository_placement,
-    load_trusted_callback_signers, strip_secret_fields, update_invocation, CallbackInvocationDoc,
-    CallbackModuleDoc, CallbackResultDoc,
+    create_callback_result, flush_workspace_docs, load_callback, load_callback_module_as,
+    load_callback_result, load_isolated_workspace, load_memory_workspace_docs,
+    load_repository_placement, load_trusted_callback_signers, strip_secret_fields,
+    update_invocation, CallbackInvocationDoc, CallbackModuleDoc, CallbackResultDoc,
 };
 use super::planner::{plan_from_module, validate_callback_module};
 use super::{
-    LIFECYCLE_CLAIMED, LIFECYCLE_DENIED, LIFECYCLE_FAILED, LIFECYCLE_RUNNING, LIFECYCLE_SUCCEEDED,
+    LIFECYCLE_CLAIMED, LIFECYCLE_DENIED, LIFECYCLE_FAILED, LIFECYCLE_PENDING, LIFECYCLE_RUNNING,
+    LIFECYCLE_SUCCEEDED,
 };
 use crate::plugin::executor::PluginExecutor;
 
@@ -88,37 +89,163 @@ pub fn plan_from_callback(
 ) -> Result<ActionPlan, String> {
     use crate::documents::{BuiltInCallback, CallbackHandler};
     let source = strip_secret_fields(source.clone());
-    match &callback.handler {
+    let (mut plan, selection) = match &callback.handler {
         CallbackHandler::BuiltIn {
             emitter: BuiltInCallback::CreateWorkspace,
-        } => emit_create_workspace_from_source(&source),
-        CallbackHandler::Module { module_id } => {
+            workspace_agents,
+        } => (
+            emit_create_workspace_from_source(&source)?,
+            workspace_agents.as_ref(),
+        ),
+        CallbackHandler::Module {
+            module_id,
+            workspace_agents,
+        } => {
             let module = module.ok_or_else(|| {
                 format!("CallbackModule {module_id} was not loaded for callback planner")
             })?;
             if module.module_id != *module_id || module.node_did != callback.node_did {
                 return Err("callback module owner/reference mismatch".into());
             }
-            plan_from_module(
-                module,
-                &source,
-                &callback.capabilities.iter().cloned().collect(),
+            (
+                plan_from_module(
+                    module,
+                    &source,
+                    &callback.capabilities.iter().cloned().collect(),
+                )?,
+                workspace_agents.as_ref(),
             )
         }
-        CallbackHandler::Plugin { plugin, .. } => Err(format!(
-            "callback plugin {plugin} runs the plugin itself and has no action plan"
-        )),
+        CallbackHandler::Plugin { plugin, .. } => {
+            return Err(format!(
+                "callback plugin {plugin} runs the plugin itself and has no action plan"
+            ))
+        }
+    };
+    for action in &mut plan.actions {
+        if let HostAction::CreateWorkspace(action) = action {
+            let selected = selection
+                .ok_or("workspace callback requires configured writer and integrator Agents")?;
+            for (role, did) in [
+                ("writer", &selected.writer_agent_did),
+                ("integrator", &selected.integrator_agent_did),
+            ] {
+                if did.is_empty() || did.trim() != did || did == &callback.node_did {
+                    return Err(format!("workspace {role} must name an explicit Agent DID"));
+                }
+                identity::Did::new(did).map_err(|error| error.to_string())?;
+            }
+            if action.writer_agent_did.is_some()
+                || action.writer_agent_doc_id.is_some()
+                || action.integrator_agent_did.is_some()
+                || action.integrator_agent_doc_id.is_some()
+                || !action.readers.is_empty()
+            {
+                return Err("workspace planner cannot select its own Agent authorities".into());
+            }
+            action.writer_agent_did = Some(selected.writer_agent_did.clone());
+            action.integrator_agent_did = Some(selected.integrator_agent_did.clone());
+            for reader in &selected.readers {
+                let did = &reader.agent_did;
+                if did.is_empty() || did.trim() != did || did == &callback.node_did {
+                    return Err("workspace reader must name an explicit Agent DID".into());
+                }
+                identity::Did::new(did).map_err(|error| error.to_string())?;
+                action
+                    .readers
+                    .push(crate::tools::workspace::WorkspaceReaderBinding {
+                        agent_did: did.clone(),
+                        agent_doc_id: None,
+                    });
+            }
+        }
     }
+    Ok(plan)
+}
+
+pub(super) async fn bind_workspace_agent_documents(
+    access: &crate::ConfigAccess,
+    node_did: &str,
+    plan: &mut ActionPlan,
+) -> Result<()> {
+    for action in &mut plan.actions {
+        let HostAction::CreateWorkspace(action) = action else {
+            continue;
+        };
+        for (role, did, target) in [
+            (
+                "writer",
+                action.writer_agent_did.as_deref(),
+                &mut action.writer_agent_doc_id,
+            ),
+            (
+                "integrator",
+                action.integrator_agent_did.as_deref(),
+                &mut action.integrator_agent_doc_id,
+            ),
+        ] {
+            let did = did.context("workspace selection omitted an Agent DID")?;
+            let query = format!(
+                r#"{{ Agent(filter: {{node_did: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}}}, limit: 2) {{ _docID node_did agent_did enabled }} }}"#,
+                crate::store::graphql::escape_graphql_string(node_did),
+                crate::store::graphql::escape_graphql_string(did)
+            );
+            let response = access.execute(&query).await?;
+            let rows = response
+                .pointer("/data/Agent")
+                .and_then(Value::as_array)
+                .context("workspace Agent lookup omitted rows")?;
+            anyhow::ensure!(
+                matches!(rows.as_slice(), [row] if row["node_did"] == node_did
+                && row["agent_did"] == did && row["enabled"] != false),
+                "configured workspace {role} Agent is unavailable or ambiguous"
+            );
+            *target = Some(
+                rows[0]["_docID"]
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .context("workspace Agent lacks a physical document ID")?
+                    .to_owned(),
+            );
+        }
+        for reader in &mut action.readers {
+            let did = &reader.agent_did;
+            let query = format!(
+                r#"{{ Agent(filter: {{node_did: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}}}, limit: 2) {{ _docID node_did agent_did enabled }} }}"#,
+                crate::store::graphql::escape_graphql_string(node_did),
+                crate::store::graphql::escape_graphql_string(did)
+            );
+            let response = access.execute(&query).await?;
+            let rows = response
+                .pointer("/data/Agent")
+                .and_then(Value::as_array)
+                .context("workspace reader Agent lookup omitted rows")?;
+            anyhow::ensure!(
+                matches!(rows.as_slice(), [row] if row["node_did"] == node_did
+                && row["agent_did"] == *did && row["enabled"] != false),
+                "configured workspace reader Agent is unavailable or ambiguous"
+            );
+            reader.agent_doc_id = Some(
+                rows[0]["_docID"]
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .context("workspace reader Agent lacks a physical document ID")?
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(())
 }
 
 async fn load_planner_module(
     node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     callback: &crate::documents::Callback,
-) -> Result<Option<CallbackModuleDoc>, String> {
-    let crate::documents::CallbackHandler::Module { module_id } = &callback.handler else {
+) -> Result<Option<(String, CallbackModuleDoc)>, String> {
+    let crate::documents::CallbackHandler::Module { module_id, .. } = &callback.handler else {
         return Ok(None);
     };
-    let module = load_callback_module(node, module_id, &callback.node_did)
+    let (doc_id, module) = load_callback_module_as(access, module_id, &callback.node_did)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("CallbackModule {module_id} not found for callback owner"))?;
@@ -126,7 +253,7 @@ async fn load_planner_module(
         .await
         .map_err(|e| e.to_string())?;
     validate_callback_module(&module, &trusted)?;
-    Ok(Some(module))
+    Ok(Some((doc_id, module)))
 }
 
 fn emit_create_workspace_from_source(source: &Value) -> Result<ActionPlan, String> {
@@ -163,6 +290,11 @@ fn emit_create_workspace_from_source(source: &Value) -> Result<ActionPlan, Strin
     });
     let path_capability = workspace_path_capability_from_source(source)?;
     Ok(emit_create_workspace_plan(CreateWorkspaceAction {
+        writer_agent_did: None,
+        writer_agent_doc_id: None,
+        integrator_agent_did: None,
+        integrator_agent_doc_id: None,
+        readers: Vec::new(),
         workspace_id,
         path_capability,
         work_unit_id,
@@ -302,6 +434,7 @@ pub(crate) fn apply_planner_deny(invocation: &mut CallbackInvocationDoc, reason:
 
 pub async fn run_owned_invocation(
     node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     invocation: &CallbackInvocationDoc,
     callback: &crate::documents::Callback,
     ceiling: Option<&Path>,
@@ -314,19 +447,57 @@ pub async fn run_owned_invocation(
     {
         return Ok(());
     }
-    let Some(mut claimed) = claim_invocation(node, &invocation.owner_node_did, invocation).await?
+    let module = if invocation.lifecycle_state == LIFECYCLE_PENDING
+        && matches!(
+            &callback.handler,
+            crate::documents::CallbackHandler::Module { .. }
+        ) {
+        Some(
+            load_planner_module(node, access, callback)
+                .await
+                .map_err(anyhow::Error::msg)?
+                .ok_or_else(|| anyhow!("callback module unavailable before claim"))?,
+        )
+    } else {
+        None
+    };
+    let prepared_plan = if let Some((_, module)) = &module {
+        let plan = emit_new_plan(callback, &invocation.input, Some(module.clone()))
+            .await
+            .map_err(anyhow::Error::msg)?;
+        Some(action_plan_canonical_json(&plan).map_err(anyhow::Error::msg)?)
+    } else {
+        None
+    };
+    let Some(mut claimed) = claim_invocation(
+        node,
+        access,
+        &invocation.owner_node_did,
+        invocation,
+        callback,
+        module.as_ref().map(|(doc, module)| (doc.as_str(), module)),
+        prepared_plan.as_deref(),
+    )
+    .await?
     else {
         return Ok(());
     };
-    persist_claimed_to_running(node, &mut claimed).await?;
+    let admitted_callback: crate::documents::Callback = serde_json::from_str(
+        claimed
+            .claimed_callback
+            .as_deref()
+            .ok_or_else(|| anyhow!("admitted callback configuration missing"))?,
+    )?;
+    let callback = &admitted_callback;
+    persist_claimed_to_running(node, access, &mut claimed).await?;
 
-    if finish_succeeded_if_docs_ready(node, &claimed).await? {
+    if finish_succeeded_if_docs_ready(node, access, &claimed).await? {
         return Ok(());
     }
 
     let source = claimed.input.clone();
     execute_running_invocation(
-        node,
+        CallbackAccess { node, access },
         &mut claimed,
         callback,
         &source,
@@ -339,19 +510,21 @@ pub async fn run_owned_invocation(
 
 async fn persist_claimed_to_running(
     node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     invocation: &mut CallbackInvocationDoc,
 ) -> Result<()> {
     if invocation.lifecycle_state == LIFECYCLE_RUNNING {
         return Ok(());
     }
     invocation.lifecycle_state = LIFECYCLE_RUNNING.to_string();
-    if update_invocation(node, invocation, Some(LIFECYCLE_CLAIMED)).await? {
+    if update_invocation(access, invocation, Some(LIFECYCLE_CLAIMED)).await? {
         return Ok(());
     }
     let current = super::documents::load_invocation(
         node,
         &invocation.invocation_id,
         &invocation.owner_node_did,
+        &invocation.agent_did,
     )
     .await?;
     match current {
@@ -371,8 +544,13 @@ async fn persist_claimed_to_running(
     }
 }
 
+pub(super) struct CallbackAccess<'a> {
+    pub node: &'a std::sync::Arc<EmbeddedNode>,
+    pub access: &'a crate::ConfigAccess,
+}
+
 async fn execute_running_invocation(
-    node: &std::sync::Arc<EmbeddedNode>,
+    context: CallbackAccess<'_>,
     invocation: &mut CallbackInvocationDoc,
     callback: &crate::documents::Callback,
     source: &Value,
@@ -380,12 +558,14 @@ async fn execute_running_invocation(
     plugins: &PluginExecutor,
     data_node: Option<&std::sync::Arc<EmbeddedNode>>,
 ) -> Result<()> {
+    let CallbackAccess { node, access } = context;
     if callback.node_did != invocation.owner_node_did
         || callback.callback_id != invocation.callback_id
         || !callback.enabled
     {
         return deny(
             node,
+            access,
             invocation,
             "callback is disabled or differs from invocation owner/reference",
         )
@@ -394,7 +574,7 @@ async fn execute_running_invocation(
 
     let mut journal = decode_journal(invocation.action_journal.as_deref())?;
     if !crate::tools::workspace::action_journal_prefix_legal(&journal) {
-        return deny(node, invocation, "illegal action journal prefix").await;
+        return deny(node, access, invocation, "illegal action journal prefix").await;
     }
     if let crate::documents::CallbackHandler::Plugin {
         plugin,
@@ -411,7 +591,13 @@ async fn execute_running_invocation(
             outputs,
         };
         return super::plugin::execute(
-            node, invocation, handler, source, plugins, journal, data_node,
+            CallbackAccess { node, access },
+            invocation,
+            handler,
+            source,
+            plugins,
+            journal,
+            data_node,
         )
         .await;
     }
@@ -421,34 +607,47 @@ async fn execute_running_invocation(
     // wipe an Executing journal the host may already have acted on.
     let stored = match stored_action_plan(invocation) {
         Ok(plan) => plan,
-        Err(reason) => return deny(node, invocation, &reason).await,
+        Err(reason) => return deny(node, access, invocation, &reason).await,
     };
-    let plan = if let Some(plan) = stored {
+    let is_new_plan = stored.is_none();
+    let mut plan = if let Some(plan) = stored {
         plan
     } else if !journal.is_empty() {
         return deny(
             node,
+            access,
             invocation,
             "missing stored ActionPlan with a non-empty journal",
         )
         .await;
     } else {
-        let module = match load_planner_module(node, callback).await {
-            Ok(module) => module,
-            Err(reason) => return deny(node, invocation, &reason).await,
-        };
-        match emit_new_plan(callback, source, module).await {
+        if matches!(
+            &callback.handler,
+            crate::documents::CallbackHandler::Module { .. }
+        ) {
+            return deny(
+                node,
+                access,
+                invocation,
+                "admitted callback module plan is unavailable",
+            )
+            .await;
+        }
+        match emit_new_plan(callback, source, None).await {
             Ok(plan) => plan,
-            Err(reason) => return deny(node, invocation, &reason).await,
+            Err(reason) => return deny(node, access, invocation, &reason).await,
         }
     };
+    if is_new_plan {
+        bind_workspace_agent_documents(access, &invocation.owner_node_did, &mut plan).await?;
+    }
     let canonical = match action_plan_canonical_json(&plan) {
         Ok(json) => json,
-        Err(reason) => return deny(node, invocation, &reason).await,
+        Err(reason) => return deny(node, access, invocation, &reason).await,
     };
     invocation.action_plan = Some(canonical);
     if let Err(error) = plan.validate_against(&callback.capabilities.iter().cloned().collect()) {
-        return deny(node, invocation, &error.to_string()).await;
+        return deny(node, access, invocation, &error.to_string()).await;
     }
 
     let action = match plan
@@ -457,10 +656,11 @@ async fn execute_running_invocation(
         .ok_or_else(|| anyhow!("ActionPlan has no actions"))?
         .clone()
     {
-        HostAction::CreateWorkspace(action) => action,
+        HostAction::CreateWorkspace(action) => *action,
         HostAction::FreezeWorkspaceBase(_) => {
             return deny(
                 node,
+                access,
                 invocation,
                 "freeze_workspace_base is an explicit operator action, not a callback plan",
             )
@@ -469,6 +669,7 @@ async fn execute_running_invocation(
         HostAction::SealWorkspace(_) => {
             return deny(
                 node,
+                access,
                 invocation,
                 "seal_workspace is invoked on writer success, not as a callback plan",
             )
@@ -477,6 +678,7 @@ async fn execute_running_invocation(
         HostAction::IntegrateWorkspace(_) => {
             return deny(
                 node,
+                access,
                 invocation,
                 "integrate_workspace is invoked on integrator success, not as a callback plan",
             )
@@ -485,21 +687,77 @@ async fn execute_running_invocation(
         HostAction::CleanupWorkspace(_) => {
             return deny(
                 node,
+                access,
                 invocation,
                 "cleanup_workspace is an explicit host action, not a callback plan",
             )
             .await;
         }
     };
-    if !can_start_executing(&journal, 0) {
-        return deny(node, invocation, "journal prefix blocks first action").await;
-    }
-
-    let Some(repository) =
-        load_repository_placement(node, &action.repository_id, &invocation.owner_node_did).await?
+    let Some(writer_agent) = action
+        .writer_agent_did
+        .as_deref()
+        .filter(|did| !did.is_empty() && *did != invocation.owner_node_did.as_str())
     else {
         return deny(
             node,
+            access,
+            invocation,
+            "workspace plan has no selected writer Agent",
+        )
+        .await;
+    };
+    let Some(integrator_agent) = action
+        .integrator_agent_did
+        .as_deref()
+        .filter(|did| !did.is_empty() && *did != invocation.owner_node_did.as_str())
+    else {
+        return deny(
+            node,
+            access,
+            invocation,
+            "workspace plan has no selected integrator Agent",
+        )
+        .await;
+    };
+    if action
+        .writer_agent_doc_id
+        .as_deref()
+        .is_none_or(str::is_empty)
+        || action
+            .integrator_agent_doc_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+    {
+        return deny(
+            node,
+            access,
+            invocation,
+            "workspace plan lacks physical Agent targets",
+        )
+        .await;
+    }
+    if !can_start_executing(&journal, 0) {
+        return deny(
+            node,
+            access,
+            invocation,
+            "journal prefix blocks first action",
+        )
+        .await;
+    }
+
+    let Some(repository) = load_repository_placement(
+        access,
+        &action.repository_id,
+        &invocation.owner_node_did,
+        &invocation.agent_did,
+    )
+    .await?
+    else {
+        return deny(
+            node,
+            access,
             invocation,
             &format!(
                 "RepositoryPlacement {} not found on this host",
@@ -509,11 +767,60 @@ async fn execute_running_invocation(
         .await;
     };
 
-    persist_journal(node, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
+    persist_journal(node, access, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
 
     if current_state(&journal, 0).is_none() {
         advance(&mut journal, 0, ActionJournalState::Validated);
-        persist_journal(node, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
+        persist_journal(node, access, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
+    }
+    let existing_workspace = load_isolated_workspace(
+        access,
+        &action.workspace_id,
+        &invocation.owner_node_did,
+        &invocation.agent_did,
+    )
+    .await?;
+    if let Some(existing) = &existing_workspace {
+        anyhow::ensure!(
+            existing.writer_principal == writer_agent
+                && existing.integrator_principal == integrator_agent
+                && existing.caused_by_invocation_id == invocation.invocation_id,
+            "existing workspace differs from the frozen callback provenance"
+        );
+    }
+    if existing_workspace.is_none() {
+        anyhow::ensure!(
+            matches!(
+                current_state(&journal, 0),
+                Some(ActionJournalState::Validated)
+            ),
+            "workspace reservation is unavailable after host execution began"
+        );
+        let action_for_reservation = action.clone();
+        let repository_for_reservation = repository.clone();
+        let ceiling_for_reservation = ceiling.map(Path::to_path_buf);
+        let owner = invocation.owner_node_did.clone();
+        let writer = writer_agent.to_owned();
+        let integrator = integrator_agent.to_owned();
+        let invocation_id = invocation.invocation_id.clone();
+        let correlation = correlation_from_source(source);
+        let reservation = tokio::task::spawn_blocking(move || {
+            crate::tools::workspace::prepare_workspace_reservation(
+                &action_for_reservation,
+                &repository_for_reservation,
+                ceiling_for_reservation.as_deref(),
+                &owner,
+                &writer,
+                &integrator,
+                &invocation_id,
+                &correlation,
+            )
+        })
+        .await
+        .context("joining workspace reservation preparation")??;
+        let mut reserved = MemoryWorkspaceDocuments::default();
+        reserved.write_isolated_workspace(reservation)?;
+        flush_workspace_docs(access, &reserved, &invocation.agent_did, &action).await?;
     }
     if matches!(
         current_state(&journal, 0),
@@ -522,11 +829,16 @@ async fn execute_running_invocation(
         // Durable Executing before the adapter so recovery observes rather
         // than re-runs.
         advance(&mut journal, 0, ActionJournalState::Executing);
-        persist_journal(node, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
+        persist_journal(node, access, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
     }
 
-    let mut docs =
-        load_memory_workspace_docs(node, &action.workspace_id, &invocation.owner_node_did).await?;
+    let mut docs = load_memory_workspace_docs(
+        access,
+        &action.workspace_id,
+        &invocation.owner_node_did,
+        &invocation.agent_did,
+    )
+    .await?;
     let capabilities: BTreeSet<String> = callback.capabilities.iter().cloned().collect();
     let correlation = correlation_from_source(source);
     let execute_result = {
@@ -535,8 +847,8 @@ async fn execute_running_invocation(
             repository,
             ceiling,
             capabilities,
-            writer_principal: callback.node_did.clone(),
-            integrator_principal: callback.node_did.clone(),
+            writer_principal: writer_agent.to_owned(),
+            integrator_principal: integrator_agent.to_owned(),
             caused_by_invocation_id: invocation.invocation_id.clone(),
             caused_by_correlation: correlation.clone(),
             documents: &mut docs,
@@ -546,27 +858,36 @@ async fn execute_running_invocation(
     let outcome = match execute_result {
         Ok(outcome) => outcome,
         Err(HostExecuteError::Denied { reason }) => {
-            return deny(node, invocation, &reason).await;
+            return deny(node, access, invocation, &reason).await;
         }
         Err(HostExecuteError::Failed {
             reason, outcome, ..
         }) => {
             if let Some(outcome) = outcome {
                 let written = memory_from_outcome(&outcome);
-                flush_workspace_docs(node, &written).await?;
+                flush_workspace_docs(access, &written, &invocation.agent_did, &action).await?;
             } else {
-                flush_workspace_docs(node, &docs).await?;
+                flush_workspace_docs(access, &docs, &invocation.agent_did, &action).await?;
             }
-            persist_journal(node, invocation, &journal, LIFECYCLE_FAILED, Some(&reason)).await?;
+            persist_journal(
+                node,
+                access,
+                invocation,
+                &journal,
+                LIFECYCLE_FAILED,
+                Some(&reason),
+            )
+            .await?;
             return Ok(());
         }
     };
 
     let written = memory_from_outcome(&outcome);
-    flush_workspace_docs(node, &written).await?;
-    persist_journal(node, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
+    flush_workspace_docs(access, &written, &invocation.agent_did, &action).await?;
+    persist_journal(node, access, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
     succeed_then_emit_result(
         node,
+        access,
         invocation,
         &journal,
         &outcome.workspace,
@@ -586,7 +907,8 @@ fn memory_from_outcome(
 }
 
 pub(super) async fn persist_journal(
-    node: &std::sync::Arc<EmbeddedNode>,
+    _node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     invocation: &mut CallbackInvocationDoc,
     journal: &[ActionJournalEntry],
     state: &str,
@@ -595,7 +917,7 @@ pub(super) async fn persist_journal(
     invocation.action_journal = Some(encode_journal(journal));
     invocation.lifecycle_state = state.to_string();
     invocation.error = error.map(str::to_string);
-    if !update_invocation(node, invocation, None).await? {
+    if !update_invocation(access, invocation, None).await? {
         anyhow::bail!(
             "CallbackInvocation {} persist matched no row (state={state})",
             invocation.invocation_id
@@ -621,7 +943,8 @@ async fn emit_new_plan(
 }
 
 pub(super) async fn deny(
-    node: &std::sync::Arc<EmbeddedNode>,
+    _node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     invocation: &mut CallbackInvocationDoc,
     reason: &str,
 ) -> Result<()> {
@@ -632,7 +955,7 @@ pub(super) async fn deny(
         "callback invocation denied"
     );
     apply_planner_deny(invocation, reason);
-    if !update_invocation(node, invocation, None).await? {
+    if !update_invocation(access, invocation, None).await? {
         anyhow::bail!(
             "CallbackInvocation {} deny persist matched no row",
             invocation.invocation_id
@@ -643,6 +966,7 @@ pub(super) async fn deny(
 
 async fn succeed_then_emit_result(
     node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     invocation: &mut CallbackInvocationDoc,
     journal: &[ActionJournalEntry],
     workspace: &IsolatedWorkspaceDoc,
@@ -650,7 +974,7 @@ async fn succeed_then_emit_result(
     correlation: Option<String>,
 ) -> Result<()> {
     if invocation.lifecycle_state != LIFECYCLE_SUCCEEDED {
-        persist_journal(node, invocation, journal, LIFECYCLE_SUCCEEDED, None).await?;
+        persist_journal(node, access, invocation, journal, LIFECYCLE_SUCCEEDED, None).await?;
     }
     if !can_emit_callback_result(
         &invocation.lifecycle_state,
@@ -668,11 +992,13 @@ async fn succeed_then_emit_result(
         .unwrap_or_else(|| workspace.caused_by_correlation.clone());
     create_callback_result(
         node,
+        access,
         &CallbackResultDoc {
             result_id: format!("res-{}", invocation.invocation_id),
             invocation_id: invocation.invocation_id.clone(),
             binding_id: Some(invocation.origin.binding_id().to_string()),
             owner_node_did: invocation.owner_node_did.clone(),
+            agent_did: invocation.agent_did.clone(),
             workspace_id: Some(workspace.workspace_id.clone()),
             work_unit_id: Some(workspace.work_unit_id.clone()),
             caused_by_correlation: Some(correlation),
@@ -683,20 +1009,42 @@ async fn succeed_then_emit_result(
     .map(|_| ())
 }
 
-pub async fn recover_local_invocations(
+pub(crate) async fn recover_local_invocations(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
-    engine: Option<&super::CallbackEngine>,
+    engine: &super::CallbackEngine,
 ) -> Result<()> {
-    let mut invocations = super::documents::list_recoverable_invocations(node, node_did).await?;
-    if let Some(workers) = engine.and_then(|engine| engine.workers.as_ref()) {
+    let mut invocations =
+        super::documents::list_recoverable_invocations(node, node_did, engine).await?;
+    if let Some(workers) = engine.workers.as_ref() {
         workers.prioritize(&mut invocations);
     }
     for invocation in invocations {
+        let access = match engine.access_for_agent(&invocation.agent_did) {
+            Ok(access) => access,
+            Err(error) => {
+                tracing::warn!(agent_did = %invocation.agent_did, %error, "callback recovery signer unavailable");
+                continue;
+            }
+        };
+        if let Err(error) = super::documents::ensure_callback_parent(
+            node,
+            &access,
+            "CallbackInvocation",
+            &invocation.invocation_id,
+            &invocation.owner_node_did,
+            &invocation.agent_did,
+        )
+        .await
+        {
+            tracing::warn!(invocation_id = %invocation.invocation_id, %error, "callback parent repair failed");
+            continue;
+        }
         if engine
-            .and_then(|engine| engine.workers.as_ref())
+            .workers
+            .as_ref()
             .is_some_and(|workers| workers.contains(&invocation.invocation_id))
         {
             continue;
@@ -705,7 +1053,7 @@ pub async fn recover_local_invocations(
             continue;
         }
         if invocation.lifecycle_state == LIFECYCLE_SUCCEEDED {
-            if let Err(error) = finish_succeeded_if_docs_ready(node, &invocation).await {
+            if let Err(error) = finish_succeeded_if_docs_ready(node, &access, &invocation).await {
                 tracing::warn!(
                     invocation_id = %invocation.invocation_id,
                     %error,
@@ -717,9 +1065,14 @@ pub async fn recover_local_invocations(
         if !invocation_is_claimable(node_did, &invocation) {
             continue;
         }
-        let Some(callback) =
-            load_callback(node, &invocation.callback_id, &invocation.owner_node_did).await?
-        else {
+        let callback = match callback_for_recovery(node, &invocation).await {
+            Ok(callback) => callback,
+            Err(error) => {
+                tracing::warn!(invocation_id = %invocation.invocation_id, %error, "callback recovery configuration unavailable");
+                continue;
+            }
+        };
+        let Some(callback) = callback else {
             tracing::warn!(
                 invocation_id = %invocation.invocation_id,
                 callback_id = %invocation.callback_id,
@@ -740,15 +1093,33 @@ pub async fn recover_local_invocations(
     retry_failed_plugin_invocations(node, node_did, ceiling, plugins, engine).await
 }
 
+pub(super) async fn callback_for_recovery(
+    node: &std::sync::Arc<EmbeddedNode>,
+    invocation: &CallbackInvocationDoc,
+) -> Result<Option<crate::documents::Callback>> {
+    if matches!(
+        invocation.lifecycle_state.as_str(),
+        LIFECYCLE_CLAIMED | LIFECYCLE_RUNNING
+    ) {
+        let raw = invocation
+            .claimed_callback
+            .as_deref()
+            .ok_or_else(|| anyhow!("admitted callback configuration missing"))?;
+        Ok(Some(serde_json::from_str(raw)?))
+    } else {
+        load_callback(node, &invocation.callback_id, &invocation.owner_node_did).await
+    }
+}
+
 async fn retry_failed_plugin_invocations(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
-    engine: Option<&super::CallbackEngine>,
+    engine: &super::CallbackEngine,
 ) -> Result<()> {
     let now = chrono::Utc::now();
-    for failed in super::documents::list_recent_failed(node, node_did).await? {
+    for failed in super::documents::list_recent_failed(node, node_did, engine).await? {
         let Some(callback) =
             load_callback(node, &failed.callback_id, &failed.owner_node_did).await?
         else {
@@ -783,7 +1154,8 @@ async fn retry_failed_plugin_invocations(
         pending.lifecycle_state = super::LIFECYCLE_PENDING.to_owned();
         pending.action_journal = Some("[]".to_owned());
         pending.error = None;
-        if !update_invocation(node, &pending, Some(LIFECYCLE_FAILED)).await? {
+        let access = engine.access_for_agent(&pending.agent_did)?;
+        if !update_invocation(&access, &pending, Some(LIFECYCLE_FAILED)).await? {
             continue;
         }
         tracing::info!(
@@ -810,17 +1182,15 @@ async fn execute_recovered(
     callback: &crate::documents::Callback,
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
-    engine: Option<&super::CallbackEngine>,
+    engine: &super::CallbackEngine,
 ) -> Result<()> {
-    if let Some(engine) = engine {
-        engine.execute_invocation(invocation, callback).await
-    } else {
-        run_owned_invocation(node, invocation, callback, ceiling, plugins, None).await
-    }
+    let _ = (node, ceiling, plugins);
+    engine.execute_invocation(invocation, callback).await
 }
 
 pub async fn finish_succeeded_if_docs_ready(
     node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     invocation: &CallbackInvocationDoc,
 ) -> Result<bool> {
     if !matches!(
@@ -841,7 +1211,13 @@ pub async fn finish_succeeded_if_docs_ready(
     let Some(workspace_id) = workspace_id else {
         return Ok(false);
     };
-    let docs = load_memory_workspace_docs(node, &workspace_id, &invocation.owner_node_did).await?;
+    let docs = load_memory_workspace_docs(
+        access,
+        &workspace_id,
+        &invocation.owner_node_did,
+        &invocation.agent_did,
+    )
+    .await?;
     let workspace = docs.load_isolated_workspace(&workspace_id)?;
     let placement = docs.load_placement(&workspace_id)?;
     if !result_docs_ready(&journal, workspace.as_ref(), placement.as_ref()) {
@@ -853,9 +1229,14 @@ pub async fn finish_succeeded_if_docs_ready(
     let Some(placement) = placement else {
         return Ok(false);
     };
-    if load_callback_result(node, &invocation.invocation_id, &invocation.owner_node_did)
-        .await?
-        .is_some()
+    if load_callback_result(
+        node,
+        &invocation.invocation_id,
+        &invocation.owner_node_did,
+        &invocation.agent_did,
+    )
+    .await?
+    .is_some()
         && invocation.lifecycle_state == LIFECYCLE_SUCCEEDED
     {
         return Ok(true);
@@ -863,6 +1244,7 @@ pub async fn finish_succeeded_if_docs_ready(
     let mut current = invocation.clone();
     succeed_then_emit_result(
         node,
+        access,
         &mut current,
         &journal,
         &workspace,
@@ -916,7 +1298,8 @@ mod path_capability_tests {
     #[test]
     fn builtin_requires_capability_in_frozen_projected_input() {
         let callback: crate::documents::Callback = serde_json::from_value(json!({
-            "callback_id":"path-contract", "node_did":"did:key:writer", "handler":{"kind":"built_in","emitter":"create_workspace"}
+            "callback_id":"path-contract", "node_did":"did:key:writer", "handler":{"kind":"built_in","emitter":"create_workspace",
+                "workspace_agents":{"writer_agent_did":crate::triggers::callback::test_agent_did(), "integrator_agent_did":crate::triggers::callback::test_agent_did()}}
         })).unwrap();
         let mut source = json!({"work_unit_id":"unit","repository_id":"repo","base_sha":"base","branch":"branch"});
         assert!(plan_from_callback(&callback, &source, None).is_err());

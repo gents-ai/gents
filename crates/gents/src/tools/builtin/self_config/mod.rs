@@ -3,10 +3,10 @@
 pub mod agent;
 mod agent_management;
 mod agent_queries;
+#[cfg(test)]
+use agent_management::agent_mutate;
 pub use agent_management::configure_agent;
 use agent_management::load_agent_catalog;
-#[cfg(test)]
-use agent_management::{agent_mutate, agent_preview};
 #[cfg(test)]
 use agent_queries::node_default_agent;
 use agent_queries::{agent_inspect, agent_list, guard_agent_profile_choice};
@@ -54,8 +54,7 @@ use crate::store::graphql::escape_graphql_string;
 use crate::tools::surface::presets::{builtin_preset_names, preset_fields};
 use crate::tools::surface::SelfConfigToolConfig;
 use crate::NodeIdentity;
-use agent::derive_agent_id;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use ops::{decode_merged, validate_merged_selection, ApplyRequest};
 
 pub const ENGINEER_AGENT_TAG: &str = "gents:engineer";
@@ -73,7 +72,7 @@ pub(crate) use crate::tools::output::{ordered, Ordered};
 
 const EFFECTIVE_ORDER: &[&str] = &[
     "execution_settings",
-    "agent_id",
+    "agent_did",
     "agent",
     "context",
     "inference_profile",
@@ -151,6 +150,8 @@ impl StringUpdate {
 pub struct ConfigureAgentParams {
     pub action: String,
     #[serde(default)]
+    pub identity_binding: Option<gents_protocol::agent_identity::AgentIdentityBinding>,
+    #[serde(default)]
     pub operation: Option<String>,
     #[serde(default)]
     pub display_name: StringUpdate,
@@ -159,7 +160,7 @@ pub struct ConfigureAgentParams {
     #[serde(default)]
     pub system_prompt: StringUpdate,
     #[serde(default)]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     #[serde(default)]
     pub clone_from: Option<String>,
     #[serde(default)]
@@ -184,20 +185,52 @@ pub fn build_self_config_tools(
     config: &SelfConfigToolConfig,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
 ) -> Vec<Box<dyn ToolDyn>> {
+    build_self_config_tools_with_runtime(
+        usage_cache,
+        node,
+        node_did,
+        identity,
+        None,
+        config,
+        plugins,
+        None,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "runtime and physical Node binding are explicit capabilities"
+)]
+pub(crate) fn build_self_config_tools_with_runtime(
+    usage_cache: Arc<crate::inference::usage_observation::UsageCache>,
+    node: Arc<EmbeddedNode>,
+    node_did: String,
+    identity: Option<Arc<dyn NodeIdentity>>,
+    runtime_identity: Option<Arc<dyn NodeIdentity>>,
+    config: &SelfConfigToolConfig,
+    plugins: Arc<crate::plugin::executor::PluginExecutor>,
+    node_binding: Option<crate::store::config_client::ConfigurationNodeBinding>,
+) -> Vec<Box<dyn ToolDyn>> {
     if !config.enabled {
         return Vec::new();
     }
-    let core = match SelfConfigCore::new(node.clone(), node_did.clone(), config.agent_id.clone()) {
+    let core = match SelfConfigCore::new(node.clone(), node_did.clone(), config.agent_did.clone()) {
         Ok(core) => core
+            .with_agent_signer(
+                identity
+                    .as_deref()
+                    .and_then(|actor| actor.managed_agent_signer()),
+            )
+            .with_runtime_identity(runtime_identity)
+            .with_node_binding(node_binding)
             .with_no_lockout(config.no_lockout)
             .with_process_ceiling(config.process_ceiling.clone())
             .with_held_grants(OperatorGrants {
                 pack_install: config.enable_pack_install,
-                ..Default::default()
             }),
         Err(error) => {
             tracing::warn!(
-                agent_id = %config.agent_id,
+                agent_did = %config.agent_did,
                 %error,
                 "self-config tools requested but not registrable; failing closed"
             );
@@ -233,3 +266,6 @@ pub fn self_config_tool_names(config: &SelfConfigToolConfig) -> Vec<String> {
     names.push(CONFIG_TOOL_NAME.to_string());
     names
 }
+
+#[cfg(test)]
+mod agent_creation_native_tests;

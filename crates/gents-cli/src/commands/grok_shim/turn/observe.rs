@@ -65,6 +65,7 @@ impl TurnManager {
                         if let Err(error) = goal_cursor
                             .refresh(
                                 &manager.node,
+                                &manager.config.actor,
                                 &manager.config.node_did,
                                 &observed_session,
                                 &sender,

@@ -205,7 +205,7 @@ function WorkerRow({
         <span className="relative z-10">
           <NodeAgentStack
             nodeDid={nodeOfSession(worker)}
-            agentId={worker.agentId}
+            agentDid={worker.agentDid}
             size="sm"
           />
         </span>

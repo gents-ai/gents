@@ -3,7 +3,7 @@ use crate::store::config_client::ConfigAccess;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission, PublishedAdmission, PublishedAdmissionOptions,
 };
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 async fn lifecycle_row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
     let response = node
@@ -66,7 +66,11 @@ async fn interrupt_request(admission: &PublishedAdmission, request_doc_id: &str)
 }
 
 async fn teardown(admission: PublishedAdmission) {
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -78,6 +82,7 @@ async fn generated_composed_invariants_use_canonical_admission_owner() {
         let running = witness.tool_pre_state == "running";
         let mut admission = published_admission(PublishedAdmissionOptions {
             name: format!("composed-{}", witness.tool_call_id),
+            real_identity: true,
             start_running: running,
             ..Default::default()
         })
@@ -97,9 +102,13 @@ async fn generated_composed_invariants_use_canonical_admission_owner() {
         if witness.deadline_exceeded {
             if running {
                 prepare_expired_composed_boundary(&admission, &tool_doc_id, &request_doc_id).await;
-                let report = ToolCallLifecycle::recover_all(&admission.node, &admission.node_did)
-                    .await
-                    .unwrap();
+                let report = ToolCallLifecycle::recover_all(
+                    &admission.node,
+                    &admission.node_did,
+                    &super::recovery_closeout_conformance::recovery_identities(&admission),
+                )
+                .await
+                .unwrap();
                 assert_eq!(report.tool_calls_recovered, 1);
             } else {
                 admission

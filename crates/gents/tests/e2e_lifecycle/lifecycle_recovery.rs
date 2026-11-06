@@ -21,11 +21,12 @@ use crate::support::snapshots::{
 };
 use crate::support::{
     accepted_turn::{
-        boot_prepared_accepted_turn, prepare_accepted_turn, AcceptedTurnRuntime, AcceptedTurnSpec,
+        boot_prepared_accepted_turn, prepare_accepted_turn, prepare_accepted_turn_with_signer,
+        AcceptedTurnRuntime, AcceptedTurnSpec,
     },
-    create_agent_session, create_request, create_request_for_agent_with_signed_fields, first_row,
+    first_row,
     streaming_backend::{StreamChunk, StreamResponse},
-    test_db, AGENT_NAME, BACKEND_ID, NODE_DID,
+    test_db, BACKEND_ID,
 };
 
 type StatusRow = AgentRequestRow;
@@ -35,21 +36,126 @@ struct NotificationDeliveryRow {
     completion_notification_delivered_at: Option<String>,
 }
 
+async fn grant_recovery_agent(
+    db: &crate::support::TestDb,
+    collection: &str,
+    doc_id: &str,
+    agent_did: &str,
+) {
+    gents::ConfigAccess::local(db.node.clone())
+        .add_actor_relationship(
+            collection,
+            doc_id,
+            "working_agent",
+            &identity::Did::new(agent_did).unwrap(),
+        )
+        .await
+        .expect("grant recovery fixture to selected Agent");
+}
+
+async fn grant_recovery_request(db: &crate::support::TestDb, request_id: &str, agent_did: &str) {
+    let request_id = gents::store::graphql::escape_graphql_string(request_id);
+    let response = db.node.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ _docID }} }}"#,
+    )).await;
+    let row = first_row::<serde_json::Value>(&response, "AgentRequest");
+    grant_recovery_agent(
+        db,
+        "AgentRequest",
+        row["_docID"].as_str().unwrap(),
+        agent_did,
+    )
+    .await;
+}
+
+async fn create_recovery_session(
+    db: &crate::support::TestDb,
+    agent_identity: &Arc<dyn gents::NodeIdentity>,
+    session_id: &str,
+    created_at: &str,
+) {
+    let mut session = crate::support::session_document_in_scope(
+        db.node_identity.did(),
+        session_id,
+        agent_identity.did(),
+        created_at,
+    );
+    session.requester_did = Some(db.node_identity.did().to_owned());
+    let input =
+        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session).unwrap())
+            .unwrap();
+    let response = gents::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(db.node_identity.did()).unwrap(),
+    )
+    .write(
+        "test.lifecycle_recovery_session",
+        &format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}"),
+    )
+    .await
+    .expect("create recovery session");
+    let doc_id = gents::store::graphql::created_doc_id(&response, "AgentSession").unwrap();
+    grant_recovery_agent(db, "AgentSession", &doc_id, agent_identity.did()).await;
+}
+
+async fn create_recovery_request(
+    db: &crate::support::TestDb,
+    agent_identity: &Arc<dyn gents::NodeIdentity>,
+    request_id: &str,
+    session_id: &str,
+    status: &str,
+    created_at: &str,
+) -> String {
+    let input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+        "request_id": request_id,
+        "purpose": "normal",
+        "node_did": db.node_identity.did(),
+        "requester_did": db.node_identity.did(),
+        "agent_did": agent_identity.did(),
+        "session_id": session_id,
+        "retry_parent_request": "",
+        "retry_root_request": request_id,
+        "superseded_by_request": "",
+        "content": "hello",
+        "lifecycle_state": status,
+        "backend_id": "",
+        "execution_origin": "interactive",
+        "created_at": created_at,
+        "retry_count": 0,
+        "max_retries": gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        "request_hop": 0,
+    }))
+    .unwrap();
+    let response = gents::ConfigAccess::local(db.node.clone())
+        .write(
+            "test.lifecycle_recovery_request",
+            &format!("mutation {{ create_AgentRequest(input: {input}) {{ _docID }} }}"),
+        )
+        .await
+        .expect("create recovery request");
+    let doc_id = gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    grant_recovery_agent(db, "AgentRequest", &doc_id, agent_identity.did()).await;
+    doc_id
+}
+
 async fn boot_running_recovery_bash(
     db: &crate::support::TestDb,
+    agent_identity: &Arc<dyn gents::NodeIdentity>,
     fixture: &str,
     call_id: &str,
 ) -> (AcceptedTurnRuntime, String, String, String) {
+    let agent_did = agent_identity.did();
     let session_id = format!("{fixture}-session");
     let request_id = format!("{fixture}-request");
     let prompt = format!("{fixture}-prompt");
+    create_recovery_session(db, agent_identity, &session_id, "2026-03-23T00:00:00Z").await;
     let prepared = prepare_accepted_turn(
         db,
         AcceptedTurnSpec {
             backend_id: "lifecycle-recovery-backend",
             model: "lifecycle-recovery-model",
-            parent_agent_id: AGENT_NAME,
-            configured_agent_ids: &[AGENT_NAME],
+            parent_agent_did: agent_did,
+            configured_agent_dids: &[agent_did],
             request_id: &request_id,
             session_id: &session_id,
             prompt: &prompt,
@@ -65,13 +171,14 @@ async fn boot_running_recovery_bash(
         },
     )
     .await;
+    grant_recovery_request(db, &request_id, agent_did).await;
     configure_agent_tools(
         &db.node,
         db.node_identity.did(),
-        AGENT_NAME,
+        agent_did,
         None,
         gents::documents::Tools {
-            tools_id: format!("{AGENT_NAME}:recovery-tools"),
+            tools_id: format!("{agent_did}:recovery-tools"),
             node_did: db.node_identity.did().to_string(),
             host: Some(gents::documents::HostTools {
                 bash: Some(gents::documents::BashTools {
@@ -121,9 +228,12 @@ async fn boot_running_recovery_bash(
 
 async fn boot_two_running_recovery_bashes(
     db: &crate::support::TestDb,
+    agent_identity: &Arc<dyn gents::NodeIdentity>,
 ) -> ([AcceptedTurnRuntime; 2], [(String, String, String); 2]) {
-    let first = boot_running_recovery_bash(db, "tool-cancel", "tool-cancel-call").await;
-    let second = boot_running_recovery_bash(db, "tool-other", "tool-other-call").await;
+    let first =
+        boot_running_recovery_bash(db, agent_identity, "tool-cancel", "tool-cancel-call").await;
+    let second =
+        boot_running_recovery_bash(db, agent_identity, "tool-other", "tool-other-call").await;
     let (first_runtime, first_request, first_session, first_doc) = first;
     let (second_runtime, second_request, second_session, second_doc) = second;
     (
@@ -136,7 +246,7 @@ async fn boot_two_running_recovery_bashes(
 }
 
 async fn accepted_tool_call_doc_id(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     session_id: &str,
     provider_tool_call_id: &str,
 ) -> Option<String> {
@@ -212,7 +322,11 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
             .finish(),
     );
     let db = test_db("lifecycle-background-wake-redrive").await;
+    let agent_identity = crate::support::managed_agent(&db).await;
+    let agent_did = agent_identity.did();
     let node_did = db.node_identity.did().to_string();
+    let escaped_node_did = gents::store::graphql::escape_graphql_string(&node_did);
+    let escaped_agent_did = gents::store::graphql::escape_graphql_string(agent_did);
     let input = background_wake_input("wake-redrive-session");
     let input_literal =
         gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(&input).unwrap())
@@ -222,9 +336,9 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
             create_AgentRequest(input: {{
                 request_id: "failed-wake",
                 purpose: "normal",
-                node_did: "{node_did}",
-                requester_did: "{node_did}",
-                agent_id: "{AGENT_NAME}",
+                node_did: "{escaped_node_did}",
+                requester_did: "{escaped_node_did}",
+                agent_did: "{escaped_agent_did}",
                 session_id: "wake-redrive-session",
                 retry_parent_request: "",
                 retry_root_request: "failed-wake",
@@ -253,14 +367,14 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
         "create failed wake: {:?}",
         response.errors
     );
-    let mut session = crate::support::session_document(
+    grant_recovery_request(&db, "failed-wake", agent_did).await;
+    create_recovery_session(
+        &db,
+        &agent_identity,
         "wake-redrive-session",
-        AGENT_NAME,
         "2026-08-12T00:00:00Z",
-    );
-    session.node_did = node_did.clone();
-    session.requester_did = Some(node_did.clone());
-    crate::support::create_session_document(&db.node, &session).await;
+    )
+    .await;
     crate::support::seed_session_observation_from_request(
         &db.node,
         "wake-redrive-session",
@@ -268,7 +382,7 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
         "continue after background completion",
     )
     .await;
-    let foreign = serde_json :: json ! ({ "request_id" : "foreign-interactive" , "node_did" : node_did , "purpose" : "normal" , "requester_did" : "did:test:foreign-requester" , "agent_id" : AGENT_NAME , "session_id" : "wake-redrive-session" , "content" : "foreign interactive" , "lifecycle_state" : "pending" , "execution_origin" : "interactive" , "created_at" : "2099-01-01T00:00:00Z" , "retry_count" : 0 , "max_retries" : 3 , "request_hop" : 0 });
+    let foreign = serde_json :: json ! ({ "request_id" : "foreign-interactive" , "node_did" : node_did , "purpose" : "normal" , "requester_did" : "did:test:foreign-requester" , "agent_did" : agent_did , "session_id" : "wake-redrive-session" , "content" : "foreign interactive" , "lifecycle_state" : "pending" , "execution_origin" : "interactive" , "created_at" : "2099-01-01T00:00:00Z" , "retry_count" : 0 , "max_retries" : 3 , "request_hop" : 0 });
     let foreign_input = gents_protocol::graphql::graphql_input_literal(&foreign).unwrap();
     let response = db
         .node
@@ -281,21 +395,34 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
         "foreign request fixture: {:?}",
         response.errors
     );
-    let blocked = RequestLifecycle::redrive_failed_background_wakeups(&db.node, &node_did)
-        .await
-        .expect("newer interactive head gate");
+    grant_recovery_request(&db, "foreign-interactive", agent_did).await;
+    let blocked = RequestLifecycle::redrive_failed_background_wakeups_with_identities(
+        &db.node,
+        &node_did,
+        std::slice::from_ref(&agent_identity),
+    )
+    .await
+    .expect("newer interactive head gate");
     assert_eq!(blocked.ineligible, 1);
     assert_eq!(blocked.redriven, 0);
     assert_eq!(blocked.failed, 0);
-    let response = db . node . execute (& format ! (r#"mutation {{ delete_AgentRequest(filter: {{ node_did: {{ _eq: "{node_did}" }}, request_id: {{ _eq: "foreign-interactive" }} }}) {{ _docID }} }}"#)) . await ;
+    let response = db . node . execute (& format ! (r#"mutation {{ delete_AgentRequest(filter: {{ node_did: {{ _eq: "{escaped_node_did}" }}, request_id: {{ _eq: "foreign-interactive" }} }}) {{ _docID }} }}"#)) . await ;
     assert!(
         !response.has_errors(),
         "remove competing fixture: {:?}",
         response.errors
     );
     let (first, concurrent) = tokio::join!(
-        RequestLifecycle::redrive_failed_background_wakeups(&db.node, &node_did),
-        RequestLifecycle::redrive_failed_background_wakeups(&db.node, &node_did),
+        RequestLifecycle::redrive_failed_background_wakeups_with_identities(
+            &db.node,
+            &node_did,
+            std::slice::from_ref(&agent_identity)
+        ),
+        RequestLifecycle::redrive_failed_background_wakeups_with_identities(
+            &db.node,
+            &node_did,
+            std::slice::from_ref(&agent_identity)
+        ),
     );
     let first = first.expect("first concurrent redrive");
     let concurrent = concurrent.expect("second concurrent redrive");
@@ -332,10 +459,7 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
         successor.admission_kind.as_deref(),
         Some("runtime-internal")
     );
-    assert_eq!(
-        successor.admission_signer_did.as_deref(),
-        Some(node_did.as_str())
-    );
+    assert_eq!(successor.admission_signer_did.as_deref(), Some(agent_did));
     assert!(successor
         .admission_signature
         .as_deref()
@@ -356,9 +480,13 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
     assert_eq!(successor.input.as_ref(), Some(&input));
     assert_eq!(successor.deadline, None);
     assert_eq!(successor.valid_until, None);
-    let second = RequestLifecycle::redrive_failed_background_wakeups(&db.node, &node_did)
-        .await
-        .expect("repeat redrive");
+    let second = RequestLifecycle::redrive_failed_background_wakeups_with_identities(
+        &db.node,
+        &node_did,
+        std::slice::from_ref(&agent_identity),
+    )
+    .await
+    .expect("repeat redrive");
     assert_eq!(second.redriven, 0);
     assert_eq!(second.already_redriven, 1);
     assert_eq!(
@@ -372,6 +500,8 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
 #[tokio::test]
 async fn failed_background_wake_without_pending_sibling_obeys_persisted_backoff() {
     let db = test_db("lifecycle-background-wake-isolated-backoff").await;
+    let agent_identity = crate::support::managed_agent(&db).await;
+    let agent_did = agent_identity.did();
     let node_did = db.node_identity.did().to_string();
     let session_id = "wake-isolated-backoff-session";
     let request_id = "failed-isolated-backoff-wake";
@@ -384,7 +514,7 @@ async fn failed_background_wake_without_pending_sibling_obeys_persisted_backoff(
         "purpose": "normal",
         "node_did": node_did,
         "requester_did": node_did,
-        "agent_id": AGENT_NAME,
+        "agent_did": agent_did,
         "session_id": session_id,
         "retry_root_request": request_id,
         "content": "continue after background completion",
@@ -410,10 +540,8 @@ async fn failed_background_wake_without_pending_sibling_obeys_persisted_backoff(
         "seed failed wake: {:?}",
         created.errors
     );
-    let mut session = crate::support::session_document(session_id, AGENT_NAME, &created_at);
-    session.node_did = node_did.clone();
-    session.requester_did = Some(node_did.clone());
-    crate::support::create_session_document(&db.node, &session).await;
+    grant_recovery_request(&db, request_id, agent_did).await;
+    create_recovery_session(&db, &agent_identity, session_id, &created_at).await;
     crate::support::seed_session_observation_from_request(
         &db.node,
         session_id,
@@ -435,9 +563,13 @@ async fn failed_background_wake_without_pending_sibling_obeys_persisted_backoff(
     .expect("persisted terminal timestamp determines backoff");
     assert!(next_retry_at > chrono::Utc::now());
 
-    let report = RequestLifecycle::redrive_failed_background_wakeups(&db.node, &node_did)
-        .await
-        .expect("isolated backoff sweep");
+    let report = RequestLifecycle::redrive_failed_background_wakeups_with_identities(
+        &db.node,
+        &node_did,
+        std::slice::from_ref(&agent_identity),
+    )
+    .await
+    .expect("isolated backoff sweep");
     assert_eq!(report.scanned, 1);
     assert_eq!(report.deferred, 1);
     assert_eq!(report.redriven, 0);
@@ -454,20 +586,22 @@ async fn failed_background_wake_without_pending_sibling_obeys_persisted_backoff(
 #[tokio::test]
 async fn failed_background_wake_waits_for_persisted_backoff() {
     let db = test_db("lifecycle-background-wake-backoff").await;
+    let agent_identity = crate::support::managed_agent(&db).await;
+    let agent_did = agent_identity.did();
     let session_id = "wake-backoff-session";
     let input = background_wake_input(session_id);
     let source_request_id = "foreground-parent";
     let source_doc_id = create_runtime_request_with_valid_until(
         db.node.as_ref(),
         db.node_identity.did(),
-        AGENT_NAME,
+        agent_did,
         source_request_id,
         session_id,
         "2020-01-01T00:00:00Z",
         "expired background wake source",
     )
     .await;
-    let issuer_did = db.node_identity.did().to_string();
+    let issuer_did = agent_did.to_owned();
     let process_gate_dir = tempfile::tempdir_in(
         std::env::current_dir().expect("resolve lifecycle fixture working directory"),
     )
@@ -482,13 +616,17 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         },
     })
     .to_string();
-    let prepared = prepare_accepted_turn(
+    create_recovery_session(&db, &agent_identity, session_id, "2026-03-23T00:00:00Z").await;
+    grant_recovery_request(&db, source_request_id, agent_did).await;
+    let prepared = prepare_accepted_turn_with_signer(
         &db,
+        db.node_identity.as_ref(),
+        agent_identity.as_ref(),
         AcceptedTurnSpec {
             backend_id: "wake-backoff-backend",
             model: "wake-backoff-model",
-            parent_agent_id: AGENT_NAME,
-            configured_agent_ids: &[AGENT_NAME],
+            parent_agent_did: agent_did,
+            configured_agent_dids: &[agent_did],
             request_id: "failed-wake-backoff",
             session_id,
             prompt: "continue",
@@ -515,16 +653,17 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         },
     )
     .await;
+    grant_recovery_request(&db, "failed-wake-backoff", agent_did).await;
     const WAKE_INPUT_MARKER: &str = "Review the background execution results above.";
     prepared.backend.enable_dynamic_followups("continue");
     prepared.backend.enable_dynamic_followups(WAKE_INPUT_MARKER);
     configure_agent_tools(
         &db.node,
         db.node_identity.did(),
-        AGENT_NAME,
+        agent_did,
         None,
         gents::documents::Tools {
-            tools_id: format!("{AGENT_NAME}:wake-backoff-tools"),
+            tools_id: format!("{agent_did}:wake-backoff-tools"),
             node_did: db.node_identity.did().to_string(),
             host: Some(gents::documents::HostTools {
                 bash: Some(gents::documents::BashTools {
@@ -688,10 +827,13 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
                 .expect("wake candidate physical identity")
         })
         .collect::<Vec<_>>();
-    let report =
-        RequestLifecycle::redrive_failed_background_wakeups(&db.node, db.node_identity.did())
-            .await
-            .expect("deferred redrive sweep");
+    let report = RequestLifecycle::redrive_failed_background_wakeups_with_identities(
+        &db.node,
+        db.node_identity.did(),
+        std::slice::from_ref(&agent_identity),
+    )
+    .await
+    .expect("deferred redrive sweep");
     let wake_rows = background_wake_retry_rows(&db.node, session_id).await;
     let coalesced_pending = wake_rows_before
         .iter()
@@ -833,17 +975,13 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         assert_eq!(epoch.next_retry_at, None);
     }
 
-    create_request_for_agent_with_signed_fields(
-        &db.node,
-        db.node_identity.did(),
+    create_recovery_request(
+        &db,
+        &agent_identity,
         "later-interactive-request",
         session_id,
         "pending",
         "2099-01-01T00:00:00Z",
-        None,
-        None,
-        None,
-        None,
     )
     .await;
     crate::support::seed_session_observation_from_request(
@@ -866,7 +1004,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
 }
 
 async fn background_wake_retry_rows(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     session_id: &str,
 ) -> Vec<AgentRequestRow> {
     let session_id = gents::store::graphql::escape_graphql_string(session_id);
@@ -895,9 +1033,10 @@ async fn background_wake_retry_rows(
 }
 
 async fn recover_interrupted_request_after_crash(
-    node: &Arc<gents::defra_node::EmbeddedNode>,
+    node: &Arc<gents::defra_node::Node>,
     doc_id: &str,
     expected_active_child_doc_id: Option<&str>,
+    agent_identity: &Arc<dyn gents::NodeIdentity>,
 ) {
     let physical = gents::store::graphql::escape_graphql_string(doc_id);
     let response = node
@@ -980,9 +1119,13 @@ async fn recover_interrupted_request_after_crash(
         }
         protected_child = Some((child_doc_id.to_owned(), child.request_id));
     }
-    let report = RequestLifecycle::recover_all(node, node_did)
-        .await
-        .expect("recover exact interrupted request after crash");
+    let report = RequestLifecycle::recover_all_with_identities(
+        node,
+        node_did,
+        std::slice::from_ref(agent_identity),
+    )
+    .await
+    .expect("recover exact interrupted request after crash");
     assert_eq!(
         report.requests_recovered, 1,
         "only the selected expired interrupted owner may terminalize before tool recovery; protected child={protected_child:?}"
@@ -1024,13 +1167,14 @@ async fn recover_interrupted_request_after_crash(
 }
 
 async fn seed_accepted_request_projection(
-    node: &gents::defra_node::EmbeddedNode,
+    db: &crate::support::TestDb,
+    agent_identity: &Arc<dyn gents::NodeIdentity>,
     session_id: &str,
     request_id: &str,
 ) {
-    create_agent_session(node, session_id, AGENT_NAME, "2026-03-23T00:00:00Z").await;
+    create_recovery_session(db, agent_identity, session_id, "2026-03-23T00:00:00Z").await;
     crate::support::seed_session_observation_from_request(
-        node,
+        &db.node,
         session_id,
         request_id,
         "stuck request",
@@ -1041,7 +1185,7 @@ async fn seed_accepted_request_projection(
 /// Fixture fault injection only: force the exact stored lease fields the
 /// production recovery predicate compares; no live path writes them directly.
 async fn seed_expired_execution_lease(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     request_doc_id: &str,
     generation: Option<&str>,
     expires_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -1120,7 +1264,8 @@ fn canonical_created_doc_id(
 
 #[allow(clippy::too_many_arguments)]
 async fn seed_completed_canonical_output(
-    node: &gents::defra_node::EmbeddedNode,
+    db: &crate::support::TestDb,
+    agent_identity: &Arc<dyn gents::NodeIdentity>,
     request_doc_id: &str,
     session_id: &str,
     node_did: &str,
@@ -1131,7 +1276,7 @@ async fn seed_completed_canonical_output(
     let source = fixture_provider_turn_source();
     let segment = gents_protocol::output::OutputSegment {
         node_did: node_did.to_string(),
-        requester_did: None,
+        requester_did: Some(db.node_identity.did().to_owned()),
         session_id: session_id.to_string(),
         request_doc_id: request_doc_id.to_string(),
         source: source.clone(),
@@ -1156,7 +1301,8 @@ async fn seed_completed_canonical_output(
         }),
         created_at: created_at.to_string(),
     };
-    let segment_response = node
+    let segment_response = db
+        .node
         .execute_request(
             gents::defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                 .with_variables(output_segment_create_variables(&segment).unwrap()),
@@ -1168,13 +1314,20 @@ async fn seed_completed_canonical_output(
         segment_response.errors
     );
     let segment_doc_id = canonical_created_doc_id(&segment_response, "AgentOutputSegment");
+    grant_recovery_agent(
+        db,
+        "AgentOutputSegment",
+        &segment_doc_id,
+        agent_identity.did(),
+    )
+    .await;
     let close_doc_id = segment_doc_id.clone();
     let message = gents_protocol::output::TranscriptMessage {
         native_request_id: None,
         message_key: fixture_provider_message_key(request_doc_id, &source),
         node_did: node_did.to_string(),
         session_id: session_id.to_string(),
-        requester_did: None,
+        requester_did: Some(db.node_identity.did().to_owned()),
         request_doc_id: Some(request_doc_id.to_string()),
         publication: gents_protocol::output::MessagePublication::RequestExecution {
             execution_generation: generation.to_string(),
@@ -1194,7 +1347,8 @@ async fn seed_completed_canonical_output(
         }],
         created_at: created_at.to_string(),
     };
-    let message_response = node
+    let message_response = db
+        .node
         .execute_request(
             gents::defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(&message).unwrap()),
@@ -1206,12 +1360,14 @@ async fn seed_completed_canonical_output(
         message_response.errors
     );
     let message_doc_id = canonical_created_doc_id(&message_response, "AgentMessage");
+    grant_recovery_agent(db, "AgentMessage", &message_doc_id, agent_identity.did()).await;
     (segment_doc_id, message_doc_id)
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn seed_open_canonical_flush(
-    node: &gents::defra_node::EmbeddedNode,
+    db: &crate::support::TestDb,
+    agent_identity: &Arc<dyn gents::NodeIdentity>,
     request_doc_id: &str,
     session_id: &str,
     node_did: &str,
@@ -1221,7 +1377,7 @@ async fn seed_open_canonical_flush(
 ) -> String {
     let segment = gents_protocol::output::OutputSegment {
         node_did: node_did.to_string(),
-        requester_did: None,
+        requester_did: Some(db.node_identity.did().to_owned()),
         session_id: session_id.to_string(),
         request_doc_id: request_doc_id.to_string(),
         source: fixture_provider_turn_source(),
@@ -1242,7 +1398,8 @@ async fn seed_open_canonical_flush(
         close: None,
         created_at: created_at.to_string(),
     };
-    let segment_response = node
+    let segment_response = db
+        .node
         .execute_request(
             gents::defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                 .with_variables(output_segment_create_variables(&segment).unwrap()),
@@ -1253,14 +1410,18 @@ async fn seed_open_canonical_flush(
         "open canonical segment fixture create failed: {:?}",
         segment_response.errors
     );
-    canonical_created_doc_id(&segment_response, "AgentOutputSegment")
+    let doc_id = canonical_created_doc_id(&segment_response, "AgentOutputSegment");
+    grant_recovery_agent(db, "AgentOutputSegment", &doc_id, agent_identity.did()).await;
+    doc_id
 }
 
 #[tokio::test]
 async fn recover_all_marks_requests_as_error() {
     let db = test_db("lifecycle-recover-error").await;
-    let request_doc_id = create_request(
-        &db.node,
+    let agent_identity = crate::support::managed_agent(&db).await;
+    let request_doc_id = create_recovery_request(
+        &db,
+        &agent_identity,
         "stuck-1",
         "session-1",
         "processing",
@@ -1274,11 +1435,15 @@ async fn recover_all_marks_requests_as_error() {
         Some(chrono::Utc::now() - chrono::Duration::minutes(1)),
     )
     .await;
-    seed_accepted_request_projection(&db.node, "session-1", "stuck-1").await;
+    seed_accepted_request_projection(&db, &agent_identity, "session-1", "stuck-1").await;
 
-    let report = RequestLifecycle::recover_all(&db.node, NODE_DID)
-        .await
-        .unwrap();
+    let report = RequestLifecycle::recover_all_with_identities(
+        &db.node,
+        db.node_identity.did(),
+        std::slice::from_ref(&agent_identity),
+    )
+    .await
+    .unwrap();
     assert_eq!(report.requests_recovered, 1);
 
     let resp = db
@@ -1304,8 +1469,10 @@ async fn recover_all_marks_requests_as_error() {
 #[tokio::test]
 async fn recover_all_preserves_completed_canonical_output_after_lease_expiry() {
     let db = test_db("lifecycle-recover-complete").await;
-    let request_doc_id = create_request(
-        &db.node,
+    let agent_identity = crate::support::managed_agent(&db).await;
+    let request_doc_id = create_recovery_request(
+        &db,
+        &agent_identity,
         "stuck-complete",
         "session-complete",
         "processing",
@@ -1319,20 +1486,26 @@ async fn recover_all_preserves_completed_canonical_output_after_lease_expiry() {
         Some(chrono::Utc::now() - chrono::Duration::minutes(1)),
     )
     .await;
-    seed_accepted_request_projection(&db.node, "session-complete", "stuck-complete").await;
+    seed_accepted_request_projection(&db, &agent_identity, "session-complete", "stuck-complete")
+        .await;
     let (segment_doc_id, header_doc_id) = seed_completed_canonical_output(
-        &db.node,
+        &db,
+        &agent_identity,
         &request_doc_id,
         "session-complete",
-        NODE_DID,
+        db.node_identity.did(),
         "expired-completed-generation",
         "complete",
         "2026-03-23T00:00:05Z",
     )
     .await;
-    let report = RequestLifecycle::recover_all(&db.node, NODE_DID)
-        .await
-        .unwrap();
+    let report = RequestLifecycle::recover_all_with_identities(
+        &db.node,
+        db.node_identity.did(),
+        std::slice::from_ref(&agent_identity),
+    )
+    .await
+    .unwrap();
     assert_eq!(report.requests_recovered, 1);
 
     let escaped_request_doc_id = gents::store::graphql::escape_graphql_string(&request_doc_id);
@@ -1411,8 +1584,10 @@ async fn recover_all_preserves_completed_canonical_output_after_lease_expiry() {
 #[tokio::test]
 async fn recover_all_leaves_live_execution_lease_untouched() {
     let db = test_db("lifecycle-recover-live-lease").await;
-    let request_doc_id = create_request(
-        &db.node,
+    let agent_identity = crate::support::managed_agent(&db).await;
+    let request_doc_id = create_recovery_request(
+        &db,
+        &agent_identity,
         "live-request",
         "live-session",
         "processing",
@@ -1426,21 +1601,26 @@ async fn recover_all_leaves_live_execution_lease_untouched() {
         Some(chrono::Utc::now() + chrono::Duration::minutes(5)),
     )
     .await;
-    seed_accepted_request_projection(&db.node, "live-session", "live-request").await;
+    seed_accepted_request_projection(&db, &agent_identity, "live-session", "live-request").await;
     let (_segment_doc_id, _header_doc_id) = seed_completed_canonical_output(
-        &db.node,
+        &db,
+        &agent_identity,
         &request_doc_id,
         "live-session",
-        NODE_DID,
+        db.node_identity.did(),
         "live-generation",
         "still running",
         "2026-03-23T00:00:05Z",
     )
     .await;
 
-    let report = RequestLifecycle::recover_all(&db.node, NODE_DID)
-        .await
-        .unwrap();
+    let report = RequestLifecycle::recover_all_with_identities(
+        &db.node,
+        db.node_identity.did(),
+        std::slice::from_ref(&agent_identity),
+    )
+    .await
+    .unwrap();
     assert_eq!(report.responses_recovered, 0);
     assert_eq!(report.requests_recovered, 0);
 
@@ -1502,8 +1682,10 @@ async fn recover_all_leaves_live_execution_lease_untouched() {
 #[tokio::test]
 async fn recover_all_interrupts_an_expired_lease_with_a_durable_interrupt() {
     let db = test_db("lifecycle-recover-expired-interrupt").await;
-    let request_doc_id = create_request(
-        &db.node,
+    let agent_identity = crate::support::managed_agent(&db).await;
+    let request_doc_id = create_recovery_request(
+        &db,
+        &agent_identity,
         "interrupted-request",
         "interrupted-session",
         "processing",
@@ -1517,12 +1699,19 @@ async fn recover_all_interrupts_an_expired_lease_with_a_durable_interrupt() {
         Some(chrono::Utc::now() - chrono::Duration::minutes(1)),
     )
     .await;
-    seed_accepted_request_projection(&db.node, "interrupted-session", "interrupted-request").await;
+    seed_accepted_request_projection(
+        &db,
+        &agent_identity,
+        "interrupted-session",
+        "interrupted-request",
+    )
+    .await;
     seed_open_canonical_flush(
-        &db.node,
+        &db,
+        &agent_identity,
         &request_doc_id,
         "interrupted-session",
-        NODE_DID,
+        db.node_identity.did(),
         "expired-interrupt-generation",
         "partial turn",
         "2026-03-23T00:00:05Z",
@@ -1547,9 +1736,13 @@ async fn recover_all_interrupts_an_expired_lease_with_a_durable_interrupt() {
         response.errors
     );
 
-    let report = RequestLifecycle::recover_all(&db.node, NODE_DID)
-        .await
-        .unwrap();
+    let report = RequestLifecycle::recover_all_with_identities(
+        &db.node,
+        db.node_identity.did(),
+        std::slice::from_ref(&agent_identity),
+    )
+    .await
+    .unwrap();
     assert_eq!(report.requests_recovered, 1);
     assert_eq!(report.responses_recovered, 1);
 
@@ -1678,8 +1871,9 @@ async fn recover_all_interrupts_an_expired_lease_with_a_durable_interrupt() {
 #[tokio::test]
 async fn recover_all_times_out_expired_running_tool_calls() {
     let db = test_db("tool-call-recover-timeout").await;
+    let agent_identity = crate::support::managed_agent(&db).await;
     let (runtime, _request_id, session_id, tool_doc_id) =
-        boot_running_recovery_bash(&db, "tool-timeout", "tool-timeout-call").await;
+        boot_running_recovery_bash(&db, &agent_identity, "tool-timeout", "tool-timeout-call").await;
     let response = db.node.execute(&format!(
         r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ deadline_at: "2020-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
         gents::store::graphql::escape_graphql_string(&tool_doc_id),
@@ -1690,9 +1884,13 @@ async fn recover_all_times_out_expired_running_tool_calls() {
         response.errors
     );
 
-    let report = ToolCallLifecycle::recover_all(&db.node, db.node_identity.did())
-        .await
-        .unwrap();
+    let report = ToolCallLifecycle::recover_all(
+        &db.node,
+        db.node_identity.did(),
+        std::slice::from_ref(&agent_identity),
+    )
+    .await
+    .unwrap();
     assert_eq!(report.tool_calls_recovered, 1);
 
     let snapshots = fetch_tool_call_snapshots_for_session(&db.node, &session_id).await;
@@ -1709,16 +1907,18 @@ async fn recover_all_times_out_expired_running_tool_calls() {
 #[tokio::test]
 async fn recover_all_repairs_terminal_background_tool_notification_once() {
     let db = test_db("tool-call-repair-notification").await;
+    let agent_identity = crate::support::managed_agent(&db).await;
+    let agent_did = agent_identity.did();
     let node_did = db.node_identity.did().to_string();
     let session_id = "tool-notification-session";
-    let agent_id = AGENT_NAME;
+    create_recovery_session(&db, &agent_identity, session_id, "2026-03-23T00:00:00Z").await;
     let prepared = prepare_accepted_turn(
         &db,
         AcceptedTurnSpec {
             backend_id: "tool-notification-backend",
             model: "tool-notification-model",
-            parent_agent_id: agent_id,
-            configured_agent_ids: &[agent_id],
+            parent_agent_did: agent_did,
+            configured_agent_dids: &[agent_did],
             request_id: "tool-notification-req",
             session_id,
             prompt: "run background notification fixture",
@@ -1734,13 +1934,14 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
         },
     )
     .await;
+    grant_recovery_request(&db, "tool-notification-req", agent_did).await;
     configure_agent_tools(
         &db.node,
         &node_did,
-        agent_id,
+        agent_did,
         None,
         gents::documents::Tools {
-            tools_id: format!("{agent_id}:notification-tools"),
+            tools_id: format!("{agent_did}:notification-tools"),
             node_did: node_did.clone(),
             host: Some(gents::documents::HostTools {
                 bash: Some(gents::documents::BashTools {
@@ -1799,13 +2000,15 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
         response.errors
     );
 
-    let first = ToolCallLifecycle::recover_all(&db.node, &node_did)
-        .await
-        .unwrap();
+    let first =
+        ToolCallLifecycle::recover_all(&db.node, &node_did, std::slice::from_ref(&agent_identity))
+            .await
+            .unwrap();
     assert_eq!(first.notifications_repaired, 1);
-    let second = ToolCallLifecycle::recover_all(&db.node, &node_did)
-        .await
-        .unwrap();
+    let second =
+        ToolCallLifecycle::recover_all(&db.node, &node_did, std::slice::from_ref(&agent_identity))
+            .await
+            .unwrap();
     assert_eq!(second.notifications_repaired, 0);
 
     let messages = fetch_message_snapshots_for_session(&db.node, session_id).await;
@@ -1842,8 +2045,9 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
 #[tokio::test]
 async fn recover_all_cancels_running_tool_call_for_interrupted_parent_only() {
     let db = test_db("tool-call-recover-cancel").await;
+    let agent_identity = crate::support::managed_agent(&db).await;
     let ([interrupted_runtime, unrelated_runtime], rows) =
-        boot_two_running_recovery_bashes(&db).await;
+        boot_two_running_recovery_bashes(&db, &agent_identity).await;
     let response = db
         .node
         .execute(&format!(
@@ -1855,11 +2059,16 @@ async fn recover_all_cancels_running_tool_call_for_interrupted_parent_only() {
         .doc_id
         .expect("accepted interrupted request physical identity");
     interrupted_runtime.crash().await;
-    recover_interrupted_request_after_crash(&db.node, &interrupted_doc, None).await;
+    recover_interrupted_request_after_crash(&db.node, &interrupted_doc, None, &agent_identity)
+        .await;
 
-    let report = ToolCallLifecycle::recover_all(&db.node, db.node_identity.did())
-        .await
-        .unwrap();
+    let report = ToolCallLifecycle::recover_all(
+        &db.node,
+        db.node_identity.did(),
+        std::slice::from_ref(&agent_identity),
+    )
+    .await
+    .unwrap();
     assert_eq!(report.tool_calls_recovered, 1);
 
     let cancelled_snapshots = fetch_tool_call_snapshots_for_session(&db.node, &rows[0].1).await;

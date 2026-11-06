@@ -106,7 +106,7 @@ describe("a field save and the account pool", () => {
 
 describe("a field save and credentials the editor has no field for", () => {
   it("keeps a cloud backend's credentials when nothing about them was chosen", () => {
-    for (const authKind of ["aws_credentials", "google_credentials"])
+    for (const authKind of ["credential", "aws_credentials", "google_credentials"])
       expect(
         authChange(
           backend(authKind),
@@ -157,6 +157,7 @@ describe("a field save that moves a kept credential's endpoint", () => {
   it("is refused for a gateway sign-in and for cloud credentials", () => {
     for (const [authKind, kind] of [
       ["node_oauth", "ClaudeGateway"],
+      ["credential", "OpenAiCompatible"],
       ["aws_credentials", "ClaudeBedrock"],
       ["google_credentials", "ClaudeVertex"],
     ]) {

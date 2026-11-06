@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::thread::JoinHandle;
 
-pub(super) use crate::documents::{default_agent_id_for_node, Tools};
+pub(super) use crate::documents::Tools;
 pub(super) use crate::ensure_runtime_schemas;
 pub(super) use crate::request::watcher::AgentRequest;
 pub(super) use crate::runtime::status::RuntimeStatusHandle;
@@ -18,23 +18,326 @@ pub(super) use gents_protocol::node_readiness::{
 };
 pub(super) use serde_json::Value;
 
-pub(super) async fn test_node() -> Arc<defra_node::EmbeddedNode> {
-    let identity = test_identity("runtime-test-node");
-    Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    )
-}
-
 pub(super) fn test_identity(name: &str) -> KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
     KeyIdentity::load_or_create(path, None).unwrap()
 }
 
-pub(super) fn request(agent_id: Option<&str>, session_id: &str) -> AgentRequest {
+pub(super) struct PluginRuntimeFixture {
+    pub node: Arc<defra_node::Node>,
+    pub runtime: Arc<KeyIdentity>,
+    pub user_access: crate::store::config_client::ConfigAccess,
+    pub agent_access: crate::store::config_client::ConfigAccess,
+    pub node_binding: crate::store::config_client::ConfigurationNodeBinding,
+}
+
+pub(super) async fn plugin_runtime_fixture(
+    name: &str,
+    backend_id: &str,
+    endpoint: &str,
+) -> anyhow::Result<PluginRuntimeFixture> {
+    use crate::store::config_client::{
+        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, GraphqlEndpoint,
+        NodePermission,
+    };
+    use crate::Collection;
+    use serde_json::json;
+
+    let runtime = Arc::new(test_identity(&format!("{name}-runtime")));
+    let user = test_identity(&format!("{name}-user"));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(runtime.did())
+            .with_node_acp_enabled()
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .build()
+            .await?,
+    );
+    crate::ensure_runtime_schemas(&node).await?;
+    let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
+    let user_did = identity::Did::new(user.did())?;
+    for permission in [
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::DacRelationAdd,
+    ] {
+        admin.grant_node_permission(&user_did, permission).await?;
+    }
+    let user_access = ConfigAccess::Graphql(
+        GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), user.did())
+            .with_client_signing_capability(user.client_signing_capability()?)?
+            .with_client_signed_agent_creates(),
+    );
+    let node_value = json!({"node_did":runtime.did(), "enabled":true});
+    let node_plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::Node,
+        add: node_value.clone(),
+        update: node_value,
+    }])?;
+    user_access
+        .transact_write("test.plugin.node", |txn| {
+            let plan = &node_plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await?;
+    let binding = crate::store::identity::provision_agent_identity_authorized(
+        &node,
+        runtime.as_ref(),
+        &user_did,
+    )
+    .await?;
+    let agent = crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding)?;
+    let agent_did = binding.agent_did.clone();
+    let context_id = format!("{agent_did}:context");
+    let tools_id = format!("{agent_did}:tools");
+    let profile_id = format!("{agent_did}:inference");
+    let docs = [
+        (Collection::Agent, json!({"node_did":runtime.did(), "agent_did":agent_did, "creation_nonce":binding.creation_nonce, "context_id":context_id, "inference_profile_id":profile_id})),
+        (Collection::AgentContext, json!({"node_did":runtime.did(), "context_id":context_id, "tools_id":tools_id})),
+        (Collection::Tools, json!({"node_did":runtime.did(), "tools_id":tools_id})),
+        (Collection::InferenceProfile, json!({"node_did":runtime.did(), "profile_id":profile_id, "backend_id":backend_id, "model_name":"default"})),
+        (Collection::InferenceBackend, json!({"node_did":runtime.did(), "backend_id":backend_id, "name":backend_id, "provider_kind":"OpenAiCompatible", "endpoint":endpoint, "max_concurrent":1, "auth":{"kind":"unauthenticated"}})),
+    ].into_iter().map(|(collection, value)| DesiredStateApplyDocument { collection, add: value.clone(), update: value }).collect();
+    let plan = DesiredStateApplyPlan::new(docs)?;
+    user_access
+        .transact_write("test.plugin.configuration", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await?;
+    let observed = user_access.execute("{ Node { _docID node_did } }").await?;
+    let node_doc = observed["data"]["Node"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["node_did"] == runtime.did()))
+        .and_then(|row| row["_docID"].as_str())
+        .ok_or_else(|| anyhow::anyhow!("plugin fixture Node missing"))?
+        .to_owned();
+    let default_node =
+        json!({"node_did":runtime.did(), "enabled":true, "default_agent_did":agent_did});
+    let default_plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::Node,
+        add: default_node.clone(),
+        update: default_node,
+    }])?;
+    user_access
+        .transact_write("test.plugin.default", |txn| {
+            let plan = &default_plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await?;
+    let agent_access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did())?,
+        agent.as_ref(),
+    )?;
+    let node_binding = crate::store::config_client::ConfigurationNodeBinding {
+        node_did: identity::Did::new(runtime.did())?,
+        doc_id: node_doc,
+        enabled: true,
+        default_agent_did: Some(agent_did),
+    };
+    Ok(PluginRuntimeFixture {
+        node,
+        runtime,
+        user_access,
+        agent_access,
+        node_binding,
+    })
+}
+
+pub(super) struct HeldRuntimeFixture {
+    pub db: crate::support::TestDb,
+    pub user: KeyIdentity,
+    pub user_access: crate::ConfigAccess,
+    pub agent: std::sync::Arc<dyn NodeIdentity>,
+}
+
+impl HeldRuntimeFixture {
+    pub fn admission(&self) -> crate::store::local::backend_protection::BackendAdmission {
+        self.db.home.backend_admission()
+    }
+
+    pub async fn agent_config_access(&self) -> crate::ConfigAccess {
+        use crate::store::config_client::NodePermission;
+        let runtime_did = self.db.node_identity.did();
+        let admin =
+            crate::ConfigAccess::local_as(self.db.node.clone(), runtime_did.parse().unwrap());
+        let agent_did = identity::Did::new(self.agent.did()).unwrap();
+        for permission in [
+            NodePermission::CollectionGet,
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+        ] {
+            admin
+                .grant_node_permission(&agent_did, permission)
+                .await
+                .unwrap();
+        }
+        self.user_access
+            .transact_write("test.runtime.agent_config", |txn| {
+                let agent_did = &agent_did;
+                Box::pin(async move {
+                    crate::store::config_client::grant_selected_self_configuration(
+                        txn,
+                        runtime_did,
+                        agent_did.as_str(),
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
+        crate::ConfigAccess::local_managed_agent(
+            self.db.node.clone(),
+            agent_did,
+            self.agent.as_ref(),
+        )
+        .unwrap()
+    }
+}
+
+pub(super) async fn held_runtime_fixture(
+    name: &str,
+    backend_id: &str,
+    endpoint: &str,
+) -> HeldRuntimeFixture {
+    held_runtime_fixture_with_status(name, backend_id, endpoint, 1, "healthy").await
+}
+
+pub(super) async fn held_runtime_fixture_with_status(
+    name: &str,
+    backend_id: &str,
+    endpoint: &str,
+    max_concurrent: i64,
+    probe_status: &str,
+) -> HeldRuntimeFixture {
+    use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    let (db, user, user_access, binding) = crate::test_support::signed_test_node(name).await;
+    let node_did = db.node_identity.did();
+    let profile_id = format!("{}:inference", binding.agent_did);
+    let docs = [
+        (
+            crate::Collection::InferenceProfile,
+            serde_json::json!({
+                "node_did": node_did, "profile_id": profile_id,
+                "backend_id": backend_id, "model_name": "default"
+            }),
+        ),
+        (
+            crate::Collection::InferenceBackend,
+            serde_json::json!({
+                "node_did": node_did, "backend_id": backend_id,
+                "name": backend_id, "provider_kind": "OpenAiCompatible", "endpoint": endpoint,
+                "max_concurrent": max_concurrent, "auth": {"kind": "unauthenticated"}
+            }),
+        ),
+    ]
+    .into_iter()
+    .map(|(collection, value)| DesiredStateApplyDocument {
+        collection,
+        add: value.clone(),
+        update: value,
+    })
+    .collect();
+    let plan = DesiredStateApplyPlan::new(docs).unwrap();
+    user_access
+        .transact_write("test.runtime.inference", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .unwrap();
+    let runtime_access = crate::ConfigAccess::local_as(db.node.clone(), node_did.parse().unwrap());
+    crate::inference::backends::registry::set_backend_probe_status_as(
+        &runtime_access,
+        node_did,
+        backend_id,
+        probe_status,
+    )
+    .await
+    .unwrap();
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    grant_held_agent_operations(&db.node, db.node_identity.as_ref(), agent.as_ref()).await;
+    HeldRuntimeFixture {
+        db,
+        user,
+        user_access,
+        agent,
+    }
+}
+
+pub(super) async fn grant_held_agent_operations(
+    node: &Arc<defra_node::Node>,
+    runtime: &dyn NodeIdentity,
+    agent: &dyn NodeIdentity,
+) {
+    use crate::store::config_client::NodePermission;
+    let admin = crate::ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
+    let agent_did = identity::Did::new(agent.did()).unwrap();
+    for permission in [
+        NodePermission::CollectionGet,
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::DocumentDelete,
+        NodePermission::DacRelationAdd,
+        NodePermission::DacRelationDelete,
+    ] {
+        admin
+            .grant_node_permission(&agent_did, permission)
+            .await
+            .unwrap();
+    }
+}
+
+pub(super) async fn create_held_agent_request(
+    node: &Arc<defra_node::Node>,
+    node_did: &str,
+    agent: &dyn NodeIdentity,
+    request_id: &str,
+    session_id: &str,
+    content: &str,
+) -> String {
+    let did = agent.did();
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        request_id,
+        node_did,
+        did,
+        did,
+        session_id,
+        content,
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(did),
+    );
+    crate::sign_agent_request_create(agent, &mut create)
+        .await
+        .unwrap();
+    let access =
+        crate::ConfigAccess::local_managed_agent(node.clone(), did.parse().unwrap(), agent)
+            .unwrap();
+    let response = access
+        .write(
+            "test.runtime.create_request",
+            &create.graphql_mutation().unwrap(),
+        )
+        .await
+        .unwrap();
+    crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
+}
+
+pub(super) fn request(agent_did: Option<&str>, session_id: &str) -> AgentRequest {
     AgentRequest {
         retry_parent_request_doc_id: None,
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
@@ -42,7 +345,7 @@ pub(super) fn request(agent_id: Option<&str>, session_id: &str) -> AgentRequest 
         request_id: "req-1".to_string(),
         node_did: "did:test:test".to_string(),
         requester_did: None,
-        agent_id: agent_id.unwrap_or_default().to_owned(),
+        agent_did: agent_did.unwrap_or_default().to_owned(),
         session_id: session_id.to_string(),
         content: "hello".to_string(),
         max_total_tokens: None,
@@ -89,7 +392,7 @@ struct RuntimeDiagnosticRow {
 }
 
 pub(super) async fn fetch_runtime_status(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
 ) -> RuntimeStatusRow {
     fetch_runtime_status_if_present(node, node_did)
@@ -98,7 +401,7 @@ pub(super) async fn fetch_runtime_status(
 }
 
 async fn fetch_runtime_status_if_present(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
 ) -> Option<RuntimeStatusRow> {
     let escaped_node_did = escape_graphql_string(node_did);
@@ -139,7 +442,7 @@ async fn fetch_runtime_status_if_present(
 }
 
 pub(super) async fn wait_for_runtime_reconcile_phase(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
     expected_reconcile_phase: &str,
 ) -> RuntimeStatusRow {
@@ -163,7 +466,7 @@ pub(super) async fn wait_for_runtime_reconcile_phase(
 }
 
 pub(super) async fn fetch_node_readiness(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
 ) -> NodeReadinessSnapshot {
     let escaped_node_did = escape_graphql_string(node_did);
@@ -196,7 +499,7 @@ pub(super) async fn fetch_node_readiness(
 }
 
 pub(super) async fn wait_for_runtime_process_state(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
     expected_process_state: &str,
 ) {
@@ -397,226 +700,21 @@ impl crate::runtime::agent::ProcessLifecycleObserver for RecordingObserver {
     }
 }
 
-pub(super) async fn bind_default_agent_backend(
-    node: &Arc<defra_node::EmbeddedNode>,
+pub(super) async fn update_backend_probe_status(
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     backend_id: &str,
-    endpoint: &str,
+    probe_status: &str,
 ) {
-    bind_default_agent_backend_with_capacity_and_probe_status(
-        node, node_did, backend_id, endpoint, 1, "healthy",
-    )
-    .await;
-}
-
-pub(super) async fn bind_default_agent_backend_with_capacity(
-    node: &Arc<defra_node::EmbeddedNode>,
-    node_did: &str,
-    backend_id: &str,
-    endpoint: &str,
-    max_concurrent: i64,
-) {
-    bind_default_agent_backend_with_capacity_and_probe_status(
-        node,
+    let access = crate::ConfigAccess::local_as(node.clone(), node_did.parse().unwrap());
+    crate::inference::backends::registry::set_backend_probe_status_as(
+        &access,
         node_did,
         backend_id,
-        endpoint,
-        max_concurrent,
-        "healthy",
+        probe_status,
     )
-    .await;
-}
-
-pub(super) async fn bind_default_agent_backend_with_capacity_and_probe_status(
-    node: &Arc<defra_node::EmbeddedNode>,
-    node_did: &str,
-    backend_id: &str,
-    endpoint: &str,
-    max_concurrent: i64,
-    probe_status: &str,
-) {
-    use crate::store::config_client::{
-        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
-    use crate::Collection;
-    let mut principal = crate::ensure_node(node, node_did).await.unwrap();
-    let agent_id = default_agent_id_for_node(node_did);
-    principal.default_agent_id = Some(agent_id.clone());
-    let context_id = format!("{agent_id}:context");
-    let tools_id = format!("{agent_id}:tools");
-    let profile_id = format!("{agent_id}:inference");
-    let documents = [
-        (Collection::Node, serde_json::to_value(principal).unwrap()),
-        (Collection::Agent, serde_json::json!({"node_did":node_did,
-            "agent_id":agent_id, "context_id":context_id, "inference_profile_id":profile_id})),
-        (Collection::AgentContext, serde_json::json!({"node_did":node_did,
-            "context_id":context_id, "tools_id":tools_id})),
-        (Collection::Tools, serde_json::json!({"node_did":node_did, "tools_id":tools_id})),
-        (Collection::InferenceProfile, serde_json::json!({"node_did":node_did,
-            "profile_id":profile_id, "backend_id":backend_id, "model_name":"default"})),
-        (Collection::InferenceBackend, serde_json::json!({"node_did":node_did,
-            "backend_id":backend_id, "name":backend_id, "provider_kind":"OpenAiCompatible",
-            "endpoint":endpoint, "max_concurrent":max_concurrent, "auth":{"kind":"unauthenticated"}})),
-    ].into_iter().map(|(collection, value)| DesiredStateApplyDocument {
-        collection, add:value.clone(), update:value,
-    }).collect();
-    let plan = DesiredStateApplyPlan::new(documents).unwrap();
-    ConfigAccess::transact_local_write(node, None, "test.runtime.configure", |txn| {
-        let plan = &plan;
-        Box::pin(
-            async move { crate::store::config_client::apply_desired_state_plan(txn, plan).await },
-        )
-    })
     .await
     .unwrap();
-    let backend_id = escape_graphql_string(backend_id);
-    let owner = escape_graphql_string(node_did);
-    let status = escape_graphql_string(probe_status);
-    let response = node.execute(&format!(r#"mutation {{
-        update_InferenceBackend(filter: {{node_did: {{_eq: "{owner}"}}, backend_id: {{_eq: "{backend_id}"}}}},
-            input: {{probe_status: "{status}"}}) {{_docID}}
-    }}"#)).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-}
-
-pub(super) async fn create_agent_request(
-    node: &defra_node::EmbeddedNode,
-    node_did: &str,
-    request_id: &str,
-    session_id: &str,
-    content: &str,
-) -> String {
-    create_agent_request_for_agent(node, node_did, None, request_id, session_id, content).await
-}
-
-pub(super) async fn create_agent_request_for_agent(
-    node: &defra_node::EmbeddedNode,
-    node_did: &str,
-    agent_id: Option<&str>,
-    request_id: &str,
-    session_id: &str,
-    content: &str,
-) -> String {
-    let identity = crate::store::identity::RegisteredIdentity::from_registered_did(node_did, None)
-        .expect("registered runtime test identity");
-    let agent_id = agent_id
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| default_agent_id_for_node(node_did));
-    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-        gents_protocol::request_admission::RequestPurpose::Normal,
-        request_id,
-        node_did,
-        node_did,
-        agent_id,
-        session_id,
-        content,
-        "interactive",
-        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(node_did),
-    );
-    crate::sign_agent_request_create(&identity, &mut create)
-        .await
-        .expect("sign runtime test AgentRequest");
-    let response = node.execute(&create.graphql_mutation().unwrap()).await;
-    assert!(
-        !response.has_errors(),
-        "create signed AgentRequest failed: {:?}",
-        response.errors
-    );
-    let query = format!(
-        r#"{{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
-                _docID
-            }}
-        }}"#,
-        escape_graphql_string(request_id),
-    );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "AgentRequest lookup failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("_docID"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .expect("AgentRequest _docID")
-}
-
-pub(super) async fn wait_for_inference_call_state(
-    node: &defra_node::EmbeddedNode,
-    request_id: &str,
-    expected_state: &str,
-) {
-    let escaped_request_id = escape_graphql_string(request_id);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let query = format!(
-            r#"{{
-                InferenceCall(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}) {{
-                    call_state
-                    failure_reason
-                }}
-            }}"#
-        );
-        let response = node.execute(&query).await;
-        assert!(
-            !response.has_errors(),
-            "InferenceCall query failed: {:?}",
-            response.errors
-        );
-        let rows = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("InferenceCall"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        if rows.iter().any(|row| {
-            row.get("call_state")
-                .and_then(Value::as_str)
-                .is_some_and(|state| state == expected_state)
-        }) {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for InferenceCall request_id={} to reach call_state={}, last rows={:?}",
-            request_id,
-            expected_state,
-            rows
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
-
-pub(super) async fn update_backend_probe_status(
-    node: &defra_node::EmbeddedNode,
-    backend_id: &str,
-    probe_status: &str,
-) {
-    let escaped_backend_id = escape_graphql_string(backend_id);
-    let escaped_probe_status = escape_graphql_string(probe_status);
-    let mutation = format!(
-        r#"mutation {{
-            update_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                input: {{ probe_status: "{escaped_probe_status}" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "update InferenceBackend probe_status failed: {:?}",
-        response.errors
-    );
 }
 
 pub(super) struct ScriptedWatcher {

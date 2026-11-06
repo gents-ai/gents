@@ -1,4 +1,6 @@
-use super::install::{check_expected_digest, check_wire_target, install_documents_command};
+use super::install::{
+    check_expected_digest, check_wire_target, install_documents_command_with_local,
+};
 use super::scope::resolve_plugin_slot_owner;
 use super::source::names_a_directory;
 use super::*;
@@ -212,7 +214,12 @@ async fn plugin_store_record_error_releases_the_owned_offline_store() {
     let records = reopened
         .execute("{ PackInstallation(limit: 1) { coordinate } }")
         .await;
-    reopened.local_node().unwrap().shutdown().await;
+    reopened
+        .local_node()
+        .unwrap()
+        .shutdown()
+        .await
+        .expect("node shutdown");
     assert_eq!(
         records.unwrap()["data"]["PackInstallation"],
         serde_json::json!([])
@@ -271,16 +278,21 @@ async fn documents_command_closes_its_owned_store_on_success_and_failure() {
         let pack = resolve_pack_source(&args.package, None, home.path())
             .await
             .unwrap();
-        let (access, _) = crate::resolve_config_access(Some(home.path()), None)
-            .await
-            .unwrap();
+        let (access, _, local_endpoint) =
+            crate::resolve_pack_config_access(Some(home.path()), None)
+                .await
+                .unwrap();
         let query = "{ Tools(limit: 1) { _docID } }";
         let before = access.execute(query).await.unwrap();
         assert!(before["data"]["Tools"].is_array(), "{before}");
         let retained_node = access.local_node().unwrap().clone();
-        let outcome =
-            crate::request_helpers::capture_report(install_documents_command(access, &pack, &args))
-                .await;
+        let outcome = crate::request_helpers::capture_report(install_documents_command_with_local(
+            access,
+            &pack,
+            &args,
+            local_endpoint,
+        ))
+        .await;
         assert_eq!(outcome.is_err(), invalid_binding, "{outcome:?}");
         if let Err(error) = outcome {
             assert!(
@@ -299,7 +311,12 @@ async fn documents_command_closes_its_owned_store_on_success_and_failure() {
         let (reopened, _) = crate::resolve_config_access(Some(home.path()), None)
             .await
             .expect("command shutdown and handle release must allow immediate store reopen");
-        reopened.local_node().unwrap().shutdown().await;
+        reopened
+            .local_node()
+            .unwrap()
+            .shutdown()
+            .await
+            .expect("node shutdown");
         drop(reopened);
     }
 }
@@ -362,7 +379,12 @@ async fn documents_install_rolls_back_its_record_on_failure() {
                 )
                 .await
                 .unwrap();
-        access.local_node().unwrap().shutdown().await;
+        access
+            .local_node()
+            .unwrap()
+            .shutdown()
+            .await
+            .expect("node shutdown");
     }
 
     let second = documents_pack_dir("1.1.0");

@@ -113,6 +113,7 @@ tokio::task_local! {
         EmbeddedFinalizationBoundary,
         Arc<tokio::sync::Notify>,
     );
+    static EMBEDDED_FINALIZATION_RELEASE: (Arc<tokio::sync::Notify>, Arc<AtomicBool>);
 }
 
 pub(super) async fn pause_embedded_finalization_for_test(boundary: EmbeddedFinalizationBoundary) {
@@ -121,12 +122,42 @@ pub(super) async fn pause_embedded_finalization_for_test(boundary: EmbeddedFinal
         .ok()
         .flatten();
     if let Some(reached) = reached {
+        let release = EMBEDDED_FINALIZATION_RELEASE
+            .try_with(|(release, fired)| (Arc::clone(release), Arc::clone(fired)))
+            .ok();
+        if release
+            .as_ref()
+            .is_some_and(|(_, fired)| fired.swap(true, Ordering::Relaxed))
+        {
+            return;
+        }
         reached.notify_one();
-        std::future::pending::<()>().await;
+        if let Some((release, _)) = release {
+            release.notified().await;
+        } else {
+            std::future::pending::<()>().await;
+        }
     }
 }
 
 impl ConfigApplyTxn<'_> {
+    pub(crate) async fn with_embedded_before_commit_pause<F>(
+        reached: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        future: F,
+    ) -> F::Output
+    where
+        F: Future,
+    {
+        EMBEDDED_FINALIZATION_PAUSE
+            .scope(
+                (EmbeddedFinalizationBoundary::BeforeCommit, reached),
+                EMBEDDED_FINALIZATION_RELEASE
+                    .scope((release, Arc::new(AtomicBool::new(false))), future),
+            )
+            .await
+    }
+
     pub(crate) async fn with_embedded_commit_ack_pause<F>(
         reached: Arc<tokio::sync::Notify>,
         future: F,
@@ -305,6 +336,20 @@ impl ConfigApplyTxn<'_> {
     where
         F: Future,
     {
+        let (output, fired, _) =
+            Self::with_successful_mutation_pause_and_count(after, reached, release, future).await;
+        (output, fired)
+    }
+
+    pub(crate) async fn with_successful_mutation_pause_and_count<F>(
+        after: usize,
+        reached: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        future: F,
+    ) -> (F::Output, bool, usize)
+    where
+        F: Future,
+    {
         assert!(after > 0);
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after: None,
@@ -337,6 +382,7 @@ impl ConfigApplyTxn<'_> {
                 .expect("pause configured")
                 .fired
                 .load(Ordering::Relaxed),
+            fault.count.load(Ordering::Relaxed),
         )
     }
 

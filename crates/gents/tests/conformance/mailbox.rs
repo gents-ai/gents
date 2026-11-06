@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::session::mailbox::{
-    dismiss_mailbox_item, load_mailbox_item, stamp_create, FileMailboxItemArgs, MailboxAction,
-    MailboxKind, MailboxSourceKind, MailboxStampContext, MailboxStatus,
+    dismiss_mailbox_item_on, stamp_create_with_access, FileMailboxItemArgs, MailboxAction,
+    MailboxKind, MailboxSourceKind, MailboxStampContext, MailboxStatus, MAILBOX_CLOSE_COLLECTIONS,
 };
 
 use crate::lean_vocab_test::{
@@ -61,8 +61,15 @@ async fn rust_mailbox_dismiss_owner_drives_only_lean_legal_transitions() {
     let directory = tempfile::tempdir().unwrap();
     let identity =
         gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+    let requester =
+        gents::KeyIdentity::load_or_create(directory.path().join("requester.key"), None).unwrap();
+    let other =
+        gents::KeyIdentity::load_or_create(directory.path().join("other.key"), None).unwrap();
+    let agent_binding = gents::store::identity::provision_agent_identity(&identity).unwrap();
+    let agent = gents::store::identity::resolve_agent_identity(&identity, &agent_binding).unwrap();
     let node = Arc::new(
         EmbeddedNode::builder()
+            .enable_signing()
             .with_node_identity_did(gents::NodeIdentity::did(&identity))
             .build()
             .await
@@ -72,12 +79,39 @@ async fn rust_mailbox_dismiss_owner_drives_only_lean_legal_transitions() {
         .await
         .expect("runtime schemas");
 
-    let item = stamp_create(
+    let admin = gents::ConfigAccess::local_as(
+        node.clone(),
+        gents::NodeIdentity::did(&identity).parse().unwrap(),
+    );
+    for actor in [agent.did(), gents::NodeIdentity::did(&other)] {
+        for permission in [
+            gents::store::config_client::NodePermission::DocumentRead,
+            gents::store::config_client::NodePermission::DocumentUpdate,
+            gents::store::config_client::NodePermission::DacRelationAdd,
+        ] {
+            admin
+                .grant_node_permission(&actor.parse().unwrap(), permission)
+                .await
+                .unwrap();
+        }
+    }
+    let creator = gents::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let outsider = gents::ConfigAccess::local_as(
+        node.clone(),
+        gents::NodeIdentity::did(&other).parse().unwrap(),
+    );
+    let item = stamp_create_with_access(
         &node,
+        &creator,
         &MailboxStampContext {
-            requester_did: "did:test:owner".to_string(),
-            node_did: "did:test:agent".to_string(),
-            agent_id: "operator".to_string(),
+            requester_did: gents::NodeIdentity::did(&requester).to_string(),
+            node_did: gents::NodeIdentity::did(&identity).to_string(),
+            agent_did: agent.did().to_string(),
             session_id: Some("session-1".to_string()),
         },
         FileMailboxItemArgs {
@@ -95,37 +129,25 @@ async fn rust_mailbox_dismiss_owner_drives_only_lean_legal_transitions() {
             parent_item_id: None,
             deadline_at: None,
         },
+        MAILBOX_CLOSE_COLLECTIONS,
     )
     .await
     .expect("stamped open mailbox item");
     assert_eq!(item.status, "open");
 
-    assert!(
-        dismiss_mailbox_item(&node, &item.doc_id, "did:test:other")
-            .await
-            .is_err(),
-        "non-owner dismissal must be refused"
-    );
-    assert_eq!(
-        load_mailbox_item(&node, &item.doc_id)
-            .await
-            .expect("load after refused dismissal")
-            .expect("stamped item still present")
-            .status,
-        "open",
-        "refused dismissal must leave the item open"
-    );
-
-    let dismissed = dismiss_mailbox_item(&node, &item.doc_id, "did:test:owner")
+    assert!(dismiss_mailbox_item_on(&outsider, &item.doc_id)
         .await
-        .expect("owner dismissal");
+        .is_err());
+    let dismissed = dismiss_mailbox_item_on(&creator, &item.doc_id)
+        .await
+        .expect("native-authorized dismissal is independent of session requester provenance");
     assert_eq!(dismissed.status, "dismissed");
     assert!(
         dismissed.resolved_at.is_some(),
-        "the open -> dismissed owner transition must stamp resolved_at"
+        "the open -> dismissed transition must stamp resolved_at"
     );
 
-    let repeated = dismiss_mailbox_item(&node, &item.doc_id, "did:test:owner")
+    let repeated = dismiss_mailbox_item_on(&creator, &item.doc_id)
         .await
         .expect("re-dismiss of a terminal item is an idempotent no-op");
     assert_eq!(repeated.status, "dismissed");

@@ -78,7 +78,7 @@ pub(crate) async fn request_preview_in_txn<'a>(
     }
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{
-        _docID request_id node_did agent_id session_id
+        _docID request_id node_did agent_did session_id
     }} }}"#,
         crate::store::graphql::escape_graphql_string(parent_id)
     );
@@ -179,7 +179,7 @@ mod tests {
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let response = ConfigAccess::write_local(&node, "test.session.preview.parent", r#"mutation {
             create_AgentRequest(input: { request_id: "parent", purpose: "normal", node_did: "did:test:sender",
-                agent_id: "did:test:sender:engineer", session_id: "source", content: "Parent request",
+                agent_did: "did:test:sender:engineer", session_id: "source", content: "Parent request",
                 created_at: "2030-01-01T00:00:00Z", lifecycle_state: "completed" }) { _docID }
         }"#).await.unwrap();
         let parent = crate::store::graphql::mutation_documents(&response, "create_AgentRequest")
@@ -194,7 +194,7 @@ mod tests {
             request_id: "received".into(),
             purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
             node_did: Some("did:test:receiver".into()),
-            agent_id: Some("engineer".into()),
+            agent_did: Some("engineer".into()),
             session_id: Some("target".into()),
             requester_did: Some("did:test:sender".into()),
             content: Some(content.into()),
@@ -234,6 +234,6 @@ mod tests {
             })
             .await;
         observed.unwrap();
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 }

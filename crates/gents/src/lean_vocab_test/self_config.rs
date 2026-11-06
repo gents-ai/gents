@@ -62,7 +62,7 @@ pub(crate) struct LeanSelfConfigCase {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LeanAgentCatalogEntry {
-    pub(crate) agent_id: String,
+    pub(crate) agent_did: String,
     pub(crate) enabled: bool,
 }
 
@@ -108,7 +108,8 @@ pub(crate) struct LeanAgentResolvedSession {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCandidateAgent {
-    pub(crate) agent_id: String,
+    pub(crate) agent_did: String,
+    pub(crate) creation_nonce: String,
     pub(crate) context_id: Option<String>,
     pub(crate) inference_profile_id: String,
     pub(crate) enabled: bool,
@@ -165,6 +166,9 @@ pub(crate) struct LeanJobGuardCase {
     pub(crate) name: String,
     pub(crate) writer: String,
     pub(crate) selected_before: bool,
+    pub(crate) native_authorized: bool,
+    pub(crate) native_source_authorized: bool,
+    pub(crate) add_schema_tool: bool,
     #[serde(deserialize_with = "super::required_nullable")]
     pub(crate) stored_integrations: Option<serde_json::Value>,
     pub(crate) candidate_integrations: serde_json::Value,

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
@@ -10,7 +10,7 @@ use gents_protocol::output::{
 
 use crate::request::lifecycle::execution_policy::{authorize_output_append, LeaseObservation};
 use crate::session::canonical_rows::{
-    output_segment_create_variables, transcript_message_create_variables, OutputSegmentRow,
+    output_segment_bound_variables, transcript_message_bound_variables, OutputSegmentRow,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
@@ -25,19 +25,92 @@ use super::{
     PartialHeaderFactory, ProviderAttemptClose, ProviderCloseRejection, ProviderPartialCandidate,
 };
 
+#[cfg(test)]
 pub(crate) async fn close_provider_attempt(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
     generation: &str,
     prepared: &OutputSegment,
     close: ProviderAttemptClose,
 ) -> Result<Option<String>> {
-    close_provider_attempt_at(node, generation, prepared, close, None, Utc::now()).await
+    close_provider_attempt_at(node, actor, generation, prepared, close, None, Utc::now()).await
+}
+
+pub(in crate::request::streaming) async fn close_provider_attempt_with_signer(
+    node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
+    signer: Option<crate::store::identity::ManagedAgentSigner>,
+    generation: &str,
+    prepared: &OutputSegment,
+    close: ProviderAttemptClose,
+) -> Result<Option<String>> {
+    close_provider_attempt_with_time(
+        node,
+        (actor, signer),
+        generation,
+        prepared,
+        close,
+        None,
+        Utc::now(),
+    )
+    .await
 }
 
 /// Fenced to the writer generation, except a changed generation may acknowledge
 /// an already committed, exact auxiliary closure without authorizing another write.
+#[cfg(test)]
 pub(crate) async fn close_provider_attempt_at(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
+    generation: &str,
+    prepared: &OutputSegment,
+    close: ProviderAttemptClose,
+    candidate: Option<ProviderPartialCandidate>,
+    now: DateTime<Utc>,
+) -> Result<Option<String>> {
+    close_provider_attempt_with_time(
+        node,
+        (actor, None),
+        generation,
+        prepared,
+        close,
+        candidate,
+        now,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(crate) async fn close_provider_attempt_at_with_access(
+    access: &ConfigAccess,
+    generation: &str,
+    prepared: &OutputSegment,
+    close: ProviderAttemptClose,
+    candidate: Option<ProviderPartialCandidate>,
+    now: DateTime<Utc>,
+) -> Result<Option<String>> {
+    let node = access
+        .local_node()
+        .context("fixture requires local access")?;
+    let actor = identity::Did::new(access.actor_did().context("missing fixture actor")?)?;
+    close_provider_attempt_with_time(
+        node,
+        (actor, access.managed_agent_signer()),
+        generation,
+        prepared,
+        close,
+        candidate,
+        now,
+    )
+    .await
+}
+
+async fn close_provider_attempt_with_time(
+    node: &std::sync::Arc<EmbeddedNode>,
+    (actor, signer): (
+        identity::Did,
+        Option<crate::store::identity::ManagedAgentSigner>,
+    ),
     generation: &str,
     prepared: &OutputSegment,
     close: ProviderAttemptClose,
@@ -67,223 +140,239 @@ pub(crate) async fn close_provider_attempt_at(
                 .is_none_or(|value| value.header.is_none()),
         "auxiliary audit closure cannot publish a transcript header"
     );
-    ConfigAccess::transact_local_idempotent(
-        node,
-        None,
-        IdempotentTransactionRetry::Standard,
-        "streaming.close_provider_attempt",
-        move |txn| {
-            let candidate = candidate.clone();
-            Box::pin(async move {
-                let request = load_request_in_txn(txn, prepared).await?;
-                let records = load_source_in_txn(txn, prepared).await?;
-                let closures = records
-                    .iter()
-                    .filter(|row| row.segment.close.is_some())
-                    .collect::<Vec<_>>();
-                if let [existing] = closures.as_slice() {
-                    if existing.segment.writer != prepared.writer {
-                        return Err(ProviderCloseRejection::WriterMismatch.into());
-                    }
-                    validate_closing_shape(prepared, &existing.segment)?;
-                    if !writer_matches_generation {
-                        let proposed = candidate.as_ref().map_or(prepared, |value| &value.closing);
-                        if proposed != &existing.segment {
-                            return Err(ProviderCloseRejection::InvalidExtent.into());
+    let access =
+        ConfigAccess::local_with_optional_agent_signer(node.clone(), actor.clone(), signer)?;
+    let result = access
+        .transact_idempotent(
+            IdempotentTransactionRetry::Standard,
+            "streaming.close_provider_attempt",
+            move |txn| {
+                let candidate = candidate.clone();
+                Box::pin(async move {
+                    let request = load_request_in_txn(txn, prepared).await?;
+                    let records = load_source_in_txn(txn, prepared).await?;
+                    let closures = records
+                        .iter()
+                        .filter(|row| row.segment.close.is_some())
+                        .collect::<Vec<_>>();
+                    if let [existing] = closures.as_slice() {
+                        if existing.segment.writer != prepared.writer {
+                            return Err(ProviderCloseRejection::WriterMismatch.into());
                         }
-                        validate_closed_source_extent(
-                            &records,
-                            &prepared.request_doc_id,
-                            &prepared.source,
-                            existing,
-                        )?;
-                    }
-                    let matches = matches!(
-                        (&existing.segment.close, close),
-                        (
-                            Some(SourceClose::Retracted),
-                            ProviderAttemptClose::Retracted
-                        ) | (
-                            Some(SourceClose::Closed {
-                                outcome: OutputOutcome::Partial,
-                                ..
-                            }),
-                            ProviderAttemptClose::Partial,
-                        ) | (
-                            Some(SourceClose::Closed {
-                                outcome: OutputOutcome::Complete,
-                                ..
-                            }),
-                            ProviderAttemptClose::AuxiliaryComplete,
-                        )
-                    );
-                    anyhow::ensure!(matches, "provider close replay changed outcome");
-                    if let Some(candidate) = candidate.as_ref() {
-                        validate_closing_shape(prepared, &candidate.closing)?;
-                        anyhow::ensure!(
-                            candidate.closing == existing.segment,
-                            "partial close replay changed its closure candidate"
-                        );
-                    }
-                    if request.purpose.is_some_and(
-                        gents_protocol::request_admission::RequestPurpose::is_auxiliary,
-                    ) {
-                        match existing.segment.close.as_ref() {
-                            Some(SourceClose::Closed { .. }) => validate_closed_source_extent(
+                        validate_closing_shape(prepared, &existing.segment)?;
+                        if !writer_matches_generation {
+                            let proposed =
+                                candidate.as_ref().map_or(prepared, |value| &value.closing);
+                            if proposed != &existing.segment {
+                                return Err(ProviderCloseRejection::InvalidExtent.into());
+                            }
+                            validate_closed_source_extent(
                                 &records,
                                 &prepared.request_doc_id,
                                 &prepared.source,
                                 existing,
-                            )?,
-                            Some(SourceClose::Retracted) => validate_source_physical_identities(
-                                &records,
-                                &prepared.request_doc_id,
-                                &prepared.source,
-                            )?,
-                            None => unreachable!("closure row selected"),
+                            )?;
+                        }
+                        let matches = matches!(
+                            (&existing.segment.close, close),
+                            (
+                                Some(SourceClose::Retracted),
+                                ProviderAttemptClose::Retracted
+                            ) | (
+                                Some(SourceClose::Closed {
+                                    outcome: OutputOutcome::Partial,
+                                    ..
+                                }),
+                                ProviderAttemptClose::Partial,
+                            ) | (
+                                Some(SourceClose::Closed {
+                                    outcome: OutputOutcome::Complete,
+                                    ..
+                                }),
+                                ProviderAttemptClose::AuxiliaryComplete,
+                            )
+                        );
+                        anyhow::ensure!(matches, "provider close replay changed outcome");
+                        if let Some(candidate) = candidate.as_ref() {
+                            validate_closing_shape(prepared, &candidate.closing)?;
+                            anyhow::ensure!(
+                                candidate.closing == existing.segment,
+                                "partial close replay changed its closure candidate"
+                            );
+                        }
+                        if request.purpose.is_some_and(
+                            gents_protocol::request_admission::RequestPurpose::is_auxiliary,
+                        ) {
+                            match existing.segment.close.as_ref() {
+                                Some(SourceClose::Closed { .. }) => validate_closed_source_extent(
+                                    &records,
+                                    &prepared.request_doc_id,
+                                    &prepared.source,
+                                    existing,
+                                )?,
+                                Some(SourceClose::Retracted) => {
+                                    validate_source_physical_identities(
+                                        &records,
+                                        &prepared.request_doc_id,
+                                        &prepared.source,
+                                    )?
+                                }
+                                None => unreachable!("closure row selected"),
+                            }
+                        }
+                        return partial_header_in_txn(
+                            txn,
+                            PartialHeaderInputs {
+                                prepared,
+                                generation,
+                                closing: existing,
+                                records: &records,
+                                close,
+                                header_factory: candidate
+                                    .as_ref()
+                                    .and_then(|value| value.header.as_ref()),
+                                now,
+                                replay: true,
+                            },
+                        )
+                        .await;
+                    }
+                    if request.purpose.is_some_and(
+                        gents_protocol::request_admission::RequestPurpose::is_auxiliary,
+                    ) && closures.len() > 1
+                    {
+                        return Err(ReconstructionError::ConflictingClosures {
+                            request_doc_id: prepared.request_doc_id.clone(),
+                            source: prepared.source.clone(),
+                        }
+                        .into());
+                    }
+                    anyhow::ensure!(
+                        closures.is_empty(),
+                        "provider source has multiple closing records"
+                    );
+                    if !writer_matches_generation {
+                        return Err(ProviderCloseRejection::WriterMismatch.into());
+                    }
+                    let observations = records
+                        .iter()
+                        .map(|row| ObservedSegment {
+                            doc_id: &row.doc_id,
+                            segment: &row.segment,
+                        })
+                        .collect::<Vec<_>>();
+                    let extent = gents_protocol::output::extent::inspect_open_source(
+                        &observations,
+                        &prepared.request_doc_id,
+                        &prepared.source,
+                        &prepared.writer,
+                    )?;
+                    if !matches!(close, ProviderAttemptClose::Retracted) {
+                        if let Some(last_created_at) = extent.last_created_at.as_deref() {
+                            let closing =
+                                candidate.as_ref().map_or(prepared, |value| &value.closing);
+                            let last_created_at = DateTime::parse_from_rfc3339(last_created_at)
+                                .context("provider source has an invalid committed timestamp")?;
+                            let closing_created_at =
+                                DateTime::parse_from_rfc3339(&closing.created_at)
+                                    .context("provider closure has an invalid created_at")?;
+                            if closing_created_at < last_created_at {
+                                return Err(ProviderCloseRejection::RegressedTimestamp.into());
+                            }
                         }
                     }
-                    return partial_header_in_txn(
+                    let derived_close = match close {
+                        ProviderAttemptClose::Retracted => SourceClose::Retracted,
+                        ProviderAttemptClose::Partial | ProviderAttemptClose::AuxiliaryComplete => {
+                            SourceClose::Closed {
+                                outcome: if matches!(close, ProviderAttemptClose::AuxiliaryComplete)
+                                {
+                                    OutputOutcome::Complete
+                                } else {
+                                    OutputOutcome::Partial
+                                },
+                                segments: extent.segments,
+                                stream_bytes: extent.stream_bytes,
+                            }
+                        }
+                    };
+                    let closure = candidate
+                        .as_ref()
+                        .map(|value| value.closing.clone())
+                        .unwrap_or_else(|| {
+                            let mut closure = prepared.clone();
+                            closure.ordinal = None;
+                            closure.runs.clear();
+                            closure.payload.clear();
+                            closure.close = Some(derived_close.clone());
+                            closure
+                        });
+                    if closure.close.as_ref() != Some(&derived_close) {
+                        return Err(ProviderCloseRejection::InvalidExtent.into());
+                    }
+                    validate_closing_shape(prepared, &closure)?;
+                    let owner = request
+                        .execution_generation
+                        .as_deref()
+                        .context("request generation missing")?;
+                    let state = request
+                        .lifecycle_state
+                        .context("request lifecycle missing")?;
+                    let expiry = request
+                        .execution_lease_expires_at
+                        .as_deref()
+                        .context("request expiry missing")?;
+                    let deadline = DateTime::parse_from_rfc3339(expiry)?.timestamp_millis();
+                    if !authorize_output_append(
+                        LeaseObservation {
+                            request: state,
+                            generation: owner,
+                            deadline_ms: deadline,
+                        },
+                        generation,
+                        now.timestamp_millis(),
+                    ) {
+                        return Err(ProviderCloseRejection::LostLease.into());
+                    }
+                    let response = txn
+                        .execute_with_variables(
+                            CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                            &output_segment_bound_variables(txn, &closure).await?,
+                        )
+                        .await?;
+                    let close_doc_id = created_doc_id(&response, "AgentOutputSegment")?;
+                    let closing = OutputSegmentRow {
+                        doc_id: close_doc_id,
+                        segment: closure,
+                    };
+                    partial_header_in_txn(
                         txn,
                         PartialHeaderInputs {
                             prepared,
                             generation,
-                            closing: existing,
+                            closing: &closing,
                             records: &records,
                             close,
                             header_factory: candidate
                                 .as_ref()
                                 .and_then(|value| value.header.as_ref()),
                             now,
-                            replay: true,
+                            replay: false,
                         },
                     )
-                    .await;
-                }
-                if request
-                    .purpose
-                    .is_some_and(gents_protocol::request_admission::RequestPurpose::is_auxiliary)
-                    && closures.len() > 1
-                {
-                    return Err(ReconstructionError::ConflictingClosures {
-                        request_doc_id: prepared.request_doc_id.clone(),
-                        source: prepared.source.clone(),
-                    }
-                    .into());
-                }
-                anyhow::ensure!(
-                    closures.is_empty(),
-                    "provider source has multiple closing records"
-                );
-                if !writer_matches_generation {
-                    return Err(ProviderCloseRejection::WriterMismatch.into());
-                }
-                let observations = records
-                    .iter()
-                    .map(|row| ObservedSegment {
-                        doc_id: &row.doc_id,
-                        segment: &row.segment,
-                    })
-                    .collect::<Vec<_>>();
-                let extent = gents_protocol::output::extent::inspect_open_source(
-                    &observations,
-                    &prepared.request_doc_id,
-                    &prepared.source,
-                    &prepared.writer,
-                )?;
-                if !matches!(close, ProviderAttemptClose::Retracted) {
-                    if let Some(last_created_at) = extent.last_created_at.as_deref() {
-                        let closing = candidate.as_ref().map_or(prepared, |value| &value.closing);
-                        let last_created_at = DateTime::parse_from_rfc3339(last_created_at)
-                            .context("provider source has an invalid committed timestamp")?;
-                        let closing_created_at = DateTime::parse_from_rfc3339(&closing.created_at)
-                            .context("provider closure has an invalid created_at")?;
-                        if closing_created_at < last_created_at {
-                            return Err(ProviderCloseRejection::RegressedTimestamp.into());
-                        }
-                    }
-                }
-                let derived_close = match close {
-                    ProviderAttemptClose::Retracted => SourceClose::Retracted,
-                    ProviderAttemptClose::Partial | ProviderAttemptClose::AuxiliaryComplete => {
-                        SourceClose::Closed {
-                            outcome: if matches!(close, ProviderAttemptClose::AuxiliaryComplete) {
-                                OutputOutcome::Complete
-                            } else {
-                                OutputOutcome::Partial
-                            },
-                            segments: extent.segments,
-                            stream_bytes: extent.stream_bytes,
-                        }
-                    }
-                };
-                let closure = candidate
-                    .as_ref()
-                    .map(|value| value.closing.clone())
-                    .unwrap_or_else(|| {
-                        let mut closure = prepared.clone();
-                        closure.ordinal = None;
-                        closure.runs.clear();
-                        closure.payload.clear();
-                        closure.close = Some(derived_close.clone());
-                        closure
-                    });
-                if closure.close.as_ref() != Some(&derived_close) {
-                    return Err(ProviderCloseRejection::InvalidExtent.into());
-                }
-                validate_closing_shape(prepared, &closure)?;
-                let owner = request
-                    .execution_generation
-                    .as_deref()
-                    .context("request generation missing")?;
-                let state = request
-                    .lifecycle_state
-                    .context("request lifecycle missing")?;
-                let expiry = request
-                    .execution_lease_expires_at
-                    .as_deref()
-                    .context("request expiry missing")?;
-                let deadline = DateTime::parse_from_rfc3339(expiry)?.timestamp_millis();
-                if !authorize_output_append(
-                    LeaseObservation {
-                        request: state,
-                        generation: owner,
-                        deadline_ms: deadline,
-                    },
-                    generation,
-                    now.timestamp_millis(),
-                ) {
-                    return Err(ProviderCloseRejection::LostLease.into());
-                }
-                let response = txn
-                    .execute_with_variables(
-                        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-                        &output_segment_create_variables(&closure)?,
-                    )
-                    .await?;
-                let close_doc_id = created_doc_id(&response, "AgentOutputSegment")?;
-                let closing = OutputSegmentRow {
-                    doc_id: close_doc_id,
-                    segment: closure,
-                };
-                partial_header_in_txn(
-                    txn,
-                    PartialHeaderInputs {
-                        prepared,
-                        generation,
-                        closing: &closing,
-                        records: &records,
-                        close,
-                        header_factory: candidate.as_ref().and_then(|value| value.header.as_ref()),
-                        now,
-                        replay: false,
-                    },
-                )
-                .await
-            })
-        },
+                    .await
+                })
+            },
+        )
+        .await?;
+    crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+        &access,
+        &prepared.node_did,
+        &actor,
+        &prepared.session_id,
     )
-    .await
+    .await?;
+    Ok(result)
 }
 
 fn validate_closing_shape(prepared: &OutputSegment, closing: &OutputSegment) -> Result<()> {
@@ -455,7 +544,7 @@ async fn partial_header_in_txn(
     let response = txn
         .execute_with_variables(
             CREATE_AGENT_MESSAGE_MUTATION,
-            &transcript_message_create_variables(&message)?,
+            &transcript_message_bound_variables(txn, &message).await?,
         )
         .await?;
     let message_doc_id = created_doc_id(&response, "AgentMessage")?;

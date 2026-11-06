@@ -46,7 +46,7 @@ async fn atomic_background_completion_coalesces_keyed_agent_wakeups() {
     assert_eq!(second.request_id, first.request_id);
     assert_eq!(second.session_id, session_id);
 
-    let rows = queue_rows(&db.node, session_id)
+    let rows = queue_rows(&db, session_id)
         .await
         .into_iter()
         .filter(|row| {
@@ -60,7 +60,7 @@ async fn atomic_background_completion_coalesces_keyed_agent_wakeups() {
     let row = &rows[0];
     assert_eq!(row.doc_id, first.doc_id);
     assert_eq!(row.session_id, session_id);
-    assert_eq!(row.agent_id, TEST_AGENT_ID);
+    assert_eq!(row.agent_did, db.agent_did());
     assert_eq!(
         row.content,
         "Process pending agent completion notifications in this session."
@@ -83,14 +83,13 @@ async fn atomic_background_completion_coalesces_keyed_agent_wakeups() {
         .and_then(|input| input.queue.as_ref())
         .is_some_and(queue_is_automated_wakeup));
     let notifications = db
-        .node
+        .agent_access
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ request_doc_id }} }}"#,
             escape_graphql_string(&first.doc_id)
         ))
-        .await;
-    assert!(!notifications.has_errors(), "{:?}", notifications.errors);
-    let data = notifications.data.unwrap();
+        .await.unwrap();
+    let data = &notifications["data"];
     let messages = data["AgentMessage"].as_array().unwrap();
     assert_eq!(
         messages.len(),
@@ -118,12 +117,12 @@ async fn atomic_background_completion_ignores_append_row_with_same_source_and_ke
         interrupted_request_id: None,
         background_completion_wake_version: None,
     };
-    insert_raw_queue_request(
-        &db.node,
-        db.node_did(),
+    insert_runtime_queue_request(
+        &db,
+        &parent,
         "req-existing-append-same-key",
-        session_id,
-        &wake_queue_input(append_hints.clone()),
+        "raw duplicate",
+        wake_queue_input(append_hints.clone()),
     )
     .await;
     let coalesce_hints = RequestQueue {
@@ -144,7 +143,7 @@ async fn atomic_background_completion_ignores_append_row_with_same_source_and_ke
         .request
         .expect("non-Goal wake");
 
-    let rows = queue_rows(&db.node, session_id)
+    let rows = queue_rows(&db, session_id)
         .await
         .into_iter()
         .filter(|row| {
@@ -196,42 +195,30 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
         .unwrap()
         .request
         .expect("non-Goal wake");
-    let duplicate = session_request_create_mutation(
+    let duplicate_doc_id = insert_runtime_queue_request(
+        &db,
         &parent,
-        SessionRequestFields {
-            agent_id: TEST_AGENT_ID,
-            content: "raw duplicate",
-            execution_origin: ExecutionOrigin::Scheduled,
-            input: wake_queue_input(hints.clone()),
-            request_id: "req-coalesce-race-duplicate",
-            created_at: &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            retry_key: None,
-        },
+        "req-coalesce-race-duplicate",
+        "raw duplicate",
+        wake_queue_input(hints.clone()),
     )
-    .await
-    .unwrap();
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
-        &db.node,
-        "test.signed_duplicate_wake",
-        &duplicate,
-    )
-    .await
-    .unwrap();
-    let duplicate_doc_id = extract_single_doc_id(&response, "create_AgentRequest").unwrap();
+    .await;
 
-    let reconciled = reconcile_coalesced_pending_request(
-        &db.node,
+    let reconciled = reconcile_coalesced_pending_request_for_with_access(
+        (&db.node, &db.agent_access),
+        db.agent_did(),
         session_id,
         db.node_did(),
         QueueSource::BackgroundCompletion,
         &key,
+        None,
     )
     .await
     .unwrap()
     .expect("survivor");
     assert_eq!(reconciled.request_id, survivor.request_id);
 
-    let rows = queue_rows(&db.node, session_id).await;
+    let rows = queue_rows(&db, session_id).await;
     let survivor_row = rows
         .iter()
         .find(|row| row.request_id == survivor.request_id)
@@ -301,18 +288,16 @@ async fn atomic_background_completion_without_key_rejects_without_persisting_inp
         )
         .await;
     assert!(result.is_err());
-    assert!(queue_rows(&db.node, session_id)
-        .await
-        .into_iter()
-        .all(|row| {
-            !row.input
-                .as_ref()
-                .and_then(|input| input.queue.as_ref())
-                .is_some_and(queue_is_automated_wakeup)
-        }));
-    let response = db.node.execute("{ AgentMessage {_docID} }").await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    assert!(response.data.unwrap()["AgentMessage"]
+    assert!(queue_rows(&db, session_id).await.into_iter().all(|row| {
+        !row.input
+            .as_ref()
+            .and_then(|input| input.queue.as_ref())
+            .is_some_and(queue_is_automated_wakeup)
+    }));
+    let response = db.agent_access.execute(
+        r#"{ AgentMessage(filter: {message_key: {_eq: "background-completion-notification:unkeyed:tool"}}) {_docID} }"#,
+    ).await.unwrap();
+    assert!(response["data"]["AgentMessage"]
         .as_array()
         .unwrap()
         .is_empty());

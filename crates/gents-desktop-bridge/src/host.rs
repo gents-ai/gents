@@ -190,7 +190,7 @@ impl ClientHost {
                     self.core
                         .select_agent_model(
                             &request.node_did,
-                            &request.agent_id,
+                            &request.agent_did,
                             &request.backend_id,
                             &request.model_name,
                             request.reasoning_effort,
@@ -530,6 +530,28 @@ impl ClientHost {
                         "use an absolute local runtime home path",
                     ));
                 }
+                self.core
+                    .refresh_local_standard_peer(&home, "Local runtime")
+                    .await
+                    .map_err(backend_error)?;
+                self.core
+                    .request_p2p_repair()
+                    .await
+                    .map_err(backend_error)?;
+                encode(())
+            }
+            ClientCommand::EnrollLocal { node_home } => {
+                let home = match node_home {
+                    Some(path) if !path.trim().is_empty() => std::path::PathBuf::from(path.trim()),
+                    _ => gents_desktop_core::local_runtime::default_node_home()
+                        .map_err(backend_error)?,
+                };
+                if !home.is_absolute() {
+                    return Err(BridgeError::new(
+                        BridgeErrorCode::InvalidArgument,
+                        "use an absolute local runtime home path",
+                    ));
+                }
                 let peer = self
                     .core
                     .refresh_local_standard_peer(&home, "Local runtime")
@@ -728,9 +750,7 @@ impl ClientHost {
                     .map_err(BridgeError::untyped)?,
             ),
             ClientCommand::ProcessControl { request } => encode(
-                crate::process_control::process_control(&self.core, &request)
-                    .await
-                    .map_err(BridgeError::untyped)?,
+                crate::process_control::process_control(&self.core, &request).await?,
             ),
         }
     }

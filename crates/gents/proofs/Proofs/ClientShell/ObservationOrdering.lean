@@ -224,6 +224,13 @@ structure State where
   sharedEpoch : Nat := 0
   nodeEpoch : Nat → Nat := fun _ => 0
 
+/-- Runtime documents are read from the selected runtime's authenticated database
+endpoint under the client DID. The observer arms its GraphQL subscriptions before
+requesting the initial snapshot; reconnect, renewal and gaps require a fresh snapshot.
+These epochs reject stale publications from those reads. A local replica is never
+an alternative source for runtime configuration, sessions or transcript data.
+Native subscription delivery may omit permission-denied empty results; document
+policy revocation invalidation remains an upstream limitation, not an access grant. -/
 structure Read where
   dataEpoch : Nat
   requestEventEpoch : Nat
@@ -685,3 +692,83 @@ theorem unapproved_has_no_activation_error (s : State) (authority : Authority) :
   simp [project]
 
 end EnrollmentActivationObservation
+
+namespace RuntimeConnectionObservation
+
+inductive Status where
+  | connecting | connected | disconnected | denied
+  deriving DecidableEq, Repr
+
+inductive Event where
+  | sourceStarted | subscriptionsReady | snapshotSucceeded | transportFailed | permissionDenied
+  deriving DecidableEq, Repr
+
+/-- A direct runtime connection is established only after subscriptions are armed
+and an authenticated snapshot succeeds. A successful empty result is still a
+successful snapshot: ACP may filter every row without returning an error. P2P
+peer or replication observations do not determine this state. -/
+def observe (status : Status) (event : Event) : Status :=
+  match event with
+  | .sourceStarted | .subscriptionsReady => .connecting
+  | .snapshotSucceeded => .connected
+  | .transportFailed => .disconnected
+  | .permissionDenied => .denied
+
+def blocksAdmission (status : Status) : Bool := decide (status ≠ .connected)
+
+theorem pairing_does_not_decide_runtime_admission (status : Status) (p2p sync : Bool) :
+    (if p2p || sync then blocksAdmission status else blocksAdmission status) = blocksAdmission status := by
+  cases p2p <;> cases sync <;> rfl
+
+theorem empty_snapshot_is_connected (status : Status) :
+    observe status .snapshotSucceeded = .connected := by rfl
+
+theorem subscription_alone_is_not_a_completed_read (status : Status) :
+    observe status .subscriptionsReady = .connecting := by rfl
+
+theorem denial_is_not_an_empty_result (status : Status) :
+    observe status .permissionDenied = .denied := by rfl
+
+/-- A denial is not terminal. A grant restored on the runtime emits nothing a
+denied reader can subscribe to, and a 401 from an expired or rotated bearer is
+also reported as a denial, so the observer restarts a denied source at the same
+endpoint after `reprobeDelayMs` of its consecutive-denial count. The count grows
+on each denial, resets once an authenticated snapshot succeeds, and the delay
+doubles from `reprobeBaseMs` up to `reprobeCapMs`, bounding both the probe rate
+against a still-denied runtime and the time a restored grant stays unobserved.
+Refresh reads outside the source do not move this state: rows they publish do
+not establish a connection, and a denial they observe is confirmed by the
+source. -/
+def reprobeBaseMs : Nat := 1000
+
+def reprobeCapMs : Nat := 30000
+
+def reprobeDelayMs (denials : Nat) : Nat := min (reprobeBaseMs * 2 ^ denials) reprobeCapMs
+
+def nextDenials (denials : Nat) : Event → Nat
+  | .permissionDenied => denials + 1
+  | .snapshotSucceeded => 0
+  | .sourceStarted | .subscriptionsReady | .transportFailed => denials
+
+theorem denied_source_restarts :
+    observe .denied .sourceStarted = .connecting := by rfl
+
+theorem reprobe_delay_bounded (denials : Nat) : reprobeDelayMs denials ≤ reprobeCapMs :=
+  Nat.min_le_right _ _
+
+theorem reprobe_delay_positive (denials : Nat) : 0 < reprobeDelayMs denials := by
+  unfold reprobeDelayMs reprobeBaseMs reprobeCapMs
+  exact Nat.lt_min.mpr ⟨Nat.mul_pos (by decide) (Nat.pow_pos (by decide)), by decide⟩
+
+theorem reprobe_delay_monotone (denials : Nat) :
+    reprobeDelayMs denials ≤ reprobeDelayMs (denials + 1) := by
+  have h : reprobeBaseMs * 2 ^ denials ≤ reprobeBaseMs * 2 ^ (denials + 1) :=
+    Nat.mul_le_mul_left _ (Nat.pow_le_pow_right (by decide) (Nat.le_succ _))
+  unfold reprobeDelayMs
+  simp only [Nat.min_def]
+  split <;> split <;> omega
+
+theorem connected_snapshot_resets_reprobe (denials : Nat) :
+    nextDenials denials .snapshotSucceeded = 0 := by rfl
+
+end RuntimeConnectionObservation

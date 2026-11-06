@@ -1298,6 +1298,32 @@ Denies the desktop_mailbox_start_request command without any pre-configured scop
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-managed-server-enroll`
+
+</td>
+<td>
+
+Enables the desktop_managed_server_enroll command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-managed-server-enroll`
+
+</td>
+<td>
+
+Denies the desktop_managed_server_enroll command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-managed-server-open-login-items`
 
 </td>
@@ -2962,32 +2988,6 @@ Denies the desktop_session_history command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-session-hydration-retry`
-
-</td>
-<td>
-
-Enables the desktop_session_hydration_retry command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-session-hydration-retry`
-
-</td>
-<td>
-
-Denies the desktop_session_hydration_retry command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
 `gents-desktop-bridge:allow-desktop-session-live-delta`
 
 </td>
@@ -3033,6 +3033,32 @@ Enables the desktop_session_provenance command without any pre-configured scope.
 <td>
 
 Denies the desktop_session_provenance command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-session-reload`
+
+</td>
+<td>
+
+Enables the desktop_session_reload command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-session-reload`
+
+</td>
+<td>
+
+Denies the desktop_session_reload command without any pre-configured scope.
 
 </td>
 </tr>

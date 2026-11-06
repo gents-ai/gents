@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use crate::tools::call::lifecycle::IllegalToolCallTransition;
 use crate::triggers::event_delivery::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
@@ -14,9 +14,9 @@ mod query;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use cooldown::GOSSIP_FALLBACK_POLL;
 use cooldown::{
-    prune_processed_requests, take_next_eligible_pending_request, GOSSIP_FALLBACK_POLL,
-    PROCESSED_REQUEST_COOLDOWN,
+    prune_processed_requests, take_next_eligible_pending_request, PROCESSED_REQUEST_COOLDOWN,
 };
 pub(crate) use query::{agent_request_from_mutation_response, AGENT_REQUEST_FIELDS};
 
@@ -27,7 +27,7 @@ pub struct AgentRequest {
     pub request_id: String,
     pub node_did: String,
     pub requester_did: Option<String>,
-    pub agent_id: String,
+    pub agent_did: String,
     pub session_id: String,
     pub content: String,
     pub retry_parent_request_doc_id: Option<String>,
@@ -91,7 +91,9 @@ impl TryFrom<gents_protocol::row::AgentRequestRow> for AgentRequest {
             request_id: row.request_id,
             node_did: row.node_did.context("agent request is missing node_did")?,
             requester_did: normalize_optional_string(row.requester_did),
-            agent_id: row.agent_id.context("agent request is missing agent_id")?,
+            agent_did: row
+                .agent_did
+                .context("agent request is missing agent_did")?,
             session_id: row
                 .session_id
                 .context("agent request is missing session_id")?,
@@ -136,8 +138,8 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
 
 pub fn validate_agent_request(req: &AgentRequest) -> Result<()> {
     anyhow::ensure!(
-        !req.agent_id.is_empty() && req.agent_id.trim() == req.agent_id,
-        "agent request agent_id must be a canonical nonblank identifier"
+        !req.agent_did.is_empty() && req.agent_did.trim() == req.agent_did,
+        "agent request agent_did must be a canonical nonblank identifier"
     );
     if req.max_total_tokens.is_some_and(|limit| limit < 0) {
         anyhow::bail!("agent request max_total_tokens must be non-negative");
@@ -192,6 +194,17 @@ pub fn validate_agent_request(req: &AgentRequest) -> Result<()> {
 }
 
 pub trait Watcher: Send + Sync {
+    fn set_agent_identities(
+        &mut self,
+        _agents: Vec<Arc<dyn crate::store::identity::NodeIdentity>>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn retains_agent(&self, _agent_did: &str) -> bool {
+        true
+    }
+
     fn next_request(
         &mut self,
     ) -> impl std::future::Future<Output = Option<Result<AgentRequest>>> + Send;
@@ -202,6 +215,8 @@ pub struct DefraWatcher {
     node_did: String,
     subscription: events::DocumentChangeSubscription,
     processed_request_ids: cooldown::ProcessedRequests,
+    agents: Vec<Arc<dyn crate::store::identity::NodeIdentity>>,
+    scan_failed: bool,
 }
 
 impl DefraWatcher {
@@ -221,7 +236,19 @@ impl DefraWatcher {
             node_did: node_did.to_string(),
             subscription,
             processed_request_ids: RapidHashMap::new(),
+            agents: Vec::new(),
+            scan_failed: false,
         })
+    }
+
+    pub fn for_agents(
+        node: Arc<EmbeddedNode>,
+        node_did: &str,
+        agents: Vec<Arc<dyn crate::store::identity::NodeIdentity>>,
+    ) -> Result<Self> {
+        let mut watcher = Self::new(node, node_did)?;
+        watcher.set_agent_identities(agents)?;
+        Ok(watcher)
     }
 }
 
@@ -234,15 +261,65 @@ impl EventDeliveryRuntimeContract for DefraWatcher {
     };
 }
 
-async fn wait_for_request_change(
+pub(crate) async fn wait_for_request_change(
     subscription: &mut events::DocumentChangeSubscription,
 ) -> Result<Option<events::DocumentChangeBatch>, tokio::time::error::Elapsed> {
     tokio::time::timeout(GOSSIP_FALLBACK_POLL, subscription.recv()).await
 }
 
+pub(crate) async fn wait_for_change_or_resubscribe<F>(
+    subscription: &mut events::DocumentChangeSubscription,
+    reopen: F,
+) -> anyhow::Result<()>
+where
+    F: FnOnce() -> anyhow::Result<events::DocumentChangeSubscription>,
+{
+    if matches!(wait_for_request_change(subscription).await, Ok(None)) {
+        tokio::time::sleep(GOSSIP_FALLBACK_POLL).await;
+        *subscription = reopen()?;
+    }
+    Ok(())
+}
+
 impl Watcher for DefraWatcher {
+    fn set_agent_identities(
+        &mut self,
+        mut agents: Vec<Arc<dyn crate::store::identity::NodeIdentity>>,
+    ) -> Result<()> {
+        for agent in &agents {
+            anyhow::ensure!(
+                agent.did() != self.node_did,
+                "request watcher requires distinct agent identities"
+            );
+            identity::Did::new(agent.did())?;
+        }
+        agents.sort_by(|a, b| a.did().cmp(b.did()));
+        agents.dedup_by(|a, b| a.did() == b.did());
+        let unchanged = self.agents.len() == agents.len()
+            && self
+                .agents
+                .iter()
+                .zip(&agents)
+                .all(|(a, b)| a.did() == b.did());
+        if !unchanged {
+            self.scan_failed = false;
+        }
+        self.agents = agents;
+        Ok(())
+    }
+
+    fn retains_agent(&self, agent_did: &str) -> bool {
+        self.agents.iter().any(|agent| agent.did() == agent_did)
+    }
+
     async fn next_request(&mut self) -> Option<Result<AgentRequest>> {
         loop {
+            if self.scan_failed {
+                match wait_for_request_change(&mut self.subscription).await {
+                    Ok(None) => return None,
+                    Ok(Some(_)) | Err(_) => self.scan_failed = false,
+                }
+            }
             let now = Instant::now();
             prune_processed_requests(&mut self.processed_request_ids, now);
 
@@ -265,7 +342,10 @@ impl Watcher for DefraWatcher {
                         );
                     }
                 }
-                Err(e) => return Some(Err(e)),
+                Err(e) => {
+                    self.scan_failed = true;
+                    return Some(Err(e));
+                }
             }
 
             let batch = match wait_for_request_change(&mut self.subscription).await {

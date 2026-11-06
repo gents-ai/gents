@@ -9,9 +9,11 @@
 use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
-use gents::store::config_client::{ConfigAccess, ReceiptWriteError};
+use gents::request::lifecycle::ClientSubmissionError;
+use gents::store::config_client::ConfigAccess;
 use gents_protocol::graphql::{escape_graphql_string, GraphqlRequestOptions};
 use gents_protocol::request_admission::AgentRequestCreate;
+#[cfg(test)]
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 
@@ -24,18 +26,17 @@ pub(crate) mod journal;
 
 /// Confirmed rejection of the original caller-bound signed preparation.
 /// The original identity remains recoverable until the caller acknowledges it.
-#[derive(Debug)]
-pub struct SubmissionNotDelivered {
-    pub request: SubmittedRequest,
+/// The journal retains the outcome, not the native error chain; a recovery
+/// after a lost response can therefore lack the original error detail.
+#[derive(Debug, thiserror::Error)]
+pub enum SubmissionNotDelivered {
+    #[error("request {} was not delivered", .request.request_id)]
+    Rejected {
+        request: SubmittedRequest,
+        #[source]
+        cause: Option<anyhow::Error>,
+    },
 }
-
-impl std::fmt::Display for SubmissionNotDelivered {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "request {} was not delivered", self.request.request_id)
-    }
-}
-
-impl std::error::Error for SubmissionNotDelivered {}
 
 /// A prepared owner submission whose commit outcome could not be determined.
 ///
@@ -73,6 +74,96 @@ pub struct SubmissionOutcomeUnknown {
     pub session_id: String,
     pub pending: UnresolvedSubmission,
     pub cause: Option<anyhow::Error>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SubmissionAttemptError {
+    #[error(transparent)]
+    Unknown(Box<SubmissionOutcomeUnknown>),
+    #[error(transparent)]
+    Rejected(ClientSubmissionError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SubmissionError {
+    #[error(transparent)]
+    Unknown(#[from] Box<SubmissionOutcomeUnknown>),
+    #[error(transparent)]
+    Cleanup(#[from] SubmissionCleanupIncomplete),
+    #[error(transparent)]
+    NotDelivered(#[from] SubmissionNotDelivered),
+    #[error(transparent)]
+    Unconfirmed(#[from] DeliveryUnconfirmed),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl From<SubmissionOutcomeUnknown> for SubmissionError {
+    fn from(error: SubmissionOutcomeUnknown) -> Self {
+        Self::Unknown(Box::new(error))
+    }
+}
+
+/// A confirmed delivery outcome whose retained local journal could not be retired.
+#[derive(Debug, thiserror::Error)]
+pub enum SubmissionCleanupIncomplete {
+    #[error("request {} was delivered; local journal cleanup failed: {cause}", .request.request_id)]
+    Accepted {
+        request: SubmittedRequest,
+        #[source]
+        cause: anyhow::Error,
+    },
+    #[error("request {} was not delivered; local journal cleanup failed: {cause}", .request.request_id)]
+    Rejected {
+        request: SubmittedRequest,
+        #[source]
+        cause: anyhow::Error,
+        rejection: anyhow::Error,
+    },
+}
+
+pub(crate) fn report_cleanup(
+    pending: &UnresolvedSubmission,
+    delivery: std::result::Result<SubmittedRequest, SubmissionAttemptError>,
+    cleanup: Result<()>,
+) -> std::result::Result<SubmittedRequest, SubmissionError> {
+    let delivery = match delivery {
+        Err(SubmissionAttemptError::Unknown(error)) => return Err(error.into()),
+        Err(SubmissionAttemptError::Rejected(error)) => Err(anyhow::Error::from(error)),
+        Ok(request) => Ok(request),
+    };
+    match cleanup {
+        Ok(()) => delivery.map_err(SubmissionError::Other),
+        Err(cause) => match delivery {
+            Ok(request) => Err(SubmissionCleanupIncomplete::Accepted { request, cause }.into()),
+            Err(rejection) => Err(SubmissionCleanupIncomplete::Rejected {
+                request: pending.result.clone(),
+                cause,
+                rejection,
+            }
+            .into()),
+        },
+    }
+}
+
+pub(crate) fn report_rejection(
+    pending: &UnresolvedSubmission,
+    rejection: anyhow::Error,
+    cleanup: Result<()>,
+) -> SubmissionError {
+    match cleanup {
+        Err(cause) => SubmissionCleanupIncomplete::Rejected {
+            request: pending.result.clone(),
+            cause,
+            rejection,
+        }
+        .into(),
+        Ok(()) => SubmissionNotDelivered::Rejected {
+            request: pending.result.clone(),
+            cause: Some(rejection),
+        }
+        .into(),
+    }
 }
 
 impl std::fmt::Display for SubmissionOutcomeUnknown {
@@ -128,7 +219,11 @@ impl UnresolvedSubmission {
                 && self.result.request_id == self.request_id
                 && self.result.node_did == self.node_did
                 && self.result.session_id == self.session_id
-                && self.mutation == self.create.graphql_mutation().map_err(anyhow::Error::msg)?,
+                && self.mutation
+                    == self
+                        .create
+                        .graphql_client_publication_mutation()
+                        .map_err(anyhow::Error::msg)?,
             "retained submission is inconsistent with its signed request"
         );
         Ok(())
@@ -146,7 +241,9 @@ impl UnresolvedSubmission {
 
     /// Retain a prepared signed create and the identity it will produce.
     pub(crate) fn new(create: AgentRequestCreate, result: SubmittedRequest) -> Result<Self> {
-        let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
+        let mutation = create
+            .graphql_client_publication_mutation()
+            .map_err(anyhow::Error::msg)?;
         Ok(Self {
             request_id: create.request_id.clone(),
             session_id: create.session_id.clone(),
@@ -157,7 +254,7 @@ impl UnresolvedSubmission {
         })
     }
 
-    fn outcome_unknown(&self, cause: Option<anyhow::Error>) -> anyhow::Error {
+    fn unknown(&self, cause: Option<anyhow::Error>) -> SubmissionOutcomeUnknown {
         tracing::warn!(
             action = "chat_submit_receipt_unresolved",
             request_id = %self.request_id,
@@ -171,7 +268,11 @@ impl UnresolvedSubmission {
             pending: self.clone(),
             cause,
         }
-        .into()
+    }
+
+    #[cfg(test)]
+    fn outcome_unknown(&self, cause: Option<anyhow::Error>) -> anyhow::Error {
+        self.unknown(cause).into()
     }
 }
 
@@ -181,15 +282,14 @@ impl UnresolvedSubmission {
 /// the prepared admission signature; a row that matches the identity but not
 /// the signature is an error, never an absence. Local access reads the same
 /// receipt from the embedded owner.
-pub(super) async fn owner_receipt(
-    access: &ConfigAccess,
-    create: &AgentRequestCreate,
-) -> Result<bool> {
+#[cfg(test)]
+async fn owner_receipt(access: &ConfigAccess, create: &AgentRequestCreate) -> Result<bool> {
     read_owner_receipt(access, create)
         .await
         .context(RECEIPT_READ_CONTEXT)
 }
 
+#[cfg(test)]
 async fn read_owner_receipt(access: &ConfigAccess, create: &AgentRequestCreate) -> Result<bool> {
     let scope = gents::session::session_scope_filter(
         &create.node_did,
@@ -256,12 +356,8 @@ async fn read_owner_receipt(access: &ConfigAccess, create: &AgentRequestCreate) 
 pub(super) async fn commit_signed_submission(
     access: &ConfigAccess,
     pending: UnresolvedSubmission,
-) -> Result<SubmittedRequest> {
-    let written = access
-        .write_with_receipt("desktop.chat.submit", &pending.mutation, || {
-            owner_receipt(access, &pending.create)
-        })
-        .await;
+) -> std::result::Result<SubmittedRequest, SubmissionAttemptError> {
+    let written = gents::request::lifecycle::submit_client_request(access, &pending.create).await;
     let Err(error) = written else {
         return Ok(pending.result);
     };
@@ -271,21 +367,22 @@ pub(super) async fn commit_signed_submission(
 async fn reconcile_commit_failure(
     access: &ConfigAccess,
     pending: UnresolvedSubmission,
-    error: ReceiptWriteError,
-) -> Result<SubmittedRequest> {
+    error: ClientSubmissionError,
+) -> std::result::Result<SubmittedRequest, SubmissionAttemptError> {
     if gents::store::graphql::is_storage_full(&error) {
-        return Err(pending.outcome_unknown(Some(error.into())));
+        return Err(SubmissionAttemptError::Unknown(Box::new(
+            pending.unknown(Some(error.into())),
+        )));
     }
-    // The owner processed the mutation and answered with GraphQL errors; an
-    // unreadable receipt proves nothing about delivery.
-    if matches!(&error, ReceiptWriteError::Write(write) if write.is_graphql_rejection()) {
-        match owner_receipt(access, &pending.create).await {
-            Ok(true) => return Ok(pending.result),
-            Ok(false) if !reports_existing_request(&error) => return Err(error.into()),
-            _ => {}
+    match gents::request::lifecycle::reconcile_client_request(access, &pending.create).await {
+        Ok(true) => Ok(pending.result),
+        Ok(false) if !error.is_unconfirmed() && !reports_existing_request(&error) => {
+            Err(SubmissionAttemptError::Rejected(error))
         }
+        _ => Err(SubmissionAttemptError::Unknown(Box::new(
+            pending.unknown(Some(error.into())),
+        ))),
     }
-    Err(pending.outcome_unknown(Some(error.into())))
 }
 
 /// A rejection that implies the owner already holds a request with this id.
@@ -300,7 +397,7 @@ fn reports_existing_request(error: &(dyn std::error::Error + 'static)) -> bool {
 
 /// Reconcile an earlier unknown send whose signed payload is no longer retained.
 ///
-/// A visible owner request with this identity proves delivery. Absence, or an
+/// A visible owner request with a completed publication marker proves delivery. Absence, or an
 /// unreadable lookup, proves nothing: the original write may still be in
 /// flight. Both return [`DeliveryUnconfirmed`] so the identity stays
 /// unresolved and no fresh request is minted.
@@ -309,13 +406,13 @@ pub async fn reconcile_unretained_submission(
     node_did: &str,
     session_id: &str,
     request_id: &str,
-) -> Result<SubmittedRequest> {
+) -> std::result::Result<SubmittedRequest, SubmissionError> {
     match submitted_request_exists(access, node_did, session_id, request_id).await {
         Ok(true) => Ok(SubmittedRequest {
             request_id: request_id.to_string(),
             session_id: session_id.to_string(),
             node_did: node_did.to_string(),
-            agent_id: None,
+            agent_did: None,
         }),
         Ok(false) | Err(_) => Err(DeliveryUnconfirmed {
             request_id: request_id.to_string(),
@@ -348,7 +445,7 @@ async fn submitted_request_exists(
     let response = gents::store::config_client::query_graphql_with_options(
         endpoint,
         &format!(
-            "{{AgentRequest(filter:{{{scope},request_id:{{_eq:\"{logical}\"}}}}){{request_id}}}}"
+            "{{AgentRequest(filter:{{{scope},request_id:{{_eq:\"{logical}\"}}}}){{request_id relationships_pending}}}}"
         ),
         GraphqlRequestOptions {
             timeout: Duration::from_secs(30),
@@ -363,7 +460,9 @@ async fn submitted_request_exists(
         .and_then(Value::as_array)
         .context("request receipt query omitted rows")?;
     ensure!(rows.len() <= 1, "ambiguous scoped submission receipt");
-    Ok(!rows.is_empty())
+    Ok(rows
+        .first()
+        .is_some_and(|row| row["relationships_pending"] == false))
 }
 
 /// Resolve an earlier unknown submission outcome without re-preparing it.
@@ -375,11 +474,13 @@ async fn submitted_request_exists(
 pub async fn resolve_unresolved_submission(
     access: &ConfigAccess,
     pending: &UnresolvedSubmission,
-) -> Result<SubmittedRequest> {
-    match owner_receipt(access, &pending.create).await {
+) -> std::result::Result<SubmittedRequest, SubmissionAttemptError> {
+    match gents::request::lifecycle::reconcile_client_request(access, &pending.create).await {
         Ok(true) => Ok(pending.result.clone()),
         Ok(false) => commit_signed_submission(access, pending.clone()).await,
-        Err(error) => Err(pending.outcome_unknown(Some(error))),
+        Err(error) => Err(SubmissionAttemptError::Unknown(Box::new(
+            pending.unknown(Some(error.into())),
+        ))),
     }
 }
 
@@ -392,7 +493,7 @@ fn test_access(url: &str) -> ConfigAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use defra_node::EmbeddedNode;
+    use defra_node::Node as EmbeddedNode;
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     use serde_json::json;
     use wiremock::matchers::{body_string_contains, method, path};
@@ -401,7 +502,7 @@ mod tests {
     const SIGNER_DID: &str = "did:key:z6MkownerReceiptTest";
     const REQUEST_ID: &str = "request-receipt-1";
     const SESSION_ID: &str = "session-receipt-1";
-    const AGENT_ID: &str = "agent-receipt-1";
+    const AGENT_DID: &str = "agent-receipt-1";
 
     fn test_create() -> AgentRequestCreate {
         let mut create = AgentRequestCreate::base(
@@ -409,7 +510,7 @@ mod tests {
             REQUEST_ID,
             SIGNER_DID,
             SIGNER_DID,
-            AGENT_ID,
+            AGENT_DID,
             SESSION_ID,
             "receipt reconciliation",
             "interactive",
@@ -422,7 +523,7 @@ mod tests {
 
     fn test_mutation(create: &AgentRequestCreate) -> String {
         create
-            .graphql_mutation()
+            .graphql_client_publication_mutation()
             .expect("test create renders a canonical mutation")
     }
 
@@ -431,7 +532,7 @@ mod tests {
             request_id: REQUEST_ID.to_string(),
             session_id: SESSION_ID.to_string(),
             node_did: SIGNER_DID.to_string(),
-            agent_id: Some(AGENT_ID.to_string()),
+            agent_did: Some(AGENT_DID.to_string()),
         }
     }
 
@@ -448,6 +549,167 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn cleanup_observation_preserves_the_modeled_delivery_and_identity() {
+        let snapshot = tokio::task::spawn_blocking(
+            gents_lean_contract::load_contract_snapshot::<serde_json::Value>,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        for case in snapshot["client_submission_cleanup_cases"]
+            .as_array()
+            .unwrap()
+        {
+            let request = case["prepared"]["request"].as_u64().unwrap().to_string();
+            let mut pending = test_pending();
+            pending.request_id = request.clone();
+            pending.create.request_id = request.clone();
+            pending.result.request_id = request.clone();
+            let outcome = case["outcome"].as_str().unwrap();
+            let delivery = match outcome {
+                "accepted" => Ok(pending.result.clone()),
+                "notDelivered" => Err(SubmissionAttemptError::Rejected(
+                    ClientSubmissionError::Rejected(anyhow::anyhow!("confirmed rejection")),
+                )),
+                "unresolved" => Err(SubmissionAttemptError::Unknown(Box::new(
+                    pending.unknown(None),
+                ))),
+                _ => panic!("unknown modeled delivery"),
+            };
+            let cleanup = if case["cleanup_succeeded"].as_bool().unwrap() {
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!("native cleanup denial"))
+            };
+            let result = report_cleanup(&pending, delivery, cleanup);
+            assert_eq!(
+                case["expected_prepared"]["request"]
+                    .as_u64()
+                    .unwrap()
+                    .to_string(),
+                request
+            );
+            assert_eq!(case["expected_outcome"].as_str(), Some(outcome));
+            if case["cleanup_failed"].as_bool().unwrap() {
+                let SubmissionError::Cleanup(error) = result.unwrap_err() else {
+                    panic!("cleanup failure must retain its outcome");
+                };
+                let (observed, accepted, cause) = match error {
+                    SubmissionCleanupIncomplete::Accepted { request, cause } => {
+                        (request, true, cause)
+                    }
+                    SubmissionCleanupIncomplete::Rejected { request, cause, .. } => {
+                        (request, false, cause)
+                    }
+                };
+                assert_eq!(observed.request_id, request);
+                assert_eq!(accepted, outcome == "accepted");
+                assert!(cause.to_string().contains("native cleanup denial"));
+            } else if outcome == "accepted" {
+                assert_eq!(result.unwrap().request_id, request);
+            } else if outcome == "unresolved" {
+                assert!(matches!(result.unwrap_err(), SubmissionError::Unknown(_)));
+            } else {
+                assert!(!matches!(result.unwrap_err(), SubmissionError::Cleanup(_)));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn rejected_recovery_retains_modeled_identity_and_native_error() {
+        let snapshot = tokio::task::spawn_blocking(
+            gents_lean_contract::load_contract_snapshot::<serde_json::Value>,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        for case in snapshot["client_submission_rejection_cases"]
+            .as_array()
+            .unwrap()
+        {
+            if case["outcome"] != "notDelivered" {
+                continue;
+            }
+            let mut pending = test_pending();
+            pending.result.request_id = case["request"].as_u64().unwrap().to_string();
+            let native_error = case["native_error"].as_u64();
+            let error = if let Some(token) = native_error {
+                report_rejection(&pending, anyhow::anyhow!("native denial {token}"), Ok(()))
+            } else {
+                SubmissionNotDelivered::Rejected {
+                    request: pending.result.clone(),
+                    cause: None,
+                }
+                .into()
+            };
+            let SubmissionError::NotDelivered(SubmissionNotDelivered::Rejected { request, cause }) =
+                error
+            else {
+                panic!("rejection expected")
+            };
+            assert_eq!(
+                request.request_id,
+                case["expected_request"].as_u64().unwrap().to_string()
+            );
+            assert_eq!(
+                cause.is_some(),
+                case["expected_native_error"].as_u64().is_some()
+            );
+            if let Some(cause) = cause {
+                assert_eq!(
+                    cause.to_string(),
+                    format!(
+                        "native denial {}",
+                        case["expected_native_error"].as_u64().unwrap()
+                    )
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn uncertain_recovery_retains_modeled_identity_and_access_error() {
+        let snapshot = tokio::task::spawn_blocking(
+            gents_lean_contract::load_contract_snapshot::<serde_json::Value>,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        for case in snapshot["client_submission_uncertain_error_cases"]
+            .as_array()
+            .unwrap()
+        {
+            let mut pending = test_pending();
+            pending.request_id = case["request"].as_u64().unwrap().to_string();
+            let cause = case["access_error"]
+                .as_u64()
+                .map(|token| anyhow::anyhow!("native access error {token}"));
+            let error = pending
+                .outcome_unknown(cause)
+                .downcast::<SubmissionOutcomeUnknown>()
+                .unwrap();
+            assert_eq!(
+                error.request_id,
+                case["expected_request"].as_u64().unwrap().to_string()
+            );
+            assert_eq!(case["expected_outcome"], "unresolved");
+            assert_eq!(
+                error.cause.is_some(),
+                case["expected_access_error"].as_u64().is_some()
+            );
+            if let Some(cause) = error.cause {
+                assert_eq!(
+                    cause.to_string(),
+                    format!(
+                        "native access error {}",
+                        case["expected_access_error"].as_u64().unwrap()
+                    )
+                );
+            }
+        }
+    }
+
     #[test]
     fn slash_skill_reconciliation_matches_the_original_prepared_request() {
         let mut create = test_create();
@@ -460,31 +722,148 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retained_submission_survives_reopen_and_replays_exact_bytes() {
+    async fn client_submission_refuses_a_different_local_signer_before_journal_write() {
+        use gents::NodeIdentity as _;
         let home = tempfile::tempdir().unwrap();
+        let client =
+            gents::KeyIdentity::load_or_create(home.path().join("client.key"), None).unwrap();
+        let other =
+            gents::KeyIdentity::load_or_create(home.path().join("other.key"), None).unwrap();
         let node = std::sync::Arc::new(
             EmbeddedNode::builder()
+                .with_node_identity_did(client.did())
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let snapshot = tokio::task::spawn_blocking(
+            gents_lean_contract::load_contract_snapshot::<serde_json::Value>,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        for case in snapshot["identity_private_journal_policy"]["signer_checks"]
+            .as_array()
+            .unwrap()
+        {
+            let actor = match case["role"].as_str().unwrap() {
+                "client" => client.did(),
+                "other" => other.did(),
+                "empty" => "",
+                _ => panic!("unknown modeled signer"),
+            };
+            assert_eq!(
+                journal::require_client_signer(&node, actor).is_ok(),
+                case["expected"].as_bool().unwrap()
+            );
+        }
+        let access = ConfigAccess::local_as(node.clone(), other.did().parse().unwrap());
+        let error = super::super::submit_request(
+            &node,
+            &crate::client::store::ClientStore::default(),
+            &access,
+            "session",
+            "node",
+            other.did(),
+            &other,
+            AgentRequestAdmissionRecord::client(other.did()),
+            "message",
+            Some("agent"),
+            super::super::SubmitRequestOptions::default(),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("local client signer"));
+        let own = ConfigAccess::local_as(node.clone(), client.did().parse().unwrap());
+        let rows = own
+            .execute("{ PendingChatSubmission { _docID } }")
+            .await
+            .unwrap();
+        assert!(rows["data"]["PendingChatSubmission"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        node.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn private_submission_reopens_only_for_its_client() {
+        use gents::NodeIdentity as _;
+        let home = tempfile::tempdir().unwrap();
+        let client =
+            gents::KeyIdentity::load_or_create(home.path().join("client.key"), None).unwrap();
+        let other =
+            gents::KeyIdentity::load_or_create(home.path().join("other.key"), None).unwrap();
+        let open = || async {
+            std::sync::Arc::new(
+                EmbeddedNode::builder()
+                    .with_node_identity_did(client.did())
+                    .data_path(home.path())
+                    .build()
+                    .await
+                    .unwrap(),
+            )
+        };
+        let node = open().await;
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let pending = test_pending();
+        journal::save(&node, client.did(), &pending).await.unwrap();
+        node.shutdown().await.unwrap();
+        drop(node);
+        let reopened = open().await;
+        assert!(journal::load(&reopened, other.did(), REQUEST_ID)
+            .await
+            .unwrap()
+            .is_none());
+        let restored = journal::load(&reopened, client.did(), REQUEST_ID)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.mutation, pending.mutation);
+        assert_eq!(restored.create, pending.create);
+        journal::forget(&reopened, client.did(), REQUEST_ID)
+            .await
+            .unwrap();
+        assert!(journal::load(&reopened, client.did(), REQUEST_ID)
+            .await
+            .unwrap()
+            .is_none());
+        reopened.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn retained_submission_survives_reopen_and_replays_exact_bytes() {
+        let home = tempfile::tempdir().unwrap();
+        use gents::NodeIdentity as _;
+        let client =
+            gents::KeyIdentity::load_or_create(home.path().join("client.key"), None).unwrap();
+        let node = std::sync::Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(client.did())
                 .data_path(home.path())
                 .build()
                 .await
                 .unwrap(),
         );
-        node.add_collection(gents_protocol::schemas::PENDING_CHAT_SUBMISSION)
-            .await
-            .unwrap();
+        gents::ensure_runtime_schemas(&node).await.unwrap();
         let pending = test_pending();
-        journal::save(&node, &pending).await.unwrap();
-        node.shutdown().await;
+        journal::save(&node, client.did(), &pending).await.unwrap();
+        node.shutdown().await.unwrap();
         drop(node);
 
         let reopened = std::sync::Arc::new(
             EmbeddedNode::builder()
+                .with_node_identity_did(client.did())
                 .data_path(home.path())
                 .build()
                 .await
                 .unwrap(),
         );
-        let restored = journal::load(&reopened, REQUEST_ID).await.unwrap().unwrap();
+        let restored = journal::load(&reopened, client.did(), REQUEST_ID)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(restored.mutation, pending.mutation);
         assert_eq!(restored.create, pending.create);
         let server = MockServer::start().await;
@@ -507,12 +886,14 @@ mod tests {
         assert_eq!(requests.len(), 1);
         let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
         assert_eq!(body["query"], pending.mutation);
-        journal::forget(&reopened, REQUEST_ID).await;
-        assert!(journal::load(&reopened, REQUEST_ID)
+        journal::forget(&reopened, client.did(), REQUEST_ID)
+            .await
+            .unwrap();
+        assert!(journal::load(&reopened, client.did(), REQUEST_ID)
             .await
             .unwrap()
             .is_none());
-        reopened.shutdown().await;
+        reopened.shutdown().await.unwrap();
     }
 
     fn receipt_row(create: &AgentRequestCreate) -> Value {
@@ -604,9 +985,9 @@ mod tests {
         let error = resolve_unresolved_submission(&access, &pending)
             .await
             .expect_err("an absent receipt for every attempt is an unknown outcome");
-        let unknown = error
-            .downcast_ref::<SubmissionOutcomeUnknown>()
-            .expect("unknown outcome is a typed error");
+        let SubmissionAttemptError::Unknown(unknown) = &error else {
+            panic!("unknown outcome is a typed error: {error:#}");
+        };
         assert_eq!(unknown.request_id, REQUEST_ID);
         assert_eq!(unknown.session_id, SESSION_ID);
         assert_eq!(unknown.pending.request_id, REQUEST_ID);
@@ -693,7 +1074,10 @@ mod tests {
             let error = commit_signed_submission(&access, pending.clone())
                 .await
                 .unwrap_err();
-            let unknown = error.downcast_ref::<SubmissionOutcomeUnknown>();
+            let unknown = match &error {
+                SubmissionAttemptError::Unknown(unknown) => Some(unknown),
+                SubmissionAttemptError::Rejected(_) => None,
+            };
             assert_eq!(
                 unknown.is_some(),
                 case["outcome_unknown"].as_bool().unwrap()
@@ -706,7 +1090,13 @@ mod tests {
                     unknown.pending.create.admission.signature,
                     pending.create.admission.signature
                 );
-                assert!(gents::store::graphql::is_storage_full(error.as_ref()));
+                assert!(gents::store::graphql::is_storage_full(
+                    unknown
+                        .cause
+                        .as_ref()
+                        .expect("storage failure cause")
+                        .as_ref()
+                ));
                 assert_eq!(
                     server.received_requests().await.unwrap().len(),
                     1,
@@ -736,7 +1126,7 @@ mod tests {
             .expect_err("a definite rejection with no receipt fails");
 
         assert!(
-            error.downcast_ref::<SubmissionOutcomeUnknown>().is_none(),
+            matches!(error, SubmissionAttemptError::Rejected(_)),
             "a definite rejection must not be reported as possibly delivered: {error:#}"
         );
         assert_eq!(create_requests(&server).await.len(), 1);
@@ -800,7 +1190,7 @@ mod tests {
         let mut different_signature = pending.create.clone();
         different_signature.admission.signature[0] ^= 1;
         assert!(owner_receipt(&access, &different_signature).await.is_err());
-        node.shutdown().await;
+        node.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -819,19 +1209,19 @@ mod tests {
         let error = reconcile_commit_failure(
             &access,
             pending.clone(),
-            ReceiptWriteError::Write(
-                gents::store::config_client::ConfigClientError::StoreClaimHeld,
+            ClientSubmissionError::Unconfirmed(
+                gents::store::config_client::ConfigClientError::StoreClaimHeld.into(),
             ),
         )
         .await
         .expect_err("a local post-send failure does not prove rejection");
 
-        let unknown = error
-            .downcast_ref::<SubmissionOutcomeUnknown>()
-            .expect("local non-GraphQL errors remain uncertain");
+        let SubmissionAttemptError::Unknown(unknown) = &error else {
+            panic!("local non-GraphQL errors remain uncertain: {error:#}");
+        };
         assert_eq!(unknown.request_id, pending.request_id);
         assert_eq!(unknown.pending.mutation, pending.mutation);
-        node.shutdown().await;
+        node.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -846,9 +1236,9 @@ mod tests {
                 .await
                 .expect_err("an unconfirmed post-send failure is not a success");
 
-            let unknown = error
-                .downcast_ref::<SubmissionOutcomeUnknown>()
-                .unwrap_or_else(|| panic!("HTTP {status} must be an unknown outcome: {error:#}"));
+            let SubmissionAttemptError::Unknown(unknown) = &error else {
+                panic!("HTTP {status} must be an unknown outcome: {error:#}");
+            };
             assert_eq!(unknown.request_id, test_result().request_id);
         }
     }
@@ -871,7 +1261,7 @@ mod tests {
             .expect_err("an unconfirmed duplicate rejection is not a success");
 
         assert!(
-            error.downcast_ref::<SubmissionOutcomeUnknown>().is_some(),
+            matches!(error, SubmissionAttemptError::Unknown(_)),
             "an existing-request rejection with no visible receipt may still be delivered: {error:#}"
         );
     }
@@ -892,9 +1282,9 @@ mod tests {
         .await
         .expect_err("an absent receipt does not prove the original never commits");
 
-        let unconfirmed = error
-            .downcast_ref::<DeliveryUnconfirmed>()
-            .unwrap_or_else(|| panic!("absence must stay unresolved: {error:#}"));
+        let SubmissionError::Unconfirmed(unconfirmed) = &error else {
+            panic!("absence must stay unresolved: {error:#}");
+        };
         assert_eq!(unconfirmed.request_id, result.request_id);
         assert_eq!(unconfirmed.session_id, result.session_id);
         assert!(
@@ -918,14 +1308,18 @@ mod tests {
         .await
         .expect_err("an unreadable receipt proves nothing");
 
-        assert!(error.downcast_ref::<DeliveryUnconfirmed>().is_some());
+        assert!(matches!(error, SubmissionError::Unconfirmed(_)));
     }
 
     #[tokio::test]
     async fn unretained_present_receipt_resolves_to_original_identity() {
         let server = MockServer::start().await;
         let result = test_result();
-        mount_receipt(&server, vec![json!({"request_id": result.request_id})]).await;
+        mount_receipt(
+            &server,
+            vec![json!({"request_id": result.request_id, "relationships_pending": false})],
+        )
+        .await;
         let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
 
         let resolved = reconcile_unretained_submission(

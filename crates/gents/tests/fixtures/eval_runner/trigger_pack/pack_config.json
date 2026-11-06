@@ -2,10 +2,10 @@
   "node": {},
   "agents": [
     {
-      "agent_id": "seeded",
       "display_name": "Eval seed subject",
       "context_id": "seeded-context",
-      "inference_profile_id": "gents:inference-slot:primary"
+      "inference_profile_id": "gents:inference-slot:primary",
+      "agent_slot": "seeded"
     }
   ],
   "contexts": [
@@ -31,7 +31,7 @@
     {
       "task_id": "seed-task",
       "display_name": "Report a seeded item",
-      "agent_id": "seeded",
+      "agent_did": "gents:agent-slot:seeded",
       "prompt_template": "Seeded item: {{ doc.label }}"
     }
   ],

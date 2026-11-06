@@ -13,15 +13,15 @@ import { admittingProjection, shellStores } from "./shell-fixture";
 
 const deployment = {
   nodeDid: "agent",
-  node: { nodeDid: "agent", defaultAgentId: "setup" },
-  agents: [{ agentId: "setup", enabled: true, isDefault: true }],
-  sessions: [{ sessionId: "session-1", agentId: "setup" }],
+  node: { nodeDid: "agent", defaultAgentDid: "setup" },
+  agents: [{ agentDid: "setup", enabled: true, isDefault: true }],
+  sessions: [{ sessionId: "session-1", agentDid: "setup" }],
   mailboxItems: [],
 } as unknown as DeploymentView;
 
 function send(running: boolean) {
   const stores = shellStores({
-    selection: { nodeDid: "agent", agentId: "setup", sessionId: "session-1" },
+    selection: { nodeDid: "agent", agentDid: "setup", sessionId: "session-1" },
   });
   applyFleetSnapshot(stores.fleet, {
     bootstrap: {},

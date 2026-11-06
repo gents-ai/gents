@@ -38,7 +38,7 @@ async fn supervision_restarts_panicking_behavior_while_sibling_continues() {
             let panic_attempt_tx = panic_attempt_tx.clone();
             let sibling_tick_tx = sibling_tick_tx.clone();
             async move {
-                if behavior.agent_id == "panic-profile" {
+                if behavior.agent_did == "panic-profile" {
                     let attempt = panic_attempts.fetch_add(1, Ordering::SeqCst);
                     panic_attempt_tx.send_replace(attempt + 1);
                     if attempt < 2 {

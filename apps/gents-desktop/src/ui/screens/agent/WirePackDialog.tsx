@@ -62,15 +62,15 @@ export function WirePackDialog({
   onClose,
 }: WirePackDialogProps) {
   const { actions } = useApp();
-  const [agentId, setAgentId] = useState(agent ?? agents[0]?.agentId ?? "");
+  const [agentDid, setAgentDid] = useState(agent ?? agents[0]?.agentDid ?? "");
   const [preview, setPreview] = useState<PackWireResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refused, setRefused] = useState(false);
   const [busy, setBusy] = useState(false);
-  const request = { plugin, agent: agentId, targetsFrom, remove: false };
+  const request = { plugin, agent: agentDid, targetsFrom, remove: false };
 
   useEffect(() => {
-    if (!agentId) return;
+    if (!agentDid) return;
     let current = true;
     setPreview(null);
     setError(null);
@@ -82,7 +82,7 @@ export function WirePackDialog({
       current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [actions, plugin, agentId, targetsFrom.join("\n")]);
+  }, [actions, plugin, agentDid, targetsFrom.join("\n")]);
 
   async function confirm() {
     setBusy(true);
@@ -112,18 +112,18 @@ export function WirePackDialog({
             <FieldLabel htmlFor="wire-agent">Agent</FieldLabel>
             <Select
               items={agents.map((a) => ({
-                value: a.agentId,
+                value: a.agentDid,
                 label: a.displayName,
               }))}
-              value={agentId}
-              onValueChange={(v) => v && setAgentId(v)}
+              value={agentDid}
+              onValueChange={(v) => v && setAgentDid(v)}
             >
               <SelectTrigger id="wire-agent" className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 {agents.map((a) => (
-                  <SelectItem key={a.agentId} value={a.agentId}>
+                  <SelectItem key={a.agentDid} value={a.agentDid}>
                     {a.displayName}
                   </SelectItem>
                 ))}
@@ -157,7 +157,7 @@ export function WirePackDialog({
           {refused ? (
             <Refusal
               plugin={plugin}
-              command={wireCommand(plugin, agentId, targetsFrom)}
+              command={wireCommand(plugin, agentDid, targetsFrom)}
             />
           ) : (
             error && (

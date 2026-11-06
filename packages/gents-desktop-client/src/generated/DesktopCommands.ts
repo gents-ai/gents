@@ -1,6 +1,7 @@
 // Generated from the native command signatures.
 import type { AccountUsageView } from "./AccountUsageView.js";
 import type { AgentDeleteRequest } from "./AgentDeleteRequest.js";
+import type { AgentIdentityBinding } from "./AgentIdentityBinding.js";
 import type { AgentSaveRequest } from "./AgentSaveRequest.js";
 import type { AllowedFoldersView } from "./AllowedFoldersView.js";
 import type { BackendDeleteRequest } from "./BackendDeleteRequest.js";
@@ -150,12 +151,14 @@ import type { TriggerDeleteRequest } from "./TriggerDeleteRequest.js";
 import type { TriggerSaveRequest } from "./TriggerSaveRequest.js";
 import type { UxDataCallRequest } from "./UxDataCallRequest.js";
 import type { UxDataSurfacesRequest } from "./UxDataSurfacesRequest.js";
+import type { UxDataWatchEvent } from "./UxDataWatchEvent.js";
 import type { WorkflowPromoteRequest } from "./WorkflowPromoteRequest.js";
 import type { WorkflowPromoteView } from "./WorkflowPromoteView.js";
 import type { WorkspaceListingView } from "./WorkspaceListingView.js";
 
 export type DesktopCommands = {
   desktop_agent_delete: { args: { request: AgentDeleteRequest }; result: DesktopClientSnapshot };
+  desktop_agent_identity_provision: { args: { nodeDid: string }; result: AgentIdentityBinding };
   desktop_agent_save: { args: { request: AgentSaveRequest }; result: DesktopClientSnapshot };
   desktop_allowed_dirs_add: { args: { path: string; access: string }; result: AllowedFoldersView };
   desktop_allowed_dirs_list: { args: Record<string, never>; result: AllowedFoldersView };
@@ -204,6 +207,7 @@ export type DesktopCommands = {
   desktop_mailbox_list: { args: Record<string, never>; result: Array<MailboxItemView> };
   desktop_mailbox_observe: { args: { request: MailboxItemObservationRequest }; result: MailboxItemObservation | null };
   desktop_mailbox_start_request: { args: { request: MailboxItemRequest }; result: MailboxItemView };
+  desktop_managed_server_enroll: { args: Record<string, never>; result: void };
   desktop_managed_server_open_login_items: { args: Record<string, never>; result: void };
   desktop_managed_server_reset: { args: { request: ManagedServerResetRequest }; result: ManagedServerResetResult };
   desktop_managed_server_restart: { args: { request: ManagedServerRestartRequest }; result: ManagedServerStatus };
@@ -268,9 +272,9 @@ export type DesktopCommands = {
   desktop_session_fork_before_message: { args: { request: SessionForkBeforeRequest }; result: SessionForkResult };
   desktop_session_goal: { args: { nodeDid: string; sessionId: string }; result: SessionGoalView | null };
   desktop_session_history: { args: { request: SessionHistoryRequest }; result: SessionHistoryPage };
-  desktop_session_hydration_retry: { args: { sessionId: string; nodeDid?: string | null }; result: void };
   desktop_session_live_delta: { args: { sessionId: string; nodeDid?: string | null; requestId: string; baseLiveCursor: string; baseContentByteLen: number; baseContentHash: string; baseReasoningByteLen: number; baseReasoningHash: string }; result: SessionLiveDeltaView | null };
   desktop_session_provenance: { args: { request: DesktopSessionProvenanceRequest }; result: SessionProvenanceView };
+  desktop_session_reload: { args: { sessionId: string; nodeDid?: string | null }; result: void };
   desktop_session_rename: { args: { request: SessionRenameRequest }; result: void };
   desktop_session_rows: { args: { sessionId: string; nodeDid?: string | null; window: SessionRowsWindow; limit?: number | null }; result: SessionRowsView | null };
   desktop_session_snapshot: { args: { sessionId: string; nodeDid?: string | null; requestId?: string | null; timelineLimit?: number | null; timelineBeforeItemKey?: string | null }; result: DesktopSessionSnapshot | null };
@@ -284,7 +288,7 @@ export type DesktopCommands = {
   desktop_tool_service_delete: { args: { request: ToolServiceDeleteRequest }; result: DesktopClientSnapshot };
   desktop_tool_service_save: { args: { request: ToolServiceSaveRequest }; result: DesktopClientSnapshot };
   desktop_tool_service_test: { args: { request: ToolServiceTestRequest }; result: ToolServiceTestResult };
-  desktop_tool_surface_explain: { args: { nodeDid: string; agentId: string }; result: ToolSurfaceExplanationView };
+  desktop_tool_surface_explain: { args: { nodeDid: string; agentDid: string }; result: ToolSurfaceExplanationView };
   desktop_tools_delete: { args: { request: ToolsDeleteRequest }; result: DesktopClientSnapshot };
   desktop_tools_save: { args: { request: ToolsSaveRequest }; result: DesktopClientSnapshot };
   desktop_trigger_delete: { args: { request: TriggerDeleteRequest }; result: DesktopClientSnapshot };
@@ -292,7 +296,7 @@ export type DesktopCommands = {
   desktop_ux_data_call: { args: { request: UxDataCallRequest }; result: JsonValue };
   desktop_ux_data_surfaces: { args: { request: UxDataSurfacesRequest }; result: JsonValue };
   desktop_ux_data_unwatch: { args: { id: string }; result: void };
-  desktop_ux_data_watch: { args: { request: UxDataCallRequest; channel: Channel<JsonValue> }; result: string };
+  desktop_ux_data_watch: { args: { request: UxDataCallRequest; channel: Channel<UxDataWatchEvent> }; result: string };
   desktop_ux_plugin_source: { args: { id: string }; result: JsonValue };
   desktop_ux_plugins_list: { args: Record<string, never>; result: JsonValue };
   desktop_workflow_dynamic: { args: { selector: string }; result: DynamicWorkflowView };

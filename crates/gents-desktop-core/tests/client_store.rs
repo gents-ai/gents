@@ -50,10 +50,10 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
             r#"mutation {
         session: create_AgentSession(input: {
             session_id: "session-1", node_did: "did:test:amy", requester_did: null,
-            agent_id: "default", created_at: "2026-08-21T18:07:35Z"
+            agent_did: "default", created_at: "2026-08-21T18:07:35Z"
         }) { _docID }
         request: create_AgentRequest(input: {
-            purpose: "normal", request_id: "request-1", node_did: "did:test:amy", agent_id: "default",
+            purpose: "normal", request_id: "request-1", node_did: "did:test:amy", agent_did: "default",
             session_id: "session-1", content: "run it", lifecycle_state: "processing",
             created_at: "2026-08-21T18:07:35Z"
         }) { _docID }
@@ -155,7 +155,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
                 create_Node(input: {
                     node_did: "did:test:hosted-amy"
                     display_name: "Amy"
-                    default_agent_id: "did:test:hosted-amy:default"
+                    default_agent_did: "did:test:hosted-amy:default"
                     enabled: true
                 }) { _docID }
             }"#,
@@ -173,7 +173,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
             .nodes
             .iter()
             .find(|node| node.node_did == NODE_DID)
-            .and_then(|node| node.default_agent_id.as_deref()),
+            .and_then(|node| node.default_agent_did.as_deref()),
         Some("did:test:hosted-amy:default")
     );
 
@@ -184,7 +184,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         "purpose": "normal",
         "node_did": NODE_DID,
         "requester_did": NODE_DID,
-        "agent_id": "did:test:hosted-amy:default",
+        "agent_did": "did:test:hosted-amy:default",
         "session_id": "session-terminal-config",
         "content": "make research the default",
         "lifecycle_state": "completed"
@@ -193,7 +193,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         "nodes": [{
             "node_did": NODE_DID,
             "display_name": "Amy",
-            "default_agent_id": "did:test:hosted-amy:research",
+            "default_agent_did": "did:test:hosted-amy:research",
             "enabled": true
         }]
     });
@@ -227,7 +227,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         "session_id": "session-terminal-config",
         "node_did": NODE_DID,
         "requester_did": NODE_DID,
-        "agent_id": "did:test:hosted-amy:default",
+        "agent_did": "did:test:hosted-amy:default",
         "created_at": "2026-07-24T00:00:00Z"
     });
     let response_operator_data = operator_data.clone();
@@ -295,7 +295,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         loop {
             if core.store().snapshot().nodes.iter().any(|node| {
                 node.node_did == NODE_DID
-                    && node.default_agent_id.as_deref() == Some("did:test:hosted-amy:research")
+                    && node.default_agent_did.as_deref() == Some("did:test:hosted-amy:research")
             }) {
                 break;
             }
@@ -308,7 +308,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
     let local_node = core
         .node()
         .execute(&format!(
-            r#"query {{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ default_agent_id }} }}"#,
+            r#"query {{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ default_agent_did }} }}"#,
             gents::store::graphql::escape_graphql_string(NODE_DID)
         ))
         .await;
@@ -324,7 +324,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
             .and_then(|data| data.get("Node"))
             .and_then(serde_json::Value::as_array)
             .and_then(|rows| rows.first())
-            .and_then(|row| row.get("default_agent_id"))
+            .and_then(|row| row.get("default_agent_did"))
             .and_then(serde_json::Value::as_str),
         Some("did:test:hosted-amy:default"),
         "the new projection value must come from operator overlay, not local DB mutation"
@@ -546,7 +546,7 @@ async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
                 create_Node(input: {{
                     node_did: "{did}",
                     display_name: "{did}",
-                    default_agent_id: "default",
+                    default_agent_did: "default",
                     enabled: true,
                     created_at: "2026-05-07T00:00:00Z",
                     created_by: "test"
@@ -634,12 +634,16 @@ async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
 }
 
 #[test]
-fn default_agent_id_does_not_require_a_gossiped_node() {
+fn default_agent_did_does_not_require_a_gossiped_node() {
     let node_did = "did:key:z6MkAmy";
-    let agent_id = gents::default_agent_id_for_node(node_did);
+    let directory = tempfile::tempdir().unwrap();
+    let root = gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+    let binding = gents::store::identity::provision_agent_identity(&root).unwrap();
+    let agent_did = binding.agent_did;
     let store = ClientStore::from_rows(ClientStoreRows {
         agents: vec![gents::documents::Agent {
-            agent_id: agent_id.clone(),
+            creation_nonce: binding.creation_nonce,
+            agent_did: agent_did.clone(),
             node_did: node_did.to_string(),
             display_name: Some("Amy".to_string()),
             description: None,
@@ -654,7 +658,7 @@ fn default_agent_id_does_not_require_a_gossiped_node() {
 
     assert!(store.nodes.is_empty());
     assert_eq!(
-        store.default_agent_id_for_node(node_did),
-        Some(agent_id.as_str())
+        store.default_agent_did_for_node(node_did),
+        Some(agent_did.as_str())
     );
 }

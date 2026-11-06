@@ -9,7 +9,7 @@ use gents::eval::report::{
     load_report, load_report_among, load_runs, report_refused, run_header, SlotCounts, SlotReport,
 };
 use gents::eval::{
-    load_verdicts, Invalidation, OutcomeKind, ProviderReason, RunHeader, VerdictRecord,
+    load_run, load_verdicts, Invalidation, OutcomeKind, ProviderReason, RunHeader, VerdictRecord,
 };
 use serde::Serialize;
 
@@ -221,6 +221,13 @@ pub(super) async fn trial(
         ))
     });
     let requests = if args.requests {
+        let run = load_run(&ctx.access, &ctx.owner, &args.run_id)
+            .await?
+            .context("run disappeared while inspecting the trial")?;
+        anyhow::ensure!(
+            ctx.evaluator.did() == run.evaluator_did,
+            "retained trial inspection requires the evaluator identity that created the run"
+        );
         let trials = gents::eval::load_trials(&ctx.access, &ctx.owner, &args.run_id).await?;
         let trial = trials
             .iter()
@@ -240,6 +247,7 @@ pub(super) async fn trial(
                     session_id: latest.session_id.clone(),
                     home_hint: latest.home_hint.clone(),
                 },
+                ctx.evaluator.as_ref(),
             )
             .await?,
         )

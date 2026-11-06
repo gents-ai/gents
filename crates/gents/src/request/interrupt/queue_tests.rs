@@ -3,185 +3,185 @@ use crate::lean_vocab_test::{
     LeanInterruptQueueCase, LeanInterruptQueueEntry, LeanInterruptQueueInput,
 };
 use crate::request::lifecycle::queue::{
-    persist_background_completion_with_message, QueuePolicy, QueueSource, RequestInput,
-    RequestQueue,
+    persist_background_completion_with_message_waking_with_access, QueuePolicy, QueueSource,
+    RequestInput, RequestQueue,
 };
 use crate::request::lifecycle::ExecutionOrigin;
 use crate::request::watcher::AgentRequest;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::store::identity::{KeyIdentity, NodeIdentity};
+use crate::store::identity::NodeIdentity;
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Notify;
 
-const BEHAVIOR: &str = "general";
-
-fn free_http_address() -> std::net::SocketAddr {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.local_addr().unwrap()
+struct QueueFixture {
+    db: crate::support::TestDb,
+    user: crate::KeyIdentity,
+    client: ConfigAccess,
+    agent: Arc<dyn NodeIdentity>,
+    agent_access: ConfigAccess,
+    parent: AgentRequest,
+    _lifecycle: crate::request::lifecycle::RequestLifecycle,
 }
 
-async fn wait_http_ready(access: &ConfigAccess) {
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if access
-                .execute("query { AgentRequest { _docID } }")
-                .await
-                .is_ok()
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("real embedded HTTP GraphQL endpoint must become ready");
-}
-
-async fn insert_request(node: &Arc<EmbeddedNode>, input: Value) -> String {
-    ConfigAccess::transact_local_write(node, None, "test.interrupt_queue.insert", |txn| {
-        let input = input.clone();
-        Box::pin(async move {
-            let result = txn
-                .execute_with_variables(
-                    "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
-                    &json!({"input": input}),
-                )
-                .await?;
-            Ok::<_, anyhow::Error>(gents_protocol::graphql::extract_mutation_doc_id(&result, "AgentRequest")?)
-        })
-    })
-    .await
-    .unwrap()
-}
-
-async fn rows(node: &EmbeddedNode, session: &str) -> Vec<Value> {
-    let session = escape_graphql_string(session);
-    let result = graphql_with_transaction_retry(
-        node,
-        &format!("{{AgentRequest(filter:{{session_id:{{_eq:\"{session}\"}}}}){{_docID request_id node_did requester_did lifecycle_state interrupt_requested_at input execution_origin}}}}"),
-        "interrupt queue test rows",
+async fn publish_client_request(
+    client: &ConfigAccess,
+    user: &dyn NodeIdentity,
+    identity: crate::request::lifecycle::RequestIdentity,
+    input: RequestInput,
+) -> String {
+    let request_id = identity.request_id.clone();
+    let mut spec = crate::request::lifecycle::RequestSpec::new(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        identity,
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+    );
+    spec.input = input;
+    let create = crate::request::lifecycle::build_signed_client_request(
+        client,
+        spec,
+        crate::request::lifecycle::RequestSigner::Identity(user),
     )
     .await
     .unwrap();
-    result.data.unwrap()["AgentRequest"]
+    crate::request::lifecycle::submit_client_request(client, &create)
+        .await
+        .unwrap();
+    let response = client.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID }} }}"#,
+        escape_graphql_string(&request_id),
+    )).await.unwrap();
+    let [row] = response["data"]["AgentRequest"]
         .as_array()
         .unwrap()
-        .clone()
+        .as_slice()
+    else {
+        panic!("signed fixture request must be unique");
+    };
+    row["_docID"].as_str().unwrap().to_owned()
 }
 
-async fn fixture(
-    case: &LeanInterruptQueueCase,
-) -> (Arc<EmbeddedNode>, tempfile::TempDir, AgentRequest) {
-    fixture_with_http(case, None).await
+async fn rows(access: &ConfigAccess, session: &str) -> Vec<Value> {
+    let session = escape_graphql_string(session);
+    let result = access.execute(
+        &format!("{{AgentRequest(filter:{{session_id:{{_eq:\"{session}\"}}}}){{_docID request_id node_did requester_did lifecycle_state interrupt_requested_at input execution_origin}}}}"),
+    ).await.unwrap();
+    result["data"]["AgentRequest"].as_array().unwrap().clone()
 }
 
-async fn fixture_with_http(
-    case: &LeanInterruptQueueCase,
-    http_address: Option<std::net::SocketAddr>,
-) -> (Arc<EmbeddedNode>, tempfile::TempDir, AgentRequest) {
+async fn latch(access: &ConfigAccess, parent: &AgentRequest) -> Option<String> {
+    let observed = observe_interrupt_requested_at_with_access(
+        access,
+        &parent.request_id,
+        &parent.node_did,
+        parent.requester_did.as_deref(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        observed.request_doc_id.as_deref(),
+        Some(parent.doc_id.as_str())
+    );
+    observed.requested_at
+}
+
+async fn fixture(case: &LeanInterruptQueueCase) -> QueueFixture {
+    use crate::request::lifecycle::{ClaimOutcome, RequestIdentity, RequestLifecycle};
+
     assert_eq!(case.node_id, 1, "fixture maps modeled node 1 to its DID");
     assert_eq!(
         case.requester_id,
         Some(case.node_id),
-        "runtime wake requester must share the modeled scope"
+        "modeled requester scope"
     );
-    let dir = tempfile::tempdir().unwrap();
-    let identity = KeyIdentity::load_or_create(dir.path().join("agent.key"), None).unwrap();
-    let did = identity.did().to_owned();
-    let builder = EmbeddedNode::builder()
-        .data_path(dir.path().join("db"))
-        .with_node_identity_did(&did);
-    let builder = match http_address {
-        Some(address) => builder.with_http(defra_node::HttpConfig::with_addr(address)),
-        None => builder,
-    };
-    let node = Arc::new(builder.build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_agent(&node, &did, BEHAVIOR).await;
-    let session = case.session_id.to_string();
-    crate::session::ensure_session_with_agent_id_and_requester_did(
-        &node,
-        &session,
-        &did,
-        BEHAVIOR,
-        Some(&did),
+    let (db, user, client, binding) =
+        crate::test_support::signed_test_node(&format!("interrupt-queue-{}", case.name)).await;
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let agent_access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
     )
-    .await
     .unwrap();
-    let active = case.active_request_id.unwrap().to_string();
-    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-        gents_protocol::request_admission::RequestPurpose::Normal,
-        &active,
-        &did,
-        &did,
-        BEHAVIOR,
-        &session,
-        "active",
-        "interactive",
-        "2026-09-01T00:00:00Z",
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
+    let request_id = case.active_request_id.unwrap().to_string();
+    let session = case.session_id.to_string();
+    let doc = publish_client_request(
+        &client,
+        &user,
+        RequestIdentity {
+            request_id: request_id.clone(),
+            node_did: db.node_identity.did().to_owned(),
+            requester_did: Some(user.did().to_owned()),
+            agent_did: binding.agent_did.clone(),
+            session_id: session,
+            content: "active".into(),
+            execution_origin: ExecutionOrigin::Interactive,
+            created_at: "2026-09-01T00:00:00Z".into(),
+        },
+        RequestInput::default(),
+    )
+    .await;
+    let response = agent_access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+            escape_graphql_string(&doc),
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
+        ))
+        .await
+        .unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+    let request = row.try_into().unwrap();
+    let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        db.node.clone(),
+        db.node_identity.clone(),
+        authority,
     );
-    crate::sign_agent_request_create(&identity, &mut create)
+    let (request, admission) = verifier
+        .verify_fresh_for_claim_with_identity(&request, agent.as_ref())
         .await
         .unwrap();
-    let access = ConfigAccess::local(node.clone());
-    let response = access
-        .write(
-            "test.interrupt_queue.active",
-            &create.graphql_mutation().unwrap(),
-        )
-        .await
-        .unwrap();
-    let doc = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
-    access
-        .write(
-            "test.interrupt_queue.processing",
-            &format!(
-                "mutation {{ update_AgentRequest(docID: \"{}\", input: {{ lifecycle_state: \"processing\" }}) {{ _docID }} }}",
-                escape_graphql_string(&doc),
-            ),
-        )
-        .await
-        .unwrap();
-    let parent = AgentRequest {
-        doc_id: doc,
-        request_id: active,
-        node_did: did.clone(),
-        requester_did: Some(did),
-        agent_id: BEHAVIOR.into(),
-        session_id: session,
-        content: "active".into(),
-        max_total_tokens: None,
-        input: Default::default(),
-        retry_parent_request_doc_id: None,
-        purpose: gents_protocol::request_admission::RequestPurpose::Normal,
-        execution_origin: Some("interactive".into()),
-        created_at: "2026-09-01T00:00:00Z".into(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_secs: None,
-        execution_lease_expires_at: None,
-        request_hop: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_owner_node_did: None,
-        workspace_authority: None,
-        workspace_seal_hash: None,
-    };
-    (node, dir, parent)
+    assert!(
+        admission.is_some(),
+        "client request needs verified claim admission"
+    );
+    let mut lifecycle = RequestLifecycle::new_with_node_did(
+        db.node.clone(),
+        agent.did(),
+        db.node_identity.did(),
+        request,
+        60,
+    );
+    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
+    lifecycle.set_client_claim_admission(admission);
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+        db.node.clone(),
+        &lifecycle,
+        Duration::ZERO,
+    )
+    .unwrap();
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let parent = lifecycle.request().clone();
+    QueueFixture {
+        db,
+        user,
+        client,
+        agent,
+        agent_access,
+        parent,
+        _lifecycle: lifecycle,
+    }
 }
 
 async fn enqueue_generated_wake(
+    access: &ConfigAccess,
     node: &Arc<EmbeddedNode>,
     parent: &AgentRequest,
     case: &LeanInterruptQueueCase,
@@ -196,7 +196,8 @@ async fn enqueue_generated_wake(
     assert_eq!(source, QueueSource::BackgroundCompletion);
     assert_eq!(policy, QueuePolicy::Coalesce);
     let key = entry.queue_key.expect("generated wake key");
-    persist_background_completion_with_message(
+    persist_background_completion_with_message_waking_with_access(
+        access,
         node,
         parent,
         &format!("notification {}", entry.request_id),
@@ -216,6 +217,7 @@ async fn enqueue_generated_wake(
             background_completion_wake_version: None,
         },
         None,
+        crate::request::lifecycle::RequestHopCause::Continuation,
     )
     .await
     .unwrap()
@@ -225,7 +227,7 @@ async fn enqueue_generated_wake(
 }
 
 async fn insert_generated_pending(
-    node: &Arc<EmbeddedNode>,
+    fixture: &QueueFixture,
     parent: &AgentRequest,
     entry: &LeanInterruptQueueEntry,
     source: QueueSource,
@@ -234,7 +236,7 @@ async fn insert_generated_pending(
 ) -> String {
     let created_at = chrono::DateTime::from_timestamp(entry.created_at as i64, 0)
         .unwrap()
-        .to_rfc3339();
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let input = RequestInput {
         queue: Some(RequestQueue {
             delivery: Default::default(),
@@ -250,13 +252,20 @@ async fn insert_generated_pending(
         }),
         ..Default::default()
     };
-    insert_request(
-        node,
-        json!({"request_id":entry.request_id.to_string(),"node_did":parent.node_did,
-            "requester_did":parent.requester_did,"session_id":parent.session_id,
-            "agent_id":BEHAVIOR,"content":"generated pending fixture",
-            "lifecycle_state":"pending","execution_origin":origin.as_str(),
-            "input":input,"created_at":created_at}),
+    publish_client_request(
+        &fixture.client,
+        &fixture.user,
+        crate::request::lifecycle::RequestIdentity {
+            request_id: entry.request_id.to_string(),
+            node_did: parent.node_did.clone(),
+            requester_did: parent.requester_did.clone(),
+            agent_did: parent.agent_did.clone(),
+            session_id: parent.session_id.clone(),
+            content: "generated pending fixture".into(),
+            execution_origin: origin,
+            created_at,
+        },
+        input,
     )
     .await
 }
@@ -333,15 +342,13 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
             continue;
         }
         for use_http in [false, true] {
-            let address = use_http.then(free_http_address);
-            let (node, _dir, parent) = fixture_with_http(case, address).await;
-            let access = match address {
-                Some(address) => {
-                    let access = ConfigAccess::graphql(format!("http://{address}/api/v0/graphql"));
-                    wait_http_ready(&access).await;
-                    access
-                }
-                None => ConfigAccess::local(node.clone()),
+            let fixture = fixture(case).await;
+            let node = fixture.db.node.clone();
+            let parent = &fixture.parent;
+            let access = if use_http {
+                fixture.db.client_access(fixture.agent.as_ref())
+            } else {
+                fixture.agent_access.clone()
             };
             let mut bound: RapidHashMap<u64, String> = RapidHashMap::new();
             let mut notification_bindings = Vec::new();
@@ -357,9 +364,7 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
                         )
                         .await
                         .unwrap();
-                        let latch = fetch_interrupt_requested_at_by_doc_id(&node, &parent.doc_id)
-                            .await
-                            .unwrap();
+                        let latch = latch(&fixture.agent_access, parent).await;
                         assert!(latch.is_some(), "{}: interrupt must latch", case.name);
                         if let Some(first) = &first_latch {
                             assert_eq!(&latch, first, "{}: replay changed latch", case.name);
@@ -377,7 +382,14 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
                                 .unwrap();
                         let doc = match (origin, source) {
                             (ExecutionOrigin::Scheduled, QueueSource::BackgroundCompletion) => {
-                                let doc = enqueue_generated_wake(&node, &parent, case, entry).await;
+                                let doc = enqueue_generated_wake(
+                                    &fixture.agent_access,
+                                    &node,
+                                    parent,
+                                    case,
+                                    entry,
+                                )
+                                .await;
                                 notification_bindings.push(doc.clone());
                                 doc
                             }
@@ -386,7 +398,7 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
                                 QueueSource::User | QueueSource::BackgroundCompletion,
                             ) => {
                                 insert_generated_pending(
-                                    &node, &parent, entry, source, policy, origin,
+                                    &fixture, parent, entry, source, policy, origin,
                                 )
                                 .await
                             }
@@ -403,7 +415,7 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
                     }
                 }
             }
-            let actual = rows(&node, &parent.session_id).await;
+            let actual = rows(&fixture.agent_access, &parent.session_id).await;
             let by_doc: RapidHashMap<_, _> = actual
                 .iter()
                 .map(|row| (row["_docID"].as_str().unwrap().to_owned(), row))
@@ -462,17 +474,15 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
                 "{}: latch",
                 case.name
             );
-            let messages = graphql_with_transaction_retry(
-                &node,
-                &format!(
+            let messages = fixture
+                .agent_access
+                .execute(&format!(
                 "{{AgentMessage(filter:{{session_id:{{_eq:\"{}\"}}}}){{_docID request_doc_id}}}}",
                 escape_graphql_string(&parent.session_id)
-            ),
-                "interrupt queue notification facts",
-            )
-            .await
-            .unwrap();
-            let data = messages.data.unwrap();
+            ))
+                .await
+                .unwrap();
+            let data = &messages["data"];
             let mut actual_bindings = data["AgentMessage"]
                 .as_array()
                 .unwrap()
@@ -486,7 +496,7 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
                 "{}: notification facts",
                 case.name
             );
-            node.shutdown().await;
+            node.shutdown().await.expect("shut down test node");
         }
     }
     assert_eq!(
@@ -541,16 +551,15 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
             ) => (Some(old), None, Some(later)),
             _ => panic!("generated overlap script changed without a native adapter"),
         };
-        let address = free_http_address();
-        let (node, _dir, parent) = fixture_with_http(case, Some(address)).await;
-        let endpoint = format!("http://{address}/api/v0/graphql");
-        let access = ConfigAccess::graphql(endpoint);
-        wait_http_ready(&access).await;
+        let fixture = fixture(case).await;
+        let node = fixture.db.node.clone();
+        let parent = &fixture.parent;
+        let access = fixture.db.client_access(fixture.agent.as_ref());
         let mut bound = RapidHashMap::new();
         if let Some(entry) = before_capture {
             bound.insert(
                 entry.request_id,
-                enqueue_generated_wake(&node, &parent, case, entry).await,
+                enqueue_generated_wake(&fixture.agent_access, &node, parent, case, entry).await,
             );
         }
 
@@ -593,22 +602,20 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
             .await
             .expect("HTTP transaction must pause after modeled queue scan");
         assert_eq!(
-            fetch_interrupt_requested_at_by_doc_id(&node, &parent.doc_id)
-                .await
-                .unwrap(),
+            latch(&fixture.agent_access, parent).await,
             None,
             "staged HTTP latch must remain invisible before commit"
         );
         if let Some(entry) = during_pause {
             let doc = tokio::time::timeout(
                 Duration::from_secs(10),
-                enqueue_generated_wake(&node, &parent, case, entry),
+                enqueue_generated_wake(&fixture.agent_access, &node, parent, case, entry),
             )
             .await
             .expect("embedded wake publication must commit while HTTP interrupt is open");
             bound.insert(entry.request_id, doc);
         }
-        let before_commit = rows(&node, &parent.session_id).await;
+        let before_commit = rows(&fixture.agent_access, &parent.session_id).await;
         assert_eq!(
             before_commit
                 .iter()
@@ -652,14 +659,12 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
         if let Some(entry) = after_commit {
             bound.insert(
                 entry.request_id,
-                enqueue_generated_wake(&node, &parent, case, entry).await,
+                enqueue_generated_wake(&fixture.agent_access, &node, parent, case, entry).await,
             );
         }
-        let latched = fetch_interrupt_requested_at_by_doc_id(&node, &parent.doc_id)
-            .await
-            .unwrap();
+        let latched = latch(&fixture.agent_access, parent).await;
         assert_eq!(latched.is_some(), case.expected.latched);
-        let after_commit = rows(&node, &parent.session_id).await;
+        let after_commit = rows(&fixture.agent_access, &parent.session_id).await;
         let by_doc: RapidHashMap<_, _> = after_commit
             .iter()
             .map(|row| (row["_docID"].as_str().unwrap().to_owned(), row))
@@ -708,8 +713,8 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
                 .map(|id| bound[id].clone())
                 .collect()
         );
-        interrupt_request_by_doc_id(
-            &node,
+        interrupt_request_by_doc_id_with_access(
+            &fixture.agent_access,
             &parent.doc_id,
             &parent.node_did,
             parent.requester_did.as_deref(),
@@ -717,13 +722,11 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
         .await
         .unwrap();
         assert_eq!(
-            fetch_interrupt_requested_at_by_doc_id(&node, &parent.doc_id)
-                .await
-                .unwrap(),
+            latch(&fixture.agent_access, parent).await,
             latched,
             "generated replay preserves first latch"
         );
-        let after_replay = rows(&node, &parent.session_id).await;
+        let after_replay = rows(&fixture.agent_access, &parent.session_id).await;
         let by_doc = |records: Vec<Value>| {
             records
                 .into_iter()
@@ -735,17 +738,15 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
             by_doc(after_commit),
             "replay must leave exact physical rows unchanged"
         );
-        let messages = graphql_with_transaction_retry(
-            &node,
-            &format!(
+        let messages = fixture
+            .agent_access
+            .execute(&format!(
                 "{{AgentMessage(filter:{{session_id:{{_eq:\"{}\"}}}}){{request_doc_id}}}}",
                 escape_graphql_string(&parent.session_id)
-            ),
-            "HTTP overlap notification bindings",
-        )
-        .await
-        .unwrap();
-        let mut actual_bindings = messages.data.unwrap()["AgentMessage"]
+            ))
+            .await
+            .unwrap();
+        let mut actual_bindings = messages["data"]["AgentMessage"]
             .as_array()
             .unwrap()
             .iter()
@@ -759,7 +760,7 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
             "{}: notification facts",
             case.name
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 }
 
@@ -769,10 +770,13 @@ async fn interrupted_queue_drain_rolls_back_with_latch() {
         .iter()
         .find(|case| case.name == "completion_before_interrupt")
         .expect("generated pre-interrupt completion case");
-    let (node, _dir, parent) = fixture(case).await;
-    let wake = persist_background_completion_with_message(
+    let fixture = fixture(case).await;
+    let node = fixture.db.node.clone();
+    let parent = &fixture.parent;
+    let wake = persist_background_completion_with_message_waking_with_access(
+        &fixture.agent_access,
         &node,
-        &parent,
+        parent,
         "notification",
         "background-completion-notification:rollback:tool",
         "review notifications",
@@ -787,6 +791,7 @@ async fn interrupted_queue_drain_rolls_back_with_latch() {
             background_completion_wake_version: None,
         },
         None,
+        crate::request::lifecycle::RequestHopCause::Continuation,
     )
     .await
     .unwrap()
@@ -794,8 +799,8 @@ async fn interrupted_queue_drain_rolls_back_with_latch() {
     .unwrap();
     let (result, count) = ConfigApplyTxn::with_successful_mutation_failure_at(
         Some(2),
-        interrupt_request_by_doc_id(
-            &node,
+        interrupt_request_by_doc_id_with_access(
+            &fixture.agent_access,
             &parent.doc_id,
             &parent.node_did,
             parent.requester_did.as_deref(),
@@ -804,7 +809,7 @@ async fn interrupted_queue_drain_rolls_back_with_latch() {
     .await;
     assert!(result.is_err(), "second transaction mutation must fail");
     assert!(count >= 2, "latch and drain must share one transaction");
-    let actual = rows(&node, &parent.session_id).await;
+    let actual = rows(&fixture.agent_access, &parent.session_id).await;
     let parent_row = actual
         .iter()
         .find(|row| row["_docID"] == parent.doc_id)
@@ -815,5 +820,101 @@ async fn interrupted_queue_drain_rolls_back_with_latch() {
         .unwrap();
     assert!(parent_row["interrupt_requested_at"].is_null());
     assert_eq!(wake_row["lifecycle_state"], "pending");
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
+}
+
+#[tokio::test]
+async fn desktop_user_signed_interrupt_latches_and_drains_the_modeled_wake() {
+    let case = crate::lean_vocab_test::lean_interrupt_queue_cases()
+        .iter()
+        .find(|case| case.name == "completion_before_interrupt")
+        .expect("modeled completion before interrupt");
+    let entry = case
+        .inputs
+        .iter()
+        .find_map(|event| match event {
+            LeanInterruptQueueInput::Enqueue { entry } => Some(entry),
+            _ => None,
+        })
+        .expect("modeled pending wake");
+    let fixture = fixture(case).await;
+    let parent = &fixture.parent;
+    let wake =
+        enqueue_generated_wake(&fixture.agent_access, &fixture.db.node, parent, case, entry).await;
+    let (interrupt_tx, mut interrupt_rx) = tokio::sync::watch::channel(None);
+    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let observer = spawn_request_interrupt_observer(
+        fixture.db.node.clone(),
+        fixture.agent_access.clone(),
+        parent.doc_id.clone(),
+        interrupt_tx,
+        shutdown_rx,
+    );
+
+    interrupt_request_by_doc_id_with_access(
+        &fixture.client,
+        &parent.doc_id,
+        &parent.node_did,
+        parent.requester_did.as_deref(),
+    )
+    .await
+    .unwrap();
+    let first = latch(&fixture.agent_access, parent).await;
+    assert_eq!(first.is_some(), case.expected.latched);
+    assert_eq!(
+        fetch_interrupt_requested_at_by_doc_id(&fixture.db.node, &parent.doc_id)
+            .await
+            .unwrap(),
+        None,
+        "the Node's default read cannot observe the User-owned request"
+    );
+    assert_eq!(
+        fetch_interrupt_requested_at_by_doc_id_with_access(&fixture.agent_access, &parent.doc_id)
+            .await
+            .unwrap(),
+        first,
+        "the final latch check must use the selected Agent"
+    );
+    let intent = tokio::time::timeout(
+        Duration::from_secs(5),
+        interrupt_rx.wait_for(|intent| intent.is_some()),
+    )
+    .await
+    .expect("the selected Agent must observe the interrupt")
+    .unwrap()
+    .clone()
+    .unwrap();
+    assert_eq!(
+        intent.at,
+        chrono::DateTime::parse_from_rfc3339(first.as_deref().unwrap())
+            .unwrap()
+            .with_timezone(&Utc)
+    );
+    observer.await.unwrap();
+    let after = rows(&fixture.agent_access, &parent.session_id).await;
+    let state = &after.iter().find(|row| row["_docID"] == wake).unwrap()["lifecycle_state"];
+    assert_eq!(
+        state == "interrupted",
+        case.expected.terminal.contains(&entry.request_id)
+    );
+    assert_eq!(
+        state == "pending",
+        case.expected.pending.contains(&entry.request_id)
+    );
+
+    interrupt_request_by_doc_id_with_access(
+        &fixture.client,
+        &parent.doc_id,
+        &parent.node_did,
+        parent.requester_did.as_deref(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(latch(&fixture.agent_access, parent).await, first);
+    fixture
+        .db
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
 }

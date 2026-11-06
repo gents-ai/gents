@@ -23,6 +23,8 @@ pub enum BridgeErrorCode {
     SessionAccepted,
     /// A verified runtime Goal-control rejection, never transport or message classification.
     GoalControlRejected,
+    /// DefraDB explicitly rejected the authenticated operation.
+    PermissionDenied,
     NotFound,
     InvalidArgument,
     Unsupported,
@@ -51,6 +53,7 @@ impl BridgeErrorCode {
             Self::SessionNotConnected => "sessionNotConnected",
             Self::SessionAccepted => "sessionAccepted",
             Self::GoalControlRejected => "goalControlRejected",
+            Self::PermissionDenied => "permissionDenied",
             Self::NotFound => "notFound",
             Self::InvalidArgument => "invalidArgument",
             Self::Unsupported => "unsupported",
@@ -138,6 +141,12 @@ impl BridgeError {
         if let Some(classified) = error.chain().find_map(|cause| cause.downcast_ref::<Self>()) {
             return classified.clone();
         }
+        if gents::store::config_client::TransactionFailure::permission_denied(&error) {
+            return Self::new(
+                BridgeErrorCode::PermissionDenied,
+                "Access was denied. Check this client's permissions with the runtime owner.",
+            );
+        }
         let transport =
             gents::store::config_client::TransactionFailure::config_client_error(&error)
                 .and_then(gents::store::config_client::ConfigClientError::transport_error)
@@ -153,7 +162,17 @@ impl BridgeError {
     }
 
     pub(crate) fn runtime_http_error(error: reqwest::Error, message: String) -> anyhow::Error {
-        if error.is_connect() || error.is_timeout() || error.is_body() {
+        if error.status().is_some_and(|status| {
+            matches!(
+                status,
+                reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+            )
+        }) {
+            anyhow::Error::from(Self::new(
+                BridgeErrorCode::PermissionDenied,
+                "Access was denied. Check this client's permissions with the runtime owner.",
+            ))
+        } else if error.is_connect() || error.is_timeout() || error.is_body() {
             let mut bridge = match error.url() {
                 Some(url) => {
                     Self::endpoint_unreachable(url.origin().ascii_serialization(), message.clone())
@@ -165,6 +184,28 @@ impl BridgeError {
         } else {
             anyhow::Error::from(error).context(message)
         }
+    }
+}
+
+/// A verified agent rejection is a denial; every unconfirmed control keeps its
+/// intent reference in the message because the action may still take effect.
+impl From<gents::tools::call::control::client::send::ControlSendError> for BridgeError {
+    fn from(error: gents::tools::call::control::client::send::ControlSendError) -> Self {
+        use gents::tools::call::control::client::send::ControlSendError;
+        let code = match &error {
+            ControlSendError::NotAuthorized
+            | ControlSendError::PermissionDenied
+            | ControlSendError::Rejected { .. } => BridgeErrorCode::PermissionDenied,
+            ControlSendError::NotFound => BridgeErrorCode::NotFound,
+            ControlSendError::RuntimeRequired => BridgeErrorCode::Unsupported,
+            ControlSendError::Unavailable(_)
+            | ControlSendError::Refused { .. }
+            | ControlSendError::Unconfirmed { .. } => BridgeErrorCode::Unknown,
+        };
+        Self::new(
+            code,
+            gents_protocol::error_chain::ErrorChain(&error).to_string(),
+        )
     }
 }
 
@@ -201,6 +242,31 @@ impl From<&str> for BridgeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_database_denial_is_nonretryable_without_inferring_hidden_documents() {
+        let denial = gents_protocol::database_error::GraphqlFailure::new(
+            "write",
+            serde_json::json!([
+                {"message":"opaque", "extensions":{"code":"PERMISSION_DENIED"}}
+            ]),
+        );
+        let error = gents::store::config_client::ConfigClientError::Database(denial);
+        let bridge = BridgeError::classify_transport_error(anyhow::Error::new(error));
+        assert_eq!(bridge.code, BridgeErrorCode::PermissionDenied);
+        assert!(!bridge.retryable);
+        assert!(!bridge.message.contains("opaque"));
+        let hidden = gents::store::config_client::ConfigClientError::Database(
+            gents_protocol::database_error::GraphqlFailure::new(
+                "read",
+                serde_json::json!([
+                    {"message":"not found or unavailable"}
+                ]),
+            ),
+        );
+        let bridge = BridgeError::classify_transport_error(anyhow::Error::new(hidden));
+        assert_eq!(bridge.code, BridgeErrorCode::Unknown);
+    }
 
     #[test]
     fn an_unpublished_read_fence_remains_a_retryable_observation() {

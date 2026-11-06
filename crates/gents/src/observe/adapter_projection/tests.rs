@@ -101,7 +101,7 @@ fn timeline_with_captures() -> crate::observe::run_timeline::RunTimeline {
             doc_id: Some("doc-req-1".to_string()),
             request_id: "req-1".to_string(),
             node_did: Some("did:test:amy".to_string()),
-            agent_id: Some("amy".to_string()),
+            agent_did: Some("amy".to_string()),
             session_id: Some("session-1".to_string()),
             content: Some("hello".to_string()),
             lifecycle_state: Some(RequestLifecycleState::Completed),
@@ -286,7 +286,7 @@ fn assert_adapter_projection_matches_json_schema(envelope: &AdapterProjectionEnv
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ProjectionParticipant {
     node_did: Option<String>,
-    agent_id: Option<String>,
+    agent_did: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -309,7 +309,7 @@ fn delegated_coherence_timeline() -> RunTimeline {
             doc_id: Some("doc-req-root".to_string()),
             request_id: "req-root".to_string(),
             node_did: Some("did:test:coordinator".to_string()),
-            agent_id: Some("coordinator".to_string()),
+            agent_did: Some("coordinator".to_string()),
             session_id: Some("session-root".to_string()),
             content: Some("root private objective".to_string()),
             lifecycle_state: Some(RequestLifecycleState::Completed),
@@ -320,7 +320,7 @@ fn delegated_coherence_timeline() -> RunTimeline {
             doc_id: Some("doc-req-review".to_string()),
             request_id: "req-review".to_string(),
             node_did: Some("did:test:reviewer".to_string()),
-            agent_id: Some("reviewer".to_string()),
+            agent_did: Some("reviewer".to_string()),
             session_id: Some("session-review".to_string()),
             lifecycle_state: Some(RequestLifecycleState::Completed),
             caused_by_parent_request_id: Some("req-root".to_string()),
@@ -450,7 +450,7 @@ fn projection_participants(
                 .agent
                 .extra
                 .as_ref()
-                .and_then(|extra| extra.get("agent_id"))
+                .and_then(|extra| extra.get("agent_did"))
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
         )
@@ -461,8 +461,10 @@ fn projection_participants(
             .iter()
             .filter_map(|item| match item {
                 OpenAiCodexTraceItem::Request {
-                    node_did, agent_id, ..
-                } => participant(node_did.clone(), agent_id.clone()),
+                    node_did,
+                    agent_did,
+                    ..
+                } => participant(node_did.clone(), agent_did.clone()),
                 _ => None,
             })
             .collect(),
@@ -470,13 +472,13 @@ fn projection_participants(
             .nodes
             .iter()
             .filter(|node| node.kind == "request")
-            .filter_map(|node| participant(node.node_did.clone(), node.agent_id.clone()))
+            .filter_map(|node| participant(node.node_did.clone(), node.agent_did.clone()))
             .collect(),
         AdapterProjection::MultiAgentTask(projection) => projection
             .participants
             .iter()
             .filter_map(|participant| {
-                self::participant(participant.node_did.clone(), participant.agent_id.clone())
+                self::participant(participant.node_did.clone(), participant.agent_did.clone())
             })
             .collect(),
     }
@@ -484,12 +486,15 @@ fn projection_participants(
 
 fn participant(
     node_did: Option<String>,
-    agent_id: Option<String>,
+    agent_did: Option<String>,
 ) -> Option<ProjectionParticipant> {
-    if node_did.is_none() && agent_id.is_none() {
+    if node_did.is_none() && agent_did.is_none() {
         return None;
     }
-    Some(ProjectionParticipant { node_did, agent_id })
+    Some(ProjectionParticipant {
+        node_did,
+        agent_did,
+    })
 }
 
 #[test]
@@ -867,11 +872,11 @@ fn adapter_projections_are_coherent_for_delegated_timeline() {
     let expected_participants = BTreeSet::from([
         ProjectionParticipant {
             node_did: Some("did:test:coordinator".to_string()),
-            agent_id: Some("coordinator".to_string()),
+            agent_did: Some("coordinator".to_string()),
         },
         ProjectionParticipant {
             node_did: Some("did:test:reviewer".to_string()),
-            agent_id: Some("reviewer".to_string()),
+            agent_did: Some("reviewer".to_string()),
         },
     ]);
     let expected_delegations = BTreeSet::from([ProjectionDelegation {
@@ -1026,7 +1031,7 @@ fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
             doc_id: Some("doc-req-1".to_string()),
             request_id: "req-1".to_string(),
             node_did: Some("did:test:root".to_string()),
-            agent_id: Some("root".to_string()),
+            agent_did: Some("root".to_string()),
             session_id: Some("session-1".to_string()),
             content: Some("sensitive prompt".to_string()),
             lifecycle_state: Some(RequestLifecycleState::Completed),
@@ -1037,7 +1042,7 @@ fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
             doc_id: Some("doc-child-1".to_string()),
             request_id: "child-1".to_string(),
             node_did: Some("did:test:child".to_string()),
-            agent_id: Some("child".to_string()),
+            agent_did: Some("child".to_string()),
             session_id: Some("session-1".to_string()),
             lifecycle_state: Some(RequestLifecycleState::Completed),
             caused_by_parent_request_id: Some("req-1".to_string()),
@@ -1288,21 +1293,55 @@ async fn an_agent_new_row_links_the_request_it_caused() {
     .await
     .unwrap();
     let node = message.admission.node.clone();
-    let caller_request_id = crate::request::binding::load_agent_request_by_doc_id(
-        &node,
+    let access = &message.admission.client;
+    let caller_request_id = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        access,
         message.admission.tool.request_doc_id().unwrap(),
     )
     .await
     .unwrap()
     .unwrap()
     .request_id;
+    let child = access.execute(&format!(
+        r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{_docID node_did requester_did agent_did session_doc_id}} }}"#,
+        crate::store::graphql::escape_graphql_string(&message.caused_request_doc_id),
+    )).await.unwrap();
+    let [child] = child["data"]["AgentRequest"].as_array().unwrap().as_slice() else {
+        panic!("the User owning the Node and Agent must observe the caused request: {child}");
+    };
+    let agent = message
+        .admission
+        .tool
+        .access()
+        .unwrap()
+        .actor_did()
+        .unwrap();
+    assert_eq!(child["node_did"], message.admission.node_did);
+    assert_eq!(child["requester_did"], agent);
+    assert_eq!(child["agent_did"], agent);
+    let session_doc = child["session_doc_id"]
+        .as_str()
+        .expect("caused request session");
+    let session = access.execute(&format!(
+        r#"{{ AgentSession(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{_docID node_did requester_did agent_did}} }}"#,
+        crate::store::graphql::escape_graphql_string(session_doc),
+    )).await.unwrap();
+    let [session] = session["data"]["AgentSession"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("the User owning the Node and Agent must observe the caused session: {session}");
+    };
+    assert_eq!(session["_docID"], session_doc);
+    assert_eq!(session["node_did"], message.admission.node_did);
+    assert_eq!(session["requester_did"], agent);
+    assert_eq!(session["agent_did"], agent);
     let tool_call_id = message.admission.tool.tool_call_id().to_owned();
-    let rows = crate::observe::run_timeline_fetch::load_run_timeline_rows(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
-        &caller_request_id,
-    )
-    .await
-    .unwrap();
+    let rows =
+        crate::observe::run_timeline_fetch::load_run_timeline_rows(access, &caller_request_id)
+            .await
+            .unwrap();
     let row = rows
         .tool_calls
         .iter()
@@ -1326,6 +1365,6 @@ async fn an_agent_new_row_links_the_request_it_caused() {
             parent_tool_call_id: Some(tool_call_id),
         })
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }

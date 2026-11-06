@@ -18,8 +18,8 @@ use sha2::{Digest, Sha256};
 
 pub use super::admit::host_pin;
 use super::admit::{
-    admit_step, fresh_spawns, out_pin, out_resume, step_row, AdmitRefusal, HostFacts, Refusal,
-    StepContext, StepRow,
+    admit_step, fresh_spawns, out_pin, out_resume, step_row, AdmitRefusal, HostFacts,
+    PolicyDenialDetail, Refusal, StepContext, StepRow,
 };
 use super::control::{kill, resume_target_in_txn, validate_resume, KillCause};
 use super::driver::{
@@ -104,7 +104,7 @@ pub async fn run_step0(
             .await
         }
     };
-    let access = ConfigAccess::local(runtime.node.clone());
+    let access = runtime.agent_access(lifecycle.actor())?;
     let row_doc_id = lifecycle
         .doc_id()
         .context("a job tool call has no physical identity")?
@@ -113,7 +113,8 @@ pub async fn run_step0(
         .await
         .context("assembling the step 0 input")?;
     let caller = &input.caller;
-    let data = DataCaller::new(runtime.node.clone(), &caller.node_did)?;
+    let agent_identity = runtime.agent_identity(&caller.node_did, &caller.agent_did)?;
+    let data = DataCaller::for_agent(runtime.node.clone(), &caller.node_did, agent_identity.did())?;
     let jobs = JobCaller::new(
         runtime.node.clone(),
         ProcessControlScope {
@@ -123,12 +124,13 @@ pub async fn run_step0(
             requester_did: lifecycle.requester_did().map(str::to_owned),
         },
         StampContext::ToolOutput {
-            node_did: caller.node_did.clone(),
+            caller_did: caller.agent_did.clone(),
             session_id: caller.session_id.clone(),
             request_doc_id: caller.request_doc_id.clone(),
             tool_call_doc_id: row_doc_id.clone(),
         },
     )
+    .with_agent_access(access.clone())
     .with_children(input.job.chain.clone(), input.ceiling.result_bytes);
     let (call, receipt) = runtime
         .plugins
@@ -190,12 +192,15 @@ pub async fn run_step0(
     }
     let row = read_step_row(&access, &row_doc_id).await?;
     let max_hop =
-        crate::request::admission::max_request_hop(runtime.node.as_ref(), &caller.node_did).await?;
+        crate::request::admission::max_request_hop(runtime.node.as_ref(), &caller.node_did)
+            .await?
+            .bound();
     let mut ctx = step0_context(runtime, binding, &installed, &input, lifecycle, max_hop)?;
     ctx.control_targets = control_targets(&access, coordinate, &output).await?;
     if let Err(refusal) = admit_step(&ctx, &row, &output) {
         let (class, message, next) = step0_refusal(
             refusal.refusal,
+            refusal.detail,
             binding,
             &installed,
             &runtime.home,
@@ -227,6 +232,7 @@ pub async fn run_step0(
             .await;
         };
         lifecycle.stage_deferred_writes(Some(DeferredToolWrites::new(PluginToolWrites {
+            actor: ::identity::Did::new(agent_identity.did().to_owned())?,
             grant,
             writes: writes.to_vec(),
         })));
@@ -245,8 +251,9 @@ pub async fn run_step0(
             let (owner, _) = target
                 .as_ref()
                 .context("an admitted control entry has no job row")?;
-            let mut target_lifecycle = ToolCallLifecycle::load_by_doc_id(
+            let mut target_lifecycle = ToolCallLifecycle::load_by_doc_id_as(
                 runtime.node.clone(),
+                lifecycle.actor().clone(),
                 &request.row_doc_id,
                 &owner.node_did,
                 &owner.session_id,
@@ -430,7 +437,7 @@ pub fn split_address(address: &str) -> Option<(String, String)> {
 /// What the adoption transaction decided.
 enum Adopted {
     /// With the address of the row that resumed the named resume target.
-    Refused(Refusal, Option<String>),
+    Refused(Refusal, Option<PolicyDenialDetail>, Option<String>),
     Settled {
         lifecycle: ToolCallLifecycle,
         terminal: PluginJobTerminal,
@@ -549,7 +556,7 @@ pub async fn adopt_step0(
     // error would terminate the request instead of failing the call.
     if let Some(grant) = grant.as_ref().filter(|_| !writes.is_empty()) {
         let stamps = crate::plugin::data::StampContext::JobStep {
-            node_did: caller.node_did.clone(),
+            caller_did: caller.agent_did.clone(),
             session_id: caller.session_id.clone(),
             request_doc_id: caller.request_doc_id.clone(),
             tool_call_doc_id: row_doc_id.clone(),
@@ -572,7 +579,7 @@ pub async fn adopt_step0(
     }
     let cause = SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
-        caller_agent_id: caller.agent_id.clone(),
+        caller_agent_did: caller.agent_did.clone(),
         caller_session_id: caller.session_id.clone(),
         caller_requester_did: lifecycle.requester_did().map(str::to_owned),
         caller_request_id: caller.request_id.clone(),
@@ -586,11 +593,9 @@ pub async fn adopt_step0(
     let adopted = {
         let (cause, args_digest, row_doc_id, grant, lifecycle) =
             (&cause, &args_digest, &row_doc_id, &grant, &*lifecycle);
-        ConfigAccess::transact_local_write(
-            &runtime.node,
-            Some(::identity::Did::new(caller.node_did.clone())?),
-            "plugin_job.adopt_step0",
-            |txn| {
+        lifecycle
+            .access()?
+            .transact_write("plugin_job.adopt_step0", |txn| {
                 Box::pin(async move {
                     let adopted_at = u64::try_from(chrono::Utc::now().timestamp_millis())?;
                     let provisional = HostFacts {
@@ -645,7 +650,9 @@ pub async fn adopt_step0(
                         )
                         .await?
                         {
-                            return Ok::<_, anyhow::Error>(Adopted::Refused(refusal, resumed_by));
+                            return Ok::<_, anyhow::Error>(Adopted::Refused(
+                                refusal, None, resumed_by,
+                            ));
                         }
                     }
                     let mut out = output.clone();
@@ -669,7 +676,13 @@ pub async fn adopt_step0(
                     let row = read_step_row_in_txn(txn, row_doc_id).await?;
                     let adoption = match adopt(&ctx, &view, &row, &out) {
                         Ok(adoption) => adoption,
-                        Err(refusal) => return Ok(Adopted::Refused(refusal.refusal, resumed_by)),
+                        Err(refusal) => {
+                            return Ok(Adopted::Refused(
+                                refusal.refusal,
+                                refusal.detail,
+                                resumed_by,
+                            ))
+                        }
                     };
                     let pin = adoption
                         .row
@@ -744,15 +757,19 @@ pub async fn adopt_step0(
                             .as_ref()
                             .context("a plugin without data cannot write")?;
                         let stamps = crate::plugin::data::StampContext::JobStep {
-                            node_did: caller.node_did.clone(),
+                            caller_did: caller.agent_did.clone(),
                             session_id: caller.session_id.clone(),
                             request_doc_id: caller.request_doc_id.clone(),
                             tool_call_doc_id: row_doc_id.clone(),
                             job_row_doc_id: row_doc_id.clone(),
                             chain_root_doc_id: pin.chain_root_doc_id.clone(),
                         };
+                        let agent_identity =
+                            runtime.agent_identity(&caller.node_did, &caller.agent_did)?;
+                        let actor = ::identity::Did::new(agent_identity.did().to_owned())?;
                         crate::plugin::application_write::apply_plugin_writes_in_txn(
                             txn,
+                            &actor,
                             grant,
                             &stamps,
                             writes.to_vec(),
@@ -811,15 +828,15 @@ pub async fn adopt_step0(
                         receipt,
                     })
                 })
-            },
-        )
-        .await?
+            })
+            .await?
     };
     match adopted {
-        Adopted::Refused(refusal, resumed_by) => {
+        Adopted::Refused(refusal, detail, resumed_by) => {
             let resume = out_resume(output).map(|resume| resume.row_doc_id.as_str());
             let (class, message, next) = step0_refusal(
                 refusal,
+                detail,
                 binding,
                 installed,
                 &runtime.home,
@@ -834,6 +851,13 @@ pub async fn adopt_step0(
             payload,
         } => {
             *lifecycle = flipped;
+            crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+                &lifecycle.access()?,
+                lifecycle.node_did(),
+                lifecycle.actor(),
+                lifecycle.session_id(),
+            )
+            .await?;
             lifecycle.finish_plugin_job_row(terminal).await?;
             Ok(payload)
         }
@@ -842,7 +866,14 @@ pub async fn adopt_step0(
             receipt,
         } => {
             *lifecycle = flipped;
-            driver.kick(&row_doc_id);
+            crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+                &lifecycle.access()?,
+                lifecycle.node_did(),
+                lifecycle.actor(),
+                lifecycle.session_id(),
+            )
+            .await?;
+            driver.kick(&row_doc_id, lifecycle.actor())?;
             Ok(receipt)
         }
     }
@@ -881,6 +912,7 @@ async fn refuse(
 /// the row a step-0 resume named and the address of the row that resumed it.
 fn step0_refusal(
     refusal: Refusal,
+    detail: Option<PolicyDenialDetail>,
     binding: &JobBinding,
     installed: &InstalledPlugin,
     home: &Path,
@@ -889,6 +921,16 @@ fn step0_refusal(
 ) -> (FailureClass, String, String) {
     let tool = binding.tool_name.as_str();
     let coordinate = binding.plugin.plugin.as_str();
+    if refusal == Refusal::PolicyDenied {
+        if let Some(detail) = detail {
+            let (message, next) = detail.guidance();
+            return (
+                FailureClass::PolicyDenied,
+                message.to_owned(),
+                next.to_owned(),
+            );
+        }
+    }
     match refusal {
         Refusal::NotAvailable if engine_guard(home, installed).is_err() => (
             FailureClass::ServiceUnavailable,

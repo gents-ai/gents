@@ -35,6 +35,7 @@ pub(crate) struct AdmittedCompletionModel<M> {
     pub(crate) model_name: Option<String>,
     pub(crate) profile_id: Option<String>,
     pub(crate) separate_reasoning: bool,
+    pub(crate) agent_signer: Option<crate::store::identity::ManagedAgentSigner>,
 }
 
 impl<M> AdmittedCompletionModel<M> {
@@ -50,6 +51,7 @@ impl<M> AdmittedCompletionModel<M> {
             model_name: None,
             profile_id: None,
             separate_reasoning: false,
+            agent_signer: None,
         }
     }
 
@@ -65,10 +67,11 @@ impl<M> AdmittedCompletionModel<M> {
     {
         let mut permit = self
             .admission
-            .acquire_current_call(
+            .acquire_current_call_with_signer(
                 &self.connection,
                 self.model_name.as_deref(),
                 self.profile_id.as_deref(),
+                self.agent_signer.clone(),
             )
             .await
             .map_err(AdmittedCallError::Admission)?;
@@ -135,10 +138,12 @@ pub(crate) struct CurrentCallJoin {
 pub(crate) struct AdmissionCallContext {
     pub(super) request_id: String,
     pub(super) request_doc_id: String,
+    pub(super) request_purpose: gents_protocol::request_admission::RequestPurpose,
     pub(super) backend_id: String,
-    pub(super) agent_id: String,
+    pub(super) agent_did: String,
     pub(super) node_did: String,
     pub(super) session_id: String,
+    pub(super) requester_did: Option<String>,
     pub(super) call_kind: CallKind,
     pub(super) attempt: i64,
     pub(super) call_seq: Arc<AtomicU64>,
@@ -153,16 +158,18 @@ pub(crate) struct AdmissionCallContext {
 impl AdmissionCallContext {
     pub(crate) fn for_request(
         request: &AgentRequest,
-        agent_id: impl Into<String>,
+        agent_did: impl Into<String>,
         backend_id: impl Into<String>,
     ) -> Self {
         Self {
             request_id: request.request_id.clone(),
             request_doc_id: request.doc_id.clone(),
+            request_purpose: request.purpose,
             backend_id: backend_id.into(),
-            agent_id: agent_id.into(),
+            agent_did: agent_did.into(),
             node_did: request.node_did.clone(),
             session_id: request.session_id.clone(),
+            requester_did: request.requester_did.clone(),
             call_kind: CallKind::Inference,
             attempt: 1,
             call_seq: Arc::new(AtomicU64::new(0)),
@@ -177,19 +184,23 @@ impl AdmissionCallContext {
         runtime_instance_id: &str,
         model_name: Option<&str>,
         profile_id: Option<&str>,
+        agent_signer: Option<crate::store::identity::ManagedAgentSigner>,
     ) -> PendingCallMetadata {
         let call_seq = self.call_seq.fetch_add(1, Ordering::SeqCst) + 1;
         let metadata = PendingCallMetadata {
+            agent_signer,
             call_id: uuid::Uuid::new_v4().to_string(),
             runtime_instance_id: runtime_instance_id.to_string(),
             request_id: self.request_id.clone(),
             request_doc_id: self.request_doc_id.clone(),
+            request_purpose: self.request_purpose,
             session_id: self.session_id.clone(),
+            requester_did: self.requester_did.clone(),
             model_name: model_name.map(str::to_owned),
             profile_id: profile_id.map(str::to_owned),
             call_seq,
             backend_id: self.backend_id.clone(),
-            agent_id: self.agent_id.clone(),
+            agent_did: self.agent_did.clone(),
             node_did: self.node_did.clone(),
             call_kind: self.call_kind,
             attempt: self.attempt,

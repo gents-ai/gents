@@ -1,0 +1,8 @@
+name: Gents identity ownership model
+resources:
+  - name: journals
+    relations: []
+    permissions:
+      - name: read
+      - name: update
+      - name: delete

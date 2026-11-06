@@ -13,15 +13,9 @@ use serde_json::Value;
 /// the client route. `null` means the runtime could not read its own node yet.
 pub const STATUS_REPLICATED_SCHEMA_FIELD: &str = "replicated_schema";
 
-/// Prevent app routes from bypassing protocol schema compatibility checks.
-pub fn admit_app_collections(requested: BTreeSet<String>) -> Option<BTreeSet<String>> {
-    let overlaps_protocol_catalog = requested.iter().any(|requested| {
-        crate::schemas::ALL_COLLECTION_NAMES
-            .iter()
-            .chain(crate::schemas::RUNTIME_COLLECTION_NAMES.iter())
-            .any(|protocol| requested == protocol)
-    });
-    (!requested.is_empty() && !overlaps_protocol_catalog).then_some(requested)
+/// Application collections remain on the runtime, including explicitly requested routes.
+pub fn admit_app_collections(_requested: BTreeSet<String>) -> Option<BTreeSet<String>> {
+    None
 }
 
 /// What a merge depends on for one collection: DefraDB's content-addressed

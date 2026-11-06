@@ -2,7 +2,7 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::{
     MessagePublication, MessageRole, ReconstructionError, TerminalOutput,
 };
@@ -42,14 +42,14 @@ pub(crate) fn select_folded_outcome(
 }
 
 pub(crate) async fn load_session_message_terminal(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &ConfigAccess,
     caused_doc_id: &str,
 ) -> Result<Option<CausedRequestTerminal>> {
-    ConfigAccess::transact_local_readonly(node, None, "background.session_message_terminal", |txn| {
+    access.transact_readonly("background.session_message_terminal", |txn| {
         Box::pin(async move {
             let response = txn.execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
-                    _docID request_id node_did requester_did session_id agent_id lifecycle_state failure_reason superseded_by_request superseded_by_request_doc_id
+                    _docID request_id node_did requester_did session_id agent_did lifecycle_state failure_reason superseded_by_request superseded_by_request_doc_id
                 }} }}"#,
                 crate::store::graphql::escape_graphql_string(caused_doc_id),
             )).await?;
@@ -59,7 +59,7 @@ pub(crate) async fn load_session_message_terminal(
             anyhow::ensure!(
                 caused.node_did.as_deref().is_some_and(|value| !value.is_empty())
                     && caused.session_id.as_deref().is_some_and(|value| !value.is_empty())
-                    && caused.agent_id.as_deref().is_some_and(|value| !value.is_empty()),
+                    && caused.agent_did.as_deref().is_some_and(|value| !value.is_empty()),
                 "caused request lacks its session scope"
             );
             let folded = caused.lifecycle_state == Some(RequestLifecycleState::Superseded)
@@ -70,7 +70,7 @@ pub(crate) async fn load_session_message_terminal(
                     .context("folded request lacks its physical head")?;
                 anyhow::ensure!(head != caused_doc_id, "folded request references itself");
                 let response = txn.execute(&format!(
-                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id node_did requester_did session_id agent_id }} }}"#,
+                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id node_did requester_did session_id agent_did }} }}"#,
                     crate::store::graphql::escape_graphql_string(head),
                 )).await?;
                 let heads: Vec<AgentRequestRow> = query_rows(&response, "AgentRequest")?;
@@ -78,7 +78,7 @@ pub(crate) async fn load_session_message_terminal(
                 anyhow::ensure!(heads.len() == 1 && heads[0].node_did == caused.node_did
                     && heads[0].session_id == caused.session_id
                     && heads[0].requester_did == caused.requester_did
-                    && heads[0].agent_id == caused.agent_id
+                    && heads[0].agent_did == caused.agent_did
                     && caused.superseded_by_request.as_deref() == Some(heads[0].request_id.as_str()),
                     "folded request head is outside its session scope");
                 ids.push(head.to_owned());

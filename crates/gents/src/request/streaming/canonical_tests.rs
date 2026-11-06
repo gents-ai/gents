@@ -2,49 +2,217 @@ use super::*;
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use std::{sync::Arc, time::Duration};
 
-async fn claimed(node: &Arc<EmbeddedNode>, request_id: &str, session_id: &str) -> RequestLifecycle {
-    let now = chrono::Utc::now().to_rfc3339();
-    let request_id = crate::store::graphql::escape_graphql_string(request_id);
-    let session_id = crate::store::graphql::escape_graphql_string(session_id);
-    let now = crate::store::graphql::escape_graphql_string(&now);
-    let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "did:test:test", agent_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#)).await;
-    assert!(!response.has_errors(), "{:#?}", response.errors);
-    let response = node
+struct FixtureGuard {
+    _db: crate::support::TestDb,
+    owner: crate::ConfigAccess,
+}
+
+fn fixture_access(node: &Arc<EmbeddedNode>, lifecycle: &RequestLifecycle) -> crate::ConfigAccess {
+    crate::ConfigAccess::local_with_agent_signer(
+        node.clone(),
+        lifecycle.actor_did().unwrap(),
+        lifecycle.managed_agent_signer().unwrap(),
+    )
+    .unwrap()
+}
+
+async fn fixture_with_ids(
+    name: &str,
+    request_id: &str,
+    session_id: &str,
+) -> (
+    Arc<EmbeddedNode>,
+    FixtureGuard,
+    RequestLifecycle,
+    DefraStreamWriter,
+) {
+    use crate::store::identity::NodeIdentity;
+    let (db, user, owner, binding) = crate::test_support::signed_test_node(name).await;
+    let node = db.node.clone();
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let create = crate::request::lifecycle::build_signed_client_request(
+        &owner,
+        crate::request::lifecycle::RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            crate::request::lifecycle::RequestIdentity {
+                request_id: request_id.into(),
+                node_did: db.node_identity.did().into(),
+                requester_did: Some(user.did().into()),
+                agent_did: agent.did().into(),
+                session_id: session_id.into(),
+                content: "hello".into(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            },
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+        ),
+        crate::request::lifecycle::RequestSigner::Identity(&user),
+    )
+    .await
+    .unwrap();
+    crate::request::lifecycle::submit_client_request(&owner, &create)
+        .await
+        .unwrap();
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let response = access
         .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS
+            "{{ AgentRequest {{ {} }} }}",
+            crate::SIGNED_REQUEST_FIELDS
         ))
-        .await;
+        .await
+        .unwrap();
     let row: gents_protocol::row::AgentRequestRow =
-        crate::store::graphql::first_row(&response, "AgentRequest")
-            .unwrap()
-            .unwrap();
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+    let request = row.try_into().unwrap();
+    let (_authority_owner, authority) =
+        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        db.node_identity.clone(),
+        authority,
+    );
+    let (request, admission) = verifier
+        .verify_fresh_for_claim(&request, agent.did())
+        .await
+        .unwrap();
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
-        "general",
-        "did:test:test",
-        row.try_into().unwrap(),
+        agent.did(),
+        db.node_identity.did(),
+        request,
         60,
     );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    lifecycle
+    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
+    lifecycle.set_client_claim_admission(admission);
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    let writer =
+        DefraStreamWriter::new_managed(node.clone(), agent.as_ref(), Duration::from_millis(1))
+            .unwrap();
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    (node, FixtureGuard { _db: db, owner }, lifecycle, writer)
+}
+
+async fn fixture_query(access: &crate::ConfigAccess, document: &str) -> defra_node::QueryResponse {
+    access
+        .transact_readonly("test.canonical_stream.read", |txn| {
+            Box::pin(async move { txn.execute_local_response(document).await })
+        })
+        .await
+        .unwrap()
+}
+
+async fn fixture_insert_child(
+    access: &crate::ConfigAccess,
+    lifecycle: &RequestLifecycle,
+    document: &str,
+    variables: &serde_json::Value,
+    collection: &str,
+) -> serde_json::Value {
+    let session = crate::store::graphql::escape_graphql_string(&lifecycle.request().session_id);
+    let rows = access.execute(&format!(r#"{{ AgentSession(filter: {{session_id: {{_eq: "{session}"}}}}, limit: 1) {{ _docID }} }}"#)).await.unwrap();
+    let session_doc = rows["data"]["AgentSession"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    access
+        .transact_write("test.canonical_stream.insert_child", |txn| {
+            let session_doc = &session_doc;
+            Box::pin(async move {
+                let response = txn.execute_with_variables(document, variables).await?;
+                let doc = crate::store::graphql::created_doc_id(&response, collection)?;
+                txn.add_resource_relationship(collection, &doc, "parent", "sessions", session_doc)
+                    .await?;
+                Ok::<_, anyhow::Error>(response)
+            })
+        })
+        .await
+        .unwrap()
 }
 
 #[tokio::test]
 async fn authored_publication_replays_and_reconstructs_exact_message() {
-    let path = std::env::temp_dir().join(format!("canonical-authored-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        crate::test_support::node_builder()
-            .data_path(&path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::store::schema::ensure_runtime_schemas(&node)
+    use crate::store::identity::NodeIdentity;
+
+    let (db, user, owner, binding) =
+        crate::test_support::signed_test_node("canonical-authored").await;
+    let node = db.node.clone();
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let create = crate::request::lifecycle::build_signed_client_request(
+        &owner,
+        crate::request::lifecycle::RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            crate::request::lifecycle::RequestIdentity {
+                request_id: "request-authored".into(),
+                node_did: db.node_identity.did().into(),
+                requester_did: Some(user.did().into()),
+                agent_did: agent.did().into(),
+                session_id: "session-authored".into(),
+                content: "hello".into(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            },
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+        ),
+        crate::request::lifecycle::RequestSigner::Identity(&user),
+    )
+    .await
+    .unwrap();
+    crate::request::lifecycle::submit_client_request(&owner, &create)
         .await
         .unwrap();
-    let mut lifecycle = claimed(&node, "request-authored", "session-authored").await;
-    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(1));
+    let access = crate::store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let response = access
+        .execute(&format!(
+            "{{ AgentRequest {{ {} }} }}",
+            crate::SIGNED_REQUEST_FIELDS
+        ))
+        .await
+        .unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+    let request = row.try_into().unwrap();
+    let (_authority_owner, authority) =
+        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        db.node_identity.clone(),
+        authority,
+    );
+    let (request, admission) = verifier
+        .verify_fresh_for_claim(&request, agent.did())
+        .await
+        .unwrap();
+    let mut lifecycle = RequestLifecycle::new_with_node_did(
+        node.clone(),
+        agent.did(),
+        db.node_identity.did(),
+        request,
+        60,
+    );
+    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
+    lifecycle.set_client_claim_admission(admission);
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    let writer =
+        DefraStreamWriter::new_managed(node.clone(), agent.as_ref(), Duration::from_millis(1))
+            .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     let message = gents_protocol::message::Message::user("continue ✓");
     let first = writer
@@ -57,16 +225,15 @@ async fn authored_publication_replays_and_reconstructs_exact_message() {
         .unwrap();
     assert_eq!(first, replay);
     let (_, reconstructed) = crate::session::load_canonical_message(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &access,
         &first,
-        "did:test:test",
-        None,
+        db.node_identity.did(),
+        Some(user.did()),
     )
     .await
     .unwrap();
     assert_eq!(reconstructed, message);
-    node.shutdown().await;
-    let _ = std::fs::remove_dir_all(path);
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -78,13 +245,13 @@ async fn selected_history_missing_later_payload_never_returns_a_shortened_prefix
         MessageBlock, MessagePublication, MessageRole, OutputOutcome, PayloadPresentation,
         PayloadRef, PresentedPayload, TranscriptMessage,
     };
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
-    let mut lifecycle = claimed(&node, "incomplete-request", "incomplete-session").await;
-    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(1));
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let (node, _db, lifecycle, writer) = fixture_with_ids(
+        "incomplete-history",
+        "incomplete-request",
+        "incomplete-session",
+    )
+    .await;
+    let access = fixture_access(&node, &lifecycle);
     writer
         .publish_authored_message(
             &lifecycle,
@@ -94,18 +261,23 @@ async fn selected_history_missing_later_payload_never_returns_a_shortened_prefix
         .await
         .unwrap();
     assert_eq!(
-        crate::session::load_history(&node, "incomplete-session", "did:test:test", None)
-            .await
-            .unwrap()
-            .len(),
+        crate::session::load_history_with_access(
+            &access,
+            "incomplete-session",
+            &lifecycle.request().node_did,
+            lifecycle.request().requester_did.as_deref()
+        )
+        .await
+        .unwrap()
+        .len(),
         1
     );
     let header = TranscriptMessage {
         native_request_id: None,
         message_key: "later-input".into(),
         session_id: "incomplete-session".into(),
-        node_did: "did:test:test".into(),
-        requester_did: None,
+        node_did: lifecycle.request().node_did.clone(),
+        requester_did: lifecycle.request().requester_did.clone(),
         request_doc_id: Some(lifecycle.request().doc_id.clone()),
         publication: MessagePublication::RequestExecution {
             execution_generation: "later-generation".into(),
@@ -125,21 +297,27 @@ async fn selected_history_missing_later_payload_never_returns_a_shortened_prefix
         }],
         created_at: chrono::Utc::now().to_rfc3339(),
     };
-    let response = node
-        .execute_request(
-            defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
-                .with_variables(transcript_message_create_variables(&header).unwrap()),
-        )
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let error = crate::session::load_history(&node, "incomplete-session", "did:test:test", None)
-        .await
-        .expect_err("missing later payload must fail the complete selection");
+    fixture_insert_child(
+        &access,
+        &lifecycle,
+        CREATE_AGENT_MESSAGE_MUTATION,
+        &transcript_message_create_variables(&header).unwrap(),
+        "AgentMessage",
+    )
+    .await;
+    let error = crate::session::load_history_with_access(
+        &access,
+        "incomplete-session",
+        &lifecycle.request().node_did,
+        lifecycle.request().requester_did.as_deref(),
+    )
+    .await
+    .expect_err("missing later payload must fail the complete selection");
     assert!(
         format!("{error:#}").contains("not-yet-replicated-close"),
         "{error:#}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -151,15 +329,18 @@ async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_o
     let request_doc_id = lifecycle.request().doc_id.clone();
     let hook = crate::tools::call::hook::DefraSessionHook::with_identity(
         node.clone(),
-        "did:test:test",
+        &lifecycle.request().node_did,
         crate::tools::call::hook::FailurePolicy::default(),
     );
-    assert!(
-        crate::session::load_history(&node, "session-owned-input", "did:test:test", None)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(crate::session::load_history_with_access(
+        &fixture_access(&node, &lifecycle),
+        "session-owned-input",
+        &lifecycle.request().node_did,
+        lifecycle.request().requester_did.as_deref()
+    )
+    .await
+    .unwrap()
+    .is_empty());
     let context = Message::user("request context");
     let prompt = Message::user("queued prompt ✓");
     {
@@ -183,14 +364,21 @@ async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_o
         }
     }
     assert_eq!(
-        crate::session::load_history(&node, "session-owned-input", "did:test:test", None)
-            .await
-            .unwrap(),
+        crate::session::load_history_with_access(
+            &fixture_access(&node, &lifecycle),
+            "session-owned-input",
+            &lifecycle.request().node_did,
+            lifecycle.request().requester_did.as_deref()
+        )
+        .await
+        .unwrap(),
         vec![context, prompt]
     );
-    let response = node
-        .execute("{AgentMessage(order:{sequence: ASC}){message_key request_doc_id sequence}}")
-        .await;
+    let response = fixture_query(
+        &fixture_access(&node, &lifecycle),
+        "{AgentMessage(order:{sequence: ASC}){message_key request_doc_id sequence}}",
+    )
+    .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let rows = response.data.unwrap()["AgentMessage"]
         .as_array()
@@ -207,38 +395,19 @@ async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_o
         rows[1]["message_key"],
         format!("authored:{request_doc_id}:prompt")
     );
-    node.shutdown().await;
-    let _ = std::fs::remove_dir_all(path);
+    node.shutdown().await.expect("shut down test node");
+    drop(path);
 }
 
 async fn fixture(
     name: &str,
 ) -> (
     Arc<EmbeddedNode>,
-    std::path::PathBuf,
+    FixtureGuard,
     RequestLifecycle,
     DefraStreamWriter,
 ) {
-    let path = std::env::temp_dir().join(format!("canonical-{name}-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        crate::test_support::node_builder()
-            .data_path(&path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
-    let mut lifecycle = claimed(
-        &node,
-        &format!("request-{name}"),
-        &format!("session-{name}"),
-    )
-    .await;
-    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(1));
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
-    (node, path, lifecycle, writer)
+    fixture_with_ids(name, &format!("request-{name}"), &format!("session-{name}")).await
 }
 
 #[tokio::test]
@@ -312,7 +481,6 @@ async fn provider_publication_request_size_benchmark() {
     use crate::session::canonical_rows::{
         output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
-    use crate::store::config_client::ConfigAccess;
     use gents_protocol::output::{OutputSource, SourceClose};
     let mut measurements = Vec::new();
     for sources in [1_usize, 32, 128] {
@@ -325,24 +493,19 @@ async fn provider_publication_request_size_benchmark() {
             segments: 1,
             stream_bytes: vec![noise.payload.len().try_into().unwrap()],
         });
-        ConfigAccess::transact_local_write(&node, None, "test.publication_benchmark_seed", |txn| {
-            let mut noise = noise.clone();
-            Box::pin(async move {
-                for index in 0..sources {
-                    noise.source = OutputSource::Authored {
-                        key: format!("noise-{index}"),
-                    };
-                    txn.execute_with_variables(
-                        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-                        &output_segment_create_variables(&noise)?,
-                    )
-                    .await?;
-                }
-                Ok::<_, anyhow::Error>(())
-            })
-        })
-        .await
-        .unwrap();
+        for index in 0..sources {
+            noise.source = OutputSource::Authored {
+                key: format!("noise-{index}"),
+            };
+            fixture_insert_child(
+                &fixture_access(&node, &lifecycle),
+                &lifecycle,
+                CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                &output_segment_create_variables(&noise).unwrap(),
+                "AgentOutputSegment",
+            )
+            .await;
+        }
         let mut fresh = Vec::new();
         let mut replay = Vec::new();
         let mut fresh_scans = Vec::new();
@@ -354,8 +517,10 @@ async fn provider_publication_request_size_benchmark() {
                 *turn_index = iteration;
             }
             let publish = || {
-                super::canonical::publish_provider_turn(
+                super::canonical::publish_provider_turn_with_signer(
                     &node,
+                    lifecycle.actor_did().unwrap(),
+                    lifecycle.managed_agent_signer(),
                     lifecycle.execution_generation().unwrap(),
                     super::canonical::ProviderPublicationPlan {
                         final_flush: Some(segment.clone()),
@@ -391,8 +556,8 @@ async fn provider_publication_request_size_benchmark() {
             "fresh_publication_median_ms": fresh[2], "replay_median_ms": replay[2],
             "fresh_request_scans": fresh_scans, "replay_request_scans": replay_scans,
         }));
-        node.shutdown().await;
-        std::fs::remove_dir_all(path).unwrap();
+        node.shutdown().await.expect("shut down test node");
+        drop(path);
     }
     let result = serde_json::json!({"measurements": measurements, "persistent_node": true});
     if let Some(path) = std::env::var_os("GENTS_PUBLICATION_BENCHMARK_OUTPUT") {
@@ -408,8 +573,10 @@ async fn first_publication_rejects_native_message_that_differs_from_reconstructi
     let (segment, encoded) =
         provider_segment_for_message(&lifecycle, &actual, chrono::Utc::now().to_rfc3339());
     let expected = gents_protocol::message::Message::assistant("different native message");
-    let error = super::canonical::publish_provider_turn(
+    let error = super::canonical::publish_provider_turn_with_signer(
         &node,
+        lifecycle.actor_did().unwrap(),
+        lifecycle.managed_agent_signer(),
         lifecycle.execution_generation().unwrap(),
         super::canonical::ProviderPublicationPlan {
             final_flush: Some(segment),
@@ -424,8 +591,7 @@ async fn first_publication_rejects_native_message_that_differs_from_reconstructi
     .await
     .expect_err("first publication must compare reconstructed and native messages");
     assert!(format!("{error:#}").contains("first publication native message changed"));
-    let rows = node
-        .execute(&format!(
+    let rows = fixture_query(&fixture_access(&node, &lifecycle), &format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
             crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id),
             crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id),
@@ -439,8 +605,8 @@ async fn first_publication_rejects_native_message_that_differs_from_reconstructi
         .as_array()
         .unwrap()
         .is_empty());
-    node.shutdown().await;
-    let _ = std::fs::remove_dir_all(path);
+    node.shutdown().await.expect("shut down test node");
+    drop(path);
 }
 
 async fn publish_tool_turn_for_rollback_test(
@@ -459,8 +625,14 @@ async fn publish_tool_turn_for_rollback_test(
         background_calls: Vec::new(),
         consumes_folded: None,
     };
-    super::canonical::publish_provider_turn(node, lifecycle.execution_generation().unwrap(), plan)
-        .await
+    super::canonical::publish_provider_turn_with_signer(
+        node,
+        lifecycle.actor_did().unwrap(),
+        lifecycle.managed_agent_signer(),
+        lifecycle.execution_generation().unwrap(),
+        plan,
+    )
+    .await
 }
 
 #[tokio::test]
@@ -502,7 +674,7 @@ async fn publication_and_replay_read_only_the_selected_source() {
         },
     )
     .unwrap();
-    let explained = crate::store::config_client::ConfigAccess::local(node.clone())
+    let explained = fixture_access(&node, &lifecycle)
         .execute(&format!("query @explain(type: execute) {query}"))
         .await
         .unwrap();
@@ -523,18 +695,18 @@ async fn publication_and_replay_read_only_the_selected_source() {
         }
     }
     assert_eq!(document_fetches(&explained["data"]["explain"]), 1);
-    let history = crate::session::load_history(
-        &node,
+    let history = crate::session::load_history_with_access(
+        &fixture_access(&node, &lifecycle),
         &lifecycle.request().session_id,
-        "did:test:test",
-        None,
+        &lifecycle.request().node_did,
+        lifecycle.request().requester_did.as_deref(),
     )
     .await
     .unwrap();
     assert_eq!(history.len(), 4);
     assert_eq!(history.last(), Some(&message));
-    node.shutdown().await;
-    std::fs::remove_dir_all(path).unwrap();
+    node.shutdown().await.expect("shut down test node");
+    drop(path);
 }
 
 #[tokio::test]
@@ -556,7 +728,7 @@ async fn every_successful_publication_mutation_rolls_back_if_the_transaction_fai
     let (node, path, lifecycle, _writer) = fixture("mutation-rollback").await;
     let request_doc_id = crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id);
     let rows = || async {
-        let response = node.execute(&format!(
+        let response = fixture_query(&fixture_access(&node, &lifecycle), &format!(
             r#"{{
                 AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }}
                 AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }}
@@ -580,15 +752,15 @@ async fn every_successful_publication_mutation_rolls_back_if_the_transaction_fai
         writes >= 3,
         "tool-bearing publication must have multiple writes"
     );
-    node.shutdown().await;
-    let _ = std::fs::remove_dir_all(path);
+    node.shutdown().await.expect("shut down test node");
+    drop(path);
 }
 
 async fn recovery_receipt_fixture(
     name: &str,
 ) -> (
     Arc<EmbeddedNode>,
-    std::path::PathBuf,
+    FixtureGuard,
     RequestLifecycle,
     DefraStreamWriter,
     gents_protocol::row::AgentRequestRow,
@@ -596,54 +768,15 @@ async fn recovery_receipt_fixture(
 ) {
     let (node, path, lifecycle, writer) = fixture(name).await;
     let request = lifecycle.request();
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "test.recovery_session_observation",
-        |txn| {
-            Box::pin(async move {
-                let now = chrono::Utc::now().to_rfc3339();
-                crate::session::ensure_session_in_txn(
-                    txn,
-                    &request.session_id,
-                    &request.node_did,
-                    &request.agent_id,
-                    request.requester_did.as_deref(),
-                    None,
-                    None,
-                    &now,
-                )
-                .await?;
-                let session = crate::session::load_agent_session_row_in_txn(
-                    txn,
-                    &request.node_did,
-                    &request.session_id,
-                    request.requester_did.as_deref(),
-                )
-                .await?
-                .expect("recovery session");
-                let facts =
-                    crate::session::load_scoped_request_facts_in_txn(txn, &session.session, false)
-                        .await?;
-                let fact = facts
-                    .iter()
-                    .find(|fact| fact.observed.request_doc_id == request.doc_id)
-                    .expect("recovery request fact");
-                assert!(
-                    crate::session::advance_session_request_observation_in_txn(
-                        txn,
-                        fact,
-                        &request.content,
-                        &now,
-                    )
-                    .await?
-                );
-                Ok::<_, anyhow::Error>(())
-            })
-        },
-    )
-    .await
-    .unwrap();
+    let session = crate::store::graphql::escape_graphql_string(&request.session_id);
+    let observed_session = fixture_query(&fixture_access(&node, &lifecycle), &format!(
+        r#"{{ AgentSession(filter: {{session_id: {{_eq: "{session}"}}}}, limit: 1) {{ observation }} }}"#
+    )).await;
+    let observation = &observed_session.data.as_ref().unwrap()["AgentSession"][0]["observation"];
+    assert_eq!(
+        observation["latest_request"]["request_doc_id"],
+        request.doc_id
+    );
     let doc_id = &lifecycle.request().doc_id;
     writer
         .start_provider_attempt(doc_id, 0, 0, "inference.1".parse().unwrap())
@@ -657,8 +790,7 @@ async fn recovery_receipt_fixture(
         .unwrap();
     let escaped = crate::store::graphql::escape_graphql_string(doc_id);
     let expiry = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
-    let expire = crate::store::config_client::ConfigAccess::write_local(
-        &node,
+    let expire = fixture_access(&node, &lifecycle).write(
         "test.expire_recovery_receipt_fixture",
         &format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, input: {{ execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
@@ -678,13 +810,7 @@ async fn recovery_receipt_fixture(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ {} }} }}"#,
         crate::request::watcher::AGENT_REQUEST_FIELDS,
     );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        &node,
-        &query,
-        "test.read_recovery_receipt_fixture",
-    )
-    .await
-    .unwrap();
+    let response = fixture_query(&fixture_access(&node, &lifecycle), &query).await;
     let observed = crate::store::graphql::first_row(&response, "AgentRequest")
         .unwrap()
         .unwrap();
@@ -693,15 +819,18 @@ async fn recovery_receipt_fixture(
 
 #[tokio::test]
 async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mutations() {
-    use crate::request::lifecycle::{recover_expired_generation_with_facts, RecoveryResult};
+    use crate::request::lifecycle::{
+        recover_expired_generation_with_access_for_test, RecoveryResult,
+    };
     use crate::store::config_client::ConfigApplyTxn;
 
-    let (node, path, _lifecycle, _writer, observed, expiry) =
+    let (node, path, lifecycle, _writer, observed, expiry) =
         recovery_receipt_fixture("recovery-mutation-rollback").await;
+    let access = fixture_access(&node, &lifecycle);
     let doc_id = observed.doc_id.as_deref().unwrap();
     let escaped = crate::store::graphql::escape_graphql_string(doc_id);
     let snapshot = || async {
-        let response = node.execute(&format!(
+        let response = fixture_query(&fixture_access(&node, &lifecycle), &format!(
             r#"{{
                 AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ _docID }}
                 AgentMessage(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ _docID }}
@@ -718,8 +847,8 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
     let generation = observed.execution_generation.as_deref().unwrap();
     let now = chrono::Utc::now();
     let recover = || {
-        recover_expired_generation_with_facts(
-            &node,
+        recover_expired_generation_with_access_for_test(
+            &access,
             &observed,
             generation,
             &expiry,
@@ -747,18 +876,21 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
     assert_eq!(replay.unwrap(), RecoveryResult::Won { published: 1 });
     assert_eq!(writes, 0);
     assert_eq!(snapshot().await, committed);
-    node.shutdown().await;
-    let _ = std::fs::remove_dir_all(path);
+    node.shutdown().await.expect("shut down test node");
+    drop(path);
 }
 
 #[tokio::test]
 async fn post_commit_receipt_loss_replays_exact_recovered_generation_and_selection() {
-    use crate::request::lifecycle::{recover_expired_generation_with_facts, RecoveryResult};
+    use crate::request::lifecycle::{
+        recover_expired_generation_with_access_for_test, RecoveryResult,
+    };
     use crate::store::config_client::ConfigApplyTxn;
     use gents_protocol::output::{MessagePublication, TerminalOutput};
 
-    let (node, path, _lifecycle, _writer, observed, expiry) =
+    let (node, path, lifecycle, _writer, observed, expiry) =
         recovery_receipt_fixture("recovery-receipt-loss").await;
+    let access = fixture_access(&node, &lifecycle);
     let request_doc_id = observed.doc_id.as_deref().unwrap();
     let old_generation = observed.execution_generation.as_deref().unwrap();
     let fresh_generation = "recovery-receipt-loss-generation";
@@ -776,15 +908,10 @@ async fn post_commit_receipt_loss_replays_exact_recovered_generation_and_selecti
         crate::request::watcher::AGENT_REQUEST_FIELDS,
     );
     let snapshot = || async {
-        crate::store::graphql::graphql_with_transaction_retry(
-            &node,
-            &query,
-            "test.recovery_receipt_snapshot",
-        )
-        .await
-        .expect("read recovery physical facts")
-        .data
-        .expect("recovery query data")
+        fixture_query(&fixture_access(&node, &lifecycle), &query)
+            .await
+            .data
+            .expect("recovery query data")
     };
     let before = snapshot().await;
     assert!(before["AgentMessage"].as_array().unwrap().is_empty());
@@ -793,8 +920,8 @@ async fn post_commit_receipt_loss_replays_exact_recovered_generation_and_selecti
     let original = &original_segments[0];
     assert!(original["close"].is_null());
     let recover = || {
-        recover_expired_generation_with_facts(
-            &node,
+        recover_expired_generation_with_access_for_test(
+            &access,
             &observed,
             old_generation,
             &expiry,
@@ -873,8 +1000,8 @@ async fn post_commit_receipt_loss_replays_exact_recovered_generation_and_selecti
         committed,
         "external replay must preserve all physical IDs, request facts and session observation"
     );
-    node.shutdown().await;
-    let _ = std::fs::remove_dir_all(path);
+    node.shutdown().await.expect("shut down test node");
+    drop(path);
 }
 
 #[tokio::test]
@@ -887,8 +1014,8 @@ async fn provider_closure_cannot_precede_committed_source_timestamp() {
         &message,
         (now + chrono::Duration::seconds(1)).to_rfc3339(),
     );
-    super::canonical::append_provider_segment_at(
-        &node,
+    super::canonical::append_provider_segment_at_with_access(
+        &fixture_access(&node, &lifecycle),
         lifecycle.execution_generation().unwrap(),
         &raw,
         now,
@@ -900,8 +1027,8 @@ async fn provider_closure_cannot_precede_committed_source_timestamp() {
     closing.runs.clear();
     closing.payload.clear();
     closing.created_at = now.to_rfc3339();
-    let error = super::canonical::publish_provider_turn_at(
-        &node,
+    let error = super::canonical::publish_provider_turn_at_with_access(
+        &fixture_access(&node, &lifecycle),
         lifecycle.execution_generation().unwrap(),
         super::canonical::ProviderPublicationPlan {
             final_flush: Some(closing),
@@ -917,7 +1044,7 @@ async fn provider_closure_cannot_precede_committed_source_timestamp() {
     .await
     .expect_err("closure time must be nondecreasing against committed data");
     assert!(format!("{error:#}").contains("closure timestamp precedes"));
-    let rows = node.execute(&format!(
+    let rows = fixture_query(&fixture_access(&node, &lifecycle), &format!(
         r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID close }} }}"#,
         crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id),
         crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id),
@@ -934,8 +1061,8 @@ async fn provider_closure_cannot_precede_committed_source_timestamp() {
         segments[0]["close"].is_null(),
         "failed closure writes no close fact"
     );
-    node.shutdown().await;
-    let _ = std::fs::remove_dir_all(path);
+    node.shutdown().await.expect("shut down test node");
+    drop(path);
 }
 
 #[tokio::test]
@@ -945,7 +1072,7 @@ async fn multiple_flushes_close_and_reconstruct_exact_final_message() {
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID lifecycle_state execution_generation execution_lease_expires_at }} }}"#,
         crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id)
     );
-    let before_flushes = node.execute(&lease_query).await;
+    let before_flushes = fixture_query(&fixture_access(&node, &lifecycle), &lease_query).await;
     assert!(!before_flushes.has_errors(), "{:?}", before_flushes.errors);
     writer
         .start_provider_attempt(
@@ -970,7 +1097,7 @@ async fn multiple_flushes_close_and_reconstruct_exact_final_message() {
         .await
         .unwrap());
     let expected = gents_protocol::message::Message::assistant("hello 世界");
-    let after_flushes = node.execute(&lease_query).await;
+    let after_flushes = fixture_query(&fixture_access(&node, &lifecycle), &lease_query).await;
     assert!(!after_flushes.has_errors(), "{:?}", after_flushes.errors);
     assert_eq!(
         after_flushes.data, before_flushes.data,
@@ -981,15 +1108,15 @@ async fn multiple_flushes_close_and_reconstruct_exact_final_message() {
         .await
         .unwrap();
     let (_, reconstructed) = crate::session::load_canonical_message(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &fixture_access(&node, &lifecycle),
         &published.message_doc_id,
-        "did:test:test",
-        None,
+        &lifecycle.request().node_did,
+        lifecycle.request().requester_did.as_deref(),
     )
     .await
     .unwrap();
     assert_eq!(reconstructed, expected);
-    let rows = node.execute(&format!(r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ ordinal close }} }}"#, crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id))).await;
+    let rows = fixture_query(&fixture_access(&node, &lifecycle), &format!(r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ ordinal close }} }}"#, crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id))).await;
     let rows = rows.data.as_ref().unwrap()["AgentOutputSegment"]
         .as_array()
         .unwrap();
@@ -998,8 +1125,8 @@ async fn multiple_flushes_close_and_reconstruct_exact_final_message() {
         3,
         "two immutable flushes plus terminal-only closure"
     );
-    node.shutdown().await;
-    let _ = std::fs::remove_dir_all(path);
+    node.shutdown().await.expect("shut down test node");
+    drop(path);
 }
 
 #[tokio::test]
@@ -1023,15 +1150,17 @@ async fn published_turn_stays_nonterminal_until_request_selection_commits() {
         crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id),
         crate::request::watcher::AGENT_REQUEST_FIELDS,
     );
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let access = fixture_access(&node, &lifecycle);
     writer
         .flush_native_partial(&lifecycle, &expected)
         .await
         .unwrap();
-    let live_request =
-        crate::store::graphql::first_row(&node.execute(&query).await, "AgentRequest")
-            .unwrap()
-            .unwrap();
+    let live_request = crate::store::graphql::first_row(
+        &fixture_query(&fixture_access(&node, &lifecycle), &query).await,
+        "AgentRequest",
+    )
+    .unwrap()
+    .unwrap();
     let CanonicalRequestOutput::Live(live) = observe_request_output(&access, &live_request)
         .await
         .unwrap()
@@ -1061,10 +1190,12 @@ async fn published_turn_stays_nonterminal_until_request_selection_commits() {
                 TerminalizeResult::Won,
             );
         }
-        let row: gents_protocol::row::AgentRequestRow =
-            crate::store::graphql::first_row(&node.execute(&query).await, "AgentRequest")
-                .unwrap()
-                .unwrap();
+        let row: gents_protocol::row::AgentRequestRow = crate::store::graphql::first_row(
+            &fixture_query(&fixture_access(&node, &lifecycle), &query).await,
+            "AgentRequest",
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(row.is_terminal(), terminal);
         match (
             terminal,
@@ -1095,8 +1226,8 @@ async fn published_turn_stays_nonterminal_until_request_selection_commits() {
             (_, observation) => panic!("terminal={terminal}: unexpected {observation:?}"),
         }
     }
-    node.shutdown().await;
-    let _ = std::fs::remove_dir_all(path);
+    node.shutdown().await.expect("shut down test node");
+    drop(path);
 }
 
 #[tokio::test]
@@ -1134,7 +1265,7 @@ async fn final_delta_shares_its_closing_record_and_replay_adds_nothing() {
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}, order: {{ ordinal: ASC }}) {{ _docID ordinal payload close }} }}"#,
             crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id),
         );
-        let before = node.execute(&query).await;
+        let before = fixture_query(&fixture_access(&node, &lifecycle), &query).await;
         assert!(!before.has_errors(), "{:?}", before.errors);
         let rows = before.data.as_ref().unwrap()["AgentOutputSegment"]
             .as_array()
@@ -1155,10 +1286,10 @@ async fn final_delta_shares_its_closing_record_and_replay_adds_nothing() {
             })
         );
         let (_, reconstructed) = crate::session::load_canonical_message(
-            &crate::store::config_client::ConfigAccess::local(node.clone()),
+            &fixture_access(&node, &lifecycle),
             &published.message_doc_id,
-            "did:test:test",
-            None,
+            &lifecycle.request().node_did,
+            lifecycle.request().requester_did.as_deref(),
         )
         .await
         .unwrap();
@@ -1169,14 +1300,14 @@ async fn final_delta_shares_its_closing_record_and_replay_adds_nothing() {
             .unwrap();
         assert_eq!(replay.message_doc_id, published.message_doc_id);
         assert_eq!(replay.sequence, published.sequence);
-        let after = node.execute(&query).await;
+        let after = fixture_query(&fixture_access(&node, &lifecycle), &query).await;
         assert!(!after.has_errors(), "{:?}", after.errors);
         assert_eq!(
             after.data, before.data,
             "lost-ack replay must not append a closing record"
         );
-        node.shutdown().await;
-        let _ = std::fs::remove_dir_all(path);
+        node.shutdown().await.expect("shut down test node");
+        drop(path);
     }
 }
 
@@ -1218,9 +1349,15 @@ async fn publication_timestamp_follows_a_flush_that_already_owns_the_tail() {
         close: None,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
-    canonical::append_provider_segment(&node, lifecycle.execution_generation().unwrap(), &segment)
-        .await
-        .unwrap();
+    canonical::append_provider_segment_with_signer(
+        &node,
+        lifecycle.actor_did().unwrap(),
+        lifecycle.managed_agent_signer(),
+        lifecycle.execution_generation().unwrap(),
+        &segment,
+    )
+    .await
+    .unwrap();
     tail.streams = encoded.streams;
     tail.next_ordinal = 1;
     drop(tails);
@@ -1229,7 +1366,7 @@ async fn publication_timestamp_follows_a_flush_that_already_owns_the_tail() {
         .await
         .expect("publication must timestamp after the earlier flusher");
     let (_, observed) = crate::session::load_canonical_message(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &fixture_access(&node, &lifecycle),
         &published.message_doc_id,
         &request.node_did,
         request.requester_did.as_deref(),
@@ -1237,8 +1374,8 @@ async fn publication_timestamp_follows_a_flush_that_already_owns_the_tail() {
     .await
     .unwrap();
     assert_eq!(observed, message);
-    node.shutdown().await;
-    let _ = std::fs::remove_dir_all(path);
+    node.shutdown().await.expect("shut down test node");
+    drop(path);
 }
 
 #[tokio::test]
@@ -1268,13 +1405,15 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
         )
         .await
         .unwrap();
-    let response = node
-        .execute(&format!(
+    let response = fixture_query(
+        &fixture_access(&node, &lifecycle),
+        &format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id),
             crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS
-        ))
-        .await;
+        ),
+    )
+    .await;
     let rows = response.data.as_ref().unwrap()["AgentOutputSegment"]
         .as_array()
         .unwrap()
@@ -1312,10 +1451,10 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
         panic!("a retained text prefix must publish a selectable partial header")
     };
     let (header, reconstructed) = crate::session::load_canonical_message(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &fixture_access(&node, &lifecycle),
         &message_doc_id,
-        "did:test:test",
-        None,
+        &lifecycle.request().node_did,
+        lifecycle.request().requester_did.as_deref(),
     )
     .await
     .unwrap();
@@ -1337,21 +1476,14 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
     late.payload = "late".to_string();
     late.runs[0].bytes = 4;
     late.runs[0].declaration = None;
-    let late = node
-        .execute_request(
-            defra_node::QueryRequest::new(
-                crate::session::canonical_rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-            )
-            .with_variables(
-                crate::session::canonical_rows::output_segment_create_variables(&late).unwrap(),
-            ),
-        )
-        .await;
-    assert!(
-        !late.has_errors(),
-        "inject late replicated fact: {:?}",
-        late.errors
-    );
+    fixture_insert_child(
+        &fixture_access(&node, &lifecycle),
+        &lifecycle,
+        crate::session::canonical_rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+        &crate::session::canonical_rows::output_segment_create_variables(&late).unwrap(),
+        "AgentOutputSegment",
+    )
+    .await;
     writer
         .start_provider_attempt(
             &lifecycle.request().doc_id,
@@ -1376,8 +1508,7 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
         },
         "lost-ack replay must resolve the same partial header"
     );
-    let replay = node
-        .execute(&format!(
+    let replay = fixture_query(&fixture_access(&node, &lifecycle), &format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID sequence }} }}"#,
             crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id)
         ))
@@ -1392,24 +1523,37 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
         "partial close replay must not allocate another header or sequence"
     );
     let escaped_message = crate::store::graphql::escape_graphql_string(&message_doc_id);
-    let deleted = node
-        .execute(&format!(
+    crate::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(&lifecycle.request().node_did).unwrap(),
+    )
+    .grant_node_permission(
+        &identity::Did::new(lifecycle.request().requester_did.as_deref().unwrap()).unwrap(),
+        crate::store::config_client::NodePermission::DocumentDelete,
+    )
+    .await
+    .unwrap();
+    let deleted = path.owner.write("test.remove_imported_header", &format!(
             r#"mutation {{ delete_AgentMessage(filter: {{ _docID: {{ _eq: "{escaped_message}" }} }}) {{ _docID }} }}"#
         ))
-        .await;
-    assert!(
-        !deleted.has_errors(),
-        "remove imported header: {:?}",
-        deleted.errors
+        .await.unwrap();
+    assert_eq!(
+        deleted["data"]["delete_AgentMessage"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
     );
     let escaped_request = crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id);
-    let expired = node.execute(&format!(
+    let expired = fixture_access(&node, &lifecycle).write("test.expire_imported_partial", &format!(
         r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_request}" }} }}, input: {{ execution_lease_expires_at: "2020-01-01T00:00:00Z" }}) {{ _docID }} }}"#
-    )).await;
-    assert!(
-        !expired.has_errors(),
-        "expire imported partial owner: {:?}",
-        expired.errors
+    )).await.unwrap();
+    assert_eq!(
+        expired["data"]["update_AgentRequest"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
     );
     writer
         .start_provider_attempt(
@@ -1431,8 +1575,7 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
         missing.is_err(),
         "an imported text closure without its header must not publish during replay"
     );
-    let after_missing = node
-        .execute(&format!(
+    let after_missing = fixture_query(&fixture_access(&node, &lifecycle), &format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{escaped_request}" }} }}) {{ _docID }} }}"#
         ))
         .await;
@@ -1443,8 +1586,8 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
             .is_empty(),
         "headerless replay must remain read-only"
     );
-    node.shutdown().await;
-    let _ = std::fs::remove_dir_all(path);
+    node.shutdown().await.expect("shut down test node");
+    drop(path);
 }
 
 #[tokio::test]
@@ -1496,8 +1639,7 @@ async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
     assert_eq!(first.sequence, replay.sequence);
     assert_eq!(first.accepted_tools.len(), 2);
     assert_eq!(replay.accepted_tools.len(), 2);
-    let tool_rows = node
-        .execute(&format!(
+    let tool_rows = fixture_query(&fixture_access(&node, &lifecycle), &format!(
             r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID tool_call_id }} }}"#,
             crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id),
         ))
@@ -1531,8 +1673,8 @@ async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
         assert_eq!(a.accepted_header_doc_id, b.accepted_header_doc_id);
         assert_eq!(a.arguments, b.arguments);
     }
-    node.shutdown().await;
-    let _ = std::fs::remove_dir_all(path);
+    node.shutdown().await.expect("shut down test node");
+    drop(path);
 }
 
 #[tokio::test]
@@ -1574,24 +1716,12 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
             AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID lifecycle_state }}
         }}"#
     );
-    let before = crate::store::graphql::graphql_with_transaction_retry(
-        &node,
-        &query,
-        "receipt_loss_before_external_replay",
-    )
-    .await
-    .expect("read committed receipt-loss publication");
+    let before = fixture_query(&fixture_access(&node, &lifecycle), &query).await;
     let replay = writer
         .publish_native_turn(&lifecycle, 0, 0, &message)
         .await
         .expect("external replay resolves committed publication");
-    let replayed = crate::store::graphql::graphql_with_transaction_retry(
-        &node,
-        &query,
-        "receipt_loss_after_external_replay",
-    )
-    .await
-    .expect("read publication after external replay");
+    let replayed = fixture_query(&fixture_access(&node, &lifecycle), &query).await;
     assert_eq!(
         replayed.data, before.data,
         "replay after a lost receipt must not add stored documents"
@@ -1661,13 +1791,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
         format!("{loser_error:#}").contains("no longer pending"),
         "the losing handle must be rejected by the physical pending-row fence: {loser_error:#}"
     );
-    let dispatched = crate::store::graphql::graphql_with_transaction_retry(
-        &node,
-        &query,
-        "receipt_loss_after_dispatch_race",
-    )
-    .await
-    .expect("read single dispatched tool row");
+    let dispatched = fixture_query(&fixture_access(&node, &lifecycle), &query).await;
     let dispatched_tools = dispatched.data.as_ref().unwrap()["AgentToolCall"]
         .as_array()
         .unwrap();
@@ -1684,21 +1808,15 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
         .complete("one receipt-loss dispatch result")
         .await
         .unwrap();
-    let completed = crate::store::graphql::graphql_with_transaction_retry(
-        &node,
-        &query,
-        "receipt_loss_after_single_completion",
-    )
-    .await
-    .expect("read completed tool row");
+    let completed = fixture_query(&fixture_access(&node, &lifecycle), &query).await;
     let completed_tools = completed.data.as_ref().unwrap()["AgentToolCall"]
         .as_array()
         .unwrap();
     assert_eq!(completed_tools.len(), 1);
     assert_eq!(completed_tools[0]["_docID"], a.tool_call_doc_id);
     assert_eq!(completed_tools[0]["lifecycle_state"], "completed");
-    let output = crate::tools::background::status::canonical_tool_output(
-        &node,
+    let output = crate::tools::background::status::observe_canonical_tool_output_with_access(
+        &fixture_access(&node, &lifecycle),
         &a.tool_call_doc_id,
         &lifecycle.request().doc_id,
         &lifecycle.request().session_id,
@@ -1707,25 +1825,22 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
     )
     .await
     .unwrap();
-    assert_eq!(output, "one receipt-loss dispatch result");
-    node.shutdown().await;
-    let _ = std::fs::remove_dir_all(path);
+    assert_eq!(output.into_text(), "one receipt-loss dispatch result");
+    node.shutdown().await.expect("shut down test node");
+    drop(path);
 }
 
 #[tokio::test]
 async fn modeled_inputs_survive_publication_replay_and_forks() {
     use gents_protocol::request_input::RequestInput;
-    const OWNER: &str = "did:test:test";
     const SESSION: &str = "captured-documents";
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
-    crate::test_support::install_test_agent(&node, OWNER, "general").await;
-    let mut lifecycle = claimed(&node, "captured-documents", SESSION).await;
-    let writer = DefraStreamWriter::new(node.clone(), OWNER, Duration::ZERO);
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let (node, path, mut lifecycle, writer) = fixture_with_ids(
+        "canonical-captured-documents",
+        "captured-documents",
+        SESSION,
+    )
+    .await;
+    let access = fixture_access(&node, &lifecycle);
     let mut expected = Vec::new();
     for (index, case) in crate::lean_vocab_test::lean_contract_snapshot()
         .request_input_cases
@@ -1752,10 +1867,14 @@ async fn modeled_inputs_survive_publication_replay_and_forks() {
             .await
             .unwrap();
         assert_eq!(first, replay, "{}: publication replay", case["name"]);
-        let (_, reconstructed) =
-            crate::session::load_canonical_message(&access, &first, OWNER, None)
-                .await
-                .unwrap();
+        let (_, reconstructed) = crate::session::load_canonical_message(
+            &access,
+            &first,
+            &lifecycle.request().node_did,
+            lifecycle.request().requester_did.as_deref(),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             serde_json::to_value(&reconstructed).unwrap(),
             case["expected_native_input"],
@@ -1777,44 +1896,59 @@ async fn modeled_inputs_survive_publication_replay_and_forks() {
         )
         .await
         .unwrap();
-    let before = crate::session::load_history(&node, SESSION, OWNER, None)
-        .await
-        .unwrap();
+    let before = crate::session::load_history_with_access(
+        &path.owner,
+        SESSION,
+        &lifecycle.request().node_did,
+        lifecycle.request().requester_did.as_deref(),
+    )
+    .await
+    .unwrap();
     assert_eq!(before, expected);
-    let child = crate::session::fork(
-        &node,
+    let child = crate::session::fork_on(
+        &path.owner,
         crate::session::ForkParams {
             source_session_id: SESSION,
             boundary: crate::session::ForkBoundary::UserTurn(
                 u32::try_from(expected.len()).unwrap(),
             ),
-            caller_node_did: OWNER,
-            caller_requester_did: None,
-            target_agent_id: None,
+            caller_node_did: &lifecycle.request().node_did,
+            caller_requester_did: lifecycle.request().requester_did.as_deref(),
+            target_agent_did: None,
         },
     )
     .await
     .unwrap();
-    let forked = crate::session::load_history(&node, &child.session_id, OWNER, None)
-        .await
-        .unwrap();
+    let forked = crate::session::load_history_with_access(
+        &path.owner,
+        &child.session_id,
+        &lifecycle.request().node_did,
+        lifecycle.request().requester_did.as_deref(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         forked, before,
         "fork retains the original payload and capture metadata"
     );
     assert_eq!(
-        crate::session::load_history(&node, SESSION, OWNER, None)
-            .await
-            .unwrap(),
+        crate::session::load_history_with_access(
+            &path.owner,
+            SESSION,
+            &lifecycle.request().node_did,
+            lifecycle.request().requester_did.as_deref()
+        )
+        .await
+        .unwrap(),
         before
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
 async fn cancelled_flush_replays_before_inference_close_or_publication() {
     use crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS;
-    use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+    use crate::store::config_client::ConfigApplyTxn;
     use gents_protocol::message::Message;
     use gents_protocol::output::TerminalOutput;
 
@@ -1844,7 +1978,7 @@ async fn cancelled_flush_replays_before_inference_close_or_publication() {
         .await
         .expect("inference flush commits before acknowledgement");
         drop(flush);
-        let access = ConfigAccess::local(node.clone());
+        let access = fixture_access(&node, &lifecycle);
         let query = format!(
             "{{AgentOutputSegment(filter: {{request_doc_id: {{_eq: \"{}\"}}}}) {{{AGENT_OUTPUT_SEGMENT_FIELDS}}}}}",
             crate::store::graphql::escape_graphql_string(&request.doc_id),
@@ -1901,7 +2035,115 @@ async fn cancelled_flush_replays_before_inference_close_or_publication() {
             assert_eq!(replay.message_doc_id, message_doc_id);
             assert_eq!(access.execute(&query).await.unwrap(), after);
         }
-        node.shutdown().await;
-        let _ = std::fs::remove_dir_all(path);
+        node.shutdown().await.expect("shut down test node");
+        drop(path);
+    }
+}
+
+#[tokio::test]
+async fn dirty_native_flush_completes_before_the_turn_barrier_or_is_recovered_after_stop() {
+    use crate::store::config_client::ConfigApplyTxn;
+    use futures::StreamExt;
+    use gents_protocol::message::Message;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    for after_commit in [false, true] {
+        let (node, path, lifecycle, mut writer) = fixture(if after_commit {
+            "handoff-flush-after-commit"
+        } else {
+            "handoff-flush-before-commit"
+        })
+        .await;
+        writer.batch_interval = Duration::from_secs(60);
+        let doc = lifecycle.request().doc_id.clone();
+        writer
+            .start_provider_attempt(&doc, 0, 0, "inference.1".parse().unwrap())
+            .await;
+        assert!(writer.write_tokens(&doc, "first").await.unwrap());
+        assert!(!writer.write_tokens(&doc, " buffered").await.unwrap());
+        assert!(writer.next_flush_deadline(&doc).await.is_some());
+        let message = Message::assistant("first buffered");
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let hook_started = Arc::new(AtomicBool::new(false));
+        let marked = hook_started.clone();
+        let mut progress = Box::pin(async_stream::stream! {
+            yield crate::runtime::agent::loop_stream::LoopStreamItem::ProviderTurnReady {
+                turn: 0, attempt: 0, message: Message::assistant("first buffered"),
+            };
+            marked.store(true, Ordering::SeqCst);
+            yield crate::runtime::agent::loop_stream::LoopStreamItem::Final { text: "done".into() };
+        });
+        let flush = async {
+            if after_commit {
+                ConfigApplyTxn::with_embedded_commit_ack_pause(
+                    reached.clone(),
+                    writer.flush_native_partial(&lifecycle, &message),
+                )
+                .await
+            } else {
+                ConfigApplyTxn::with_successful_mutation_pause_at(
+                    1,
+                    reached.clone(),
+                    release.clone(),
+                    writer.flush_native_partial(&lifecycle, &message),
+                )
+                .await
+                .0
+            }
+        };
+        let mut combined = Box::pin(gents_loop::stream_processor::flush_while_polling(
+            flush,
+            progress.next(),
+        ));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                () = reached.notified() => {},
+                _ = &mut combined => panic!("flush skipped its selected boundary"),
+            }
+        })
+        .await
+        .expect("flush reaches the selected transaction boundary");
+        assert!(
+            !hook_started.load(Ordering::SeqCst),
+            "the next call stays behind the held flush"
+        );
+        if after_commit {
+            drop(combined);
+            drop(progress);
+            assert!(!hook_started.load(Ordering::SeqCst));
+            writer
+                .flush_native_partial(&lifecycle, &message)
+                .await
+                .expect("reconcile the exact pending flush after its unconfirmed acknowledgement");
+            let rows = fixture_access(&node, &lifecycle).execute(&format!(
+                r#"{{ AgentOutputSegment(filter: {{request_doc_id: {{_eq: "{}"}}}}) {{_docID ordinal}} }}"#,
+                crate::store::graphql::escape_graphql_string(&doc),
+            )).await.unwrap();
+            assert_eq!(
+                rows["data"]["AgentOutputSegment"].as_array().unwrap().len(),
+                1
+            );
+        } else {
+            release.notify_one();
+            let (result, item) = combined.await;
+            result.expect("flush commits");
+            assert!(matches!(
+                item,
+                Some(Some(
+                    crate::runtime::agent::loop_stream::LoopStreamItem::ProviderTurnReady { .. }
+                ))
+            ));
+            writer
+                .publish_native_turn(&lifecycle, 0, 0, &message)
+                .await
+                .expect("publish accepted turn");
+            writer.flush_pending(&doc).await.unwrap();
+            assert!(writer.next_flush_deadline(&doc).await.is_none());
+            let _ = progress.next().await;
+            assert!(hook_started.load(Ordering::SeqCst));
+        }
+        node.shutdown().await.expect("node shutdown");
+        drop(path);
     }
 }

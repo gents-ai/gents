@@ -26,7 +26,7 @@ pub struct TaskRunResult {
     pub request_id: String,
     pub session_id: String,
     pub node_did: String,
-    pub agent_id: String,
+    pub agent_did: String,
     pub lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
 }
 
@@ -36,7 +36,7 @@ pub struct ChatSendResult {
     pub session_id: String,
     pub request_id: String,
     pub node_did: String,
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     /// Absent when the owner accepted the request.
     #[ts(optional = nullable)]
     pub outcome: Option<ChatSendOutcome>,
@@ -55,7 +55,7 @@ pub struct ChatSubmissionReceipt {
     pub node_did: String,
     pub request_id: String,
     pub session_id: String,
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     pub envelope_hash: String,
     pub signed_payload_hash: String,
 }
@@ -95,7 +95,7 @@ impl From<gents_desktop_core::client::SubmittedRequest> for ChatSendResult {
             session_id: receipt.session_id,
             request_id: receipt.request_id,
             node_did: receipt.node_did,
-            agent_id: receipt.agent_id,
+            agent_did: receipt.agent_did,
             outcome: None,
             submission_receipt: None,
             delivery_error: None,

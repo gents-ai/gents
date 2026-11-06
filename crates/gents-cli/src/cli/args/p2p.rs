@@ -113,12 +113,24 @@ pub(crate) enum P2pNetworkCommand {
 pub(crate) enum P2pEnrollmentCommand {
     #[command(about = "List fresh pending authenticated enrollment requests")]
     Pending(P2pAccessArgs),
+    #[command(about = "Grant a pending client Node administration explicitly")]
+    Grant(P2pEnrollmentGrantArgs),
     #[command(about = "Approve a pending request with a bounded lease")]
     Approve(P2pEnrollmentDecisionArgs),
     #[command(about = "Deny a pending request")]
     Deny(P2pEnrollmentDecisionArgs),
     #[command(about = "Revoke the current authorization for a request")]
     Revoke(P2pEnrollmentDecisionArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct P2pEnrollmentGrantArgs {
+    /// Immutable enrollment request ID shown by the operator pending queue.
+    pub(crate) request_id: String,
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -255,6 +267,40 @@ pub(crate) enum P2pDocumentsCommand {
 pub(crate) enum P2pPairingsCommand {
     #[command(about = "List enrollment-owned pairings annotated with live health")]
     List(P2pPairingsListArgs),
+    #[command(about = "List visible pairing document IDs for reader grants")]
+    ReaderTargets(P2pAccessArgs),
+    #[command(about = "Grant an Agent read access to one pairing observation")]
+    GrantReader(P2pPairingsReaderArgs),
+    #[command(about = "Revoke one reason an Agent can read a pairing observation")]
+    RevokeReader(P2pPairingsReaderArgs),
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum PairingObservationArg {
+    Desired,
+    Applied,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum PairingReadReasonArg {
+    RouteAdmission,
+    ToolView,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pPairingsReaderArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, value_enum)]
+    pub(crate) observation: PairingObservationArg,
+    #[arg(long, help = "Physical document ID of the pairing observation")]
+    pub(crate) doc_id: String,
+    #[arg(long, value_enum)]
+    pub(crate) reason: PairingReadReasonArg,
+    #[arg(long)]
+    pub(crate) agent_did: String,
 }
 
 #[derive(clap::Args)]

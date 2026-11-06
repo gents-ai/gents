@@ -190,14 +190,14 @@ fn validate_multi_agent_projection(
             .trim()
             .is_empty()
             && participant
-                .agent_id
+                .agent_did
                 .as_deref()
                 .unwrap_or("")
                 .trim()
                 .is_empty()
         {
             violations.push(format!(
-                "participants[{index}] must include node_did or agent_id"
+                "participants[{index}] must include node_did or agent_did"
             ));
         }
     }

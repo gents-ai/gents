@@ -61,7 +61,7 @@ pub(super) fn model_session(value: &serde_json::Value) -> gents_protocol::sessio
     };
     serde_json::from_value(serde_json::json!({
             "session_id": model_id(&value["scope"]["session"]), "node_did": model_id(&value["scope"]["node"]),
-            "requester_did": model_id(&value["scope"]["requester"]), "agent_id": model_id(&value["agent"]),
+            "requester_did": model_id(&value["scope"]["requester"]), "agent_did": model_id(&value["agent"]),
             "created_at": model_time(&value["created_at"]), "closed_at": model_time(&value["closed_at"]),
             "stopped_at": model_time(&value["stopped_at"]),
             "archived_at": model_time(&value["archived_at"]),

@@ -11,12 +11,37 @@ mod start_tests;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::identity::NodeIdentity;
 
+#[cfg(test)]
+pub(crate) async fn agent_document_for_test(
+    access: &crate::store::config_client::ConfigAccess,
+    node: &str,
+    agent: &str,
+) -> String {
+    access
+        .transact_readonly("test.goal.agent_document", |txn| {
+            Box::pin(async move {
+                crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Agent,
+                    node,
+                    agent,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap()
+        .0
+}
+
 pub(crate) enum PreparedGoalControl {
     Create {
         objective: String,
         token_budget: Option<i64>,
         request: Box<AgentRequestCreate>,
         replacement: Option<(GoalDocument, GoalCreationIdentity)>,
+        client_graphs: Option<GoalClientGraphs>,
     },
     Edit {
         goal: GoalDocument,
@@ -29,6 +54,108 @@ pub(crate) enum PreparedGoalControl {
         goal: GoalDocument,
         predecessor: String,
     },
+}
+
+pub(crate) struct GoalClientGraphs {
+    request: std::sync::Arc<db::block::builder::VerifiedClientCreate>,
+    replacement_delete: Option<std::sync::Arc<db::block::builder::VerifiedClientMutation>>,
+}
+
+pub(crate) async fn attach_client_goal_graphs(
+    txn: &ConfigApplyTxn<'_>,
+    command: &SessionGoalControl,
+    prepared: &mut PreparedGoalControl,
+) -> Result<Result<(), String>> {
+    let PreparedGoalControl::Create {
+        request,
+        replacement,
+        client_graphs,
+        ..
+    } = prepared
+    else {
+        return Ok(Err("native Goal graphs require a creation".into()));
+    };
+    let Some(evidence) = command.native_evidence.as_ref() else {
+        return Ok(Err("goal creation has no native graph evidence".into()));
+    };
+    if txn.managed_agent_signer().is_none()
+        || txn.actor_did() != Some(command.agent_did.as_str())
+        || request.admission.signer_did != command.requester_did
+        || request.agent_did != command.agent_did
+        || request.agent_doc_id.as_deref() != Some(command.agent_doc_id.as_str())
+        || request.session_doc_id != command.session_doc_id
+        || command.initial_request.as_deref() != Some(request.as_ref())
+    {
+        return Ok(Err("goal creation actor or physical targets differ".into()));
+    }
+    let input = crate::store::config_client::client_request_input(request)?;
+    let graph =
+        match crate::store::config_client::verify_request_evidence(input, evidence.request.clone())
+            .await
+        {
+            Ok(graph) if graph.signer_did() == command.requester_did => std::sync::Arc::new(graph),
+            Ok(_)
+            | Err(
+                crate::store::config_client::ConfigClientError::ClientAgentGraph(_)
+                | crate::store::config_client::ConfigClientError::Json(_),
+            ) => return Ok(Err("invalid native goal request evidence".into())),
+            Err(error) => return Err(error.into()),
+        };
+    let deletion = match (replacement, evidence.replacement_delete.as_ref()) {
+        (None, None) => None,
+        (Some((prior, _)), Some(evidence)) => {
+            let subject = ::identity::Did::new(&command.requester_did)?;
+            let observed = txn
+                .observe_document_access(
+                    &subject,
+                    "Goal",
+                    std::slice::from_ref(&prior.doc_id),
+                    defra_node::DocumentAccessMode::Named {
+                        permission: "delete".into(),
+                        node_permission: acp::nac::NodePermission::DocumentDelete,
+                    },
+                )
+                .await?;
+            match observed.as_slice() {
+                [defra_node::DocumentAccessDecision::Allowed] => {}
+                [defra_node::DocumentAccessDecision::Denied] => {
+                    return Ok(Err("permission denied or goal unavailable".into()))
+                }
+                _ => anyhow::bail!("native goal deletion access is unavailable"),
+            }
+            let graph = match crate::store::config_client::verify_goal_delete_evidence(
+                txn,
+                &prior.doc_id,
+                evidence.clone(),
+            )
+            .await
+            {
+                Ok(graph)
+                    if graph.signer_did() == command.requester_did
+                        && graph.doc_id() == prior.doc_id =>
+                {
+                    graph
+                }
+                Ok(_)
+                | Err(
+                    crate::store::config_client::ConfigClientError::ClientVerifiedMutationGraph(_)
+                    | crate::store::config_client::ConfigClientError::Json(_),
+                ) => return Ok(Err("invalid or stale native goal deletion evidence".into())),
+                Err(error) => return Err(error.into()),
+            };
+            Some(std::sync::Arc::new(graph))
+        }
+        _ => {
+            return Ok(Err(
+                "goal replacement evidence does not match its target".into()
+            ))
+        }
+    };
+    *client_graphs = Some(GoalClientGraphs {
+        request: graph,
+        replacement_delete: deletion,
+    });
+    Ok(Ok(()))
 }
 
 /// Preflight performs no document writes. Once staging begins, every error
@@ -47,14 +174,19 @@ pub(crate) async fn prepare_goal_control(
         &command.session_id,
     )
     .await?;
-    if session.as_ref().map(|session| session.doc_id.as_str()) != command.session_doc_id.as_deref()
-        || session.as_ref().is_some_and(|session| {
-            session.session.requester_did.as_deref() != Some(command.requester_did.as_str())
-        })
-    {
+    let Some(session) = session else {
+        return Ok(Err("create the session before starting its goal".into()));
+    };
+    if command.session_doc_id.is_none() {
+        return Ok(Err("create the session before starting its goal".into()));
+    }
+    if Some(session.doc_id.as_str()) != command.session_doc_id.as_deref() {
         return Ok(Err(
             "session changed; refresh before changing its goal".into()
         ));
+    }
+    if session.session.agent_did != command.agent_did {
+        return Ok(Err("permission denied or session unavailable".into()));
     }
     let goal = load_canonical_goal_in_txn(txn, &command.node_did, &command.session_id).await?;
     let requests = if matches!(
@@ -101,10 +233,10 @@ pub(crate) async fn prepare_goal_control(
                     &command.command_id,
                 );
                 let response = txn.execute(&format!(r#"{{
-                    Goal(filter: {{node_did: {{_eq: "{}"}}, goal_id: {{_eq: "{}"}}}}, showDeleted: true) {{_docID}}
-                    GoalCreationClaim(filter: {{creation_key: {{_eq: "{}"}}}}, showDeleted: true) {{_docID}}
-                }}"#, escape_graphql_string(&command.node_did), escape_graphql_string(&identity.goal_id),
-                    escape_graphql_string(&identity.creation_key))).await?;
+                    Goal(filter: {{session_doc_id: {{_eq: "{}"}}, goal_id: {{_eq: "{}"}}}}, showDeleted: true) {{_docID}}
+                    GoalCreationClaim(filter: {{session_doc_id: {{_eq: "{}"}}, creation_key: {{_eq: "{}"}}}}, showDeleted: true) {{_docID}}
+                }}"#, escape_graphql_string(&session.doc_id), escape_graphql_string(&identity.goal_id),
+                    escape_graphql_string(&session.doc_id), escape_graphql_string(&identity.creation_key))).await?;
                 if ["Goal", "GoalCreationClaim"].into_iter().any(|collection| {
                     response["data"][collection]
                         .as_array()
@@ -173,7 +305,13 @@ pub(crate) async fn prepare_goal_control(
         };
         if request.node_did != command.node_did
             || request.session_id != command.session_id
-            || request.requester_did != command.requester_did
+            || request.requester_did
+                != session
+                    .session
+                    .requester_did
+                    .as_deref()
+                    .unwrap_or(&command.requester_did)
+            || request.admission.signer_did != command.requester_did
             || request.purpose != RequestPurpose::Normal
             || request.execution_origin != "interactive"
             || request.input.goal_continuation.is_some()
@@ -192,9 +330,7 @@ pub(crate) async fn prepare_goal_control(
             || request.caused_by_parent_tool_call_doc_id.is_some()
             || request.retry_key.as_deref()
                 != Some(format!("session-goal:{}", command.command_id).as_str())
-            || session
-                .as_ref()
-                .is_some_and(|session| session.session.agent_id != request.agent_id)
+            || session.session.agent_did != request.agent_did
         {
             return Ok(Err(
                 "initial goal request does not match its session and author".into(),
@@ -205,6 +341,7 @@ pub(crate) async fn prepare_goal_control(
             token_budget: *token_budget,
             request: request.clone(),
             replacement,
+            client_graphs: None,
         }));
     }
     let Some(goal) = goal else {
@@ -293,35 +430,33 @@ pub(crate) fn prepare_goal_resume(
     })
 }
 
+fn client_goal_transaction_actor_matches(transaction_actor: Option<&str>, requester: &str) -> bool {
+    !requester.is_empty() && transaction_actor == Some(requester)
+}
+
 pub(crate) async fn stage_goal_control(
     txn: &ConfigApplyTxn<'_>,
     identity: &dyn NodeIdentity,
     prepared: PreparedGoalControl,
 ) -> Result<GoalControlOutcome> {
-    let node_did = match &prepared {
-        PreparedGoalControl::Create { request, .. } => &request.node_did,
-        PreparedGoalControl::Edit { goal, .. }
-        | PreparedGoalControl::Pause(goal)
-        | PreparedGoalControl::Stop(goal)
-        | PreparedGoalControl::ResumeCurrent(goal)
-        | PreparedGoalControl::ResumeIdle { goal, .. } => &goal.node_did,
-    };
-    anyhow::ensure!(
-        identity.did() == node_did,
-        "goal control requires its node signing identity"
-    );
     let (goal_id, request_id) = match prepared {
         PreparedGoalControl::Create {
             objective,
             token_budget,
             request,
             replacement,
+            client_graphs,
         } => {
+            anyhow::ensure!(
+                client_goal_transaction_actor_matches(txn.actor_did(), &request.admission.signer_did)
+                    || client_graphs.is_some(),
+                "client Goal creation requires the requester's native transaction signer or a verified client graph handoff"
+            );
             crate::session::ensure_session_in_txn(
                 txn,
                 &request.session_id,
                 &request.node_did,
-                &request.agent_id,
+                &request.agent_did,
                 Some(&request.requester_did),
                 request.input.initial_title.clone(),
                 None,
@@ -329,16 +464,24 @@ pub(crate) async fn stage_goal_control(
             )
             .await?;
             if let Some((prior, _)) = &replacement {
-                let response = txn
-                    .execute(&format!(
-                        r#"mutation {{ delete_Goal(docID: "{}") {{_docID}} }}"#,
-                        escape_graphql_string(&prior.doc_id)
-                    ))
+                if let Some(graphs) = client_graphs.as_ref() {
+                    let graph = graphs
+                        .replacement_delete
+                        .as_ref()
+                        .context("verified replacement lacks its native deletion")?;
+                    txn.delete_verified_configuration_document(
+                        gents_protocol::schemas::GOAL_NAME,
+                        &prior.doc_id,
+                        graph.clone(),
+                    )
                     .await?;
-                anyhow::ensure!(
-                    mutation_row_count(&response["data"]["delete_Goal"]) == 1,
-                    "terminal goal was not retired"
-                );
+                } else {
+                    txn.delete_configuration_document(
+                        gents_protocol::schemas::GOAL_NAME,
+                        &prior.doc_id,
+                    )
+                    .await?;
+                }
             }
             let submitted = stage_goal_backed_request_with_identity_in_txn(
                 txn,
@@ -348,6 +491,7 @@ pub(crate) async fn stage_goal_control(
                 token_budget,
                 &request,
                 replacement.as_ref().map(|(_, identity)| identity),
+                client_graphs.as_ref().map(|graphs| &graphs.request),
             )
             .await?;
             let goal = load_canonical_goal_in_txn(txn, &request.node_did, &request.session_id)

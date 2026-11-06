@@ -528,6 +528,15 @@ pub enum FileInventoryReadAction {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DirectFileInventoryRequest {
+    pub node_did: String,
+    pub session_id: String,
+    pub peer_id: String,
+    pub action: FileInventoryReadAction,
+}
+
 impl Default for FileInventoryReadAction {
     fn default() -> Self {
         Self::Read { cursor: None }

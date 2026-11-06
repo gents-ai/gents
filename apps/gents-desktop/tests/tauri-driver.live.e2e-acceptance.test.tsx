@@ -48,7 +48,7 @@ describeLive("Tauri app native e2e acceptance (live fixture runtime)", () => {
       ).toBeDefined();
       expect(backend?.endpoint).toBe(expectedInferenceUrl);
       const defaultAgent = deployment.agents.find(
-        (agent) => agent.agentId === deployment.node.defaultAgentId,
+        (agent) => agent.agentDid === deployment.node.defaultAgentDid,
       );
       expect(
         defaultAgent,
@@ -68,7 +68,7 @@ describeLive("Tauri app native e2e acceptance (live fixture runtime)", () => {
       ).toBeDefined();
       expect(profile?.model_name).toBe(expectedModelName);
       logTurn(
-        `fixture runtime endpoint=${backend?.endpoint} model=${profile?.model_name} agent=${defaultAgent?.agentId}`,
+        `fixture runtime endpoint=${backend?.endpoint} model=${profile?.model_name} agent=${defaultAgent?.agentDid}`,
       );
 
       await driver.ready();

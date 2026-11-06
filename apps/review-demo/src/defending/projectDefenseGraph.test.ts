@@ -139,7 +139,7 @@ describe("projectDefenseGraph", () => {
       {
         request_id: "verifier-request",
         session_id: "verifier-session",
-        agent_id: "defend-verifier",
+        agent_did: "defend-verifier",
         caused_by_correlation: "defense-1",
         caused_by_parent_request_id: "triage-request",
         content: "Verify exactly `finding-1` (finding_id: finding-1).",
@@ -248,7 +248,7 @@ describe("projectDefenseGraph", () => {
       {
         request_id: "verifier-request",
         session_id: "verifier-session",
-        agent_id: "defend-verifier",
+        agent_did: "defend-verifier",
         caused_by_correlation: "defense-1",
         caused_by_trigger_id: "defend-verifier",
         caused_by_source_doc_id: "verify-assignment-1",
@@ -299,7 +299,7 @@ describe("projectDefenseGraph", () => {
       caused_by_correlation: "defense-empty",
       caused_by_trigger_id: "defend-verifier",
       caused_by_source_doc_id: "empty-assignment",
-      agent_id: "defend-verifier",
+      agent_did: "defend-verifier",
       lifecycle_state: "completed",
     });
 
@@ -346,7 +346,7 @@ describe("projectDefenseGraph", () => {
       caused_by_correlation: "defense-blocked",
       caused_by_trigger_id: "defend-verifier",
       caused_by_source_doc_id: "assignment-blocked",
-      agent_id: "defend-verifier",
+      agent_did: "defend-verifier",
       lifecycle_state: "completed",
     });
 
@@ -426,7 +426,7 @@ describe("projectDefenseGraph", () => {
       caused_by_correlation: "defense-orphan",
       caused_by_trigger_id: "defend-verifier",
       caused_by_source_doc_id: "assignment-orphan",
-      agent_id: "defend-verifier",
+      agent_did: "defend-verifier",
       lifecycle_state: "processing",
     });
 

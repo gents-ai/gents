@@ -12,7 +12,7 @@ fn task_with_hooks(task_id: &str, hooks: Vec<TaskHook>) -> Task {
         task_id: task_id.to_string(),
         display_name: None,
         description: None,
-        agent_id: "agent-1".to_string(),
+        agent_did: "agent-1".to_string(),
         prompt_template: "run the task".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,

@@ -5,14 +5,14 @@ use crate::store::identity::{KeyIdentity, NodeIdentity};
 use std::sync::Arc;
 
 async fn seed(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     agent: &str,
     requester: Option<&str>,
     id: &str,
     title: &str,
     closed: bool,
 ) {
-    ConfigAccess::write_local(node, "test.sessions.discovery", &format!(r#"mutation {{create_AgentSession(input: {{node_did: {},requester_did: {},session_id: {},agent_id: "engineer",created_at: "2025-01-01T00:00:00Z",closed_at: {},title: {{text: {},source: "user"}},tags: ["release"]}}) {{_docID}}}}"#,quoted(agent),requester.map(quoted).unwrap_or_else(||"null".into()),quoted(id),if closed {quoted("2025-01-02T00:00:00Z")}else{"null".into()},quoted(title))).await.unwrap();
+    ConfigAccess::write_local(node, "test.sessions.discovery", &format!(r#"mutation {{create_AgentSession(input: {{node_did: {},requester_did: {},session_id: {},agent_did: "engineer",created_at: "2025-01-01T00:00:00Z",closed_at: {},title: {{text: {},source: "user"}},tags: ["release"]}}) {{_docID}}}}"#,quoted(agent),requester.map(quoted).unwrap_or_else(||"null".into()),quoted(id),if closed {quoted("2025-01-02T00:00:00Z")}else{"null".into()},quoted(title))).await.unwrap();
 }
 
 async fn call(tool: &SessionHistoryTool, params: Value) -> Value {
@@ -30,10 +30,10 @@ async fn sessions_reads_cross_agent_documents_only_when_acp_allows_the_caller() 
     let owner = pin_fixed_signing_identity(identities.path());
     let reader = KeyIdentity::load_or_create(identities.path().join("reader.key"), None).unwrap();
     let denied = KeyIdentity::load_or_create(identities.path().join("denied.key"), None).unwrap();
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     let policy = node
-        .add_dac_policy(
-            owner.did(),
+        .add_dac_policy_as(
+            &defra_core::RequestContext::default().with_identity(Some(owner.did().to_owned())),
             r#"
 name: Sessions reader test
 resources:
@@ -60,14 +60,18 @@ resources:
     let doc = ConfigAccess::transact_local_write(&node, Some(owner_did.parse().unwrap()), "test.sessions.acp.create", |txn| {
             let did = owner_did.clone();
             Box::pin(async move {
-                let value = txn.execute(&format!("mutation {{add_AgentSession(input: {{node_did: {}, requester_did: \"different-requester\", session_id: \"shared\", agent_id: \"engineer\", created_at: \"2026-01-01T00:00:00Z\"}}) {{_docID}}}}", quoted(&did))).await?;
+                let value = txn.execute(&format!("mutation {{add_AgentSession(input: {{node_did: {}, requester_did: \"different-requester\", session_id: \"shared\", agent_did: \"engineer\", created_at: \"2026-01-01T00:00:00Z\"}}) {{_docID}}}}", quoted(&did))).await?;
                 Ok::<_, anyhow::Error>(value["data"]["add_AgentSession"][0]["_docID"].as_str().with_context(|| format!("ACP session fixture creation failed: {value}"))?.to_owned())
             })
         }).await.unwrap();
     node.add_dac_actor_relationship(owner.did(), "AgentSession", &doc, "reader", reader.did())
         .await
         .unwrap();
-    let allowed_tool = SessionHistoryTool::new(node.clone(), reader.did());
+    let allowed_tool = SessionHistoryTool::new(
+        node.clone(),
+        reader.did(),
+        identity::Did::new((reader.did()).to_string()).unwrap(),
+    );
     assert_eq!(
         call(&allowed_tool, json!({"action":"count"})).await["count"],
         1
@@ -75,7 +79,11 @@ resources:
     let found = call(&allowed_tool, json!({"action":"get","session_id":"shared"})).await;
     assert_eq!(found["session"]["node_did"], owner.did());
     assert_eq!(found["session"]["requester_did"], "different-requester");
-    let denied_tool = SessionHistoryTool::new(node.clone(), denied.did());
+    let denied_tool = SessionHistoryTool::new(
+        node.clone(),
+        denied.did(),
+        identity::Did::new((denied.did()).to_string()).unwrap(),
+    );
     assert_eq!(
         call(&denied_tool, json!({"action":"count"})).await["count"],
         0
@@ -105,7 +113,7 @@ resources:
     assert!(error
         .to_string()
         .contains("unavailable or ambiguous under ACP"));
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 async fn call_error(tool: &SessionHistoryTool, params: Value) -> String {
@@ -160,7 +168,11 @@ async fn output_pages_a_background_calls_stored_output_past_its_receipt() {
         .await
         .unwrap();
     let session = lifecycle.session_id().to_owned();
-    let tool = SessionHistoryTool::new(fixture.node.clone(), fixture.node_did.clone());
+    let tool = SessionHistoryTool::new(
+        fixture.node.clone(),
+        fixture.node_did.clone(),
+        lifecycle.actor().clone(),
+    );
     // While the call runs, its only delivery is the receipt: not output.
     let error = call_error(
         &tool,
@@ -186,7 +198,7 @@ async fn output_pages_a_background_calls_stored_output_past_its_receipt() {
         params = page["next_call"].clone();
     }
     assert_eq!(recovered, raw);
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -206,7 +218,11 @@ async fn output_pages_the_full_stored_tool_output_behind_a_bounded_view() {
     let raw = complete_with_large_output(&mut lifecycle).await;
     assert!(raw.len() > 2 * 50 * 1024);
     let session = lifecycle.session_id().to_owned();
-    let tool = SessionHistoryTool::new(fixture.node.clone(), fixture.node_did.clone());
+    let tool = SessionHistoryTool::new(
+        fixture.node.clone(),
+        fixture.node_did.clone(),
+        lifecycle.actor().clone(),
+    );
 
     for key in ["spawn-provider-call", "spawn-native-tool"] {
         let mut params = json!({"action":"output","session_id":session,"call_id":key});
@@ -291,7 +307,7 @@ async fn output_pages_the_full_stored_tool_output_behind_a_bounded_view() {
 
     let help = call(&tool, json!({"action":"help","topic":"output"})).await;
     assert!(help["help"].as_str().unwrap().contains("next_call"));
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(fixture.path).unwrap();
 }
 
@@ -333,7 +349,11 @@ async fn discovery_counts_and_pages_canonical_sessions_without_requests() {
         .await
         .unwrap();
     }
-    let tool = SessionHistoryTool::new(node.clone(), owner.did());
+    let tool = SessionHistoryTool::new(
+        node.clone(),
+        owner.did(),
+        identity::Did::new((owner.did()).to_string()).unwrap(),
+    );
     let filter = json!({"status":"closed","tag":"release","text":"atlas"});
     assert_eq!(
         call(&tool, json!({"action":"count","filter":filter})).await["count"],
@@ -368,7 +388,7 @@ async fn discovery_counts_and_pages_canonical_sessions_without_requests() {
     )
     .await;
     assert_eq!(cross_agent["session"]["node_did"], foreign.did());
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[test]
@@ -427,7 +447,11 @@ async fn transcript_search_reconstructs_canonical_text_and_pages_hits() {
         None,
     )
     .await;
-    let tool = SessionHistoryTool::new(node.clone(), owner.did());
+    let tool = SessionHistoryTool::new(
+        node.clone(),
+        owner.did(),
+        identity::Did::new((owner.did()).to_string()).unwrap(),
+    );
     let error = Tool::call(
         &tool,
         serde_json::from_value(
@@ -506,5 +530,5 @@ async fn transcript_search_reconstructs_canonical_text_and_pages_hits() {
     .await;
     assert_eq!(second["messages"][0]["sequence"], 2);
     assert!(second["next_cursor"].is_null());
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

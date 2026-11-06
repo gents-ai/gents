@@ -14,7 +14,7 @@ export type ChatDraft = {
   sessionId: string;
   selectedSessionId: string | null;
   queued: boolean;
-  mailbox?: { itemId: string; summary: string };
+  mailbox?: { nodeDid: string; itemId: string; summary: string };
   requestJson: string;
   result?: ChatSendResult;
 };
@@ -56,10 +56,15 @@ function decode(value: unknown): ChatDraft {
     if (
       !object(value.mailbox) ||
       !identifier(value.mailbox.itemId) ||
+      !identifier(value.mailbox.nodeDid) ||
       typeof value.mailbox.summary !== "string"
     )
       throw new Error("The saved answer's question could not be read.");
-    draft.mailbox = { itemId: value.mailbox.itemId, summary: value.mailbox.summary };
+    draft.mailbox = {
+      nodeDid: value.mailbox.nodeDid,
+      itemId: value.mailbox.itemId,
+      summary: value.mailbox.summary,
+    };
   }
   if (value.result !== undefined) {
     if (!object(value.result))
@@ -178,7 +183,7 @@ export function validateChatResult(draft: ChatDraft, result: ChatSendResult) {
     receipt.nodeDid !== draft.nodeDid ||
     receipt.requestId !== draft.requestId ||
     receipt.sessionId !== draft.sessionId ||
-    receipt.agentId !== result.agentId ||
+    receipt.agentDid !== result.agentDid ||
     !identifier(receipt.envelopeHash) ||
     !identifier(receipt.signedPayloadHash) ||
     !(
@@ -194,7 +199,7 @@ export function validateChatResult(draft: ChatDraft, result: ChatSendResult) {
   try {
     request = chatDraftRequest(draft);
   } catch {}
-  if (request?.agentId && request.agentId !== result.agentId)
+  if (request?.agentDid && request.agentDid !== result.agentDid)
     throw new Error("The message reply changed its original Agent.");
   const prior: ChatSubmissionReceipt | null | undefined =
     draft.result?.submissionReceipt;
@@ -202,7 +207,7 @@ export function validateChatResult(draft: ChatDraft, result: ChatSendResult) {
     prior &&
     (prior.envelopeHash !== receipt.envelopeHash ||
       prior.signedPayloadHash !== receipt.signedPayloadHash ||
-      prior.agentId !== receipt.agentId)
+      prior.agentDid !== receipt.agentDid)
   )
     throw new Error("The message receipt changed its original signed preparation.");
 }

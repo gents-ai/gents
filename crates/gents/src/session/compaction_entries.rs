@@ -1,6 +1,5 @@
 use super::rows::dedupe_paths;
 use super::*;
-use crate::store::graphql::graphql_response_with_transaction_retry as execute_query_timed;
 use anyhow::Context;
 use rapidhash::RapidHashSet;
 use std::collections::BTreeSet;
@@ -194,8 +193,28 @@ where
     )?)
 }
 
+#[cfg(test)]
 pub(crate) async fn load_prompt_compaction_state(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    through_sequence: Option<u32>,
+) -> Result<PromptCompactionState> {
+    let access = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(agent_did)?);
+    load_prompt_compaction_state_with_access(
+        &access,
+        session_id,
+        node_did,
+        requester_did,
+        through_sequence,
+    )
+    .await
+}
+
+pub(crate) async fn load_prompt_compaction_state_with_access(
+    access: &crate::ConfigAccess,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -219,21 +238,14 @@ pub(crate) async fn load_prompt_compaction_state(
             }}
         }}"#
     );
-    let resp = execute_query_timed(node, &query, "load_prompt_compaction_state").await?;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "loading prompt compaction state for session_id={}: {:?}",
-            session_id,
-            resp.errors
-        );
-    }
-    let rows: Vec<PromptCompactionRow> = match resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("CompactionEntry"))
-    {
+    let resp = access
+        .transact_readonly("session.load_prompt_compaction_state", |txn| {
+            Box::pin(txn.execute(&query))
+        })
+        .await?;
+    let rows: Vec<PromptCompactionRow> = match resp.pointer("/data/CompactionEntry") {
         Some(value) => serde_json::from_value(value.clone())?,
-        None => Vec::new(),
+        None => anyhow::bail!("compaction state query omitted rows"),
     };
     validate_compaction_chain(node_did, session_id, requester_did, &rows)?;
     let active_len = through_sequence.map_or(rows.len(), |cutoff| {
@@ -269,7 +281,7 @@ pub(crate) async fn load_prompt_compaction_state(
 }
 
 pub async fn load_compaction_entries(
-    node: &EmbeddedNode,
+    access: &crate::store::config_client::ConfigAccess,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -298,22 +310,14 @@ pub async fn load_compaction_entries(
         }}"#
     );
 
-    let resp = execute_query_timed(node, &query, "load_compaction_entries").await?;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "loading compaction entries for session_id={}: {:?}",
-            session_id,
-            resp.errors
-        );
-    }
+    let resp = access.execute(&query).await?;
 
     let rows: Vec<CompactionGenerationRow> = match resp
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("CompactionEntry"))
     {
         Some(value) => serde_json::from_value(value.clone())?,
-        None => Vec::new(),
+        None => anyhow::bail!("compaction entries query omitted rows"),
     };
 
     validate_file_path_projection_chain(node_did, session_id, requester_did, &rows)?;
@@ -353,6 +357,7 @@ pub async fn load_compaction_entries(
 }
 
 pub(crate) struct NewExactSessionCompaction<'a> {
+    pub(crate) agent_did: &'a str,
     pub(crate) session_id: &'a str,
     pub(crate) node_did: &'a str,
     pub(crate) requester_did: Option<&'a str>,
@@ -370,12 +375,13 @@ pub(crate) struct NewExactSessionCompaction<'a> {
 /// and compacted count are derived from the artifact, so callers cannot pair a
 /// cursor with a different split or checkpoint.
 pub(crate) async fn save_exact_compaction_entry(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     input: NewExactSessionCompaction<'_>,
     reduction: crate::inference::compaction::ExactReduction<'_>,
 ) -> Result<CompactionEntry> {
-    save_compaction_entry_with_requester_did(
-        node,
+    save_compaction_entry_with_access(
+        access,
+        input.agent_did,
         input.session_id,
         input.node_did,
         input.requester_did,
@@ -394,44 +400,9 @@ pub(crate) async fn save_exact_compaction_entry(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[cfg(test)]
-pub(crate) async fn save_compaction_entry(
-    node: &std::sync::Arc<EmbeddedNode>,
-    session_id: &str,
-    node_did: &str,
-    request_id: &str,
-    request_doc_id: &str,
-    summary: &str,
-    files_read: &[String],
-    files_modified: &[String],
-    messages_compacted: u32,
-    compacted_through_sequence: u32,
-    original_tokens: usize,
-    compacted_tokens: usize,
-) -> Result<CompactionEntry> {
-    let state = load_prompt_compaction_state(node, session_id, node_did, None, None).await?;
-    save_compaction_entry_with_requester_did(
-        node,
-        session_id,
-        node_did,
-        None,
-        request_id,
-        request_doc_id,
-        summary,
-        files_read,
-        files_modified,
-        messages_compacted,
-        compacted_through_sequence,
-        original_tokens,
-        compacted_tokens,
-        &state.generation,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn save_compaction_entry_with_requester_did(
-    node: &std::sync::Arc<EmbeddedNode>,
+pub(super) async fn save_compaction_entry_with_access(
+    access: &crate::ConfigAccess,
+    agent_did: &str,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -461,15 +432,26 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
     let escaped_request_id = &escaped_request_id;
     let escaped_request_doc_id = &escaped_request_doc_id;
     let requester_did_field = &requester_did_field;
-    crate::store::config_client::ConfigAccess::transact_local_idempotent(
-        node,
-        None,
-        crate::store::config_client::IdempotentTransactionRetry::Standard,
-        "session.save_compaction_entry",
-        move |txn| {
-            Box::pin(async move {
-                let query = format!(
-                    r#"{{
+    access
+        .transact_idempotent(
+            crate::store::config_client::IdempotentTransactionRetry::Standard,
+            "session.save_compaction_entry",
+            move |txn| {
+                Box::pin(async move {
+                    let (session_doc_id, selected_agent) =
+                        crate::session::canonical_rows::agent_session_child_binding_in_txn(
+                            txn,
+                            node_did,
+                            session_id,
+                            requester_did,
+                        )
+                        .await?;
+                    anyhow::ensure!(
+                        selected_agent == agent_did,
+                        "compaction agent differs from session agent"
+                    );
+                    let query = format!(
+                        r#"{{
                     CompactionEntry(
                         filter: {{ {scope} }},
                         order: {{ sequence: ASC }}
@@ -480,76 +462,77 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
                         original_tokens compacted_tokens created_at
                     }}
                 }}"#
-                );
-                let value = txn.execute(&query).await?;
-                let rows: Vec<CompactionGenerationRow> = serde_json::from_value(
-                    value
-                        .get("data")
-                        .and_then(|data| data.get("CompactionEntry"))
-                        .cloned()
-                        .unwrap_or_else(|| serde_json::json!([])),
-                )?;
-                validate_compaction_chain(node_did, session_id, requester_did, &rows)?;
-                let actual_generation = compaction_generation(&rows)?;
-                if actual_generation != expected_generation {
-                    if let Some(entry) = reconcile_exact_redelivery(
-                        &rows,
-                        expected_generation,
-                        session_id,
-                        node_did,
-                        requester_did,
-                        request_id,
-                        request_doc_id,
-                        summary,
-                        files_read,
-                        files_modified,
-                        messages_compacted,
-                        compacted_through_sequence,
-                        original_tokens,
-                        compacted_tokens,
-                    )? {
-                        return Ok(entry);
-                    }
-                }
-                if actual_generation != expected_generation {
-                    return Err(StaleCompactionGeneration {
-                        session_id: session_id.to_string(),
-                    }
-                    .into());
-                }
-                if let Some(cursor) = compacted_through_sequence {
-                    let prior_cursor = rows
-                        .iter()
-                        .rev()
-                        .find_map(|row| row.compacted_through_sequence);
-                    anyhow::ensure!(
-                        prior_cursor.is_none_or(|prior| cursor > prior),
-                        "compaction cursor regression for session {session_id}"
                     );
-                }
+                    let value = txn.execute(&query).await?;
+                    let rows: Vec<CompactionGenerationRow> = serde_json::from_value(
+                        value
+                            .get("data")
+                            .and_then(|data| data.get("CompactionEntry"))
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!([])),
+                    )?;
+                    validate_compaction_chain(node_did, session_id, requester_did, &rows)?;
+                    let actual_generation = compaction_generation(&rows)?;
+                    if actual_generation != expected_generation {
+                        if let Some(entry) = reconcile_exact_redelivery(
+                            &rows,
+                            expected_generation,
+                            session_id,
+                            node_did,
+                            requester_did,
+                            request_id,
+                            request_doc_id,
+                            summary,
+                            files_read,
+                            files_modified,
+                            messages_compacted,
+                            compacted_through_sequence,
+                            original_tokens,
+                            compacted_tokens,
+                        )? {
+                            return Ok(entry);
+                        }
+                    }
+                    if actual_generation != expected_generation {
+                        return Err(StaleCompactionGeneration {
+                            session_id: session_id.to_string(),
+                        }
+                        .into());
+                    }
+                    if let Some(cursor) = compacted_through_sequence {
+                        let prior_cursor = rows
+                            .iter()
+                            .rev()
+                            .find_map(|row| row.compacted_through_sequence);
+                        anyhow::ensure!(
+                            prior_cursor.is_none_or(|prior| cursor > prior),
+                            "compaction cursor regression for session {session_id}"
+                        );
+                    }
 
-                let mut cumulative_files_read =
-                    cumulative_file_paths(&rows, |row| &row.files_read)?;
-                let file_read_delta = new_file_paths(&cumulative_files_read, files_read);
-                cumulative_files_read.extend(files_read.iter().cloned());
-                dedupe_paths(&mut cumulative_files_read);
-                let mut cumulative_files_modified =
-                    cumulative_file_paths(&rows, |row| &row.files_modified)?;
-                let file_modified_delta =
-                    new_file_paths(&cumulative_files_modified, files_modified);
-                cumulative_files_modified.extend(files_modified.iter().cloned());
-                dedupe_paths(&mut cumulative_files_modified);
+                    let mut cumulative_files_read =
+                        cumulative_file_paths(&rows, |row| &row.files_read)?;
+                    let file_read_delta = new_file_paths(&cumulative_files_read, files_read);
+                    cumulative_files_read.extend(files_read.iter().cloned());
+                    dedupe_paths(&mut cumulative_files_read);
+                    let mut cumulative_files_modified =
+                        cumulative_file_paths(&rows, |row| &row.files_modified)?;
+                    let file_modified_delta =
+                        new_file_paths(&cumulative_files_modified, files_modified);
+                    cumulative_files_modified.extend(files_modified.iter().cloned());
+                    dedupe_paths(&mut cumulative_files_modified);
 
-                let sequence =
-                    u32::try_from(rows.len() + 1).context("compaction sequence overflow")?;
-                let compaction_key = compaction_key(node_did, session_id, requester_did, sequence);
-                let created_at =
-                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-                let cursor_field = compacted_through_sequence
-                    .map(|cursor| cursor.to_string())
-                    .unwrap_or_else(|| "null".to_string());
-                let mutation = format!(
-                    r#"mutation {{
+                    let sequence =
+                        u32::try_from(rows.len() + 1).context("compaction sequence overflow")?;
+                    let compaction_key =
+                        compaction_key(node_did, session_id, requester_did, sequence);
+                    let created_at =
+                        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+                    let cursor_field = compacted_through_sequence
+                        .map(|cursor| cursor.to_string())
+                        .unwrap_or_else(|| "null".to_string());
+                    let mutation = format!(
+                        r#"mutation {{
                     create_CompactionEntry(input: {{
                         compaction_key: "{compaction_key}"
                         session_id: "{escaped_session_id}"
@@ -568,31 +551,41 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
                         created_at: "{created_at}"
                     }}) {{ _docID }}
                 }}"#,
-                    compaction_key = escape_graphql_string(&compaction_key),
-                    summary = escape_graphql_string(summary),
-                    files_read_json =
-                        escape_graphql_string(&encode_file_path_delta(&file_read_delta)?),
-                    files_modified_json =
-                        escape_graphql_string(&encode_file_path_delta(&file_modified_delta)?),
-                    created_at = escape_graphql_string(&created_at),
-                );
-                txn.execute(&mutation).await?;
-                Ok::<_, anyhow::Error>(CompactionEntry {
-                    session_id: session_id.to_string(),
-                    sequence,
-                    summary: summary.clone(),
-                    files_read: cumulative_files_read,
-                    files_modified: cumulative_files_modified,
-                    messages_compacted,
-                    compacted_through_sequence,
-                    original_tokens,
-                    compacted_tokens,
-                    created_at,
+                        compaction_key = escape_graphql_string(&compaction_key),
+                        summary = escape_graphql_string(summary),
+                        files_read_json =
+                            escape_graphql_string(&encode_file_path_delta(&file_read_delta)?),
+                        files_modified_json =
+                            escape_graphql_string(&encode_file_path_delta(&file_modified_delta)?),
+                        created_at = escape_graphql_string(&created_at),
+                    );
+                    let response = txn.execute(&mutation).await?;
+                    let doc_id =
+                        crate::store::graphql::created_doc_id(&response, "CompactionEntry")?;
+                    txn.add_resource_relationship(
+                        "CompactionEntry",
+                        &doc_id,
+                        "parent",
+                        "sessions",
+                        &session_doc_id,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(CompactionEntry {
+                        session_id: session_id.to_string(),
+                        sequence,
+                        summary: summary.clone(),
+                        files_read: cumulative_files_read,
+                        files_modified: cumulative_files_modified,
+                        messages_compacted,
+                        compacted_through_sequence,
+                        original_tokens,
+                        compacted_tokens,
+                        created_at,
+                    })
                 })
-            })
-        },
-    )
-    .await
+            },
+        )
+        .await
 }
 
 fn encode_file_path_delta(paths: &[String]) -> Result<String> {

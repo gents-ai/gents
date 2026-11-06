@@ -253,7 +253,7 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
         gents_desktop_bridge::host::ClientHostService::start(Arc::clone(&core), listener);
     let mut client = support::Attachment::start(&paths).await;
     client
-        .call(1, "client_connect_local", json!({"nodeHome": home}))
+        .call(1, "client_enroll_local", json!({"nodeHome": home}))
         .await;
     let snapshot = client.snapshot(2).await;
     let deployments = snapshot["client"]["deployments"].as_array().unwrap();

@@ -1,10 +1,70 @@
 use super::*;
+use crate::store::identity::NodeIdentity;
 use crate::tools::call::lifecycle::admission_fixture::{
-    ensure_fixture_session, published_admission_with_owner, PublishedAdmissionOptions,
+    published_admission_with_owner, PublishedAdmissionOptions,
 };
 
 mod readers;
 mod turn_chronology;
+
+async fn grant_session_reader(
+    client: &ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    reader: &str,
+) -> String {
+    let node_did = escape_graphql_string(node_did);
+    let session_id = escape_graphql_string(session_id);
+    let response = client.execute(&format!(
+        r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }} }}) {{ _docID }} }}"#,
+    )).await.unwrap();
+    let [row] = response["data"]["AgentSession"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("fixture User must see exactly one session");
+    };
+    let id = row["_docID"].as_str().unwrap().to_owned();
+    client
+        .add_actor_relationship(
+            "AgentSession",
+            &id,
+            "reader",
+            &identity::Did::new(reader).unwrap(),
+        )
+        .await
+        .unwrap();
+    id
+}
+
+async fn reserve_inventory_session(
+    client: &ConfigAccess,
+    node_did: &str,
+    agent_did: &str,
+    session_id: &str,
+    created_at: &str,
+) -> String {
+    let requester = client.actor_did().expect("fixture holds the requester");
+    let create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        format!("reserve-inventory-{session_id}"),
+        node_did,
+        &requester,
+        agent_did,
+        session_id,
+        "inventory",
+        "interactive",
+        created_at,
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(&requester),
+    );
+    let id = crate::request::lifecycle::reserve_goal_session(client, &create)
+        .await
+        .unwrap();
+    let granted = grant_session_reader(client, node_did, session_id, node_did).await;
+    assert_eq!(id, granted);
+    id
+}
 
 #[tokio::test]
 async fn uncaptured_terminal_is_unknown_and_an_empty_closure_is_known() {
@@ -17,6 +77,13 @@ async fn uncaptured_terminal_is_unknown_and_an_empty_closure_is_known() {
     .unwrap();
     let node = fixture.node;
     let mut tool = fixture.tool;
+    grant_session_reader(
+        &fixture.client,
+        &fixture.node_did,
+        tool.session_id(),
+        &fixture.node_did,
+    )
+    .await;
     let requester = tool.requester_did().unwrap().to_owned();
     let session_id = tool.session_id().to_owned();
     let session =
@@ -57,11 +124,11 @@ async fn uncaptured_terminal_is_unknown_and_an_empty_closure_is_known() {
         .await
         .unwrap();
     assert_eq!(repeated.binding, terminal.binding);
-    ensure_fixture_session(
-        &node,
-        "empty-inventory-session",
+    reserve_inventory_session(
+        &fixture.client,
         &fixture.node_did,
-        Some(&requester),
+        tool.actor().as_str(),
+        "empty-inventory-session",
         "2026-10-24T00:00:00Z",
     )
     .await;
@@ -96,7 +163,7 @@ async fn uncaptured_terminal_is_unknown_and_an_empty_closure_is_known() {
     );
     assert!(empty.entries.is_empty());
     assert_ne!(empty.binding.digest, terminal.binding.digest);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }
 
@@ -128,6 +195,13 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
             .unwrap();
         let node = fixture.node;
         let mut tool = fixture.tool;
+        grant_session_reader(
+            &fixture.client,
+            &fixture.node_did,
+            tool.session_id(),
+            &fixture.node_did,
+        )
+        .await;
         let model_tool = &case["source"]["tools"][0];
         if model_tool["state"] == "completed" {
             tool.complete("fixture terminal").await.unwrap();
@@ -218,7 +292,7 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
             let observation = if projection["observation"].is_null() {
                 None
             } else {
-                Some(ConfigAccess::transact_local_write(&node, None, "test.inventory.model_observation", |txn| {
+                Some(tool.access().unwrap().transact_write("test.inventory.model_observation", |txn| {
                 let input = &observation_input;
                 Box::pin(async move {
                     let response = txn.execute_with_variables(
@@ -251,7 +325,7 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
                 "requester_did": actor(&projection["scope"]["requester"]),
                 "verified_unchanged": projection["verified_unchanged"].as_bool().filter(|value| *value),
                 "changes": if changes.is_empty() { None } else { Some(changes) } });
-            let foreign = if projection["owner"] != "node-1" {
+            let foreign = if projection["owner"] != model_tool["agent_did"] {
                 let key_path = fixture.path.join("foreign-projection.key");
                 Some(
                     tokio::task::spawn_blocking(move || {
@@ -264,29 +338,50 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
             } else {
                 None
             };
-            let identity = foreign
-                .as_ref()
-                .map(|identity| identity.did().parse().unwrap());
-            let id = ConfigAccess::transact_local_write(&node, identity, "test.inventory.model_projection", |txn| {
+            let creator = if let Some(foreign) = &foreign {
+                use crate::store::config_client::{GraphqlEndpoint, NodePermission};
+                let actor = identity::Did::new(foreign.did()).unwrap();
+                let admin = ConfigAccess::local_as(
+                    node.clone(),
+                    identity::Did::new(&scope.node_did).unwrap(),
+                );
+                for permission in [
+                    NodePermission::DocumentRead,
+                    NodePermission::DocumentUpdate,
+                    NodePermission::DacRelationAdd,
+                    NodePermission::CollectionGet,
+                ] {
+                    admin
+                        .grant_node_permission(&actor, permission)
+                        .await
+                        .unwrap();
+                }
+                let ConfigAccess::Graphql(endpoint) = &fixture.client else {
+                    panic!("fixture User uses a client endpoint");
+                };
+                ConfigAccess::Graphql(
+                    GraphqlEndpoint::as_principal(endpoint.url(), foreign.did())
+                        .with_client_signing_capability(
+                            foreign.client_signing_capability().unwrap(),
+                        )
+                        .unwrap()
+                        .with_client_signed_agent_creates(),
+                )
+            } else {
+                tool.access().unwrap()
+            };
+            creator.transact_write("test.inventory.model_projection", |txn| {
                 let input = &input;
+                let node_did = &scope.node_did;
                 Box::pin(async move {
-                    let response = txn.execute_with_variables(
+                    let response = txn.execute_client_signed_create(
                         "mutation($input: ToolFileInventoryMutationInputArg!) { create_ToolFileInventory(input: $input) { _docID } }",
-                        &json!({"input": input})).await?;
-                    crate::store::graphql::created_doc_id(&response, "ToolFileInventory")
+                        &json!({"input": input}), gents_protocol::schemas::TOOL_FILE_INVENTORY).await?;
+                    let id = crate::store::graphql::created_doc_id(&response, "ToolFileInventory")?;
+                    txn.add_actor_relationship("ToolFileInventory", &id, "reader", &identity::Did::new(node_did)?).await?;
+                    Ok::<_, anyhow::Error>(())
                 })
             }).await.unwrap();
-            if let Some(foreign) = foreign {
-                node.add_dac_actor_relationship(
-                    foreign.did(),
-                    "ToolFileInventory",
-                    &id,
-                    "reader",
-                    &scope.node_did,
-                )
-                .await
-                .unwrap();
-            }
         }
         let result = FileInventorySnapshot::load(&node, &admission).await;
         let expected = &case["expected"];
@@ -387,13 +482,13 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
             }
             other => panic!("unhandled source projection outcome {other}"),
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         tokio::fs::remove_dir_all(fixture.path).await.unwrap();
     }
 }
 
 async fn retain_fork_fixture_capture(
-    node: &Arc<EmbeddedNode>,
+    _node: &Arc<EmbeddedNode>,
     tool: &crate::tools::call::lifecycle::ToolCallLifecycle,
     path: &str,
 ) {
@@ -425,7 +520,7 @@ async fn retain_fork_fixture_capture(
         serde_json::to_value(&changes).unwrap(),
     )
     .unwrap();
-    ConfigAccess::transact_local_write(node, None, "test.inventory.fork_capture", |txn| {
+    tool.access().unwrap().transact_write("test.inventory.fork_capture", |txn| {
         let changes = &changes;
         let change = &change;
         Box::pin(async move {
@@ -439,9 +534,11 @@ async fn retain_fork_fixture_capture(
             input.as_object_mut().unwrap().remove("file_changes");
             input["changes"] = json!([FileChangeMetadata::from(change)]);
             input["observation_doc_id"] = json!(observation);
-            txn.execute_with_variables(
+            let response = txn.execute_with_variables(
                 "mutation($input: ToolFileInventoryMutationInputArg!) { create_ToolFileInventory(input: $input) { _docID } }",
                 &json!({"input": input})).await?;
+            let projection = crate::store::graphql::created_doc_id(&response, "ToolFileInventory")?;
+            txn.add_actor_relationship("ToolFileInventory", &projection, "reader", &identity::Did::new(tool.node_did())?).await?;
             Ok::<_, anyhow::Error>(())
         })
     }).await.unwrap();
@@ -449,9 +546,9 @@ async fn retain_fork_fixture_capture(
 
 #[tokio::test]
 async fn generated_fork_inventory_retains_only_selected_native_origins() {
-    use crate::session::{fork, ForkBoundary, ForkParams};
+    use crate::session::{fork_on, ForkBoundary, ForkParams};
     use crate::tools::call::lifecycle::admission_fixture::{
-        claimed_signed_request, publish_accepted_on_claimed_request,
+        pending_client_fixture_request, publish_accepted_on_claimed_request,
     };
     use serde_json::Value;
     let contracts: Value =
@@ -475,6 +572,12 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
         let parent = origin_tool.session_id().to_owned();
         let did = origin_tool.node_did().to_owned();
         let requester = origin_tool.requester_did().unwrap().to_owned();
+        grant_session_reader(&fixture.client, &did, &parent, &did).await;
+        let signer = origin_tool
+            .access()
+            .unwrap()
+            .managed_agent_signer()
+            .unwrap();
         origin_tool.complete("origin complete").await.unwrap();
         retain_fork_fixture_capture(&node, &origin_tool, "selected.rs").await;
         request_owner
@@ -487,7 +590,6 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             )
             .await
             .unwrap();
-        crate::test_support::install_test_agent(&node, &did, "general").await;
         let headers = ConfigAccess::local(node.clone())
             .execute(&format!(
                 "{{ AgentMessage(filter: {{ {} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}",
@@ -501,18 +603,19 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             .iter()
             .filter(|row| crate::session::is_user_turn(row).unwrap())
             .count();
-        let child = fork(
-            &node,
+        let child = fork_on(
+            &fixture.client,
             ForkParams {
                 source_session_id: &parent,
                 boundary: ForkBoundary::UserTurn(turns as u32),
                 caller_node_did: &did,
                 caller_requester_did: Some(&requester),
-                target_agent_id: None,
+                target_agent_did: None,
             },
         )
         .await
         .unwrap();
+        grant_session_reader(&fixture.client, &did, &child.session_id, &did).await;
         let load_admission = |session_id: String| {
             let (node, did, requester) = (node.clone(), did.clone(), requester.clone());
             async move {
@@ -558,14 +661,34 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             &before_later_parent_work,
             &[(origin_tool.doc_id().unwrap(), 90)],
         );
-        let key_path = fixture.path.join("test-agent.key");
-        let identity =
-            tokio::task::spawn_blocking(move || crate::KeyIdentity::load_or_create(key_path, None))
-                .await
-                .unwrap()
-                .unwrap();
-        let mut later_request =
-            claimed_signed_request(&node, "later-parent-request", &parent, &identity, None).await;
+        let make_request = |request_id: &str| {
+            gents_protocol::request_admission::AgentRequestCreate::base(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                request_id,
+                &did,
+                &requester,
+                signer.did(),
+                &parent,
+                "spawn",
+                "interactive",
+                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::client(&requester),
+            )
+        };
+        let mut later_request = pending_client_fixture_request(
+            &node,
+            &fixture.client,
+            fixture.runtime.clone(),
+            fixture.requester_identity.as_ref(),
+            &signer,
+            make_request("later-parent-request"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            later_request.claim_with_identity().await.unwrap(),
+            crate::request::lifecycle::ClaimOutcome::Claimed
+        );
         let mut later_tool = publish_accepted_on_claimed_request(
             node.clone(),
             &mut later_request,
@@ -659,18 +782,19 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             .iter()
             .filter(|row| crate::session::is_user_turn(row).unwrap())
             .count();
-        let complete_child = fork(
-            &node,
+        let complete_child = fork_on(
+            &fixture.client,
             ForkParams {
                 source_session_id: &parent,
                 boundary: ForkBoundary::UserTurn(turns as u32),
                 caller_node_did: &did,
                 caller_requester_did: Some(&requester),
-                target_agent_id: None,
+                target_agent_did: None,
             },
         )
         .await
         .unwrap();
+        grant_session_reader(&fixture.client, &did, &complete_child.session_id, &did).await;
         let complete = FileInventorySnapshot::load(
             &node,
             &load_admission(complete_child.session_id.clone()).await,
@@ -686,8 +810,20 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
         assert!(complete.entries.iter().all(|entry| {
             entry.scope.session_id == parent && entry.scope.session_id != complete_child.session_id
         }));
-        let mut unknown_request =
-            claimed_signed_request(&node, "unknown-parent-request", &parent, &identity, None).await;
+        let mut unknown_request = pending_client_fixture_request(
+            &node,
+            &fixture.client,
+            fixture.runtime.clone(),
+            fixture.requester_identity.as_ref(),
+            &signer,
+            make_request("unknown-parent-request"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            unknown_request.claim_with_identity().await.unwrap(),
+            crate::request::lifecycle::ClaimOutcome::Claimed
+        );
         let mut unknown_tool = publish_accepted_on_claimed_request(
             node.clone(),
             &mut unknown_request,
@@ -736,7 +872,7 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
                 .binding,
             snapshot.binding
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         tokio::fs::remove_dir_all(fixture.path).await.unwrap();
     }
 }
@@ -828,6 +964,13 @@ async fn check_real_inventory_chronology(background: bool, notify: bool) {
     .unwrap();
     let node = fixture.node;
     let mut first = fixture.tool;
+    grant_session_reader(
+        &fixture.client,
+        &fixture.node_did,
+        first.session_id(),
+        &fixture.node_did,
+    )
+    .await;
     if background {
         assert!(first
             .publish_background_receipt("running in background")
@@ -838,6 +981,7 @@ async fn check_real_inventory_chronology(background: bool, notify: bool) {
     if notify {
         crate::tools::background::completion::append_background_tool_completion(
             &node,
+            &first.access().unwrap(),
             first.session_id(),
             &request.request().request_id,
             first.doc_id().unwrap(),
@@ -921,7 +1065,7 @@ async fn check_real_inventory_chronology(background: bool, notify: bool) {
         .await
         .unwrap();
     assert_eq!(inventory.binding, repeated.binding);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }
 

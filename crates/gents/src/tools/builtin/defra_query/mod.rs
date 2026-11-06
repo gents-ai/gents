@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::inference::llm::tool::ToolDefinition;
 use crate::inference::llm::tool::{Tool, ToolDyn};
 use anyhow::anyhow;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde_json::json;
 
 /// Bounds an individual field value included in model-facing query results.

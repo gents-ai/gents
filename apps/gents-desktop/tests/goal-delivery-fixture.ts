@@ -18,6 +18,7 @@ export function appliedGoalResult(request: GoalControlRequest): GoalControlResul
         commandDigest: "sha256:" + "a".repeat(64),
         initialRequestId: first,
         requesterDid: request.clientDid!,
+        agentDid: request.agentDid ?? "did:key:fixture-agent",
       },
     },
   };

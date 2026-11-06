@@ -25,7 +25,7 @@ pub(super) async fn run_cli_text(bin: &Path, args: &[String]) -> Result<String> 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-pub(super) async fn run_cli_json(bin: &Path, args: &[String]) -> Result<Value> {
+pub(crate) async fn run_cli_json(bin: &Path, args: &[String]) -> Result<Value> {
     let stdout = run_cli_text(bin, args).await?;
     serde_json::from_str(stdout.trim()).with_context(|| {
         format!(

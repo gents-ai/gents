@@ -24,6 +24,29 @@ pub async fn load_history(
     load_history_through_sequence(node, session_id, node_did, requester_did, None).await
 }
 
+#[cfg(test)]
+pub(crate) async fn load_history_with_access(
+    access: &crate::ConfigAccess,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+) -> Result<Vec<Message>> {
+    Ok(super::output::sequenced::load_sequenced_messages_using(
+        super::output::access::ReadAccess::Config(access),
+        session_id,
+        node_did,
+        requester_did,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await?
+    .into_iter()
+    .map(|row| row.message)
+    .collect())
+}
+
 pub(crate) async fn load_history_through_sequence(
     node: &EmbeddedNode,
     session_id: &str,
@@ -47,14 +70,18 @@ pub(crate) async fn load_history_through_sequence(
 }
 
 pub(crate) async fn load_sequenced_history_for_request(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request: &crate::request::watcher::AgentRequest,
     through_sequence: Option<u32>,
     after_sequence: Option<u32>,
     provider_profile: crate::turn::provider_input::ProviderInputProfile,
 ) -> Result<Vec<SequencedMessage>> {
-    super::output::sequenced::load_sequenced_messages(
-        node,
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(request.agent_did.clone())?,
+    );
+    super::output::sequenced::load_sequenced_messages_using(
+        super::output::access::ReadAccess::Config(&access),
         &request.session_id,
         &request.node_did,
         request.requester_did.as_deref(),
@@ -67,9 +94,13 @@ pub(crate) async fn load_sequenced_history_for_request(
 }
 
 pub(crate) async fn retry_has_published_input(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request: &crate::request::watcher::AgentRequest,
 ) -> Result<bool> {
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(request.agent_did.clone())?,
+    );
     let Some(mut parent_id) = request.retry_parent_request_doc_id.clone() else {
         return Ok(false);
     };
@@ -99,15 +130,9 @@ pub(crate) async fn retry_has_published_input(
                 _or: [{{ await_mode: {{ _eq: "foreground" }} }}, {{ await_mode: {{ _eq: null }} }}] }}, limit: 1) {{ _docID }}
         }}"#
         );
-        let response = crate::store::graphql::graphql_with_transaction_retry(
-            node,
-            &query,
-            "resolve retry frontier",
-        )
-        .await?;
+        let response = access.execute(&query).await?;
         let rows = response
-            .data
-            .as_ref()
+            .get("data")
             .context("retry frontier query omitted data")?;
         let parents = rows["AgentRequest"]
             .as_array()
@@ -152,30 +177,6 @@ pub(crate) async fn retry_has_published_input(
     }
 }
 
-#[cfg(test)]
-pub(super) async fn load_history_projection(
-    node: &EmbeddedNode,
-    session_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-    through_sequence: Option<u32>,
-    current_input_request_doc_id: Option<&str>,
-) -> Result<Vec<Message>> {
-    Ok(load_sequenced_history_projection(
-        node,
-        session_id,
-        node_did,
-        requester_did,
-        through_sequence,
-        None,
-        current_input_request_doc_id,
-    )
-    .await?
-    .into_iter()
-    .map(|row| row.message)
-    .collect())
-}
-
 pub(crate) async fn load_sequenced_history_projection(
     node: &EmbeddedNode,
     session_id: &str,
@@ -200,4 +201,26 @@ pub(crate) async fn load_sequenced_history_projection(
     tracing::Span::current().record("history_message_count", history.len() as i64);
     tracing::debug!(session_id = %session_id, ?through_sequence, ?after_sequence, ?current_input_request_doc_id, count = history.len(), "loaded canonical history");
     Ok(history)
+}
+
+pub(crate) async fn load_sequenced_history_projection_on(
+    access: &crate::store::config_client::ConfigAccess,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    through_sequence: Option<u32>,
+    after_sequence: Option<u32>,
+    current_input_request_doc_id: Option<&str>,
+) -> Result<Vec<SequencedMessage>> {
+    super::output::sequenced::load_sequenced_messages_using(
+        super::output::access::ReadAccess::Config(access),
+        session_id,
+        node_did,
+        requester_did,
+        through_sequence,
+        after_sequence,
+        current_input_request_doc_id,
+        None,
+    )
+    .await
 }

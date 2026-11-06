@@ -124,7 +124,7 @@ fn ensure_request_deadline_open(deadline: RequestDeadline, context: &str) -> Res
 }
 
 pub(super) fn render_request_context_message(
-    _node: &defra_node::EmbeddedNode,
+    _node: &defra_node::Node,
     agent_config: &ResolvedAgent,
     request: &AgentRequest,
     frozen_instruction_manifest: Option<&str>,
@@ -165,6 +165,17 @@ where
             .await
             .map_err(|_| request_deadline_error(deadline, context)),
     }
+}
+
+// Construct a branch's potentially large future outside the live stream poll
+// frame. The call must remain separate even in optimized builds.
+#[inline(never)]
+fn box_stream_branch<F, Fut>(branch: F) -> std::pin::Pin<Box<Fut>>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future,
+{
+    Box::pin(branch())
 }
 
 impl<M> AgentDaemon<M>
@@ -223,7 +234,7 @@ where
         let attempt_index = 1_i64;
         let request_id = request.request_id.clone();
         let session_id = request.session_id.clone();
-        let agent_id = self.agent_config.agent_id.clone();
+        let agent_did = self.agent_config.agent_did.clone();
         let reviewer = self.workspace_reviewer(
             request,
             aggregate_token_budget.clone(),
@@ -234,7 +245,7 @@ where
             self.approval_home.as_deref(),
             &request.node_did,
             request.requester_did.as_deref(),
-            &agent_id,
+            &agent_did,
             workspace.workspace_cwd.as_deref(),
         )?
         .map(|context| context.with_reviewer(reviewer.callback.clone()));
@@ -250,18 +261,20 @@ where
             })
             .map(Arc::new);
         let inference = Box::pin(async {
-                let prepared = async {
+                let prepared = Box::pin(async {
                     let output_obligation_gate = crate::runtime::agent::output_obligation::OutputObligationGate::for_request(
                         self.node.clone(), request, self.output_obligations.as_ref(),
                     ).await?;
-                    let hook = DefraSessionHook::resume_with_identity_policy(
+                    let hook = DefraSessionHook::resume_with_actor_policy(
                         self.node.clone(),
                         &request.session_id,
                         self.agent_config.node_did(),
                         request.requester_did.as_deref(),
+                        ::identity::Did::new(request.agent_did.clone())?,
                         self.hook_failure_policy,
                     )
                     .await?
+                    .with_managed_identity(self.agent_config.agent_identity.as_ref())?
                     .with_inference_observation(inference_observation.clone())
                     .with_background_tool_registry(self.background_tool_registry.clone())
                     .with_background_execution_registry(self.background_execution_registry.clone())
@@ -276,6 +289,7 @@ where
                     .with_steering_inputs(
                         request.clone(),
                         self.request_admission.clone(),
+                        self.agent_config.agent_identity.clone(),
                         lifecycle.natural_finish_allowed(),
                     );
                     let hook = match &self.job_driver {
@@ -301,7 +315,9 @@ where
                         self.account_hops,
                     )?;
                     let claude_context = crate::claude_request_context::for_request(
-                        &crate::store::config_client::ConfigAccess::local(self.node.clone()),
+                        &crate::store::config_client::ConfigAccess::local_managed_agent(
+                            self.node.clone(), identity::Did::new(request.agent_did.clone())?, self.agent_config.agent_identity.as_ref(),
+                        )?,
                         &self.agent_config,
                         request,
                         gents_claude::origin::Kind::Turn,
@@ -330,6 +346,9 @@ where
                             .transpose()?,
                     );
                     let turn_node = self.node.clone();
+                    let turn_agent_did = self.agent_config.agent_did.clone();
+                    let turn_agent_signer = self.agent_config.agent_identity.managed_agent_signer()
+                        .context("provider reduction requires a managed Agent signer")?;
                     let turn_request = request.clone();
                     let turn_request_commit_cid = lifecycle
                         .request_commit_cid()
@@ -350,6 +369,8 @@ where
                         let compactor = turn_compactor.clone();
                         let mut options: ReductionOptions = turn_compaction_options.clone();
                         let node = turn_node.clone();
+                        let agent_did = turn_agent_did.clone();
+                        let signer = turn_agent_signer.clone();
                         let request = turn_request.clone();
                         let request_commit_cid = turn_request_commit_cid.clone();
                         Box::pin(async move {
@@ -378,7 +399,11 @@ where
                             // safe_to_reduce gate belongs to session compaction.
                             let source_boundary =
                                 crate::turn::provider_context_reduction::capture_source_boundary(
-                                    node.as_ref(),
+                                    &crate::ConfigAccess::local_with_agent_signer(
+                                        node.clone(),
+                                        identity::Did::new(agent_did.clone()).map_err(compactor_failure)?,
+                                        signer.clone(),
+                                    ).map_err(compactor_failure)?,
                                     &request.session_id,
                                     &request.node_did,
                                     request.requester_did.as_deref(),
@@ -456,6 +481,7 @@ where
                             let reduction_index = compaction_request.prior_reduction_keys.len() + 1;
                             crate::turn::provider_context_reduction::stage_exact(
                                 crate::turn::provider_context_reduction::NewExactProviderContextReduction {
+                                    agent_did: &agent_did,
                                     node_did: &request.node_did,
                                     requester_did: request.requester_did.as_deref(),
                                     session_id: &request.session_id,
@@ -476,7 +502,7 @@ where
                                 },
                                 exact,
                             )
-                            .and_then(|staged| staged.into_turn_outcome(node))
+                            .and_then(|staged| staged.into_turn_outcome(node, signer))
                             .map_err(compactor_failure)
                         })
                     };
@@ -494,8 +520,11 @@ where
                         }
                     };
                     loop_config.authored_input = Some(authored_input(folded_prompts.clone()));
+                    let reduction_access = crate::store::config_client::ConfigAccess::local_managed_agent(
+                        self.node.clone(), identity::Did::new(request.agent_did.clone())?, self.agent_config.agent_identity.as_ref(),
+                    )?;
                     let restored = crate::turn::provider_context_reduction::load_unconsumed_for_request(
-                        self.node.as_ref(),
+                        &reduction_access,
                         &request.doc_id,
                     )
                     .await?;
@@ -524,7 +553,8 @@ where
                         };
                         replay.required = row.replay_associations()?.required;
                         crate::session::validate_canonical_replay_boundary(
-                            self.node.as_ref(), replay_scope, &boundary,
+                            &reduction_access,
+                            replay_scope, &boundary,
                         ).await?;
                         loop_config.context_message = None;
                         // The checkpoint's provider view already holds every
@@ -546,7 +576,7 @@ where
                     } else {
                         loop_config.reduction_chain_keys =
                             crate::turn::provider_context_reduction::load_for_request(
-                                self.node.as_ref(),
+                                &reduction_access,
                                 &request.doc_id,
                             )
                             .await?
@@ -575,7 +605,7 @@ where
                         loop_prompt,
                         max_turns_provenance,
                     ))
-                };
+                });
                 let Some(prepared) =
                     super::request::prepare_unless_interrupted(interrupt_rx, prepared).await
                 else {
@@ -591,7 +621,10 @@ where
                     loop_prompt,
                     max_turns_provenance,
                 ) = prepared?;
-                let loop_tools = self.loop_tools.clone();
+                let loop_tools = crate::inference::llm::tool::bind_request_tools(
+                    self.loop_tools.clone(),
+                    lifecycle.claimed_tool_context()?,
+                );
                 let inference_token = request_token.child_token();
                 let inference_token_for_start = inference_token.clone();
                 let terminal_failure_reason = admission::terminal_failure_reason_observer();
@@ -639,7 +672,7 @@ where
                     attempt_index,
                     inference_token.clone(),
                     terminal_failure_reason.clone(),
-                    async {
+                    Box::pin(async {
                         let mut processor = crate::runtime::agent::stream_processor::StreamProcessor::new(
                             &persistence_hook,
                             stream_writer,
@@ -651,6 +684,9 @@ where
                         lease_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                         let mut stream_error = None;
 
+                        // The drain and flush futures are large. Construct them only
+                        // after their branch wins so polling the live stream retains
+                        // enough stack for nested provider and storage owners.
                         loop {
                             let mut flush_failure = None;
                             let flush_deadline = processor.next_flush_deadline().await;
@@ -658,36 +694,41 @@ where
                                 biased;
                                 _ = shutdown.changed() => {
                                     drop(stream);
-                                    match tokio::time::timeout(
-                                        crate::store::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-                                        async {
-                                            match processor.validate_execution().await.map_err(RuntimeSeamError::into_inner) {
-                                                Ok(()) => {}
-                                                Err(error) if error.is::<crate::request::lifecycle::ExecutionOwnershipLost>() => {
-                                                    tracing::warn!(
-                                                        request_id = %request_id,
-                                                        session_id = %session_id,
-                                                        error = %error,
-                                                        "execution ownership lost before shutdown drain; received in-memory bytes, if any, were not committed by this drain; only durable output remains recoverable"
-                                                    );
-                                                    return Ok(false);
+                                    let processor = &mut processor;
+                                    let request_id = &request_id;
+                                    let session_id = &session_id;
+                                    return box_stream_branch(move || async move {
+                                        match tokio::time::timeout(
+                                            crate::store::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+                                            async {
+                                                match processor.validate_execution().await.map_err(RuntimeSeamError::into_inner) {
+                                                    Ok(()) => {}
+                                                    Err(error) if error.is::<crate::request::lifecycle::ExecutionOwnershipLost>() => {
+                                                        tracing::warn!(
+                                                            request_id = %request_id,
+                                                            session_id = %session_id,
+                                                            error = %error,
+                                                            "execution ownership lost before shutdown drain; received in-memory bytes, if any, were not committed by this drain; only durable output remains recoverable"
+                                                        );
+                                                        return Ok(false);
+                                                    }
+                                                    Err(error) => return Err(error),
                                                 }
-                                                Err(error) => return Err(error),
-                                            }
-                                            processor.persist_received_partial_turn("persist received assistant turn during graceful shutdown").await.map_err(processor_failure)?;
-                                            Ok(true)
-                                        },
-                                    ).await {
-                                        Ok(Ok(false)) => return Err(anyhow::Error::new(crate::request::lifecycle::ExecutionOwnershipLost)
-                                            .context("shutdown drain was not attempted")),
-                                        Ok(Ok(true)) => return Err(anyhow!("shutdown requested during inference stream")),
-                                        Ok(Err(error)) => return Err(ShutdownDrainFailure {
-                                            reason: format!("partial-turn persistence failed: {error:#}"),
-                                        }.into()),
-                                        Err(_) => return Err(ShutdownDrainFailure {
-                                            reason: "partial-turn persistence exceeded the embedded storage-step deadline; commit outcome must be recovered from durable state".into(),
-                                        }.into()),
-                                    }
+                                                processor.persist_received_partial_turn("persist received assistant turn during graceful shutdown").await.map_err(processor_failure)?;
+                                                Ok(true)
+                                            },
+                                        ).await {
+                                            Ok(Ok(false)) => Err(anyhow::Error::new(crate::request::lifecycle::ExecutionOwnershipLost)
+                                                .context("shutdown drain was not attempted")),
+                                            Ok(Ok(true)) => Err(anyhow!("shutdown requested during inference stream")),
+                                            Ok(Err(error)) => Err(ShutdownDrainFailure {
+                                                reason: format!("partial-turn persistence failed: {error:#}"),
+                                            }.into()),
+                                            Err(_) => Err(ShutdownDrainFailure {
+                                                reason: "partial-turn persistence exceeded the embedded storage-step deadline; commit outcome must be recovered from durable state".into(),
+                                            }.into()),
+                                        }
+                                    }).await;
                                 }
                                 _ = async {
                                     tokio::select! {
@@ -698,29 +739,35 @@ where
                                     request_token.cancel();
                                     inference_token.cancel();
                                     drop(stream);
-                                    let output_result = processor
-                                        .persist_received_partial_turn("persist interrupted assistant turn")
-                                        .await.map_err(processor_failure);
-                                    if let Err(error) =
-                                        persistence_hook.cancel_in_flight_tool_calls().await
-                                    {
-                                        tracing::warn!(
-                                            request_id = %request_id,
-                                            session_id = %session_id,
-                                            error = %error,
-                                            "failed to cancel in-flight tool calls during request interrupt"
-                                        );
-                                    }
-                                    if let Err(error) = output_result {
-                                        tracing::warn!(
-                                            request_id = %request_id,
-                                            session_id = %session_id,
-                                            error = %error,
-                                            "failed to persist received provider audit before interrupt terminal transition"
-                                        );
-                                        return Err(error.context("persisting received provider audit during interrupt"));
-                                    }
-                                    return Err(anyhow!("request interrupted during inference"));
+                                    let processor = &mut processor;
+                                    let persistence_hook = &persistence_hook;
+                                    let request_id = &request_id;
+                                    let session_id = &session_id;
+                                    return box_stream_branch(move || async move {
+                                        let output_result = processor
+                                            .persist_received_partial_turn("persist interrupted assistant turn")
+                                            .await.map_err(processor_failure);
+                                        if let Err(error) =
+                                            persistence_hook.cancel_in_flight_tool_calls().await
+                                        {
+                                            tracing::warn!(
+                                                request_id = %request_id,
+                                                session_id = %session_id,
+                                                error = %error,
+                                                "failed to cancel in-flight tool calls during request interrupt"
+                                            );
+                                        }
+                                        if let Err(error) = output_result {
+                                            tracing::warn!(
+                                                request_id = %request_id,
+                                                session_id = %session_id,
+                                                error = %error,
+                                                "failed to persist received provider audit before interrupt terminal transition"
+                                            );
+                                            return Err(error.context("persisting received provider audit during interrupt"));
+                                        }
+                                        Err(anyhow!("request interrupted during inference"))
+                                    }).await;
                                 }
                                 _ = lease_poll.tick() => {
                                     if let Err(error) = processor.validate_execution().await.map_err(RuntimeSeamError::into_inner) {
@@ -741,22 +788,29 @@ where
                                         None => std::future::pending::<()>().await,
                                     }
                                 } => {
-                                    let progress = async {
-                                        crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-                                            request_deadline,
-                                            request_token.clone(),
-                                            None,
-                                            None,
-                                            Some(session_id.clone()),
-                                            trigger_correlation.clone(),
-                                            trigger_context.source_fields.clone(),
-                                            false,
-                                            stream.next(),
+                                    let processor = &mut processor;
+                                    let stream = &mut stream;
+                                    let session_id = &session_id;
+                                    let trigger_correlation = &trigger_correlation;
+                                    let trigger_context = &trigger_context;
+                                    let (flushed, item) = box_stream_branch(move || async move {
+                                        let progress = async {
+                                            crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+                                                request_deadline,
+                                                request_token.clone(),
+                                                None,
+                                                None,
+                                                Some(session_id.clone()),
+                                                trigger_correlation.clone(),
+                                                trigger_context.source_fields.clone(),
+                                                false,
+                                                stream.next(),
+                                            ).await
+                                        };
+                                        crate::runtime::agent::stream_processor::flush_while_polling(
+                                            processor.flush_pending(), progress,
                                         ).await
-                                    };
-                                    let (flushed, item) = crate::runtime::agent::stream_processor::flush_while_polling(
-                                        processor.flush_pending(), progress,
-                                    ).await;
+                                    }).await;
                                     match item {
                                         Some(Some(item)) => {
                                             flush_failure = flushed.err().map(processor_failure);
@@ -789,25 +843,31 @@ where
                                                 error.to_string(),
                                             );
                                             drop(stream);
-                                            let output_result = processor
-                                                .persist_received_partial_turn(
-                                                    "persist deadline-expired assistant turn",
-                                                )
-                                                .await.map_err(processor_failure);
-                                            if let Err(sweep_error) =
-                                                persistence_hook.timeout_expired_tool_calls().await
-                                            {
-                                                tracing::warn!(
-                                                    request_id = %request_id,
-                                                    session_id = %session_id,
-                                                    error = %sweep_error,
-                                                    "failed to sweep expired in-flight tool calls after request deadline"
-                                                );
-                                            }
-                                            output_result.context(
-                                                "persisting received provider audit after request deadline",
-                                            )?;
-                                            return Err(error);
+                                            let processor = &mut processor;
+                                            let persistence_hook = &persistence_hook;
+                                            let request_id = &request_id;
+                                            let session_id = &session_id;
+                                            return box_stream_branch(move || async move {
+                                                let output_result = processor
+                                                    .persist_received_partial_turn(
+                                                        "persist deadline-expired assistant turn",
+                                                    )
+                                                    .await.map_err(processor_failure);
+                                                if let Err(sweep_error) =
+                                                    persistence_hook.timeout_expired_tool_calls().await
+                                                {
+                                                    tracing::warn!(
+                                                        request_id = %request_id,
+                                                        session_id = %session_id,
+                                                        error = %sweep_error,
+                                                        "failed to sweep expired in-flight tool calls after request deadline"
+                                                    );
+                                                }
+                                                output_result.context(
+                                                    "persisting received provider audit after request deadline",
+                                                )?;
+                                                Err(error)
+                                            }).await;
                                         }
                                     }
                                 }
@@ -815,7 +875,7 @@ where
                                 Some(item) => item,
                                 None => break,
                             };
-                            let processed = match processor.process_item(item).await.map_err(processor_failure) {
+                            let processed = match Box::pin(processor.process_item(item)).await.map_err(processor_failure) {
                                 Ok(processed) => processed,
                                 Err(error) => {
                                     drop(stream);
@@ -950,7 +1010,7 @@ where
                             return Err(error);
                         }
                         Ok(HandleRequestOutcome::Completed)
-                    },
+                    }),
                 )
                 .await
             }
@@ -959,7 +1019,7 @@ where
                 request_id = %request_id,
                 session_id = %session_id,
                 node_did = %request.node_did,
-                agent_id = %agent_id,
+                agent_did = %agent_did,
                 backend_id = %backend_id,
                 model_name = %model_name,
                 deadline_at = %deadline_at,
@@ -973,7 +1033,7 @@ where
         let outcome = crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
             request.requester_did.clone(),
             Some(request.node_did.clone()),
-            Some(agent_id.to_string()),
+            Some(agent_did.to_string()),
             Some(request.request_id.clone()),
             crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
                 request_deadline,
@@ -1020,7 +1080,7 @@ pub(super) mod tests {
     use crate::runtime::agent::completion_retry::CompletionRetryProfileFields;
     use crate::runtime::agent::daemon::AgentDaemonInit;
     use crate::runtime::agent::runtime::StartupBarrier;
-    use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
+    use crate::store::identity::{NodeIdentity, RuntimeNode};
     use crate::tools::call::hook::{
         BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
     };
@@ -1102,7 +1162,12 @@ pub(super) mod tests {
         provider_inputs: Arc<std::sync::Mutex<Vec<String>>>,
         title_calls: Arc<AtomicUsize>,
         title_shape_mismatches: Arc<AtomicUsize>,
-        successor: Option<(Arc<defra_node::EmbeddedNode>, String, String)>,
+        successor: Option<(
+            Arc<defra_node::Node>,
+            String,
+            String,
+            crate::store::identity::ManagedAgentSigner,
+        )>,
     }
 
     #[allow(refining_impl_trait)]
@@ -1152,17 +1217,18 @@ pub(super) mod tests {
                         inputs.len() == 1
                     };
                     if first {
-                        if let Some((node, request_id, did)) = &self.successor {
-                            crate::tools::call::lifecycle::admission_fixture::complete_child(
+                        if let Some((node, request_id, did, signer)) = &self.successor {
+                            crate::tools::call::lifecycle::admission_fixture::complete_child_managed(
                                 node,
                                 request_id,
                                 did,
                                 "successor native output",
+                                signer,
                             )
                             .await;
                             assert_eq!(
-                                crate::tools::background::completion::settle_running_session_message_rows(
-                                    node, did
+                                crate::tools::background::completion::settle_running_session_message_rows_with_access(
+                                    node, &crate::ConfigAccess::local_with_agent_signer(node.clone(), identity::Did::new(signer.did()).unwrap(), signer.clone()).unwrap(), did
                                 )
                                 .await
                                 .unwrap(),
@@ -1201,32 +1267,26 @@ pub(super) mod tests {
     }
 
     async fn persisted_request_by_doc_id(
-        node: &defra_node::EmbeddedNode,
+        access: &crate::ConfigAccess,
         doc_id: &str,
     ) -> serde_json::Value {
-        let response = node
+        let response = access
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason terminal_output }} }}"#,
                 crate::store::graphql::escape_graphql_string(doc_id)
             ))
-            .await;
-        assert!(
-            !response.has_errors(),
-            "request lifecycle query: {:?}",
-            response.errors
-        );
-        let rows = response.data.as_ref().unwrap()["AgentRequest"]
-            .as_array()
+            .await
             .unwrap();
+        let rows = response["data"]["AgentRequest"].as_array().unwrap();
         assert_eq!(rows.len(), 1);
         rows[0].clone()
     }
 
     async fn persisted_request_state(
-        node: &defra_node::EmbeddedNode,
+        access: &crate::ConfigAccess,
         doc_id: &str,
     ) -> gents_protocol::request_lifecycle::RequestLifecycleState {
-        let row = persisted_request_by_doc_id(node, doc_id).await;
+        let row = persisted_request_by_doc_id(access, doc_id).await;
         gents_protocol::request_lifecycle::RequestLifecycleState::parse(
             row["lifecycle_state"].as_str().unwrap(),
         )
@@ -1264,37 +1324,26 @@ pub(super) mod tests {
         }
     }
 
-    pub(in crate::runtime::agent::daemon) fn test_agent_with_deadline(
-        deadline: Duration,
+    fn test_agent_with_binding(
+        identity: Arc<dyn NodeIdentity>,
+        binding: gents_protocol::agent_identity::AgentIdentityBinding,
     ) -> Arc<ResolvedAgent> {
-        let mut agent_config = ResolvedAgent::clone(&test_agent());
-        agent_config.deadline_duration = deadline;
-        Arc::new(agent_config)
-    }
-
-    fn test_agent() -> Arc<ResolvedAgent> {
-        let identity: Arc<dyn NodeIdentity> = Arc::new(
-            KeyIdentity::load_or_create(
-                std::env::temp_dir().join(format!("daemon-lineage-{}.key", uuid::Uuid::new_v4())),
-                None,
-            )
-            .expect("test identity"),
-        );
-        test_agent_with_identity(identity)
-    }
-
-    fn test_agent_with_identity(identity: Arc<dyn NodeIdentity>) -> Arc<ResolvedAgent> {
         let principal = Arc::new(RuntimeNode {
             node_did: identity.did().to_string(),
             identity,
-            default_agent_id: "general".to_string(),
+            default_agent_did: binding.agent_did.clone(),
             display_name: None,
             enabled: true,
         });
-
+        let agent_identity =
+            crate::store::identity::resolve_agent_identity(principal.identity.as_ref(), &binding)
+                .unwrap();
+        let agent_did = binding.agent_did;
         Arc::new(ResolvedAgent {
+            configuration: crate::inference::resolved::ResolvedConfiguration::Static,
             profile_id: None,
-            agent_id: "general".to_string(),
+            agent_did,
+            agent_identity,
             node: principal,
             backend_id: Some("backend-general".to_string()),
             backend_provider_kind: BackendProviderKind::OpenAiCompatible,
@@ -1327,80 +1376,132 @@ pub(super) mod tests {
         })
     }
 
-    async fn create_routed_request(
-        node: &std::sync::Arc<defra_node::EmbeddedNode>,
-        agent_config: &ResolvedAgent,
-        requester_did: &str,
-    ) -> AgentRequest {
-        crate::test_support::install_test_agent(
-            node,
-            agent_config.node_did(),
-            &agent_config.agent_id,
+    async fn held_daemon_fixture(
+        name: &str,
+    ) -> (
+        crate::support::TestDb,
+        crate::KeyIdentity,
+        crate::ConfigAccess,
+        Arc<ResolvedAgent>,
+    ) {
+        use crate::store::config_client::NodePermission;
+        let (db, user, access, binding) = crate::test_support::signed_test_node(name).await;
+        let config = test_agent_with_binding(db.node_identity.clone(), binding);
+        let admin =
+            crate::ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
+        let agent_did = identity::Did::new(&config.agent_did).unwrap();
+        for permission in [
+            NodePermission::CollectionGet,
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::DocumentDelete,
+            NodePermission::DacRelationAdd,
+            NodePermission::DacRelationDelete,
+        ] {
+            admin
+                .grant_node_permission(&agent_did, permission)
+                .await
+                .unwrap();
+        }
+        (db, user, access, config)
+    }
+
+    fn held_daemon_agent_access(
+        db: &crate::support::TestDb,
+        config: &ResolvedAgent,
+    ) -> crate::ConfigAccess {
+        crate::ConfigAccess::local_managed_agent(
+            db.node.clone(),
+            identity::Did::new(&config.agent_did).unwrap(),
+            config.agent_identity.as_ref(),
         )
-        .await;
+        .unwrap()
+    }
+
+    async fn held_daemon_query(
+        access: &crate::ConfigAccess,
+        document: &str,
+    ) -> query::QueryResponse {
+        let result = if document.trim_start().starts_with("mutation") {
+            access.write("test.daemon_fixture", document).await
+        } else {
+            access.execute(document).await
+        }
+        .unwrap();
+        serde_json::from_value(result).unwrap()
+    }
+
+    async fn create_held_routed_request(
+        db: &crate::support::TestDb,
+        user: &crate::KeyIdentity,
+        access: &crate::ConfigAccess,
+        agent_config: &ResolvedAgent,
+        title: Option<&str>,
+    ) -> AgentRequest {
+        use crate::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
+        use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
         let request_id = uuid::Uuid::new_v4().to_string();
-        let session_id = uuid::Uuid::new_v4().to_string();
-        let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-            gents_protocol::request_admission::RequestPurpose::Normal,
-            request_id,
-            agent_config.node_did(),
-            requester_did,
-            &agent_config.agent_id,
-            session_id,
-            "route this reply",
-            "interactive",
-            created_at,
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                agent_config.node_did(),
-            ),
+        let mut spec = RequestSpec::new(
+            RequestPurpose::Normal,
+            RequestIdentity {
+                request_id: request_id.clone(),
+                node_did: db.node_identity.did().to_owned(),
+                requester_did: Some(user.did().to_owned()),
+                agent_did: agent_config.agent_did.clone(),
+                session_id: uuid::Uuid::new_v4().to_string(),
+                content: "route this reply".into(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            },
+            AgentRequestAdmissionRecord::client(user.did()),
         );
-        create.request_hop = 1;
-        create.caused_by_parent_request_id = Some("parent-request".into());
-        create.caused_by_parent_request_doc_id = Some("parent-request-doc".into());
-        create.caused_by_parent_tool_call_id = Some("parent-tool-call".into());
-        create.caused_by_parent_tool_call_doc_id = Some("parent-tool-call-doc".into());
-        crate::sign_agent_request_create(agent_config.node_identity().as_ref(), &mut create)
+        spec.input.initial_title = title.map(|text| gents_protocol::session::SessionTitle {
+            text: text.to_owned(),
+            source: gents_protocol::session::SessionTitleSource::Task,
+        });
+        let create = crate::request::lifecycle::build_signed_client_request(
+            access,
+            spec,
+            RequestSigner::Identity(user),
+        )
+        .await
+        .unwrap();
+        crate::request::lifecycle::submit_client_request(access, &create)
             .await
             .unwrap();
-        let response = node.execute(&create.graphql_mutation().unwrap()).await;
-        assert!(
-            !response.has_errors(),
-            "create routed AgentRequest failed: {:?}",
-            response.errors
-        );
-        let doc_id =
-            crate::store::graphql::single_mutation_document(&response, "create_AgentRequest")
-                .unwrap()
-                .expect("created request receipt")["_docID"]
-                .as_str()
-                .expect("created request physical ID")
-                .to_owned();
-
-        crate::request::admission::load_request_for_admission_test(node, &doc_id)
+        let escaped = crate::store::graphql::escape_graphql_string(&request_id);
+        let response = access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{_docID}} }}"#
+            ))
             .await
-            .unwrap()
+            .unwrap();
+        let doc_id = response["data"]["AgentRequest"][0]["_docID"]
+            .as_str()
+            .unwrap();
+        crate::request::admission::load_request_for_admission_test_as(
+            &db.node,
+            doc_id,
+            &agent_config.agent_did,
+        )
+        .await
+        .unwrap()
     }
 
     async fn create_enrollment_daemon_request(
-        node: &std::sync::Arc<defra_node::EmbeddedNode>,
+        db: &crate::support::TestDb,
+        member_access: &crate::ConfigAccess,
         agent_config: &ResolvedAgent,
         member: &dyn NodeIdentity,
         fence: &crate::runtime::agent::p2p_reconcile::enrollment_reconcile::EnrollmentAuthorizationFence,
         suffix: &str,
     ) -> AgentRequest {
-        crate::test_support::install_test_agent(
-            node,
-            agent_config.node_did(),
-            &agent_config.agent_id,
-        )
-        .await;
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             format!("request-{suffix}"),
             agent_config.node_did(),
             member.did(),
-            &agent_config.agent_id,
+            &agent_config.agent_did,
             format!("session-{suffix}"),
             "run enrolled request",
             "interactive",
@@ -1417,29 +1518,32 @@ pub(super) mod tests {
         crate::sign_agent_request_create(member, &mut create)
             .await
             .unwrap();
-        let response = node.execute(&create.graphql_mutation().unwrap()).await;
-        assert!(
-            !response.has_errors(),
-            "create enrollment request: {:?}",
-            response.errors
-        );
-        let query = format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
-            crate::store::graphql::escape_graphql_string(&create.request_id)
-        );
-        let response = node.execute(&query).await;
-        let doc_id = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRequest"))
-            .and_then(|rows| rows.as_array())
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("_docID"))
-            .and_then(|value| value.as_str())
-            .expect("enrollment request doc id");
-        crate::request::admission::load_request_for_admission_test(node, doc_id)
+        let input = crate::store::config_client::client_request_input(&create).unwrap();
+        let agent_did = identity::Did::new(&agent_config.agent_did).unwrap();
+        let doc_id = member_access
+            .transact_write("test.enrollment_request", |txn| {
+                let input = &input;
+                let agent_did = &agent_did;
+                Box::pin(async move {
+                    let response = txn.execute_client_signed_create(
+                        "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                        &serde_json::json!({"input":input}),
+                        gents_protocol::schemas::AGENT_REQUEST,
+                    ).await?;
+                    let doc_id = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                    txn.add_actor_relationship("AgentRequest", &doc_id, "working_agent", agent_did).await?;
+                    Ok::<_, anyhow::Error>(doc_id)
+                })
+            })
             .await
-            .unwrap()
+            .unwrap();
+        crate::request::admission::load_request_for_admission_test_as(
+            &db.node,
+            &doc_id,
+            &agent_config.agent_did,
+        )
+        .await
+        .unwrap()
     }
 
     #[test]
@@ -1609,25 +1713,15 @@ pub(super) mod tests {
     async fn daemon_request_path_stamps_requester_lineage_on_hook_messages() {
         use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-        let data_path =
-            std::env::temp_dir().join(format!("daemon-requester-lineage-{}", uuid::Uuid::new_v4()));
-        let node = Arc::new(
-            crate::test_support::node_builder()
-                .data_path(&data_path)
-                .build()
-                .await
-                .expect("embedded node"),
-        );
-        crate::ensure_runtime_schemas(node.as_ref())
-            .await
-            .expect("runtime schemas");
-
-        let agent_config = test_agent();
-        let requester_did = agent_config.node_did().to_string();
-        let request = create_routed_request(&node, &agent_config, &requester_did).await;
+        let (db, user, access, agent_config) =
+            held_daemon_fixture("daemon-requester-lineage").await;
+        let node = db.node.clone();
+        let node_did = db.node_identity.did().to_owned();
+        let requester_did = user.did().to_owned();
+        let request = create_held_routed_request(&db, &user, &access, &agent_config, None).await;
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &agent_config.system_prompt,
-            &agent_config.agent_id,
+            &agent_config.agent_did,
             &[],
             false,
             &[],
@@ -1639,6 +1733,12 @@ pub(super) mod tests {
             agent_config.node_did().to_string(),
         );
         let request_identity = agent_config.node_identity().clone();
+        let rendered_request_capture_factory =
+            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                node.clone(),
+                agent_config.agent_identity.as_ref(),
+            )
+            .unwrap();
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: node.clone(),
             agent_config,
@@ -1648,11 +1748,7 @@ pub(super) mod tests {
             loop_tools,
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
-            rendered_request_capture_factory: Some(
-                crate::inference::rendered_request::defra_rendered_request_capture_factory(
-                    node.clone(),
-                ),
-            ),
+            rendered_request_capture_factory: Some(rendered_request_capture_factory),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_execution_registry: BackgroundExecutionRegistry::default(),
             startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
@@ -1672,24 +1768,20 @@ pub(super) mod tests {
             .await
             .unwrap();
 
+        let escaped = crate::store::graphql::escape_graphql_string(&request.doc_id);
+        let result = access.execute(&format!(r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{escaped}"}}}}) {{lifecycle_state}} }}"#)).await.unwrap();
         assert_eq!(
-            persisted_request_state(&node, &request.doc_id).await,
-            RequestLifecycleState::Completed,
-            "successful processing returns only after request completion"
+            result["data"]["AgentRequest"][0]["lifecycle_state"],
+            RequestLifecycleState::Completed.as_str()
         );
         let request_doc_id = crate::store::graphql::escape_graphql_string(&request.doc_id);
         let requester = crate::store::graphql::escape_graphql_string(&requester_did);
-        let authored_prompt = node
+        let authored_prompt = access
             .execute(&format!(
                 r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }}, requester_did: {{ _eq: "{requester}" }}, role: {{ _eq: "user" }} }}) {{ _docID message_key request_doc_id requester_did role }} }}"#
             ))
-            .await;
-        assert!(
-            !authored_prompt.has_errors(),
-            "query completed request's authored prompt failed: {:?}",
-            authored_prompt.errors
-        );
-        let authored_rows = authored_prompt.data.unwrap()["AgentMessage"]
+            .await.unwrap();
+        let authored_rows = authored_prompt["data"]["AgentMessage"]
             .as_array()
             .unwrap()
             .clone();
@@ -1718,19 +1810,10 @@ pub(super) mod tests {
                 }}
             }}"#
         );
-        let response = node.execute(&query).await;
-        assert!(
-            !response.has_errors(),
-            "query routed AgentMessage failed: {:?}",
-            response.errors
-        );
-        let rows = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentMessage"))
-            .and_then(serde_json::Value::as_array)
+        let response = access.execute(&query).await.unwrap();
+        let rows = response["data"]["AgentMessage"]
+            .as_array()
             .expect("AgentMessage rows");
-        let access = crate::store::config_client::ConfigAccess::local(node.clone());
         let mut found_reply = false;
         for row in rows {
             assert_eq!(
@@ -1745,7 +1828,7 @@ pub(super) mod tests {
             let (_, message) = crate::session::load_canonical_message(
                 &access,
                 doc_id,
-                &requester_did,
+                &node_did,
                 Some(&requester_did),
             )
             .await
@@ -1758,14 +1841,13 @@ pub(super) mod tests {
         assert!(
             found_reply,
             "daemon-persisted assistant message must carry requester lineage; rows={rows:?}; request={:?}",
-            node.execute(&format!(
+            access.execute(&format!(
                 "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{}\" }} }}) {{ lifecycle_state failure_reason terminal_output }} }}",
                 crate::store::graphql::escape_graphql_string(&request.doc_id)
             )).await
         );
 
-        node.shutdown().await;
-        let _ = std::fs::remove_dir_all(data_path);
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -1780,15 +1862,27 @@ pub(super) mod tests {
         let notification_text = selected.notification_text;
         let node = admission.node.clone();
         assert_eq!(
-            persisted_request_state(&node, &wake.doc_id).await,
+            persisted_request_state(&admission.client, &wake.doc_id).await,
             RequestLifecycleState::Pending,
             "watcher selection must not preclaim the wake"
         );
-        let identity: Arc<dyn NodeIdentity> = Arc::new(
-            KeyIdentity::load_or_create(admission.path.join("test-agent.key"), None)
-                .expect("load the signed fixture's original identity"),
-        );
-        let agent_config = test_agent_with_identity(identity);
+        let identity = admission.runtime.clone();
+        let signer = admission
+            .tool
+            .access()
+            .unwrap()
+            .managed_agent_signer()
+            .unwrap();
+        let escaped_agent = crate::store::graphql::escape_graphql_string(signer.did());
+        let agent_row = admission.client.execute(&format!(
+            r#"{{ Agent(filter: {{ agent_did: {{ _eq: "{escaped_agent}" }} }}, limit: 2) {{ agent_did creation_nonce }} }}"#,
+        )).await.unwrap();
+        let [row] = agent_row["data"]["Agent"].as_array().unwrap().as_slice() else {
+            panic!("the selected Agent binding must be unique");
+        };
+        let binding = serde_json::from_value(row.clone()).unwrap();
+        let agent_config = test_agent_with_binding(identity, binding);
+        assert_eq!(agent_config.agent_identity.did(), signer.did());
         assert_eq!(agent_config.node_did(), admission.node_did);
         assert_eq!(wake.node_did, admission.node_did);
         assert_eq!(
@@ -1797,7 +1891,7 @@ pub(super) mod tests {
         );
         assert!(
             crate::session::session_needs_generated_title(
-                &node,
+                &admission.client,
                 &admission.node_did,
                 wake.requester_did.as_deref(),
                 &wake.session_id,
@@ -1809,7 +1903,7 @@ pub(super) mod tests {
 
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &agent_config.system_prompt,
-            &agent_config.agent_id,
+            &agent_config.agent_did,
             &[],
             false,
             &[],
@@ -1821,23 +1915,29 @@ pub(super) mod tests {
         let request_identity = agent_config.node_identity().clone();
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: node.clone(),
-            agent_config,
+            agent_config: agent_config.clone(),
             provider_family: None,
             model: Arc::new(WakeInputModel {
                 provider_inputs: provider_inputs.clone(),
                 title_calls: title_calls.clone(),
                 title_shape_mismatches: title_shape_mismatches.clone(),
-                successor: successor
-                    .map(|request| (node.clone(), request, admission.node_did.clone())),
+                successor: successor.map(|request| {
+                    (
+                        node.clone(),
+                        request,
+                        admission.node_did.clone(),
+                        signer.clone(),
+                    )
+                }),
             }),
             preamble,
             loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::inference::rendered_request::defra_rendered_request_capture_factory(
-                    node.clone(),
-                ),
+                crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                    node.clone(), agent_config.agent_identity.as_ref(),
+                ).unwrap(),
             ),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -1867,7 +1967,7 @@ pub(super) mod tests {
         );
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
-                let response = crate::store::config_client::ConfigAccess::local(node.clone())
+                let response = admission.client
                     .execute(&format!(
                         r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }}, purpose: {{ _eq: "{title_purpose}" }} }}) {{ lifecycle_state caused_by_parent_request_id caused_by_parent_request_doc_id }} }}"#
                     ))
@@ -1890,7 +1990,7 @@ pub(super) mod tests {
         .expect("daemon must persist pending title work before test shutdown");
         assert!(
             crate::session::session_needs_generated_title(
-                &node,
+                &admission.client,
                 &admission.node_did,
                 wake.requester_did.as_deref(),
                 &wake.session_id,
@@ -1900,7 +2000,7 @@ pub(super) mod tests {
             "creator cannot update the title without watcher dispatch"
         );
 
-        let diagnostic = persisted_request_by_doc_id(&node, &wake.doc_id).await;
+        let diagnostic = persisted_request_by_doc_id(&admission.client, &wake.doc_id).await;
         {
             let captured = provider_inputs.lock().expect("wake provider input capture");
             assert_eq!(
@@ -1926,14 +2026,17 @@ pub(super) mod tests {
         }
 
         assert_eq!(
-            persisted_request_state(&node, &wake.doc_id).await,
+            persisted_request_state(&admission.client, &wake.doc_id).await,
             RequestLifecycleState::Completed,
             "wake must complete through the daemon's owned request path"
         );
 
-        let mut watcher =
-            crate::request::watcher::DefraWatcher::new(node.clone(), &admission.node_did)
-                .expect("request watcher");
+        let mut watcher = crate::request::watcher::DefraWatcher::for_agents(
+            node.clone(),
+            &admission.node_did,
+            vec![agent_config.agent_identity.clone()],
+        )
+        .expect("request watcher");
         let successor = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 let request = crate::request::watcher::Watcher::next_request(&mut watcher)
@@ -1997,8 +2100,8 @@ pub(super) mod tests {
             assert_eq!(input.matches("successor native output").count(), 1);
             assert_eq!(input.matches("durable native output").count(), 1);
         }
-        let history = crate::session::load_history(
-            &node,
+        let history = crate::session::load_history_with_access(
+            &admission.client,
             &wake.session_id,
             &admission.node_did,
             wake.requester_did.as_deref(),
@@ -2043,50 +2146,34 @@ pub(super) mod tests {
         drop(watcher);
 
         drop(daemon);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         std::fs::remove_dir_all(admission.path).unwrap();
     }
 
     #[tokio::test]
     async fn started_daemon_rechecks_workspace_root_policy_for_each_fresh_request() {
-        let data_path = std::env::temp_dir().join(format!(
-            "daemon-workspace-root-recheck-{}",
-            uuid::Uuid::new_v4()
-        ));
-        let node = Arc::new(
-            crate::test_support::node_builder()
-                .data_path(&data_path)
-                .build()
-                .await
-                .expect("embedded node"),
-        );
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let (db, user, user_access, agent_config) =
+            held_daemon_fixture("daemon-workspace-root").await;
+        let node = db.node.clone();
         let workspace = tempfile::tempdir().unwrap();
         let selected = workspace.path().join("selected");
         std::fs::create_dir_all(&selected).unwrap();
         let selected = std::fs::canonicalize(selected).unwrap();
-        let escaped_selected =
-            crate::store::graphql::escape_graphql_string(&selected.to_string_lossy());
-        let created = node
-            .execute(&format!(
-                r#"mutation {{ create_WorkspaceRoot(input: {{root_path:"{escaped_selected}", enabled:true}}) {{_docID}} }}"#
-            ))
-            .await;
-        assert!(!created.has_errors(), "{:?}", created.errors);
-        let workspace_root_doc_id =
-            crate::store::graphql::single_mutation_document(&created, "create_WorkspaceRoot")
-                .unwrap()
-                .expect("created WorkspaceRoot")["_docID"]
-                .as_str()
-                .expect("WorkspaceRoot document id")
-                .to_owned();
-
-        let agent_config = test_agent();
-        let requester_did = agent_config.node_did().to_string();
-        let first = create_routed_request(&node, &agent_config, &requester_did).await;
+        let root_path = selected.to_str().unwrap();
+        crate::tools::surface::set_workspace_root_with_readers(
+            &user_access,
+            agent_config.node_did(),
+            root_path,
+            None,
+            true,
+            std::slice::from_ref(&agent_config.agent_did),
+        )
+        .await
+        .unwrap();
+        let first = create_held_routed_request(&db, &user, &user_access, &agent_config, None).await;
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &agent_config.system_prompt,
-            &agent_config.agent_id,
+            &agent_config.agent_did,
             &[],
             false,
             &[],
@@ -2107,9 +2194,11 @@ pub(super) mod tests {
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                     node.clone(),
-                ),
+                    agent_config.agent_identity.as_ref(),
+                )
+                .unwrap(),
             ),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -2124,7 +2213,7 @@ pub(super) mod tests {
         })
         .unwrap()
         .with_root_execution_guard(Some(crate::tools::surface::RootExecutionGuard {
-            agent_id: agent_config.agent_id.clone(),
+            agent_did: agent_config.agent_did.clone(),
             selected_root: Some(selected.clone()),
             ceiling_root: Some(selected.clone()),
         }));
@@ -2140,16 +2229,10 @@ pub(super) mod tests {
             "the admitted request must reach the provider before revocation"
         );
         let escaped_first_doc_id = crate::store::graphql::escape_graphql_string(&first_doc_id);
-        let first_terminal = node
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_first_doc_id}" }} }}, limit: 1) {{ lifecycle_state failure_reason terminal_output }} }}"#
-            ))
-            .await;
-        assert!(!first_terminal.has_errors(), "{:?}", first_terminal.errors);
-        let first_row: serde_json::Value =
-            crate::store::graphql::first_row(&first_terminal, "AgentRequest")
-                .unwrap()
-                .unwrap();
+        let first_terminal = user_access.execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_first_doc_id}" }} }}, limit: 1) {{ lifecycle_state failure_reason terminal_output }} }}"#
+        )).await.unwrap();
+        let first_row = first_terminal["data"]["AgentRequest"][0].clone();
         assert_eq!(
             first_row["lifecycle_state"], "completed",
             "first request failed after provider call: {first_row}"
@@ -2165,14 +2248,17 @@ pub(super) mod tests {
         );
         let calls_before_revocation = calls.load(Ordering::SeqCst);
 
-        let escaped_doc_id = crate::store::graphql::escape_graphql_string(&workspace_root_doc_id);
-        let revoked = node
-            .execute(&format!(
-                r#"mutation {{ update_WorkspaceRoot(filter: {{_docID: {{_eq:"{escaped_doc_id}"}}}}, input: {{enabled:false}}) {{_docID}} }}"#
-            ))
-            .await;
-        assert!(!revoked.has_errors(), "{:?}", revoked.errors);
-        let second = create_routed_request(&node, &agent_config, &requester_did).await;
+        crate::tools::surface::set_workspace_root(
+            &user_access,
+            agent_config.node_did(),
+            root_path,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        let second =
+            create_held_routed_request(&db, &user, &user_access, &agent_config, None).await;
         let second_doc_id = second.doc_id.clone();
         daemon.process_request(second, shutdown_rx).await.unwrap();
         assert_eq!(
@@ -2181,59 +2267,32 @@ pub(super) mod tests {
             "the revoked fresh request must fail before provider exposure"
         );
         let escaped_request_doc_id = crate::store::graphql::escape_graphql_string(&second_doc_id);
-        let rejected = node
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{escaped_request_doc_id}"}}}}, limit:1) {{lifecycle_state terminal_output}} }}"#
-            ))
-            .await;
-        assert!(!rejected.has_errors(), "{:?}", rejected.errors);
-        let lifecycle_state = rejected
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRequest"))
-            .and_then(serde_json::Value::as_array)
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("lifecycle_state"))
-            .and_then(serde_json::Value::as_str);
-        assert_eq!(lifecycle_state, Some("failed"));
-        let second_selection: gents_protocol::output::TerminalOutput = serde_json::from_value(
-            rejected.data.as_ref().unwrap()["AgentRequest"][0]["terminal_output"].clone(),
-        )
-        .unwrap();
+        let rejected = user_access.execute(&format!(
+            r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{escaped_request_doc_id}"}}}}, limit:1) {{lifecycle_state terminal_output}} }}"#
+        )).await.unwrap();
+        let row = &rejected["data"]["AgentRequest"][0];
+        assert_eq!(row["lifecycle_state"], "failed");
+        let second_selection: gents_protocol::output::TerminalOutput =
+            serde_json::from_value(row["terminal_output"].clone()).unwrap();
         assert_eq!(
             second_selection,
             gents_protocol::output::TerminalOutput::NoMessage,
             "a later failed request must not inherit the earlier reply"
         );
 
-        node.shutdown().await;
-        let _ = std::fs::remove_dir_all(data_path);
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
     async fn daemon_final_claim_rechecks_revocation_and_accepts_exact_replacement() {
-        let data_path = std::env::temp_dir().join(format!(
-            "daemon-enrollment-final-claim-{}",
-            uuid::Uuid::new_v4()
-        ));
-        let node = Arc::new(
-            crate::test_support::node_builder()
-                .data_path(&data_path)
-                .build()
-                .await
-                .expect("embedded node"),
-        );
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let agent_config = test_agent();
-        let member_dir = tempfile::tempdir().unwrap();
-        let member: Arc<dyn NodeIdentity> = Arc::new(
-            KeyIdentity::load_or_create(member_dir.path().join("member.key"), None).unwrap(),
-        );
+        let (db, member, member_access, agent_config) =
+            held_daemon_fixture("daemon-enrollment-final-claim").await;
+        let node = db.node.clone();
         let fence = |sequence: u64, request_id: &str| {
             crate::runtime::agent::p2p_reconcile::enrollment_reconcile::EnrollmentAuthorizationFence {
                 network_id: "network-1".into(),
                 request_id: request_id.into(),
-                admin_did: "did:key:admin".into(),
+                admin_did: agent_config.node_did().to_string(),
                 member_did: member.did().to_string(),
                 member_peer: "peer-member".into(),
                 member_ticket: "ticket-member".into(),
@@ -2246,9 +2305,10 @@ pub(super) mod tests {
         };
         let generation_one = fence(1, "enrollment-1");
         let revoked = create_enrollment_daemon_request(
-            &node,
+            &db,
+            &member_access,
             &agent_config,
-            member.as_ref(),
+            &member,
             &generation_one,
             "revoked",
         )
@@ -2260,7 +2320,7 @@ pub(super) mod tests {
 
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &agent_config.system_prompt,
-            &agent_config.agent_id,
+            &agent_config.agent_did,
             &[],
             false,
             &[],
@@ -2281,9 +2341,11 @@ pub(super) mod tests {
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                     node.clone(),
-                ),
+                    agent_config.agent_identity.as_ref(),
+                )
+                .unwrap(),
             ),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -2309,24 +2371,19 @@ pub(super) mod tests {
             0,
             "revoked work reached provider"
         );
-        let rejected = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state claimed_at }} }}"#,
-            crate::store::graphql::escape_graphql_string(&revoked.doc_id))).await;
-        let row = rejected
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRequest"))
-            .and_then(|rows| rows.as_array())
-            .and_then(|rows| rows.first())
-            .unwrap();
+        let rejected = member_access.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state claimed_at }} }}"#,
+            crate::store::graphql::escape_graphql_string(&revoked.doc_id))).await.unwrap();
+        let row = &rejected["data"]["AgentRequest"][0];
         assert_eq!(row["lifecycle_state"], "failed");
         assert!(row["claimed_at"].is_null());
 
         let generation_two = fence(2, "enrollment-2");
         authority.replace(Some(generation_two.clone())).await;
         let replacement = create_enrollment_daemon_request(
-            &node,
+            &db,
+            &member_access,
             &agent_config,
-            member.as_ref(),
+            &member,
             &generation_two,
             "replacement",
         )
@@ -2340,8 +2397,7 @@ pub(super) mod tests {
             "exact replacement did not reach provider"
         );
 
-        node.shutdown().await;
-        let _ = std::fs::remove_dir_all(data_path);
+        node.shutdown().await.expect("node shutdown");
     }
     include!("pre_inference_interrupt_tests.rs");
     include!("execution_lease_regression_tests.rs");

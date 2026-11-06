@@ -133,6 +133,7 @@ impl SelfConfigCore {
             let policy = crate::tools::surface::load_workspace_root_policy_in_txn(
                 txn,
                 process_ceiling.root.as_deref(),
+                self.node_did(),
             )
             .await?;
             if let Some(tools) = canonical_tools.as_mut() {
@@ -149,7 +150,7 @@ impl SelfConfigCore {
                 .and_then(|host| host.root.as_deref())
                 .filter(|root| !root.trim().is_empty());
             crate::tools::surface::resolve_effective_tool_root(
-                self.agent_id(),
+                self.agent_did(),
                 configured_root.map(Path::new),
                 process_ceiling.root.as_deref(),
             )?
@@ -216,7 +217,7 @@ impl SelfConfigCore {
                 let include = match target {
                     SelfConfigTarget::Task => {
                         let owned =
-                            row.get("agent_id").and_then(Value::as_str) == Some(self.agent_id());
+                            row.get("agent_did").and_then(Value::as_str) == Some(self.agent_did());
                         if owned {
                             task_ids.insert(id.to_owned());
                         }
@@ -253,7 +254,7 @@ impl SelfConfigCore {
             automation.insert(target.collection_name().into(), Value::Array(selected));
         }
         Ok(json!({
-            "node_did": self.node_did(), "agent_id": self.agent_id(),
+            "node_did": self.node_did(), "agent_did": self.agent_did(),
             "agent": anchor.doc, "context": anchor.context, "inference_profile": anchor.profile,
             "documents": documents, "skills": skills, "automation": automation,
             "execution_settings": execution_settings(documents.get("InferenceExecution"))?,
@@ -295,7 +296,7 @@ impl SelfConfigCore {
             read_owned_doc(txn, SelfConfigTarget::Task, self.node_did(), task_id)
                 .await?
                 .is_some_and(|(_, task)| {
-                    task.get("agent_id").and_then(Value::as_str) == Some(self.agent_id())
+                    task.get("agent_did").and_then(Value::as_str) == Some(self.agent_did())
                 }),
         )
     }

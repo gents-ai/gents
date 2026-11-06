@@ -783,7 +783,7 @@ mod overlay_tests {
         serde_json::from_value(serde_json::json!({
             "session_id": "shared-session",
             "node_did": node_did,
-            "agent_id": "agent",
+            "agent_did": "agent",
             "created_at": "2026-10-14T00:00:00Z",
             "title": {"text": title, "source": "user"}
         }))
@@ -1201,7 +1201,7 @@ mod overlay_tests {
             node_did: node_did.to_string(),
             display_name: Some(display_name.to_string()),
             avatar: None,
-            default_agent_id: None,
+            default_agent_did: None,
             enabled: true,
             created_at: None,
             created_by: None,
@@ -1213,7 +1213,8 @@ mod overlay_tests {
     fn agent_config(node_did: &str, display_name: &str) -> Agent {
         serde_json::from_value(serde_json::json!({
             "node_did": node_did,
-            "agent_id": format!("{node_did}:default"),
+            "agent_did": format!("{node_did}:default"),
+            "creation_nonce": "a".repeat(64),
             "display_name": display_name,
             "enabled": true,
             "inference_profile_id": format!("{node_did}:profile"),
@@ -1225,7 +1226,7 @@ mod overlay_tests {
         serde_json::from_value(serde_json::json!({
             "node_did": node_did,
             "task_id": task_id,
-            "agent_id": "agent",
+            "agent_did": "agent",
             "prompt_template": "Do the thing",
             "enabled": enabled,
         }))
@@ -1270,6 +1271,7 @@ mod overlay_tests {
 
     fn backend_observation(probe_status: &str) -> InferenceBackendObservation {
         InferenceBackendObservation {
+            metadata_doc_id: None,
             backend_id: "backend".to_string(),
             catalogs: Vec::new(),
             probe_status: Some(probe_status.to_string()),

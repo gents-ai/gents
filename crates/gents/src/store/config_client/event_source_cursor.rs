@@ -1,7 +1,7 @@
 use super::ConfigApplyTxn;
-use crate::runtime::agent::document_view::is_retired_reserved_id;
 use crate::store::graphql::escape_graphql_string;
 use anyhow::{Context, Result};
+use gents_protocol::canonical::is_retired_reserved_id;
 use gents_protocol::event_delivery::EventConsumer;
 use gents_protocol::trigger_delivery::EventSourceCursor;
 use serde_json::json;
@@ -17,19 +17,29 @@ async fn trigger_binding(
     owner: &str,
     trigger_id: &str,
 ) -> Result<(crate::documents::Trigger, crate::documents::EventSource)> {
-    let value = super::read_desired_state_document_in_txn(
-        txn,
-        crate::Collection::Trigger,
-        owner,
-        trigger_id,
-    )
-    .await?
-    .context("cursor trigger disappeared")?;
+    let (_, trigger, _, source) = trigger_binding_with_ids(txn, owner, trigger_id).await?;
+    Ok((trigger, source))
+}
+
+async fn trigger_binding_with_ids(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    trigger_id: &str,
+) -> Result<(
+    String,
+    crate::documents::Trigger,
+    String,
+    crate::documents::EventSource,
+)> {
+    let (trigger_doc, value) =
+        super::read_desired_state_record_in_txn(txn, crate::Collection::Trigger, owner, trigger_id)
+            .await?
+            .context("cursor trigger disappeared")?;
     let trigger: crate::documents::Trigger = serde_json::from_value(value)?;
     let crate::documents::TriggerSource::Event { event_source_id } = &trigger.source else {
         anyhow::bail!("arrival cursor requires an event trigger")
     };
-    let source = super::read_desired_state_document_in_txn(
+    let (source_doc, source) = super::read_desired_state_record_in_txn(
         txn,
         crate::Collection::EventSource,
         owner,
@@ -44,13 +54,51 @@ async fn trigger_binding(
         target_id: event_source_id.clone(),
         node_did: owner.to_owned(),
     })?;
-    Ok((trigger, serde_json::from_value(source)?))
+    Ok((
+        trigger_doc,
+        trigger,
+        source_doc,
+        serde_json::from_value(source)?,
+    ))
 }
 
 struct ConsumerBinding {
     enabled: bool,
     serial: bool,
     source: crate::documents::EventSource,
+    agent_did: String,
+}
+
+async fn trigger_agent(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    trigger: &crate::documents::Trigger,
+) -> Result<String> {
+    Ok(trigger_task(txn, owner, trigger).await?.agent_did)
+}
+
+async fn trigger_task(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    trigger: &crate::documents::Trigger,
+) -> Result<crate::documents::Task> {
+    Ok(trigger_task_with_id(txn, owner, trigger).await?.1)
+}
+
+async fn trigger_task_with_id(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    trigger: &crate::documents::Trigger,
+) -> Result<(String, crate::documents::Task)> {
+    let (doc, task) = super::read_desired_state_record_in_txn(
+        txn,
+        crate::Collection::Task,
+        owner,
+        &trigger.task_id,
+    )
+    .await?
+    .context("trigger Task is unavailable")?;
+    Ok((doc, serde_json::from_value(task)?))
 }
 
 async fn callback_binding(
@@ -96,10 +144,12 @@ async fn event_binding(
     match consumer {
         EventConsumer::Trigger { trigger_id } => {
             let (trigger, source) = trigger_binding(txn, owner, trigger_id).await?;
+            let agent_did = trigger_agent(txn, owner, &trigger).await?;
             Ok(ConsumerBinding {
                 enabled: trigger.enabled,
                 serial: trigger.concurrency == Some(crate::documents::ConcurrencyMode::Serial),
                 source,
+                agent_did,
             })
         }
         EventConsumer::CallbackBinding { binding_id } => {
@@ -117,6 +167,7 @@ async fn event_binding(
                 enabled: binding.enabled && callback.is_some_and(|callback| callback.enabled),
                 serial: false,
                 source,
+                agent_did: binding.agent_did,
             })
         }
     }
@@ -135,13 +186,62 @@ fn cursor_key(owner: &str, consumer: &EventConsumer, collection: &str) -> String
     }
 }
 
+async fn consumer_agent(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    consumer: &EventConsumer,
+) -> Result<String> {
+    match consumer {
+        EventConsumer::Trigger { trigger_id } => {
+            let trigger = super::read_desired_state_document_in_txn(
+                txn,
+                crate::Collection::Trigger,
+                owner,
+                trigger_id,
+            )
+            .await?
+            .context("cursor Trigger is unavailable")?;
+            let trigger: crate::documents::Trigger = serde_json::from_value(trigger)?;
+            trigger_agent(txn, owner, &trigger).await
+        }
+        EventConsumer::CallbackBinding { binding_id } => {
+            let binding = super::read_desired_state_document_in_txn(
+                txn,
+                crate::Collection::CallbackBinding,
+                owner,
+                binding_id,
+            )
+            .await?
+            .context("cursor CallbackBinding is unavailable")?;
+            Ok(serde_json::from_value::<crate::documents::CallbackBinding>(binding)?.agent_did)
+        }
+    }
+}
+
+#[cfg(test)]
 pub(crate) async fn load_or_seed(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     consumer: &EventConsumer,
 ) -> Result<CursorRecord> {
+    load_or_seed_with_node_binding(txn, owner, consumer, None).await
+}
+
+pub(crate) async fn load_or_seed_with_node_binding(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    consumer: &EventConsumer,
+    node_binding: Option<&super::ConfigurationNodeBinding>,
+) -> Result<CursorRecord> {
     let binding = event_binding(txn, owner, consumer).await?;
-    load_or_seed_for_source(txn, owner, consumer, &binding.source.source_collection).await
+    load_or_seed_for_source_with_node_binding(
+        txn,
+        owner,
+        consumer,
+        &binding.source.source_collection,
+        node_binding,
+    )
+    .await
 }
 
 /// Cursor creation belongs to the configuration transaction, including a
@@ -151,6 +251,7 @@ pub(crate) async fn seed_referencing_consumers(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     event_source_id: &str,
+    node_binding: Option<&super::ConfigurationNodeBinding>,
 ) -> Result<()> {
     let response = txn
         .execute(&format!(
@@ -174,7 +275,7 @@ pub(crate) async fn seed_referencing_consumers(
             let consumer = EventConsumer::Trigger {
                 trigger_id: trigger_id.to_owned(),
             };
-            load_or_seed(txn, owner, &consumer).await?;
+            load_or_seed_with_node_binding(txn, owner, &consumer, node_binding).await?;
         }
     }
     for row in response["data"]["CallbackBinding"]
@@ -190,7 +291,7 @@ pub(crate) async fn seed_referencing_consumers(
         let consumer = EventConsumer::CallbackBinding {
             binding_id: binding_id.to_owned(),
         };
-        load_or_seed(txn, owner, &consumer).await?;
+        load_or_seed_with_node_binding(txn, owner, &consumer, node_binding).await?;
     }
     Ok(())
 }
@@ -200,10 +301,36 @@ pub(crate) async fn seed_referencing_consumers(
 pub(crate) async fn validate_event_admission(
     txn: &ConfigApplyTxn<'_>,
     fire: &gents_protocol::trigger_delivery::TriggerFire,
+    expected_generation: &serde_json::Value,
 ) -> Result<()> {
-    let (trigger, source) =
-        trigger_binding(txn, &fire.identity.owner_did, &fire.identity.trigger_id).await?;
+    let (trigger_doc, trigger, source_doc, source) =
+        trigger_binding_with_ids(txn, &fire.identity.owner_did, &fire.identity.trigger_id).await?;
+    let (task_doc, task) = trigger_task_with_id(txn, &fire.identity.owner_did, &trigger).await?;
+    anyhow::ensure!(
+        txn.actor_did() == Some(task.agent_did.as_str()),
+        "event trigger selected Agent changed before admission"
+    );
+    crate::request::admission::observe_unattended_agent_in_txn(
+        txn,
+        &fire.identity.owner_did,
+        &task.agent_did,
+    )
+    .await?;
+    anyhow::ensure!(
+        crate::triggers::engine::event_delivery::event_admission_generation(
+            &source,
+            &trigger,
+            &task,
+            &crate::triggers::engine::event_delivery::EventConfigDocIds {
+                trigger: &trigger_doc,
+                source: &source_doc,
+                task: &task_doc,
+            }
+        )? == *expected_generation,
+        "event source, trigger, or Task changed before admission"
+    );
     anyhow::ensure!(trigger.enabled, "event trigger is disabled");
+    anyhow::ensure!(task.enabled, "event Task is disabled");
     anyhow::ensure!(
         crate::triggers::engine::durable::outcome_source_allowed(
             &source.source_collection,
@@ -281,6 +408,16 @@ pub(crate) async fn load_or_seed_for_source(
     consumer: &EventConsumer,
     collection: &str,
 ) -> Result<CursorRecord> {
+    load_or_seed_for_source_with_node_binding(txn, owner, consumer, collection, None).await
+}
+
+async fn load_or_seed_for_source_with_node_binding(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    consumer: &EventConsumer,
+    collection: &str,
+    node_binding: Option<&super::ConfigurationNodeBinding>,
+) -> Result<CursorRecord> {
     if let Some(record) = load_for_source(txn, owner, consumer, collection).await? {
         return Ok(record);
     }
@@ -311,8 +448,17 @@ pub(crate) async fn load_or_seed_for_source(
         source_collection: collection.into(),
         after,
     };
-    let response = txn.execute_with_variables("mutation($input: EventSourceCursorMutationInputArg!) {create_EventSourceCursor(input: $input) {_docID}}", &json!({"input": cursor})).await?;
+    let response = txn.execute_client_signed_create(
+        "mutation($input: EventSourceCursorMutationInputArg!) {create_EventSourceCursor(input: $input) {_docID}}",
+        &json!({"input": cursor}), gents_protocol::schemas::EVENT_SOURCE_CURSOR,
+    ).await?;
     let doc_id = crate::store::graphql::created_doc_id(&response, "EventSourceCursor")?;
+    let node_doc = super::configuration_node_doc(txn, owner, node_binding).await?;
+    let agent = identity::Did::new(consumer_agent(txn, owner, consumer).await?)?;
+    txn.add_resource_relationship("EventSourceCursor", &doc_id, "parent", "nodes", &node_doc)
+        .await?;
+    txn.add_actor_relationship("EventSourceCursor", &doc_id, "writer", &agent)
+        .await?;
     Ok(CursorRecord { doc_id, cursor })
 }
 
@@ -355,7 +501,12 @@ pub(crate) async fn checkpoint_prefix(
         enabled,
         serial,
         source,
+        agent_did,
     } = event_binding(txn, owner, consumer).await?;
+    anyhow::ensure!(
+        txn.actor_did() == Some(agent_did.as_str()),
+        "event consumer selected Agent changed before checkpoint"
+    );
     anyhow::ensure!(
         source.source_collection == collection && source.group.is_none(),
         "event source binding changed before checkpoint"
@@ -521,7 +672,7 @@ async fn admitted_callback_arrival(
         crate::triggers::callback::idempotency_key(binding_id, source_collection, source_doc_id);
     let response = txn
         .execute(&format!(
-            "{{ CallbackInvocation(filter: {{owner_node_did: {{_eq: \"{}\"}}, idempotency_key: {{_eq: \"{}\"}}}}, limit: 2) {{ origin }} }}",
+            "{{ CallbackInvocation(filter: {{owner_node_did: {{_eq: \"{}\"}}, idempotency_key: {{_eq: \"{}\"}}}}, limit: 2) {{ origin claimed_at claimed_callback }} }}",
             escape_graphql_string(owner),
             escape_graphql_string(&key),
         ))
@@ -547,7 +698,11 @@ async fn admitted_callback_arrival(
             ),
         "callback receipt disagrees with its arrival"
     );
-    Ok(true)
+    Ok(callback_claim_recorded(row))
+}
+
+fn callback_claim_recorded(row: &serde_json::Value) -> bool {
+    row["claimed_at"].as_str().is_some() && row["claimed_callback"].as_str().is_some()
 }
 
 #[cfg(test)]

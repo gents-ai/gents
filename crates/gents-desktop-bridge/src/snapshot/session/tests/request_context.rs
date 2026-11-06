@@ -75,11 +75,11 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
     let requester_did = "did:test:context-requester";
     let requests = format!(
         r#"mutation {{
-            accounted: create_AgentRequest(input: {{ purpose: "normal", request_id: "request-accounted", node_did: "{node_did}", requester_did: "{requester_did}", agent_id: "default", session_id: "{session_id}", content: "test", lifecycle_state: "pending", backend_id: "backend", created_at: "2026-08-24T12:00:00Z", retry_count: 0 }}) {{ _docID }}
-            pending: create_AgentRequest(input: {{ purpose: "normal", request_id: "request-pending", node_did: "{node_did}", requester_did: "{requester_did}", agent_id: "default", session_id: "{session_id}", content: "test", lifecycle_state: "pending", backend_id: "backend", created_at: "2026-08-24T12:02:00Z", retry_count: 0 }}) {{ _docID }}
-            twin: create_AgentRequest(input: {{ purpose: "normal", request_id: "request-accounted", node_did: "{node_did}", requester_did: "{requester_did}", agent_id: "default", session_id: "{session_id}", content: "physical twin", lifecycle_state: "pending", backend_id: "backend", created_at: "2026-08-24T12:00:30Z", retry_count: 0 }}) {{ _docID }}
-            foreign: create_AgentRequest(input: {{ purpose: "normal", request_id: "request-accounted", node_did: "{node_did}", requester_did: "{requester_did}", agent_id: "default", session_id: "session-other-owner", content: "other session", lifecycle_state: "pending", backend_id: "backend", created_at: "2026-08-24T12:01:00Z", retry_count: 0 }}) {{ _docID }}
-            other_requester: create_AgentRequest(input: {{ purpose: "normal", request_id: "request-accounted", node_did: "{node_did}", requester_did: "did:foreign:requester", agent_id: "default", session_id: "{session_id}", content: "other requester", lifecycle_state: "pending", backend_id: "backend", created_at: "2026-08-24T12:01:30Z", retry_count: 0 }}) {{ _docID }}
+            accounted: create_AgentRequest(input: {{ purpose: "normal", request_id: "request-accounted", node_did: "{node_did}", requester_did: "{requester_did}", agent_did: "default", session_id: "{session_id}", content: "test", lifecycle_state: "pending", backend_id: "backend", created_at: "2026-08-24T12:00:00Z", retry_count: 0 }}) {{ _docID }}
+            pending: create_AgentRequest(input: {{ purpose: "normal", request_id: "request-pending", node_did: "{node_did}", requester_did: "{requester_did}", agent_did: "default", session_id: "{session_id}", content: "test", lifecycle_state: "pending", backend_id: "backend", created_at: "2026-08-24T12:02:00Z", retry_count: 0 }}) {{ _docID }}
+            twin: create_AgentRequest(input: {{ purpose: "normal", request_id: "request-accounted", node_did: "{node_did}", requester_did: "{requester_did}", agent_did: "default", session_id: "{session_id}", content: "physical twin", lifecycle_state: "pending", backend_id: "backend", created_at: "2026-08-24T12:00:30Z", retry_count: 0 }}) {{ _docID }}
+            foreign: create_AgentRequest(input: {{ purpose: "normal", request_id: "request-accounted", node_did: "{node_did}", requester_did: "{requester_did}", agent_did: "default", session_id: "session-other-owner", content: "other session", lifecycle_state: "pending", backend_id: "backend", created_at: "2026-08-24T12:01:00Z", retry_count: 0 }}) {{ _docID }}
+            other_requester: create_AgentRequest(input: {{ purpose: "normal", request_id: "request-accounted", node_did: "{node_did}", requester_did: "did:foreign:requester", agent_did: "default", session_id: "{session_id}", content: "other requester", lifecycle_state: "pending", backend_id: "backend", created_at: "2026-08-24T12:01:30Z", retry_count: 0 }}) {{ _docID }}
         }}"#
     );
     let response = core.node().execute(&requests).await;
@@ -106,7 +106,7 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
         session_id: session_id.into(),
         node_did: node_did.into(),
         requester_did: Some(requester_did.into()),
-        agent_id: "default".into(),
+        agent_did: "default".into(),
         created_at: "2026-08-24T12:00:00Z".into(),
         closed_at: None,
         archived_at: None,

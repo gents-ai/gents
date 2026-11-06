@@ -36,7 +36,7 @@ async fn background_wait_ignores_unrelated_changes(resync_required: bool) {
         request_id,
         session_id,
         node_did: db.node_identity.did().to_owned(),
-        requester_did: Some(db.node_identity.did().to_owned()),
+        requester_did: hook.active_requester_did().await,
     };
     let collections = crate::collection_ids(&db.node, ["AgentToolCall", "AgentRequest"]).unwrap();
     let waiting = Arc::new(tokio::sync::Notify::new());
@@ -59,18 +59,18 @@ async fn background_wait_ignores_unrelated_changes(resync_required: bool) {
         () = waiting.notified() => {}
     }
     gate.add_permits(1);
-    let completed = tokio::time::timeout(Duration::from_secs(2), async {
+    let actor = identity::Did::new(caller.requester_did.clone().expect("selected agent")).unwrap();
+    let access = crate::ConfigAccess::local_as(db.node.clone(), actor);
+    let tool = crate::store::graphql::escape_graphql_string(tool_id);
+    let session = crate::store::graphql::escape_graphql_string(&caller.session_id);
+    let completed_doc = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            let lifecycle = crate::tools::call::lifecycle::ToolCallLifecycle::load(
-                db.node.clone(),
-                &caller.session_id,
-                tool_id,
-            )
-            .await
-            .unwrap()
-            .unwrap();
-            if lifecycle.is_terminal() {
-                break lifecycle;
+            let response = access.execute(&format!(r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }}, tool_call_id: {{ _eq: "{tool}" }} }}) {{ _docID lifecycle_state }} }}"#)).await.unwrap();
+            let rows = response["data"]["AgentToolCall"].as_array().unwrap();
+            assert_eq!(rows.len(), 1, "selected agent sees the exact background call");
+            let state = rows[0]["lifecycle_state"].as_str().unwrap();
+            if matches!(state, "completed" | "failed" | "cancelled" | "timed_out") {
+                break rows[0]["_docID"].as_str().unwrap().to_owned();
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -99,7 +99,7 @@ async fn background_wait_ignores_unrelated_changes(resync_required: bool) {
             .unbounded_send(events::DocumentChangeBatch {
                 changes: vec![events::DocumentChange {
                     collection_id: collections[0].clone(),
-                    doc_id: completed.doc_id().unwrap().to_owned(),
+                    doc_id: completed_doc,
                     has_local_write: false,
                 }],
                 resync_required: false,

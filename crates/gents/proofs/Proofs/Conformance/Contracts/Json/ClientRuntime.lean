@@ -545,6 +545,7 @@ def recoverySweepCaseJson (witness : RecoverySweepCase) : String :=
     ++ "\"parent_live\":" ++ jsonOptionalBool witness.parentLive ++ ","
     ++ "\"parent_interrupted\":" ++ jsonOptionalBool witness.parentInterrupted ++ ","
     ++ "\"parent_terminal\":" ++ jsonOptionalBool witness.parentTerminal ++ ","
+    ++ "\"task_hook_observation\":" ++ jsonOptionalString witness.taskHookObservation ++ ","
     ++ "\"execution_registered\":"
       ++ jsonOptionalBool witness.executionRegistered ++ ","
     ++ "\"process_outcome\":" ++ jsonOptionalString witness.processOutcome ++ ","

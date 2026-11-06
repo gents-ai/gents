@@ -8,10 +8,10 @@ import Proofs.Recovery.Sweeps.BackgroundRestart
 namespace Conformance.ContractCases
 
 structure RuntimeReconcileCase where
-  requestedAgent : Option AgentId
-  preDefaultAgent : AgentId
-  preSessionAgent : Option AgentId
-  preRunnable : List AgentId
+  requestedAgent : Option AgentDid
+  preDefaultAgent : AgentDid
+  preSessionAgent : Option AgentDid
+  preRunnable : List AgentDid
   name : String
   action : String
   legal : Bool
@@ -31,8 +31,8 @@ structure RuntimeReconcileCase where
   trackedSessionId : SessionId
   trackedRequestGeneration : Generation
   trackedRequestSession : SessionId
-  trackedRequestAgent : AgentId
-  trackedSessionAgent : AgentId
+  trackedRequestAgent : AgentDid
+  trackedSessionAgent : AgentDid
   deriving Repr
 
 structure ClientAgentReadinessCase where
@@ -207,7 +207,7 @@ structure AgentRequestAdmissionCase where
   triggerConfigDocumentBindingCurrent : Bool
   sourceDocumentBindingCurrent : Bool
   targetPolicyAllows : Bool
-  peerAuthorityAllows : Bool
+  nativeCreateAuthorized : Bool
   hopWithinBound : Bool
   expectedAdmitted : Bool
   expectedDisposition : String
@@ -235,8 +235,8 @@ structure SessionRecoveryCase where
   postLatestId : RequestId
   preSessionId : SessionId
   postSessionId : SessionId
-  preAgentId : AgentId
-  postAgentId : AgentId
+  preAgentDid : AgentDid
+  postAgentDid : AgentDid
   preRequestCount : Nat
   postRequestCount : Nat
   preRetryCount : Nat
@@ -483,6 +483,7 @@ structure RecoverySweepCase where
   parentLive : Option Bool := none
   parentInterrupted : Option Bool := none
   parentTerminal : Option Bool := none
+  taskHookObservation : Option String := none
   executionRegistered : Option Bool := none
   processOutcome : Option String := none
   ownerTaskDeleted : Option Bool := none

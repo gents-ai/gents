@@ -113,7 +113,7 @@ function CardTitle({
     its settings. */
 function CardActions({
   nodeDid,
-  agentId,
+  agentDid,
   enabled,
   settings,
   onStart,
@@ -121,7 +121,7 @@ function CardActions({
 }: {
   nodeDid: string;
   /** the node's default agent when none */
-  agentId: string | null;
+  agentDid: string | null;
   enabled: boolean;
   settings: Route;
   onStart: () => void;
@@ -133,7 +133,7 @@ function CardActions({
       {lead}
       <NewSessionWith
         nodeDid={nodeDid}
-        agentId={agentId}
+        agentDid={agentDid}
         enabled={enabled}
         onStart={onStart}
       />
@@ -307,7 +307,7 @@ export function NodeHoverCard({
         </Facts>
         <CardActions
           nodeDid={deployment.nodeDid}
-          agentId={null}
+          agentDid={null}
           enabled={deployment.node.enabled !== false}
           settings={page}
           onStart={() => setOpen(false)}
@@ -320,39 +320,39 @@ export function NodeHoverCard({
 
 export function AgentHoverCard({
   deployment,
-  agentId,
+  agentDid,
   description,
   side = "right",
   children,
 }: {
   deployment: NodeView | null;
-  agentId: string | null;
+  agentDid: string | null;
   description?: string;
   side?: "right" | "bottom" | "top" | "left";
   children: ReactElement;
 }) {
   const [open, setOpen] = useState(false);
-  const b = agentOf(deployment, agentId);
-  const env = deployment?.agentEnvironments.find((e) => e.agentId === agentId);
+  const b = agentOf(deployment, agentDid);
+  const env = deployment?.agentEnvironments.find((e) => e.agentDid === agentDid);
   if (!deployment || !b) return children;
   const backend = backendOf(deployment, b);
-  const readiness = agentReadiness(deployment, b.agentId);
+  const readiness = agentReadiness(deployment, b.agentDid);
   const hasInstructions = Boolean(
     b.contextId &&
     deployment.contexts.some((context) => context.context_id === b.contextId),
   );
   const sharing = hasInstructions
     ? deployment.agents.filter(
-        (agent) => agent.contextId === b.contextId && agent.agentId !== b.agentId,
+        (agent) => agent.contextId === b.contextId && agent.agentDid !== b.agentDid,
       )
     : [];
   const summary = description || b.description || undefined;
-  const tasks = deployment.tasks.filter((t) => t.agentId === b.agentId).length;
+  const tasks = deployment.tasks.filter((t) => t.agentDid === b.agentDid).length;
   const settings: Route = {
     name: "agent",
     nodeDid: deployment.nodeDid,
     section: "agents",
-    item: b.agentId,
+    item: b.agentDid,
   };
   return (
     <HoverCard open={open} onOpenChange={setOpen}>
@@ -363,7 +363,7 @@ export function AgentHoverCard({
         className="w-80"
         data-testid="agent-hover-card"
       >
-        <CardTitle name={agentName(agentId, deployment)} to={settings}>
+        <CardTitle name={agentName(agentDid, deployment)} to={settings}>
           {b.isDefault && (
             <span className="shrink-0 text-xs text-muted-foreground">Default</span>
           )}
@@ -436,7 +436,7 @@ export function AgentHoverCard({
         </Facts>
         <CardActions
           nodeDid={deployment.nodeDid}
-          agentId={b.agentId}
+          agentDid={b.agentDid}
           enabled={b.enabled}
           settings={settings}
           onStart={() => setOpen(false)}
@@ -473,12 +473,12 @@ function StartLocalNode({ deployment }: { deployment: NodeView }) {
 /* in the card's content, so it reads the app only once the card is open */
 function NewSessionWith({
   nodeDid,
-  agentId,
+  agentDid,
   enabled,
   onStart,
 }: {
   nodeDid: string;
-  agentId: string | null;
+  agentDid: string | null;
   enabled: boolean;
   onStart: () => void;
 }) {
@@ -490,7 +490,7 @@ function NewSessionWith({
       onClick={() => {
         onStart();
         actions.selectNode(nodeDid);
-        actions.selectAgent(agentId);
+        actions.selectAgent(agentDid);
         navigate({ name: "session", sessionId: null });
       }}
       className={cn(

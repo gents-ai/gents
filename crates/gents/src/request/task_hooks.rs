@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
@@ -11,7 +11,7 @@ use crate::request::lifecycle::RequestTerminalOutcome;
 use crate::request::watcher::AgentRequest;
 use crate::store::collection::Collection;
 use crate::store::config_client::config_projection;
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::escape_graphql_string;
 use crate::tools::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 
 #[path = "task_hooks/records.rs"]
@@ -505,24 +505,24 @@ impl TaskHookExec for ManagedTaskHookExec {
 }
 
 pub(crate) async fn resolve_request_task_hooks(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     request: &AgentRequest,
 ) -> Result<(Vec<TaskHook>, bool)> {
-    let task_id = match load_fire_task_id(node, &request.node_did, &request.request_id).await? {
+    let task_id = match load_fire_task_id(access, &request.node_did, &request.request_id).await? {
         Some(task_id) => Some(task_id),
         None if request.has_automated_trigger_lineage() => {
             let trigger_id = request
                 .caused_by_trigger_id
                 .as_deref()
                 .context("automated trigger lineage has no trigger_id")?;
-            load_trigger_task_id(node, &request.node_did, trigger_id).await?
+            load_trigger_task_id(access, &request.node_did, trigger_id).await?
         }
         None => None,
     };
     let Some(task_id) = task_id else {
         return Ok((Vec::new(), false));
     };
-    let task = load_task(node, &request.node_did, &task_id)
+    let task = load_task(access, &request.node_did, &task_id)
         .await?
         .with_context(|| {
             format!("Task {task_id} this request was fired from no longer exists; refusing to run it without its hooks")
@@ -548,21 +548,19 @@ struct TaskIdRow {
 }
 
 async fn load_fire_task_id(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     node_did: &str,
     request_id: &str,
 ) -> Result<Option<String>> {
-    let response = graphql_with_transaction_retry(
-        node,
+    let response = access.execute(
         &format!(
             r#"{{ TriggerFire(filter: {{ owner_did: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }} }}, limit: 2) {{ task_id }} }}"#,
             escape_graphql_string(node_did),
             escape_graphql_string(request_id),
         ),
-        "load task hook fire receipt",
     )
     .await?;
-    let rows: Vec<TaskIdRow> = crate::store::graphql::rows(&response, "TriggerFire")?;
+    let rows: Vec<TaskIdRow> = serde_json::from_value(response["data"]["TriggerFire"].clone())?;
     anyhow::ensure!(
         rows.len() <= 1,
         "request {request_id:?} has multiple Task fire receipts"
@@ -573,21 +571,19 @@ async fn load_fire_task_id(
 }
 
 async fn load_trigger_task_id(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     node_did: &str,
     trigger_id: &str,
 ) -> Result<Option<String>> {
-    let response = graphql_with_transaction_retry(
-        node,
+    let response = access.execute(
         &format!(
             r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 2) {{ task_id }} }}"#,
             escape_graphql_string(node_did),
             escape_graphql_string(trigger_id),
         ),
-        "load task hook trigger",
     )
     .await?;
-    let rows: Vec<TaskIdRow> = crate::store::graphql::rows(&response, "Trigger")?;
+    let rows: Vec<TaskIdRow> = serde_json::from_value(response["data"]["Trigger"].clone())?;
     anyhow::ensure!(
         rows.len() <= 1,
         "ambiguous Trigger {trigger_id:?} for {node_did:?}"
@@ -597,20 +593,22 @@ async fn load_trigger_task_id(
     ))
 }
 
-async fn load_task(node: &EmbeddedNode, node_did: &str, task_id: &str) -> Result<Option<Task>> {
+async fn load_task(
+    access: &crate::ConfigAccess,
+    node_did: &str,
+    task_id: &str,
+) -> Result<Option<Task>> {
     let (fields, _) = config_projection(Collection::Task, None)?;
-    let response = graphql_with_transaction_retry(
-        node,
+    let response = access.execute(
         &format!(
             "{{ Task(filter: {{ node_did: {{_eq: \"{}\"}}, task_id: {{_eq: \"{}\"}} }}, limit: 2) {{ {} }} }}",
             escape_graphql_string(node_did),
             escape_graphql_string(task_id),
             fields.join(" "),
         ),
-        "load task hooks",
     )
     .await?;
-    let rows: Vec<serde_json::Value> = crate::store::graphql::rows(&response, "Task")?;
+    let rows: Vec<serde_json::Value> = serde_json::from_value(response["data"]["Task"].clone())?;
     anyhow::ensure!(
         rows.len() <= 1,
         "ambiguous Task {task_id:?} for {node_did:?}"

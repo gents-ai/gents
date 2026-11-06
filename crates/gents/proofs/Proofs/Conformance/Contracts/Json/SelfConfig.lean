@@ -22,6 +22,26 @@ def selfConfigFieldTableJson (t : Target) : String :=
 def selfConfigFieldTablesJson : String :=
   jsonArray (allTargets.map selfConfigFieldTableJson)
 
+def selfConfigResourceReadExposureCasesJson : String :=
+  let cases : List (String × Target × List String) :=
+    [("backend", .inferenceBackend, ["backend"]),
+     ("backend", .inferenceBackend, ["backend", "node"]),
+     ("backend", .inferenceBackend, ["backend", "agent"]),
+     ("backend", .inferenceBackend, ["node"]),
+     ("backend", .inferenceBackend, ["agent"]),
+     ("tools", .tools, ["tools"]),
+     ("profile", .inferenceProfile, ["profile"]),
+     ("automation", .task, ["automation"]),
+     ("automation", .task, ["backend"]),
+     ("effective", .agent, ["backend"]),
+     ("effective", .agent, ["automation"]),
+     ("effective", .agent, ["tools"])]
+  jsonArray (cases.map fun (resource, target, enabled) =>
+    "{\"resource\":" ++ jsonString resource ++
+    ",\"categories\":" ++ jsonStringArray enabled ++
+    ",\"exposed\":" ++ scBool (if resource == "effective" then effectiveReadExposed enabled
+      else resourceReadExposed enabled target) ++ "}")
+
 def fieldValuePairJson (entry : FieldKey × FieldValue) : String :=
   "{"
     ++ "\"field\":" ++ jsonString entry.1 ++ ","
@@ -86,10 +106,12 @@ def schemaPublicationCasesJson : String := Id.run do
   for grant in [false, true] do
     for artifact in [false, true] do
       for compatible in [false, true] do
-        rows := rows ++ ["{\"grant\":" ++ scBool grant
-          ++ ",\"artifact\":" ++ scBool artifact
-          ++ ",\"compatible\":" ++ scBool compatible
-          ++ ",\"accepted\":" ++ scBool (SelfConfig.schemaPublicationAllowed grant artifact compatible) ++ "}"]
+        for nativeAllowed in [false, true] do
+          rows := rows ++ ["{\"grant\":" ++ scBool grant
+            ++ ",\"artifact\":" ++ scBool artifact
+            ++ ",\"compatible\":" ++ scBool compatible
+            ++ ",\"native_allowed\":" ++ scBool nativeAllowed
+            ++ ",\"accepted\":" ++ scBool (SelfConfig.schemaPublicationAllowed grant artifact compatible nativeAllowed) ++ "}"]
   return jsonArray rows
 
 end Conformance.Contracts

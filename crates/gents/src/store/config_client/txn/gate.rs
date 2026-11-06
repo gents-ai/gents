@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tracing::{instrument::WithSubscriber, Instrument};
 
 #[cfg(test)]
@@ -34,12 +34,62 @@ pub(super) struct StoreClaim {
 pub struct LocalConfigAccess {
     pub(super) node: Arc<EmbeddedNode>,
     pub(super) gate: Arc<MutationWriteGate>,
+    pub(super) identity: Option<identity::Did>,
+    pub(super) agent_signer: Option<crate::store::identity::ManagedAgentSigner>,
+    pub(super) client_signed_writes: bool,
 }
 
 impl LocalConfigAccess {
     pub(crate) fn new(node: Arc<EmbeddedNode>) -> Self {
         let gate = mutation_write_gate(&node);
-        Self { node, gate }
+        Self {
+            node,
+            gate,
+            identity: None,
+            agent_signer: None,
+            client_signed_writes: false,
+        }
+    }
+
+    pub(crate) fn with_identity(mut self, identity: identity::Did) -> Self {
+        self.identity = Some(identity);
+        self
+    }
+
+    pub(crate) fn with_agent_signer(
+        mut self,
+        signer: crate::store::identity::ManagedAgentSigner,
+    ) -> Self {
+        self.agent_signer = Some(signer);
+        self
+    }
+
+    pub(crate) fn require_client_signed_writes(&mut self) {
+        self.client_signed_writes = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_agent_signer(&self) -> bool {
+        self.agent_signer.is_some()
+    }
+
+    pub(crate) fn identity(&self) -> Option<&identity::Did> {
+        self.identity.as_ref()
+    }
+
+    pub(crate) fn agent_signer(&self) -> Option<crate::store::identity::ManagedAgentSigner> {
+        self.agent_signer.clone()
+    }
+
+    pub(crate) fn require_mutation_signer(&self) -> Result<()> {
+        if self.client_signed_writes {
+            return Err(ConfigClientError::EmbeddedClientSigningUnavailable);
+        }
+        require_mutation_signer(
+            &self.node,
+            self.identity.as_ref(),
+            self.agent_signer.as_ref(),
+        )
     }
 
     pub(crate) fn claimed(
@@ -48,7 +98,13 @@ impl LocalConfigAccess {
     ) -> Result<Self> {
         let gate = mutation_write_gate(&node);
         gate.attach_store_claim(Arc::clone(&node), lock)?;
-        Ok(Self { node, gate })
+        Ok(Self {
+            node,
+            gate,
+            identity: None,
+            agent_signer: None,
+            client_signed_writes: false,
+        })
     }
 
     pub(crate) fn node(&self) -> &Arc<EmbeddedNode> {
@@ -95,6 +151,35 @@ impl LocalConfigAccess {
             .await
             .map_err(ConfigClientError::OwnedOperationEnded)?
     }
+}
+
+pub(super) fn require_mutation_signer(
+    node: &EmbeddedNode,
+    actor: Option<&identity::Did>,
+    signer: Option<&crate::store::identity::ManagedAgentSigner>,
+) -> Result<()> {
+    validate_managed_signer(node, actor, signer)?;
+    if let Some(actor) = actor {
+        if node.node_identity_did() != Some(actor.as_str()) && signer.is_none() {
+            return Err(ConfigClientError::ManagedAgentSignerRequired);
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn validate_managed_signer(
+    node: &EmbeddedNode,
+    actor: Option<&identity::Did>,
+    signer: Option<&crate::store::identity::ManagedAgentSigner>,
+) -> Result<()> {
+    if let Some(signer) = signer {
+        if actor.map(identity::Did::as_str) != Some(signer.did())
+            || node.node_identity_did() != Some(signer.node_did())
+        {
+            return Err(ConfigClientError::TransactionActorMismatch);
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]

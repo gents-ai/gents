@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::inference::llm::tool::ToolDyn;
-use anyhow::{anyhow, Result};
-use defra_node::EmbeddedNode;
+use anyhow::{anyhow, Context, Result};
+use defra_node::Node as EmbeddedNode;
 
 pub(crate) type AgentFactory =
     Box<dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<ResolvedAgent, AgentBuildError> + Send>;
@@ -37,9 +37,10 @@ const TEST_DEFAULT_BACKEND_ENDPOINT: &str = "http://localhost:8000/v1";
 
 #[derive(Default)]
 pub struct GentsBuilder {
+    backend_admission: Option<crate::store::local::backend_protection::BackendAdmission>,
     node: Option<Arc<EmbeddedNode>>,
     identity: Option<Arc<dyn NodeIdentity>>,
-    default_agent_id: Option<String>,
+    default_agent_did: Option<String>,
     tool_ceiling: ToolCeiling,
     mcp_pool: McpPool,
     local_hostname: Option<String>,
@@ -65,6 +66,14 @@ impl GentsBuilder {
         self
     }
 
+    pub fn backend_admission(
+        mut self,
+        admission: crate::store::local::backend_protection::BackendAdmission,
+    ) -> Self {
+        self.backend_admission = Some(admission);
+        self
+    }
+
     pub fn identity(mut self, identity: Arc<dyn NodeIdentity>) -> Self {
         self.identity = Some(identity);
         self
@@ -79,8 +88,8 @@ impl GentsBuilder {
         self
     }
 
-    pub fn default_agent_id(mut self, agent_id: impl Into<String>) -> Self {
-        self.default_agent_id = Some(agent_id.into());
+    pub fn default_agent_did(mut self, agent_did: impl Into<String>) -> Self {
+        self.default_agent_did = Some(agent_did.into());
         self
     }
 
@@ -157,6 +166,10 @@ impl GentsBuilder {
         let node = self
             .node
             .ok_or_else(|| anyhow!("Gents builder is missing node"))?;
+        let backend_admission = self
+            .backend_admission
+            .context("fresh backend protection provenance is required")?;
+        backend_admission.validate(&node).await?;
         let identity = self
             .identity
             .ok_or_else(|| anyhow!("Gents builder is missing identity"))?;
@@ -169,31 +182,44 @@ impl GentsBuilder {
             anyhow::bail!("Gents builder requires at least one agent");
         }
 
-        let default_agent_id = self
-            .default_agent_id
-            .clone()
-            .unwrap_or_else(|| self.agents[0].name.clone());
-        let agent_names = self
-            .agents
+        let mut pending_agents = self.agents;
+        for agent in &mut pending_agents {
+            if agent.identity_binding.is_none() {
+                agent.identity_binding = Some(crate::store::identity::provision_agent_identity(
+                    identity.as_ref(),
+                )?);
+            }
+        }
+        let agent_names = pending_agents
             .iter()
-            .map(|agent_config| agent_config.name.clone())
-            .collect::<Vec<_>>();
-        if !agent_names.iter().any(|name| name == &default_agent_id) {
+            .map(|agent| {
+                agent
+                    .identity_binding
+                    .as_ref()
+                    .map(|binding| binding.agent_did.clone())
+                    .ok_or_else(|| anyhow!("agent identity was not provisioned"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let default_agent_did = self
+            .default_agent_did
+            .clone()
+            .unwrap_or_else(|| agent_names[0].clone());
+        if !agent_names.iter().any(|name| name == &default_agent_did) {
             anyhow::bail!(
                 "default agent {} is not present in builder agents",
-                default_agent_id
+                default_agent_did
             );
         }
         let duplicates = find_duplicates(&agent_names);
         if !duplicates.is_empty() {
             anyhow::bail!(
-                "duplicate agent names in builder: {}",
+                "duplicate agent DIDs in builder: {}",
                 duplicates.into_iter().collect::<Vec<_>>().join(", ")
             );
         }
 
-        let mut agent_factories: Vec<AgentFactory> = Vec::with_capacity(self.agents.len());
-        for agent_config in self.agents {
+        let mut agent_factories: Vec<AgentFactory> = Vec::with_capacity(pending_agents.len());
+        for agent_config in pending_agents {
             let factory = agent_config
                 .into_factory(
                     &node,
@@ -208,7 +234,7 @@ impl GentsBuilder {
         let node_data = RuntimeNode {
             node_did: identity.did().to_string(),
             identity: identity.clone(),
-            default_agent_id: default_agent_id.clone(),
+            default_agent_did: default_agent_did.clone(),
             display_name: None,
             enabled: true,
         };
@@ -217,33 +243,36 @@ impl GentsBuilder {
 
         let mut agents = Vec::with_capacity(agent_results.len());
         for result in agent_results {
-            let agent_arc = result
-                .map_err(|e| anyhow::anyhow!("agent '{}' build failed: {}", e.agent_id, e.error))?;
+            let agent_arc = result.map_err(|e| {
+                anyhow::anyhow!("agent '{}' build failed: {}", e.agent_did, e.error)
+            })?;
             agents.push(agent_arc);
         }
         agents.sort_by(|left, right| {
-            let left_is_default = left.agent_id == default_agent_id;
-            let right_is_default = right.agent_id == default_agent_id;
+            let left_is_default = left.agent_did == default_agent_did;
+            let right_is_default = right.agent_did == default_agent_did;
             right_is_default
                 .cmp(&left_is_default)
-                .then_with(|| left.agent_id.cmp(&right.agent_id))
+                .then_with(|| left.agent_did.cmp(&right.agent_did))
         });
 
-        let capture_node = node.clone();
         let plugin_node = node.clone();
 
         Ok(Gents {
+            backend_admission,
             usage_cache: Arc::default(),
             node,
             runtime_node: principal,
             agents,
             unavailable_agents: Default::default(),
+            active_snapshot: Default::default(),
             document_runtime_context: None,
             mcp_pool: self.mcp_pool,
             local_hostname: self
                 .local_hostname
                 .unwrap_or_else(runtime::default_hostname),
             local_subnet: self.local_subnet,
+            advertised_graphql_url: None,
             retry_policy: self.retry_policy,
             hook_failure_policy: self.hook_failure_policy,
             background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -258,13 +287,7 @@ impl GentsBuilder {
             startup_readiness: Default::default(),
             #[cfg(test)]
             router_dispatch_probe: None,
-            rendered_request_capture_factory: Some(
-                self.rendered_request_capture_factory.unwrap_or_else(|| {
-                    crate::inference::rendered_request::defra_rendered_request_capture_factory(
-                        capture_node,
-                    )
-                }),
-            ),
+            rendered_request_capture_factory: self.rendered_request_capture_factory,
             manual_trigger_handle: Arc::new(tokio::sync::OnceCell::new()),
             enrollment_authority: Arc::default(),
             operator_tool_root: self.tool_ceiling.root().map(std::path::PathBuf::from),
@@ -284,6 +307,14 @@ pub struct AgentBuilder {
 }
 
 impl AgentBuilder {
+    pub fn identity_binding(
+        mut self,
+        binding: gents_protocol::agent_identity::AgentIdentityBinding,
+    ) -> Self {
+        self.pending_agent.identity_binding = Some(binding);
+        self
+    }
+
     pub fn backend_id(mut self, backend_id: impl Into<String>) -> Self {
         self.pending_agent.backend_id = Some(backend_id.into());
         self
@@ -390,11 +421,6 @@ impl AgentBuilder {
         self
     }
 
-    pub fn enable_memory(mut self, enable_memory: bool) -> Self {
-        self.pending_agent.tool_selection.enable_memory = enable_memory;
-        self
-    }
-
     pub fn enable_session_history_tool(mut self, enable_session_history_tool: bool) -> Self {
         self.pending_agent
             .tool_selection
@@ -488,6 +514,7 @@ fn find_duplicates(values: &[String]) -> RapidHashSet<String> {
 #[derive(Clone)]
 pub(crate) struct PendingAgent {
     name: String,
+    identity_binding: Option<gents_protocol::agent_identity::AgentIdentityBinding>,
     backend_id: Option<String>,
     #[cfg(test)]
     backend_endpoint: String,
@@ -513,6 +540,7 @@ impl PendingAgent {
     pub(crate) fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            identity_binding: None,
             backend_id: None,
             #[cfg(test)]
             backend_endpoint: TEST_DEFAULT_BACKEND_ENDPOINT.to_string(),
@@ -589,7 +617,7 @@ impl PendingAgent {
         Ok(Box::new(move |principal| {
             self.build_with_resolved_backend(principal, backend_fields, &tool_ceiling)
                 .map_err(|error| AgentBuildError {
-                    agent_id: agent_name,
+                    agent_did: agent_name,
                     error,
                 })
         }))
@@ -621,9 +649,17 @@ impl PendingAgent {
             tags: Vec::new(),
         };
         compaction.validate()?;
+        let binding = self
+            .identity_binding
+            .as_ref()
+            .ok_or_else(|| anyhow!("agent {agent_name:?} identity was not provisioned"))?;
+        let agent_identity =
+            crate::store::identity::resolve_agent_identity(principal.identity.as_ref(), binding)?;
         Ok(ResolvedAgent {
+            configuration: crate::inference::resolved::ResolvedConfiguration::Static,
             profile_id: None,
-            agent_id: self.name,
+            agent_did: binding.agent_did.clone(),
+            agent_identity,
             node: principal,
             backend_id: backend_fields.backend_id,
             backend_provider_kind: backend_fields.backend_provider_kind,
@@ -644,7 +680,7 @@ impl PendingAgent {
             },
             system_prompt: self.system_prompt,
             tools: AgentToolSurfaceConfig::from_selection(
-                &agent_name,
+                &binding.agent_did,
                 self.tool_selection,
                 tool_ceiling,
                 self.custom_tools,
@@ -666,18 +702,35 @@ impl PendingAgent {
 
 #[cfg(test)]
 impl PendingAgent {
+    pub(crate) fn with_identity_binding_for_test(
+        mut self,
+        binding: gents_protocol::agent_identity::AgentIdentityBinding,
+    ) -> Self {
+        self.identity_binding = Some(binding);
+        self
+    }
+
     pub(crate) fn build_with_identity_for_test<I>(self, identity: I) -> ResolvedAgent
     where
         I: NodeIdentity + 'static,
     {
+        self.build_with_identity_arc_for_test(Arc::new(identity))
+    }
+
+    pub(crate) fn build_with_identity_arc_for_test(
+        mut self,
+        identity: Arc<dyn NodeIdentity>,
+    ) -> ResolvedAgent {
         let backend_id = self.backend_id.clone();
         let backend_endpoint = self.backend_endpoint.clone();
-        let agent_name = self.name.clone();
-        let identity: Arc<dyn NodeIdentity> = Arc::new(identity);
+        let binding = self.identity_binding.get_or_insert_with(|| {
+            crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap()
+        });
+        let agent_did = binding.agent_did.clone();
         let principal = Arc::new(RuntimeNode {
             node_did: identity.did().to_string(),
             identity,
-            default_agent_id: agent_name.clone(),
+            default_agent_did: agent_did,
             display_name: None,
             enabled: true,
         });

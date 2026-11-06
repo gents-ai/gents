@@ -76,7 +76,7 @@ pub async fn pending_user_queue_projection(
                         let edit_group = can_edit
                             .then(|| {
                                 serde_json::to_string(&(
-                                    &row.agent_id,
+                                    &row.agent_did,
                                     &row.workspace_id,
                                     &row.workspace_owner_node_did,
                                     &row.workspace_authority,
@@ -155,7 +155,8 @@ pub async fn pending_user_queue_projection(
 
 fn editable(row: &AgentRequestRow, requester: &str) -> bool {
     row.requester_did.as_deref() == Some(requester)
-        && row.admission_signer_did.as_deref() == Some(requester)
+        && (row.admission_kind.as_deref() == Some("client")
+            || row.admission_signer_did.as_deref() == Some(requester))
         && crate::request::admission::verify_request_receipt_signature(row).is_ok()
         && matches!(
             crate::request::lifecycle::parse_valid_until(
@@ -213,7 +214,7 @@ fn selected_group<'a>(
     );
     let first = &selected[0];
     anyhow::ensure!(
-        selected.iter().all(|row| row.agent_id == first.agent_id
+        selected.iter().all(|row| row.agent_did == first.agent_did
             && row.workspace_id == first.workspace_id
             && row.workspace_authority == first.workspace_authority
             && row.workspace_owner_node_did == first.workspace_owner_node_did
@@ -339,7 +340,7 @@ fn replacement_spec(
             requester_did: Some(requester_did.to_owned()),
             request_id,
             node_did: node_did.to_owned(),
-            agent_id: source.agent_id.clone().context("message has no agent")?,
+            agent_did: source.agent_did.clone().context("message has no agent")?,
             session_id: session_id.to_owned(),
             content: message.content.trim().to_owned(),
             execution_origin: ExecutionOrigin::Interactive,
@@ -394,8 +395,8 @@ pub(crate) async fn prepare_pending_user_edit_with_deliveries(
     first_request_id: Option<&str>,
 ) -> Result<Vec<AgentRequestCreate>> {
     anyhow::ensure!(
-        signer.did() == requester_did && admission.signer_did == requester_did,
-        "Only the author can edit pending messages."
+        access.actor_did().as_deref() == Some(signer.did()) && admission.signer_did == signer.did(),
+        "Pending edit signer must match the authenticated caller."
     );
     anyhow::ensure!(
         deliveries.is_none_or(|values| values.len() == edit.messages.len()),
@@ -439,8 +440,20 @@ pub(crate) async fn prepare_pending_user_edit_with_deliveries(
                 delivery,
             },
         )?;
+        let create = crate::request::lifecycle::materialize::build_request(spec)?;
         creates.push(
-            crate::request::lifecycle::build_signed_request(spec, RequestSigner::Identity(signer))
+            access
+                .transact_readonly("queue.edit.bind_targets", |txn| {
+                    let create = create.clone();
+                    Box::pin(async move {
+                        crate::request::lifecycle::client::build_signed_edit_request_in_txn(
+                            txn,
+                            create,
+                            RequestSigner::Identity(signer),
+                        )
+                        .await
+                    })
+                })
                 .await?,
         );
     }
@@ -533,7 +546,7 @@ mod input_reissuance_tests {
             let source = AgentRequestRow {
                 doc_id: Some(case["reissued_source_doc_id"].as_str().unwrap().into()),
                 request_id: "source-message".into(),
-                agent_id: Some("coding".into()),
+                agent_did: Some("coding".into()),
                 input: Some(input.clone()),
                 ..Default::default()
             };
@@ -594,6 +607,7 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
     node_did: &str,
     session_id: &str,
     requester_did: &str,
+    signer_did: &str,
     edit: &PendingQueueEdit,
     creates: &[AgentRequestCreate],
 ) -> Result<std::result::Result<ValidatedPendingEdit, String>> {
@@ -612,15 +626,15 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
                 "Replacement request identity is not fresh."
             );
             anyhow::ensure!(
-                create.admission.signer_did == requester_did,
-                "Only the author can replace pending messages."
+                create.admission.signer_did == signer_did,
+                "Replacement signer differs from the signed edit caller."
             );
             create.admission.validate_canonical_fields()?;
             create
                 .admission
                 .validate_branch_fields()
                 .map_err(anyhow::Error::msg)?;
-            let expected = super::super::materialize::build_request(replacement_spec(
+            let mut expected = super::super::materialize::build_request(replacement_spec(
                 selected,
                 slot,
                 message,
@@ -639,6 +653,8 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
                         .delivery,
                 },
             )?)?;
+            expected.session_doc_id.clone_from(&create.session_doc_id);
+            expected.agent_doc_id.clone_from(&create.agent_doc_id);
             anyhow::ensure!(
                 create == &expected,
                 "Replacement request does not match the selected message."
@@ -646,7 +662,7 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
             create.graphql_input_fields().map_err(anyhow::Error::msg)?;
             anyhow::ensure!(
                 crate::store::identity::verify_did_signature(
-                    requester_did,
+                    signer_did,
                     &create.signing_payload(),
                     &create.admission.signature
                 )?,
@@ -673,7 +689,7 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
         let (context, _, _) = match crate::request::admission::load_request_context_in_txn(
             txn,
             node_did,
-            &create.agent_id,
+            &create.agent_did,
         )
         .await
         {
@@ -696,7 +712,9 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
             return Ok(Err(error.to_string()));
         }
     }
-    if persisted_replacements_in_txn(txn, node_did, creates).await? != PersistedReplacements::None {
+    if persisted_replacements_in_txn(txn, node_did, creates, None).await?
+        != PersistedReplacements::None
+    {
         return Ok(Err("Replacement request identity already exists.".into()));
     }
     Ok(Ok(validated))
@@ -713,33 +731,60 @@ pub(crate) async fn persisted_replacements_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
     creates: &[AgentRequestCreate],
+    expected_docs: Option<&[String]>,
 ) -> Result<PersistedReplacements> {
+    anyhow::ensure!(
+        expected_docs.is_none_or(|docs| docs.len() == creates.len()),
+        "replacement evidence count changed"
+    );
     let mut exact = Vec::new();
     let mut missing = 0;
-    for create in creates {
+    for (index, create) in creates.iter().enumerate() {
         let response = txn.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID admission_signature }} }}"#,
+            r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID admission_signature }} }}"#,
             escape_graphql_string(node_did), escape_graphql_string(&create.request_id)
         )).await?;
         let existing = response["data"]["AgentRequest"]
             .as_array()
             .context("replacement identity lookup missing")?;
+        if existing.len() > 1 {
+            return Ok(PersistedReplacements::Conflicting);
+        }
         match existing.first() {
             None => missing += 1,
             Some(row)
-                if row["admission_signature"].as_str()
-                    == Some(
-                        bs58::encode(&create.admission.signature)
-                            .into_string()
-                            .as_str(),
-                    ) =>
+                if expected_docs
+                    .is_none_or(|docs| row["_docID"].as_str() == Some(docs[index].as_str()))
+                    && row["admission_signature"].as_str()
+                        == Some(
+                            bs58::encode(&create.admission.signature)
+                                .into_string()
+                                .as_str(),
+                        ) =>
             {
-                exact.push(
-                    row["_docID"]
-                        .as_str()
-                        .context("replacement lacks physical identity")?
-                        .to_owned(),
-                );
+                let doc = row["_docID"]
+                    .as_str()
+                    .context("replacement lacks physical identity")?
+                    .to_owned();
+                if expected_docs.is_some() {
+                    let owners = txn
+                        .document_owners("AgentRequest", std::slice::from_ref(&doc))
+                        .await?;
+                    let [owner] = owners.as_slice() else {
+                        anyhow::bail!("replacement native owner observation is unavailable");
+                    };
+                    anyhow::ensure!(
+                        owner.doc_id == doc && owner.visible,
+                        "replacement native owner observation is unavailable"
+                    );
+                    let Some(owner) = owner.owner.as_ref() else {
+                        anyhow::bail!("replacement native owner observation is unavailable");
+                    };
+                    if owner.as_str() != create.admission.signer_did {
+                        return Ok(PersistedReplacements::Conflicting);
+                    }
+                }
+                exact.push(doc);
             }
             Some(_) => return Ok(PersistedReplacements::Conflicting),
         }
@@ -754,6 +799,7 @@ pub(crate) async fn persisted_replacements_in_txn(
 pub(crate) async fn apply_pending_user_edit_in_txn(
     txn: &ConfigApplyTxn<'_>,
     validated: ValidatedPendingEdit,
+    graphs: &[std::sync::Arc<db::block::builder::VerifiedClientCreate>],
 ) -> Result<PendingQueueReceipt> {
     let ValidatedPendingEdit {
         node_did,
@@ -765,11 +811,22 @@ pub(crate) async fn apply_pending_user_edit_in_txn(
         request_doc_ids: Vec::new(),
         request_ids: Vec::new(),
     };
-    for create in &creates {
-        let response = txn
-            .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
+    anyhow::ensure!(
+        graphs.len() == creates.len(),
+        "replacement graph count changed"
+    );
+    for (create, graph) in creates.iter().zip(graphs) {
+        let session = create
+            .session_doc_id
+            .as_deref()
+            .context("replacement session target missing")?;
+        let agent = create
+            .agent_doc_id
+            .as_deref()
+            .context("replacement Agent target missing")?;
+        let id = txn
+            .stage_verified_edit_request(create, graph.clone(), session, agent)
             .await?;
-        let id = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
         receipt.request_doc_ids.push(id);
         receipt.request_ids.push(create.request_id.clone());
     }
@@ -920,22 +977,33 @@ pub(super) async fn replace_pending_user_messages(
         None,
     )
     .await?;
+    let mut graphs = Vec::with_capacity(creates.len());
+    for create in &creates {
+        let input = crate::store::config_client::client_request_input(create)?;
+        let evidence =
+            crate::store::config_client::prepare_request_evidence(signer, input.clone()).await?;
+        graphs.push(std::sync::Arc::new(
+            crate::store::config_client::verify_request_evidence(input, evidence).await?,
+        ));
+    }
     access
         .transact_write("queue.replace_pending_messages", |txn| {
             let edit = &edit;
             let creates = &creates;
+            let graphs = &graphs;
             Box::pin(async move {
                 let validated = validate_pending_user_edit_in_txn(
                     txn,
                     node_did,
                     session_id,
                     requester_did,
+                    signer.did(),
                     edit,
                     creates,
                 )
                 .await?
                 .map_err(anyhow::Error::msg)?;
-                apply_pending_user_edit_in_txn(txn, validated).await
+                apply_pending_user_edit_in_txn(txn, validated, graphs).await
             })
         })
         .await

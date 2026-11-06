@@ -31,8 +31,11 @@ impl NodeReadinessWriter for FailDemotionWriter {
 async fn aborted_staged_generation_does_not_release_active_startup_obligation() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let (status_owner, runtime_status) =
-        RuntimeStatusHandle::start(node.clone(), "did:test:startup-generation-barrier");
+    let node_did = node
+        .node_identity_did()
+        .expect("fixture node has an identity")
+        .to_owned();
+    let (status_owner, runtime_status) = RuntimeStatusHandle::start(node.clone(), node_did);
     runtime_status.initialize_startup("general").await.unwrap();
     let barrier = Arc::new(StartupBarrier::ready_for_test());
     let (fatal_error, _fatal_errors) = mpsc::unbounded_channel();
@@ -66,7 +69,7 @@ async fn aborted_staged_generation_does_not_release_active_startup_obligation() 
         .await
         .expect("exact generation-one retirement should release the final obligation");
     status_owner.close().await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -92,7 +95,7 @@ async fn demotion_persistence_failure_closes_admission_and_cancels_runtime() {
             generation: 1,
             node: None,
             local_did: String::new(),
-            default_agent_id: "general".to_string(),
+            default_agent_did: "general".to_string(),
             agents: RapidHashMap::new(),
             tool_surfaces: RapidHashMap::new(),
             backend_admission_configs: RapidHashMap::new(),
@@ -158,5 +161,5 @@ async fn demotion_persistence_failure_closes_admission_and_cancels_runtime() {
     );
 
     status_owner.close().await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

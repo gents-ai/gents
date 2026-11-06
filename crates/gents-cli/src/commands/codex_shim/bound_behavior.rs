@@ -1,19 +1,19 @@
 pub(super) use crate::commands::inference_binding::load_bound_context_window;
 use crate::commands::inference_binding::load_bound_profile;
 use anyhow::Result;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use std::sync::Arc;
 
 pub(super) const MODEL_SELECTION_SEPARATOR: &str = "::";
 
-pub(super) use crate::commands::inference_binding::resolve_bound_agent_id;
+pub(super) use crate::commands::inference_binding::resolve_bound_agent_did;
 
 pub(super) async fn load_bound_inference_profile_id(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> Result<String> {
-    Ok(load_bound_profile(node, node_did, agent_id)
+    Ok(load_bound_profile(node, node_did, agent_did)
         .await?
         .profile_id)
 }
@@ -21,18 +21,18 @@ pub(super) async fn load_bound_inference_profile_id(
 pub(super) async fn load_bound_model_selection_id(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> Result<String> {
-    let profile = load_bound_profile(node, node_did, agent_id).await?;
+    let profile = load_bound_profile(node, node_did, agent_did).await?;
     Ok(model_selection_id(&profile.backend_id, &profile.model_name))
 }
 
 pub(super) async fn load_bound_model_selection_id_for_state(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> Result<String> {
-    load_bound_model_selection_id(node, node_did, agent_id).await
+    load_bound_model_selection_id(node, node_did, agent_did).await
 }
 
 pub(super) fn model_selection_id(backend_id: &str, model_name: &str) -> String {
@@ -70,7 +70,7 @@ mod tests {
             let owner = identity.did();
             gents::ensure_node(&node, owner).await.unwrap();
             let plan = DesiredStateApplyPlan::new([
-                (Collection::Agent, json!({"node_did":owner,"agent_id":"same","inference_profile_id":"same-profile"})),
+                (Collection::Agent, json!({"node_did":owner,"agent_did":"same","inference_profile_id":"same-profile"})),
                 (Collection::InferenceProfile,json!({"node_did":owner,"profile_id":"same-profile","backend_id":"same-backend","model_name":model,"context_window":window})),
                 (Collection::InferenceBackend,json!({"node_did":owner,"backend_id":"same-backend","name":"Test","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
             ].into_iter().map(|(collection,value)|DesiredStateApplyDocument {collection,add:value.clone(),update:value}).collect()).unwrap();
@@ -111,6 +111,6 @@ mod tests {
         assert!(load_bound_model_selection_id(&node, first.did(), "missing")
             .await
             .is_err());
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }

@@ -16,7 +16,6 @@ use super::ClientPeerStatus;
 
 mod config_delete;
 mod config_save;
-mod hydration;
 mod manual_runs;
 mod operator;
 mod pending_queue;
@@ -75,15 +74,8 @@ pub(super) fn find_request_in_scope(
     Ok(Some(row.clone()))
 }
 
-fn required_peer_generation<'a>(name: &str, value: Option<&'a str>) -> Result<&'a str> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .with_context(|| format!("{name} is missing from the current peer authority"))
-}
-
-fn agent_id_for_write(requested_agent_id: Option<&str>) -> Option<String> {
-    requested_agent_id
+fn agent_did_for_write(requested_agent_did: Option<&str>) -> Option<String> {
+    requested_agent_did
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
@@ -143,10 +135,10 @@ fn ux_local_runtime_record<'a>(
 }
 
 impl ClientCore {
-    pub(super) fn session_queue_access(&self, node_did: &str) -> ConfigAccess {
+    pub(super) fn session_queue_access(&self, node_did: &str) -> Result<ConfigAccess> {
         self.operator_graphql(node_did)
             .map(ConfigAccess::Graphql)
-            .unwrap_or_else(|| ConfigAccess::local(self.node_arc()))
+            .with_context(|| format!("runtime {node_did} has no authenticated database endpoint"))
     }
 
     pub(super) async fn peer_record_for_chat_write(
@@ -186,72 +178,21 @@ impl ClientCore {
         String,
     )> {
         let record = record.context("chat target has no current owned peer route")?;
-        if record.is_enrollment() {
-            let request_id = required_peer_generation(
-                "enrollment_request_id",
-                record.enrollment_request_id.as_deref(),
-            )?;
-            let digest = required_peer_generation(
-                "enrollment_request_digest",
-                record.enrollment_request_digest.as_deref(),
-            )?;
-            let admin_did = required_peer_generation(
-                "enrollment_admin_did",
-                record.enrollment_admin_did.as_deref(),
-            )?;
-            let sequence = record
-                .enrollment_authorization_sequence
-                .filter(|value| *value > 0)
-                .context("enrollment authorization sequence is missing")?;
-            let expires_at = required_peer_generation(
-                "enrollment_authorization_expires_at",
-                record.enrollment_authorization_expires_at.as_deref(),
-            )?;
-            let signer: Arc<dyn gents::store::identity::NodeIdentity> =
-                Arc::new(self.node_identity.clone());
-            let admission = AgentRequestAdmissionRecord::enrollment(
-                self.node_identity.did(),
-                request_id,
-                digest,
-                admin_did,
-                sequence,
-                expires_at,
-            );
-            return Ok((signer, admission, self.requester_did(record)));
-        }
         anyhow::ensure!(
-            record.source.as_deref() == Some("local-standard") && record.node_did == node_did,
-            "chat target is not owned by enrollment or a local standard runtime"
+            record.node_did == node_did,
+            "request route belongs to another node"
         );
         let signer: Arc<dyn gents::store::identity::NodeIdentity> =
-            match gents::store::identity::RegisteredIdentity::from_registered_did(node_did, None) {
-                Ok(identity) => Arc::new(identity),
-                Err(_) => {
-                    let home = required_peer_generation(
-                        "local_node_home",
-                        record.local_node_home.as_deref(),
-                    )?;
-                    crate::local_runtime::load_standard_runtime_identity(Path::new(home))?
-                }
-            };
-        anyhow::ensure!(
-            signer.did() == node_did,
-            "local request signer does not own target node"
-        );
+            Arc::new(self.node_identity.clone());
         Ok((
             signer,
-            AgentRequestAdmissionRecord::local_self(node_did),
-            self.requester_did(record),
+            AgentRequestAdmissionRecord::client(self.node_identity.did()),
+            self.node_identity.did().to_owned(),
         ))
     }
 
-    /// The DID this client sends as on `record`'s node.
-    pub fn requester_did(&self, record: &PeerRecord) -> String {
-        if record.is_enrollment() {
-            self.node_identity.did().to_string()
-        } else {
-            record.node_did.clone()
-        }
+    pub fn requester_did(&self, _record: &PeerRecord) -> String {
+        self.node_identity.did().to_owned()
     }
 
     async fn refresh_config_source(&self, source_node_did: &str) -> Result<u64> {
@@ -281,11 +222,15 @@ impl ClientCore {
     }
 
     fn record_mutation_error(&self, operation: &str, error: anyhow::Error) -> anyhow::Error {
+        self.record_mutation_error_message(operation, &error);
+        error
+    }
+
+    fn record_mutation_error_message(&self, operation: &str, error: &dyn std::fmt::Display) {
         let message = format!("{operation} failed: {error}");
         *self
             .last_mutation_error
             .write()
             .expect("mutation error lock poisoned") = Some(message);
-        error
     }
 }

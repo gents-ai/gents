@@ -45,10 +45,10 @@ async fn config_read_commands_list_and_show_trigger_schedule_and_mcp() -> Result
             )?;
             let config_path = root.join("pack_config.json");
             let mut config = read_json_file(&config_path)?;
-            let agent_id = config["node"]
-                .get("default_agent_id")
+            let agent_did = config["node"]
+                .get("default_agent_did")
                 .and_then(Value::as_str)
-                .ok_or_else(|| anyhow!("missing default_agent_id after export"))?
+                .ok_or_else(|| anyhow!("missing default_agent_did after export"))?
                 .to_string();
 
             let task_id = format!("{agent_name}-task");
@@ -61,7 +61,7 @@ async fn config_read_commands_list_and_show_trigger_schedule_and_mcp() -> Result
                 "task_id": task_id.clone(),
                 "display_name": "Read Commands Task",
                 "description": "Seeds config read command coverage.",
-                "agent_id": agent_id.clone(),
+                "agent_did": agent_did.clone(),
                 "prompt_template": "Report config read status.",
                 "enabled": false,
             }]);

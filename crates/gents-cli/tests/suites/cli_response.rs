@@ -80,7 +80,7 @@ async fn create_fixture_request(
     let request = graphql_query(
         &runtime.graphql,
         &format!(
-            r#"mutation{{create_AgentRequest(input:{{purpose: "normal", request_id:"{}",node_did:"{}",requester_did:null,session_id:"{}",agent_id:"response-test",content:"test request",created_at:"{}",lifecycle_state:"{}"}}){{_docID}}}}"#,
+            r#"mutation{{create_AgentRequest(input:{{purpose: "normal", request_id:"{}",node_did:"{}",requester_did:null,session_id:"{}",agent_did:"response-test",content:"test request",created_at:"{}",lifecycle_state:"{}"}}){{_docID}}}}"#,
             escape_graphql_string(request_id),
             escape_graphql_string(&runtime.node_did),
             escape_graphql_string(session_id),

@@ -1,4 +1,4 @@
-type WorkspaceReceipt @branchable {
+type WorkspaceReceipt @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "workspace_children") {
     receipt_id: String @index(unique: true) @immutable
     workspace_id: String @index @immutable
     produced_by_request_id: String @index @immutable

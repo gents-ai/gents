@@ -9,6 +9,12 @@ use futures_util::StreamExt;
 use gents::pack::{PackKind, PackManifest};
 use serde_json::json;
 
+struct LocalPackAccess {
+    writer: gents::store::config_client::ConfigAccess,
+    schema: gents::store::config_client::ConfigAccess,
+    runtime: std::sync::Arc<dyn gents::NodeIdentity>,
+}
+
 /// The documents pack install: the CLI's single site that writes a documents
 /// pack and its dependencies. `explicit` is false only when the pack is
 /// installed as another pack's dependency.
@@ -18,6 +24,17 @@ pub(crate) async fn install_documents_pack(
     pack: &PackSource,
     args: &PackInstallArgs,
     explicit: bool,
+) -> Result<serde_json::Value> {
+    install_documents_pack_inner(access, owner, pack, args, explicit, None).await
+}
+
+async fn install_documents_pack_inner(
+    access: &gents::store::config_client::ConfigAccess,
+    owner: &str,
+    pack: &PackSource,
+    args: &PackInstallArgs,
+    explicit: bool,
+    local: Option<&LocalPackAccess>,
 ) -> Result<serde_json::Value> {
     let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
     let dependencies: Vec<PackSource> =
@@ -30,33 +47,39 @@ pub(crate) async fn install_documents_pack(
             .collect::<Result<Vec<_>>>()?;
     if let gents::store::config_client::ConfigAccess::Graphql(endpoint) = access {
         let mut needs_runtime_store = false;
-        if args.scope.graphql.is_some() {
-            for source in std::iter::once(pack).chain(dependencies.iter()) {
-                if !source.manifest().metadata.plugins.is_empty() {
-                    needs_runtime_store = true;
-                    break;
-                }
-                let config = gents::pack::load_pack_config(
-                    source.manifest(),
-                    &gents::pack::PackInstallOptions {
-                        node_did: owner.to_owned(),
-                    },
-                    &|path| Ok(source.asset(path)?.to_vec()),
-                    &|name| std::env::var(name).ok(),
-                )?;
-                if config.tools.iter().any(|tools| {
-                    tools
-                        .integrations
-                        .as_ref()
-                        .and_then(|integrations| integrations.plugins.as_ref())
-                        .is_some_and(|plugins| !plugins.is_empty())
-                }) {
-                    needs_runtime_store = true;
-                    break;
-                }
+        for source in std::iter::once(pack).chain(dependencies.iter()) {
+            if !source.manifest().metadata.plugins.is_empty()
+                || !source.manifest().schemas.is_empty()
+                || source
+                    .manifest()
+                    .metadata
+                    .assets
+                    .iter()
+                    .any(|path| path.starts_with("schemas/"))
+            {
+                needs_runtime_store = true;
+                break;
+            }
+            let config = gents::pack::load_pack_authoring_config(
+                source.manifest(),
+                &gents::pack::PackInstallOptions {
+                    node_did: owner.to_owned(),
+                },
+                &|path| Ok(source.asset(path)?.to_vec()),
+                &|name| std::env::var(name).ok(),
+            )?;
+            if config.documents.tools.iter().any(|tools| {
+                tools
+                    .integrations
+                    .as_ref()
+                    .and_then(|integrations| integrations.plugins.as_ref())
+                    .is_some_and(|plugins| !plugins.is_empty())
+            }) {
+                needs_runtime_store = true;
+                break;
             }
         }
-        if needs_runtime_store {
+        if needs_runtime_store && args.preview {
             return crate::http::pack_install::install_remote(
                 endpoint,
                 owner,
@@ -67,8 +90,20 @@ pub(crate) async fn install_documents_pack(
             )
             .await;
         }
+        if needs_runtime_store {
+            return crate::http::pack_install_client::install_remote(
+                endpoint,
+                owner,
+                pack,
+                &dependencies,
+                args,
+                explicit,
+            )
+            .await;
+        }
     }
-    install_documents_pack_resolved(access, owner, pack, args, explicit, dependencies).await
+    install_documents_pack_resolved_inner(access, owner, pack, args, explicit, dependencies, local)
+        .await
 }
 
 pub(crate) async fn install_documents_pack_resolved(
@@ -79,42 +114,56 @@ pub(crate) async fn install_documents_pack_resolved(
     explicit: bool,
     dependencies: Vec<PackSource>,
 ) -> Result<serde_json::Value> {
+    install_documents_pack_resolved_inner(access, owner, pack, args, explicit, dependencies, None)
+        .await
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "local install adds held Node and client access to the shared pack inputs"
+)]
+async fn install_documents_pack_resolved_inner(
+    access: &gents::store::config_client::ConfigAccess,
+    owner: &str,
+    pack: &PackSource,
+    args: &PackInstallArgs,
+    explicit: bool,
+    dependencies: Vec<PackSource>,
+    local: Option<&LocalPackAccess>,
+) -> Result<serde_json::Value> {
     let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
     let requested = parse_inference_slot_bindings(&args.inference_slots)?;
     let temp = tempfile::tempdir()?;
     gents::pack::materialize::materialize(pack.archive(), temp.path())?;
-    let (mut authored, mut report) = crate::desired_state::load_manifest_root(temp.path());
-    if authored.is_none() {
-        (authored, report) =
-            crate::desired_state::load_manifest_root_for_owner(temp.path(), Some(owner));
-    }
-    anyhow::ensure!(
-        authored.is_some(),
-        "invalid pack configuration: {:?}",
-        report.errors
-    );
-    let mut authored = authored.expect("checked pack configuration");
-    super::super::config::binding::rebind_manifest_to_node(
-        &mut authored,
-        owner,
-        args.force_rebind_concrete_did,
-    )?;
-    let prepared = gents::pack::prepare_document_pack_install(
-        access,
-        owner,
-        pack.manifest(),
-        &authored,
-        &requested,
-        &dependencies
-            .iter()
-            .map(PackSource::archive)
-            .collect::<Vec<_>>(),
-        gents::pack::InstalledVia::Operator,
-        args.scope.graphql.is_none().then_some(home.as_path()),
-        Some(pack.archive()),
-        &|name| std::env::var(name).ok(),
-    )
-    .await?;
+    let dependency_archives = dependencies
+        .iter()
+        .map(PackSource::archive)
+        .collect::<Vec<_>>();
+    let prepared = if let Some(local) = local {
+        gents::pack::prepare_document_pack_archive_with_runtime(
+            access,
+            owner,
+            pack.archive(),
+            &requested,
+            &dependency_archives,
+            Some(home.as_path()),
+            &|name| std::env::var(name).ok(),
+            local.runtime.as_ref(),
+        )
+        .await?
+    } else {
+        gents::pack::prepare_document_pack_archive(
+            access,
+            owner,
+            pack.archive(),
+            &requested,
+            &dependency_archives,
+            gents::pack::InstalledVia::Operator,
+            args.scope.graphql.is_none().then_some(home.as_path()),
+            &|name| std::env::var(name).ok(),
+        )
+        .await?
+    };
     let inference = prepared.inference.clone();
     let dependency_inference = prepared.dependency_inference.clone();
     let origin_tag = gents::pack::pack_origin_tag(&pack.manifest().name)?;
@@ -172,12 +221,14 @@ pub(crate) async fn install_documents_pack_resolved(
             )
         })
         .collect();
-    gents::pack::apply_prepared_dependency_schemas(access, &prepared).await?;
-    let schemas = super::super::schema::apply_pack_schemas_if_present(access, temp.path())
+    let schema_access = local.map_or(access, |local| &local.schema);
+    let writer = local.map_or(access, |local| &local.writer);
+    gents::pack::apply_prepared_dependency_schemas(schema_access, &prepared).await?;
+    let schemas = super::super::schema::apply_pack_schemas_if_present(schema_access, temp.path())
         .await
         .context("pack install schemas")?;
     let (apply, plugins) = gents::pack::install_prepared_document_graph(
-        access,
+        writer,
         owner,
         pack.archive(),
         &prepared,
@@ -305,10 +356,11 @@ pub(crate) async fn wire_pack_plugins(
 /// Offline command access owns its node and store claim. DefraDB background
 /// tasks may retain the database after a handle drops, so shutdown must finish
 /// before this command releases its access. HTTP access has no owned node here.
-pub(super) async fn install_documents_command(
+pub(super) async fn install_documents_command_with_local(
     access: gents::store::config_client::ConfigAccess,
     pack: &PackSource,
     args: &PackInstallArgs,
+    local_endpoint: Option<gents::store::config_client::GraphqlEndpoint>,
 ) -> Result<()> {
     let result = async {
         let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
@@ -329,7 +381,38 @@ pub(super) async fn install_documents_command(
             Some(&access),
         )
         .await?;
-        let mut output = install_documents_pack(&access, &owner, pack, args, args.explicit).await?;
+        let local = if let Some(endpoint) = local_endpoint {
+            let config =
+                crate::home_state::read_init_config(&home)?.context("home is not initialized")?;
+            let runtime = crate::home_state::load_initialized_home_identity(&home, &config)?;
+            anyhow::ensure!(
+                runtime.did() == owner,
+                "selected Node does not match the held runtime"
+            );
+            let node = access
+                .local_node()
+                .context("local pack install requires the owned Node")?
+                .clone();
+            Some(LocalPackAccess {
+                writer: gents::store::config_client::ConfigAccess::Graphql(endpoint),
+                schema: gents::store::config_client::ConfigAccess::local_as(
+                    node,
+                    identity::Did::new(&owner)?,
+                ),
+                runtime,
+            })
+        } else {
+            None
+        };
+        let mut output = install_documents_pack_inner(
+            &access,
+            &owner,
+            pack,
+            args,
+            args.explicit,
+            local.as_ref(),
+        )
+        .await?;
         if !args.wire.is_empty() && !args.preview && args.scope.graphql.is_none() {
             output["wired"] = wire_pack_plugins(&access, &owner, &home, pack, &args.wire)
                 .await?
@@ -339,7 +422,9 @@ pub(super) async fn install_documents_command(
     }
     .await;
     if let Some(node) = access.local_node() {
-        node.shutdown().await;
+        if let Err(error) = node.shutdown().await {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+        }
     }
     crate::print_json(&result?)
 }
@@ -356,12 +441,12 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
     )?;
     match pack.manifest().metadata.kind {
         PackKind::Documents => {
-            let (access, _) = crate::resolve_config_access(
+            let (access, _, local_endpoint) = crate::resolve_pack_config_access(
                 args.scope.home.as_deref(),
                 args.scope.graphql.as_deref(),
             )
             .await?;
-            install_documents_command(access, &pack, &args).await
+            install_documents_command_with_local(access, &pack, &args, local_endpoint).await
         }
         PackKind::Assets | PackKind::Plugins => {
             let requested = parse_inference_slot_bindings(&args.inference_slots)?;
@@ -390,6 +475,28 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 .clone()
                 .context("asset and plugins packs require --home")?;
             let notification_scope = plugin_notification_scope(&home).await?;
+            if let Some((gents::ConfigAccess::Graphql(endpoint), owner)) = &notification_scope {
+                let dependencies =
+                    futures_util::stream::iter(pack.manifest().metadata.dependencies.iter())
+                        .map(|coordinate| {
+                            resolve_pack_source(coordinate, args.registry.as_deref(), &home)
+                        })
+                        .buffered(4)
+                        .collect::<Vec<_>>()
+                        .await
+                        .into_iter()
+                        .collect::<Result<Vec<_>>>()?;
+                let result = crate::http::pack_install_client::install_remote(
+                    endpoint,
+                    owner,
+                    &pack,
+                    &dependencies,
+                    &args,
+                    true,
+                )
+                .await?;
+                return crate::print_json(&result);
+            }
             let notify_scope = notification_scope.clone();
             let notify_home = home.clone();
             let result = gents::pack::plugin_lifecycle::install(
@@ -398,16 +505,17 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 args.grant_authority,
                 slot_owner.as_deref(),
                 &requested,
-                move |identity| {
+                move |identity, changes| {
                     let home = notify_home;
                     async move {
                         if let Some((access, owner)) = notify_scope {
-                            gents::pack::record_plugin_store_change(
+                            gents::pack::record_staged_plugin_store_change(
                                 &access,
                                 &owner,
                                 &home,
                                 &identity.coordinate,
                                 Some(&identity),
+                                &changes,
                             )
                             .await
                         } else {
@@ -419,7 +527,9 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
             .await;
             if let Some((access, _)) = &notification_scope {
                 if let Some(node) = access.local_node() {
-                    node.shutdown().await;
+                    if let Err(error) = node.shutdown().await {
+                        tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+                    }
                 }
             }
             let (record, installed_plugins) = result?;

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::access::{rows_value, ReadAccess, ReadCache};
@@ -7,7 +7,7 @@ use super::headers::load_header;
 use super::{replay_violation, CanonicalOutputReadError, CanonicalReplayScope};
 
 async fn load_replay_request_facts_batch(
-    node: &EmbeddedNode,
+    access: ReadAccess<'_, '_>,
     request_doc_ids: &[String],
 ) -> Result<BTreeMap<String, ReplayRequestFacts>> {
     let distinct = request_doc_ids
@@ -40,7 +40,7 @@ async fn load_replay_request_facts_batch(
             ));
         }
         query.push_str(" }");
-        let response = ReadAccess::Node(node)
+        let response = access
             .query(&query, "load_canonical_replay_request_facts")
             .await?;
         let request_rows = rows_value(&response, "requests")?;
@@ -104,24 +104,34 @@ impl ReplayRequestReader for EmbeddedNode {
         &self,
         request_doc_ids: &[String],
     ) -> Result<BTreeMap<String, ReplayRequestFacts>> {
-        load_replay_request_facts_batch(self, request_doc_ids).await
+        load_replay_request_facts_batch(ReadAccess::Node(self), request_doc_ids).await
+    }
+}
+
+#[async_trait::async_trait]
+impl ReplayRequestReader for crate::store::config_client::ConfigAccess {
+    async fn request_facts(
+        &self,
+        request_doc_ids: &[String],
+    ) -> Result<BTreeMap<String, ReplayRequestFacts>> {
+        load_replay_request_facts_batch(ReadAccess::Config(self), request_doc_ids).await
     }
 }
 
 /// Validate a restored replay's physical request and bounded transcript view
 /// even when no current assistant needs provider evidence.
 pub(crate) async fn validate_canonical_replay_boundary(
-    node: &EmbeddedNode,
+    access: &crate::store::config_client::ConfigAccess,
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::turn::provider_context_reduction::SourceBoundary,
 ) -> Result<()> {
-    validated_canonical_replay_boundary(node, node, scope, boundary)
+    validated_canonical_replay_boundary(ReadAccess::Config(access), access, scope, boundary)
         .await
         .map(|_| ())
 }
 
 pub(super) async fn validated_canonical_replay_boundary(
-    node: &EmbeddedNode,
+    access: ReadAccess<'_, '_>,
     requests: &impl ReplayRequestReader,
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::turn::provider_context_reduction::SourceBoundary,
@@ -150,7 +160,7 @@ pub(super) async fn validated_canonical_replay_boundary(
     };
     let mut cache = ReadCache::default();
     let high_water_header = load_header(
-        ReadAccess::Node(node),
+        access,
         &high_water.doc_id,
         scope.node_did,
         scope.requester_did,
@@ -169,15 +179,21 @@ pub(super) async fn validated_canonical_replay_boundary(
             && i64::from(high_water_header.message.sequence) == high_water.sequence,
         "canonical replay high-water header disagrees with its physical scope or sequence"
     );
-    let high_water_commit = crate::store::graphql::newest_document_composite_commit(
-        node,
-        &high_water.doc_id,
-        "canonical replay high-water header",
-    )
-    .await?
-    .ok_or_else(|| {
-        replay_violation("canonical replay high-water header has no composite commit")
-    })?;
+    let operation = "canonical replay high-water header";
+    let response = access
+        .query(
+            &crate::store::graphql::newest_composite_query(&high_water.doc_id),
+            operation,
+        )
+        .await?;
+    let commits = crate::store::graphql::composite_commits_at(
+        response.get("data").and_then(|data| data.get("_commits")),
+        "_commits",
+    )?;
+    let high_water_commit =
+        crate::store::graphql::unique_newest_composite_commit(commits, operation)?.ok_or_else(
+            || replay_violation("canonical replay high-water header has no composite commit"),
+        )?;
     replay_ensure!(
         high_water_commit.cid == high_water.commit_cid,
         "canonical replay high-water CID is not the physical header version"

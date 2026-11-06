@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::{MessagePublication, MessageRole, OutputOutcome, OutputSource};
 use std::collections::BTreeSet;
 
@@ -49,6 +49,33 @@ pub(in crate::session) async fn load_sequenced_messages(
     exclude_request_doc_id: Option<&str>,
     replay_profile: Option<crate::turn::provider_input::ProviderInputProfile>,
 ) -> Result<Vec<SequencedMessage>> {
+    load_sequenced_messages_using(
+        ReadAccess::Node(node),
+        session_id,
+        node_did,
+        requester_did,
+        through_sequence,
+        after_sequence,
+        exclude_request_doc_id,
+        replay_profile,
+    )
+    .await
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "independent transcript range filters"
+)]
+pub(in crate::session) async fn load_sequenced_messages_using(
+    access: ReadAccess<'_, '_>,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    through_sequence: Option<u32>,
+    after_sequence: Option<u32>,
+    exclude_request_doc_id: Option<&str>,
+    replay_profile: Option<crate::turn::provider_input::ProviderInputProfile>,
+) -> Result<Vec<SequencedMessage>> {
     let session_scope = session_scope_filter(node_did, session_id, requester_did);
     let mut bounds = Vec::new();
     if let Some(sequence) = after_sequence {
@@ -67,21 +94,9 @@ pub(in crate::session) async fn load_sequenced_messages(
         AgentMessage(filter: {{ {session_scope}{bounds} }}, order: {{ sequence: ASC }}) {{ {AGENT_MESSAGE_FIELDS} }}
     }}"#
     );
-    let response = crate::store::graphql::graphql_response_with_transaction_retry(
-        node,
-        &query,
-        "load_canonical_history",
-    )
-    .await?;
-    if response.has_errors() {
-        anyhow::bail!(
-            "loading canonical history for session_id={session_id}: {:?}",
-            response.errors
-        );
-    }
+    let response = access.query(&query, "load_canonical_history").await?;
     let data = response
-        .data
-        .as_ref()
+        .get("data")
         .context("canonical history query omitted data")?;
     let headers = data
         .get("AgentMessage")
@@ -123,15 +138,21 @@ pub(in crate::session) async fn load_sequenced_messages(
         })
         .filter_map(|row| row.message.request_doc_id.clone())
         .collect::<Vec<_>>();
-    preload_request_output_segments(node, &output_requests, node_did, requester_did, &mut cache)
-        .await?;
+    preload_request_output_segments(
+        access,
+        &output_requests,
+        node_did,
+        requester_did,
+        &mut cache,
+    )
+    .await?;
     let mut messages = Vec::new();
     for row in headers.into_iter().filter(|row| {
         exclude_request_doc_id.is_none_or(|id| !is_current_admission_input(&row.message, id))
     }) {
         let sequence = row.message.sequence;
         let reconstructed = reconstruct_scoped_message_with_facts(
-            ReadAccess::Node(node),
+            access,
             &row.doc_id,
             node_did,
             requester_did,

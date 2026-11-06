@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::documents::{load_agent_tools_in_txn, PluginToolRef};
 use gents::plugin::executor::PluginExecutor;
 use gents::plugin::store::InstalledPlugin;
@@ -56,12 +56,12 @@ fn first_paragraph(text: &str) -> Option<String> {
 pub(super) async fn list(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     plugin_home: &Path,
 ) -> Result<Value> {
     let tools =
         gents::ConfigAccess::transact_local_readonly(node, None, "grok.workflows_list", |txn| {
-            Box::pin(async move { load_agent_tools_in_txn(txn, node_did, agent_id).await })
+            Box::pin(async move { load_agent_tools_in_txn(txn, node_did, agent_did).await })
         })
         .await?;
     let plugins: Vec<PluginToolRef> = tools
@@ -87,7 +87,7 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use defra_node::EmbeddedNode;
+    use defra_node::Node as EmbeddedNode;
     use gents::documents::{AgentContext, IntegrationTools, PluginToolRef, Tools};
     use serde_json::{json, Value};
 
@@ -117,7 +117,8 @@ mod tests {
         let identity = gents::KeyIdentity::load_or_create(dir.path().join("actor.key"), None)
             .expect("test signing identity");
         let node_did = gents::NodeIdentity::did(&identity).to_owned();
-        let agent_id = "catalog-agent".to_owned();
+        let binding = gents::store::identity::provision_agent_identity(&identity).unwrap();
+        let agent_did = binding.agent_did.clone();
         let node = Arc::new(
             EmbeddedNode::builder()
                 .with_node_identity_did(&node_did)
@@ -133,8 +134,8 @@ mod tests {
         super::super::seed_test_agent_configuration(
             &node,
             &node_did,
-            &agent_id,
-            &agent_id,
+            &binding,
+            &agent_did,
             "catalog-model",
             true,
         )
@@ -144,7 +145,7 @@ mod tests {
                 .iter()
                 .map(|plugin| serde_json::from_value(json!({"plugin": plugin})).unwrap())
                 .collect();
-            let (did, agent) = (node_did.clone(), agent_id.clone());
+            let (did, agent) = (node_did.clone(), agent_did.clone());
             gents::ConfigAccess::transact_local_write(&node, None, "catalog.fixture", |txn| {
                 let (did, agent, refs) = (did.clone(), agent.clone(), refs.clone());
                 Box::pin(async move {
@@ -197,7 +198,7 @@ mod tests {
             .await
             .unwrap();
         }
-        (dir, node, node_did, agent_id)
+        (dir, node, node_did, agent_did)
     }
 
     #[test]

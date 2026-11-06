@@ -32,7 +32,7 @@ function fixture(error = failure) {
     nodeDid,
     requestId: "original-request",
     sessionId: "original-session",
-    agentId: "default",
+    agentDid: "default",
     content: "Keep my original message",
     cwd: "/workspace",
   };

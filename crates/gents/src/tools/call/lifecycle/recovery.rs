@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -9,6 +9,45 @@ use gents_protocol::row::AgentRequestRow;
 use crate::store::graphql::escape_graphql_string;
 
 use super::{AwaitMode, CancelCause, FailureClass, ToolCallLifecycle, ToolCallState};
+
+pub type RecoveryIdentities = [std::sync::Arc<dyn crate::store::identity::NodeIdentity>];
+type RecoveryAccesses = std::collections::BTreeMap<String, crate::ConfigAccess>;
+
+fn recovery_accesses(
+    node: &std::sync::Arc<EmbeddedNode>,
+    node_did: &str,
+    identities: &RecoveryIdentities,
+) -> Result<RecoveryAccesses> {
+    anyhow::ensure!(
+        node.node_identity_did() == Some(node_did),
+        "tool recovery node identity mismatch"
+    );
+    let mut accesses = RecoveryAccesses::new();
+    for identity in identities {
+        let did = identity.did();
+        anyhow::ensure!(
+            did != node_did,
+            "runtime identity cannot recover agent tools"
+        );
+        let actor = identity::Did::new(did)?;
+        let access = match crate::ConfigAccess::local_managed_agent(
+            node.clone(),
+            actor,
+            identity.as_ref(),
+        ) {
+            Ok(access) => access,
+            Err(error) => {
+                tracing::warn!(agent_did = did, %error, "tool recovery signer unavailable");
+                continue;
+            }
+        };
+        anyhow::ensure!(
+            accesses.insert(did.to_owned(), access).is_none(),
+            "duplicate tool recovery agent identity"
+        );
+    }
+    Ok(accesses)
+}
 
 #[derive(Debug, Default)]
 pub struct ToolCallRecoveryReport {
@@ -118,10 +157,12 @@ impl super::ToolCallLifecycle {
     pub async fn recover_all(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
+        identities: &RecoveryIdentities,
     ) -> Result<ToolCallRecoveryReport> {
         Self::recover_all_with_executions(
             node,
             node_did,
+            identities,
             &crate::tools::call::hook::BackgroundExecutionRegistry::default(),
         )
         .await
@@ -130,15 +171,17 @@ impl super::ToolCallLifecycle {
     pub async fn recover_all_with_executions(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
+        identities: &RecoveryIdentities,
         executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
     ) -> Result<ToolCallRecoveryReport> {
-        let tool_calls_recovered = recover_stuck_running_tool_calls(node, node_did, executions)
-            .await?
-            + Self::reconcile_orphaned_background_tools(node, node_did, executions)
-                .await?
-                .tool_calls_terminalized;
+        let accesses = recovery_accesses(node, node_did, identities)?;
+        let tool_calls_recovered =
+            recover_stuck_running_tool_calls(node, node_did, &accesses, executions).await?
+                + Self::reconcile_orphaned_background_tools(node, node_did, identities, executions)
+                    .await?
+                    .tool_calls_terminalized;
         let notifications_repaired =
-            Self::reconcile_background_completion_side_effects(node, node_did)
+            Self::reconcile_background_completion_side_effects(node, node_did, identities)
                 .await?
                 .side_effects_converged;
 
@@ -151,10 +194,12 @@ impl super::ToolCallLifecycle {
     pub async fn reconcile_terminal_parent_owned_tools(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
+        identities: &RecoveryIdentities,
     ) -> Result<TerminalParentToolReport> {
         Self::reconcile_terminal_parent_owned_tools_with_executions(
             node,
             node_did,
+            identities,
             &crate::tools::call::hook::BackgroundExecutionRegistry::default(),
         )
         .await
@@ -163,12 +208,12 @@ impl super::ToolCallLifecycle {
     pub(crate) async fn reconcile_terminal_parent_owned_tools_with_executions(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
+        identities: &RecoveryIdentities,
         executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
     ) -> Result<TerminalParentToolReport> {
-        let rows = load_running_tool_call_rows_for_agent(node, node_did).await?;
+        let accesses = recovery_accesses(node, node_did, identities)?;
+        let rows = load_running_tool_call_rows_for_agent(node_did, &accesses).await?;
         let mut report = TerminalParentToolReport::default();
-        let mut parent_cache: rapidhash::RapidHashMap<String, Option<AgentRequestRow>> =
-            rapidhash::RapidHashMap::default();
 
         for row in rows {
             if row.node_did.as_deref() != Some(node_did) {
@@ -180,24 +225,8 @@ impl super::ToolCallLifecycle {
                 continue;
             }
 
-            let parent = match row
-                .request_id
-                .as_deref()
-                .filter(|request_id| !request_id.is_empty())
-            {
-                Some(request_id) => {
-                    if let Some(cached) = parent_cache.get(request_id) {
-                        cached.clone()
-                    } else {
-                        let loaded =
-                            lookup_parent_request(node, node_did, request_id, None).await?;
-                        parent_cache.insert(request_id.to_string(), loaded.clone());
-                        loaded
-                    }
-                }
-                None => None,
-            };
-            let Some(parent) = parent else {
+            let Some((access, parent)) = selected_running_parent(node_did, &row, &accesses).await?
+            else {
                 continue;
             };
             if !request_is_terminal(&parent) {
@@ -209,20 +238,20 @@ impl super::ToolCallLifecycle {
             };
 
             let deadline_at = parse_datetime(row.deadline_at.as_deref());
-            let updated = match recover_tool_call_row(node, &row, deadline_at, outcome, true).await
-            {
-                Ok(updated) => updated,
-                Err(error) => {
-                    tracing::warn!(
-                        doc_id = %row.doc_id,
-                        request_id = row.request_id.as_deref().unwrap_or(""),
-                        tool_call_id = %row.tool_call_id,
-                        error = %error,
-                        "failed to terminalize running tool owned by terminal parent"
-                    );
-                    continue;
-                }
-            };
+            let updated =
+                match recover_tool_call_row(node, access, &row, deadline_at, outcome, true).await {
+                    Ok(updated) => updated,
+                    Err(error) => {
+                        tracing::warn!(
+                            doc_id = %row.doc_id,
+                            request_id = row.request_id.as_deref().unwrap_or(""),
+                            tool_call_id = %row.tool_call_id,
+                            error = %error,
+                            "failed to terminalize running tool owned by terminal parent"
+                        );
+                        continue;
+                    }
+                };
             if !updated {
                 continue;
             }
@@ -250,49 +279,35 @@ impl super::ToolCallLifecycle {
     pub async fn reconcile_orphaned_background_tools(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
+        identities: &RecoveryIdentities,
         executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
     ) -> Result<OrphanedBackgroundToolReport> {
+        let accesses = recovery_accesses(node, node_did, identities)?;
         executions.recover_retained_foreground().await;
-        let rows = load_running_tool_call_rows_for_agent(node, node_did).await?;
+        let rows = load_running_tool_call_rows_for_agent(node_did, &accesses).await?;
         let mut report = OrphanedBackgroundToolReport::default();
-        let mut running_background = rapidhash::RapidHashSet::default();
 
         for row in rows {
             if row.node_did.as_deref() != Some(node_did) || !is_background_tool_row(&row) {
                 continue;
             }
-            running_background.insert(row.doc_id.clone());
             let registered = executions.contains(&row.tool_call_id, &row.doc_id).await;
-            let parent = match (
-                non_empty(row.request_doc_id.as_deref()),
-                non_empty(row.node_did.as_deref()),
-                non_empty(row.request_id.as_deref()),
-            ) {
-                (Some(doc_id), Some(parent_node_did), Some(request_id)) => {
-                    let scope = crate::session::session_scope_filter(
-                        parent_node_did,
-                        &row.session_id,
-                        row.requester_did.as_deref(),
-                    );
-                    lookup_parent_request(node, parent_node_did, request_id, Some((doc_id, &scope)))
-                        .await?
-                }
-                _ => None,
-            };
-            let Some(parent) = parent else {
+            let Some((access, parent)) = selected_running_parent(node_did, &row, &accesses).await?
+            else {
                 if unresolved_parent_warning_due(&row.doc_id) {
-                    tracing::warn!(
-                        doc_id = %row.doc_id,
-                        tool_call_id = %row.tool_call_id,
-                        request_id = row.request_id.as_deref().unwrap_or(""),
-                        "background tool's parent request is unresolved; leaving it running"
-                    );
+                    tracing::warn!(doc_id = %row.doc_id, tool_call_id = %row.tool_call_id, "background tool parent or validated agent is unavailable");
                 }
                 continue;
             };
             let task_deleted = owner_task_deleted(node, node_did, &parent).await?;
             let session_stopped = crate::session::session_is_stopped(
                 node,
+                &identity::Did::new(
+                    parent
+                        .agent_did
+                        .as_deref()
+                        .context("parent request has no agent DID")?,
+                )?,
                 node_did,
                 &row.session_id,
                 row.requester_did.as_deref(),
@@ -322,23 +337,15 @@ impl super::ToolCallLifecycle {
                     continue;
                 };
                 if crate::tools::native::is_bash_tool_name(&row.tool_name) {
-                    if let Some(mut retained) = ToolCallLifecycle::load_by_doc_id(
-                        node.clone(),
-                        &row.doc_id,
-                        node_did,
-                        &row.session_id,
-                        row.requester_did.as_deref(),
-                    )
-                    .await?
-                    {
-                        if executions.settle_retained_stop(&mut retained).await? {
-                            report.tool_calls_terminalized += usize::from(retained.is_terminal());
-                            continue;
-                        }
+                    let mut retained = load_recovery_lifecycle(node, access, &row).await?;
+                    if executions.settle_retained_stop(&mut retained).await? {
+                        report.tool_calls_terminalized += usize::from(retained.is_terminal());
+                        continue;
                     }
                 }
                 let updated =
-                    match recover_tool_call_row(node, &row, deadline_at, cause, true).await {
+                    match recover_tool_call_row(node, access, &row, deadline_at, cause, true).await
+                    {
                         Ok(updated) => updated,
                         Err(error) => {
                             tracing::warn!(
@@ -353,7 +360,7 @@ impl super::ToolCallLifecycle {
                 // The worker may have won the terminal CAS while stop was in
                 // flight. Its own completion owns the durable outcome.
                 if updated {
-                    append_recovered_background_tool_completion(node, &row, cause).await;
+                    append_recovered_background_tool_completion(node, access, &row, cause).await;
                     report.tool_calls_terminalized += 1;
                 }
                 continue;
@@ -379,23 +386,21 @@ impl super::ToolCallLifecycle {
                     continue;
                 }
                 if crate::tools::native::is_bash_tool_name(&row.tool_name) {
-                    if let Some(mut retained) = ToolCallLifecycle::load_by_doc_id(
-                        node.clone(),
-                        &row.doc_id,
-                        node_did,
-                        &row.session_id,
-                        row.requester_did.as_deref(),
-                    )
-                    .await?
-                    {
-                        if executions.settle_retained_stop(&mut retained).await? {
-                            report.tool_calls_terminalized += usize::from(retained.is_terminal());
-                            continue;
-                        }
+                    let mut retained = load_recovery_lifecycle(node, access, &row).await?;
+                    if executions.settle_retained_stop(&mut retained).await? {
+                        report.tool_calls_terminalized += usize::from(retained.is_terminal());
+                        continue;
                     }
                 }
-                let updated = match recover_tool_call_row(node, &row, deadline_at, cause, true)
-                    .await
+                let updated = match recover_tool_call_row(
+                    node,
+                    access,
+                    &row,
+                    deadline_at,
+                    cause,
+                    true,
+                )
+                .await
                 {
                     Ok(updated) => updated,
                     Err(error) => {
@@ -404,7 +409,7 @@ impl super::ToolCallLifecycle {
                     }
                 };
                 if updated {
-                    append_recovered_background_tool_completion(node, &row, cause).await;
+                    append_recovered_background_tool_completion(node, access, &row, cause).await;
                     report.tool_calls_terminalized += 1;
                 }
                 continue;
@@ -429,27 +434,27 @@ impl super::ToolCallLifecycle {
                 continue;
             };
 
-            let updated = match recover_tool_call_row(node, &row, deadline_at, outcome, true).await
-            {
-                Ok(updated) => updated,
-                Err(error) => {
-                    tracing::warn!(
-                        doc_id = %row.doc_id,
-                        request_id = row.request_id.as_deref().unwrap_or(""),
-                        session_id = %row.session_id,
-                        tool_call_id = %row.tool_call_id,
-                        error = %error,
-                        "failed to reconcile orphaned background tool"
-                    );
-                    continue;
-                }
-            };
+            let updated =
+                match recover_tool_call_row(node, access, &row, deadline_at, outcome, true).await {
+                    Ok(updated) => updated,
+                    Err(error) => {
+                        tracing::warn!(
+                            doc_id = %row.doc_id,
+                            request_id = row.request_id.as_deref().unwrap_or(""),
+                            session_id = %row.session_id,
+                            tool_call_id = %row.tool_call_id,
+                            error = %error,
+                            "failed to reconcile orphaned background tool"
+                        );
+                        continue;
+                    }
+                };
             executions.forget_process_record(&row.tool_call_id, &row.doc_id);
             if !updated {
                 continue;
             }
 
-            append_recovered_background_tool_completion(node, &row, outcome).await;
+            append_recovered_background_tool_completion(node, access, &row, outcome).await;
             report.tool_calls_terminalized += 1;
             tracing::info!(
                 doc_id = %row.doc_id,
@@ -460,9 +465,8 @@ impl super::ToolCallLifecycle {
             );
         }
 
-        // A record whose execution is neither live here nor running is left
-        // from a crash after settlement, or from a group that outlived its
-        // settled row. Stop what is still proven owned, then forget it.
+        // Filtered absence does not prove settlement. Retain an unresolved
+        // process record until its selected Agent can observe the terminal row.
         let records = {
             let executions = executions.clone();
             tokio::task::spawn_blocking(move || executions.process_record_list())
@@ -470,12 +474,29 @@ impl super::ToolCallLifecycle {
                 .context("enumerating retained background process records")?
         };
         for record in records {
-            if running_background.contains(&record.tool_call_doc_id)
-                || executions
-                    .contains(&record.tool_call_id, &record.tool_call_doc_id)
-                    .await
+            if executions
+                .contains(&record.tool_call_id, &record.tool_call_doc_id)
+                .await
             {
                 continue;
+            }
+            match selected_agent_observes_terminal_tool(
+                &accesses,
+                node_did,
+                &record.tool_call_doc_id,
+                &record.tool_call_id,
+            )
+            .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::warn!(doc_id = %record.tool_call_doc_id, "retaining unresolved background process record");
+                    continue;
+                }
+                Err(error) => {
+                    tracing::warn!(doc_id = %record.tool_call_doc_id, %error, "retaining background process record after failed terminal observation");
+                    continue;
+                }
             }
             let (before, after) = record.identity.stop().await;
             if crate::tools::exec::ProcessStopOutcome::from_observations(before, after)
@@ -552,6 +573,7 @@ impl super::ToolCallLifecycle {
                 let request_id = lifecycle.calling_request_id().await?;
                 crate::tools::background::completion::append_background_tool_completion(
                     node,
+                    &lifecycle.access()?,
                     lifecycle.session_id(),
                     &request_id,
                     &doc_id,
@@ -581,8 +603,10 @@ impl super::ToolCallLifecycle {
     pub async fn reconcile_background_completion_side_effects(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
+        identities: &RecoveryIdentities,
     ) -> Result<BackgroundCompletionSideEffectReport> {
-        let rows = load_pending_background_completion_rows(node, node_did).await?;
+        let accesses = recovery_accesses(node, node_did, identities)?;
+        let rows = load_pending_background_completion_rows(node_did, &accesses).await?;
         let mut report = BackgroundCompletionSideEffectReport::default();
 
         for row in rows {
@@ -592,12 +616,6 @@ impl super::ToolCallLifecycle {
             let Some(request_id) = non_empty(row.request_id.as_deref()) else {
                 continue;
             };
-            if lookup_parent_request(node, node_did, request_id, None)
-                .await?
-                .is_none()
-            {
-                continue;
-            }
             let Some(session_id) = non_empty(row.session_id.as_deref()) else {
                 tracing::warn!(doc_id = %row.doc_id, "skipping completion redrive without session_id");
                 continue;
@@ -610,22 +628,34 @@ impl super::ToolCallLifecycle {
                 tracing::warn!(doc_id = %row.doc_id, "skipping completion redrive without request_doc_id");
                 continue;
             };
-            let output = match crate::tools::background::status::canonical_tool_output(
-                node,
-                &row.doc_id,
-                request_doc_id,
-                session_id,
+            let scope = crate::session::session_scope_filter(
                 node_did,
+                session_id,
                 row.requester_did.as_deref(),
-            )
-            .await
-            {
-                Ok(output) => output,
-                Err(error) => {
-                    tracing::warn!(doc_id = %row.doc_id, error = %error, "canonical background output is unresolved");
-                    continue;
-                }
+            );
+            let Some((access, _parent)) =
+                selected_parent_request(&accesses, node_did, request_id, request_doc_id, &scope)
+                    .await?
+            else {
+                continue;
             };
+            let output =
+                match crate::tools::background::status::observe_canonical_tool_output_with_access(
+                    access,
+                    &row.doc_id,
+                    request_doc_id,
+                    session_id,
+                    node_did,
+                    row.requester_did.as_deref(),
+                )
+                .await
+                {
+                    Ok(output) => output.into_text(),
+                    Err(error) => {
+                        tracing::warn!(doc_id = %row.doc_id, error = %error, "canonical background output is unresolved");
+                        continue;
+                    }
+                };
             // A session-message completion returns its result to this session
             // (Lean `CausalHop.return_keeps_caller_hop`).
             let wake =
@@ -634,18 +664,21 @@ impl super::ToolCallLifecycle {
                 } else {
                     crate::request::lifecycle::RequestHopCause::Continuation
                 };
-            let appended = crate::tools::background::completion::append_background_tool_completion(
-                node,
-                session_id,
-                request_id,
-                &row.doc_id,
-                &row.tool_name,
-                status,
-                &output,
-                reason,
-                wake,
-            )
-            .await;
+            let appended =
+                crate::tools::background::completion::append_background_tool_completion_for_parent(
+                    node,
+                    access,
+                    request_doc_id,
+                    session_id,
+                    request_id,
+                    &row.doc_id,
+                    &row.tool_name,
+                    status,
+                    &output,
+                    reason,
+                    wake,
+                )
+                .await;
             match appended {
                 Ok(()) => report.side_effects_converged += 1,
                 Err(error) => tracing::warn!(
@@ -915,9 +948,10 @@ mod tests {
 async fn recover_stuck_running_tool_calls(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
+    accesses: &RecoveryAccesses,
     executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
 ) -> Result<usize> {
-    let rows = load_running_tool_call_rows_for_agent(node, node_did).await?;
+    let rows = load_running_tool_call_rows_for_agent(node_did, accesses).await?;
 
     let mut recovered = 0;
     for row in rows {
@@ -931,23 +965,18 @@ async fn recover_stuck_running_tool_calls(
         }
 
         let deadline_at = parse_datetime(row.deadline_at.as_deref());
-        let parent = match row
-            .request_id
-            .as_deref()
-            .filter(|request_id| !request_id.is_empty())
-        {
-            Some(request_id) => lookup_parent_request(node, node_did, request_id, None).await?,
-            None => None,
+        let Some((access, parent)) = selected_running_parent(node_did, &row, accesses).await?
+        else {
+            continue;
         };
-
-        let outcome = classify_running_tool_recovery(&row, parent.as_ref(), Utc::now());
+        let outcome = classify_running_tool_recovery(&row, Some(&parent), Utc::now());
 
         let Some(outcome) = outcome else {
             continue;
         };
 
         let updated =
-            match recover_tool_call_row(node, &row, deadline_at, outcome, parent.is_some()).await {
+            match recover_tool_call_row(node, access, &row, deadline_at, outcome, true).await {
                 Ok(updated) => updated,
                 Err(error) => {
                     tracing::warn!(
@@ -983,10 +1012,14 @@ async fn recover_stuck_running_tool_calls(
 
 async fn append_recovered_background_tool_completion(
     node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     row: &RunningToolCallRow,
     outcome: RecoveryOutcome,
 ) {
     let Some(parent_request_id) = row.request_id.as_deref().filter(|id| !id.is_empty()) else {
+        return;
+    };
+    let Some(parent_request_doc_id) = non_empty(row.request_doc_id.as_deref()) else {
         return;
     };
     let status = match outcome {
@@ -999,18 +1032,21 @@ async fn append_recovered_background_tool_completion(
         }
     };
     let reason = outcome.notification_reason();
-    if let Err(error) = crate::tools::background::completion::append_background_tool_completion(
-        node,
-        &row.session_id,
-        parent_request_id,
-        &row.doc_id,
-        &row.tool_name,
-        status,
-        "",
-        Some(reason),
-        crate::request::lifecycle::RequestHopCause::Continuation,
-    )
-    .await
+    if let Err(error) =
+        crate::tools::background::completion::append_background_tool_completion_for_parent(
+            node,
+            access,
+            parent_request_doc_id,
+            &row.session_id,
+            parent_request_id,
+            &row.doc_id,
+            &row.tool_name,
+            status,
+            "",
+            Some(reason),
+            crate::request::lifecycle::RequestHopCause::Continuation,
+        )
+        .await
     {
         tracing::warn!(
             doc_id = %row.doc_id,
@@ -1024,16 +1060,19 @@ async fn append_recovered_background_tool_completion(
 }
 
 async fn load_running_tool_call_rows_for_agent(
-    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
+    accesses: &RecoveryAccesses,
 ) -> Result<Vec<RunningToolCallRow>> {
     let escaped = escape_graphql_string(node_did);
-    load_running_tool_call_rows_with_filter(node, &format!(r#", node_did: {{ _eq: "{escaped}" }}"#))
-        .await
+    load_running_tool_call_rows_with_filter(
+        accesses,
+        &format!(r#", node_did: {{ _eq: "{escaped}" }}"#),
+    )
+    .await
 }
 
 async fn load_running_tool_call_rows_with_filter(
-    node: &std::sync::Arc<EmbeddedNode>,
+    accesses: &RecoveryAccesses,
     extra_filter: &str,
 ) -> Result<Vec<RunningToolCallRow>> {
     let query = format!(
@@ -1058,33 +1097,23 @@ async fn load_running_tool_call_rows_with_filter(
     }}"#
     );
 
-    let resp = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "load_running_tool_call_rows_with_filter",
-    )
-    .await?;
-
-    let values = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let mut rows = Vec::with_capacity(values.len());
-    for value in values {
-        match serde_json::from_value::<RunningToolCallRow>(value.clone()) {
-            Ok(row) => rows.push(row),
-            Err(error) => {
-                tracing::warn!(
-                    doc_id = value
-                        .get("_docID")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or(""),
+    let mut rows = Vec::new();
+    let mut seen = rapidhash::RapidHashSet::default();
+    for access in accesses.values() {
+        let response = access.execute(&query).await?;
+        let values = response
+            .pointer("/data/AgentToolCall")
+            .and_then(serde_json::Value::as_array)
+            .context("running tool-call recovery query omitted rows")?;
+        for value in values {
+            match serde_json::from_value::<RunningToolCallRow>(value.clone()) {
+                Ok(row) if seen.insert(row.doc_id.clone()) => rows.push(row),
+                Ok(_) => {}
+                Err(error) => tracing::warn!(
+                    doc_id = value.get("_docID").and_then(serde_json::Value::as_str).unwrap_or(""),
                     error = %error,
                     "skipping malformed running tool-call row during recovery"
-                );
+                ),
             }
         }
     }
@@ -1092,8 +1121,8 @@ async fn load_running_tool_call_rows_with_filter(
 }
 
 async fn load_pending_background_completion_rows(
-    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
+    accesses: &RecoveryAccesses,
 ) -> Result<Vec<TerminalBackgroundToolRow>> {
     let node_did = escape_graphql_string(node_did);
     let query = format!(
@@ -1122,31 +1151,24 @@ async fn load_pending_background_completion_rows(
             }}
         }}"#
     );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "load_pending_background_completion_rows",
-    )
-    .await?;
-    let values = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(serde_json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut rows = Vec::with_capacity(values.len());
-    for value in values {
-        match serde_json::from_value::<TerminalBackgroundToolRow>(value.clone()) {
-            Ok(row) => rows.push(row),
-            Err(error) => tracing::warn!(
-                doc_id = value
-                    .get("_docID")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or(""),
-                error = %error,
-                "skipping malformed terminal background row during side-effect recovery"
-            ),
+    let mut rows = Vec::new();
+    let mut seen = rapidhash::RapidHashSet::default();
+    for access in accesses.values() {
+        let response = access.execute(&query).await?;
+        let values = response
+            .pointer("/data/AgentToolCall")
+            .and_then(serde_json::Value::as_array)
+            .context("background completion recovery query omitted rows")?;
+        for value in values {
+            match serde_json::from_value::<TerminalBackgroundToolRow>(value.clone()) {
+                Ok(row) if seen.insert(row.doc_id.clone()) => rows.push(row),
+                Ok(_) => {}
+                Err(error) => tracing::warn!(
+                    doc_id = value.get("_docID").and_then(serde_json::Value::as_str).unwrap_or(""),
+                    error = %error,
+                    "skipping malformed terminal background row during side-effect recovery"
+                ),
+            }
         }
     }
     Ok(rows)
@@ -1187,7 +1209,7 @@ fn background_completion_projection(
 /// `exact` narrows the lookup to one physical request (`_docID`) within an
 /// exact session scope filter.
 async fn lookup_parent_request(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     node_did: &str,
     request_id: &str,
     exact: Option<(&str, &str)>,
@@ -1205,23 +1227,16 @@ async fn lookup_parent_request(
     };
     let query = format!(
         r#"{{ AgentRequest(filter: {{ {filter} }}, limit: 2) {{
-            _docID request_id node_did requester_did session_id lifecycle_state
+            _docID request_id node_did requester_did session_id agent_did lifecycle_state
             caused_by_trigger_id request_hop workspace_id workspace_authority
             workspace_owner_node_did workspace_seal_hash
         }} }}"#
     );
 
-    let resp = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "lookup_parent_request",
-    )
-    .await?;
+    let resp = access.execute(&query).await?;
 
     let value = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
+        .pointer("/data/AgentRequest")
         .context("AgentRequest field missing from parent recovery query")?;
     let rows: Vec<AgentRequestRow> = serde_json::from_value(value.clone())
         .context("decode parent AgentRequest rows for tool-call recovery")?;
@@ -1232,34 +1247,159 @@ async fn lookup_parent_request(
     Ok(rows.into_iter().next())
 }
 
+async fn selected_running_parent<'a>(
+    node_did: &str,
+    row: &RunningToolCallRow,
+    accesses: &'a RecoveryAccesses,
+) -> Result<Option<(&'a crate::ConfigAccess, AgentRequestRow)>> {
+    let (Some(request_doc_id), Some(request_id)) = (
+        non_empty(row.request_doc_id.as_deref()),
+        non_empty(row.request_id.as_deref()),
+    ) else {
+        return Ok(None);
+    };
+    if row.node_did.as_deref() != Some(node_did) {
+        return Ok(None);
+    }
+    let scope = crate::session::session_scope_filter(
+        node_did,
+        &row.session_id,
+        row.requester_did.as_deref(),
+    );
+    selected_parent_request(accesses, node_did, request_id, request_doc_id, &scope).await
+}
+
+async fn selected_parent_request<'a>(
+    accesses: &'a RecoveryAccesses,
+    node_did: &str,
+    request_id: &str,
+    request_doc_id: &str,
+    scope: &str,
+) -> Result<Option<(&'a crate::ConfigAccess, AgentRequestRow)>> {
+    for (agent_did, access) in accesses {
+        let Some(parent) =
+            lookup_parent_request(access, node_did, request_id, Some((request_doc_id, scope)))
+                .await?
+        else {
+            continue;
+        };
+        if parent.agent_did.as_deref() == Some(agent_did.as_str()) {
+            return Ok(Some((access, parent)));
+        }
+    }
+    Ok(None)
+}
+
+async fn selected_agent_observes_terminal_tool(
+    accesses: &RecoveryAccesses,
+    node_did: &str,
+    tool_doc_id: &str,
+    tool_call_id: &str,
+) -> Result<bool> {
+    #[derive(Deserialize)]
+    struct ObservedTool {
+        #[serde(flatten)]
+        row: RunningToolCallRow,
+        lifecycle_state: Option<String>,
+    }
+    let query = format!(
+        r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{
+            _docID request_id request_doc_id requester_did node_did session_id
+            tool_call_id tool_name deadline_at await_mode cancel_cause job_pin lifecycle_state
+        }} }}"#,
+        escape_graphql_string(tool_doc_id)
+    );
+    for (agent_did, access) in accesses {
+        let response = access.execute(&query).await?;
+        let values = response
+            .pointer("/data/AgentToolCall")
+            .and_then(serde_json::Value::as_array)
+            .context("terminal tool observation omitted rows")?;
+        anyhow::ensure!(values.len() <= 1, "terminal tool observation is ambiguous");
+        let Some(value) = values.first() else {
+            continue;
+        };
+        let observed: ObservedTool = serde_json::from_value(value.clone())?;
+        let row = observed.row;
+        if row.doc_id != tool_doc_id
+            || row.tool_call_id != tool_call_id
+            || row.node_did.as_deref() != Some(node_did)
+            || !observed
+                .lifecycle_state
+                .as_deref()
+                .and_then(ToolCallState::from_persisted)
+                .is_some_and(ToolCallState::is_terminal)
+        {
+            continue;
+        }
+        let (Some(request_id), Some(request_doc_id)) = (
+            non_empty(row.request_id.as_deref()),
+            non_empty(row.request_doc_id.as_deref()),
+        ) else {
+            continue;
+        };
+        let scope = crate::session::session_scope_filter(
+            node_did,
+            &row.session_id,
+            row.requester_did.as_deref(),
+        );
+        let Some(parent) =
+            lookup_parent_request(access, node_did, request_id, Some((request_doc_id, &scope)))
+                .await?
+        else {
+            continue;
+        };
+        if parent.agent_did.as_deref() == Some(agent_did.as_str()) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 async fn load_recovery_lifecycle(
     node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     row: &RunningToolCallRow,
 ) -> Result<ToolCallLifecycle> {
     let node_did = row
         .node_did
         .as_deref()
         .context("recovery row omitted node_did")?;
-    ToolCallLifecycle::load_by_doc_id(
-        node.clone(),
-        &row.doc_id,
-        node_did,
-        &row.session_id,
-        row.requester_did.as_deref(),
-    )
-    .await?
-    .context("recovery physical tool row disappeared")
+    access
+        .transact_readonly("tool.recovery_load", |txn| {
+            let node = node.clone();
+            Box::pin(async move {
+                let mut lifecycle = ToolCallLifecycle::load_by_doc_id_in_txn(
+                    txn,
+                    node,
+                    &row.doc_id,
+                    node_did,
+                    &row.session_id,
+                    row.requester_did.as_deref(),
+                )
+                .await?
+                .context("recovery physical tool row disappeared")?;
+                anyhow::ensure!(
+                    txn.actor_did() == Some(lifecycle.actor().as_str()),
+                    "tool recovery actor mismatch"
+                );
+                lifecycle.bind_agent_signer(txn.managed_agent_signer())?;
+                Ok::<_, anyhow::Error>(lifecycle)
+            })
+        })
+        .await
 }
 
 async fn recover_tool_call_row(
     node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     row: &RunningToolCallRow,
     deadline_at: Option<DateTime<Utc>>,
     outcome: RecoveryOutcome,
     completion_side_effects_owed: bool,
 ) -> Result<bool> {
     let _ = completion_side_effects_owed;
-    let mut lifecycle = load_recovery_lifecycle(node, row).await?;
+    let mut lifecycle = load_recovery_lifecycle(node, access, row).await?;
     if lifecycle.state != ToolCallState::Running {
         return Ok(false);
     }
@@ -1571,5 +1711,101 @@ impl RecoveryOutcome {
                 }
                 Self::Failed | Self::ProcessLost => None,
             })
+    }
+}
+
+#[cfg(test)]
+mod actor_read_tests {
+    use super::*;
+    use crate::tools::call::lifecycle::admission_fixture::{
+        published_admission_with_owner, PublishedAdmissionOptions,
+    };
+
+    #[tokio::test]
+    async fn recovery_discovers_user_owned_tool_and_parent_as_selected_agent() {
+        let (mut admission, parent) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: "recovery-selected-agent-observation".into(),
+            tool_name: Some("bash".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let node = admission.node.clone();
+        let doc_id = admission.tool.doc_id().unwrap().to_owned();
+        let query = format!(
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(&doc_id),
+            escape_graphql_string(&parent.request().doc_id),
+        );
+        let node_view = crate::ConfigAccess::local(node.clone())
+            .execute(&query)
+            .await;
+        if let Ok(response) = node_view {
+            assert_eq!(response["data"]["AgentToolCall"], serde_json::json!([]));
+            assert_eq!(response["data"]["AgentRequest"], serde_json::json!([]));
+        }
+
+        let identities: Vec<std::sync::Arc<dyn crate::store::identity::NodeIdentity>> =
+            vec![std::sync::Arc::new(
+                admission
+                    .tool
+                    .access()
+                    .unwrap()
+                    .managed_agent_signer()
+                    .unwrap(),
+            )];
+        let accesses = recovery_accesses(&node, &admission.node_did, &identities).unwrap();
+        let rows = load_running_tool_call_rows_for_agent(&admission.node_did, &accesses)
+            .await
+            .unwrap();
+        let row = rows.iter().find(|row| row.doc_id == doc_id).unwrap();
+        let (access, selected) = selected_running_parent(&admission.node_did, row, &accesses)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            selected.doc_id.as_deref(),
+            Some(parent.request().doc_id.as_str())
+        );
+        assert_eq!(access.actor_did().as_deref(), selected.agent_did.as_deref());
+        let tool_call_id = admission.tool.tool_call_id().to_owned();
+        assert!(!selected_agent_observes_terminal_tool(
+            &accesses,
+            &admission.node_did,
+            &doc_id,
+            &tool_call_id
+        )
+        .await
+        .unwrap());
+        assert!(!selected_agent_observes_terminal_tool(
+            &RecoveryAccesses::new(),
+            &admission.node_did,
+            &doc_id,
+            &tool_call_id
+        )
+        .await
+        .unwrap());
+        assert!(admission
+            .tool
+            .complete_owned("finished", None)
+            .await
+            .unwrap());
+        assert!(selected_agent_observes_terminal_tool(
+            &accesses,
+            &admission.node_did,
+            &doc_id,
+            &tool_call_id
+        )
+        .await
+        .unwrap());
+        assert!(!selected_agent_observes_terminal_tool(
+            &accesses,
+            &admission.node_did,
+            &doc_id,
+            "wrong-tool"
+        )
+        .await
+        .unwrap());
+        node.shutdown().await.unwrap();
     }
 }

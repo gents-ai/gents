@@ -6,11 +6,11 @@ use defra_core::signing::RemoteSigner;
 #[cfg(target_os = "macos")]
 use defra_core::signing::{SigningConfig, SigningKeyType};
 #[cfg(target_os = "macos")]
-use identity::{Identity as _, RawIdentity};
+use identity::RawIdentity;
 
 #[cfg(target_os = "macos")]
 use super::{lowercase_hex, IdentityKeyUnavailable};
-use super::{IdentityError, RegisteredIdentity, Result, ServiceAccount};
+use super::{IdentityError, KeyIdentity, RegisteredIdentity, Result, ServiceAccount};
 
 pub fn load_or_create_macos_secure_enclave_identity(
     label: &str,
@@ -29,14 +29,14 @@ pub fn load_macos_secure_enclave_identity(
 pub fn load_or_create_macos_keychain_identity(
     label: &str,
     service_account: Option<ServiceAccount>,
-) -> Result<RegisteredIdentity> {
+) -> Result<KeyIdentity> {
     register_macos_keychain_identity(label, true, service_account)
 }
 
 pub fn load_macos_keychain_identity(
     label: &str,
     service_account: Option<ServiceAccount>,
-) -> Result<RegisteredIdentity> {
+) -> Result<KeyIdentity> {
     register_macos_keychain_identity(label, false, service_account)
 }
 
@@ -83,24 +83,9 @@ fn register_macos_keychain_identity(
     label: &str,
     create_if_missing: bool,
     service_account: Option<ServiceAccount>,
-) -> Result<RegisteredIdentity> {
+) -> Result<KeyIdentity> {
     let identity = load_or_create_macos_keychain_raw_identity(label, create_if_missing)?;
-    let did = identity.did()?.to_string();
-    let public_key_bytes = identity.public_key_bytes();
-    defra_core::signing::store_identity(
-        &did,
-        SigningConfig {
-            key_type: SigningKeyType::Ed25519,
-            private_key_bytes: SigningConfig::private_key_bytes_from_vec(
-                identity.private_key_bytes(),
-            ),
-            public_key_bytes: public_key_bytes.clone(),
-            public_key_hex: lowercase_hex(&public_key_bytes),
-            remote_signer: None,
-            signing_authorization: None,
-        },
-    );
-    RegisteredIdentity::from_registered_did(did, service_account)
+    KeyIdentity::from_raw_identity(identity, service_account)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -108,7 +93,7 @@ fn register_macos_keychain_identity(
     _label: &str,
     _create_if_missing: bool,
     _service_account: Option<ServiceAccount>,
-) -> Result<RegisteredIdentity> {
+) -> Result<KeyIdentity> {
     Err(IdentityError::KeychainUnavailable)
 }
 

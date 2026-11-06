@@ -1,0 +1,193 @@
+use serde_json::Value;
+
+use super::{ConfigAccess, SchemaInstallError};
+use crate::store::graphql::GraphqlResponseError;
+
+/// The provenance of SDL supplied to a client-side signing operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentSchemaSource {
+    /// The caller explicitly selected its own authored schema bytes.
+    UserAuthored,
+    /// A schema observed from a remote server cannot authorize local signatures.
+    RemoteObservation,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AuthoredDocumentCreateError {
+    #[error("provide a locally authored schema for exactly one matching application collection")]
+    InvalidSchema,
+    #[error("canonical and runtime collections require their dedicated publication owner")]
+    ProtectedCollection,
+    #[error("document fields must be a nonempty object and cannot contain empty lists")]
+    InvalidFields,
+    #[error("authored document publication requires a held User and a running HTTP endpoint")]
+    ClientSignerRequired,
+    #[error("the authored schema does not match the live collection")]
+    Schema(#[source] SchemaInstallError),
+    #[error("client-signed document publication failed")]
+    Publication(#[source] GraphqlResponseError),
+    #[error("document publication outcome is unconfirmed; inspect the collection before retrying")]
+    Unconfirmed(#[source] GraphqlResponseError),
+}
+
+pub(super) fn document_create_allowed(
+    source: DocumentSchemaSource,
+    single_collection: bool,
+    application_collection: bool,
+    matches_live: bool,
+    held_signer: bool,
+    http: bool,
+) -> bool {
+    source == DocumentSchemaSource::UserAuthored
+        && single_collection
+        && application_collection
+        && matches_live
+        && held_signer
+        && http
+}
+
+fn contains_empty_list(value: &Value) -> bool {
+    match value {
+        Value::Array(values) => values.is_empty() || values.iter().any(contains_empty_list),
+        Value::Object(values) => values.values().any(contains_empty_list),
+        _ => false,
+    }
+}
+
+/// Create one application document using the held client's native signing key.
+/// The caller supplies locally authored SDL; observed server SDL is not signing authority.
+/// The live collection is checked before signing, and an ambiguous commit is not replayed.
+pub async fn create_authored_document(
+    access: &ConfigAccess,
+    collection: &str,
+    fields: &Value,
+    source: DocumentSchemaSource,
+    sdl: &str,
+) -> Result<String, AuthoredDocumentCreateError> {
+    if source != DocumentSchemaSource::UserAuthored {
+        return Err(AuthoredDocumentCreateError::InvalidSchema);
+    }
+    let application = !gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&collection)
+        && !gents_protocol::schemas::RUNTIME_COLLECTION_NAMES.contains(&collection);
+    if !application {
+        return Err(AuthoredDocumentCreateError::ProtectedCollection);
+    }
+    if !fields.as_object().is_some_and(|fields| !fields.is_empty()) || contains_empty_list(fields) {
+        return Err(AuthoredDocumentCreateError::InvalidFields);
+    }
+    let (held_signer, http) = match access {
+        ConfigAccess::Graphql(endpoint) => (
+            endpoint.pack_replay.is_none() && endpoint.held_client_signing_capability().is_ok(),
+            true,
+        ),
+        ConfigAccess::Local(_) => (false, false),
+    };
+    if !held_signer || !http {
+        return Err(AuthoredDocumentCreateError::ClientSignerRequired);
+    }
+    let plan = super::preview_schema_install(access, sdl)
+        .await
+        .map_err(AuthoredDocumentCreateError::Schema)?;
+    let single =
+        plan.collection_contracts.len() == 1 && plan.collection_contracts.contains_key(collection);
+    let matches_live = !plan.requires_publication;
+    if !document_create_allowed(source, single, application, matches_live, held_signer, http) {
+        return Err(AuthoredDocumentCreateError::InvalidSchema);
+    }
+    let mutation = format!(
+        "mutation($input: {collection}MutationInputArg!) {{ create_{collection}(input: $input) {{ _docID }} }}"
+    );
+    let variables = serde_json::json!({"input": fields});
+    access
+        .transact_write_with_finality("document.create_authored", |txn| {
+            let (mutation, variables) = (&mutation, &variables);
+            Box::pin(async move {
+                let response = txn
+                    .execute_client_signed_create(mutation, variables, sdl)
+                    .await?;
+                crate::store::graphql::created_doc_id(&response, collection)
+            })
+        })
+        .await
+        .map_err(|failure| {
+            if failure.unconfirmed {
+                AuthoredDocumentCreateError::Unconfirmed(failure.error)
+            } else {
+                AuthoredDocumentCreateError::Publication(failure.error)
+            }
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::NodeIdentity;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn authored_application_document_is_signed_by_the_held_user() -> anyhow::Result<()> {
+        const SDL: &str = "type AuthoredDocumentFixture { name: String }";
+        const WRONG: &str = "type AuthoredDocumentFixture { name: Int }";
+        let (db, user, access, _) =
+            crate::test_support::signed_test_node("authored-document").await;
+        let plan = super::super::preview_schema_install(&access, SDL).await?;
+        super::super::apply_schema_install(&access, SDL, &plan.artifact_digest).await?;
+        let doc = create_authored_document(
+            &access,
+            "AuthoredDocumentFixture",
+            &json!({"name": "created"}),
+            DocumentSchemaSource::UserAuthored,
+            SDL,
+        )
+        .await?;
+        let escaped = crate::store::graphql::escape_graphql_string(&doc);
+        let response = access.execute(&format!(
+            r#"{{ _commits(docID: "{escaped}", filter: {{fieldName: {{_eq: "_C"}}}}, order: {{height: ASC}}, limit: 1) {{cid}} }}"#,
+        )).await?;
+        let cid = response["data"]["_commits"][0]["cid"]
+            .as_str()
+            .expect("genesis CID");
+        let (block, signature) = db
+            .node
+            .authorized_signed_block_bytes(cid, Some(user.did()))
+            .await?;
+        let block = defra_core::block::Block::from_dag_cbor(&block)?;
+        let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
+        let signer = db::block::verify::verified_signature_signer_did(&block, &signature)
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(signer, user.did());
+        assert_ne!(user.did(), db.node_identity.did());
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot()
+            .identity_client_document_creation_cases;
+        for (case_name, source, schema) in [
+            ("remote", DocumentSchemaSource::RemoteObservation, SDL),
+            ("schema-mismatch", DocumentSchemaSource::UserAuthored, WRONG),
+        ] {
+            let model = cases.iter().find(|case| case["name"] == case_name).unwrap();
+            assert_eq!(model["expected_route"], "refuse");
+            assert!(
+                create_authored_document(
+                    &access,
+                    "AuthoredDocumentFixture",
+                    &json!({"name": "denied"}),
+                    source,
+                    schema,
+                )
+                .await
+                .is_err(),
+                "{case_name}"
+            );
+        }
+        let response = access
+            .execute("{ AuthoredDocumentFixture { name } }")
+            .await?;
+        assert_eq!(
+            response["data"]["AuthoredDocumentFixture"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        Ok(())
+    }
+}

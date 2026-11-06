@@ -45,13 +45,12 @@ describe("the shell view", () => {
     ({
       sessionId: "s1",
       nodeDid: "node",
-      agentId: null,
+      agentDid: null,
       turnState: "running",
       latestRequestId: "r1",
       pendingTurn: null,
       queuedTurns: [],
       foldedInputs: [],
-      hydration: null,
       timelineItems: [{ kind: "liveAssistant", itemKey: "live", content }],
     }) as unknown as DesktopSessionSnapshot;
 

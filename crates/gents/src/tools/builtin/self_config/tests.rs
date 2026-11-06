@@ -1,3 +1,4 @@
+use super::agent_management::{model_agent_mutate, model_agent_preview};
 use super::command::{agents::agent_params, contracts::help_patch_contracts};
 use super::*;
 
@@ -78,13 +79,464 @@ impl rig::completion::CompletionModel for RootReadModel {
 pub(super) fn config(categories: &[&str]) -> SelfConfigToolConfig {
     SelfConfigToolConfig {
         enabled: true,
-        agent_id: "beh-test".to_string(),
+        agent_did: "beh-test".to_string(),
         categories: categories.iter().map(|c| c.to_string()).collect(),
         no_lockout: false,
         preview: false,
         enable_pack_install: false,
         process_ceiling: Default::default(),
     }
+}
+
+pub(super) struct SelfConfigFixture {
+    db: crate::support::TestDb,
+    user_access: crate::ConfigAccess,
+    agent: Arc<dyn crate::NodeIdentity>,
+    agent_did: String,
+    node_binding: crate::store::config_client::ConfigurationNodeBinding,
+}
+
+impl SelfConfigFixture {
+    pub(super) async fn new(name: &str) -> Self {
+        let (db, _user, user_access, binding) = crate::test_support::signed_test_node(name).await;
+        let agent =
+            crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+                .expect("fixture Agent is derived from the held runtime");
+        let response = user_access.execute("{ Node { _docID } }").await.unwrap();
+        let node_binding = crate::store::config_client::ConfigurationNodeBinding {
+            node_did: identity::Did::new(db.node_identity.did()).unwrap(),
+            doc_id: response["data"]["Node"][0]["_docID"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+            enabled: true,
+            default_agent_did: Some(binding.agent_did.clone()),
+        };
+        Self {
+            db,
+            user_access,
+            agent,
+            agent_did: binding.agent_did,
+            node_binding,
+        }
+    }
+
+    pub(super) async fn grant_selected_configuration(&self) {
+        self.user_access
+            .transact_write("test.self_config.grant_selected", |txn| {
+                let owner = self.db.node_identity.did();
+                let agent = &self.agent_did;
+                Box::pin(async move {
+                    crate::store::config_client::grant_selected_self_configuration(
+                        txn, owner, agent,
+                    )
+                    .await
+                })
+            })
+            .await
+            .expect("User grants selected configuration to the Agent");
+    }
+
+    pub(super) async fn install_sibling(&self, display_name: &str) -> String {
+        let user = identity::Did::new(self.user_access.actor_did().unwrap()).unwrap();
+        let binding = crate::store::identity::provision_agent_identity_authorized(
+            &self.db.node,
+            self.db.node_identity.as_ref(),
+            &user,
+        )
+        .await
+        .unwrap();
+        crate::test_support::install_test_agent_binding_with_access(
+            self.db.node_identity.did(),
+            display_name,
+            &binding,
+            &self.user_access,
+        )
+        .await;
+        binding.agent_did
+    }
+
+    /// The User publishes `root` as the selected WorkspaceRoot that the Agent
+    /// may use, so Tools.host.root admission has an allowed root to match.
+    pub(super) async fn publish_workspace_root(&self, root: &std::path::Path) {
+        let root = std::fs::canonicalize(root).expect("canonical workspace root");
+        crate::tools::surface::set_workspace_root_with_readers(
+            &self.user_access,
+            self.db.node_identity.did(),
+            &root.to_string_lossy(),
+            None,
+            true,
+            std::slice::from_ref(&self.agent_did),
+        )
+        .await
+        .expect("User publishes the selected WorkspaceRoot");
+    }
+
+    pub(super) async fn grant_node_reader(&self) {
+        self.user_access
+            .add_actor_relationship(
+                "Node",
+                &self.node_binding.doc_id,
+                "runtime_reader",
+                &identity::Did::new(&self.agent_did).unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+
+    async fn grant_account_fixture_selections(
+        &self,
+        documents: &[(crate::Collection, String, bool)],
+    ) {
+        self.user_access
+            .transact_write("test.account_choice.grant_selections", |txn| {
+                Box::pin(async move {
+                    let actor = identity::Did::new(&self.agent_did)?;
+                    for (collection, id, write) in documents {
+                        let (doc, _) =
+                            crate::store::config_client::read_desired_state_record_in_txn(
+                                txn,
+                                *collection,
+                                self.node_did(),
+                                id,
+                            )
+                            .await?
+                            .expect("account choice configuration exists");
+                        txn.add_actor_relationship(
+                            collection.graphql_type(),
+                            &doc,
+                            "selection_manager",
+                            &actor,
+                        )
+                        .await?;
+                        if *write {
+                            txn.add_actor_relationship(
+                                collection.graphql_type(),
+                                &doc,
+                                "writer",
+                                &actor,
+                            )
+                            .await?;
+                        }
+                    }
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
+    }
+
+    async fn grant_selected_backend_writer(&self) {
+        let backend_id = format!("{}:backend", self.agent_did());
+        let response = self.user_access.execute(&format!(
+            r#"{{ InferenceBackendMetadata(filter: {{backend_id: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
+            escape_graphql_string(&backend_id),
+        )).await.unwrap();
+        let doc_id = response["data"]["InferenceBackendMetadata"][0]["_docID"]
+            .as_str()
+            .expect("selected backend metadata exists");
+        self.user_access
+            .add_actor_relationship(
+                "InferenceBackendMetadata",
+                doc_id,
+                "writer",
+                &identity::Did::new(&self.agent_did).unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+
+    pub(super) async fn grant_agent_delete(&self) {
+        crate::ConfigAccess::local_as(
+            self.db.node.clone(),
+            identity::Did::new(self.db.node_identity.did()).unwrap(),
+        )
+        .grant_node_permission(
+            &identity::Did::new(&self.agent_did).unwrap(),
+            crate::store::config_client::NodePermission::DocumentDelete,
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn grant_agent_relation_delete(&self) {
+        crate::ConfigAccess::local_as(
+            self.db.node.clone(),
+            identity::Did::new(self.db.node_identity.did()).unwrap(),
+        )
+        .grant_node_permission(
+            &identity::Did::new(&self.agent_did).unwrap(),
+            crate::store::config_client::NodePermission::DacRelationDelete,
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn grant_user_relation_delete(&self) {
+        let admin = crate::ConfigAccess::local_as(
+            self.db.node.clone(),
+            identity::Did::new(self.db.node_identity.did()).unwrap(),
+        );
+        let user = identity::Did::new(self.user_access.actor_did().unwrap()).unwrap();
+        admin
+            .grant_node_permission(
+                &user,
+                crate::store::config_client::NodePermission::DacRelationDelete,
+            )
+            .await
+            .unwrap();
+    }
+
+    pub(super) async fn grant_agent_schema(&self) {
+        let admin = crate::ConfigAccess::local_as(
+            self.db.node.clone(),
+            identity::Did::new(self.db.node_identity.did()).unwrap(),
+        );
+        let actor = identity::Did::new(&self.agent_did).unwrap();
+        for permission in [
+            crate::store::config_client::NodePermission::CollectionGet,
+            crate::store::config_client::NodePermission::CollectionPatch,
+        ] {
+            admin
+                .grant_node_permission(&actor, permission)
+                .await
+                .unwrap();
+        }
+    }
+
+    pub(super) fn schema_tool(&self) -> crate::tools::builtin::schema_help::SchemaTool {
+        crate::tools::builtin::schema_help::SchemaTool::for_managed_agent(
+            self.db.node.clone(),
+            self.agent.as_ref(),
+        )
+        .unwrap()
+    }
+
+    pub(super) async fn grant_sibling_configuration(&self, sibling: &str) {
+        self.grant_user_relation_delete().await;
+        self.user_access
+            .transact_write("test.self_config.grant_sibling", |txn| {
+                let owner = self.db.node_identity.did();
+                let actor = &self.agent_did;
+                Box::pin(async move {
+                    crate::store::config_client::grant_selected_self_configuration(
+                        txn, owner, sibling,
+                    )
+                    .await?;
+                    let (doc_id, _) =
+                        crate::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            crate::Collection::Agent,
+                            owner,
+                            sibling,
+                        )
+                        .await?
+                        .expect("sibling Agent exists");
+                    txn.delete_actor_relationship(
+                        "Agent",
+                        &doc_id,
+                        "config_writer",
+                        &identity::Did::new(sibling)?,
+                    )
+                    .await?;
+                    txn.add_actor_relationship(
+                        "Agent",
+                        &doc_id,
+                        "config_writer",
+                        &identity::Did::new(actor)?,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
+    }
+
+    async fn grant_pack_install(&self) {
+        self.grant_pack_install_to(&self.agent_did).await;
+    }
+
+    async fn grant_pack_install_to(&self, agent_did: &str) {
+        use crate::store::config_client::{
+            apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
+            DesiredStateApplyPlan,
+        };
+        let tools_id = format!("{agent_did}:tools");
+        self.user_access
+            .transact_write("test.self_config.grant_pack_install", |txn| {
+                let tools_id = &tools_id;
+                let owner = self.db.node_identity.did();
+                Box::pin(async move {
+                    let (_, mut tools) = read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Tools,
+                        owner,
+                        tools_id,
+                    )
+                    .await?
+                    .expect("selected Tools exists");
+                    tools["self_config"] =
+                        json!({"enable_self_config": true, "enable_pack_install": true});
+                    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                        collection: crate::Collection::Tools,
+                        add: tools.clone(),
+                        update: tools,
+                    }])?;
+                    apply_desired_state_plan(txn, &plan).await
+                })
+            })
+            .await
+            .unwrap();
+    }
+
+    pub(super) fn agent_did(&self) -> &str {
+        &self.agent_did
+    }
+
+    pub(super) fn node_did(&self) -> &str {
+        self.db.node_identity.did()
+    }
+
+    pub(super) fn user_access(&self) -> &crate::ConfigAccess {
+        &self.user_access
+    }
+
+    pub(super) async fn update_signed_configuration(
+        &self,
+        collection: crate::Collection,
+        id: &str,
+        patch: Value,
+    ) {
+        let schema = match collection {
+            crate::Collection::AgentContext => gents_protocol::schemas::AGENT_CONTEXT,
+            crate::Collection::InferenceProfile => gents_protocol::schemas::INFERENCE_PROFILE,
+            crate::Collection::Node => gents_protocol::schemas::NODE,
+            crate::Collection::Tools => gents_protocol::schemas::TOOLS,
+            _ => panic!("no fixture schema for {}", collection.graphql_type()),
+        };
+        self.user_access
+            .transact_write("test.self_config.signed_fixture_update", |txn| {
+                let patch = &patch;
+                Box::pin(async move {
+                    let (doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                        txn, collection, self.node_did(), id,
+                    )
+                    .await?
+                    .expect("fixture document exists");
+                    let name = collection.graphql_type();
+                    let doc = crate::store::graphql::escape_graphql_string(&doc);
+                    txn.execute_client_signed_update(
+                        &format!(r#"mutation($input: {name}MutationInputArg!) {{ update_{name}(docID: "{doc}", input: $input) {{ _docID }} }}"#),
+                        &json!({"input": patch}),
+                        schema,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
+    }
+
+    pub(super) fn core(&self) -> SelfConfigCore {
+        SelfConfigCore::new(
+            self.db.node.clone(),
+            self.db.node_identity.did().to_owned(),
+            self.agent_did.clone(),
+        )
+        .unwrap()
+        .with_runtime_identity(Some(self.db.node_identity.clone()))
+        .with_agent_signer(self.agent.managed_agent_signer())
+        .with_node_binding(Some(self.node_binding.clone()))
+    }
+
+    pub(super) async fn add_collection(&self, sdl: &str) {
+        crate::ConfigAccess::local_as(
+            self.db.node.clone(),
+            identity::Did::new(self.db.node_identity.did()).unwrap(),
+        )
+        .add_collection(sdl)
+        .await
+        .unwrap();
+    }
+
+    pub(super) fn tools(&self, categories: &[&str]) -> Vec<Box<dyn ToolDyn>> {
+        let mut grants = config(categories);
+        grants.agent_did = self.agent_did.clone();
+        grants.preview = true;
+        self.tools_with_config(&grants)
+    }
+
+    pub(super) fn tools_with_config(&self, grants: &SelfConfigToolConfig) -> Vec<Box<dyn ToolDyn>> {
+        self.tools_with_plugins(grants, test_plugins())
+    }
+
+    fn tools_with_plugins(
+        &self,
+        grants: &SelfConfigToolConfig,
+        plugins: Arc<crate::plugin::executor::PluginExecutor>,
+    ) -> Vec<Box<dyn ToolDyn>> {
+        assert_eq!(grants.agent_did, self.agent_did);
+        build_self_config_tools_with_runtime(
+            Arc::default(),
+            self.db.node.clone(),
+            self.db.node_identity.did().to_owned(),
+            Some(self.agent.clone()),
+            Some(self.db.node_identity.clone()),
+            grants,
+            plugins,
+            Some(self.node_binding.clone()),
+        )
+    }
+}
+
+#[tokio::test]
+async fn selected_configuration_requires_and_observes_user_grant() {
+    let fixture = SelfConfigFixture::new("self-config-selected-grant").await;
+    let tools = fixture.tools(&["tools"]);
+    let update =
+        |name| json!({"argv": ["tools", "update"], "set": {"display_name": name}}).to_string();
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    assert!(tool.call(update("Denied before grant")).await.is_err());
+
+    fixture.grant_selected_configuration().await;
+    tool.call(update("Allowed"))
+        .await
+        .expect("User grant permits the selected Agent update");
+
+    let admin = crate::ConfigAccess::local_as(
+        fixture.db.node.clone(),
+        identity::Did::new(fixture.db.node_identity.did()).unwrap(),
+    );
+    let user = identity::Did::new(fixture.user_access.actor_did().unwrap()).unwrap();
+    admin
+        .grant_node_permission(
+            &user,
+            crate::store::config_client::NodePermission::DacRelationDelete,
+        )
+        .await
+        .unwrap();
+    let response = fixture
+        .user_access
+        .execute("{ Agent { _docID } }")
+        .await
+        .unwrap();
+    let doc_id = response["data"]["Agent"][0]["_docID"].as_str().unwrap();
+    fixture
+        .user_access
+        .delete_actor_relationship(
+            "Agent",
+            doc_id,
+            "config_writer",
+            &identity::Did::new(&fixture.agent_did).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(tool.call(update("Denied after revocation")).await.is_err());
 }
 
 #[test]
@@ -286,7 +738,7 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
 #[tokio::test]
 async fn build_fails_closed_without_node_did() {
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let node = defra_node::EmbeddedNode::builder()
+    let node = defra_node::Node::builder()
         .data_path(tempdir.path().join("data"))
         .build()
         .await
@@ -308,7 +760,7 @@ async fn build_fails_closed_without_node_did() {
 #[tokio::test]
 async fn build_registers_gated_family() {
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let node = defra_node::EmbeddedNode::builder()
+    let node = defra_node::Node::builder()
         .data_path(tempdir.path().join("data"))
         .build()
         .await
@@ -335,7 +787,7 @@ async fn build_registers_gated_family() {
     );
     for core in [
         "native API",
-        "\"<DID>:<slug>\"",
+        "copy the exact agent_did",
         "Preview writes nothing.",
         "[\"validate\"] audits saved configuration",
         "[\"help\"] lists granted resources",
@@ -347,26 +799,19 @@ async fn build_registers_gated_family() {
 
 #[tokio::test]
 async fn pack_install_uses_current_node_and_inference_chain() {
-    let node = build_agent_node().await;
-    let identity = node_identity("pack-install");
-    let node_did = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
-    for role in ["coordinator", "worker", "verifier"] {
-        crate::test_support::install_test_agent(&node, &node_did, role).await;
-    }
-
     let (home, plugins) = crate::test_support::home_with_fixture_pack("plugin_documents_fixture");
-    let mut tool_config = config(&[]);
-    tool_config.agent_id = "setup".to_string();
-    tool_config.enable_pack_install = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        Some(identity),
-        &tool_config,
-        plugins,
-    );
+    let (fixture, tools) = signed_pack_tool("pack-install", plugins).await;
+    let node_did = fixture.node_did();
+    let coordinator = fixture.install_sibling("coordinator").await;
+    let worker = fixture.install_sibling("worker").await;
+    let verifier = fixture.install_sibling("verifier").await;
+    fixture.grant_node_reader().await;
+    let coordinator_profile = format!("{coordinator}:inference");
+    let worker_profile = format!("{worker}:inference");
+    let verifier_profile = format!("{verifier}:inference");
+    let coordinator_slot = format!("coordinator={coordinator_profile}");
+    let worker_slot = format!("worker={worker_profile}");
+    let verifier_slot = format!("verifier={verifier_profile}");
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -396,11 +841,11 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     );
     let slot_argv = [
         "--inference-slot",
-        "coordinator=coordinator:inference",
+        coordinator_slot.as_str(),
         "--inference-slot",
-        "worker=worker:inference",
+        worker_slot.as_str(),
         "--inference-slot",
-        "verifier=verifier:inference",
+        verifier_slot.as_str(),
     ];
     let mut preview_argv = vec![
         "pack",
@@ -446,9 +891,9 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     assert_eq!(
         output["inference"]["bindings"],
         json!({
-            "coordinator": "coordinator:inference",
-            "worker": "worker:inference",
-            "verifier": "verifier:inference",
+            "coordinator": coordinator_profile,
+            "worker": worker_profile,
+            "verifier": verifier_profile,
         })
     );
     let inspected: Value = serde_json::from_str(
@@ -512,9 +957,9 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         .call(
             json!({"argv": [
                 "pack", "update", "fixture/plugin_documents_fixture@1.0.0", "--digest", bad_digest,
-                "--inference-slot", "coordinator=coordinator:inference",
-                "--inference-slot", "worker=worker:inference",
-                "--inference-slot", "verifier=verifier:inference"
+                "--inference-slot", coordinator_slot.as_str(),
+                "--inference-slot", worker_slot.as_str(),
+                "--inference-slot", verifier_slot.as_str()
             ]})
             .to_string(),
         )
@@ -522,21 +967,33 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         .expect_err("a digest not returned by preview is rejected");
     assert!(rejected.to_string().contains("preview again"));
 
-    let owner = crate::store::graphql::escape_graphql_string(&node_did);
-    let tagged = node
-        .execute(&format!(
-            r#"mutation {{ update_Agent(filter: {{node_did: {{_eq: "{owner}"}}, agent_id: {{_eq: "fixture-worker"}}}}, input: {{tags: ["gents:pack:plugin_documents_fixture", "user:favorite"]}}) {{_docID}} }}"#
-        ))
-        .await;
-    assert!(!tagged.has_errors(), "{:?}", tagged.errors);
+    let rows = fixture
+        .user_access
+        .execute(
+            r#"{ Agent(filter: {display_name: {_eq: "Fixture worker"}}) { _docID agent_did } }"#,
+        )
+        .await
+        .unwrap();
+    let pack_worker = rows["data"]["Agent"][0]["_docID"].as_str().unwrap();
+    let doc = crate::store::graphql::escape_graphql_string(pack_worker);
+    fixture.user_access.transact_write("test.pack.tag_worker", |txn| {
+        let doc = &doc;
+        Box::pin(async move {
+            txn.execute_client_signed_update(
+                &format!(r#"mutation($input: AgentMutationInputArg!) {{ update_Agent(docID: "{doc}", input: $input) {{ _docID }} }}"#),
+                &json!({"input": {"tags": ["gents:pack:plugin_documents_fixture", "user:favorite"]}}),
+                gents_protocol::schemas::AGENT,
+            ).await
+        })
+    }).await.unwrap();
     let update_preview: Value = serde_json::from_str(
         &tool
             .call(
                 json!({"argv": [
                     "pack", "preview", "update", "fixture/plugin_documents_fixture@1.0.0",
-                    "--inference-slot", "coordinator=coordinator:inference",
-                    "--inference-slot", "worker=worker:inference",
-                    "--inference-slot", "verifier=verifier:inference"
+                    "--inference-slot", coordinator_slot.as_str(),
+                    "--inference-slot", worker_slot.as_str(),
+                    "--inference-slot", verifier_slot.as_str()
                 ]})
                 .to_string(),
             )
@@ -551,9 +1008,9 @@ async fn pack_install_uses_current_node_and_inference_chain() {
             .call(
                 json!({"argv": [
                     "pack", "update", "fixture/plugin_documents_fixture@1.0.0", "--digest", update_digest,
-                    "--inference-slot", "coordinator=coordinator:inference",
-                    "--inference-slot", "worker=worker:inference",
-                    "--inference-slot", "verifier=verifier:inference"
+                    "--inference-slot", coordinator_slot.as_str(),
+                    "--inference-slot", worker_slot.as_str(),
+                    "--inference-slot", verifier_slot.as_str()
                 ]})
                 .to_string(),
             )
@@ -565,14 +1022,16 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         updated["effective"]["digest"],
         output["effective"]["digest"]
     );
-    let tags = node
+    let tags = fixture
+        .user_access
         .execute(&format!(
-            r#"{{ Agent(filter: {{node_did: {{_eq: "{owner}"}}, agent_id: {{_eq: "fixture-worker"}}}}) {{tags}} }}"#
+            r#"{{ Agent(docID: "{}") {{ tags }} }}"#,
+            crate::store::graphql::escape_graphql_string(pack_worker),
         ))
-        .await;
-    assert!(!tags.has_errors(), "{:?}", tags.errors);
+        .await
+        .unwrap();
     assert_eq!(
-        tags.data.unwrap()["Agent"][0]["tags"],
+        tags["data"]["Agent"][0]["tags"],
         json!(["gents:pack:plugin_documents_fixture", "user:favorite"])
     );
     let store = crate::pack::store::PackStore::new(home.path());
@@ -609,15 +1068,18 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     let removed: Value = serde_json::from_str(&removed).unwrap();
     assert_eq!(removed["pack"], "fixture/plugin_documents_fixture");
 
-    let response = node
+    let response = fixture
+        .user_access
         .execute(&format!(
-            "{{ PackInstallation(filter: {{node_did: {{_eq: \"{}\"}}}}) {{_docID}} }}",
-            crate::store::graphql::escape_graphql_string(&node_did)
+            r#"{{ PackInstallation(filter: {{node_did: {{_eq: "{}"}}}}) {{_docID}} }}"#,
+            crate::store::graphql::escape_graphql_string(node_did),
         ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let data = response.data.unwrap();
-    assert!(data["PackInstallation"].as_array().unwrap().is_empty());
+        .await
+        .unwrap();
+    assert!(response["data"]["PackInstallation"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 
     let again = tool
         .call(json!({"argv": ["pack", "remove", "fixture/plugin_documents_fixture"]}).to_string())
@@ -626,26 +1088,18 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     assert!(again.to_string().contains("is not installed"), "{again:#}");
 }
 
-async fn pack_tool(
+async fn signed_pack_tool(
     label: &str,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
-) -> (Arc<EmbeddedNode>, String, Vec<Box<dyn ToolDyn>>) {
-    let node = build_agent_node().await;
-    let identity = node_identity(label);
-    let node_did = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
+) -> (SelfConfigFixture, Vec<Box<dyn ToolDyn>>) {
+    let fixture = SelfConfigFixture::new(label).await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_pack_install().await;
     let mut tool_config = config(&[]);
-    tool_config.agent_id = "setup".to_string();
+    tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.enable_pack_install = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        Some(identity),
-        &tool_config,
-        plugins,
-    );
-    (node, node_did, tools)
+    let tools = fixture.tools_with_plugins(&tool_config, plugins);
+    (fixture, tools)
 }
 
 async fn config_call(
@@ -663,7 +1117,7 @@ async fn config_call(
 #[tokio::test]
 async fn pack_list_pages_the_packs_the_home_store_holds() {
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
-    let (_node, _did, tools) = pack_tool("pack-list", plugins).await;
+    let (_fixture, tools) = signed_pack_tool("pack-list", plugins).await;
     let page: Value =
         serde_json::from_str(&config_call(&tools, &["pack", "list"]).await.unwrap()).unwrap();
     assert_eq!(page["source"], "store_and_installations");
@@ -695,7 +1149,7 @@ async fn pack_list_pages_the_packs_the_home_store_holds() {
         .unwrap_err();
     assert!(error.to_string().contains("between 1 and 50"), "{error}");
 
-    let (_node, _did, homeless) = pack_tool("pack-list-homeless", test_plugins()).await;
+    let (_fixture, homeless) = signed_pack_tool("pack-list-homeless", test_plugins()).await;
     let page: Value =
         serde_json::from_str(&config_call(&homeless, &["pack", "list"]).await.unwrap()).unwrap();
     assert_eq!(page["page"]["total"], 0);
@@ -705,7 +1159,7 @@ async fn pack_list_pages_the_packs_the_home_store_holds() {
 #[tokio::test]
 async fn pack_list_reports_a_damaged_archive_as_an_error_row() {
     let (home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
-    let (_node, _did, tools) = pack_tool("pack-list-damaged", plugins).await;
+    let (_fixture, tools) = signed_pack_tool("pack-list-damaged", plugins).await;
     let page: Value =
         serde_json::from_str(&config_call(&tools, &["pack", "list"]).await.unwrap()).unwrap();
     let digest = page["items"][0]["artifact_digest"].as_str().unwrap();
@@ -733,7 +1187,7 @@ async fn pack_update_without_a_version_asks_the_registry_and_fails_loudly_offlin
     let _registry_lock = PACK_REGISTRY_ENV.lock().await;
     let _registry = crate::test_support::EnvVarGuard::set("GENTS_REGISTRY", "http://127.0.0.1:9");
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
-    let (_node, _did, tools) = pack_tool("pack-update-offline", plugins).await;
+    let (_fixture, tools) = signed_pack_tool("pack-update-offline", plugins).await;
     let error = config_call(
         &tools,
         &["pack", "preview", "update", "fixture/documents_fixture"],
@@ -768,10 +1222,11 @@ async fn pack_install_refuses_a_pack_shipped_job_block() {
         serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
     pack_config["tools"][0]["integrations"] =
         json!({"plugins": [{"plugin": "acme/runner", "job": {"agent_targets": ["wf-run"]}}]});
-    pack_config["agent_targets"] = json!([{"target_id": "wf-run", "target_node_did": "did:key:foreign", "agent_id": "fixture-worker", "name": "wf-run"}]);
+    pack_config["agent_targets"] = json!([{"target_id": "wf-run", "target_node_did": "did:key:foreign", "agent_did": "fixture-worker", "name": "wf-run"}]);
     std::fs::write(&config_path, serde_json::to_vec(&pack_config).unwrap()).unwrap();
     let (_home, plugins) = crate::test_support::home_with_pack_dir(&dir);
-    let (_node, _did, tools) = pack_tool("pack-job-block", plugins).await;
+    let (fixture, tools) = signed_pack_tool("pack-job-block", plugins).await;
+    let slot = format!("worker={}:inference", fixture.agent_did());
     let error = format!(
         "{:#}",
         config_call(
@@ -782,7 +1237,7 @@ async fn pack_install_refuses_a_pack_shipped_job_block() {
                 "install",
                 "fixture/documents_fixture",
                 "--inference-slot",
-                "worker=setup:inference",
+                &slot,
             ],
         )
         .await
@@ -800,7 +1255,8 @@ async fn pack_install_refuses_tools_naming_an_unresolved_plugin() {
     pack_config["tools"][0]["integrations"] = json!({"plugins": [{"plugin": "acme/missing"}]});
     std::fs::write(&config_path, serde_json::to_vec(&pack_config).unwrap()).unwrap();
     let (_home, plugins) = crate::test_support::home_with_pack_dir(&dir);
-    let (node, _did, tools) = pack_tool("pack-unresolved-plugin", plugins).await;
+    let (fixture, tools) = signed_pack_tool("pack-unresolved-plugin", plugins).await;
+    let slot = format!("worker={}:inference", fixture.agent_did());
     let error = format!(
         "{:#}",
         config_call(
@@ -811,7 +1267,7 @@ async fn pack_install_refuses_tools_naming_an_unresolved_plugin() {
                 "install",
                 "fixture/documents_fixture",
                 "--inference-slot",
-                "worker=setup:inference",
+                &slot,
             ],
         )
         .await
@@ -821,32 +1277,19 @@ async fn pack_install_refuses_tools_naming_an_unresolved_plugin() {
         error.contains("acme/missing") && error.contains("fixture-worker-tools"),
         "{error}"
     );
-    let written = node
+    let written = fixture
+        .user_access
         .execute(r#"{ Tools(filter: {tools_id: {_eq: "fixture-worker-tools"}}) { tools_id } }"#)
-        .await;
-    assert!(written.data.unwrap()["Tools"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+        .await
+        .unwrap();
+    assert!(written["data"]["Tools"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn config_tools_cannot_self_grant_pack_install() {
-    let node = build_agent_node().await;
-    let identity = node_identity("pack-self-grant");
-    let node_did = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
-
-    let mut tool_config = config(&["tools"]);
-    tool_config.agent_id = "setup".to_string();
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        node_did,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("pack-self-grant").await;
+    fixture.grant_selected_configuration().await;
+    let tools = fixture.tools(&["tools"]);
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -869,56 +1312,12 @@ async fn config_tools_cannot_self_grant_pack_install() {
     );
 }
 
-async fn operator_replace_tools(node: &Arc<defra_node::EmbeddedNode>, tools: Value) {
-    use crate::store::config_client::{
-        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: crate::Collection::Tools,
-        add: tools.clone(),
-        update: tools,
-    }])
-    .unwrap();
-    ConfigAccess::transact_local_write(node, None, "test.operator_tools", |txn| {
-        let plan = &plan;
-        Box::pin(
-            async move { crate::store::config_client::apply_desired_state_plan(txn, plan).await },
-        )
-    })
-    .await
-    .unwrap();
-}
-
-async fn operator_grant_pack_install(
-    node: &Arc<defra_node::EmbeddedNode>,
-    owner: &str,
-    tools_id: &str,
-) {
-    operator_replace_tools(
-        node,
-        json!({"node_did": owner, "tools_id": tools_id,
-               "self_config": {"enable_self_config": true, "enable_pack_install": true}}),
-    )
-    .await;
-}
-
 #[tokio::test]
 async fn config_tools_unrelated_edit_on_granted_tools_is_accepted() {
-    let node = build_agent_node().await;
-    let identity = node_identity("granted-tools-edit");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "granted").await;
-    operator_grant_pack_install(&node, &owner, "granted:tools").await;
-    let mut tool_config = config(&["tools"]);
-    tool_config.agent_id = "granted".to_string();
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("granted-tools-edit").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_pack_install().await;
+    let tools = fixture.tools(&["tools"]);
 
     let edited = call_config_tool(
         &tools,
@@ -954,29 +1353,23 @@ async fn config_tools_unrelated_edit_on_granted_tools_is_accepted() {
 
 #[tokio::test]
 async fn config_tools_holder_may_grant_pack_install_to_a_sibling() {
-    let node = build_agent_node().await;
-    let identity = node_identity("pack-holder-sibling");
-    let node_did = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
-    crate::test_support::install_test_agent(&node, &node_did, "sibling").await;
+    let fixture = SelfConfigFixture::new("pack-holder-sibling").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_pack_install().await;
+    let sibling = fixture.install_sibling("sibling").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&sibling).await;
     let mut tool_config = config(&["node", "tools"]);
-    tool_config.agent_id = "setup".to_string();
+    tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.enable_pack_install = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        node_did,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let tools = fixture.tools_with_config(&tool_config);
     let applied = call_config_tool(
         &tools,
         vec![
             "tools".into(),
             "edit".into(),
             "--agent".into(),
-            "sibling".into(),
+            sibling.clone(),
             "--set".into(),
             r#"self_config={"enable_self_config":true,"enable_pack_install":true}"#.into(),
         ],
@@ -1018,49 +1411,64 @@ async fn config_call_message(
         .map_err(config_error_message)
 }
 
-async fn reselection_tools(
-    label: &str,
-    hold_pack_install: bool,
-) -> Vec<Box<dyn crate::inference::llm::tool::ToolDyn>> {
-    let node = build_agent_node().await;
-    let identity = node_identity(label);
-    let owner = identity.did().to_string();
-    for agent in ["worker", "sibling", "granted", "granted-2"] {
-        crate::test_support::install_test_agent(&node, &owner, agent).await;
+struct ReselectionFixture {
+    _fixture: SelfConfigFixture,
+    sibling: String,
+    granted: String,
+    granted2: String,
+    tools: Vec<Box<dyn crate::inference::llm::tool::ToolDyn>>,
+}
+
+impl std::ops::Deref for ReselectionFixture {
+    type Target = [Box<dyn crate::inference::llm::tool::ToolDyn>];
+    fn deref(&self) -> &Self::Target {
+        &self.tools
     }
-    operator_grant_pack_install(&node, &owner, "granted:tools").await;
-    operator_grant_pack_install(&node, &owner, "granted-2:tools").await;
+}
+
+async fn reselection_tools(label: &str, hold_pack_install: bool) -> ReselectionFixture {
+    let fixture = SelfConfigFixture::new(label).await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    let sibling = fixture.install_sibling("sibling").await;
+    let granted = fixture.install_sibling("granted").await;
+    let granted2 = fixture.install_sibling("granted-2").await;
+    for target in [&sibling, &granted, &granted2] {
+        fixture.grant_sibling_configuration(target).await;
+    }
+    fixture.grant_pack_install_to(&granted).await;
+    fixture.grant_pack_install_to(&granted2).await;
+    if hold_pack_install {
+        fixture.grant_pack_install().await;
+    }
     let mut tool_config = config(&["node", "agent", "tools"]);
-    tool_config.agent_id = "worker".to_owned();
+    tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.enable_pack_install = hold_pack_install;
-    build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    )
+    let tools = fixture.tools_with_config(&tool_config);
+    ReselectionFixture {
+        _fixture: fixture,
+        sibling,
+        granted,
+        granted2,
+        tools,
+    }
 }
 
 #[tokio::test]
 async fn context_reselect_cannot_acquire_grants() {
     let tools = reselection_tools("context-reselect", false).await;
-    for target in [None, Some("sibling")] {
+    let granted_tools = format!("{}:tools", tools.granted);
+    let selection = format!("tools_id=\"{granted_tools}\"");
+    for target in [None, Some(tools.sibling.as_str())] {
         let mut argv = argv_of(&["agent", "context", "edit"]);
         if let Some(target) = target {
             argv.extend(argv_of(&["--agent", target]));
         }
-        argv.extend(argv_of(&["--set", r#"tools_id="granted:tools""#]));
+        argv.extend(argv_of(&["--set", &selection]));
         let refused = config_call_message(&tools, argv)
             .await
             .expect_err("re-pointing a Context at granted Tools must not acquire the grant");
-        assert!(
-            refused.contains(
-                "tools_id \"granted:tools\" selects Tools carrying an operator grant this agent does not hold"
-            ),
-            "{target:?}: {refused}"
-        );
+        assert!(refused.contains(&format!("tools_id {granted_tools:?} selects Tools carrying an operator grant this agent does not hold")), "{target:?}: {refused}");
         assert!(
             refused.contains("cannot be self-granted"),
             "{target:?}: {refused}"
@@ -1074,18 +1482,13 @@ async fn context_reselect_cannot_acquire_grants() {
     .expect_err("a missing Tools reference is still refused");
     assert!(
         !missing.contains("operator grant"),
-        "the reference validator, not the grant guard, refuses a missing document: {missing}"
+        "the reference validator refuses a missing document: {missing}"
     );
     let holder = reselection_tools("context-reselect-holder", true).await;
+    let selection = format!("tools_id=\"{}:tools\"", holder.granted);
     call_config_tool(
         &holder,
-        argv_of(&[
-            "agent",
-            "context",
-            "edit",
-            "--set",
-            r#"tools_id="granted:tools""#,
-        ]),
+        argv_of(&["agent", "context", "edit", "--set", &selection]),
     )
     .await
     .expect("an agent holding the grant may select Tools that carry it");
@@ -1094,36 +1497,22 @@ async fn context_reselect_cannot_acquire_grants() {
 #[tokio::test]
 async fn agent_reselect_cannot_acquire_grants() {
     let tools = reselection_tools("agent-reselect", false).await;
-    for target in ["worker", "sibling"] {
+    let granted_context = format!("{}:context", tools.granted);
+    let selection = format!("context_id=\"{granted_context}\"");
+    for target in [tools._fixture.agent_did(), tools.sibling.as_str()] {
         let refused = config_call_message(
             &tools,
-            argv_of(&[
-                "agent",
-                "edit",
-                target,
-                "--set",
-                r#"context_id="granted:context""#,
-            ]),
+            argv_of(&["agent", "edit", target, "--set", &selection]),
         )
         .await
-        .expect_err("re-pointing a Agent at a granted chain must not acquire the grant");
-        assert!(
-            refused.contains(
-                "context_id \"granted:context\" selects Tools carrying an operator grant this agent does not hold"
-            ),
-            "{target}: {refused}"
-        );
+        .expect_err("re-pointing an Agent at a granted chain must not acquire the grant");
+        assert!(refused.contains(&format!("context_id {granted_context:?} selects Tools carrying an operator grant this agent does not hold")), "{target}: {refused}");
     }
     let holder = reselection_tools("agent-reselect-holder", true).await;
+    let selection = format!("context_id=\"{}:context\"", holder.granted);
     call_config_tool(
         &holder,
-        argv_of(&[
-            "agent",
-            "edit",
-            "sibling",
-            "--set",
-            r#"context_id="granted:context""#,
-        ]),
+        argv_of(&["agent", "edit", &holder.sibling, "--set", &selection]),
     )
     .await
     .expect("an agent holding the grant may select a chain that carries it");
@@ -1132,6 +1521,7 @@ async fn agent_reselect_cannot_acquire_grants() {
 #[tokio::test]
 async fn context_reselect_between_granted_tools_is_accepted() {
     let tools = reselection_tools("context-between-granted", false).await;
+    let selection = format!("tools_id=\"{}:tools\"", tools.granted2);
     call_config_tool(
         &tools,
         argv_of(&[
@@ -1139,9 +1529,9 @@ async fn context_reselect_between_granted_tools_is_accepted() {
             "context",
             "edit",
             "--agent",
-            "granted",
+            &tools.granted,
             "--set",
-            r#"tools_id="granted-2:tools""#,
+            &selection,
         ]),
     )
     .await
@@ -1150,15 +1540,10 @@ async fn context_reselect_between_granted_tools_is_accepted() {
 
 #[tokio::test]
 async fn context_create_selecting_granted_tools_requires_the_grant() {
-    let create = argv_of(&[
-        "context",
-        "create",
-        "fresh:context",
-        "--set",
-        r#"tools_id="granted:tools""#,
-    ]);
     let tools = reselection_tools("context-create-granted", false).await;
-    let refused = config_call_message(&tools, create.clone())
+    let selection = format!("tools_id=\"{}:tools\"", tools.granted);
+    let create = argv_of(&["context", "create", "fresh:context", "--set", &selection]);
+    let refused = config_call_message(&tools, create)
         .await
         .expect_err("a new Context must not select Tools whose grant the agent does not hold");
     assert!(
@@ -1166,22 +1551,13 @@ async fn context_create_selecting_granted_tools_requires_the_grant() {
         "{refused}"
     );
     let holder = reselection_tools("context-create-holder", true).await;
-    call_config_tool(&holder, create)
-        .await
-        .expect("an agent holding the grant may create a Context that selects it");
-}
-
-pub(super) async fn build_agent_node() -> std::sync::Arc<defra_node::EmbeddedNode> {
-    let tempdir = tempfile::tempdir().expect("tempdir");
-    let node = crate::test_support::node_builder()
-        .data_path(tempdir.path().join("data"))
-        .build()
-        .await
-        .expect("node");
-    crate::ensure_runtime_schemas(&node)
-        .await
-        .expect("runtime schemas register");
-    std::sync::Arc::new(node)
+    let selection = format!("tools_id=\"{}:tools\"", holder.granted);
+    call_config_tool(
+        &holder,
+        argv_of(&["context", "create", "fresh:context", "--set", &selection]),
+    )
+    .await
+    .expect("an agent holding the grant may create a Context that selects it");
 }
 
 pub(super) fn node_identity(label: &str) -> std::sync::Arc<dyn crate::NodeIdentity> {
@@ -1194,20 +1570,9 @@ pub(super) fn node_identity(label: &str) -> std::sync::Arc<dyn crate::NodeIdenti
 
 #[tokio::test]
 async fn automation_rejects_invalid_template_before_publication_and_can_recover() {
-    let node = build_agent_node().await;
-    let identity = node_identity("template-config");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    let mut grants = config(&["automation"]);
-    grants.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner,
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("template-config").await;
+    fixture.grant_selected_configuration().await;
+    let tools = fixture.tools(&["automation"]);
     for verb in ["preview", "edit"] {
         let error = call_config_tool(
             &tools,
@@ -1223,9 +1588,12 @@ async fn automation_rejects_invalid_template_before_publication_and_can_recover(
         .await
         .unwrap_err();
         assert!(format!("{error:#}").contains("MiniJinja"), "{error:#}");
-        let rows = node.execute("{ Task { task_id } }").await;
-        assert!(!rows.has_errors());
-        assert!(rows.data.unwrap()["Task"].as_array().unwrap().is_empty());
+        let rows = fixture
+            .user_access
+            .execute("{ Task { task_id } }")
+            .await
+            .unwrap();
+        assert!(rows["data"]["Task"].as_array().unwrap().is_empty());
     }
     call_config_tool(
         &tools,
@@ -1240,9 +1608,12 @@ async fn automation_rejects_invalid_template_before_publication_and_can_recover(
     )
     .await
     .unwrap();
-    let rows = node.execute("{ Task { task_id prompt_template } }").await;
-    assert!(!rows.has_errors());
-    let data = rows.data.unwrap();
+    let rows = fixture
+        .user_access
+        .execute("{ Task { task_id prompt_template } }")
+        .await
+        .unwrap();
+    let data = &rows["data"];
     assert_eq!(data["Task"].as_array().unwrap().len(), 1);
     assert_eq!(
         data["Task"][0]["prompt_template"],
@@ -1252,23 +1623,12 @@ async fn automation_rejects_invalid_template_before_publication_and_can_recover(
 
 #[tokio::test]
 async fn automation_rejects_a_count_field_the_runtime_cannot_read_and_can_recover() {
-    let node = build_agent_node().await;
-    let identity = node_identity("event-source-config");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    node.add_collection("type SelfConfigProbe { batch: String flag: Boolean total: Int }")
-        .await
-        .unwrap();
-    let mut grants = config(&["automation"]);
-    grants.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner,
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("event-source-config").await;
+    fixture.grant_selected_configuration().await;
+    fixture
+        .add_collection("type SelfConfigProbe { batch: String flag: Boolean total: Int }")
+        .await;
+    let tools = fixture.tools(&["automation"]);
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -1303,43 +1663,41 @@ async fn automation_rejects_a_count_field_the_runtime_cannot_read_and_can_recove
             "{diagnostic}"
         );
         assert!(diagnostic.contains("Boolean"), "{diagnostic}");
-        let rows = node.execute("{ EventSource { event_source_id } }").await;
-        assert!(!rows.has_errors());
+        let rows = fixture
+            .user_access
+            .execute("{ EventSource { event_source_id } }")
+            .await
+            .unwrap();
         assert!(
-            rows.data.unwrap()["EventSource"]
-                .as_array()
-                .unwrap()
-                .is_empty(),
+            rows["data"]["EventSource"].as_array().unwrap().is_empty(),
             "a refused event source publishes no row"
         );
     }
     tool.call(set("total")).await.unwrap();
-    let rows = node
+    let rows = fixture
+        .user_access
         .execute("{ EventSource { event_source_id group } }")
-        .await;
-    assert!(!rows.has_errors());
-    let rows = rows.data.unwrap()["EventSource"]
-        .as_array()
-        .unwrap()
-        .clone();
+        .await
+        .unwrap();
+    let rows = rows["data"]["EventSource"].as_array().unwrap().clone();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["group"]["expected_count"]["source_field"], "total");
 }
 
 #[tokio::test]
 async fn effective_config_reports_inherited_workspace_network_as_disabled() {
-    let node = build_agent_node().await;
-    let identity = node_identity("workspace-network-report");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
+    let fixture = SelfConfigFixture::new("workspace-network-report").await;
+    fixture.grant_selected_configuration().await;
     let root = tempfile::tempdir().unwrap();
-    let core = SelfConfigCore::new(node, owner, "beh-test".into())
-        .unwrap()
-        .with_process_ceiling(crate::tools::surface::SelfConfigProcessCeiling {
-            file_mode: crate::tools::surface::FileToolMode::ReadWrite,
-            bash_mode: crate::tools::surface::BashMode::Unrestricted,
-            root: Some(root.path().into()),
-        });
+    fixture.publish_workspace_root(root.path()).await;
+    let core =
+        fixture
+            .core()
+            .with_process_ceiling(crate::tools::surface::SelfConfigProcessCeiling {
+                file_mode: crate::tools::surface::FileToolMode::ReadWrite,
+                bash_mode: crate::tools::surface::BashMode::Unrestricted,
+                root: Some(root.path().into()),
+            });
     core.apply(tools_request(
         &core,
         vec![(
@@ -1369,11 +1727,10 @@ async fn effective_config_reports_inherited_workspace_network_as_disabled() {
 
 #[tokio::test]
 async fn skill_import_previews_without_writes_and_requires_file_authority() {
-    let node = build_agent_node().await;
-    let identity = node_identity("skill-import");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
+    let fixture = SelfConfigFixture::new("skill-import").await;
+    fixture.grant_selected_configuration().await;
     let root = tempfile::tempdir().unwrap();
+    fixture.publish_workspace_root(root.path()).await;
     let file = root.path().join("SKILL.md");
     std::fs::write(
         &file,
@@ -1381,16 +1738,10 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
     )
     .unwrap();
     let mut grants = config(&["tools", "agent"]);
+    grants.agent_did = fixture.agent_did().to_owned();
     grants.preview = true;
     let command = |args: &[&str]| args.iter().map(|s| (*s).to_owned()).collect();
-    let denied_tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity.clone()),
-        &grants,
-        test_plugins(),
-    );
+    let denied_tools = fixture.tools_with_config(&grants);
     let denied = call_config_tool(
         &denied_tools,
         command(&["skill", "import", "review", file.to_str().unwrap()]),
@@ -1403,7 +1754,7 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
         bash_mode: crate::tools::surface::BashMode::Off,
         root: Some(root.path().into()),
     };
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "beh-test".into()).unwrap();
+    let core = fixture.core();
     core.apply(tools_request(
         &core,
         vec![(
@@ -1415,14 +1766,7 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
     ))
     .await
     .unwrap();
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
+    let tools = fixture.tools_with_config(&grants);
     let outside = tempfile::tempdir().unwrap();
     std::fs::write(
         outside.path().join("SKILL.md"),
@@ -1518,28 +1862,21 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
 
 #[tokio::test]
 async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
-    let node = build_agent_node().await;
-    let identity = node_identity("configuration-discovery");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
+    let fixture = SelfConfigFixture::new("configuration-discovery").await;
+    fixture.grant_selected_configuration().await;
     let root = tempfile::tempdir().unwrap();
+    fixture.publish_workspace_root(root.path()).await;
     let source = root.path().join("synthetic-codex");
     std::fs::create_dir_all(&source).unwrap();
     let marker = root.path().join("SHOULD_NEVER_RUN");
-    let fixture =
+    let source_config =
         include_str!("../../../../tests/fixtures/configuration_discovery/codex-user/config.toml")
             .replace("SHOULD_NEVER_RUN", &marker.to_string_lossy());
-    std::fs::write(source.join("config.toml"), fixture).unwrap();
+    std::fs::write(source.join("config.toml"), source_config).unwrap();
 
     let mut grants = config(&["tools"]);
-    let denied_tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity.clone()),
-        &grants,
-        test_plugins(),
-    );
+    grants.agent_did = fixture.agent_did().to_owned();
+    let denied_tools = fixture.tools_with_config(&grants);
     let command = |args: &[&str]| args.iter().map(|value| (*value).to_owned()).collect();
     let help = call_config_tool(&denied_tools, command(&["help", "discovery"]))
         .await
@@ -1573,7 +1910,7 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
         bash_mode: crate::tools::surface::BashMode::Off,
         root: Some(root.path().into()),
     };
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "beh-test".into()).unwrap();
+    let core = fixture.core();
     core.apply(tools_request(
         &core,
         vec![(
@@ -1589,14 +1926,7 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
         .read_effective_config(&BTreeSet::new(), false, false)
         .await
         .unwrap();
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
+    let tools = fixture.tools_with_config(&grants);
     let outside = tempfile::tempdir().unwrap();
     let outside_error = call_config_tool(
         &tools,
@@ -1655,12 +1985,23 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
         DiscoverySourceOutcome, MappingSupportLevel,
     };
 
-    let node = build_agent_node().await;
-    let identity = node_identity("setup-discovery-flow");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
+    let fixture = SelfConfigFixture::new("discovery-apply").await;
+    fixture.grant_selected_configuration().await;
+    let node = fixture.db.node.clone();
+    let owner = fixture.node_did().to_owned();
+    let identity = fixture.agent.clone();
+    let agent_did = fixture.agent_did().to_owned();
+    let runtime_access =
+        crate::ConfigAccess::local_as(node.clone(), identity::Did::new(&owner).unwrap());
+    let agent_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(&agent_did).unwrap(),
+        identity.as_ref(),
+    )
+    .unwrap();
 
     let root = tempfile::tempdir().unwrap();
+    fixture.publish_workspace_root(root.path()).await;
     let user_root = root.path().join("synthetic-user/.codex");
     let project_root = root.path().join("synthetic-project");
     std::fs::create_dir_all(&user_root).unwrap();
@@ -1692,12 +2033,13 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
 
     let mut grants = config(&["tools", "agent", "backend"]);
     grants.preview = true;
+    grants.agent_did = agent_did.clone();
     grants.process_ceiling = crate::tools::surface::SelfConfigProcessCeiling {
         file_mode: crate::tools::surface::FileToolMode::ReadOnly,
         bash_mode: crate::tools::surface::BashMode::Off,
         root: Some(root.path().into()),
     };
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "beh-test".into()).unwrap();
+    let core = fixture.core();
     core.apply(tools_request(
         &core,
         vec![(
@@ -1710,14 +2052,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     ))
     .await
     .unwrap();
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
+    let tools = fixture.tools_with_config(&grants);
     let scan = vec![
         "discovery".into(),
         "scan".into(),
@@ -1779,18 +2114,37 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     let command = |args: &[&str]| args.iter().map(|value| (*value).to_owned()).collect();
     let context_before = call_config_tool(
         &tools,
-        command(&["agent", "context", "get", "--agent", "beh-test"]),
+        command(&["agent", "context", "get", "--agent", &agent_did]),
     )
     .await
     .unwrap();
-    let backend_before =
-        call_config_tool(&tools, command(&["backend", "get", "--agent", "beh-test"]))
+    async fn runtime_backend(access: &crate::ConfigAccess, owner: &str, id: &str) -> Value {
+        access
+            .transact_readonly("test.self_config.backend", |txn| {
+                Box::pin(async move {
+                    crate::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::InferenceBackend,
+                        owner,
+                        id,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap()
+            .expect("runtime backend")
+            .1
+    }
+    let backend_id = format!("{agent_did}:backend");
+    let backend_before = runtime_backend(&runtime_access, &owner, &backend_id).await;
+    assert!(!backend_before
+        .to_string()
+        .contains("FAKE_DISCOVERY_SECRET_123"));
+    let services_before =
+        crate::tools::mcp::registry::configured_mcp_services_on(&agent_access, &owner)
             .await
             .unwrap();
-    assert!(!backend_before.contains("FAKE_DISCOVERY_SECRET_123"));
-    let services_before = crate::tools::mcp::registry::configured_mcp_services(&node, &owner)
-        .await
-        .unwrap();
 
     let approved_prompt = format!(
         "Review repository changes and report evidence. Source: {}.",
@@ -1808,7 +2162,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
                 "context".into(),
                 "preview".into(),
                 "--agent".into(),
-                "beh-test".into(),
+                agent_did.clone(),
                 "--set".into(),
                 prompt_patch.clone(),
             ],
@@ -1821,7 +2175,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     assert_eq!(
         call_config_tool(
             &tools,
-            command(&["agent", "context", "get", "--agent", "beh-test"]),
+            command(&["agent", "context", "get", "--agent", &agent_did]),
         )
         .await
         .unwrap(),
@@ -1836,7 +2190,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
             "context".into(),
             "edit".into(),
             "--agent".into(),
-            "beh-test".into(),
+            agent_did.clone(),
             "--set".into(),
             prompt_patch,
         ],
@@ -1847,7 +2201,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     let verified: Value = serde_json::from_str(
         &call_config_tool(
             &tools,
-            command(&["agent", "context", "get", "--agent", "beh-test"]),
+            command(&["agent", "context", "get", "--agent", &agent_did]),
         )
         .await
         .unwrap(),
@@ -1855,14 +2209,12 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     .unwrap();
     assert_eq!(verified["document"]["system_prompt"], approved_prompt);
     assert_eq!(
-        call_config_tool(&tools, command(&["backend", "get", "--agent", "beh-test"]),)
-            .await
-            .unwrap(),
+        runtime_backend(&runtime_access, &owner, &backend_id).await,
         backend_before,
         "discovery-backed setup must not modify operator-owned inference credentials"
     );
     assert_eq!(
-        crate::tools::mcp::registry::configured_mcp_services(&node, &owner)
+        crate::tools::mcp::registry::configured_mcp_services_on(&agent_access, &owner)
             .await
             .unwrap()
             .len(),
@@ -1883,20 +2235,9 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
 
 #[tokio::test]
 async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
-    let node = build_agent_node().await;
-    let identity = node_identity("datastore-config");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    let mut grants = config(&["tools"]);
-    grants.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("datastore-config").await;
+    fixture.grant_selected_configuration().await;
+    let tools = fixture.tools(&["tools"]);
     let command = |args: &[&str]| args.iter().map(|s| (*s).to_owned()).collect();
     let expected_help = call_config_tool(&tools, command(&["help", "datastore"]))
         .await
@@ -2056,9 +2397,9 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
     assert!(actual.contains("Jobs"));
     assert!(actual.contains("user:keep"));
     assert!(!actual.contains("Duplicate"));
-    node.add_collection("type ConfiguredWork { message: String }")
-        .await
-        .unwrap();
+    fixture
+        .add_collection("type ConfiguredWork { message: String }")
+        .await;
     let entries = r#"entries=[{"tool_name":"submit_work","collection":"ConfiguredWork","fields":[{"name":"message","required":true}]}]"#;
     call_config_tool(
         &tools,
@@ -2087,7 +2428,7 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
     )
     .await
     .is_err());
-    let core = SelfConfigCore::new(node.clone(), owner, "beh-test".into()).unwrap();
+    let core = fixture.core();
     core.apply(tools_request(
         &core,
         vec![(
@@ -2125,21 +2466,9 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
 
 #[tokio::test]
 async fn structured_config_preview_and_apply_round_trip_literal_prompt() {
-    let node = build_agent_node().await;
-    let identity = node_identity("structured-config");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "working").await;
-    let mut settings = config(&["agent"]);
-    settings.agent_id = "working".into();
-    settings.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner,
-        Some(identity),
-        &settings,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("structured-config").await;
+    fixture.grant_selected_configuration().await;
+    let tools = fixture.tools(&["agent"]);
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -2165,7 +2494,12 @@ async fn structured_config_preview_and_apply_round_trip_literal_prompt() {
         serde_json::from_str::<Value>(&tool.call(read).await.unwrap()).unwrap(),
         after
     );
-    node.shutdown().await;
+    fixture
+        .db
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
 }
 
 pub(super) async fn call_config_tool(
@@ -2184,23 +2518,26 @@ pub(super) async fn call_config_tool(
 #[tokio::test]
 async fn outcome_schema_error_returns_an_executable_schema_recovery() {
     use crate::inference::llm::tool::Tool;
-    let node = build_agent_node().await;
-    let identity = node_identity("schema-recovery");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
-    access
+    let fixture = SelfConfigFixture::new("schema-recovery").await;
+    fixture.grant_selected_configuration().await;
+    fixture
         .add_collection("type Delivery { body: String }")
-        .await
-        .unwrap();
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner,
-        Some(identity),
-        &config(&["automation"]),
-        test_plugins(),
+        .await;
+    let admin = crate::ConfigAccess::local_as(
+        fixture.db.node.clone(),
+        identity::Did::new(fixture.db.node_identity.did()).unwrap(),
     );
+    let actor = identity::Did::new(fixture.agent_did()).unwrap();
+    for permission in [
+        crate::store::config_client::NodePermission::CollectionGet,
+        crate::store::config_client::NodePermission::CollectionPatch,
+    ] {
+        admin
+            .grant_node_permission(&actor, permission)
+            .await
+            .unwrap();
+    }
+    let tools = fixture.tools(&["automation"]);
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -2222,7 +2559,11 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
         failure["recovery"]["next_call"]["argv"],
         json!(["collection", "preview", "update", "Delivery"])
     );
-    let schema = crate::tools::builtin::schema_help::SchemaTool::new(node.clone());
+    let schema = crate::tools::builtin::schema_help::SchemaTool::for_managed_agent(
+        fixture.db.node.clone(),
+        fixture.agent.as_ref(),
+    )
+    .unwrap();
     let preview: Value = serde_json::from_str(
         &Tool::call(
             &schema,
@@ -2239,28 +2580,27 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
     .await
     .unwrap();
     tool.call(trigger.to_string()).await.unwrap();
-    let rows = access.execute("{ Trigger { trigger_id } }").await.unwrap();
+    let rows = fixture
+        .user_access
+        .execute("{ Trigger { trigger_id } }")
+        .await
+        .unwrap();
     assert_eq!(rows["data"]["Trigger"].as_array().unwrap().len(), 1);
-    node.shutdown().await;
+    fixture
+        .db
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
 }
 
 #[tokio::test]
 async fn config_errors_name_the_next_call() {
-    let node = build_agent_node().await;
-    let identity = node_identity("next-call");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    crate::test_support::install_test_agent(&node, &owner, &format!("{owner}:builder")).await;
-    let mut grants = config(&["node", "tools"]);
-    grants.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("next-call").await;
+    fixture.grant_selected_configuration().await;
+    let builder = fixture.install_sibling("Builder").await;
+    fixture.grant_node_reader().await;
+    let tools = fixture.tools(&["node", "tools"]);
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -2273,7 +2613,7 @@ async fn config_errors_name_the_next_call() {
         serde_json::from_str::<Value>(&error.to_string()).unwrap()
     };
 
-    let skill = failure(json!({"argv":["agent","context","preview"],"options":{"agent":"builder"},"set":{"skill_ids":["eval-coding-check"]}})).await;
+    let skill = failure(json!({"argv":["agent","context","preview"],"options":{"agent":builder},"set":{"skill_ids":["eval-coding-check"]}})).await;
     let message = skill["error"].as_str().unwrap();
     assert!(
         message.starts_with("Skill \"eval-coding-check\" does not exist yet"),
@@ -2292,7 +2632,7 @@ async fn config_errors_name_the_next_call() {
         .unwrap();
     assert_eq!(skill["config_execution"]["mutation_entered"], false);
 
-    let tools_ref = failure(json!({"argv":["agent","context","preview"],"options":{"agent":"builder"},"set":{"tools_id":"proposed-tools"}})).await;
+    let tools_ref = failure(json!({"argv":["agent","context","preview"],"options":{"agent":builder},"set":{"tools_id":"proposed-tools"}})).await;
     let message = tools_ref["error"].as_str().unwrap();
     assert!(
         message.contains("create it with its own resource command first"),
@@ -2308,7 +2648,7 @@ async fn config_errors_name_the_next_call() {
         .unwrap();
 
     let aliased = tool
-        .call(json!({"argv":["agent","context","preview","edit"],"options":{"agent":"builder"},"set":{"skill_ids":[]}}).to_string())
+        .call(json!({"argv":["agent","context","preview","edit"],"options":{"agent":builder},"set":{"skill_ids":[]}}).to_string())
         .await
         .unwrap();
     assert!(aliased.contains("\"committed\": false"), "{aliased}");
@@ -2317,7 +2657,7 @@ async fn config_errors_name_the_next_call() {
     let message = stray["error"].as_str().unwrap();
     assert!(
         message.contains(r#"agent context edit takes no positional argument "builder""#)
-            && message.contains(r#"{"argv":["agent","context","edit"],"options":{"agent":"AGENT_ID"},"set":{"FIELD":VALUE}}"#),
+            && message.contains(r#"{"argv":["agent","context","edit"],"options":{"agent":"AGENT_DID"},"set":{"FIELD":VALUE}}"#),
         "{message}"
     );
     assert_eq!(stray["config_execution"]["mutation_entered"], false);
@@ -2325,9 +2665,9 @@ async fn config_errors_name_the_next_call() {
     let named = failure(json!({"argv":["agent","get","Builder"]})).await;
     assert_eq!(
         named["error"],
-        "unknown agent_id \"Builder\"; did you mean \"builder\"?"
+        format!("unknown agent_did \"Builder\"; did you mean {builder:?}?")
     );
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "beh-test".into()).unwrap();
+    let core = fixture.core();
     core.apply(agent_request(
         &core,
         vec![("display_name".into(), Some(json!("Night Shift")))],
@@ -2337,26 +2677,32 @@ async fn config_errors_name_the_next_call() {
     let display = failure(json!({"argv":["agent","get","night shift"]})).await;
     assert_eq!(
         display["error"],
-        "unknown agent_id \"night shift\"; did you mean \"beh-test\"?"
+        format!(
+            "unknown agent_did \"night shift\"; did you mean {:?}?",
+            fixture.agent_did()
+        )
     );
     let unknown = failure(json!({"argv":["agent","get","nobody"]})).await;
     assert!(
         unknown["error"]
             .as_str()
             .unwrap()
-            .contains(r#"copy an exact ID from ["agent","list"]"#),
+            .contains(r#"copy an exact DID from ["agent","list"]"#),
         "{unknown}"
     );
-    node.shutdown().await;
+    fixture
+        .db
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
 }
 
 #[tokio::test]
 async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch() {
-    let node = build_agent_node().await;
-    let identity = node_identity("config-execution");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    let mut grants = config(&[
+    let fixture = SelfConfigFixture::new("config-execution").await;
+    fixture.grant_selected_configuration().await;
+    let tools = fixture.tools(&[
         "node",
         "tools",
         "automation",
@@ -2364,15 +2710,6 @@ async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch(
         "backend",
         "mcp_service",
     ]);
-    grants.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner,
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -2432,36 +2769,24 @@ async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch(
     )
     .unwrap();
     assert_eq!(read["config_execution"]["mutation_entered"], false);
-    node.shutdown().await;
+    fixture
+        .db
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
 }
 
 #[tokio::test]
 async fn agent_category_gates_the_tool() {
-    let node = build_agent_node().await;
-    let identity = node_identity("agent-gate");
-    let node_did = identity.did().to_string();
-
-    let without_agent = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        None,
-        &config(&["tools"]),
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("agent-gate").await;
+    let without_agent = fixture.tools(&["tools"]);
     let error = call_config_tool(&without_agent, vec!["agent".into(), "list".into()])
         .await
         .expect_err("catalog read requires agent grant");
     assert!(error.contains("not granted"), "{error}");
 
-    let with_agent = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        node_did,
-        Some(identity),
-        &config(&["node"]),
-        test_plugins(),
-    );
+    let with_agent = fixture.tools(&["node"]);
     assert!(with_agent
         .iter()
         .any(|tool| tool.name() == CONFIG_TOOL_NAME));
@@ -2469,25 +2794,21 @@ async fn agent_category_gates_the_tool() {
 
 #[tokio::test]
 async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact_signer() {
-    let node = build_agent_node().await;
-    let identity = node_identity("agent-only-owner");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "current").await;
-    let mut tool_config = config(&["agent"]);
-    tool_config.agent_id = "current".into();
-    tool_config.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("agent-only-owner").await;
+    fixture.grant_selected_configuration().await;
+    let node = fixture.db.node.clone();
+    let owner = fixture.db.node_identity.did().to_owned();
+    let current = fixture.agent_did();
+    let profile = format!("{current}:inference");
+    let tools = fixture.tools(&["agent"]);
+    // The agent category exposes the Agent command (NodeProvisioning.agentCommandExposed);
+    // node-catalog operations stay refused before any write.
+    call_config_tool(&tools, vec!["agent".into(), "list".into()])
+        .await
+        .expect("agent authority can read the agent catalog");
     for argv in [
-        vec!["agent", "list"],
-        vec!["agent", "preview", "default", "current"],
-        vec!["agent", "default", "current"],
+        vec!["agent", "preview", "default", current],
+        vec!["agent", "default", current],
         vec![
             "agent",
             "create",
@@ -2496,7 +2817,8 @@ async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact
             "--system-prompt",
             "Other instructions",
             "--profile",
-            "current:inference",
+            &profile,
+            "--default",
         ],
     ] {
         let error = call_config_tool(&tools, argv.into_iter().map(str::to_owned).collect())
@@ -2509,7 +2831,7 @@ async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact
         vec![
             "agent".into(),
             "update".into(),
-            "current".into(),
+            current.into(),
             "--set".into(),
             r#"display_name="Renamed""#.into(),
         ],
@@ -2518,13 +2840,15 @@ async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact
     .expect("agent authority can edit its own document");
     let edited: Value = serde_json::from_str(&edited).unwrap();
     assert_eq!(edited["committed"], true);
-    let foreign_identity = node_identity("foreign-signer");
+    let foreign_identity = tokio::task::spawn_blocking(|| node_identity("foreign-signer"))
+        .await
+        .unwrap();
     let params = agent_params(
         "edit",
         None,
         &[
             "--id".into(),
-            "current".into(),
+            current.into(),
             "--display-name".into(),
             "Renamed".into(),
         ],
@@ -2544,22 +2868,11 @@ async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact
 
 #[tokio::test]
 async fn config_lists_are_bounded_paginated_and_inference_inventory_is_read_only() {
-    let node = build_agent_node().await;
-    let identity = node_identity("config-inventory");
-    let owner = identity.did().to_string();
-    for agent in ["alpha", "beta", "gamma"] {
-        crate::test_support::install_test_agent(&node, &owner, agent).await;
-    }
-    let mut tool_config = config(&["node", "profile", "backend"]);
-    tool_config.agent_id = "alpha".into();
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("config-inventory").await;
+    fixture.install_sibling("beta").await;
+    fixture.install_sibling("gamma").await;
+    fixture.grant_node_reader().await;
+    let tools = fixture.tools(&["node", "profile", "backend"]);
     let config = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -2584,15 +2897,15 @@ async fn config_lists_are_bounded_paginated_and_inference_inventory_is_read_only
     .unwrap();
     assert_ne!(first["agents"][0], second["agents"][0]);
 
-    let agent_id = first["agents"][0]["agent_id"].as_str().unwrap();
+    let agent_did = first["agents"][0]["agent_did"].as_str().unwrap();
     let inspected: Value = serde_json::from_str(
         &config
-            .call(json!({"argv":["agent", "get", agent_id]}).to_string())
+            .call(json!({"argv":["agent", "get", agent_did]}).to_string())
             .await
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(inspected["agent_id"], agent_id);
+    assert_eq!(inspected["agent_did"], agent_did);
 
     for resource in ["profile", "backend"] {
         let inventory: Value = serde_json::from_str(
@@ -2637,21 +2950,9 @@ async fn config_creates_and_discovers_an_unauthenticated_local_backend() {
             .unwrap();
     });
 
-    let node = build_agent_node().await;
-    let identity = node_identity("local-backend-create");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "setup").await;
-    let mut tool_config = config(&["backend", "profile"]);
-    tool_config.agent_id = "setup".into();
-    tool_config.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("local-backend-create").await;
+    fixture.grant_selected_configuration().await;
+    let tools = fixture.tools(&["backend", "profile"]);
     let endpoint = format!("http://{address}/v1");
     let profiles_before: Value = serde_json::from_str(
         &call_config_tool(
@@ -2752,13 +3053,13 @@ async fn config_creates_and_discovers_an_unauthenticated_local_backend() {
 
 #[tokio::test]
 async fn config_targets_owned_working_agent_for_all_bound_documents() {
-    let node = build_agent_node().await;
-    let identity = node_identity("targeted-config");
-    let owner = identity.did().to_string();
-    for agent in ["setup", "working"] {
-        crate::test_support::install_test_agent(&node, &owner, agent).await;
-    }
-    let setup = SelfConfigCore::new(node.clone(), owner.clone(), "setup".into()).unwrap();
+    let fixture = SelfConfigFixture::new("targeted-config").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    fixture.grant_agent_relation_delete().await;
+    let working_did = fixture.install_sibling("working").await;
+    fixture.grant_sibling_configuration(&working_did).await;
+    let setup = fixture.core();
     setup
         .apply(agent_request(
             &setup,
@@ -2783,24 +3084,17 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
         .unwrap();
 
     let mut tool_config = config(&["node", "agent", "tools", "profile", "backend"]);
-    tool_config.agent_id = "setup".into();
+    tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.preview = true;
     tool_config.no_lockout = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let tools = fixture.tools_with_config(&tool_config);
 
     call_config_tool(
         &tools,
         vec![
             "agent".into(),
             "edit".into(),
-            "working".into(),
+            working_did.clone(),
             "--set".into(),
             "tags=[\"ui:review\"]".into(),
         ],
@@ -2814,7 +3108,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
             "context".into(),
             "edit".into(),
             "--agent".into(),
-            "working".into(),
+            working_did.clone(),
             "--set".into(),
             "system_prompt=\"Review carefully.\"".into(),
             "--set".into(),
@@ -2828,7 +3122,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
         vec![
             "tools".into(),
             "edit".into(),
-            "--agent=working".into(),
+            format!("--agent={working_did}"),
             "--set".into(),
             "agents={\"target_ids\":[],\"enabled\":false}".into(),
             "--set".into(),
@@ -2843,7 +3137,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
             "profile".into(),
             "edit".into(),
             "--agent".into(),
-            "working".into(),
+            working_did.clone(),
             "--set".into(),
             "display_name=\"Working profile\"".into(),
         ],
@@ -2854,7 +3148,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
     let working: Value = serde_json::from_str(
         &call_config_tool(
             &tools,
-            vec!["get".into(), "--agent".into(), "working".into()],
+            vec!["get".into(), "--agent".into(), working_did.clone()],
         )
         .await
         .unwrap(),
@@ -2868,13 +3162,22 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
         working["documents"]["Tools"]["self_config"].is_null(),
         "targeting a sibling must protect the invoking Engineer chain without granting config to the sibling"
     );
-    let working_core = SelfConfigCore::new(node.clone(), owner.clone(), "working".into()).unwrap();
+    let working_core = SelfConfigCore::new(
+        fixture.db.node.clone(),
+        fixture.node_did().to_owned(),
+        working_did.clone(),
+    )
+    .unwrap()
+    .with_lockout_agent_did(fixture.agent_did().to_owned())
+    .with_agent_signer(fixture.agent.managed_agent_signer())
+    .with_runtime_identity(Some(fixture.db.node_identity.clone()))
+    .with_node_binding(Some(fixture.node_binding.clone()));
     working_core
         .apply(agent_request(
             &working_core,
             vec![(
                 "inference_profile_id".into(),
-                Some(json!("setup:inference")),
+                Some(json!(format!("{}:inference", fixture.agent_did()))),
             )],
         ))
         .await
@@ -2885,7 +3188,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
             "backend".into(),
             "edit".into(),
             "--agent".into(),
-            "working".into(),
+            working_did.clone(),
             "--set".into(),
             "enabled=false".into(),
         ],
@@ -2901,7 +3204,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
             &working_core,
             vec![(
                 "inference_profile_id".into(),
-                Some(json!("working:inference")),
+                Some(json!(format!("{working_did}:inference"))),
             )],
         ))
         .await
@@ -2941,7 +3244,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
         "create".into(),
         "review-profile".into(),
         "--set".into(),
-        "backend_id=\"working:backend\"".into(),
+        format!("backend_id=\"{working_did}:backend\""),
         "--set".into(),
         "model_name=\"review-model\"".into(),
         "--set".into(),
@@ -2991,7 +3294,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
                 "agent".into(),
                 "preview".into(),
                 "default".into(),
-                "working".into(),
+                working_did.clone(),
             ],
         )
         .await
@@ -3008,7 +3311,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
             "tools".into(),
             "edit".into(),
             "--agent".into(),
-            "setup".into(),
+            fixture.agent_did().to_owned(),
             "--set".into(),
             "tags=[\"changed\"]".into(),
         ],
@@ -3035,7 +3338,10 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
         .apply(anchored_request(
             SelfConfigTarget::AgentContext,
             "context_id",
-            vec![("tools_id".into(), Some(json!("setup:tools")))],
+            vec![(
+                "tools_id".into(),
+                Some(json!(format!("{}:tools", fixture.agent_did()))),
+            )],
         ))
         .await
         .unwrap();
@@ -3045,7 +3351,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
             "tools".into(),
             "edit".into(),
             "--agent".into(),
-            "working".into(),
+            working_did.clone(),
             "--set".into(),
             "display_name=\"must not land\"".into(),
         ],
@@ -3060,14 +3366,20 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
         .apply(anchored_request(
             SelfConfigTarget::AgentContext,
             "context_id",
-            vec![("tools_id".into(), Some(json!("working:tools")))],
+            vec![(
+                "tools_id".into(),
+                Some(json!(format!("{working_did}:tools"))),
+            )],
         ))
         .await
         .unwrap();
     working_core
         .apply(agent_request(
             &working_core,
-            vec![("context_id".into(), Some(json!("setup:context")))],
+            vec![(
+                "context_id".into(),
+                Some(json!(format!("{}:context", fixture.agent_did()))),
+            )],
         ))
         .await
         .unwrap();
@@ -3078,7 +3390,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
             "context".into(),
             "edit".into(),
             "--agent".into(),
-            "working".into(),
+            working_did.clone(),
             "--set".into(),
             "display_name=\"must not land\"".into(),
         ],
@@ -3093,22 +3405,62 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
 
 #[tokio::test]
 async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
-    let node = build_agent_node().await;
-    let identity = node_identity("config-cleanup");
-    let owner = identity.did().to_string();
-    for agent in ["beh-test", "orphan"] {
-        crate::test_support::install_test_agent(&node, &owner, agent).await;
-    }
+    let fixture = SelfConfigFixture::new("config-cleanup").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    fixture.grant_agent_delete().await;
+    fixture.grant_agent_relation_delete().await;
     let mut tool_config = config(&["node", "tools", "profile", "backend"]);
+    tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let tools = fixture.tools_with_config(&tool_config);
+    call_config_tool(
+        &tools,
+        vec![
+            "backend".into(),
+            "create".into(),
+            "orphan-backend".into(),
+            "--set".into(),
+            "endpoint=\"http://127.0.0.1:1/v1\"".into(),
+        ],
+    )
+    .await
+    .expect("Agent creates the removable backend");
+    call_config_tool(
+        &tools,
+        vec![
+            "profile".into(),
+            "create".into(),
+            "orphan-profile".into(),
+            "--set".into(),
+            "backend_id=\"orphan-backend\"".into(),
+            "--set".into(),
+            "model_name=\"test-model\"".into(),
+        ],
+    )
+    .await
+    .expect("Agent creates the removable profile");
+    let created: Value = serde_json::from_str(
+        &call_config_tool(
+            &tools,
+            vec![
+                "agent".into(),
+                "create".into(),
+                "--display-name".into(),
+                "Orphan".into(),
+                "--system-prompt".into(),
+                "Orphan fixture".into(),
+                "--preset".into(),
+                "readonly".into(),
+                "--profile".into(),
+                "orphan-profile".into(),
+            ],
+        )
+        .await
+        .expect("Agent creates the removable agent and configuration"),
+    )
+    .unwrap();
+    let orphan = created["agent_did"].as_str().unwrap().to_owned();
 
     let referenced = call_config_tool(
         &tools,
@@ -3116,7 +3468,7 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
             "cleanup".into(),
             "preview".into(),
             "--target".into(),
-            "backend=orphan:backend".into(),
+            "backend=orphan-backend".into(),
         ],
     )
     .await
@@ -3127,17 +3479,17 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
     );
 
     let targets = [
-        "agent=orphan",
-        "context=orphan:context",
-        "tools=orphan:tools",
-        "profile=orphan:inference",
-        "backend=orphan:backend",
+        format!("agent={orphan}"),
+        format!("context={orphan}:context"),
+        format!("tools={orphan}:tools"),
+        "profile=orphan-profile".to_owned(),
+        "backend=orphan-backend".to_owned(),
     ];
     let argv = |verb: &str| {
         let mut argv = vec!["cleanup".to_owned(), verb.to_owned()];
-        for target in targets {
+        for target in &targets {
             argv.push("--target".to_owned());
-            argv.push(target.to_owned());
+            argv.push(target.clone());
         }
         argv
     };
@@ -3149,7 +3501,7 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
     .unwrap();
     assert_eq!(preview["committed"], false);
     assert_eq!(preview["targets"].as_array().unwrap().len(), targets.len());
-    call_config_tool(&tools, vec!["agent".into(), "get".into(), "orphan".into()])
+    call_config_tool(&tools, vec!["agent".into(), "get".into(), orphan.clone()])
         .await
         .expect("preview performs no writes");
 
@@ -3159,7 +3511,7 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
             "backend".into(),
             "edit".into(),
             "--agent".into(),
-            "orphan".into(),
+            orphan.clone(),
             "--set".into(),
             "name=\"Changed after preview\"".into(),
         ],
@@ -3190,19 +3542,23 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
     )
     .unwrap();
     assert_eq!(removed["committed"], true);
-    let missing = call_config_tool(&tools, vec!["agent".into(), "get".into(), "orphan".into()])
+    let missing = call_config_tool(&tools, vec!["agent".into(), "get".into(), orphan.clone()])
         .await
         .expect_err("removed agent is no longer inspectable");
     assert!(
         missing.contains("missing")
             || missing.contains("no owned")
-            || missing.contains("unknown agent_id"),
+            || missing.contains("unknown agent_did"),
         "{missing}"
     );
 
     call_config_tool(
         &tools,
-        vec!["get".into(), "--agent".into(), "beh-test".into()],
+        vec![
+            "get".into(),
+            "--agent".into(),
+            fixture.agent_did().to_owned(),
+        ],
     )
     .await
     .expect("cleanup preserves unrelated configuration");
@@ -3218,27 +3574,61 @@ fn take_agent_tool(
 }
 
 #[tokio::test]
-async fn agent_default_commits_through_the_agent_owner() {
-    let node = build_agent_node().await;
-    let identity = node_identity("agent-default");
-    let node_did = identity.did().to_string();
-    for agent in ["seed", "working"] {
-        crate::test_support::install_test_agent(&node, &node_did, agent).await;
-    }
-    crate::documents::upsert_node(&node, &node_did, None, Some("seed"), true, None)
-        .await
+async fn user_owned_node_default_rejects_agent_update_and_accepts_user() {
+    use crate::lean_vocab_test::{LeanIdentityAction, LeanIdentitySubject};
+    let model = crate::lean_vocab_test::lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "user-node-agents-mixed-session-ownership-policy-followup")
         .unwrap();
-    let mut tool_config = config(&["node"]);
-    tool_config.agent_id = "seed".into();
-    tool_config.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        Some(identity.clone()),
-        &tool_config,
-        test_plugins(),
-    );
+    let user = &model
+        .objects
+        .iter()
+        .find(|object| object.resource == "nodes" && object.id == "home")
+        .unwrap()
+        .owner;
+    let agent = model
+        .relations
+        .iter()
+        .find_map(|relation| match &relation.subject {
+            LeanIdentitySubject::Actor { actor }
+                if relation.resource == "agents"
+                    && relation.id == "general"
+                    && relation.relation == "executor" =>
+            {
+                Some(actor)
+            }
+            _ => None,
+        })
+        .unwrap();
+    let may_update_node = |actor: &str| {
+        model
+            .actions
+            .iter()
+            .find_map(|action| match action {
+                LeanIdentityAction::Check {
+                    actor: candidate,
+                    resource,
+                    id,
+                    permission,
+                    expected,
+                } if candidate == actor
+                    && resource == "nodes"
+                    && id == "home"
+                    && permission == "update" =>
+                {
+                    Some(*expected)
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let fixture = SelfConfigFixture::new("agent-default-authority").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    let working = fixture.install_sibling("working").await;
+    let seed = fixture.agent_did();
+    let core = fixture.core();
+    let tools = fixture.tools(&["node"]);
     let preview: Value = serde_json::from_str(
         &call_config_tool(
             &tools,
@@ -3246,58 +3636,51 @@ async fn agent_default_commits_through_the_agent_owner() {
                 "agent".into(),
                 "preview".into(),
                 "default".into(),
-                "working".into(),
+                working.clone(),
             ],
         )
         .await
         .unwrap(),
     )
     .unwrap();
-    assert_eq!(preview["admitted"], true);
+    assert_eq!(preview["committed"], false);
     assert_eq!(
-        node_default_agent(&node, &node_did)
-            .await
-            .unwrap()
-            .as_deref(),
-        Some("seed")
+        node_default_agent(&core).await.unwrap().as_deref(),
+        Some(seed)
     );
-    let output: Value = serde_json::from_str(
-        &call_config_tool(
-            &tools,
-            vec!["agent".into(), "default".into(), "working".into()],
-        )
-        .await
-        .unwrap(),
+    let agent_update = call_config_tool(
+        &tools,
+        vec!["agent".into(), "default".into(), working.clone()],
     )
-    .unwrap();
-    assert_eq!(output["committed"], true);
-    assert_eq!(output["agent_id"], "working");
+    .await;
+    assert_eq!(agent_update.is_ok(), may_update_node(agent));
     assert_eq!(
-        node_default_agent(&node, &node_did)
-            .await
-            .unwrap()
-            .as_deref(),
-        Some("working")
+        node_default_agent(&core).await.unwrap().as_deref(),
+        Some(seed)
+    );
+    fixture
+        .update_signed_configuration(
+            crate::Collection::Node,
+            fixture.node_did(),
+            json!({"default_agent_did": working}),
+        )
+        .await;
+    assert!(may_update_node(user));
+    assert_eq!(
+        node_default_agent(&core).await.unwrap().as_deref(),
+        Some(working.as_str())
     );
 }
 
 #[tokio::test]
 async fn agent_create_commits_and_resolves_after_restart() {
-    let node = build_agent_node().await;
-    let identity = node_identity("agent-create");
-    let node_did = identity.did().to_string();
-
-    crate::test_support::install_test_agent(&node, &node_did, "seed").await;
-    let profile_id = "seed:inference";
-
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        Some(identity.clone()),
-        &config(&["node"]),
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("agent-create").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    let node = fixture.db.node.clone();
+    let node_did = fixture.node_did().to_owned();
+    let profile_id = format!("{}:inference", fixture.agent_did());
+    let tools = fixture.tools(&["node"]);
     let rejected_preview = call_config_tool(
         &tools,
         vec![
@@ -3309,7 +3692,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
             "--preset".into(),
             "write".into(),
             "--profile".into(),
-            profile_id.into(),
+            profile_id.clone(),
         ],
     )
     .await
@@ -3336,8 +3719,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
             "--preset".into(),
             "write".into(),
             "--profile".into(),
-            profile_id.into(),
-            "--default".into(),
+            profile_id.clone(),
         ],
     )
     .await
@@ -3346,7 +3728,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
     assert_eq!(admitted_preview["committed"], false);
     assert_eq!(admitted_preview["admitted"], true);
     assert_eq!(admitted_preview["operation"], "create");
-    assert_eq!(admitted_preview["make_default"], true);
+    assert_eq!(admitted_preview["make_default"], false);
     assert_eq!(
         admitted_preview["agent"]["display_name"],
         "Research Assistant"
@@ -3357,7 +3739,10 @@ async fn agent_create_commits_and_resolves_after_restart() {
     );
     assert_eq!(
         admitted_preview["agent"]["context_id"],
-        format!("{node_did}:research-assistant:context")
+        format!(
+            "{}:context",
+            admitted_preview["agent_did"].as_str().unwrap()
+        )
     );
     assert_eq!(crate::list_agents(&node, &node_did).await.unwrap().len(), 1);
     let tool = take_agent_tool(tools);
@@ -3368,8 +3753,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
         "--description", "Researches a focused question",
         "--system-prompt", "Research the question and cite evidence.",
         "--preset", "write",
-        "--profile", profile_id,
-        "--default"
+        "--profile", profile_id
     ]})
     .to_string();
 
@@ -3379,7 +3763,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
         .expect("list agents");
     let created: Vec<_> = agents
         .iter()
-        .filter(|agent| agent.agent_id != "seed")
+        .filter(|agent| agent.agent_did != fixture.agent_did())
         .collect();
     assert_eq!(created.len(), 1, "exactly one new agent materialized");
     assert_eq!(
@@ -3392,40 +3776,21 @@ async fn agent_create_commits_and_resolves_after_restart() {
             .as_deref()
             .expect("created agent has context"),
     );
-    let response = node
-        .execute(&format!(
-            r#"{{ AgentContext(filter: {{ context_id: {{ _eq: "{context_id}" }} }}) {{ description system_prompt }} }}"#
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "query failed: {:?}",
-        response.errors
+    let response = fixture.user_access.execute(&format!(
+        r#"{{ AgentContext(filter: {{ context_id: {{ _eq: "{context_id}" }} }}) {{ description system_prompt }} }}"#,
+    )).await.unwrap();
+    let context = &response["data"]["AgentContext"][0];
+    assert_eq!(
+        context["system_prompt"],
+        "Research the question and cite evidence."
     );
-    let prompt = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentContext"))
-        .and_then(serde_json::Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("system_prompt"))
-        .and_then(serde_json::Value::as_str);
-    assert_eq!(prompt, Some("Research the question and cite evidence."));
-    let description = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentContext"))
-        .and_then(serde_json::Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("description"))
-        .and_then(serde_json::Value::as_str);
-    assert_eq!(description, Some("Researches a focused question"));
+    assert_eq!(context["description"], "Researches a focused question");
 
     let output: Value = serde_json::from_str(&output).unwrap();
     assert_eq!(output["committed"], true);
-    assert_eq!(output["agent_id"], created[0].agent_id);
+    assert_eq!(output["agent_did"], created[0].agent_did);
     let effective: Value = serde_json::from_str(
-        &agent_inspect(&node, &node_did, &created[0].agent_id, &Default::default())
+        &agent_inspect(&fixture.core(), &created[0].agent_did)
             .await
             .unwrap(),
     )
@@ -3438,21 +3803,17 @@ async fn agent_create_commits_and_resolves_after_restart() {
         effective["effective_config"]["tool_grants"]["configured"],
         json!({"lsp": false, "network_mode": "inherit"})
     );
-    let grant_tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        Some(identity.clone()),
-        &config(&["node", "tools"]),
-        test_plugins(),
-    );
+    fixture
+        .grant_sibling_configuration(&created[0].agent_did)
+        .await;
+    let grant_tools = fixture.tools(&["node", "tools"]);
     let selected = call_config_tool(
         &grant_tools,
         vec![
             "tools".into(),
             "edit".into(),
             "--agent".into(),
-            created[0].agent_id.clone(),
+            created[0].agent_did.clone(),
             "--set".into(),
             r#"integrations={"lsp":{}}"#.into(),
             "--set".into(),
@@ -3465,7 +3826,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
     assert_eq!(applied["committed"], true);
     let selected = call_config_tool(
         &grant_tools,
-        vec!["get".into(), "--agent".into(), created[0].agent_id.clone()],
+        vec!["get".into(), "--agent".into(), created[0].agent_did.clone()],
     )
     .await
     .expect("inspect the selected sibling after the canonical tools patch");
@@ -3479,20 +3840,27 @@ async fn agent_create_commits_and_resolves_after_restart() {
         "disabled"
     );
 
+    fixture
+        .update_signed_configuration(
+            crate::Collection::Node,
+            fixture.node_did(),
+            json!({"default_agent_did": created[0].agent_did}),
+        )
+        .await;
     let snapshot = crate::runtime::agent::resolve_document_runtime_snapshot(
         &node,
         &crate::runtime::agent::DocumentResolveContext::for_tests(
-            identity,
+            fixture.db.node_identity.clone(),
             crate::tools::surface::ToolCeiling::readonly(),
             Default::default(),
         ),
     )
     .await
     .expect("restart-style runtime resolution accepts the materialized agent");
-    assert_eq!(snapshot.default_agent_id, created[0].agent_id);
+    assert_eq!(snapshot.default_agent_did, created[0].agent_did);
     let runtime_agent = snapshot
         .agents
-        .get(&created[0].agent_id)
+        .get(&created[0].agent_did)
         .unwrap_or_else(|| {
             panic!(
                 "new default is runnable after re-resolution: {:?}",
@@ -3517,44 +3885,37 @@ async fn agent_create_commits_and_resolves_after_restart() {
 }
 
 #[tokio::test]
-async fn agent_clone_accepts_sibling_agent_id() {
-    let node = build_agent_node().await;
-    let identity = node_identity("agent-clone");
-    let node_did = identity.did().to_string();
-    let qualified_sibling_id = "sibling-agent".to_owned();
-    crate::test_support::install_test_agent(&node, &node_did, &qualified_sibling_id).await;
-    let profile_id = "sibling-agent:inference";
-
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        Some(identity.clone()),
-        &config(&["node"]),
-        test_plugins(),
-    );
+async fn agent_clone_accepts_sibling_agent_did() {
+    let fixture = SelfConfigFixture::new("agent-clone").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    let node = &fixture.db.node;
+    let node_did = fixture.node_did();
+    let qualified_sibling_id = fixture.install_sibling("sibling-agent").await;
+    let profile_id = format!("{qualified_sibling_id}:inference");
+    let tools = fixture.tools(&["node"]);
     let tool = take_agent_tool(tools);
     let args = json!({"argv": [
         "agent", "clone",
         "--display-name", "Cloned Agent",
-        "--from", "sibling-agent",
+        "--from", qualified_sibling_id,
         "--profile", profile_id
     ]})
     .to_string();
     let output: Value =
         serde_json::from_str(&tool.call(args).await.expect("clone commits")).unwrap();
     assert_eq!(output["committed"], true);
-    let source = crate::list_agents(&node, &node_did)
+    let source = crate::list_agents(node, node_did)
         .await
         .unwrap()
         .into_iter()
-        .find(|a| a.agent_id == qualified_sibling_id)
+        .find(|a| a.agent_did == qualified_sibling_id)
         .unwrap();
-    let cloned = crate::list_agents(&node, &node_did)
+    let cloned = crate::list_agents(node, node_did)
         .await
         .unwrap()
         .into_iter()
-        .find(|a| Some(a.agent_id.as_str()) == output["agent_id"].as_str())
+        .find(|a| Some(a.agent_did.as_str()) == output["agent_did"].as_str())
         .unwrap();
     assert_eq!(source.inference_profile_id, cloned.inference_profile_id);
     assert_ne!(source.context_id, cloned.context_id);
@@ -3562,21 +3923,18 @@ async fn agent_clone_accepts_sibling_agent_id() {
 
 #[tokio::test]
 async fn agent_clone_cannot_copy_unheld_grants() {
-    let node = build_agent_node().await;
-    let identity = node_identity("agent-clone-grants");
-    let node_did = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &node_did, "granted").await;
-    operator_grant_pack_install(&node, &node_did, "granted:tools").await;
+    let fixture = SelfConfigFixture::new("agent-clone-grants").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    let node = &fixture.db.node;
+    let node_did = fixture.node_did();
+    let granted = fixture.install_sibling("granted").await;
+    fixture.grant_pack_install_to(&granted).await;
+    let profile = format!("{granted}:inference");
     let mut tool_config = config(&["node"]);
+    tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        Some(identity.clone()),
-        &tool_config,
-        test_plugins(),
-    );
+    let tools = fixture.tools_with_config(&tool_config);
     let tool = take_agent_tool(tools);
     for argv in [
         json!([
@@ -3585,9 +3943,9 @@ async fn agent_clone_cannot_copy_unheld_grants() {
             "--display-name",
             "Granted Copy",
             "--from",
-            "granted",
+            granted,
             "--profile",
-            "granted:inference"
+            profile
         ]),
         json!([
             "agent",
@@ -3596,9 +3954,9 @@ async fn agent_clone_cannot_copy_unheld_grants() {
             "--display-name",
             "Granted Copy",
             "--from",
-            "granted",
+            granted,
             "--profile",
-            "granted:inference"
+            profile
         ]),
     ] {
         let refused = if argv[1] == "preview" {
@@ -3616,9 +3974,9 @@ async fn agent_clone_cannot_copy_unheld_grants() {
             )
         };
         assert!(
-            refused.contains(
-                "clone source \"granted\" carries an operator grant this agent does not hold"
-            ),
+            refused.contains(&format!(
+                "clone source {granted:?} carries an operator grant this agent does not hold"
+            )),
             "{argv}: {refused}"
         );
         assert!(
@@ -3627,7 +3985,7 @@ async fn agent_clone_cannot_copy_unheld_grants() {
         );
     }
     assert!(
-        crate::list_agents(&node, &node_did)
+        crate::list_agents(node, node_did)
             .await
             .unwrap()
             .iter()
@@ -3638,57 +3996,76 @@ async fn agent_clone_cannot_copy_unheld_grants() {
 
 #[tokio::test]
 async fn agent_clone_by_holder_copies_granted_source() {
-    let node = build_agent_node().await;
-    let identity = node_identity("agent-clone-holder");
-    let node_did = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &node_did, "granted").await;
-    operator_grant_pack_install(&node, &node_did, "granted:tools").await;
+    let fixture = SelfConfigFixture::new("agent-clone-holder").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    let node = &fixture.db.node;
+    let node_did = fixture.node_did();
+    let granted = fixture.install_sibling("granted").await;
+    fixture.grant_pack_install_to(&granted).await;
+    let profile = format!("{granted}:inference");
+    fixture.grant_pack_install().await;
     let mut tool_config = config(&["node"]);
-    tool_config.enable_pack_install = true;
+    tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    tool_config.enable_pack_install = true;
+    let tools = fixture.tools_with_config(&tool_config);
     let tool = take_agent_tool(tools);
     tool.call(
         json!({"argv": ["agent", "preview", "clone", "--display-name", "Granted Copy",
-                        "--from", "granted", "--profile", "granted:inference"]})
+                        "--from", granted, "--profile", profile]})
         .to_string(),
     )
     .await
     .expect("a holder may preview copying a granted source");
     let args = json!({"argv": ["agent", "clone", "--display-name", "Granted Copy",
-                               "--from", "granted", "--profile", "granted:inference"]})
+                               "--from", granted, "--profile", profile]})
     .to_string();
     let output: Value =
         serde_json::from_str(&tool.call(args).await.expect("a holder's clone commits")).unwrap();
     assert_eq!(output["committed"], true);
     assert!(
-        crate::list_agents(&node, &node_did)
+        crate::list_agents(node, node_did)
             .await
             .unwrap()
             .iter()
-            .any(|agent| Some(agent.agent_id.as_str()) == output["agent_id"].as_str()),
+            .any(|agent| Some(agent.agent_did.as_str()) == output["agent_did"].as_str()),
         "a holder's clone publishes its Agent"
     );
 }
 
 #[tokio::test]
 async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_lockout() {
-    let node = build_agent_node().await;
-    let identity = node_identity("canonical-self-config");
-    let other = node_identity("other-self-config");
-    let owner = identity.did().to_string();
-    let foreign = other.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "same").await;
-    crate::test_support::install_test_agent(&node, &foreign, "same").await;
-    crate::test_support::install_test_agent(&node, &owner, "unconfigured").await;
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "same".into()).unwrap();
+    let fixture = SelfConfigFixture::new("canonical-self-config").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    let sibling = fixture.install_sibling("unconfigured").await;
+    let other = tokio::task::spawn_blocking(|| node_identity("other-self-config"))
+        .await
+        .unwrap();
+    let foreign = other.did().to_owned();
+    crate::test_support::bootstrap_signed_test_node(fixture.user_access(), &foreign).await;
+    let tools_id = format!("{}:tools", fixture.agent_did());
+    let document = json!({"node_did": foreign, "tools_id": tools_id});
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::Tools,
+            add: document.clone(),
+            update: document,
+        },
+    ])
+    .unwrap();
+    fixture
+        .user_access()
+        .transact_write("test.foreign_tools", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .unwrap();
+    let core = fixture.core();
     let patch = vec![(
         "self_config".into(),
         Some(json!({"enable_self_config":true})),
@@ -3712,7 +4089,10 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
     assert!(guarded
         .preview(agent_request(
             &guarded,
-            vec![("context_id".into(), Some(json!("unconfigured:context")))]
+            vec![(
+                "context_id".into(),
+                Some(json!(format!("{sibling}:context")))
+            )]
         ))
         .await
         .is_err());
@@ -3735,49 +4115,52 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
         .read_effective_config(&BTreeSet::new(), true, true)
         .await
         .unwrap();
-    assert_eq!(own["context"]["tools_id"], "same:tools");
+    assert_eq!(own["context"]["tools_id"], tools_id);
     assert_eq!(
         own["documents"]["Tools"]["self_config"]["enable_self_config"],
         true
     );
-    let foreign_core = SelfConfigCore::new(node.clone(), foreign, "same".into()).unwrap();
-    let foreign_read = foreign_core
-        .read_effective_config(&BTreeSet::new(), false, false)
+    let foreign_read = fixture.user_access()
+        .execute(&format!(r#"{{ Tools(filter: {{node_did: {{_eq: "{}"}}, tools_id: {{_eq: "{}"}}}}) {{ self_config }} }}"#,
+            escape_graphql_string(&foreign), escape_graphql_string(&tools_id)))
         .await
         .unwrap();
-    assert!(foreign_read["documents"]["Tools"]["self_config"].is_null());
+    let foreign_tools = foreign_read["data"]["Tools"].as_array().unwrap();
+    assert_eq!(foreign_tools.len(), 1);
+    assert!(foreign_tools[0]["self_config"].is_null());
 }
 
 #[tokio::test]
 async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_root() {
-    let node = build_agent_node().await;
-    let identity = node_identity("tools-root-policy");
-    let owner = identity.did().to_string();
-    let agent_id = "root-policy";
-    crate::test_support::install_test_agent(&node, &owner, agent_id).await;
+    let fixture = SelfConfigFixture::new("root-policy").await;
+    fixture.grant_selected_configuration().await;
+    let owner = fixture.node_did().to_owned();
+    let agent_did = fixture.agent_did().to_owned();
+    let access = fixture.user_access();
     let ceiling = tempfile::tempdir().unwrap();
     let selected = ceiling.path().join("selected");
     let sibling = ceiling.path().join("sibling");
     std::fs::create_dir_all(&selected).unwrap();
     std::fs::create_dir_all(&sibling).unwrap();
     let selected_text = selected.to_string_lossy();
-    let escaped = crate::store::graphql::escape_graphql_string(&selected_text);
-    crate::store::config_client::ConfigAccess::write_local(
-        &node,
-        "test.self_config.workspace_root",
-        &format!(
-            r#"mutation {{ create_WorkspaceRoot(input: {{root_path:"{escaped}", enabled:true}}) {{_docID}} }}"#
-        ),
+    crate::tools::surface::set_workspace_root_with_readers(
+        access,
+        &owner,
+        &selected_text,
+        None,
+        true,
+        std::slice::from_ref(&agent_did),
     )
     .await
     .unwrap();
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), agent_id.into())
-        .unwrap()
-        .with_process_ceiling(crate::tools::surface::SelfConfigProcessCeiling {
-            file_mode: crate::tools::surface::FileToolMode::ReadOnly,
-            bash_mode: crate::tools::surface::BashMode::Off,
-            root: Some(ceiling.path().to_path_buf()),
-        });
+    let core =
+        fixture
+            .core()
+            .with_process_ceiling(crate::tools::surface::SelfConfigProcessCeiling {
+                file_mode: crate::tools::surface::FileToolMode::ReadOnly,
+                bash_mode: crate::tools::surface::BashMode::Off,
+                root: Some(ceiling.path().to_path_buf()),
+            });
     let patch = |root: &std::path::Path| {
         vec![(
             "host".into(),
@@ -3806,26 +4189,27 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
     core.apply(tools_request(&core, patch(&authored_inside)))
         .await
         .expect("apply admits the selected root");
-    let tools_id = format!("{agent_id}:tools");
-    let persisted: crate::documents::Tools =
-        crate::store::config_client::ConfigAccess::local(node.clone())
-            .transact_write("test.self_config.read_tools", |txn| {
-                let owner = owner.clone();
-                let tools_id = tools_id.clone();
-                Box::pin(async move {
-                    let value = crate::store::config_client::read_desired_state_document_in_txn(
-                        txn,
-                        crate::Collection::Tools,
-                        &owner,
-                        &tools_id,
-                    )
-                    .await?
-                    .context("persisted Tools")?;
-                    Ok::<_, anyhow::Error>(serde_json::from_value(value)?)
-                })
+    let tools_id = format!("{agent_did}:tools");
+    let persisted: crate::documents::Tools = core
+        .access()
+        .unwrap()
+        .transact_write("test.self_config.read_tools", |txn| {
+            let owner = owner.clone();
+            let tools_id = tools_id.clone();
+            Box::pin(async move {
+                let value = crate::store::config_client::read_desired_state_document_in_txn(
+                    txn,
+                    crate::Collection::Tools,
+                    &owner,
+                    &tools_id,
+                )
+                .await?
+                .context("persisted Tools")?;
+                Ok::<_, anyhow::Error>(serde_json::from_value(value)?)
             })
-            .await
-            .unwrap();
+        })
+        .await
+        .unwrap();
     assert_eq!(
         persisted
             .host
@@ -3842,25 +4226,14 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
 
 #[tokio::test]
 async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tools() {
-    let identity = node_identity("descendant-root-self-config");
-    let owner = identity.did().to_string();
-    let storage = tempfile::tempdir().expect("node storage");
-    let node = Arc::new(
-        crate::test_support::node_builder()
-            .data_path(storage.path().join("data"))
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .expect("identity-bound node"),
-    );
-    crate::ensure_runtime_schemas(&node)
-        .await
-        .expect("runtime schemas");
-    let seed_agent = "beh-test";
-    crate::test_support::install_test_agent(&node, &owner, seed_agent).await;
-    crate::upsert_node(&node, &owner, None, Some(seed_agent), true, None)
-        .await
-        .expect("bind default agent");
+    let fixture = SelfConfigFixture::new("descendant-root-self-config").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let owner = fixture.node_did().to_owned();
+    let seed_agent = fixture.agent_did().to_owned();
+    let operator = fixture.user_access();
 
     let operator_root = tempfile::tempdir().expect("operator root");
     let selected_root = operator_root.path().join("projects").join("mandrake");
@@ -3883,38 +4256,25 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         .expect("original transcript fixture");
 
     let selected_text = selected_root.to_string_lossy().into_owned();
-    let escaped_selected = crate::store::graphql::escape_graphql_string(&selected_text);
-    let fixture_actor = ::identity::Did::new(owner.clone()).expect("fixture creator DID");
-    let workspace_root_mutation = format!(
-        r#"mutation {{ create_WorkspaceRoot(input: {{root_path:"{escaped_selected}", enabled:true}}) {{_docID}} }}"#
-    );
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        Some(fixture_actor.clone()),
-        "test.agent.workspace_root",
-        |txn| {
-            let mutation = &workspace_root_mutation;
-            Box::pin(async move { txn.execute_local_response(mutation).await.map(|_| ()) })
-        },
+    crate::tools::surface::set_workspace_root_with_readers(
+        operator,
+        &owner,
+        &selected_text,
+        None,
+        true,
+        std::slice::from_ref(&seed_agent),
     )
     .await
     .expect("publish selected WorkspaceRoot");
 
     let mut tool_config = config(&["node"]);
-    tool_config.agent_id = seed_agent.into();
+    tool_config.agent_did = seed_agent.clone();
     tool_config.process_ceiling = crate::tools::surface::SelfConfigProcessCeiling {
         file_mode: crate::tools::surface::FileToolMode::ReadOnly,
         bash_mode: crate::tools::surface::BashMode::Off,
         root: Some(operator_root.path().to_path_buf()),
     };
-    let agent_tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity.clone()),
-        &tool_config,
-        test_plugins(),
-    );
+    let agent_tools = fixture.tools_with_config(&tool_config);
     let profile_id = format!("{seed_agent}:inference");
     let command = |preview: bool| {
         let mut argv = vec!["agent".to_string()];
@@ -3933,7 +4293,6 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
             "readonly".to_string(),
             "--profile".to_string(),
             profile_id.clone(),
-            "--default".to_string(),
         ]);
         argv
     };
@@ -3956,8 +4315,33 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         .expect("list materialized agents");
     let created = agents
         .iter()
-        .find(|agent| agent.agent_id != seed_agent)
+        .find(|agent| agent.agent_did != seed_agent)
         .expect("agent reconciler materialized one agent");
+    let created_signer = crate::store::identity::resolve_agent_identity(
+        identity.as_ref(),
+        &created.identity_binding(),
+    )
+    .expect("created Agent is derived from the held runtime");
+    let created_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        ::identity::Did::new(&created.agent_did).unwrap(),
+        created_signer.as_ref(),
+    )
+    .unwrap();
+    fixture
+        .update_signed_configuration(
+            crate::Collection::Node,
+            &owner,
+            json!({"default_agent_did": created.agent_did}),
+        )
+        .await;
+    crate::tools::surface::grant_workspace_root_reader(
+        operator,
+        &selected_text,
+        &created.agent_did,
+    )
+    .await
+    .expect("User grants the created Agent access to the selected root");
     let runtime_view =
         crate::runtime::agent::document_view::load_document_runtime_view(&node, &owner)
             .await
@@ -3992,7 +4376,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     .expect("fresh request runtime snapshot");
     let runtime_agent = snapshot
         .agents
-        .get(&created.agent_id)
+        .get(&created.agent_did)
         .expect("fresh request agent is runnable")
         .clone();
     let surface = Arc::new(
@@ -4028,24 +4412,50 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         ),
     ];
     for (label, path, expected_result, forbidden_content) in cases {
-        let request_doc_id = crate::write_manual_agent_request(
-            &node,
-            fixture_actor.clone(),
-            &owner,
-            &created.agent_id,
-            &format!("descendant-root-{label}"),
-            "Read the requested workspace path.",
-            json!({}),
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let request = crate::request::lifecycle::RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            crate::request::lifecycle::RequestIdentity {
+                requester_did: Some(created.agent_did.clone()),
+                request_id: request_id.clone(),
+                node_did: owner.clone(),
+                agent_did: created.agent_did.clone(),
+                session_id: uuid::Uuid::new_v4().to_string(),
+                content: "Read the requested workspace path.".to_string(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            },
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                &created.agent_did,
+            ),
+        );
+        let request = crate::request::lifecycle::build_signed_client_request(
+            &created_access,
+            request,
+            crate::request::lifecycle::RequestSigner::Identity(created_signer.as_ref()),
         )
         .await
-        .expect("enqueue a fresh request for the reconciled agent");
+        .expect("reserve and sign a fresh request for the reconciled Agent");
+        crate::request::lifecycle::submit_client_request(&created_access, &request)
+            .await
+            .expect("publish the fresh request and its session");
+        let response = created_access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
+                escape_graphql_string(&request_id),
+            ))
+            .await
+            .unwrap();
+        let rows = response["data"]["AgentRequest"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        let request_doc_id = rows[0]["_docID"].as_str().unwrap().to_owned();
         let request = crate::request::admission::load_request_for_admission_test(
             node.as_ref(),
             &request_doc_id,
         )
         .await
         .expect("load the fresh request through the admission representation");
-        assert_eq!(request.agent_id, created.agent_id);
+        assert_eq!(request.agent_did, created.agent_did);
         let turns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let provider_inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
 
@@ -4064,13 +4474,12 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         .await
         .expect("run the persisted request through the production owned loop");
         let escaped_request_doc = crate::store::graphql::escape_graphql_string(&request_doc_id);
-        let observed = node
+        let observed = operator
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{escaped_request_doc}"}}}}) {{lifecycle_state failure_reason terminal_output}} }}"#
             ))
             .await;
-        assert!(!observed.has_errors(), "{label}: {:?}", observed.errors);
-        let data = observed.data.as_ref().expect("owned-loop observations");
+        let data = &observed.expect("owned-loop observations")["data"];
         assert!(
             turns.load(std::sync::atomic::Ordering::SeqCst) >= 2,
             "{label}: provider did not receive the tool-result turn; request: {}",
@@ -4119,26 +4528,83 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
 
 #[tokio::test]
 async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
-    let node = build_agent_node().await;
-    let identity = node_identity("self-config-secret");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "secret").await;
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "secret".into()).unwrap();
+    let fixture = SelfConfigFixture::new("self-config-secret").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_selected_backend_writer().await;
+    let core = fixture.core();
     let raw = vec![(
         "auth".into(),
         Some(json!({"kind":"api_key","key":"do-not-expose"})),
     )];
     assert!(core.preview(backend_request(raw.clone())).await.is_err());
     assert!(core.apply(backend_request(raw)).await.is_err());
-    let owner = escape_graphql_string(&owner);
-    let response=node.execute(&format!(r#"mutation {{update_InferenceBackend(filter:{{node_did:{{_eq:"{owner}"}},backend_id:{{_eq:"secret:backend"}}}},input:{{auth:{{kind:"api_key",key:"operator-secret"}}}}) {{_docID}}}}"#)).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    core.preview(backend_request(vec![(
-        "auth".into(),
-        Some(json!({"kind":"api_key","key":"operator-secret"})),
-    )]))
-    .await
+    let model = crate::lean_vocab_test::lean_self_config_cases()
+        .iter()
+        .find(|case| case.name == "backend_credential_to_raw_key_rejected")
+        .unwrap();
+    let stored: Value = serde_json::from_str(
+        &model
+            .doc
+            .iter()
+            .find(|field| field.field == "auth")
+            .unwrap()
+            .value,
+    )
     .unwrap();
+    let raw_key: Value = serde_json::from_str(
+        model
+            .patch
+            .iter()
+            .find(|field| field.field == "auth")
+            .unwrap()
+            .value
+            .as_deref()
+            .unwrap(),
+    )
+    .unwrap();
+    let backend: crate::InferenceBackend = serde_json::from_value(json!({
+        "node_did": fixture.node_did(), "backend_id": format!("{}:backend", fixture.agent_did()),
+        "name": "Test inference", "provider_kind": "OpenAiCompatible",
+        "endpoint": "http://127.0.0.1:1/v1", "auth": stored,
+    }))
+    .unwrap();
+    let secret = crate::inference::auth::credential::BackendCredential {
+        credential_id: stored["id"].as_str().unwrap().to_owned(),
+        node_did: fixture.node_did().to_owned(),
+        provider_kind: backend.provider_kind.as_str().to_owned(),
+        endpoint: backend.endpoint.clone(),
+        version: stored["version"].as_str().unwrap().to_owned(),
+        secret: crate::inference::auth::credential::BackendCredentialSecret::ApiKey {
+            key: raw_key["key"].as_str().unwrap().to_owned(),
+        },
+    };
+    fixture
+        .user_access()
+        .transact_write("test.raw_key.credential", |txn| {
+            let secret = &secret;
+            Box::pin(async move {
+                crate::inference::auth::credential::put_backend_credential_in_txn(txn, secret).await
+            })
+        })
+        .await
+        .unwrap();
+    crate::store::config_client::write_inference_backend_document(fixture.user_access(), &backend)
+        .await
+        .unwrap();
+    for result in [
+        core.preview(backend_request(vec![(
+            "auth".into(),
+            Some(raw_key.clone()),
+        )]))
+        .await,
+        core.apply(backend_request(vec![(
+            "auth".into(),
+            Some(raw_key.clone()),
+        )]))
+        .await,
+    ] {
+        assert_eq!(result.is_ok(), model.accepted);
+    }
     assert!(core
         .apply(backend_request(vec![(
             "auth".into(),
@@ -4165,11 +4631,10 @@ async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
 async fn unrelated_backend_patch_keeps_environment_reference_unresolved() {
     const VARIABLE: &str = "GENTS_TEST_UNRELATED_PATCH_ENV_REFERENCE";
     const SENTINEL: &str = "sentinel-env-secret-never-stored";
-    let node = build_agent_node().await;
-    let identity = node_identity("self-config-env-reference");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "envref").await;
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "envref".into()).unwrap();
+    let fixture = SelfConfigFixture::new("self-config-env-reference").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_selected_backend_writer().await;
+    let core = fixture.core();
     let reference = json!({"kind":"environment","variable":VARIABLE});
     core.apply(backend_request(vec![(
         "auth".into(),
@@ -4178,20 +4643,6 @@ async fn unrelated_backend_patch_keeps_environment_reference_unresolved() {
     .await
     .unwrap();
     let _variable = crate::test_support::EnvVarGuard::set(VARIABLE, SENTINEL);
-
-    let stored_backend = || {
-        let node = node.clone();
-        let owner = escape_graphql_string(&owner);
-        async move {
-            let response = node
-                .execute(&format!(
-                    r#"{{ InferenceBackend(filter: {{node_did: {{_eq: "{owner}"}}, backend_id: {{_eq: "envref:backend"}}}}) {{ name connect_timeout_secs auth }} }}"#
-                ))
-                .await;
-            assert!(!response.has_errors(), "{:?}", response.errors);
-            response.data.expect("backend data")["InferenceBackend"][0].clone()
-        }
-    };
 
     for patch in [
         vec![("name".into(), Some(json!("Renamed inference")))],
@@ -4209,14 +4660,15 @@ async fn unrelated_backend_patch_keeps_environment_reference_unresolved() {
         }
     }
 
-    let stored = stored_backend().await;
+    let backend_id = escape_graphql_string(&format!("{}:backend", fixture.agent_did()));
+    let response = fixture.user_access().execute(&format!(
+        r#"{{ InferenceBackendMetadata(filter: {{backend_id: {{_eq: "{backend_id}"}}}}) {{ name connect_timeout_secs auth_kind environment_variable }} }}"#
+    )).await.unwrap();
+    let stored = &response["data"]["InferenceBackendMetadata"][0];
     assert_eq!(stored["name"], "Renamed inference");
     assert_eq!(stored["connect_timeout_secs"], 17);
-    let auth = match &stored["auth"] {
-        Value::String(encoded) => serde_json::from_str::<Value>(encoded).unwrap(),
-        other => other.clone(),
-    };
-    assert_eq!(auth, reference, "stored auth must remain the reference");
+    assert_eq!(stored["auth_kind"], "environment");
+    assert_eq!(stored["environment_variable"], VARIABLE);
     assert!(!stored.to_string().contains(SENTINEL));
     let read = core
         .read_effective_config(&BTreeSet::new(), false, true)
@@ -4228,19 +4680,19 @@ async fn unrelated_backend_patch_keeps_environment_reference_unresolved() {
 
 #[tokio::test]
 async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
-    let node = build_agent_node().await;
-    let identity = node_identity("self-config-account");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "acct").await;
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "acct".into()).unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let fixture = SelfConfigFixture::new("self-config-account").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_selected_backend_writer().await;
+    let owner = fixture.node_did();
+    let backend_id = format!("{}:backend", fixture.agent_did());
+    let core = fixture.core();
+    let access = fixture.user_access();
     let store = |kind: &str, auth: Value| {
         let backend: crate::InferenceBackend = serde_json::from_value(json!({
-            "node_did": owner, "backend_id": "acct:backend", "name": "Test inference",
+            "node_did": owner, "backend_id": backend_id, "name": "Test inference",
             "provider_kind": kind, "endpoint": "http://127.0.0.1:1/v1", "auth": auth,
         }))
         .unwrap();
-        let access = &access;
         async move {
             crate::store::config_client::write_inference_backend_document(access, &backend)
                 .await
@@ -4294,18 +4746,102 @@ async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
     core.apply(backend_request(endpoint)).await.unwrap();
 }
 
-async fn account_choice_core(
-    agent: &str,
-) -> (
-    std::sync::Arc<defra_node::EmbeddedNode>,
-    std::sync::Arc<dyn crate::NodeIdentity>,
-    SelfConfigCore,
-) {
-    let node = build_agent_node().await;
-    let identity = node_identity(agent);
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, agent).await;
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+#[tokio::test]
+async fn backend_choice_uses_runtime_visible_default_in_agent_transaction() {
+    let fixture = SelfConfigFixture::new("account-default-choice").await;
+    fixture.grant_node_reader().await;
+    let owner = fixture.node_did();
+    let credential = crate::inference::auth::credential::OAuthCredential {
+        doc_id: None,
+        credential_id: "model-default-credential".into(),
+        node_did: owner.into(),
+        provider: crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER.into(),
+        access_token: "private-access".into(),
+        refresh_token: "private-refresh".into(),
+        id_token: None,
+        account_id: None,
+        chatgpt_plan_type: None,
+        is_fedramp: false,
+        access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        last_refresh: None,
+        enabled: true,
+        account_ref: Some("g2".into()),
+        connected_at: Some(chrono::Utc::now()),
+        provider_account_key: None,
+        label: None,
+    };
+    crate::inference::auth::credential::upsert_oauth_credential_on(
+        fixture.user_access(),
+        &credential,
+    )
+    .await
+    .unwrap();
+    let model = crate::lean_vocab_test::lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .unwrap();
+    let core = fixture.core();
+    let access = core.access().unwrap();
+    let mut disabled = false;
+    for (index, case) in model.runtime_default_choice_cases.iter().enumerate() {
+        if case["visible_default"].is_null() && !disabled {
+            crate::inference::auth::credential::set_account_enabled(
+                fixture.user_access(),
+                owner,
+                &credential.credential_id,
+                false,
+            )
+            .await
+            .unwrap();
+            disabled = true;
+        }
+        let current_id = format!("guard-current-{index}");
+        let next_id = format!("guard-next-{index}");
+        for (id, kind, account) in [
+            (&current_id, &case["current_kind"], &case["current_ref"]),
+            (&next_id, &case["next_kind"], &case["next_ref"]),
+        ] {
+            let backend: crate::InferenceBackend = serde_json::from_value(json!({
+                "node_did": owner, "backend_id": id, "name": id,
+                "provider_kind": kind, "endpoint": "http://127.0.0.1:1/v1",
+                "auth": {"kind":"node_oauth", "account_ref": account},
+            }))
+            .unwrap();
+            crate::store::config_client::write_inference_backend_document(
+                fixture.user_access(),
+                &backend,
+            )
+            .await
+            .unwrap();
+        }
+        let result = access
+            .transact_readonly("test.account_choice.runtime_default", |txn| {
+                let (current_id, next_id) = (&current_id, &next_id);
+                Box::pin(async move {
+                    ops::guard_backend_choice_in_txn(txn, owner, Some(current_id), next_id).await
+                })
+            })
+            .await;
+        assert_eq!(
+            result.is_ok(),
+            case["accepted"].as_bool().unwrap(),
+            "{}: {result:?}",
+            case["name"]
+        );
+        if let Err(error) = result {
+            assert!(!format!("{error:#}").contains("g2"));
+        }
+    }
+}
+
+async fn account_choice_core(name: &str) -> (SelfConfigFixture, SelfConfigCore) {
+    let fixture = SelfConfigFixture::new(name).await;
+    fixture.grant_node_reader().await;
+    fixture.grant_user_relation_delete().await;
+    fixture.grant_agent_relation_delete().await;
+    let owner = fixture.node_did().to_owned();
+    let agent = fixture.agent_did().to_owned();
+    let access = fixture.user_access();
     for (id, kind, auth) in [
         (
             "chat-original",
@@ -4328,7 +4864,7 @@ async fn account_choice_core(
             "endpoint": "http://127.0.0.1:1/v1", "auth": auth,
         }))
         .unwrap();
-        crate::store::config_client::write_inference_backend_document(&access, &backend)
+        crate::store::config_client::write_inference_backend_document(access, &backend)
             .await
             .unwrap();
     }
@@ -4343,7 +4879,7 @@ async fn account_choice_core(
             "model_name": "test-model",
         }))
         .unwrap();
-        crate::store::config_client::write_inference_profile_document(&access, &profile)
+        crate::store::config_client::write_inference_profile_document(access, &profile)
             .await
             .unwrap();
     }
@@ -4386,21 +4922,45 @@ async fn account_choice_core(
         .collect(),
     )
     .unwrap();
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "test.compaction",
-        |txn| {
+    access
+        .transact_write("test.compaction", |txn| {
             let plan = &plan;
             Box::pin(async move {
                 crate::store::config_client::apply_desired_state_plan(txn, plan).await
             })
-        },
-    )
-    .await
-    .unwrap();
-    let core = SelfConfigCore::new(node.clone(), owner, agent.into()).unwrap();
-    (node, identity, core)
+        })
+        .await
+        .unwrap();
+    fixture.grant_selected_configuration().await;
+    let mut selections = vec![(crate::Collection::Compaction, compaction, true)];
+    selections.push((
+        crate::Collection::AgentContext,
+        format!("{agent}:context"),
+        false,
+    ));
+    selections.extend(
+        ["p-original", "p-chat-b", "p-grok"]
+            .into_iter()
+            .map(|id| (crate::Collection::InferenceProfile, id.to_owned(), false)),
+    );
+    selections.extend(
+        ["c-original", "c-chat-b"]
+            .into_iter()
+            .map(|id| (crate::Collection::Compaction, id.to_owned(), false)),
+    );
+    selections.extend(
+        ["ctx-original", "ctx-chat-b"]
+            .into_iter()
+            .map(|id| (crate::Collection::AgentContext, id.to_owned(), false)),
+    );
+    selections.extend(
+        ["chat-original", "chat-b", "grok-original"]
+            .into_iter()
+            .map(|id| (crate::Collection::InferenceBackend, id.to_owned(), false)),
+    );
+    fixture.grant_account_fixture_selections(&selections).await;
+    let core = fixture.core();
+    (fixture, core)
 }
 
 async fn assert_account_choice_refused(
@@ -4418,7 +4978,7 @@ async fn assert_account_choice_refused(
 
 #[tokio::test]
 async fn profile_self_config_cannot_pick_another_account() {
-    let (_, _, core) = account_choice_core("pick").await;
+    let (_fixture, core) = account_choice_core("pick").await;
     let owner = core.node_did().to_owned();
     let to = |backend: &str| vec![("backend_id".into(), Some(json!(backend)))];
     assert_account_choice_refused(&core, || profile_request(to("chat-b"))).await;
@@ -4438,7 +4998,7 @@ async fn profile_self_config_cannot_pick_another_account() {
 
 #[tokio::test]
 async fn agent_profile_pick_cannot_switch_account() {
-    let (_, _, core) = account_choice_core("agent-pick").await;
+    let (_fixture, core) = account_choice_core("agent-pick").await;
     let to = |profile: &str| vec![("inference_profile_id".into(), Some(json!(profile)))];
     assert_account_choice_refused(&core, || agent_request(&core, to("p-chat-b"))).await;
     core.apply(agent_request(&core, to("p-original")))
@@ -4452,17 +5012,21 @@ async fn agent_profile_pick_cannot_switch_account() {
         .unwrap();
 }
 
-async fn grok_accounts_core(agent: &str, original: bool, g2: bool) -> SelfConfigCore {
-    let (node, _, core) = account_choice_core(agent).await;
+async fn grok_accounts_core(
+    agent: &str,
+    original: bool,
+    g2: bool,
+) -> (SelfConfigFixture, SelfConfigCore) {
+    let (fixture, core) = account_choice_core(agent).await;
     let owner = core.node_did().to_owned();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let access = fixture.user_access();
     let backend: crate::InferenceBackend = serde_json::from_value(json!({
         "node_did": owner, "backend_id": "grok-g2", "name": "grok-g2",
         "provider_kind": "XaiGrokOAuth", "endpoint": "http://127.0.0.1:1/v1",
         "auth": {"kind":"node_oauth","account_ref":"g2"},
     }))
     .unwrap();
-    crate::store::config_client::write_inference_backend_document(&access, &backend)
+    crate::store::config_client::write_inference_backend_document(access, &backend)
         .await
         .unwrap();
     let profile: crate::documents::InferenceProfile = serde_json::from_value(json!({
@@ -4470,9 +5034,19 @@ async fn grok_accounts_core(agent: &str, original: bool, g2: bool) -> SelfConfig
         "model_name": "test-model",
     }))
     .unwrap();
-    crate::store::config_client::write_inference_profile_document(&access, &profile)
+    crate::store::config_client::write_inference_profile_document(access, &profile)
         .await
         .unwrap();
+    fixture
+        .grant_account_fixture_selections(&[
+            (crate::Collection::InferenceBackend, "grok-g2".into(), false),
+            (
+                crate::Collection::InferenceProfile,
+                "p-grok-g2".into(),
+                false,
+            ),
+        ])
+        .await;
     let provider = crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
     for (account_ref, enabled) in [(None, original), (Some("g2"), g2)] {
         let original_id = crate::inference::auth::credential::oauth_credential_id(&owner, provider);
@@ -4498,11 +5072,11 @@ async fn grok_accounts_core(agent: &str, original: bool, g2: bool) -> SelfConfig
             provider_account_key: None,
             label: None,
         };
-        crate::inference::auth::credential::upsert_oauth_credential(&node, &credential)
+        crate::inference::auth::credential::upsert_oauth_credential_on(access, &credential)
             .await
             .unwrap();
     }
-    core
+    (fixture, core)
 }
 
 #[tokio::test]
@@ -4515,21 +5089,21 @@ async fn default_account_follows_the_resolver() {
         core.apply(agent_request(&core, to(profile))).await.unwrap();
     };
 
-    let core = grok_accounts_core("default-g2", false, true).await;
+    let (_fixture, core) = grok_accounts_core("default-g2", false, true).await;
     assert_account_choice_refused(&core, || agent_request(&core, to("p-grok"))).await;
     accepted(core, "p-grok-g2").await;
 
-    let core = grok_accounts_core("default-original", true, true).await;
+    let (_fixture, core) = grok_accounts_core("default-original", true, true).await;
     assert_account_choice_refused(&core, || agent_request(&core, to("p-grok-g2"))).await;
     accepted(core, "p-grok").await;
 
-    let core = grok_accounts_core("default-none", false, false).await;
+    let (_fixture, core) = grok_accounts_core("default-none", false, false).await;
     accepted(core, "p-grok").await;
 }
 
 #[tokio::test]
 async fn compaction_profile_pick_cannot_switch_account() {
-    let (_, _, core) = account_choice_core("compaction-pick").await;
+    let (_fixture, core) = account_choice_core("compaction-pick").await;
     let to = |profile: &str| {
         profile_target_request(
             Some("compaction"),
@@ -4545,7 +5119,7 @@ async fn compaction_profile_pick_cannot_switch_account() {
 
 #[tokio::test]
 async fn compaction_reference_pick_cannot_switch_account() {
-    let (_, _, core) = account_choice_core("compaction-ref-pick").await;
+    let (_fixture, core) = account_choice_core("compaction-ref-pick").await;
     let context = |compaction: &str| {
         protect_working_agent(
             anchored_request(
@@ -4574,7 +5148,8 @@ async fn compaction_reference_pick_cannot_switch_account() {
 
 #[tokio::test]
 async fn agent_management_profile_pick_cannot_switch_account() {
-    let (node, identity, core) = account_choice_core("agent-pick").await;
+    let (fixture, core) = account_choice_core("agent-pick").await;
+    let node = &fixture.db.node;
     let owner = core.node_did().to_owned();
     let params = |action: &str, argv: &[&str]| {
         agent_params(
@@ -4606,7 +5181,7 @@ async fn agent_management_profile_pick_cannot_switch_account() {
             "clone",
             &[
                 "--from",
-                "agent-pick",
+                fixture.agent_did(),
                 "--display-name",
                 "Picker clone",
                 "--profile",
@@ -4614,45 +5189,41 @@ async fn agent_management_profile_pick_cannot_switch_account() {
             ],
         )
     };
-    let edit = params("edit", &["--id", "agent-pick", "--profile", "p-chat-b"]);
+    let edit = params(
+        "edit",
+        &["--id", fixture.agent_did(), "--profile", "p-chat-b"],
+    );
     for refused in [create("p-chat-b"), clone("p-chat-b"), edit] {
-        let error = agent_mutate(
-            &node,
-            &owner,
-            identity.as_ref(),
-            &refused,
-            &Default::default(),
-        )
-        .await
-        .expect_err("switching to another account must be refused");
+        let error = model_agent_mutate(&core, fixture.agent.as_ref(), &refused)
+            .await
+            .expect_err("switching to another account must be refused");
         assert!(
             format!("{error:#}").contains("selects another"),
             "{error:#}"
         );
     }
-    assert_eq!(crate::list_agents(&node, &owner).await.unwrap().len(), 1);
+    assert_eq!(crate::list_agents(node, &owner).await.unwrap().len(), 1);
     for accepted in [
         create("p-grok"),
         clone("p-grok"),
-        params("edit", &["--id", "agent-pick", "--profile", "p-original"]),
-        params("edit", &["--id", "agent-pick", "--profile", "p-grok"]),
+        params(
+            "edit",
+            &["--id", fixture.agent_did(), "--profile", "p-original"],
+        ),
+        params(
+            "edit",
+            &["--id", fixture.agent_did(), "--profile", "p-grok"],
+        ),
     ] {
-        agent_mutate(
-            &node,
-            &owner,
-            identity.as_ref(),
-            &accepted,
-            &Default::default(),
-        )
-        .await
-        .unwrap();
+        model_agent_mutate(&core, fixture.agent.as_ref(), &accepted)
+            .await
+            .unwrap();
     }
 }
 
 #[tokio::test]
 async fn agent_preview_agrees_with_the_account_choice_fence() {
-    let (node, _, core) = account_choice_core("preview-pick").await;
-    let owner = core.node_did().to_owned();
+    let (fixture, core) = account_choice_core("preview-pick").await;
     let create = [
         "--display-name",
         "Picker",
@@ -4663,8 +5234,13 @@ async fn agent_preview_agrees_with_the_account_choice_fence() {
         "--preset",
         "write",
     ];
-    let clone = ["--from", "preview-pick", "--display-name", "Picker clone"];
-    let edit = ["--id", "preview-pick"];
+    let clone = [
+        "--from",
+        fixture.agent_did(),
+        "--display-name",
+        "Picker clone",
+    ];
+    let edit = ["--id", fixture.agent_did()];
     for (operation, argv, profile, admitted) in [
         ("create", &create[..], "p-chat-b", false),
         ("clone", &clone[..], "p-chat-b", false),
@@ -4679,12 +5255,8 @@ async fn agent_preview_agrees_with_the_account_choice_fence() {
             .map(|arg| (*arg).to_owned())
             .collect();
         let params = agent_params("preview", Some(operation.into()), &argv).unwrap();
-        let preview: Value = serde_json::from_str(
-            &agent_preview(&node, &owner, &params, &Default::default())
-                .await
-                .unwrap(),
-        )
-        .unwrap();
+        let preview: Value =
+            serde_json::from_str(&model_agent_preview(&core, &params).await.unwrap()).unwrap();
         assert_eq!(
             preview["admitted"], admitted,
             "{operation} {profile}: {preview}"
@@ -4702,35 +5274,43 @@ async fn agent_preview_agrees_with_the_account_choice_fence() {
 
 #[tokio::test]
 async fn agent_clone_inherited_compaction_cannot_switch_account() {
-    let (node, identity, core) = account_choice_core("clone-pick").await;
+    let (fixture, core) = account_choice_core("clone-pick").await;
+    let node = &fixture.db.node;
     let owner = core.node_did().to_owned();
-    let sources = ["original", "chat-b"]
-        .into_iter()
-        .map(|account| {
-            let value = json!({"node_did": owner, "agent_id": format!("src-{account}"),
-                "context_id": format!("ctx-{account}"), "inference_profile_id": "p-original"});
-            crate::store::config_client::DesiredStateApplyDocument {
-                collection: crate::Collection::Agent,
-                add: value.clone(),
-                update: value,
-            }
-        })
-        .collect();
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(sources).unwrap();
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "test.sources",
-        |txn| {
-            let plan = &plan;
+    let original = fixture.install_sibling("src-original").await;
+    let chat_b = fixture.install_sibling("src-chat-b").await;
+    fixture
+        .user_access()
+        .transact_write("test.sources", |txn| {
+            let sources = [(&original, "ctx-original"), (&chat_b, "ctx-chat-b")];
+            let owner = &owner;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                let mut documents = Vec::new();
+                for (id, context) in sources {
+                    let (_, mut value) =
+                        crate::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            crate::Collection::Agent,
+                            owner,
+                            id,
+                        )
+                        .await?
+                        .expect("source Agent exists");
+                    value["context_id"] = json!(context);
+                    value["inference_profile_id"] = json!("p-original");
+                    documents.push(crate::store::config_client::DesiredStateApplyDocument {
+                        collection: crate::Collection::Agent,
+                        add: value.clone(),
+                        update: value,
+                    });
+                }
+                let plan = crate::store::config_client::DesiredStateApplyPlan::new(documents)?;
+                crate::store::config_client::apply_desired_state_plan(txn, &plan).await
             })
-        },
-    )
-    .await
-    .unwrap();
-    let before = crate::list_agents(&node, &owner).await.unwrap();
+        })
+        .await
+        .unwrap();
+    let before = crate::list_agents(node, &owner).await.unwrap();
     let clone = |action: &str, source: &str, profile: &str| {
         let name = format!("{source} on {profile}");
         let argv = [
@@ -4745,25 +5325,18 @@ async fn agent_clone_inherited_compaction_cannot_switch_account() {
         let operation = (action == "preview").then(|| "clone".to_owned());
         agent_params(action, operation, &argv).unwrap()
     };
-    for (source, profile) in [("src-chat-b", "p-original"), ("src-chat-b", "p-grok")] {
+    for (source, profile) in [(chat_b.as_str(), "p-original"), (chat_b.as_str(), "p-grok")] {
         let preview: Value = serde_json::from_str(
-            &agent_preview(
-                &node,
-                &owner,
-                &clone("preview", source, profile),
-                &Default::default(),
-            )
-            .await
-            .unwrap(),
+            &model_agent_preview(&core, &clone("preview", source, profile))
+                .await
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(preview["admitted"], false, "{source} {profile}: {preview}");
-        let error = agent_mutate(
-            &node,
-            &owner,
-            identity.as_ref(),
+        let error = model_agent_mutate(
+            &core,
+            fixture.agent.as_ref(),
             &clone("clone", source, profile),
-            &Default::default(),
         )
         .await
         .expect_err("inheriting another account's compaction must be refused");
@@ -4772,14 +5345,12 @@ async fn agent_clone_inherited_compaction_cannot_switch_account() {
             "{error:#}"
         );
     }
-    assert_eq!(crate::list_agents(&node, &owner).await.unwrap(), before);
+    assert_eq!(crate::list_agents(node, &owner).await.unwrap(), before);
     for profile in ["p-original", "p-grok"] {
-        agent_mutate(
-            &node,
-            &owner,
-            identity.as_ref(),
-            &clone("clone", "src-original", profile),
-            &Default::default(),
+        model_agent_mutate(
+            &core,
+            fixture.agent.as_ref(),
+            &clone("clone", &original, profile),
         )
         .await
         .unwrap();
@@ -4788,20 +5359,9 @@ async fn agent_clone_inherited_compaction_cannot_switch_account() {
 
 #[tokio::test]
 async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply() {
-    let node = build_agent_node().await;
-    let identity = node_identity("self-config-lsp-guard");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    let mut tool_config = config(&["tools"]);
-    tool_config.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        None,
-        &tool_config,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("self-config-lsp-guard").await;
+    fixture.grant_selected_configuration().await;
+    let tools = fixture.tools(&["tools"]);
     let config = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -4854,18 +5414,20 @@ async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply
 
 #[tokio::test]
 async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
-    let node = build_agent_node().await;
-    let identity = node_identity("profile-context-window");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "setup").await;
+    let fixture = SelfConfigFixture::new("profile-context-window").await;
+    fixture.grant_selected_configuration().await;
+    let owner = fixture.node_did();
+    let agent = fixture.agent_did();
+    let node = &fixture.db.node;
+    let backend_id = format!("{agent}:backend");
     let backend: crate::documents::InferenceBackend = serde_json::from_value(json!({
-        "node_did": owner, "backend_id": "setup:backend", "name": "Test inference",
+        "node_did": owner, "backend_id": backend_id, "name": "Test inference",
         "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:1/v1",
         "auth": {"kind": "unauthenticated"},
     }))
     .unwrap();
     crate::inference::backends::registry::record_model_catalog(
-        &node,
+        node,
         &backend,
         serde_json::from_value(json!({
             "node_did": null,
@@ -4876,23 +5438,13 @@ async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
     )
     .await
     .unwrap();
-    let mut tool_config = config(&["profile"]);
-    tool_config.agent_id = "setup".into();
-    tool_config.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let tools = fixture.tools(&["profile"]);
     let edit = |verb: &str, window: u64| -> Vec<String> {
         vec![
             "profile".into(),
             verb.into(),
             "--agent".into(),
-            "setup".into(),
+            agent.into(),
             "--set".into(),
             format!("context_window={window}"),
         ]
@@ -4916,7 +5468,7 @@ async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
             "profile".into(),
             "get".into(),
             "--agent".into(),
-            "setup".into(),
+            agent.into(),
         ],
     )
     .await
@@ -4926,13 +5478,18 @@ async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
 
 #[tokio::test]
 async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out() {
-    let node = build_agent_node().await;
-    let identity = node_identity("engineer-god-mode");
-    let owner = identity.did().to_string();
-    for agent in ["setup", "lead", "caller"] {
-        crate::test_support::install_test_agent(&node, &owner, agent).await;
-    }
-    let setup = SelfConfigCore::new(node.clone(), owner.clone(), "setup".into()).unwrap();
+    let fixture = SelfConfigFixture::new("engineer-god-mode").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    fixture.grant_agent_delete().await;
+    fixture.grant_agent_relation_delete().await;
+    let lead = fixture.install_sibling("lead").await;
+    let caller = fixture.install_sibling("caller").await;
+    fixture.grant_sibling_configuration(&lead).await;
+    fixture.grant_sibling_configuration(&caller).await;
+    let owner = fixture.node_did().to_owned();
+    let setup_did = fixture.agent_did().to_owned();
+    let setup = fixture.core();
     setup
         .apply(agent_request(
             &setup,
@@ -4959,17 +5516,10 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         .await
         .unwrap();
     let mut grants = config(&["node", "agent", "tools", "profile", "automation"]);
-    grants.agent_id = "setup".into();
+    grants.agent_did = setup_did.clone();
     grants.preview = true;
     grants.no_lockout = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
+    let tools = fixture.tools_with_config(&grants);
     let command = |args: &[&str]| args.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
     let ok = |result: Result<String, String>| -> Value {
         serde_json::from_str(&result.unwrap_or_else(|error| panic!("{error}"))).unwrap()
@@ -4981,7 +5531,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         "--set",
         &format!("target_node_did={}", json!(owner)),
         "--set",
-        "agent_id=\"lead\"",
+        &format!("agent_did={}", json!(lead)),
     ];
     let preview = ok(call_config_tool(
         &tools,
@@ -5007,7 +5557,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             "--set",
             &format!("target_node_did={}", json!(owner)),
             "--set",
-            "agent_id=\"missing\"",
+            "agent_did=\"missing\"",
         ]),
     )
     .await
@@ -5038,7 +5588,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     ] {
         let receipt = ok(call_config_tool(
             &tools,
-            command(&["tools", "edit", "--agent", "caller", "--set", selection]),
+            command(&["tools", "edit", "--agent", &caller, "--set", selection]),
         )
         .await);
         assert_eq!(receipt["committed"], true);
@@ -5047,7 +5597,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             .unwrap()
             .contains("Selected targets are inactive"));
         let stored =
-            ok(call_config_tool(&tools, command(&["tools", "get", "--agent", "caller"])).await);
+            ok(call_config_tool(&tools, command(&["tools", "get", "--agent", &caller])).await);
         assert_ne!(stored["document"]["agents"]["enabled"], true);
         assert_eq!(
             stored["document"]["agents"]["target_ids"],
@@ -5061,7 +5611,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             "tools",
             "edit",
             "--agent",
-            "caller",
+            &caller,
             "--set",
             r#"agents={"enabled":true,"target_ids":["gatekeeper"]}"#,
         ]),
@@ -5072,7 +5622,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         .unwrap()
         .contains("Selected targets are inactive"));
     let recovered =
-        ok(call_config_tool(&tools, command(&["tools", "get", "--agent", "caller"])).await);
+        ok(call_config_tool(&tools, command(&["tools", "get", "--agent", &caller])).await);
     assert_eq!(recovered["document"]["agents"]["enabled"], true);
     assert_eq!(
         recovered["document"]["agents"]["target_ids"],
@@ -5085,7 +5635,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             "tools",
             "edit",
             "--agent",
-            "caller",
+            &caller,
             "--set",
             r#"agents={"enabled":true}"#,
         ]),
@@ -5139,14 +5689,20 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     }
     let disable = call_config_tool(
         &tools,
-        command(&["agent", "edit", "setup", "--set", "enabled=false"]),
+        command(&["agent", "edit", &setup_did, "--set", "enabled=false"]),
     )
     .await
     .unwrap_err();
     assert!(disable.contains("no-lockout"), "{disable}");
     let untag = call_config_tool(
         &tools,
-        command(&["agent", "edit", "setup", "--set", "tags=[\"ui:engineer\"]"]),
+        command(&[
+            "agent",
+            "edit",
+            &setup_did,
+            "--set",
+            "tags=[\"ui:engineer\"]",
+        ]),
     )
     .await
     .unwrap_err();
@@ -5156,7 +5712,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         command(&[
             "agent",
             "edit",
-            "setup",
+            &setup_did,
             "--set",
             &format!(
                 "tags={}",
@@ -5168,9 +5724,10 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         ]),
     )
     .await);
-    let agent_disable = call_config_tool(&tools, command(&["agent", "disable", "--id", "setup"]))
-        .await
-        .unwrap_err();
+    let agent_disable =
+        call_config_tool(&tools, command(&["agent", "disable", "--id", &setup_did]))
+            .await
+            .unwrap_err();
     assert!(agent_disable.contains("no-lockout"), "{agent_disable}");
     for name in ["\"\"", "\"   \""] {
         let blank = call_config_tool(
@@ -5280,7 +5837,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             "profile",
             "edit",
             "--agent",
-            "lead",
+            &lead,
             "--set",
             "execution_id=\"lead-execution\"",
         ]),
@@ -5293,7 +5850,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             "edit",
             "execution",
             "--agent",
-            "lead",
+            &lead,
             "--set",
             "max_turns=12",
         ]),
@@ -5305,7 +5862,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     assert_eq!(execution["effective"]["max_turns"], 12);
     let bound = ok(call_config_tool(
         &tools,
-        command(&["profile", "get", "execution", "--agent", "lead"]),
+        command(&["profile", "get", "execution", "--agent", &lead]),
     )
     .await);
     assert_eq!(bound["effective"], execution["effective"]);
@@ -5318,7 +5875,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             "task",
             "engineer-inbox",
             "--agent",
-            "setup",
+            &setup_did,
             "--set",
             "prompt_template=\"Review {{ doc.message }}\"",
         ]),
@@ -5377,11 +5934,13 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
 #[tokio::test]
 async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_calls() {
     const SECRET: &str = "operator-api-key-never-exposed";
-    let node = build_agent_node().await;
-    let identity = node_identity("backend-catalog-read");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "setup").await;
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let fixture = SelfConfigFixture::new("backend-catalog-read").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_selected_configuration().await;
+    let owner = fixture.node_did();
+    let access = fixture.user_access();
+    let runtime_access =
+        crate::ConfigAccess::local_as(fixture.db.node.clone(), identity::Did::new(owner).unwrap());
     let backend = |id: &str, kind: &str, auth: Value| -> crate::documents::InferenceBackend {
         serde_json::from_value(json!({
             "node_did": owner, "backend_id": id, "name": id, "provider_kind": kind,
@@ -5399,21 +5958,40 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
         "OpenAiCompatible",
         json!({"kind": "api_key", "key": SECRET}),
     );
+    let unobserved = backend(
+        "unobserved",
+        "OpenAiCompatible",
+        json!({"kind": "unauthenticated"}),
+    );
     let models: Vec<crate::documents::AdvertisedModel> = serde_json::from_value(json!([{
         "model_name": "claude-opus-5-5", "display_name": "Claude Opus 5.5",
         "context_window": 1_000_000, "max_context_window": null, "max_output_tokens": 128_000,
         "reasoning_efforts": ["low", "high"],
     }]))
     .unwrap();
-    for document in [&claude, &keyed] {
-        crate::store::config_client::write_inference_backend_document(&access, document)
+    for document in [&claude, &keyed, &unobserved] {
+        crate::store::config_client::write_inference_backend_document(access, document)
             .await
             .unwrap();
     }
+    let stored_keyed = access
+        .transact_readonly("test.backend_catalog.metadata", |txn| {
+            Box::pin(async move {
+                crate::store::config_client::load_inference_backend_in_txn(txn, owner, "keyed")
+                    .await
+            })
+        })
+        .await
+        .unwrap()
+        .expect("persisted keyed backend");
+    assert!(matches!(
+        &stored_keyed.auth,
+        crate::documents::BackendAuth::Credential { .. }
+    ));
     assert_eq!(
         crate::inference::backends::registry::record_connection_catalog_on(
-            &access,
-            &owner,
+            &runtime_access,
+            owner,
             claude.provider_kind,
             &claude.endpoint,
             &claude.auth,
@@ -5423,21 +6001,15 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
         .unwrap(),
         1
     );
-    crate::inference::backends::registry::record_discovered_catalog_on(&access, &keyed, models)
-        .await
-        .unwrap();
+    crate::inference::backends::registry::record_discovered_catalog_on(
+        &runtime_access,
+        &stored_keyed,
+        models,
+    )
+    .await
+    .unwrap();
 
-    let mut tool_config = config(&["backend"]);
-    tool_config.agent_id = "setup".into();
-    tool_config.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let tools = fixture.tools(&["backend"]);
     let call = |argv: &[&str]| {
         let argv = std::iter::once("backend")
             .chain(argv.iter().copied())
@@ -5453,6 +6025,10 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
 
     let list = call(&["list"]).await;
     let items = list["items"].as_array().unwrap();
+    let page = call(&["list", "--limit", "1"]).await;
+    assert_eq!(page["items"][0], items[0]);
+    assert_eq!(page["page"]["total"], items.len());
+    assert_eq!(page["page"]["truncated"], true);
     for id in ["claude", "keyed"] {
         let item = items.iter().find(|item| item["backend_id"] == id).unwrap();
         assert_eq!(
@@ -5463,6 +6039,10 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
     }
     for id in ["claude", "keyed"] {
         let get = call(&["get", id]).await;
+        let listed = items.iter().find(|item| item["backend_id"] == id).unwrap();
+        for field in ["catalog", "probe_status", "last_probe"] {
+            assert_eq!(listed[field], get["observation"][field], "{id}: {field}");
+        }
         let model = &get["observation"]["catalog"]["models"][0];
         assert_eq!(model["context_window"], 1_000_000);
         assert_eq!(model["reasoning_efforts"], json!(["low", "high"]));
@@ -5473,8 +6053,169 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
             "claude-opus-5-5"
         );
     }
+    let item = items
+        .iter()
+        .find(|item| item["backend_id"] == "unobserved")
+        .unwrap();
+    assert!(item["catalog"].is_null());
+    assert!(item["probe_status"].is_null());
+    assert!(item["last_probe"].is_null());
     let bound = call(&["get"]).await;
     assert!(bound["observation"].get("catalog").is_some(), "{bound}");
+}
+
+#[tokio::test]
+async fn modeled_resource_reads_use_resource_category_and_native_access() {
+    let fixture = SelfConfigFixture::new("resource-read-exposure").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_selected_configuration().await;
+    let backend_id = format!("{}:backend", fixture.agent_did());
+    let task = json!({"node_did": fixture.node_did(), "task_id": "read-exposure-task",
+        "agent_did": fixture.agent_did(), "prompt_template": "Do the work"});
+    let task_plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::Task,
+            add: task.clone(),
+            update: task,
+        },
+    ])
+    .unwrap();
+    fixture
+        .user_access()
+        .transact_write("test.read_exposure.task", |txn| {
+            let task_plan = &task_plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, task_plan).await
+            })
+        })
+        .await
+        .unwrap();
+    let cases =
+        &crate::lean_vocab_test::lean_contract_snapshot().self_config_resource_read_exposure_cases;
+    assert!(!cases.is_empty());
+    for case in cases {
+        let categories = case["categories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>();
+        let expected = case["exposed"].as_bool().unwrap();
+        let tools = fixture.tools(&categories);
+        let commands = match case["resource"].as_str().unwrap() {
+            "backend" => vec![
+                vec!["backend".to_owned(), "list".to_owned()],
+                vec!["backend".to_owned(), "get".to_owned(), backend_id.clone()],
+                vec!["backend".to_owned(), "get".to_owned()],
+            ],
+            "tools" => vec![vec!["tools".into(), "get".into()]],
+            "profile" => vec![
+                vec!["profile".into(), "list".into()],
+                vec!["profile".into(), "get".into()],
+            ],
+            "automation" => vec![
+                vec!["automation".into(), "list".into(), "task".into()],
+                vec![
+                    "automation".into(),
+                    "get".into(),
+                    "task".into(),
+                    "read-exposure-task".into(),
+                ],
+            ],
+            "effective" => vec![
+                vec!["get".into()],
+                vec![
+                    "get".into(),
+                    "--agent".into(),
+                    fixture.agent_did().to_owned(),
+                ],
+            ],
+            other => panic!("unexpected modeled read resource {other}"),
+        };
+        for command in commands {
+            let result = call_config_tool(&tools, command.clone()).await;
+            assert_eq!(result.is_ok(), expected, "{case}: {command:?}: {result:?}");
+            if expected && case["resource"] == "effective" {
+                let value: Value = serde_json::from_str(result.as_ref().unwrap()).unwrap();
+                assert_eq!(value["agent_did"], fixture.agent_did());
+            }
+            if expected
+                && command.first().is_some_and(|part| part == "automation")
+                && command.get(1).is_some_and(|part| part == "get")
+            {
+                let value: Value = serde_json::from_str(result.as_ref().unwrap()).unwrap();
+                assert_eq!(value["document"]["agent_did"], fixture.agent_did());
+                assert_eq!(value["document"]["task_id"], "read-exposure-task");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn automation_read_preserves_native_selected_agent_visibility() {
+    let fixture = SelfConfigFixture::new("automation-read-native-scope").await;
+    fixture.grant_selected_configuration().await;
+    let sibling = fixture.install_sibling("Other Agent").await;
+    let task = json!({"node_did": fixture.node_did(), "task_id": "other-agent-task",
+        "agent_did": sibling, "prompt_template": "Do the work"});
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::Task,
+            add: task.clone(),
+            update: task,
+        },
+    ])
+    .unwrap();
+    fixture
+        .user_access()
+        .transact_write("test.automation_read.other_task", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .unwrap();
+    let expected = crate::lean_vocab_test::lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .unwrap()
+        .configuration_task_target_cases
+        .iter()
+        .find(|case| case["name"] == "task-unrelated")
+        .unwrap()["expected"]
+        .as_bool()
+        .unwrap();
+    let access = crate::ConfigAccess::local_managed_agent(
+        fixture.db.node.clone(),
+        identity::Did::new(fixture.agent_did()).unwrap(),
+        fixture.agent.as_ref(),
+    )
+    .unwrap();
+    let response = access
+        .execute("{ Task(filter: {task_id: {_eq: \"other-agent-task\"}}) {_docID} }")
+        .await
+        .unwrap();
+    let visible = !response["data"]["Task"].as_array().unwrap().is_empty();
+    assert_eq!(visible, expected, "native selected Task access");
+    let tools = fixture.tools(&["automation"]);
+    let result = call_config_tool(
+        &tools,
+        vec![
+            "automation".into(),
+            "get".into(),
+            "task".into(),
+            "other-agent-task".into(),
+            "--agent".into(),
+            sibling,
+        ],
+    )
+    .await;
+    assert_eq!(
+        result.is_ok(),
+        expected,
+        "tool must retain invoking Agent access: {result:?}"
+    );
 }
 
 #[tokio::test]
@@ -5492,7 +6233,7 @@ async fn pack_search_uses_registry_pagination_without_installing() {
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let _registry =
         crate::test_support::EnvVarGuard::set("GENTS_REGISTRY", format!("http://{address}"));
-    let (node, did, tools) = pack_tool("registry-search", test_plugins()).await;
+    let (fixture, tools) = signed_pack_tool("registry-search", test_plugins()).await;
     let tool = tools.iter().find(|t| t.name() == CONFIG_TOOL_NAME).unwrap();
     let first: Value = serde_json::from_str(
         &tool
@@ -5519,13 +6260,14 @@ async fn pack_search_uses_registry_pagination_without_installing() {
             .await
             .is_err());
     }
-    let access = crate::store::config_client::ConfigAccess::local(node);
-    assert!(
-        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(crate::pack::read_installed_pack(
+        &fixture.user_access,
+        fixture.db.node_identity.did(),
+        "fixture/documents_fixture",
+    )
+    .await
+    .unwrap()
+    .is_none());
     server.abort();
 }
 
@@ -5538,8 +6280,10 @@ async fn pack_documents_install_and_release_documents_dependencies() {
     crate::pack::store::PackStore::new(home.path())
         .import(&bytes[..], None)
         .unwrap();
-    let (node, did, tools) = pack_tool("documents-dependencies", plugins).await;
-    let slots = ["--inference-slot", "worker=setup:inference"];
+    let (fixture, tools) = signed_pack_tool("documents-dependencies", plugins).await;
+    let did = fixture.db.node_identity.did();
+    let slot = format!("worker={}:inference", fixture.agent_did());
+    let slots = ["--inference-slot", slot.as_str()];
     let mut args = vec!["pack", "preview", "install", "fixture/dependent_fixture"];
     args.extend(slots);
     let preview: Value = serde_json::from_str(&config_call(&tools, &args).await.unwrap()).unwrap();
@@ -5558,7 +6302,7 @@ async fn pack_documents_install_and_release_documents_dependencies() {
     ];
     args.extend(slots);
     config_call(&tools, &args).await.unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node);
+    let access = &fixture.user_access;
     let rows = access
         .execute(
             r#"{ PackInstallation(filter: {coordinate: {_eq: "fixture/dependee_fixture"}}) { explicit required_by } }"#,
@@ -5573,7 +6317,7 @@ async fn pack_documents_install_and_release_documents_dependencies() {
         .await
         .unwrap();
     assert!(
-        crate::pack::read_installed_pack(&access, &did, "fixture/dependee_fixture")
+        crate::pack::read_installed_pack(access, did, "fixture/dependee_fixture")
             .await
             .unwrap()
             .is_none()
@@ -5624,8 +6368,9 @@ async fn pack_install_blocks_a_dependency_plugin_without_operator_authority() {
     crate::pack::store::PackStore::new(home.path())
         .import(&bytes[..], None)
         .unwrap();
-    let (_node, _did, tools) = pack_tool("dependency-plugin-authority", plugins).await;
-    let slots = ["--inference-slot", "worker=setup:inference"];
+    let (fixture, tools) = signed_pack_tool("dependency-plugin-authority", plugins).await;
+    let slot = format!("worker={}:inference", fixture.agent_did());
+    let slots = ["--inference-slot", slot.as_str()];
     let mut preview_argv = vec!["pack", "preview", "install", "fixture/dependent_fixture"];
     preview_argv.extend(slots);
     let preview: Value =
@@ -5664,7 +6409,9 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     manifest.as_object_mut().unwrap().remove("schemas");
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     let (_home, plugins) = crate::test_support::home_with_pack_dir(&directory);
-    let (node, did, tools) = pack_tool("inspect-documents-pack", plugins).await;
+    let (fixture, tools) = signed_pack_tool("inspect-documents-pack", plugins).await;
+    let did = fixture.db.node_identity.did();
+    let slot = format!("worker={}:inference", fixture.agent_did());
     let result: Value = serde_json::from_str(
         &config_call(&tools, &["pack", "get", "fixture/documents_fixture"])
             .await
@@ -5692,7 +6439,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
                 "install",
                 "fixture/documents_fixture",
                 "--inference-slot",
-                "worker=setup:inference",
+                &slot,
             ],
         )
         .await
@@ -5701,9 +6448,9 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     .unwrap();
     assert_eq!(preview["ready"], true, "{preview}");
     let digest = preview["artifact_digest"].as_str().unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let access = &fixture.user_access;
     assert!(
-        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+        crate::pack::read_installed_pack(access, did, "fixture/documents_fixture")
             .await
             .unwrap()
             .is_none(),
@@ -5718,14 +6465,14 @@ async fn pack_document_installation_uses_existing_lifecycle() {
             "--digest",
             "sha256:wrong",
             "--inference-slot",
-            "worker=setup:inference",
+            &slot,
         ],
     )
     .await
     .unwrap_err();
     assert!(rejected.to_string().contains("digest"), "{rejected}");
     assert!(
-        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+        crate::pack::read_installed_pack(access, did, "fixture/documents_fixture")
             .await
             .unwrap()
             .is_none()
@@ -5740,7 +6487,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
                 "--digest",
                 digest,
                 "--inference-slot",
-                "worker=setup:inference",
+                &slot,
             ],
         )
         .await
@@ -5749,12 +6496,17 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     .unwrap();
     assert_eq!(installed["effective"]["digest"], digest);
     assert!(
-        node.get_collection("FixtureJob").unwrap().is_some(),
+        fixture
+            .db
+            .node
+            .get_collection("FixtureJob")
+            .unwrap()
+            .is_some(),
         "custom schema asset must be published"
     );
 
     assert!(
-        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+        crate::pack::read_installed_pack(access, did, "fixture/documents_fixture")
             .await
             .unwrap()
             .is_some()
@@ -5769,7 +6521,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
                 "--digest",
                 digest,
                 "--inference-slot",
-                "worker=setup:inference",
+                &slot,
             ],
         )
         .await
@@ -5781,32 +6533,36 @@ async fn pack_document_installation_uses_existing_lifecycle() {
         .await
         .unwrap();
     assert!(
-        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+        crate::pack::read_installed_pack(access, did, "fixture/documents_fixture")
             .await
             .unwrap()
             .is_none()
     );
 }
 
-async fn account_state_rows(node: &std::sync::Arc<defra_node::EmbeddedNode>) -> Value {
-    let response = node
-        .execute(
-            "{ OAuthCredential { _docID credential_id enabled label access_token } \
-               InferenceBackend { _docID backend_id enabled auth } }",
-        )
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    response.data.expect("data")
+async fn account_state_rows(fixture: &SelfConfigFixture) -> Value {
+    let access = crate::inference::auth::credential::runtime_credential_access(
+        &fixture.db.node,
+        fixture.node_did(),
+    )
+    .unwrap();
+    let credentials = access
+        .execute("{ OAuthCredential { _docID credential_id enabled label access_token } }")
+        .await
+        .unwrap();
+    let backend = fixture.user_access.execute("{ InferenceBackendMetadata { _docID backend_id enabled auth_kind } BackendCredential { _docID credential_id secret } }").await.unwrap();
+    json!({"credentials": credentials["data"], "backend": backend["data"]})
 }
 
 async fn seed_account_view(
     cache: &crate::inference::usage_observation::UsageCache,
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
-    owner: &str,
+    fixture: &SelfConfigFixture,
 ) {
     use crate::inference::auth::credential::{
         oauth_credential_id, upsert_oauth_credential, OAuthCredential,
     };
+    let node = &fixture.db.node;
+    let owner = fixture.node_did();
     let provider = crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
     let account = |account_ref: Option<&str>, label: &str, enabled: bool| OAuthCredential {
         doc_id: None,
@@ -5836,7 +6592,7 @@ async fn seed_account_view(
     upsert_oauth_credential(node, &account(Some("acct-l2"), "Work", false))
         .await
         .unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let access = fixture.user_access();
     for (backend_id, kind, auth, endpoint) in [
         (
             "backend-usage-claude",
@@ -5866,7 +6622,7 @@ async fn seed_account_view(
             "auth": auth,
         }))
         .unwrap();
-        crate::store::config_client::write_inference_backend_document(&access, &backend)
+        crate::store::config_client::write_inference_backend_document(access, &backend)
             .await
             .unwrap();
     }
@@ -5877,7 +6633,7 @@ async fn seed_account_view(
         "model_name": "model-x",
     }))
     .unwrap();
-    crate::store::config_client::write_inference_profile_document(&access, &profile)
+    crate::store::config_client::write_inference_profile_document(access, &profile)
         .await
         .unwrap();
     crate::inference::usage_observation::record_usage(
@@ -5909,10 +6665,8 @@ async fn seed_account_view(
 
 #[tokio::test]
 async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
-    let node = build_agent_node().await;
-    let identity = node_identity("config-accounts");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "alpha").await;
+    let fixture = SelfConfigFixture::new("config-accounts").await;
+    fixture.grant_node_reader().await;
     let cache = std::sync::Arc::new(
         crate::inference::usage_observation::UsageCache::with_endpoints(
             crate::inference::usage_observation::UsageEndpoints {
@@ -5921,22 +6675,24 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
             },
         ),
     );
-    seed_account_view(&cache, &node, &owner).await;
+    seed_account_view(&cache, &fixture).await;
     let mut tool_config = config(&["node", "profile", "backend"]);
-    tool_config.agent_id = "alpha".into();
-    let tools = build_self_config_tools(
+    tool_config.agent_did = fixture.agent_did().to_owned();
+    let tools = build_self_config_tools_with_runtime(
         cache,
-        node.clone(),
-        owner,
-        Some(identity),
+        fixture.db.node.clone(),
+        fixture.node_did().to_owned(),
+        Some(fixture.agent.clone()),
+        Some(fixture.db.node_identity.clone()),
         &tool_config,
         test_plugins(),
+        Some(fixture.node_binding.clone()),
     );
     let config = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap();
-    let before = account_state_rows(&node).await;
+    let before = account_state_rows(&fixture).await;
 
     let text = config
         .call(json!({"argv":["backend", "accounts"]}).to_string())
@@ -5970,14 +6726,13 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
     for hidden in [
         "SECRET",
         "identity-",
-        "did:key",
         "credential_id",
         "account_ref",
         "acct-l2",
     ] {
         assert!(!text.contains(hidden), "{hidden}: {text}");
     }
-    assert_eq!(account_state_rows(&node).await, before);
+    assert_eq!(account_state_rows(&fixture).await, before);
 
     let help = config
         .call(json!({"argv":["help", "backend"]}).to_string())
@@ -5992,20 +6747,8 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
 
 #[tokio::test]
 async fn config_backend_accounts_is_readable_without_the_backend_grant() {
-    let node = build_agent_node().await;
-    let identity = node_identity("config-accounts-grant");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "alpha").await;
-    let mut tool_config = config(&["node", "profile"]);
-    tool_config.agent_id = "alpha".into();
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("config-accounts-grant").await;
+    let tools = fixture.tools(&["node", "profile"]);
     let config = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -6022,21 +6765,30 @@ async fn config_backend_accounts_is_readable_without_the_backend_grant() {
 
 #[tokio::test]
 async fn agent_management_clears_optional_fields_and_refuses_ignored_tool_modifiers() {
-    let node = build_agent_node().await;
-    let identity = node_identity("agent-clear");
-    let owner = identity.did().to_owned();
-    crate::test_support::install_test_agent(&node, &owner, "seed").await;
+    let fixture = SelfConfigFixture::new("agent-clear").await;
+    let node = &fixture.db.node;
+    let owner = fixture.node_did();
+    let access = fixture.user_access();
+    let user = identity::Did::new(access.actor_did().unwrap()).unwrap();
+    let binding = crate::store::identity::provision_agent_identity_authorized(
+        node,
+        fixture.db.node_identity.as_ref(),
+        &user,
+    )
+    .await
+    .unwrap();
+    let profile = format!("{}:inference", fixture.agent_did());
     let created: Value = serde_json::from_str(
-        &agent_mutate(
-            &node,
-            &owner,
-            identity.as_ref(),
+        &configure_agent(
+            access,
+            owner,
             &ConfigureAgentParams {
                 action: "create".into(),
+                identity_binding: Some(binding),
                 display_name: StringUpdate::Set("Clearable".into()),
                 description: StringUpdate::Set("Original description".into()),
                 system_prompt: StringUpdate::Set("Original instructions".into()),
-                profile_id: StringUpdate::Set("seed:inference".into()),
+                profile_id: StringUpdate::Set(profile.clone()),
                 ..Default::default()
             },
             &Default::default(),
@@ -6045,85 +6797,76 @@ async fn agent_management_clears_optional_fields_and_refuses_ignored_tool_modifi
         .unwrap(),
     )
     .unwrap();
-    let id = created["agent_id"].as_str().unwrap().to_owned();
+    let id = created["agent_did"].as_str().unwrap().to_owned();
     let edit = ConfigureAgentParams {
         action: "edit".into(),
-        agent_id: Some(id.clone()),
+        agent_did: Some(id.clone()),
         display_name: StringUpdate::Clear,
         description: StringUpdate::Clear,
         system_prompt: StringUpdate::Clear,
         ..Default::default()
     };
-    agent_mutate(&node, &owner, identity.as_ref(), &edit, &Default::default())
+    configure_agent(access, owner, &edit, &Default::default())
         .await
         .unwrap();
-    let stored = crate::list_agents(&node, &owner)
+    let stored = crate::list_agents(node, owner)
         .await
         .unwrap()
         .into_iter()
-        .find(|agent| agent.agent_id == id)
+        .find(|agent| agent.agent_did == id)
         .unwrap();
     assert_eq!(stored.display_name, None);
     assert_eq!(stored.description, None);
-    let effective = SelfConfigCore::new(node.clone(), owner.clone(), id.clone())
-        .unwrap()
-        .read_effective_config(&BTreeSet::new(), false, false)
-        .await
-        .unwrap();
-    assert!(
-        effective["context"]["system_prompt"].is_null(),
-        "{effective}"
+    let context_id = crate::store::graphql::escape_graphql_string(
+        stored
+            .context_id
+            .as_deref()
+            .expect("created agent has a Context"),
     );
-    assert_eq!(stored.inference_profile_id, "seed:inference");
+    let context = access.execute(&format!(
+        r#"{{ AgentContext(filter: {{ context_id: {{ _eq: "{context_id}" }} }}) {{ system_prompt }} }}"#,
+    )).await.unwrap();
+    assert!(context["data"]["AgentContext"][0]["system_prompt"].is_null());
+    assert_eq!(stored.inference_profile_id, profile);
     let invalid = ConfigureAgentParams {
         root: StringUpdate::Set("/ignored".into()),
         ..edit
     };
-    let error = agent_mutate(
-        &node,
-        &owner,
-        identity.as_ref(),
-        &invalid,
-        &Default::default(),
-    )
-    .await
-    .unwrap_err();
+    let error = configure_agent(access, owner, &invalid, &Default::default())
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("tools update"), "{error:#}");
-    let after = crate::list_agents(&node, &owner)
+    let after = crate::list_agents(node, owner)
         .await
         .unwrap()
         .into_iter()
-        .find(|agent| agent.agent_id == id)
+        .find(|agent| agent.agent_did == id)
         .unwrap();
     assert_eq!(stored, after);
 }
 
 #[tokio::test]
 async fn no_lockout_rejects_current_agent_disable_in_preview_and_commit() {
-    let node = build_agent_node().await;
-    let identity = node_identity("disable-preview-parity");
-    let owner = identity.did().to_owned();
-    for id in ["current", "default"] {
-        crate::test_support::install_test_agent(&node, &owner, id).await;
-    }
-    crate::documents::upsert_node(&node, &owner, None, Some("default"), true, None)
-        .await
-        .unwrap();
+    let fixture = SelfConfigFixture::new("disable-preview-parity").await;
+    fixture.grant_selected_configuration().await;
+    let default = fixture.install_sibling("default").await;
+    fixture.grant_node_reader().await;
+    fixture
+        .update_signed_configuration(
+            crate::Collection::Node,
+            fixture.node_did(),
+            json!({"default_agent_did": default}),
+        )
+        .await;
+    let current = fixture.agent_did();
     let mut grants = config(&["node"]);
-    grants.agent_id = "current".into();
+    grants.agent_did = current.to_owned();
     grants.no_lockout = true;
     grants.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
+    let tools = fixture.tools_with_config(&grants);
     for argv in [
-        vec!["agent", "preview", "disable", "--id", "current"],
-        vec!["agent", "disable", "--id", "current"],
+        vec!["agent", "preview", "disable", "--id", current],
+        vec!["agent", "disable", "--id", current],
     ] {
         let error = call_config_tool(&tools, argv.into_iter().map(str::to_owned).collect())
             .await
@@ -6133,41 +6876,33 @@ async fn no_lockout_rejects_current_agent_disable_in_preview_and_commit() {
             "{error}"
         );
     }
-    let current = crate::list_agents(&node, &owner)
+    let current = crate::list_agents(&fixture.db.node, fixture.node_did())
         .await
         .unwrap()
         .into_iter()
-        .find(|agent| agent.agent_id == "current")
+        .find(|agent| agent.agent_did == current)
         .unwrap();
     assert!(current.enabled);
 }
 
 #[tokio::test]
 async fn agent_only_edits_preserve_an_optional_absent_context() {
-    let node = build_agent_node().await;
-    let identity = node_identity("contextless-agent-edit");
-    let owner = identity.did().to_owned();
-    for id in ["current", "other"] {
-        crate::test_support::install_test_agent(&node, &owner, id).await;
-    }
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "current".into()).unwrap();
+    let fixture = SelfConfigFixture::new("contextless-agent-edit").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_agent_relation_delete().await;
+    let other = fixture.install_sibling("other").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&other).await;
+    let current = fixture.agent_did();
+    let other_profile = format!("{other}:inference");
+    let core = fixture.core();
     core.apply(agent_request(&core, vec![("context_id".into(), None)]))
         .await
         .unwrap();
-    let mut grants = config(&["agent"]);
-    grants.agent_id = "current".into();
-    grants.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
+    let tools = fixture.tools(&["agent"]);
     for (prefix, committed) in [
-        (vec!["agent", "preview", "edit", "current"], false),
-        (vec!["agent", "edit", "current"], true),
+        (vec!["agent", "preview", "edit", current], false),
+        (vec!["agent", "edit", current], true),
     ] {
         let mut argv: Vec<String> = prefix.into_iter().map(str::to_owned).collect();
         argv.extend(
@@ -6175,7 +6910,10 @@ async fn agent_only_edits_preserve_an_optional_absent_context() {
                 "--set",
                 r#"display_name="Contextless""#,
                 "--set",
-                r#"inference_profile_id="other:inference""#,
+                &format!(
+                    "inference_profile_id={}",
+                    serde_json::to_string(&other_profile).unwrap()
+                ),
             ]
             .into_iter()
             .map(str::to_owned),
@@ -6184,240 +6922,205 @@ async fn agent_only_edits_preserve_an_optional_absent_context() {
             serde_json::from_str(&call_config_tool(&tools, argv).await.unwrap()).unwrap();
         assert_eq!(result["committed"], committed);
     }
-    let current = crate::list_agents(&node, &owner)
+    let current = crate::list_agents(&fixture.db.node, fixture.node_did())
         .await
         .unwrap()
         .into_iter()
-        .find(|agent| agent.agent_id == "current")
+        .find(|agent| agent.agent_did == current)
         .unwrap();
     assert_eq!(current.display_name.as_deref(), Some("Contextless"));
-    assert_eq!(current.inference_profile_id, "other:inference");
+    assert_eq!(current.inference_profile_id, other_profile);
     assert_eq!(current.context_id, None);
 }
 
 #[tokio::test]
-async fn public_agent_management_previews_without_publishing_and_checks_signer() {
-    let node = build_agent_node().await;
-    let identity = node_identity("public-agent-management");
-    let owner = identity.did().to_owned();
-    crate::test_support::install_test_agent(&node, &owner, "seed").await;
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+async fn public_agent_management_uses_provisioned_binding_and_client_access() {
+    let fixture = SelfConfigFixture::new("public-agent-client").await;
+    let node = &fixture.db.node;
+    let owner = fixture.node_did();
+    let access = fixture.user_access();
+    let caller = identity::Did::new(access.actor_did().unwrap()).unwrap();
+    let binding = crate::store::identity::provision_agent_identity_authorized(
+        node,
+        fixture.db.node_identity.as_ref(),
+        &caller,
+    )
+    .await
+    .unwrap();
     let mut args = ConfigureAgentParams {
         action: "preview".into(),
         operation: Some("create".into()),
+        identity_binding: Some(binding.clone()),
         display_name: StringUpdate::Set("Public agent".into()),
         system_prompt: StringUpdate::Set("Complete the requested work.".into()),
-        profile_id: StringUpdate::Set("seed:inference".into()),
+        profile_id: StringUpdate::Set(format!("{}:inference", fixture.agent_did())),
         ..Default::default()
     };
     let preview: Value = serde_json::from_str(
-        &configure_agent(
-            &access,
-            &owner,
-            identity.as_ref(),
-            &args,
-            &Default::default(),
-        )
-        .await
-        .unwrap(),
+        &configure_agent(access, owner, &args, &Default::default())
+            .await
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(preview["admitted"], true);
     assert_eq!(preview["committed"], false);
-    assert_eq!(crate::list_agents(&node, &owner).await.unwrap().len(), 1);
+    assert_eq!(crate::list_agents(node, owner).await.unwrap().len(), 1);
     args.action = "create".into();
     args.operation = None;
-    let foreign = node_identity("public-agent-foreign");
-    let error = configure_agent(
-        &access,
-        &owner,
-        foreign.as_ref(),
-        &args,
-        &Default::default(),
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        error.to_string().contains("exact local node identity"),
-        "{error:#}"
-    );
-    assert_eq!(crate::list_agents(&node, &owner).await.unwrap().len(), 1);
-    let committed: Value = serde_json::from_str(
-        &configure_agent(
-            &access,
-            &owner,
-            identity.as_ref(),
-            &args,
-            &Default::default(),
-        )
+    args.identity_binding = None;
+    let error = configure_agent(access, owner, &args, &Default::default())
         .await
-        .unwrap(),
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("runtime-provisioned identity binding"));
+    args.identity_binding = Some(binding.clone());
+    let committed: Value = serde_json::from_str(
+        &configure_agent(access, owner, &args, &Default::default())
+            .await
+            .unwrap(),
     )
     .unwrap();
-    assert_eq!(committed["admitted"], true);
     assert_eq!(committed["committed"], true);
-    assert_eq!(committed["agent_id"], preview["agent_id"]);
-    assert_eq!(crate::list_agents(&node, &owner).await.unwrap().len(), 2);
+    assert_eq!(committed["agent_did"], binding.agent_did);
+    assert_eq!(committed["agent_did"], preview["agent_did"]);
+    let stored = crate::load_agent(node, &binding.agent_did)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.identity_binding(), binding);
+    let signer = crate::store::identity::resolve_agent_identity(
+        fixture.db.node_identity.as_ref(),
+        &stored.identity_binding(),
+    )
+    .unwrap();
+    assert_eq!(signer.did(), stored.agent_did);
 }
 
 #[tokio::test]
 async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() {
-    let node = build_agent_node().await;
-    let identity = node_identity("disabled-agent-edit");
-    let owner = identity.did().to_owned();
-    crate::test_support::install_test_agent(&node, &owner, "target").await;
-    let mut stored = crate::load_agent(&node, "target").await.unwrap().unwrap();
+    let fixture = SelfConfigFixture::new("disabled-agent-edit").await;
+    let node = &fixture.db.node;
+    let owner = fixture.node_did();
+    let target = fixture.install_sibling("target").await;
+    let access = fixture.user_access();
+    let mut stored = crate::load_agent(node, &target).await.unwrap().unwrap();
     stored.enabled = false;
-    crate::upsert_agent(&node, &stored).await.unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    crate::store::config_client::write_agent_document(access, &stored)
+        .await
+        .unwrap();
     let mut args = ConfigureAgentParams {
         action: "preview".into(),
         operation: Some("edit".into()),
-        agent_id: Some("target".into()),
+        agent_did: Some(target.clone()),
         display_name: StringUpdate::Set("Edited while disabled".into()),
         ..Default::default()
     };
     let preview: Value = serde_json::from_str(
-        &configure_agent(
-            &access,
-            &owner,
-            identity.as_ref(),
-            &args,
-            &Default::default(),
-        )
-        .await
-        .unwrap(),
+        &configure_agent(access, owner, &args, &Default::default())
+            .await
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(preview["committed"], false);
     assert_eq!(preview["agent"]["enabled"], false);
     assert_eq!(
-        crate::load_agent(&node, "target").await.unwrap(),
+        crate::load_agent(node, &target).await.unwrap(),
         Some(stored.clone())
     );
     args.action = "edit".into();
     args.operation = None;
-    args.clone_from = Some("target".into());
-    let error = configure_agent(
-        &access,
-        &owner,
-        identity.as_ref(),
-        &args,
-        &Default::default(),
-    )
-    .await
-    .unwrap_err();
+    args.clone_from = Some(target.clone());
+    let error = configure_agent(access, owner, &args, &Default::default())
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("does not accept clone_from"));
     assert_eq!(
-        crate::load_agent(&node, "target").await.unwrap(),
+        crate::load_agent(node, &target).await.unwrap(),
         Some(stored.clone())
     );
     args.clone_from = None;
-    configure_agent(
-        &access,
-        &owner,
-        identity.as_ref(),
-        &args,
-        &Default::default(),
-    )
-    .await
-    .unwrap();
+    configure_agent(access, owner, &args, &Default::default())
+        .await
+        .unwrap();
     stored.display_name = Some("Edited while disabled".into());
     assert_eq!(
-        crate::load_agent(&node, "target").await.unwrap(),
+        crate::load_agent(node, &target).await.unwrap(),
         Some(stored.clone())
     );
     args.profile_id = StringUpdate::Set("missing-profile".into());
-    assert!(configure_agent(
-        &access,
-        &owner,
-        identity.as_ref(),
-        &args,
-        &Default::default()
-    )
-    .await
-    .is_err());
+    assert!(configure_agent(access, owner, &args, &Default::default())
+        .await
+        .is_err());
     assert_eq!(
-        crate::load_agent(&node, "target").await.unwrap(),
+        crate::load_agent(node, &target).await.unwrap(),
         Some(stored.clone())
     );
     args.profile_id = StringUpdate::Omitted;
     args.make_default = true;
-    assert!(configure_agent(
-        &access,
-        &owner,
-        identity.as_ref(),
-        &args,
-        &Default::default()
-    )
-    .await
-    .is_err());
+    assert!(configure_agent(access, owner, &args, &Default::default())
+        .await
+        .is_err());
     assert_eq!(
-        crate::load_agent(&node, "target").await.unwrap(),
+        crate::load_agent(node, &target).await.unwrap(),
         Some(stored)
     );
 }
 
 #[tokio::test]
 async fn public_prompt_edits_require_an_existing_unshared_context_without_partial_writes() {
-    let node = build_agent_node().await;
-    let identity = node_identity("prompt-context-ownership");
-    let owner = identity.did().to_owned();
-    for id in ["missing", "shared", "sibling", "private"] {
-        crate::test_support::install_test_agent(&node, &owner, id).await;
-    }
-    let mut missing = crate::load_agent(&node, "missing").await.unwrap().unwrap();
+    let fixture = SelfConfigFixture::new("prompt-context-ownership").await;
+    fixture.grant_user_relation_delete().await;
+    let node = &fixture.db.node;
+    let owner = fixture.node_did();
+    let missing_id = fixture.install_sibling("missing").await;
+    let shared_id = fixture.install_sibling("shared").await;
+    let sibling_id = fixture.install_sibling("sibling").await;
+    let private_id = fixture.install_sibling("private").await;
+    let access = fixture.user_access();
+    let mut missing = crate::load_agent(node, &missing_id).await.unwrap().unwrap();
     missing.context_id = None;
-    crate::upsert_agent(&node, &missing).await.unwrap();
-    let shared = crate::load_agent(&node, "shared").await.unwrap().unwrap();
-    let mut sibling = crate::load_agent(&node, "sibling").await.unwrap().unwrap();
+    crate::store::config_client::write_agent_document(access, &missing)
+        .await
+        .unwrap();
+    let shared = crate::load_agent(node, &shared_id).await.unwrap().unwrap();
+    let mut sibling = crate::load_agent(node, &sibling_id).await.unwrap().unwrap();
     sibling.context_id = shared.context_id;
-    crate::upsert_agent(&node, &sibling).await.unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
-    let query = "query { Agent(order: {agent_id: ASC}) { agent_id display_name context_id inference_profile_id enabled } AgentContext(order: {context_id: ASC}) { context_id display_name system_prompt tools_id } }";
+    crate::store::config_client::write_agent_document(access, &sibling)
+        .await
+        .unwrap();
+    let query = "query { Agent(order: {agent_did: ASC}) { agent_did display_name context_id inference_profile_id enabled } AgentContext(order: {context_id: ASC}) { context_id display_name system_prompt tools_id } }";
     let before = access.execute(query).await.unwrap();
     for (target, expected) in [
-        ("missing", "agent has no context"),
-        ("shared", "unshared context"),
+        (missing_id.as_str(), "agent has no context"),
+        (shared_id.as_str(), "unshared context"),
     ] {
         for preview in [true, false] {
             let args = ConfigureAgentParams {
                 action: if preview { "preview" } else { "edit" }.into(),
                 operation: preview.then(|| "edit".into()),
-                agent_id: Some(target.into()),
+                agent_did: Some(target.into()),
                 display_name: StringUpdate::Set("Must not be published".into()),
                 system_prompt: StringUpdate::Set("Replacement instructions".into()),
                 ..Default::default()
             };
-            let error = configure_agent(
-                &access,
-                &owner,
-                identity.as_ref(),
-                &args,
-                &Default::default(),
-            )
-            .await
-            .unwrap_err();
+            let error = configure_agent(access, owner, &args, &Default::default())
+                .await
+                .unwrap_err();
             assert!(error.to_string().contains(expected), "{error:#}");
             assert_eq!(access.execute(query).await.unwrap(), before);
         }
     }
-    let private = crate::load_agent(&node, "private").await.unwrap().unwrap();
+    let private = crate::load_agent(node, &private_id).await.unwrap().unwrap();
     let args = ConfigureAgentParams {
         action: "edit".into(),
-        agent_id: Some("private".into()),
+        agent_did: Some(private_id),
         system_prompt: StringUpdate::Set("Private replacement instructions".into()),
         ..Default::default()
     };
-    configure_agent(
-        &access,
-        &owner,
-        identity.as_ref(),
-        &args,
-        &Default::default(),
-    )
-    .await
-    .unwrap();
+    configure_agent(access, owner, &args, &Default::default())
+        .await
+        .unwrap();
     let after = access.execute(query).await.unwrap();
     assert_eq!(after["data"]["Agent"], before["data"]["Agent"]);
     let mut expected_contexts = before["data"]["AgentContext"].clone();
@@ -6431,262 +7134,192 @@ async fn public_prompt_edits_require_an_existing_unshared_context_without_partia
     assert_eq!(after["data"]["AgentContext"], expected_contexts);
 }
 
-fn job_tools(plugin: &str, job: Option<Value>) -> serde_json::Map<String, Value> {
-    let mut entry = json!({"plugin": plugin});
-    if let Some(job) = job {
-        entry["job"] = job;
-    }
-    json!({"integrations": {"plugins": [entry]}})
-        .as_object()
-        .unwrap()
-        .clone()
-}
-
-fn job_block(overrides: Value) -> Value {
-    let mut block = json!({
-        "agent_targets": ["a", "b"],
-        "max_live": 8,
-        "max_spawns": 100,
-        "max_messages_per_slot": 4,
-        "result_bytes": 65536,
-        "max_wall_secs": 7200,
-        "policy": {"dynamic": "check", "dynamic_targets": ["a"], "trusted_packs": []}
-    });
-    for (key, value) in overrides.as_object().unwrap() {
-        block[key] = value.clone();
-    }
-    block
-}
-
-fn job_guard(stored: Option<Value>, candidate: Option<Value>) -> Result<(), String> {
-    let stored = job_tools("ns/runner", stored);
-    let candidate = job_tools("ns/runner", candidate);
-    ops::guard_tools_keep_grants(&ops::OperatorGrants::default(), Some(&stored), &candidate)
-        .map_err(|error| format!("{error:#}"))
-}
-
-#[test]
-fn self_config_may_narrow_job_fields() {
-    let narrowed = job_block(json!({
-        "agent_targets": ["a"],
-        "max_live": 4,
-        "max_spawns": 10,
-        "max_messages_per_slot": 0,
-        "result_bytes": 1024,
-        "max_wall_secs": 60,
-    }));
-    job_guard(Some(job_block(json!({}))), Some(narrowed)).expect("narrowing every field");
-    job_guard(Some(job_block(json!({}))), Some(job_block(json!({}))))
-        .expect("an unchanged block is not a widening");
-}
-
-#[test]
-fn self_config_may_not_widen_a_job_number() {
-    for (field, value) in [
-        ("max_live", 9),
-        ("max_spawns", 101),
-        ("max_messages_per_slot", 5),
-        ("result_bytes", 65537),
-        ("max_wall_secs", 7201),
-    ] {
-        let refused = job_guard(
-            Some(job_block(json!({}))),
-            Some(job_block(json!({field: value}))),
-        )
-        .expect_err(field);
-        assert!(refused.contains(&format!("job.{field}")), "{refused}");
-        assert!(refused.contains("only the operator"), "{refused}");
-    }
-}
-
-#[test]
-fn self_config_may_not_add_a_job_target() {
-    let refused = job_guard(
-        Some(job_block(json!({}))),
-        Some(job_block(json!({"agent_targets": ["a", "c"]}))),
-    )
-    .expect_err("a target outside the stored ceiling");
-    assert!(refused.contains("job.agent_targets"), "{refused}");
-    assert!(refused.contains("only the operator"), "{refused}");
-}
-
-#[test]
-fn self_config_may_not_edit_job_policy() {
-    let stored = job_block(json!({}));
-    for policy in [
-        json!({"dynamic": "off", "dynamic_targets": ["a"], "trusted_packs": []}),
-        json!({"dynamic": "check", "dynamic_targets": [], "trusted_packs": []}),
-        json!({"dynamic": "check", "dynamic_targets": ["a"], "trusted_packs": ["x/y"]}),
-    ] {
-        let refused = job_guard(
-            Some(stored.clone()),
-            Some(job_block(json!({"policy": policy}))),
-        )
-        .expect_err("policy is operator-only");
-        assert!(refused.contains("job.policy"), "{refused}");
-        assert!(refused.contains("only the operator"), "{refused}");
-    }
-}
-
-#[test]
-fn self_config_may_not_add_a_job_block() {
-    let refused =
-        job_guard(None, Some(job_block(json!({})))).expect_err("absent is the empty ceiling");
-    assert!(refused.contains("ns/runner"), "{refused}");
-    assert!(refused.contains("only the operator"), "{refused}");
-    let other = job_tools("ns/other", Some(job_block(json!({}))));
-    let stored = job_tools("ns/runner", Some(job_block(json!({}))));
-    ops::guard_tools_keep_grants(&ops::OperatorGrants::default(), Some(&stored), &other)
-        .expect_err("a block for another plugin is an added block");
-    ops::guard_tools_keep_grants(&ops::OperatorGrants::default(), None, &stored)
-        .expect_err("no stored Tools carries no job block");
-    ops::guard_tools_keep_grants(
-        &ops::OperatorGrants {
-            pack_install: true,
-            ..Default::default()
-        },
-        None,
-        &stored,
-    )
-    .expect_err("holding pack installation does not hold a job grant");
-}
-
-#[test]
-fn self_config_may_remove_a_job_block() {
-    job_guard(Some(job_block(json!({}))), None).expect("removing the block narrows it");
-    let stored = job_tools("ns/runner", Some(job_block(json!({}))));
-    ops::guard_tools_keep_grants(
-        &ops::OperatorGrants::default(),
-        Some(&stored),
-        &serde_json::Map::new(),
-    )
-    .expect("dropping integrations narrows every block");
-}
-
-#[test]
-fn reselection_keeps_job_grants() {
-    let held = ops::OperatorGrants::default();
-    let stored = job_tools("ns/runner", Some(job_block(json!({}))));
-    let narrower = job_tools("ns/runner", Some(job_block(json!({"max_live": 1}))));
-    let wider = job_tools("ns/runner", Some(job_block(json!({"max_live": 9}))));
-    ops::reselection_keeps_grants(&held, Some(&stored), Some(&narrower)).expect("narrower");
-    ops::reselection_keeps_grants(&held, Some(&stored), Some(&wider)).expect_err("wider");
-    ops::reselection_keeps_grants(&held, None, Some(&stored))
-        .expect_err("a reselection from no Tools acquires no job block");
-    ops::reselection_keeps_grants(&held, Some(&stored), None).expect("selecting no Tools");
-    let plain = job_tools("ns/runner", None);
-    ops::reselection_keeps_grants(&held, None, Some(&plain)).expect("no block, no grant");
-}
-
-async fn grant_pack_install_for_test(
-    node: &Arc<defra_node::EmbeddedNode>,
-    owner: &str,
-    tools_id: &str,
-) {
-    let value = json!({"node_did":owner,"tools_id":tools_id,"self_config":{"enable_self_config":true,"enable_pack_install":true}});
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-        crate::store::config_client::DesiredStateApplyDocument {
-            collection: crate::Collection::Tools,
-            add: value.clone(),
-            update: value,
-        },
-    ])
-    .unwrap();
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "test.operator_grant",
-        |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
-            })
-        },
-    )
-    .await
-    .unwrap();
-}
-
 #[tokio::test]
-async fn model_clone_is_atomically_grant_bounded_but_operator_clone_is_not() {
-    let node = build_agent_node().await;
-    let identity = node_identity("clone-grant-bound");
-    let owner = identity.did().to_owned();
-    for id in ["worker", "source"] {
-        crate::test_support::install_test_agent(&node, &owner, id).await;
-    }
-    grant_pack_install_for_test(&node, &owner, "source:tools").await;
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "worker".into()).unwrap();
-    let args = ConfigureAgentParams {
-        action: "clone".into(),
-        display_name: StringUpdate::Set("Bound clone".into()),
-        clone_from: Some("source".into()),
-        profile_id: StringUpdate::Set("source:inference".into()),
-        ..Default::default()
-    };
-    let before = crate::list_agents(&node, &owner).await.unwrap();
-    let preview: Value = serde_json::from_str(
-        &agent_management::model_agent_preview(&core, &args)
+async fn modeled_job_policy_updates_follow_native_tools_authorization() {
+    let cases = &crate::lean_vocab_test::lean_self_config_selection_cases().job_guard_cases;
+    let native_cases: Vec<_> = cases
+        .iter()
+        .filter(|case| case.name.starts_with("native_agent_update_"))
+        .collect();
+    assert!(native_cases
+        .iter()
+        .any(|case| case.native_authorized && case.native_source_authorized));
+    assert!(native_cases.iter().any(|case| !case.native_authorized));
+    assert!(native_cases.iter().any(|case| {
+        case.native_authorized && !case.native_source_authorized && case.add_schema_tool
+    }));
+    for case in native_cases {
+        let fixture = SelfConfigFixture::new(&case.name).await;
+        let tools_id = format!("{}:tools", fixture.agent_did());
+        let node_did = fixture.node_did().to_owned();
+        fixture
+            .update_signed_configuration(
+                crate::Collection::Tools,
+                &tools_id,
+                json!({"integrations": case.stored_integrations}),
+            )
+            .await;
+        if case.native_authorized {
+            fixture.grant_selected_configuration().await;
+        }
+        let (doc_id, before) = fixture
+            .user_access()
+            .transact_readonly("test.job_policy.tools_before", |txn| {
+                let tools_id = &tools_id;
+                let node_did = &node_did;
+                Box::pin(async move {
+                    crate::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Tools,
+                        node_did,
+                        tools_id,
+                    )
+                    .await
+                })
+            })
             .await
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(preview["admitted"], false);
-    assert!(preview["rejection"]
-        .as_str()
-        .unwrap()
-        .contains("cannot be self-granted"));
-    let error = agent_management::model_agent_mutate(&core, identity.as_ref(), &args)
-        .await
-        .unwrap_err();
-    assert!(format!("{error:#}").contains("cannot be self-granted"));
-    assert_eq!(crate::list_agents(&node, &owner).await.unwrap(), before);
-    let holder = core.with_held_grants(ops::OperatorGrants {
-        pack_install: true,
-        ..Default::default()
-    });
-    let accepted: Value = serde_json::from_str(
-        &agent_management::model_agent_mutate(&holder, identity.as_ref(), &args)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(accepted["committed"], true);
-    let mut operator_args = args;
-    operator_args.display_name = StringUpdate::Set("Operator clone".into());
-    let operator: Value = serde_json::from_str(
-        &configure_agent(
-            &crate::store::config_client::ConfigAccess::local(node.clone()),
-            &owner,
-            identity.as_ref(),
-            &operator_args,
-            &Default::default(),
+            .unwrap()
+            .expect("selected Tools exists");
+        let actor = identity::Did::new(fixture.agent_did()).unwrap();
+        let decisions = crate::ConfigAccess::local_as(
+            fixture.db.node.clone(),
+            identity::Did::new(&node_did).unwrap(),
         )
-        .await
-        .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(operator["committed"], true);
+        .transact_readonly("test.job_policy.native_update", |txn| {
+                let actor = actor.clone();
+                let doc_id = doc_id.clone();
+                Box::pin(async move {
+                    txn.observe_document_access(
+                        &actor,
+                        "Tools",
+                        &[doc_id],
+                        defra_node::DocumentAccessMode::Named {
+                            permission: "update".into(),
+                            node_permission:
+                                crate::store::config_client::NodePermission::DocumentUpdate,
+                        },
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            decisions == [defra_node::DocumentAccessDecision::Allowed],
+            case.native_authorized,
+            "{}: native Tools update",
+            case.name
+        );
+        assert!(!fixture
+            .db
+            .node
+            .nac_manager()
+            .is_admin(&actor)
+            .await
+            .unwrap());
+        let mut patch = vec![(
+            "integrations".into(),
+            Some(case.candidate_integrations.clone()),
+        )];
+        if case.add_schema_tool {
+            let mut built_ins = before
+                .get("built_ins")
+                .filter(|value| value.is_object())
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            assert_ne!(built_ins["enable_schema_tool"], true);
+            built_ins["enable_schema_tool"] = json!(true);
+            patch.push(("built_ins".into(), Some(built_ins)));
+        }
+        let core = fixture.core();
+        let result = core.apply(tools_request(&core, patch)).await;
+        assert_eq!(result.is_ok(), case.accepted, "{}: {result:?}", case.name);
+        if let Err(error) = result {
+            if !case.native_authorized {
+                let denied = gents_protocol::error_chain::find_map_source(
+                    error.as_ref(),
+                    |cause| {
+                        cause
+                    .downcast_ref::<crate::store::config_client::ConfigClientError>()
+                    .map(|error| {
+                        error.is_permission_denied()
+                            || error.is_missing_or_denied_write()
+                            || matches!(error, crate::store::config_client::ConfigClientError::ConfigurationMutationNotApplied { .. })
+                    })
+                    },
+                );
+                assert_eq!(denied, Some(true), "{}: {error:#}", case.name);
+            }
+        }
+        let (_, after) = fixture
+            .user_access()
+            .transact_readonly("test.job_policy.tools_after", |txn| {
+                let tools_id = &tools_id;
+                let node_did = &node_did;
+                Box::pin(async move {
+                    crate::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Tools,
+                        node_did,
+                        tools_id,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap()
+            .expect("selected Tools remains visible");
+        let expected = if case.accepted {
+            &case.candidate_integrations["plugins"][0]["job"]["policy"]["dynamic"]
+        } else {
+            &before["integrations"]["plugins"][0]["job"]["policy"]["dynamic"]
+        };
+        assert_eq!(
+            &after["integrations"]["plugins"][0]["job"]["policy"]["dynamic"], expected,
+            "{}",
+            case.name
+        );
+        if case.add_schema_tool {
+            assert_eq!(after["built_ins"], before["built_ins"], "{}", case.name);
+            assert!(!fixture
+                .db
+                .node
+                .nac_manager()
+                .check_permission(
+                    &actor,
+                    crate::store::config_client::NodePermission::CollectionPatch,
+                )
+                .await
+                .unwrap());
+        }
+        fixture.db.node.shutdown().await.unwrap();
+    }
 }
 
 #[tokio::test]
 async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
-    let node = build_agent_node().await;
-    let identity = node_identity("reselection-grant-bound");
-    let owner = identity.did().to_owned();
-    for id in ["worker", "sibling", "granted"] {
-        crate::test_support::install_test_agent(&node, &owner, id).await;
-    }
-    grant_pack_install_for_test(&node, &owner, "granted:tools").await;
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "sibling".into())
-        .unwrap()
-        .with_lockout_agent_id("worker".into());
+    let fixture = SelfConfigFixture::new("reselection-grant-bound").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_agent_relation_delete().await;
+    fixture.grant_node_reader().await;
+    let sibling = fixture.install_sibling("sibling").await;
+    let granted = fixture.install_sibling("granted").await;
+    fixture.grant_sibling_configuration(&sibling).await;
+    fixture.grant_pack_install_to(&granted).await;
+    let context = format!("{granted}:context");
+    let core = SelfConfigCore::new(
+        fixture.db.node.clone(),
+        fixture.node_did().to_owned(),
+        sibling.clone(),
+    )
+    .unwrap()
+    .with_lockout_agent_did(fixture.agent_did().to_owned())
+    .with_agent_signer(fixture.agent.managed_agent_signer())
+    .with_runtime_identity(Some(fixture.db.node_identity.clone()))
+    .with_node_binding(Some(fixture.node_binding.clone()));
     for preview in [true, false] {
         let request = protect_working_agent(
-            agent_request(
-                &core,
-                vec![("context_id".into(), Some(json!("granted:context")))],
-            ),
+            agent_request(&core, vec![("context_id".into(), Some(json!(context)))]),
             false,
             true,
         );
@@ -6697,26 +7330,50 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
         };
         assert!(format!("{:#}", result.unwrap_err()).contains("cannot be self-granted"));
     }
-    let holder = core.with_held_grants(ops::OperatorGrants {
-        pack_install: true,
-        ..Default::default()
-    });
+    fixture.grant_pack_install().await;
+    let holder = core.with_held_grants(ops::OperatorGrants { pack_install: true });
     holder
         .apply(protect_working_agent(
-            agent_request(
-                &holder,
-                vec![("context_id".into(), Some(json!("granted:context")))],
-            ),
+            agent_request(&holder, vec![("context_id".into(), Some(json!(context)))]),
             false,
             true,
         ))
         .await
         .unwrap();
-    let no_grant = SelfConfigCore::new(node.clone(), owner, "sibling".into()).unwrap();
+    fixture
+        .user_access
+        .transact_write("test.grant_sibling_self_config", |txn| {
+            let owner = fixture.node_did();
+            let sibling = &sibling;
+            Box::pin(async move {
+                crate::store::config_client::grant_selected_self_configuration(txn, owner, sibling)
+                    .await
+            })
+        })
+        .await
+        .unwrap();
+    let sibling_doc = crate::load_agent(&fixture.db.node, &sibling)
+        .await
+        .unwrap()
+        .unwrap();
+    let sibling_signer = crate::store::identity::resolve_agent_identity(
+        fixture.db.node_identity.as_ref(),
+        &sibling_doc.identity_binding(),
+    )
+    .unwrap();
+    let no_grant = SelfConfigCore::new(
+        fixture.db.node.clone(),
+        fixture.node_did().to_owned(),
+        sibling,
+    )
+    .unwrap()
+    .with_agent_signer(sibling_signer.managed_agent_signer())
+    .with_runtime_identity(Some(fixture.db.node_identity.clone()))
+    .with_node_binding(Some(fixture.node_binding.clone()));
     no_grant
         .apply(tools_request(
             &no_grant,
-            vec![("built_ins".into(), Some(json!({"enable_memory":true})))],
+            vec![("built_ins".into(), Some(json!({"enable_goal_tools":true})))],
         ))
         .await
         .unwrap();
@@ -6731,23 +7388,18 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
         home.path().to_owned(),
     )));
-    let node = build_agent_node().await;
-    let identity = node_identity("native-pack");
-    let did = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &did, "setup").await;
+    let fixture = SelfConfigFixture::new("native-pack").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_pack_install().await;
+    fixture.publish_workspace_root(workspace.path()).await;
+    let node = fixture.db.node.clone();
+    let did = fixture.db.node_identity.did().to_owned();
     let mut cfg = config(&["tools", "agent"]);
-    cfg.agent_id = "setup".into();
+    cfg.agent_did = fixture.agent_did().to_owned();
     cfg.enable_pack_install = true;
     cfg.process_ceiling.file_mode = crate::tools::surface::FileToolMode::ReadOnly;
     cfg.process_ceiling.root = Some(workspace.path().to_owned());
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        did.clone(),
-        Some(identity),
-        &cfg,
-        plugins.clone(),
-    );
+    let tools = fixture.tools_with_plugins(&cfg, plugins.clone());
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -6821,24 +7473,25 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
         .unwrap();
     let readback = config_call(&tools, &["tools", "get"]).await.unwrap();
     assert!(readback.contains("fixture/native_echo"));
-    let persisted: crate::documents::Tools =
-        crate::store::config_client::ConfigAccess::local(node.clone())
-            .transact_readonly("test.self_config.read_native_pack_tools", |txn| {
-                let did = did.clone();
-                Box::pin(async move {
-                    let value = crate::store::config_client::read_desired_state_document_in_txn(
-                        txn,
-                        crate::Collection::Tools,
-                        &did,
-                        "setup:tools",
-                    )
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("persisted Tools document disappeared"))?;
-                    Ok::<_, anyhow::Error>(serde_json::from_value(value)?)
-                })
+    let persisted: crate::documents::Tools = fixture
+        .user_access
+        .transact_readonly("test.self_config.read_native_pack_tools", |txn| {
+            let did = did.clone();
+            let tools_id = format!("{}:tools", fixture.agent_did());
+            Box::pin(async move {
+                let value = crate::store::config_client::read_desired_state_document_in_txn(
+                    txn,
+                    crate::Collection::Tools,
+                    &did,
+                    &tools_id,
+                )
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("persisted Tools document disappeared"))?;
+                Ok::<_, anyhow::Error>(serde_json::from_value(value)?)
             })
-            .await
-            .unwrap();
+        })
+        .await
+        .unwrap();
     assert_eq!(
         persisted
             .integrations
@@ -6851,7 +7504,7 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     let record = crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
     assert!(record.granted.is_none());
     let surface = crate::tools::surface::AgentToolSurfaceConfig::from_tools_document(
-        "setup",
+        fixture.agent_did(),
         &persisted,
         &crate::tools::surface::ToolCeiling::readonly_at(workspace.path()),
         Vec::new(),
@@ -6911,22 +7564,14 @@ async fn native_pack_local_paths_and_approval_fail_closed() {
     let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
         home.path().to_owned(),
     )));
-    let node = build_agent_node().await;
-    let identity = node_identity("native-pack-refusals");
-    let did = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &did, "setup").await;
+    let fixture = SelfConfigFixture::new("native-pack-refusals").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_pack_install().await;
     let mut cfg = config(&["tools"]);
-    cfg.agent_id = "setup".into();
+    cfg.agent_did = fixture.agent_did().to_owned();
     cfg.enable_pack_install = true;
     cfg.process_ceiling.root = Some(workspace.path().to_owned());
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        did.clone(),
-        Some(identity.clone()),
-        &cfg,
-        plugins.clone(),
-    );
+    let tools = fixture.tools_with_plugins(&cfg, plugins.clone());
     let path = artifact.to_str().unwrap();
     assert!(config_call(&tools, &["pack", "get", path])
         .await
@@ -6934,14 +7579,7 @@ async fn native_pack_local_paths_and_approval_fail_closed() {
         .to_string()
         .contains("effective file read permission"));
     cfg.process_ceiling.file_mode = crate::tools::surface::FileToolMode::ReadOnly;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        did,
-        Some(identity),
-        &cfg,
-        plugins,
-    );
+    let tools = fixture.tools_with_plugins(&cfg, plugins);
     assert!(config_call(&tools, &["pack", "get", path])
         .await
         .unwrap_err()
@@ -7067,8 +7705,11 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
     std::fs::write(&artifact, &bytes).unwrap();
 
     let (home, plugins) = crate::test_support::home_with_pack_dir(&directory);
-    let (node, did, tools) =
+    let (agent_fixture, tools) =
         pack_tool_with_local_read("local-mixed-documents", plugins, fixture.path()).await;
+    let node = &agent_fixture.db.node;
+    let did = agent_fixture.db.node_identity.did();
+    let slot = format!("worker={}:inference", agent_fixture.agent_did());
 
     // get: reports kind, digest and the operator blocker for the plugin.
     let get: Value = serde_json::from_str(
@@ -7117,7 +7758,7 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
                 "install",
                 artifact.to_str().unwrap(),
                 "--inference-slot",
-                "worker=setup:inference",
+                &slot,
             ],
         )
         .await
@@ -7149,7 +7790,7 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
             "--digest",
             &digest,
             "--inference-slot",
-            "worker=setup:inference",
+            &slot,
         ],
     )
     .await
@@ -7158,9 +7799,9 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
         refused.to_string().contains("operator authorization"),
         "{refused}"
     );
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let access = &agent_fixture.user_access;
     assert!(
-        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+        crate::pack::read_installed_pack(access, did, "fixture/documents_fixture")
             .await
             .unwrap()
             .is_none()
@@ -7201,7 +7842,7 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
                 "--digest",
                 &digest,
                 "--inference-slot",
-                "worker=setup:inference",
+                &slot,
             ],
         )
         .await
@@ -7236,7 +7877,7 @@ async fn native_pack_local_path_plugins_only_still_requires_operator_grant() {
         home.path().to_owned(),
     )));
     let workspace = &workspace;
-    let (_node, _did, tools) =
+    let (_agent_fixture, tools) =
         pack_tool_with_local_read("local-plugins-only", plugins, workspace.path()).await;
     let path = artifact.to_str().unwrap().to_owned();
 
@@ -7267,39 +7908,22 @@ async fn pack_tool_with_local_read(
     label: &str,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
     root: &std::path::Path,
-) -> (
-    std::sync::Arc<defra_node::EmbeddedNode>,
-    String,
-    Vec<Box<dyn ToolDyn>>,
-) {
-    let node = build_agent_node().await;
-    let identity = node_identity(label);
-    let node_did = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
+) -> (SelfConfigFixture, Vec<Box<dyn ToolDyn>>) {
+    let fixture = SelfConfigFixture::new(label).await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_pack_install().await;
     let mut tool_config = config(&["tools"]);
-    tool_config.agent_id = "setup".to_string();
+    tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.enable_pack_install = true;
     tool_config.process_ceiling.file_mode = crate::tools::surface::FileToolMode::ReadOnly;
     tool_config.process_ceiling.root = Some(root.to_owned());
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        Some(identity),
-        &tool_config,
-        plugins,
-    );
+    let tools = fixture.tools_with_plugins(&tool_config, plugins);
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap();
-    tool.call(
-        json!({"argv":["tools","update"],"set":{"host":{"root":root,"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}})
-            .to_string(),
-    )
-    .await
-    .unwrap();
-    (node, node_did, tools)
+    tool.call(json!({"argv":["tools","update"],"set":{"host":{"root":root,"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}}).to_string()).await.unwrap();
+    (fixture, tools)
 }
 
 /// Installs two ChatGptCodex OAuth backends for `owner` — the provider's
@@ -7308,8 +7932,10 @@ async fn pack_tool_with_local_read(
 /// resolver needs to keep the account-free reference as the provider
 /// default. Binding to `p-default` is allowed; `p-other` selects another
 /// account and must be refused.
-async fn install_chat_account_fences(node: &Arc<EmbeddedNode>, owner: &str) {
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+async fn install_chat_account_fences(fixture: &SelfConfigFixture) {
+    let owner = fixture.db.node_identity.did();
+    let access = &fixture.user_access;
+    let node = &fixture.db.node;
     for (id, auth) in [
         ("chat-original", json!({"kind":"node_oauth"})),
         (
@@ -7323,7 +7949,7 @@ async fn install_chat_account_fences(node: &Arc<EmbeddedNode>, owner: &str) {
             "auth": auth,
         }))
         .unwrap();
-        crate::store::config_client::write_inference_backend_document(&access, &backend)
+        crate::store::config_client::write_inference_backend_document(access, &backend)
             .await
             .unwrap();
     }
@@ -7333,7 +7959,7 @@ async fn install_chat_account_fences(node: &Arc<EmbeddedNode>, owner: &str) {
             "model_name": "test-model",
         }))
         .unwrap();
-        crate::store::config_client::write_inference_profile_document(&access, &profile)
+        crate::store::config_client::write_inference_profile_document(access, &profile)
             .await
             .unwrap();
     }
@@ -7376,9 +8002,11 @@ async fn install_chat_account_fences(node: &Arc<EmbeddedNode>, owner: &str) {
 #[tokio::test]
 async fn pack_documents_install_refuses_non_default_account_inference_bindings() {
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
-    let (node, did, tools) = pack_tool("documents-account-fence", plugins).await;
-    install_chat_account_fences(&node, &did).await;
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let (fixture, tools) = signed_pack_tool("documents-account-fence", plugins).await;
+    install_chat_account_fences(&fixture).await;
+    let node = &fixture.db.node;
+    let did = fixture.db.node_identity.did();
+    let access = &fixture.user_access;
     let get: Value = serde_json::from_str(
         &config_call(&tools, &["pack", "get", "fixture/documents_fixture"])
             .await
@@ -7403,7 +8031,7 @@ async fn pack_documents_install_refuses_non_default_account_inference_bindings()
     .unwrap_err();
     assert!(refused.to_string().contains("selects another"), "{refused}");
     assert!(
-        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+        crate::pack::read_installed_pack(access, did, "fixture/documents_fixture")
             .await
             .unwrap()
             .is_none()
@@ -7430,7 +8058,7 @@ async fn pack_documents_install_refuses_non_default_account_inference_bindings()
     .unwrap_err();
     assert!(refused.to_string().contains("selects another"), "{refused}");
     assert!(
-        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+        crate::pack::read_installed_pack(access, did, "fixture/documents_fixture")
             .await
             .unwrap()
             .is_none()
@@ -7442,7 +8070,8 @@ async fn pack_documents_install_refuses_non_default_account_inference_bindings()
 
     // The provider's default account and the account-free setup backend are
     // both admitted, and the pack installs under the pinned digest.
-    for profile in ["p-default", "setup:inference"] {
+    let current_profile = format!("{}:inference", fixture.agent_did());
+    for profile in ["p-default", current_profile.as_str()] {
         let preview: Value = serde_json::from_str(
             &config_call(
                 &tools,

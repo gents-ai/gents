@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::inference::llm::message::Message;
 use gents::inference::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents::inference::rendered_request::RenderedCompletionRequest;
@@ -22,7 +22,7 @@ use crate::support::test_db;
 
 const CAPTURE_MODEL: &str = "capture-model";
 const CAPTURE_BACKEND_ID: &str = "capture-backend";
-const CAPTURE_AGENT_ID: &str = "capture-behavior";
+const CAPTURE_AGENT_DID: &str = "capture-behavior";
 const CAPTURE_TOOL: &str = "capture_probe";
 
 const PROD_PARSE_400_BODY: &str = r#"{"object":"error","message":"BadRequestError: Error in processing prompt inputs: Expecting value: line 1 column 28 (char 27)","type":"BadRequestError","code":400}"#;
@@ -39,8 +39,8 @@ async fn attached_image_reaches_the_provider_and_survives_the_next_turn() {
         ],
     )
     .unwrap();
-    let db = test_db("attached-image-wire").await;
-    let agent = boot_capture_agent(&db, "attached-image-wire", backend.endpoint(), None).await;
+    let fixture =
+        OwnedCaptureFixture::new("attached-image-wire", backend.endpoint(), false, None).await;
     let input = RequestInput {
         attachments: vec![RequestAttachment {
             name: "pixel.png".into(),
@@ -49,35 +49,26 @@ async fn attached_image_reaches_the_provider_and_survives_the_next_turn() {
         }],
         ..Default::default()
     };
-    let first = crate::support::interrupt::create_runtime_request_with_input(
-        db.node.as_ref(),
-        &agent.node_did,
-        CAPTURE_AGENT_ID,
-        "image-first",
-        "image-session",
-        "",
-        input,
-    )
-    .await;
-    wait_for_request_lifecycle_state(db.node.as_ref(), &first, "completed").await;
-    let second = crate::support::interrupt::create_runtime_request_with_input(
-        db.node.as_ref(),
-        &agent.node_did,
-        CAPTURE_AGENT_ID,
-        "image-second",
-        "image-session",
-        "What was in the image?",
-        RequestInput {
-            attachments: vec![RequestAttachment {
-                name: "note.txt".into(),
-                media_type: "text/plain".into(),
-                data: "bm90ZSBmcm9tIGZpbGU=".into(),
-            }],
-            ..Default::default()
-        },
-    )
-    .await;
-    wait_for_request_lifecycle_state(db.node.as_ref(), &second, "completed").await;
+    fixture
+        .submit_with_input("image-first", "image-session", "", input)
+        .await;
+    fixture.wait_completed("image-first").await;
+    fixture
+        .submit_with_input(
+            "image-second",
+            "image-session",
+            "What was in the image?",
+            RequestInput {
+                attachments: vec![RequestAttachment {
+                    name: "note.txt".into(),
+                    media_type: "text/plain".into(),
+                    data: "bm90ZSBmcm9tIGZpbGU=".into(),
+                }],
+                ..Default::default()
+            },
+        )
+        .await;
+    fixture.wait_completed("image-second").await;
     let bodies = backend.observed_completion_bodies();
     assert_eq!(bodies.len(), 2);
     let url = format!("data:image/png;base64,{image}");
@@ -95,35 +86,34 @@ async fn attached_image_reaches_the_provider_and_survives_the_next_turn() {
     let followup = serde_json::to_string(&bodies[1]).unwrap();
     assert!(followup.contains("note from file"));
     assert!(!followup.contains("bm90ZSBmcm9tIGZpbGU="));
-    let rendered = wait_for_rendered_requests(db.node.as_ref(), "image-first", 1).await;
+    let rendered = fixture.rendered_requests("image-first").await;
     assert_eq!(
         parse_json(&rendered[0]["request_json"]),
         canonical(&bodies[0])
     );
-    let unsupported = crate::support::interrupt::create_runtime_request_with_input(
-        db.node.as_ref(),
-        &agent.node_did,
-        CAPTURE_AGENT_ID,
-        "pdf-third",
-        "image-session",
-        "Read the PDF",
-        RequestInput {
-            attachments: vec![RequestAttachment {
-                name: "note.pdf".into(),
-                media_type: "application/pdf".into(),
-                data: "JVBERi0xLjQ=".into(),
-            }],
-            ..Default::default()
-        },
-    )
-    .await;
+    fixture
+        .submit_with_input(
+            "pdf-third",
+            "image-session",
+            "Read the PDF",
+            RequestInput {
+                attachments: vec![RequestAttachment {
+                    name: "note.pdf".into(),
+                    media_type: "application/pdf".into(),
+                    data: "JVBERi0xLjQ=".into(),
+                }],
+                ..Default::default()
+            },
+        )
+        .await;
     assert_eq!(
-        wait_for_request_terminal_state(db.node.as_ref(), &unsupported, Duration::from_secs(10))
+        fixture
+            .wait_terminal("pdf-third", Duration::from_secs(10))
             .await,
         RequestLifecycleState::Failed
     );
     assert_eq!(backend.observed_completion_requests(), 2);
-    agent.shutdown().await;
+    fixture.runtime.shutdown().await;
 }
 
 #[tokio::test]
@@ -133,19 +123,13 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
         vec![StreamScript::completes("capture-me", ["ok"])],
     )
     .expect("mock backend");
-    let db = test_db("rendered-request-capture").await;
-    let agent = boot_capture_agent(&db, "rendered-request-capture", backend.endpoint(), None).await;
+    let fixture =
+        OwnedCaptureFixture::new("rendered-request-capture", backend.endpoint(), false, None).await;
 
-    let doc_id = create_runtime_request(
-        db.node.as_ref(),
-        &agent.node_did,
-        CAPTURE_AGENT_ID,
-        "req-capture-1",
-        "session-capture-1",
-        "please capture-me",
-    )
-    .await;
-    wait_for_request_lifecycle_state(db.node.as_ref(), &doc_id, "completed").await;
+    fixture
+        .submit("req-capture-1", "session-capture-1", "please capture-me")
+        .await;
+    fixture.wait_completed("req-capture-1").await;
 
     let observed = backend.observed_completion_bodies();
     assert_eq!(
@@ -154,7 +138,11 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
         "the mock backend should have served exactly one completion"
     );
 
-    let rows = wait_for_rendered_requests(db.node.as_ref(), "req-capture-1", observed.len()).await;
+    let rows = fixture.rendered_requests("req-capture-1").await;
+    fixture.wait_for_goal_observation("session-capture-1").await;
+    fixture
+        .assert_capture_isolation("req-capture-1", "session-capture-1")
+        .await;
     let row = &rows[0];
 
     assert_eq!(
@@ -167,7 +155,7 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
     assert_eq!(row["attempt"], 0);
     assert_eq!(row["source"], "openai_chat_completions");
     assert_eq!(row["session_id"], "session-capture-1");
-    assert_eq!(row["node_did"].as_str(), Some(agent.node_did.as_str()));
+    assert_eq!(row["node_did"].as_str(), Some(fixture.node_did.as_str()));
     assert_eq!(
         row["model_name"], CAPTURE_MODEL,
         "the model column must name the model the provider was asked for"
@@ -217,7 +205,7 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
         "request-bound accounting must be internally reproducible"
     );
 
-    let calls = inference_calls(db.node.as_ref(), "req-capture-1").await;
+    let calls = fixture.inference_calls("req-capture-1").await;
     let inference_call = calls
         .iter()
         .find(|call| call["call_kind"] == "inference")
@@ -228,7 +216,7 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
         "the replicated InferenceCall projection must match local capture provenance"
     );
 
-    agent.shutdown().await;
+    fixture.runtime.shutdown().await;
 }
 
 #[tokio::test]
@@ -238,27 +226,23 @@ async fn a_failing_capture_sink_issues_no_provider_request() {
         vec![StreamScript::completes("must-not-send", ["ok"])],
     )
     .expect("mock backend");
-    let db = test_db("rendered-request-capture-faults").await;
-    let agent = boot_capture_agent(
-        &db,
+    let fixture = OwnedCaptureFixture::new(
         "rendered-request-capture-faults",
         backend.endpoint(),
+        false,
         Some("injected rendered-request capture failure"),
     )
     .await;
-
-    let doc_id = create_runtime_request(
-        db.node.as_ref(),
-        &agent.node_did,
-        CAPTURE_AGENT_ID,
-        "req-capture-fault-1",
-        "session-capture-fault-1",
-        "please must-not-send",
-    )
-    .await;
-
-    let terminal =
-        wait_for_request_terminal_state(db.node.as_ref(), &doc_id, Duration::from_secs(20)).await;
+    fixture
+        .submit(
+            "req-capture-fault-1",
+            "session-capture-fault-1",
+            "please must-not-send",
+        )
+        .await;
+    let terminal = fixture
+        .wait_terminal("req-capture-fault-1", Duration::from_secs(20))
+        .await;
 
     assert_eq!(
         backend.observed_completion_requests(),
@@ -273,21 +257,30 @@ async fn a_failing_capture_sink_issues_no_provider_request() {
         "a request whose capture never succeeded must terminate as failed"
     );
     assert!(
-        rendered_requests(db.node.as_ref(), "req-capture-fault-1")
+        fixture
+            .rendered_requests("req-capture-fault-1")
             .await
             .is_empty(),
         "a failed capture must not leave a partial fact record"
     );
 
-    agent.shutdown().await;
+    fixture.runtime.shutdown().await;
 }
 
 #[tokio::test]
 async fn capture_is_idempotent_and_never_rebinds_a_key() {
-    let db = test_db("rendered-request-capture-idempotency").await;
-    let sink = gents::inference::rendered_request::DefraRenderedRequestSink::new(db.node.clone());
+    let (db, agent, _) = stored_capture_fixture("rendered-request-capture-idempotency").await;
+    let sink = gents::inference::rendered_request::DefraRenderedRequestSink::new_managed(
+        db.node.clone(),
+        agent.as_ref(),
+    )
+    .unwrap();
 
-    let first = rendered_fixture(serde_json::json!({"model": "m", "messages": [{"role": "user"}]}));
+    let first = rendered_fixture(
+        &db,
+        agent.as_ref(),
+        serde_json::json!({"model": "m", "messages": [{"role": "user"}]}),
+    );
     sink.capture(first.clone()).await.expect("first capture");
     assert_eq!(
         rendered_requests(db.node.as_ref(), &first.request_id)
@@ -396,8 +389,12 @@ fn message_text(seed: u64, len: usize) -> String {
 
 #[tokio::test]
 async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
-    let db = test_db("rendered-request-manifest-linear").await;
-    let sink = gents::inference::rendered_request::DefraRenderedRequestSink::new(db.node.clone());
+    let (db, agent, _) = stored_capture_fixture("rendered-request-manifest-linear").await;
+    let sink = gents::inference::rendered_request::DefraRenderedRequestSink::new_managed(
+        db.node.clone(),
+        agent.as_ref(),
+    )
+    .unwrap();
     let turns = 12usize;
     let mut old_bytes = 0usize;
     let mut new_bytes = 0usize;
@@ -415,7 +412,7 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
                 serde_json::json!({"role":"user","content": message_text(u64::try_from(index).unwrap(), 3 * 1024)})
             ).collect::<Vec<_>>()
         });
-        let mut rendered = rendered_fixture(body.clone());
+        let mut rendered = rendered_fixture(&db, agent.as_ref(), body.clone());
         rendered.request_id = format!("req-manifest-{turn}");
         rendered.assembly_trace =
             gents::inference::rendered_request::AssemblyTrace::from_effective_messages(
@@ -674,8 +671,13 @@ fn shared_manifest_suffix(previous: &[String], current: &[String]) -> usize {
         .unwrap_or(0)
 }
 
-fn manifest_turn_fixture(body: Value, turn: usize) -> RenderedCompletionRequest {
-    let mut rendered = rendered_fixture(body);
+fn manifest_turn_fixture(
+    db: &crate::support::TestDb,
+    agent: &dyn NodeIdentity,
+    body: Value,
+    turn: usize,
+) -> RenderedCompletionRequest {
+    let mut rendered = rendered_fixture(db, agent, body);
     rendered.request_id = format!("req-manifest-resync-{turn}");
     rendered.turn_index = turn;
     rendered.assembly_trace =
@@ -712,8 +714,12 @@ fn manifest_turn_fixture(body: Value, turn: usize) -> RenderedCompletionRequest 
 async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
     const TURNS: usize = 20;
     const KEPT_FROM: usize = 12;
-    let db = test_db("rendered-request-manifest-resync").await;
-    let sink = gents::inference::rendered_request::DefraRenderedRequestSink::new(db.node.clone());
+    let (db, agent, _) = stored_capture_fixture("rendered-request-manifest-resync").await;
+    let sink = gents::inference::rendered_request::DefraRenderedRequestSink::new_managed(
+        db.node.clone(),
+        agent.as_ref(),
+    )
+    .unwrap();
     let history: Vec<Value> = (0..TURNS)
         .map(|index| {
             serde_json::json!({
@@ -724,7 +730,7 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
     let mut pre_edit_key = String::new();
     for turn in 0..TURNS {
         let body = serde_json::json!({"model":"m", "messages": history[..=turn]});
-        let rendered = manifest_turn_fixture(body, turn);
+        let rendered = manifest_turn_fixture(&db, agent.as_ref(), body, turn);
         if turn + 1 == TURNS {
             pre_edit_key = rendered.capture_key.clone();
         }
@@ -751,7 +757,7 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
     })))
     .collect::<Vec<_>>();
     let edited_body = serde_json::json!({"model":"m", "messages": edited_messages});
-    let rendered = manifest_turn_fixture(edited_body.clone(), TURNS);
+    let rendered = manifest_turn_fixture(&db, agent.as_ref(), edited_body.clone(), TURNS);
     let edited_provenance_payload = rendered.provenance_payload_json.clone();
     let edited_key = rendered.capture_key.clone();
     sink.capture(rendered).await.unwrap();
@@ -816,11 +822,15 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
 
 #[tokio::test]
 async fn stored_v2_delta_rows_still_decode_through_their_own_arm() {
-    let db = test_db("rendered-request-stored-v2-delta").await;
-    let base = rendered_fixture(serde_json::json!({
-        "model":"m", "messages":[{"role":"user","content": "base λ"}],
-        "padding": "x".repeat(8 * 1024)
-    }));
+    let (db, agent, session) = stored_capture_fixture("rendered-request-stored-v2-delta").await;
+    let base = rendered_fixture(
+        &db,
+        agent.as_ref(),
+        serde_json::json!({
+            "model":"m", "messages":[{"role":"user","content": "base λ"}],
+            "padding": "x".repeat(8 * 1024)
+        }),
+    );
     let base_container = serde_json::json!({
         "gents_capture_json": 1,
         "request_body": {"gents_lossless_json": 1, "kind": "full", "value": base.request_json},
@@ -828,7 +838,15 @@ async fn stored_v2_delta_rows_still_decode_through_their_own_arm() {
             "gents_lossless_json": 1, "kind": "full", "value": base.provenance_payload_json
         }
     });
-    insert_stored_capture(db.node.as_ref(), &base, 2, &base_container.to_string()).await;
+    insert_stored_capture(
+        &db,
+        agent.as_ref(),
+        &session,
+        &base,
+        2,
+        &base_container.to_string(),
+    )
+    .await;
     let base_doc_id = capture_doc_id(db.node.as_ref(), &base.capture_key).await;
     let base_cid = request_json_commit_cid(db.node.as_ref(), &base_doc_id).await;
 
@@ -859,7 +877,7 @@ async fn stored_v2_delta_rows_still_decode_through_their_own_arm() {
             "gents_lossless_json": 1, "kind": "full", "value": base.provenance_payload_json
         }
     });
-    let mut delta = rendered_fixture(next_body.clone());
+    let mut delta = rendered_fixture(&db, agent.as_ref(), next_body.clone());
     delta.turn_index = 1;
     delta.request_id = "req-stored-v2-delta".to_string();
     delta.capture_key = gents::inference::rendered_request::capture_key(
@@ -871,7 +889,15 @@ async fn stored_v2_delta_rows_still_decode_through_their_own_arm() {
         delta.attempt,
     )
     .unwrap();
-    insert_stored_capture(db.node.as_ref(), &delta, 2, &delta_container.to_string()).await;
+    insert_stored_capture(
+        &db,
+        agent.as_ref(),
+        &session,
+        &delta,
+        2,
+        &delta_container.to_string(),
+    )
+    .await;
 
     let stored = stored_request_json(db.node.as_ref(), &delta.capture_key).await;
     assert_eq!(
@@ -898,7 +924,9 @@ async fn stored_v2_delta_rows_still_decode_through_their_own_arm() {
 }
 
 async fn insert_stored_capture(
-    node: &EmbeddedNode,
+    db: &crate::support::TestDb,
+    agent: &dyn NodeIdentity,
+    session_doc: &str,
     rendered: &RenderedCompletionRequest,
     capture_version: u32,
     request_json: &str,
@@ -910,7 +938,7 @@ async fn insert_stored_capture(
     let mutation = format!(
         r#"mutation {{ create_RenderedRequest(input: {{
             capture_key:"{}", request_doc_id:"{}", request_commit_cid:"{}", request_id:"{}",
-            session_id:"{}", node_did:"{}", requester_did:"{}", agent_id:"{}",
+            session_id:"{}", session_doc_id:"{}", node_did:"{}", requester_did:"{}", agent_did:"{}",
             capture_scope:"{}", turn_index:{}, attempt:{}, capture_version:{},
             model_name:"{}", source:"{}", request_json:"{}", provenance_json:"{}",
             created_at:"2026-10-07T00:00:00Z"
@@ -920,9 +948,10 @@ async fn insert_stored_capture(
         escape_graphql_string(&rendered.request_commit_cid),
         escape_graphql_string(&rendered.request_id),
         escape_graphql_string(&rendered.session_id),
+        escape_graphql_string(session_doc),
         escape_graphql_string(&rendered.node_did),
         escape_graphql_string(&rendered.requester_did),
-        escape_graphql_string(&rendered.agent_id),
+        escape_graphql_string(&rendered.agent_did),
         escape_graphql_string(&rendered.capture_scope),
         rendered.turn_index,
         rendered.attempt,
@@ -932,8 +961,39 @@ async fn insert_stored_capture(
         escape_graphql_string(request_json),
         escape_graphql_string(&provenance),
     );
-    let response = node.execute(&mutation).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    write_stored_capture(db, agent, session_doc, &mutation).await;
+}
+
+async fn write_stored_capture(
+    db: &crate::support::TestDb,
+    agent: &dyn NodeIdentity,
+    session_doc: &str,
+    mutation: &str,
+) {
+    let access = gents::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent,
+    )
+    .unwrap();
+    access
+        .transact_write("test.capture.seed_legacy", |txn| {
+            Box::pin(async move {
+                let response = txn.execute(mutation).await?;
+                let doc = gents::store::graphql::created_doc_id(&response, "RenderedRequest")?;
+                txn.add_resource_relationship(
+                    "RenderedRequest",
+                    &doc,
+                    "parent",
+                    "sessions",
+                    session_doc,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
 }
 
 async fn stored_request_json(node: &EmbeddedNode, capture_key: &str) -> String {
@@ -981,11 +1041,19 @@ async fn request_json_commit_cid(node: &EmbeddedNode, doc_id: &str) -> String {
 
 #[tokio::test]
 async fn legacy_capture_remains_readable_and_idempotent_after_format_upgrade() {
-    let db = test_db("rendered-request-legacy-format").await;
-    let sink = gents::inference::rendered_request::DefraRenderedRequestSink::new(db.node.clone());
-    let rendered = rendered_fixture(serde_json::json!({
-        "model": "m", "messages": [{"role": "user", "content": "legacy λ"}]
-    }));
+    let (db, agent, session) = stored_capture_fixture("rendered-request-legacy-format").await;
+    let sink = gents::inference::rendered_request::DefraRenderedRequestSink::new_managed(
+        db.node.clone(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let rendered = rendered_fixture(
+        &db,
+        agent.as_ref(),
+        serde_json::json!({
+            "model": "m", "messages": [{"role": "user", "content": "legacy λ"}]
+        }),
+    );
     let mut legacy_manifest = rendered.provenance_json.clone();
     legacy_manifest["manifest_version"] = serde_json::json!(3);
     legacy_manifest["assembly_trace"] = rendered.provenance_payload_json.clone();
@@ -1000,9 +1068,10 @@ async fn legacy_capture_remains_readable_and_idempotent_after_format_upgrade() {
         ("request_commit_cid", rendered.request_commit_cid.as_str()),
         ("request_id", rendered.request_id.as_str()),
         ("session_id", rendered.session_id.as_str()),
+        ("session_doc_id", session.as_str()),
         ("node_did", rendered.node_did.as_str()),
         ("requester_did", rendered.requester_did.as_str()),
-        ("agent_id", rendered.agent_id.as_str()),
+        ("agent_did", rendered.agent_did.as_str()),
         ("capture_scope", rendered.capture_scope.as_str()),
         ("model_name", rendered.model_name.as_str()),
         ("source", source.as_str().unwrap()),
@@ -1017,8 +1086,7 @@ async fn legacy_capture_remains_readable_and_idempotent_after_format_upgrade() {
     let mutation = format!(
         "mutation {{ create_RenderedRequest(input: {{{fields}, capture_version:1, turn_index:0, attempt:0}}) {{ _docID }} }}"
     );
-    let response = db.node.execute(&mutation).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    write_stored_capture(&db, agent.as_ref(), &session, &mutation).await;
     let before = commit_set(db.node.as_ref(), &rendered.capture_key).await;
     assert!(!before.is_empty());
     let rows = rendered_requests(db.node.as_ref(), &rendered.request_id).await;
@@ -1060,8 +1128,7 @@ async fn legacy_capture_remains_readable_and_idempotent_after_format_upgrade() {
             &escape_graphql_string(&missing_version.capture_key),
         )
         .replace("capture_version:1,", "");
-    let response = db.node.execute(&malformed).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    write_stored_capture(&db, agent.as_ref(), &session, &malformed).await;
     let malformed_commits = commit_set(db.node.as_ref(), &missing_version.capture_key).await;
     let error = sink
         .capture(missing_version.clone())
@@ -1093,25 +1160,21 @@ async fn a_retried_attempt_is_its_own_durable_fact() {
         )],
     )
     .expect("mock backend");
-    let db = test_db("rendered-request-capture-attempts").await;
-    let agent = boot_capture_agent(
-        &db,
+    let fixture = OwnedCaptureFixture::new(
         "rendered-request-capture-attempts",
         backend.endpoint(),
+        false,
         None,
     )
     .await;
-
-    let doc_id = create_runtime_request(
-        db.node.as_ref(),
-        &agent.node_did,
-        CAPTURE_AGENT_ID,
-        "req-capture-attempts",
-        "session-capture-attempts",
-        &format!("please recover {marker}"),
-    )
-    .await;
-    wait_for_request_lifecycle_state(db.node.as_ref(), &doc_id, "completed").await;
+    fixture
+        .submit(
+            "req-capture-attempts",
+            "session-capture-attempts",
+            &format!("please recover {marker}"),
+        )
+        .await;
+    fixture.wait_completed("req-capture-attempts").await;
 
     let observed = backend.observed_completion_bodies();
     assert_eq!(
@@ -1126,7 +1189,7 @@ async fn a_retried_attempt_is_its_own_durable_fact() {
          being true, the fence below no longer isolates `attempt`"
     );
 
-    let rows = wait_for_rendered_requests(db.node.as_ref(), "req-capture-attempts", 2).await;
+    let rows = fixture.rendered_requests("req-capture-attempts").await;
     assert_eq!(
         coordinates(&rows),
         vec![("inference.1", 0, 0), ("inference.1", 0, 1)],
@@ -1157,7 +1220,7 @@ async fn a_retried_attempt_is_its_own_durable_fact() {
         retry_accounting["components"], first_accounting["components"],
         "a byte-identical retry must reuse the same measured request components"
     );
-    let calls = inference_calls(db.node.as_ref(), "req-capture-attempts").await;
+    let calls = fixture.inference_calls("req-capture-attempts").await;
     let inference_calls = calls
         .iter()
         .filter(|call| call["call_kind"] == "inference")
@@ -1188,7 +1251,7 @@ async fn a_retried_attempt_is_its_own_durable_fact() {
         "the greatest call sequence must carry retry attempt 1"
     );
 
-    agent.shutdown().await;
+    fixture.runtime.shutdown().await;
 }
 
 #[tokio::test]
@@ -1214,62 +1277,31 @@ async fn retry_continues_recorded_tool_progress_without_republishing_input() {
         )],
     )
     .unwrap();
-    let db = test_db(marker).await;
-    let agent = boot_capture_agent_with(&db, marker, backend.endpoint(), None, |behavior| {
-        behavior.custom_tool(FixedOutputTool::new(CAPTURE_TOOL, output))
-    })
-    .await;
-    let content = format!("please use the tool {marker}");
-    let parent = create_runtime_request(
-        db.node.as_ref(),
-        &agent.node_did,
-        CAPTURE_AGENT_ID,
-        "retry-parent",
+    let fixture = OwnedCaptureFixture::new_with_tool(
         marker,
-        &content,
+        backend.endpoint(),
+        FixedOutputTool::new(CAPTURE_TOOL, output),
     )
     .await;
+    let content = format!("please use the tool {marker}");
+    let parent = fixture.submit("retry-parent", marker, &content).await;
     assert_eq!(
-        wait_for_request_terminal_state(db.node.as_ref(), &parent, Duration::from_secs(20)).await,
+        fixture
+            .wait_terminal("retry-parent", Duration::from_secs(20))
+            .await,
         RequestLifecycleState::Failed
     );
-    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-        gents_protocol::request_admission::RequestPurpose::Normal,
-        "retry-successor",
-        &agent.node_did,
-        &agent.node_did,
-        CAPTURE_AGENT_ID,
-        marker,
-        &content,
-        "interactive",
-        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent.node_did),
-    );
-    create.retry_parent_request = Some("retry-parent".into());
-    create.retry_parent_request_doc_id = Some(parent.clone());
-    create.retry_root_request = Some("retry-parent".into());
-    create.retry_count = 1;
-    create.max_retries = 3;
-    gents::sign_agent_request_create_as_registered_target(&mut create)
-        .await
-        .unwrap();
-    let response = gents::store::config_client::ConfigAccess::local(db.node.clone())
-        .write("test.retry_successor", &create.graphql_mutation().unwrap())
-        .await
-        .unwrap();
-    let response: gents::defra_node::QueryResponse = serde_json::from_value(response).unwrap();
-    let doc_id = gents::store::graphql::single_mutation_document(&response, "create_AgentRequest")
-        .unwrap()
-        .unwrap()["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let doc_id = fixture
+        .submit_retry("retry-successor", marker, &content, "retry-parent", &parent)
+        .await;
     assert_eq!(
-        wait_for_request_terminal_state(db.node.as_ref(), &doc_id, Duration::from_secs(20)).await,
+        fixture
+            .wait_terminal("retry-successor", Duration::from_secs(20))
+            .await,
         RequestLifecycleState::Completed
     );
     let observed = backend.observed_completion_bodies();
-    let captures = wait_for_rendered_requests(db.node.as_ref(), "retry-successor", 1).await;
+    let captures = fixture.rendered_requests("retry-successor").await;
     let captured = parse_json(&captures[0]["request_json"]);
     let retry_body = observed
         .iter()
@@ -1305,14 +1337,14 @@ async fn retry_continues_recorded_tool_progress_without_republishing_input() {
         "{messages:?}"
     );
     let retry_doc = escape_graphql_string(&doc_id);
-    let rows = gents::store::graphql::graphql_with_transaction_retry(db.node.as_ref(), &format!(
+    let rows = fixture.access.execute(&format!(
         r#"{{ AgentMessage(filter: {{request_doc_id: {{_eq:"{retry_doc}"}}, message_key: {{_eq:"authored:{retry_doc}:prompt"}}}}) {{_docID}} }}"#
-    ), "test.retry_authored_input").await.unwrap();
+    )).await.unwrap();
     assert_eq!(
-        rows.data.unwrap()["AgentMessage"].as_array().unwrap().len(),
+        rows["data"]["AgentMessage"].as_array().unwrap().len(),
         usize::from(case["publish"].as_bool().unwrap())
     );
-    agent.shutdown().await;
+    fixture.runtime.shutdown().await;
 }
 
 #[tokio::test]
@@ -1337,26 +1369,20 @@ async fn a_multi_turn_tool_using_request_captures_every_turn_in_order() {
         )],
     )
     .expect("mock backend");
-    let db = test_db("rendered-request-capture-multi-turn").await;
-    let agent = boot_capture_agent_with(
-        &db,
+    let fixture = OwnedCaptureFixture::new_with_tool(
         "rendered-request-capture-multi-turn",
         backend.endpoint(),
-        None,
-        |behavior| behavior.custom_tool(FixedOutputTool::new(CAPTURE_TOOL, TOOL_OUTPUT)),
+        FixedOutputTool::new(CAPTURE_TOOL, TOOL_OUTPUT),
     )
     .await;
-
-    let doc_id = create_runtime_request(
-        db.node.as_ref(),
-        &agent.node_did,
-        CAPTURE_AGENT_ID,
-        "req-capture-multi-turn",
-        "session-capture-multi-turn",
-        &format!("please use the tool {marker}"),
-    )
-    .await;
-    wait_for_request_lifecycle_state(db.node.as_ref(), &doc_id, "completed").await;
+    let doc_id = fixture
+        .submit(
+            "req-capture-multi-turn",
+            "session-capture-multi-turn",
+            &format!("please use the tool {marker}"),
+        )
+        .await;
+    fixture.wait_completed("req-capture-multi-turn").await;
 
     let observed = backend.observed_completion_bodies();
     assert_eq!(
@@ -1365,7 +1391,7 @@ async fn a_multi_turn_tool_using_request_captures_every_turn_in_order() {
         "a tool-calling turn and the turn that reads its result: {observed:?}"
     );
 
-    let rows = wait_for_rendered_requests(db.node.as_ref(), "req-capture-multi-turn", 2).await;
+    let rows = fixture.rendered_requests("req-capture-multi-turn").await;
     assert_eq!(
         coordinates(&rows),
         vec![("inference.1", 0, 0), ("inference.1", 1, 0)],
@@ -1386,17 +1412,16 @@ async fn a_multi_turn_tool_using_request_captures_every_turn_in_order() {
             "turn {index} must carry the body the provider was posted"
         );
     }
-    let request_commits = gents::store::graphql::composite_commits(
-        db.node.as_ref(),
-        &doc_id,
-        "load captured AgentRequest versions",
-    )
-    .await
-    .expect("AgentRequest commits");
+    let query = format!(
+        r#"{{ _commits(docID: "{}", filter: {{ fieldName: {{ _eq: "_C" }} }}) {{ cid }} }}"#,
+        escape_graphql_string(&doc_id)
+    );
+    let response = fixture.access.execute(&query).await.unwrap();
+    let request_commits = response["data"]["_commits"].as_array().unwrap();
     for row in &rows {
         let pinned = row["request_commit_cid"].as_str().unwrap_or_default();
         assert!(
-            request_commits.iter().any(|commit| commit.cid == pinned),
+            request_commits.iter().any(|commit| commit["cid"] == pinned),
             "capture must pin an actual DefraDB version of its request: {pinned}"
         );
     }
@@ -1430,7 +1455,7 @@ async fn a_multi_turn_tool_using_request_captures_every_turn_in_order() {
         "the assembly trace must carry the threaded tool result verbatim: {threaded}"
     );
 
-    let calls = inference_calls(db.node.as_ref(), "req-capture-multi-turn").await;
+    let calls = fixture.inference_calls("req-capture-multi-turn").await;
     let inference_call_seqs: Vec<i64> = calls
         .iter()
         .filter(|call| call["call_kind"].as_str() == Some("inference"))
@@ -1466,7 +1491,7 @@ async fn a_multi_turn_tool_using_request_captures_every_turn_in_order() {
         );
     }
 
-    agent.shutdown().await;
+    fixture.runtime.shutdown().await;
 }
 
 #[tokio::test]
@@ -1492,27 +1517,22 @@ async fn a_repaired_attempt_is_a_second_fact_with_a_different_canonical_request(
         )],
     )
     .expect("mock backend");
-    let db = test_db("rendered-request-capture-repair").await;
-    let agent = boot_capture_agent_with(
-        &db,
+    let fixture = OwnedCaptureFixture::new_with_tool(
         "rendered-request-capture-repair",
         backend.endpoint(),
-        None,
-        |behavior| behavior.custom_tool(FixedOutputTool::new(CAPTURE_TOOL, "REPAIR_TOOL_OUTPUT")),
+        FixedOutputTool::new(CAPTURE_TOOL, "REPAIR_TOOL_OUTPUT"),
     )
     .await;
-
-    let doc_id = create_runtime_request(
-        db.node.as_ref(),
-        &agent.node_did,
-        CAPTURE_AGENT_ID,
-        "req-capture-repair",
-        "session-capture-repair",
-        &format!("please use the tool {marker}"),
-    )
-    .await;
-    let terminal =
-        wait_for_request_terminal_state(db.node.as_ref(), &doc_id, Duration::from_secs(20)).await;
+    fixture
+        .submit(
+            "req-capture-repair",
+            "session-capture-repair",
+            &format!("please use the tool {marker}"),
+        )
+        .await;
+    let terminal = fixture
+        .wait_terminal("req-capture-repair", Duration::from_secs(20))
+        .await;
     assert_eq!(
         terminal,
         RequestLifecycleState::Completed,
@@ -1527,7 +1547,7 @@ async fn a_repaired_attempt_is_a_second_fact_with_a_different_canonical_request(
         "the tool turn, its parse-400, and the repaired retry: {observed:?}"
     );
 
-    let rows = wait_for_rendered_requests(db.node.as_ref(), "req-capture-repair", 3).await;
+    let rows = fixture.rendered_requests("req-capture-repair").await;
     assert_eq!(
         coordinates(&rows),
         vec![
@@ -1578,7 +1598,7 @@ async fn a_repaired_attempt_is_a_second_fact_with_a_different_canonical_request(
         parse_json(&rows[2]["provenance_json"])["assembly_trace"]["context_accounting"].clone();
     assert_eq!(repaired_accounting["turn_index"], 1);
     assert_eq!(repaired_accounting["attempt"], 1);
-    let calls = inference_calls(db.node.as_ref(), "req-capture-repair").await;
+    let calls = fixture.inference_calls("req-capture-repair").await;
     let inference_calls = calls
         .iter()
         .filter(|call| call["call_kind"] == "inference")
@@ -1594,7 +1614,7 @@ async fn a_repaired_attempt_is_a_second_fact_with_a_different_canonical_request(
         "the greatest call sequence must carry the repaired request accounting"
     );
 
-    agent.shutdown().await;
+    fixture.runtime.shutdown().await;
 }
 
 #[tokio::test]
@@ -1635,35 +1655,23 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
         )],
     )
     .expect("mock backend");
-    let db = test_db("rendered-request-capture-compaction").await;
-    let agent = boot_capture_agent_with(
-        &db,
+    let fixture = OwnedCaptureFixture::new_with_strip_tools(
         "rendered-request-capture-compaction",
         backend.endpoint(),
-        None,
-        |behavior| {
-            behavior
-                .enable_meta_tools(false)
-                .enable_context_budget(false)
-                .context_window(CONTEXT_WINDOW)
-                .compaction_threshold(COMPACTION_THRESHOLD)
-                .compaction_strategy(CompactionStrategy::StripToolResults)
-                .custom_tool(FixedOutputTool::new("capture_big", big_output))
-                .custom_tool(FixedOutputTool::new("capture_small", SMALL_MARKER))
-        },
+        vec![
+            FixedOutputTool::new("capture_big", big_output),
+            FixedOutputTool::new("capture_small", SMALL_MARKER),
+        ],
     )
     .await;
-
-    let doc_id = create_runtime_request(
-        db.node.as_ref(),
-        &agent.node_did,
-        CAPTURE_AGENT_ID,
-        "req-capture-compaction",
-        "session-capture-compaction",
-        &format!("please use both tools {marker}"),
-    )
-    .await;
-    wait_for_request_lifecycle_state(db.node.as_ref(), &doc_id, "completed").await;
+    fixture
+        .submit(
+            "req-capture-compaction",
+            "session-capture-compaction",
+            &format!("please use both tools {marker}"),
+        )
+        .await;
+    fixture.wait_completed("req-capture-compaction").await;
 
     let observed = backend.observed_completion_bodies();
     assert_eq!(
@@ -1673,7 +1681,7 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
         observed.len()
     );
 
-    let rows = wait_for_rendered_requests(db.node.as_ref(), "req-capture-compaction", 3).await;
+    let rows = fixture.rendered_requests("req-capture-compaction").await;
     assert_eq!(
         coordinates(&rows),
         vec![
@@ -1744,19 +1752,18 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
     );
 
     assert!(
-        compaction_entries(db.node.as_ref(), "session-capture-compaction")
+        fixture
+            .compaction_entries("session-capture-compaction")
             .await
             .is_empty(),
         "reducing a closed tool pair must not advance the session-prefix cursor"
     );
 
-    agent.shutdown().await;
+    fixture.runtime.shutdown().await;
 }
 
 #[tokio::test]
 async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
-    const CONTEXT_WINDOW: usize = 200_000;
-    const COMPACTION_THRESHOLD: f64 = 0.25;
     const SEED_CHARS: usize = 260_000;
     const SEED_MARKER: &str = "capture-summarizer";
     const SUMMARIZER_MARKER: &str = "Produce the required structured continuation checkpoint now.";
@@ -1804,53 +1811,49 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     )
     .expect("mock backend");
 
-    let db = test_db("rendered-request-capture-summarizer").await;
-    let agent = boot_capture_agent_with(
-        &db,
+    let owned = OwnedCaptureFixture::new(
         "rendered-request-capture-summarizer",
         backend.endpoint(),
+        true,
         None,
-        |behavior| {
-            behavior
-                .enable_meta_tools(false)
-                .enable_context_budget(false)
-                .context_window(CONTEXT_WINDOW)
-                .compaction_threshold(COMPACTION_THRESHOLD)
-                .compaction_strategy(CompactionStrategy::StripThenSummarize)
-        },
     )
     .await;
-
     let session_id = "session-capture-summarizer";
-    let seed_doc = create_runtime_request(
-        db.node.as_ref(),
-        &agent.node_did,
-        CAPTURE_AGENT_ID,
-        "req-capture-seed",
-        session_id,
-        &format!("seed the transcript {SEED_MARKER}"),
-    )
-    .await;
-    wait_for_request_lifecycle_state(db.node.as_ref(), &seed_doc, "completed").await;
+    let seed_doc = owned
+        .submit(
+            "req-capture-seed",
+            session_id,
+            &format!("seed the transcript {SEED_MARKER}"),
+        )
+        .await;
+    owned.wait_completed("req-capture-seed").await;
     let seed_bodies = backend.observed_completion_requests();
     assert_eq!(
         seed_bodies, 1,
         "the seeding request must be a single uncompacted completion"
     );
 
-    let seed_commit = gents::store::graphql::newest_document_composite_commit(
-        db.node.as_ref(),
-        &seed_doc,
-        "seed request reduction boundary",
-    )
-    .await
-    .unwrap()
-    .expect("seed request commit");
+    let seed_commit = owned
+        .access
+        .transact_readonly("test.seed_commit", |txn| {
+            let seed_doc = &seed_doc;
+            Box::pin(async move {
+                gents::store::graphql::newest_document_composite_commit_in_txn(
+                    txn,
+                    seed_doc,
+                    "seed request reduction boundary",
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap()
+        .expect("seed request commit");
     let boundary = gents::turn::provider_context_reduction::capture_source_boundary(
-        db.node.as_ref(),
+        &owned.agent_access,
         session_id,
-        &agent.node_did,
-        None,
+        &owned.node_did,
+        Some(owned.user.did()),
         &seed_doc,
         &seed_commit.cid,
     )
@@ -1858,7 +1861,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     .unwrap();
     let request_local_checkpoint = vec![Message::user("REQUEST_LOCAL_ONLY_SENTINEL")];
     let reduction_key = gents::turn::provider_context_reduction::reduction_key(
-        &agent.node_did,
+        &owned.node_did,
         session_id,
         &seed_doc,
         0,
@@ -1878,7 +1881,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
         r#"mutation {{ create_ProviderContextReduction(input: {{
             reduction_key: "{reduction_key}"
             node_did: "{node_did}"
-            requester_did: null
+            requester_did: "{requester_did}"
             session_id: "{session_id}"
             request_id: "req-capture-seed"
             request_doc_id: "{request_doc_id}"
@@ -1901,7 +1904,8 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
             created_at: "2026-09-02T00:00:00Z"
         }}) {{ _docID }} }}"#,
         reduction_key = gents::store::graphql::escape_graphql_string(&reduction_key),
-        node_did = gents::store::graphql::escape_graphql_string(&agent.node_did),
+        node_did = gents::store::graphql::escape_graphql_string(&owned.node_did),
+        requester_did = escape_graphql_string(owned.user.did()),
         session_id = gents::store::graphql::escape_graphql_string(session_id),
         request_doc_id = gents::store::graphql::escape_graphql_string(&seed_doc),
         request_commit_cid = gents::store::graphql::escape_graphql_string(&seed_commit.cid),
@@ -1911,23 +1915,48 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
         replay_associations_json =
             gents::store::graphql::escape_graphql_string(&replay_associations_json),
     );
-    let response = db.node.execute(&fixture).await;
-    assert!(
-        !response.has_errors(),
-        "seed incident-shaped request-local reduction: {:?}",
-        response.errors
+    let session_query = format!(
+        r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+        escape_graphql_string(session_id)
     );
-
-    let follow_up_doc = create_runtime_request(
-        db.node.as_ref(),
-        &agent.node_did,
-        CAPTURE_AGENT_ID,
-        "req-capture-summarized",
-        session_id,
-        "and now a short follow-up",
-    )
-    .await;
-    wait_for_request_lifecycle_state(db.node.as_ref(), &follow_up_doc, "completed").await;
+    let session_doc = owned.access.execute(&session_query).await.unwrap()["data"]["AgentSession"]
+        [0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    owned
+        .agent_access
+        .transact_write("test.capture.seed_reduction", |txn| {
+            let fixture = &fixture;
+            let session_doc = &session_doc;
+            Box::pin(async move {
+                let result = txn.execute(fixture).await?;
+                let doc =
+                    gents::store::graphql::created_doc_id(&result, "ProviderContextReduction")?;
+                txn.add_resource_relationship(
+                    "ProviderContextReduction",
+                    &doc,
+                    "parent",
+                    "sessions",
+                    session_doc,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
+    owned
+        .assert_session_derived_isolation(session_id, "ProviderContextReduction")
+        .await;
+    owned
+        .submit(
+            "req-capture-summarized",
+            session_id,
+            "and now a short follow-up",
+        )
+        .await;
+    owned.wait_completed("req-capture-summarized").await;
 
     let follow_up_bodies = backend.observed_completion_bodies()[seed_bodies..].to_vec();
     assert!(
@@ -1937,12 +1966,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
         follow_up_bodies.len()
     );
 
-    let rows = wait_for_rendered_requests(
-        db.node.as_ref(),
-        "req-capture-summarized",
-        follow_up_bodies.len(),
-    )
-    .await;
+    let rows = owned.rendered_requests("req-capture-summarized").await;
 
     assert_eq!(
         rows.len(),
@@ -1990,13 +2014,58 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
         "the request's own completion loop must still be captured alongside it"
     );
 
-    let entries = compaction_entry_count(db.node.as_ref(), session_id).await;
+    let query = format!(
+        r#"{{ CompactionEntry(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+        escape_graphql_string(session_id)
+    );
+    let entries = owned.access.execute(&query).await.unwrap()["data"]["CompactionEntry"]
+        .as_array()
+        .unwrap()
+        .clone();
     assert_eq!(
-        entries, 1,
+        entries.len(),
+        1,
         "the pre-request summarizer must have written its compaction entry"
     );
+    owned
+        .assert_native_signer(entries[0]["_docID"].as_str().unwrap(), &owned.agent_did)
+        .await;
+    owned
+        .assert_session_derived_isolation(session_id, "CompactionEntry")
+        .await;
 
-    agent.shutdown().await;
+    let fork = gents::session::fork_on(
+        &owned.access,
+        gents::session::ForkParams {
+            source_session_id: session_id,
+            boundary: gents::session::ForkBoundary::UserTurn(2),
+            caller_node_did: &owned.node_did,
+            caller_requester_did: Some(owned.user.did()),
+            target_agent_did: None,
+        },
+    )
+    .await
+    .expect("held client can fork a compacted session");
+    assert_eq!(fork.copied_compaction_entries, 1);
+    let copied = owned.compaction_entries(&fork.session_id).await;
+    assert_eq!(copied.len(), 1);
+    owned
+        .assert_native_signer(copied[0]["_docID"].as_str().unwrap(), owned.user.did())
+        .await;
+    let query = format!(
+        r#"{{ CompactionEntry(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+        escape_graphql_string(&fork.session_id)
+    );
+    for access in [&owned.sibling_access, &owned.outsider_access] {
+        assert!(
+            access.execute(&query).await.unwrap()["data"]["CompactionEntry"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    owned.runtime.shutdown().await;
 }
 
 const THRESHOLD_SUMMARIZER_MARKER: &str =
@@ -2072,7 +2141,7 @@ async fn run_serialized_threshold_probe(name: &str, threshold: f64) -> Threshold
     let seed_doc = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         seed_request_id,
         session_id,
         SEED_MARKER,
@@ -2098,7 +2167,7 @@ async fn run_serialized_threshold_probe(name: &str, threshold: f64) -> Threshold
     let follow_up_doc = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         follow_up_request_id,
         session_id,
         FOLLOW_UP_MARKER,
@@ -2353,7 +2422,7 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
     let seed_doc = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         "req-rolling-seed",
         session_id,
         "ROLLING_SEED_REQUEST",
@@ -2396,7 +2465,7 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
     let failed_doc = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         "req-rolling-failure",
         session_id,
         FAILURE_MARKER,
@@ -2422,7 +2491,7 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
     let retry_doc = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         "req-rolling-retry",
         session_id,
         RETRY_MARKER,
@@ -2562,8 +2631,46 @@ fn parse_json(value: &Value) -> Value {
     canonical(&serde_json::from_str::<Value>(text).expect("stored column must be valid JSON"))
 }
 
-fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
-    let node_did = "did:key:z6MkCaptureIdempotency".to_string();
+async fn stored_capture_fixture(
+    name: &str,
+) -> (crate::support::TestDb, Arc<dyn NodeIdentity>, String) {
+    use gents::request::lifecycle::{
+        build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
+        RequestSigner, RequestSpec,
+    };
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    let db = test_db(name).await;
+    let agent = crate::support::managed_agent(&db).await;
+    let root = db.node_identity.as_ref();
+    let access = gents::ConfigAccess::local_as(db.node.clone(), root.did().parse().unwrap());
+    let spec = RequestSpec::new(
+        RequestPurpose::Normal,
+        RequestIdentity {
+            request_id: "capture-fixture-request".into(),
+            node_did: root.did().into(),
+            requester_did: Some(root.did().into()),
+            agent_did: agent.did().into(),
+            session_id: "session-idem".into(),
+            content: "capture fixture".into(),
+            execution_origin: ExecutionOrigin::Interactive,
+            created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        },
+        AgentRequestAdmissionRecord::client(root.did()),
+    );
+    let create = build_signed_client_request(&access, spec, RequestSigner::Identity(root))
+        .await
+        .unwrap();
+    submit_client_request(&access, &create).await.unwrap();
+    let session = create.session_doc_id.expect("published session identity");
+    (db, agent, session)
+}
+
+fn rendered_fixture(
+    db: &crate::support::TestDb,
+    agent: &dyn NodeIdentity,
+    request_json: Value,
+) -> RenderedCompletionRequest {
+    let node_did = db.node_identity.did().to_owned();
     let session_id = "session-idem".to_string();
     let request_doc_id = String::new();
     let request_id = "req-idem".to_string();
@@ -2590,8 +2697,8 @@ fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
         turn_index: 0,
         attempt: 0,
         node_did,
-        requester_did: String::new(),
-        agent_id: "behavior".to_string(),
+        requester_did: db.node_identity.did().to_owned(),
+        agent_did: agent.did().to_owned(),
         session_id,
         model_name: "m".to_string(),
         source: gents::inference::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
@@ -2653,7 +2760,7 @@ async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Value> 
                 session_id
                 node_did
                 requester_did
-                agent_id
+                agent_did
                 capture_scope
                 turn_index
                 attempt
@@ -2724,32 +2831,6 @@ async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Value> 
         )
     });
     rows
-}
-
-async fn inference_calls(node: &EmbeddedNode, request_id: &str) -> Vec<Value> {
-    let query = format!(
-        r#"query {{
-            InferenceCall(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{
-                call_id
-                call_seq
-                call_kind
-                attempt
-                context_accounting_json
-            }}
-        }}"#,
-        request_id = escape_graphql_string(request_id),
-    );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "InferenceCall query failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .and_then(|data| data.get("InferenceCall").cloned())
-        .and_then(|value| value.as_array().cloned())
-        .unwrap_or_default()
 }
 
 async fn commit_set(node: &EmbeddedNode, capture_key: &str) -> Vec<(String, String)> {
@@ -2833,18 +2914,6 @@ async fn wait_for_rendered_requests(
     }
 }
 
-async fn boot_capture_agent(
-    db: &crate::support::TestDb,
-    test_name: &str,
-    endpoint: &str,
-    capture_failure: Option<&str>,
-) -> BootedAgent {
-    boot_capture_agent_with(db, test_name, endpoint, capture_failure, |behavior| {
-        behavior
-    })
-    .await
-}
-
 async fn boot_capture_agent_with(
     db: &crate::support::TestDb,
     test_name: &str,
@@ -2857,13 +2926,13 @@ async fn boot_capture_agent_with(
     let mut builder = Gents::builder()
         .node(db.node.clone())
         .identity(identity)
-        .default_agent_id(CAPTURE_AGENT_ID)
+        .default_agent_did(CAPTURE_AGENT_DID)
         .tool_ceiling(ToolCeiling::meta_only());
     if let Some(message) = capture_failure {
         builder = builder.fail_rendered_request_capture_for_test(message);
     }
     let behavior = builder
-        .agent(CAPTURE_AGENT_ID)
+        .agent(CAPTURE_AGENT_DID)
         .backend_id(CAPTURE_BACKEND_ID)
         .model_name(CAPTURE_MODEL)
         .stream_batch_ms(0)
@@ -2886,9 +2955,9 @@ async fn upsert_capture_backend(node: &Arc<EmbeddedNode>, owner: &str, endpoint:
     };
     gents::ensure_node(node, owner).await.unwrap();
     let value = serde_json::json!({"node_did":owner,"backend_id":CAPTURE_BACKEND_ID,"name":CAPTURE_BACKEND_ID,"provider_kind":"OpenAiCompatible","openai_wire_api":"chat_completions","endpoint":endpoint,"auth":{"kind":"unauthenticated"},"max_concurrent":4,"max_queue_depth":100});
-    let profile_id = format!("{CAPTURE_AGENT_ID}:inference");
+    let profile_id = format!("{CAPTURE_AGENT_DID}:inference");
     let profile = serde_json::json!({"node_did":owner,"profile_id":profile_id,"backend_id":CAPTURE_BACKEND_ID,"model_name":CAPTURE_MODEL});
-    let behavior = serde_json::json!({"node_did":owner,"agent_id":CAPTURE_AGENT_ID,"inference_profile_id":profile_id});
+    let behavior = serde_json::json!({"node_did":owner,"agent_did":CAPTURE_AGENT_DID,"inference_profile_id":profile_id});
     let plan = DesiredStateApplyPlan::new(
         [
             (gents::Collection::InferenceBackend, value),
@@ -2920,4 +2989,718 @@ async fn upsert_capture_backend(node: &Arc<EmbeddedNode>, owner: &str, endpoint:
     )
     .await
     .unwrap();
+}
+
+struct OwnedCaptureFixture {
+    _directory: tempfile::TempDir,
+    node: Arc<EmbeddedNode>,
+    user: gents::KeyIdentity,
+    _selected_identity: Arc<dyn NodeIdentity>,
+    _sibling_identity: Arc<dyn NodeIdentity>,
+    _outsider: gents::KeyIdentity,
+    sibling_access: gents::store::config_client::ConfigAccess,
+    outsider_access: gents::store::config_client::ConfigAccess,
+    agent_access: gents::store::config_client::ConfigAccess,
+    access: gents::store::config_client::ConfigAccess,
+    node_did: String,
+    agent_did: String,
+    runtime: BootedAgent,
+}
+
+impl OwnedCaptureFixture {
+    async fn new(name: &str, endpoint: &str, compaction: bool, failure: Option<&str>) -> Self {
+        Self::new_inner(name, endpoint, compaction, failure, Vec::new(), false).await
+    }
+
+    async fn new_with_tool(name: &str, endpoint: &str, tool: FixedOutputTool) -> Self {
+        Self::new_inner(name, endpoint, false, None, vec![tool], false).await
+    }
+
+    async fn new_with_strip_tools(name: &str, endpoint: &str, tools: Vec<FixedOutputTool>) -> Self {
+        Self::new_inner(name, endpoint, false, None, tools, true).await
+    }
+
+    async fn new_inner(
+        name: &str,
+        endpoint: &str,
+        compaction: bool,
+        failure: Option<&str>,
+        tools: Vec<FixedOutputTool>,
+        strip: bool,
+    ) -> Self {
+        use gents::store::config_client::{
+            ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
+        };
+        let directory = tempfile::Builder::new().prefix(name).tempdir().unwrap();
+        let root: Arc<dyn NodeIdentity> = Arc::new(
+            gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap(),
+        );
+        let user =
+            gents::KeyIdentity::load_or_create(directory.path().join("user.key"), None).unwrap();
+        let outsider =
+            gents::KeyIdentity::load_or_create(directory.path().join("outsider.key"), None)
+                .unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let graphql = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(root.did())
+                .with_node_acp_enabled()
+                .with_http(gents::defra_node::HttpConfig::with_listener(listener).unwrap())
+                .build()
+                .await
+                .unwrap(),
+        );
+        let policy = node
+            .add_dac_policy_with_counter_as(
+                &defra_core::RequestContext::default().with_identity(Some(root.did().to_owned())),
+                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+                0,
+            )
+            .await
+            .unwrap();
+        for (name, schema) in [
+            ("RenderedRequest", gents_protocol::schemas::RENDERED_REQUEST),
+            (
+                "RenderedRequestBlock",
+                gents_protocol::schemas::RENDERED_REQUEST_BLOCK,
+            ),
+            (
+                "ProviderContextReduction",
+                gents_protocol::schemas::PROVIDER_CONTEXT_REDUCTION,
+            ),
+            ("CompactionEntry", gents_protocol::schemas::COMPACTION_ENTRY),
+            ("InferenceCall", gents_protocol::schemas::INFERENCE_CALL),
+            ("GoalObservation", gents_protocol::schemas::GOAL_OBSERVATION),
+        ] {
+            let bound = if schema.contains("@policy(") {
+                schema.to_owned()
+            } else {
+                schema.replacen(
+                    &format!("type {name}"),
+                    &format!("type {name} @policy(id: \"{policy}\", resource: \"children\")"),
+                    1,
+                )
+            };
+            node.add_collection(&bound).await.unwrap();
+        }
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let admin = ConfigAccess::local_as(node.clone(), root.did().parse().unwrap());
+        let access = ConfigAccess::Graphql(
+            gents::store::config_client::GraphqlEndpoint::as_principal(&graphql, user.did())
+                .with_client_signing_capability(user.client_signing_capability().unwrap())
+                .unwrap()
+                .with_client_signed_agent_creates(),
+        );
+        for permission in [
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::DacRelationAdd,
+            NodePermission::DacRelationDelete,
+        ] {
+            admin
+                .grant_node_permission(&user.did().parse().unwrap(), permission)
+                .await
+                .unwrap();
+        }
+        let value = serde_json::json!({"node_did":root.did(), "enabled":true});
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: gents::Collection::Node,
+            add: value.clone(),
+            update: value,
+        }])
+        .unwrap();
+        admin
+            .transact_write("test.capture.node", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    gents::store::config_client::apply_desired_state_plan(txn, plan).await
+                })
+            })
+            .await
+            .unwrap();
+        let query = format!(
+            r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(root.did())
+        );
+        let node_doc = admin.execute(&query).await.unwrap()["data"]["Node"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        admin
+            .add_actor_relationship(
+                "Node",
+                &node_doc,
+                "administrator",
+                &user.did().parse().unwrap(),
+            )
+            .await
+            .unwrap();
+        let binding = gents::store::identity::provision_agent_identity_authorized(
+            &node,
+            root.as_ref(),
+            &user.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
+        let agent_identity =
+            gents::store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
+        assert_eq!(agent_identity.did(), binding.agent_did);
+        let sibling = gents::store::identity::provision_agent_identity_authorized(
+            &node,
+            root.as_ref(),
+            &user.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
+        let sibling_identity =
+            gents::store::identity::resolve_agent_identity(root.as_ref(), &sibling).unwrap();
+        admin
+            .grant_node_permission(
+                &outsider.did().parse().unwrap(),
+                NodePermission::DocumentRead,
+            )
+            .await
+            .unwrap();
+        let mut docs = vec![
+            (
+                gents::Collection::Node,
+                serde_json::json!({"node_did":root.did(),"enabled":true,"default_agent_did":binding.agent_did}),
+            ),
+            (
+                gents::Collection::InferenceBackend,
+                serde_json::json!({"node_did":root.did(),"backend_id":CAPTURE_BACKEND_ID,"name":CAPTURE_BACKEND_ID,"provider_kind":"OpenAiCompatible","openai_wire_api":"chat_completions","endpoint":endpoint,"auth":{"kind":"unauthenticated"},"max_concurrent":4,"max_queue_depth":100,"enabled":true}),
+            ),
+            (
+                gents::Collection::InferenceProfile,
+                serde_json::json!({"node_did":root.did(),"profile_id":"capture-profile","backend_id":CAPTURE_BACKEND_ID,"model_name":CAPTURE_MODEL,"context_window":200000}),
+            ),
+            (
+                gents::Collection::Agent,
+                serde_json::json!({"node_did":root.did(),"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"inference_profile_id":"capture-profile","context_id":"capture-context","enabled":true}),
+            ),
+        ];
+        docs.push((gents::Collection::Agent, serde_json::json!({"node_did":root.did(),"agent_did":sibling.agent_did,"creation_nonce":sibling.creation_nonce,"inference_profile_id":"capture-profile","enabled":false})));
+        if compaction {
+            docs.push((gents::Collection::AgentContext, serde_json::json!({"node_did":root.did(),"context_id":"capture-context","compaction_id":"capture-compaction"})));
+            docs.push((gents::Collection::Compaction, serde_json::json!({"node_did":root.did(),"compaction_id":"capture-compaction","strategy":"StripThenSummarize","threshold":0.25})));
+        } else {
+            docs[3].1.as_object_mut().unwrap().remove("context_id");
+        }
+        let plan = DesiredStateApplyPlan::new(
+            docs.into_iter()
+                .map(|(collection, value)| DesiredStateApplyDocument {
+                    collection,
+                    add: value.clone(),
+                    update: value,
+                })
+                .collect(),
+        )
+        .unwrap();
+        admin
+            .transact_write("test.capture.configuration", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    gents::store::config_client::apply_desired_state_plan(txn, plan).await
+                })
+            })
+            .await
+            .unwrap();
+        gents::inference::backends::registry::set_backend_probe_status_as(
+            &admin,
+            root.did(),
+            CAPTURE_BACKEND_ID,
+            "healthy",
+        )
+        .await
+        .unwrap();
+        let agent = if failure.is_some() || !tools.is_empty() {
+            let mut builder = Gents::builder()
+                .node(node.clone())
+                .identity(root.clone())
+                .default_agent_did(&binding.agent_did)
+                .tool_ceiling(ToolCeiling::meta_only());
+            if let Some(failure) = failure {
+                builder = builder.fail_rendered_request_capture_for_test(failure);
+            }
+            let mut agent = builder
+                .agent(&binding.agent_did)
+                .identity_binding(binding.clone())
+                .backend_id(CAPTURE_BACKEND_ID)
+                .model_name(CAPTURE_MODEL);
+            if strip {
+                agent = agent
+                    .enable_meta_tools(false)
+                    .enable_context_budget(false)
+                    .context_window(40_000)
+                    .compaction_threshold(0.25)
+                    .compaction_strategy(CompactionStrategy::StripToolResults);
+            }
+            for tool in tools {
+                agent = agent.custom_tool(tool);
+            }
+            agent.done().build().await.expect("build capture runtime")
+        } else {
+            Gents::from_default_agent_documents(
+                node.clone(),
+                root.clone(),
+                gents::DocumentRuntimeOptions {
+                    tool_ceiling: ToolCeiling::meta_only(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("build real capture runtime")
+        };
+        let node_did = root.did().to_owned();
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let handle = tokio::spawn(agent.run(rx));
+        let runtime = BootedAgent::new(tx, handle, node_did.clone());
+        Self {
+            _directory: directory,
+            node: node.clone(),
+            user,
+            agent_access: ConfigAccess::local_managed_agent(
+                node.clone(),
+                binding.agent_did.parse().unwrap(),
+                agent_identity.as_ref(),
+            )
+            .unwrap(),
+            _selected_identity: agent_identity.clone(),
+            _sibling_identity: sibling_identity.clone(),
+            sibling_access: ConfigAccess::local_managed_agent(
+                node.clone(),
+                sibling.agent_did.parse().unwrap(),
+                sibling_identity.as_ref(),
+            )
+            .unwrap(),
+            outsider_access: ConfigAccess::Graphql(
+                gents::store::config_client::GraphqlEndpoint::as_principal(
+                    &graphql,
+                    outsider.did(),
+                )
+                .with_client_signing_capability(outsider.client_signing_capability().unwrap())
+                .unwrap(),
+            ),
+            _outsider: outsider,
+            access,
+            node_did,
+            agent_did: binding.agent_did,
+            runtime,
+        }
+    }
+
+    async fn submit(&self, request_id: &str, session_id: &str, content: &str) -> String {
+        self.submit_with_input(request_id, session_id, content, Default::default())
+            .await
+    }
+
+    async fn submit_with_input(
+        &self,
+        request_id: &str,
+        session_id: &str,
+        content: &str,
+        input: gents_protocol::request_input::RequestInput,
+    ) -> String {
+        use gents::request::lifecycle::{
+            build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
+            RequestSigner, RequestSpec,
+        };
+        use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+        let mut spec = RequestSpec::new(
+            RequestPurpose::Normal,
+            RequestIdentity {
+                request_id: request_id.into(),
+                node_did: self.node_did.clone(),
+                requester_did: Some(self.user.did().into()),
+                agent_did: self.agent_did.clone(),
+                session_id: session_id.into(),
+                content: content.into(),
+                execution_origin: ExecutionOrigin::Interactive,
+                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            },
+            AgentRequestAdmissionRecord::client(self.user.did()),
+        );
+        spec.input = input;
+        let create =
+            build_signed_client_request(&self.access, spec, RequestSigner::Identity(&self.user))
+                .await
+                .unwrap();
+        submit_client_request(&self.access, &create).await.unwrap();
+        self.assert_native_signer(create.session_doc_id.as_deref().unwrap(), self.user.did())
+            .await;
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(request_id)
+        );
+        let doc = self.access.execute(&query).await.unwrap()["data"]["AgentRequest"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        self.assert_native_signer(&doc, self.user.did()).await;
+        doc
+    }
+
+    async fn submit_retry(
+        &self,
+        request_id: &str,
+        session_id: &str,
+        content: &str,
+        parent_id: &str,
+        parent_doc: &str,
+    ) -> String {
+        use gents::request::lifecycle::{
+            build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
+            RequestSigner, RequestSpec, RetryLink,
+        };
+        use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+        let mut spec = RequestSpec::new(
+            RequestPurpose::Normal,
+            RequestIdentity {
+                request_id: request_id.into(),
+                node_did: self.node_did.clone(),
+                requester_did: Some(self.user.did().into()),
+                agent_did: self.agent_did.clone(),
+                session_id: session_id.into(),
+                content: content.into(),
+                execution_origin: ExecutionOrigin::Interactive,
+                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            },
+            AgentRequestAdmissionRecord::client(self.user.did()),
+        );
+        spec.retry = Some(RetryLink {
+            parent_request_id: Some(parent_id.into()),
+            parent_request_doc_id: Some(parent_doc.into()),
+            root_request_id: parent_id.into(),
+            retry_count: 1,
+            max_retries: 3,
+        });
+        let create =
+            build_signed_client_request(&self.access, spec, RequestSigner::Identity(&self.user))
+                .await
+                .unwrap();
+        submit_client_request(&self.access, &create).await.unwrap();
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(request_id)
+        );
+        self.access.execute(&query).await.unwrap()["data"]["AgentRequest"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    async fn wait_completed(&self, request_id: &str) {
+        let state = self
+            .wait_terminal(request_id, Duration::from_secs(15))
+            .await;
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason }} }}"#,
+            escape_graphql_string(request_id)
+        );
+        let details = self.access.execute(&query).await.unwrap();
+        assert_eq!(
+            state,
+            RequestLifecycleState::Completed,
+            "request {request_id}: {details}"
+        );
+    }
+
+    async fn wait_terminal(&self, request_id: &str, timeout: Duration) -> RequestLifecycleState {
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason }} }}"#,
+            escape_graphql_string(request_id)
+        );
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let result = self.access.execute(&query).await.unwrap();
+            let rows = result["data"]["AgentRequest"].as_array().unwrap();
+            if let Some(row) = rows.first() {
+                if let Some(state) = row["lifecycle_state"]
+                    .as_str()
+                    .and_then(|state| RequestLifecycleState::parse(state).ok())
+                {
+                    if state.is_terminal() {
+                        return state;
+                    }
+                }
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "request did not complete: {result}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    async fn wait_for_goal_observation(&self, session_id: &str) {
+        let mut changes = gents::subscribe_collections(&self.node, ["GoalObservation"]).unwrap();
+        let query = format!(
+            r#"{{ GoalObservation(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(session_id)
+        );
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                let response = self.access.execute(&query).await.unwrap();
+                if !response["data"]["GoalObservation"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+                {
+                    break;
+                }
+                changes
+                    .recv()
+                    .await
+                    .expect("goal observation subscription closed");
+            }
+        })
+        .await
+        .expect("runtime must publish the session goal observation");
+    }
+
+    async fn rendered_requests(&self, request_id: &str) -> Vec<Value> {
+        let query = format!(
+            r#"{{ RenderedRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ capture_key request_doc_id request_commit_cid request_id session_id node_did requester_did agent_did capture_scope turn_index attempt capture_version model_name source request_json provenance_json }} }}"#,
+            escape_graphql_string(request_id)
+        );
+        let result = self.access.execute(&query).await.unwrap();
+        let mut rows = result["data"]["RenderedRequest"]
+            .as_array()
+            .unwrap()
+            .clone();
+        for row in &mut rows {
+            let version = row["capture_version"].as_u64().unwrap() as u32;
+            let stored = row["request_json"].as_str().unwrap().to_owned();
+            for (field, kind) in [
+                (
+                    "request_json",
+                    gents::inference::rendered_request::CapturePayloadKind::RequestBody,
+                ),
+                (
+                    "provenance_payload_json",
+                    gents::inference::rendered_request::CapturePayloadKind::ProvenancePayload,
+                ),
+            ] {
+                let decoded = if version == 1
+                    && kind
+                        == gents::inference::rendered_request::CapturePayloadKind::ProvenancePayload
+                {
+                    parse_json(&row["provenance_json"])["assembly_trace"].clone()
+                } else {
+                    gents::inference::rendered_request::decode_capture_json(
+                        &self.access,
+                        version,
+                        &stored,
+                        kind,
+                    )
+                    .await
+                    .unwrap()
+                };
+                row[field] = Value::String(
+                    gents::inference::rendered_request::canonical_json_string(&decoded).unwrap(),
+                );
+            }
+        }
+        rows.sort_by_key(|row| {
+            (
+                row["capture_scope"].as_str().unwrap_or_default().to_owned(),
+                row["turn_index"].as_i64().unwrap_or_default(),
+                row["attempt"].as_i64().unwrap_or_default(),
+            )
+        });
+        rows
+    }
+
+    async fn assert_native_signer(&self, doc: &str, signer: &str) {
+        let query = format!(
+            r#"{{ _commits(docID: "{}", filter: {{ fieldName: {{ _eq: "_C" }} }}, order: {{ height: ASC }}, limit: 1) {{ cid }} }}"#,
+            escape_graphql_string(doc)
+        );
+        let response = self.access.execute(&query).await.unwrap();
+        let cid = response["data"]["_commits"][0]["cid"]
+            .as_str()
+            .expect("genesis composite CID");
+        let (block, signature) = self
+            .node
+            .authorized_signed_block_bytes(cid, Some(self.user.did()))
+            .await
+            .unwrap();
+        let block = defra_core::block::Block::from_dag_cbor(&block).unwrap();
+        let signature = defra_core::block::Signature::from_dag_cbor(&signature).unwrap();
+        assert_eq!(
+            db::block::verify::verified_signature_signer_did(&block, &signature).unwrap(),
+            signer
+        );
+    }
+
+    async fn assert_capture_isolation(&self, request_id: &str, session_id: &str) {
+        let query = format!(
+            r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(session_id)
+        );
+        let session = self.access.execute(&query).await.unwrap()["data"]["AgentSession"][0]
+            ["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let query = format!(
+            r#"{{ RenderedRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} RenderedRequestBlock(filter: {{ session_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} InferenceCall(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} GoalObservation(filter: {{ session_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(request_id),
+            escape_graphql_string(&session),
+            escape_graphql_string(request_id),
+            escape_graphql_string(&session)
+        );
+        let owned = self.access.execute(&query).await.unwrap();
+        for collection in [
+            "RenderedRequest",
+            "RenderedRequestBlock",
+            "InferenceCall",
+            "GoalObservation",
+        ] {
+            for row in owned["data"][collection].as_array().unwrap() {
+                self.assert_native_signer(row["_docID"].as_str().unwrap(), &self.agent_did)
+                    .await;
+            }
+        }
+        for access in [&self.access, &self.agent_access] {
+            let response = access.execute(&query).await.unwrap();
+            for collection in [
+                "RenderedRequest",
+                "RenderedRequestBlock",
+                "InferenceCall",
+                "GoalObservation",
+            ] {
+                assert!(
+                    !response["data"][collection].as_array().unwrap().is_empty(),
+                    "authorized actor must see {collection}"
+                );
+            }
+        }
+        for access in [&self.sibling_access, &self.outsider_access] {
+            let response = access.execute(&query).await.unwrap();
+            for collection in [
+                "RenderedRequest",
+                "RenderedRequestBlock",
+                "InferenceCall",
+                "GoalObservation",
+            ] {
+                assert!(
+                    response["data"][collection].as_array().unwrap().is_empty(),
+                    "unrelated actor must not see {collection}"
+                );
+            }
+        }
+        let outsider = self._outsider.did().parse().unwrap();
+        self.access
+            .add_actor_relationship("AgentSession", &session, "reader", &outsider)
+            .await
+            .unwrap();
+        let granted = self.outsider_access.execute(&query).await.unwrap();
+        for collection in [
+            "RenderedRequest",
+            "RenderedRequestBlock",
+            "InferenceCall",
+            "GoalObservation",
+        ] {
+            assert!(
+                !granted["data"][collection].as_array().unwrap().is_empty(),
+                "granted reader must see {collection}"
+            );
+        }
+        self.access
+            .delete_actor_relationship("AgentSession", &session, "reader", &outsider)
+            .await
+            .unwrap();
+        let revoked = self.outsider_access.execute(&query).await.unwrap();
+        for collection in [
+            "RenderedRequest",
+            "RenderedRequestBlock",
+            "InferenceCall",
+            "GoalObservation",
+        ] {
+            assert!(
+                revoked["data"][collection].as_array().unwrap().is_empty(),
+                "revoked reader must not see {collection}"
+            );
+        }
+    }
+
+    async fn compaction_entries(&self, session_id: &str) -> Vec<Value> {
+        let query = format!(
+            r#"{{ CompactionEntry(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(session_id)
+        );
+        self.access.execute(&query).await.unwrap()["data"]["CompactionEntry"]
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    async fn assert_session_derived_isolation(&self, session_id: &str, collection: &str) {
+        assert!(matches!(
+            collection,
+            "CompactionEntry" | "ProviderContextReduction"
+        ));
+        let session_query = format!(
+            r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(session_id)
+        );
+        let session = self.access.execute(&session_query).await.unwrap()["data"]["AgentSession"][0]
+            ["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let query = format!(
+            r#"{{ {collection}(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(session_id)
+        );
+        for access in [&self.access, &self.agent_access] {
+            let response = access.execute(&query).await.unwrap();
+            let rows = response["data"][collection].as_array().unwrap();
+            assert!(!rows.is_empty(), "authorized actor must see {collection}");
+            for row in rows {
+                self.assert_native_signer(row["_docID"].as_str().unwrap(), &self.agent_did)
+                    .await;
+            }
+        }
+        for access in [&self.sibling_access, &self.outsider_access] {
+            assert!(access.execute(&query).await.unwrap()["data"][collection]
+                .as_array()
+                .unwrap()
+                .is_empty());
+        }
+        let outsider = self._outsider.did().parse().unwrap();
+        self.access
+            .add_actor_relationship("AgentSession", &session, "reader", &outsider)
+            .await
+            .unwrap();
+        assert!(
+            !self.outsider_access.execute(&query).await.unwrap()["data"][collection]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        self.access
+            .delete_actor_relationship("AgentSession", &session, "reader", &outsider)
+            .await
+            .unwrap();
+        assert!(
+            self.outsider_access.execute(&query).await.unwrap()["data"][collection]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    async fn inference_calls(&self, request_id: &str) -> Vec<Value> {
+        let query = format!(
+            r#"{{ InferenceCall(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ call_id call_seq call_kind attempt context_accounting_json }} }}"#,
+            escape_graphql_string(request_id)
+        );
+        self.access.execute(&query).await.unwrap()["data"]["InferenceCall"]
+            .as_array()
+            .unwrap()
+            .clone()
+    }
 }

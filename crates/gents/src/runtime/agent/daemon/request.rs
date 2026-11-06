@@ -152,21 +152,25 @@ where
         let admitted = async {
             if let Some(guard) = &self.root_execution_guard {
                 guard
-                    .validate(&self.node)
+                    .validate(&self.node, self.agent_config.agent_identity.as_ref())
                     .await
                     .context("validating current WorkspaceRoot policy for fresh request")?;
             }
             let resume_from_history =
                 session::retry_has_published_input(&self.node, &request).await?;
+            let access = crate::store::config_client::ConfigAccess::local_managed_agent(
+                self.node.clone(),
+                identity::Did::new(request.agent_did.clone())?,
+                self.agent_config.agent_identity.as_ref(),
+            )?;
             let aggregate_token_budget =
                 crate::turn::completion_factory::aggregate_token_budget_for_request(
-                    self.node.as_ref(),
-                    &request,
+                    &access, &request,
                 )
                 .await?;
             let context_calibration =
                 crate::turn::completion_factory::context_calibration_for_session(
-                    self.node.as_ref(),
+                    &access,
                     &self.agent_config,
                     &request.node_did,
                     &request.session_id,
@@ -185,10 +189,10 @@ where
         };
         let (resume_from_history, aggregate_token_budget, context_calibration) = admitted?;
         let trace_attrs = RequestTraceAttrs::from_request(&request);
-        let agent_name = self.agent_config.agent_id.clone();
+        let agent_name = self.agent_config.agent_did.clone();
         let admission_context = AdmissionCallContext::for_request(
             &request,
-            lifecycle.agent_id(),
+            lifecycle.agent_did(),
             lifecycle.backend_id(),
         );
         // One capture scope for the whole request: the pre-request compaction
@@ -233,7 +237,7 @@ where
             ));
         }
         let handled = admission::scope_request(admission_context, async {
-            let response_agent_id = lifecycle.agent_id().to_string();
+            let response_agent_did = lifecycle.agent_did().to_string();
             lifecycle
                 .begin_owned_execution(stream_writer)
                 .instrument(tracing::info_span!(
@@ -241,7 +245,7 @@ where
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     node_did = %request.node_did,
-                    agent_id = %response_agent_id,
+                    agent_did = %response_agent_did,
                     request_hop = trace_attrs.request_hop,
                 ))
                 .await?;
@@ -251,15 +255,17 @@ where
                 let skill_reminders = self
                     .prompt_builder
                     .selected_skill_reminders(selected_skill_ids);
-                let overlay = crate::tools::workspace::resolve_request_workspace_overlay(
-                    &self.node,
-                    &request,
-                    lifecycle.execution_generation()?,
-                    self.agent_config.tools.static_policy().bash.execution_mode
-                        == crate::tools::native::CommandExecutionMode::ArtifactWrite,
-                    self.operator_tool_root.as_deref(),
-                )
-                .await?;
+                let overlay =
+                    crate::tools::workspace::resolve_request_workspace_overlay_with_identity(
+                        &self.node,
+                        self.agent_config.agent_identity.as_ref(),
+                        &request,
+                        lifecycle.execution_generation()?,
+                        self.agent_config.tools.static_policy().bash.execution_mode
+                            == crate::tools::native::CommandExecutionMode::ArtifactWrite,
+                        self.operator_tool_root.as_deref(),
+                    )
+                    .await?;
                 let frozen_instruction_manifest =
                     crate::tools::workspace::frozen_instruction_manifest_from_overlay(
                         overlay.as_ref(),
@@ -313,8 +319,13 @@ where
                 let wake_notifications = if resume_from_history {
                     Vec::new()
                 } else {
+                    let access = crate::ConfigAccess::local_managed_agent(
+                        self.node.clone(),
+                        identity::Did::new(&request.agent_did)?,
+                        self.agent_config.agent_identity.as_ref(),
+                    )?;
                     super::wake_input::load(
-                        &self.node,
+                        &access,
                         &request,
                         lifecycle.background_completion_input_through_sequence(),
                     )
@@ -324,9 +335,13 @@ where
                 for assembly_attempt in 0..=1 {
                     let background_cutoff =
                         lifecycle.background_completion_input_through_sequence();
+                    let compaction_access = crate::ConfigAccess::local_managed_agent(
+                        self.node.clone(), identity::Did::new(&request.agent_did)?,
+                        self.agent_config.agent_identity.as_ref(),
+                    )?;
                     let compaction_state =
-                        session::load_prompt_compaction_state(
-                            &self.node,
+                        session::load_prompt_compaction_state_with_access(
+                            &compaction_access,
                             &request.session_id,
                             &request.node_did,
                             request.requester_did.as_deref(),
@@ -336,7 +351,7 @@ where
                                 "request.load_prompt_compaction_state",
                                 request_id = %request.request_id,
                                 session_id = %request.session_id,
-                                agent_id = %agent_name,
+                                agent_did = %agent_name,
                                 compaction_entry_count = tracing::field::Empty,
                                 compacted_message_count = tracing::field::Empty,
                                 summary_count = tracing::field::Empty,
@@ -361,7 +376,7 @@ where
                         "request.load_active_history",
                         request_id = %request.request_id,
                         session_id = %request.session_id,
-                        agent_id = %agent_name,
+                        agent_did = %agent_name,
                         compacted_through_sequence = prior_cursor.map(i64::from),
                         compacted_provider_messages_skipped = total_compacted_messages as i64,
                         cursor_hit = prior_cursor.is_some(),
@@ -377,7 +392,7 @@ where
                     let file_activity = compaction::history::extract_file_activity(&durable_history);
                     if !file_activity.is_empty() {
                         tracing::debug!(
-                            agent_id = %self.agent_config.agent_id,
+                            agent_did = %self.agent_config.agent_did,
                             session_id = %request.session_id,
                             files_read = ?file_activity.files_read,
                             files_modified = ?file_activity.files_modified,
@@ -409,7 +424,7 @@ where
                             "request.build_prompt",
                             request_id = %request.request_id,
                             session_id = %request.session_id,
-                            agent_id = %agent_name,
+                            agent_did = %agent_name,
                             history_messages = history.len(),
                             summary_count = summaries.len(),
                         ))
@@ -448,7 +463,7 @@ where
                             tracing::info!(
                                 request_id = %request.request_id,
                                 session_id = %request.session_id,
-                                agent_id = %agent_name,
+                                agent_did = %agent_name,
                                 "compaction skipped: canonical provider prefix is not a stable turn boundary"
                             );
                         }
@@ -529,8 +544,9 @@ where
                                 (compaction_generation_is_latest, compacted_through_sequence)
                             {
                                 match session::save_exact_compaction_entry(
-                                    &self.node,
+                                    &compaction_access,
                                     session::NewExactSessionCompaction {
+                                        agent_did: &request.agent_did,
                                         session_id: &request.session_id,
                                         node_did: &request.node_did,
                                         requester_did: request.requester_did.as_deref(),
@@ -597,7 +613,7 @@ where
                                 "request.build_prompt",
                                 request_id = %request.request_id,
                                 session_id = %request.session_id,
-                                agent_id = %agent_name,
+                                agent_did = %agent_name,
                                 history_messages = history.len(),
                                 summary_count = summaries.len(),
                                 compacted = true,
@@ -614,7 +630,7 @@ where
                 request_id = %request.request_id,
                 session_id = %request.session_id,
                 node_did = %request.node_did,
-                agent_id = %agent_name,
+                agent_did = %agent_name,
                 deadline_at = %trace_attrs.deadline_at,
                 has_deadline = trace_attrs.has_deadline,
                 request_hop = trace_attrs.request_hop,
@@ -661,7 +677,7 @@ where
 
             let doc_id = lifecycle.request().doc_id.clone();
 
-            let inference_agent_id = lifecycle.agent_id().to_string();
+            let inference_agent_did = lifecycle.agent_did().to_string();
             let inference_backend_id = lifecycle.backend_id().to_string();
             let result = self
                 .run_inference(
@@ -689,7 +705,7 @@ where
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     node_did = %request.node_did,
-                    agent_id = %inference_agent_id,
+                    agent_did = %inference_agent_did,
                     backend_id = %inference_backend_id,
                     deadline_at = %trace_attrs.deadline_at,
                     has_deadline = trace_attrs.has_deadline,
@@ -709,14 +725,15 @@ where
                 return result;
             }
 
+            let interrupt_access = lifecycle.access()?;
             let token_was_cancelled = request_token.is_cancelled();
             let watched_interrupt = { interrupt_rx.borrow().clone() };
             let interrupt_at = if token_was_cancelled {
                 if let Some(intent) = watched_interrupt {
                     Some(intent.at.to_rfc3339())
                 } else {
-                    crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id(
-                        &self.node,
+                    crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+                        &interrupt_access,
                         &request.doc_id,
                     )
                     .await?
@@ -725,11 +742,12 @@ where
                 request_token.cancel();
                 Some(intent.at.to_rfc3339())
             } else {
-                let persisted = crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id(
-                    &self.node,
-                    &request.doc_id,
-                )
-                .await?;
+                let persisted =
+                    crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+                        &interrupt_access,
+                        &request.doc_id,
+                    )
+                    .await?;
                 if persisted.is_some() {
                     request_token.cancel();
                 }

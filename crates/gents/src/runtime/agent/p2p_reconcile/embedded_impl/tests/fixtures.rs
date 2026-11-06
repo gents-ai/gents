@@ -8,22 +8,23 @@ const TEST_SCHEMA: &str = r#"
 
 pub(in crate::runtime::agent::p2p_reconcile) struct TestNode {
     pub(in crate::runtime::agent::p2p_reconcile) node: Arc<EmbeddedNode>,
-    _tempdir: tempfile::TempDir,
+    pub(super) _tempdir: tempfile::TempDir,
 }
 
 async fn p2p_node_with_identity(node_identity_did: Option<&str>) -> TestNode {
-    p2p_node_with_options(node_identity_did, None).await
+    p2p_node_with_options(node_identity_did, None, None).await
 }
 
 async fn p2p_node_with_options(
     node_identity_did: Option<&str>,
     http_address: Option<std::net::SocketAddr>,
+    signing_key: Option<defra_node::SigningKey>,
 ) -> TestNode {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let mut builder = EmbeddedNode::builder()
         .data_path(tempdir.path())
         .with_p2p(P2PConfig {
-            port: 0,
+            port: Some(0),
             bind_addr: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
             relay_mode: IrohRelayModeConfig::Disabled,
             discovery: IrohDiscoveryConfig::Disabled,
@@ -31,16 +32,15 @@ async fn p2p_node_with_options(
             max_concurrent_multipath_paths: None,
             secret_key_path: None,
             load_persisted_collections: false,
-            max_concurrent_dag_fetches: p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES,
-            max_concurrent_push_tasks: p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS,
-            rate_limit_burst: p2p::sync::DEFAULT_RATE_LIMIT_BURST,
-            rate_limit_rate: p2p::sync::DEFAULT_RATE_LIMIT_RATE,
-            max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-            max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
+            sync: Default::default(),
+            peer_key: Default::default(),
             rebroadcast_on_merge: false,
         });
     if let Some(did) = node_identity_did {
         builder = builder.with_node_identity_did(did);
+    }
+    if let Some(key) = signing_key {
+        builder = builder.with_signing_key(key).with_node_acp_enabled();
     }
     if let Some(address) = http_address {
         builder = builder.with_http(defra_node::HttpConfig::with_addr(address));
@@ -94,6 +94,35 @@ pub(super) async fn runtime_test_node_with_identity(identity: &dyn NodeIdentity)
     test
 }
 
+pub(super) async fn runtime_test_node_with_signing_key(
+    identity: &dyn NodeIdentity,
+    key: Vec<u8>,
+) -> TestNode {
+    let test = p2p_node_with_options(
+        Some(identity.did()),
+        None,
+        Some(defra_node::SigningKey::Ed25519(key)),
+    )
+    .await;
+    ensure_runtime_schemas(&test.node)
+        .await
+        .expect("runtime schemas");
+    test
+}
+
+pub(super) async fn signed_p2p_node_without_schemas(
+    identity: &dyn NodeIdentity,
+    key: Vec<u8>,
+    address: std::net::SocketAddr,
+) -> TestNode {
+    p2p_node_with_options(
+        Some(identity.did()),
+        Some(address),
+        Some(defra_node::SigningKey::Ed25519(key)),
+    )
+    .await
+}
+
 pub(in crate::runtime::agent::p2p_reconcile) async fn runtime_http_test_node(
     identity: &dyn NodeIdentity,
 ) -> (TestNode, String) {
@@ -108,7 +137,7 @@ pub(in crate::runtime::agent::p2p_reconcile) async fn runtime_http_test_node_wit
         .unwrap()
         .local_addr()
         .unwrap();
-    let test = p2p_node_with_options(Some(identity.did()), Some(address)).await;
+    let test = p2p_node_with_options(Some(identity.did()), Some(address), None).await;
     if let Some(schema) = initial_schema {
         test.node.add_collection(schema).await.unwrap();
     }
@@ -214,7 +243,7 @@ pub(in crate::runtime::agent::p2p_reconcile) async fn authorize_enrollment_peer(
         admin_did: admin_identity.did().to_string(),
         server_peer,
         server_ticket,
-        owner_agent: admin_identity.did().to_string(),
+        owner_node_did: admin_identity.did().to_string(),
         profile: "client".to_string(),
         schema_fingerprint: enrollment_schema_fingerprint(),
         issued_at: issued_at.clone(),
@@ -252,7 +281,7 @@ pub(in crate::runtime::agent::p2p_reconcile) async fn authorize_enrollment_peer(
         candidate_did: member_identity.did().to_string(),
         candidate_peer: member_peer.to_string(),
         candidate_ticket: member_ticket.to_string(),
-        owner_agent: offer.owner_agent.clone(),
+        owner_node_did: offer.owner_node_did.clone(),
         profile: offer.profile.clone(),
         client_nonce,
         issued_at,
@@ -275,7 +304,7 @@ pub(in crate::runtime::agent::p2p_reconcile) async fn authorize_enrollment_peer(
                 offer_id: "{}", offer_token: "{}", challenge: "{}",
                 network_id: "{}", admin_did: "{}", server_peer: "{}",
                 candidate_did: "{}", candidate_peer: "{}", candidate_ticket: "{}",
-                owner_agent: "{}", profile: "{}", client_nonce: "{}",
+                owner_node_did: "{}", profile: "{}", client_nonce: "{}",
                 issued_at: "{}", expires_at: "{}", candidate_sig: "{}"
             }}) {{ _docID }} }}"#,
             request.protocol_version,
@@ -290,7 +319,7 @@ pub(in crate::runtime::agent::p2p_reconcile) async fn authorize_enrollment_peer(
             escape_graphql_string(&request.candidate_did),
             escape_graphql_string(&request.candidate_peer),
             escape_graphql_string(&request.candidate_ticket),
-            escape_graphql_string(&request.owner_agent),
+            escape_graphql_string(&request.owner_node_did),
             escape_graphql_string(&request.profile),
             escape_graphql_string(&request.client_nonce),
             escape_graphql_string(&request.issued_at),

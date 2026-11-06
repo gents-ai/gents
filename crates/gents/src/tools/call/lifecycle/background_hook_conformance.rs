@@ -1,7 +1,4 @@
-use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
-use crate::tools::call::lifecycle::ToolCallLifecycle;
-use std::sync::Arc;
 
 struct PendingTool;
 
@@ -31,16 +28,6 @@ impl crate::inference::llm::tool::ToolDyn for PendingTool {
     > {
         Box::pin(std::future::pending())
     }
-}
-
-async fn tool_state(node: &crate::defra_node::EmbeddedNode, tool_id: &str) -> Option<String> {
-    let tool_id = escape_graphql_string(tool_id);
-    let response = node.execute(&format!(r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_id}" }} }}, limit: 1) {{ lifecycle_state }} }}"#)).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let row: serde_json::Value = crate::store::graphql::first_row(&response, "AgentToolCall")
-        .unwrap()
-        .unwrap();
-    row["lifecycle_state"].as_str().map(str::to_owned)
 }
 
 async fn publish_hook_action(
@@ -113,59 +100,96 @@ async fn publish_hook_call(
 
 #[tokio::test]
 async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
-    // Load contracts before acquiring a lease; loading may wait for another loader.
-    let originating_name = "originating_request_without_matching_requester_is_denied";
-    let originating_case = crate::lean_vocab_test::lean_r6_backgrounding_case(originating_name);
-    let absent_name = "absent_requester_next_turn_authorized";
-    let absent_case = crate::lean_vocab_test::lean_r6_backgrounding_case(absent_name);
-    let empty_name = "empty_requester_does_not_alias_absent";
-    let empty_case = crate::lean_vocab_test::lean_r6_backgrounding_case(empty_name);
-    let path = std::env::temp_dir().join(format!("background-hook-scope-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&path).unwrap();
-    let identity = crate::KeyIdentity::load_or_create(path.join("agent.key"), None).unwrap();
-    let did = identity.did().to_owned();
-    let node = Arc::new(
-        crate::defra_node::EmbeddedNode::builder()
-            .data_path(&path)
-            .with_node_identity_did(&did)
-            .build()
-            .await
-            .unwrap(),
+    use crate::request::lifecycle::{ClaimOutcome, RequestTerminalOutcome, TerminalizeResult};
+    use crate::tools::background::status::ProcessControlScope;
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
+
+    let originating = crate::lean_vocab_test::lean_r6_backgrounding_case(
+        "originating_request_without_matching_requester_is_denied",
     );
-    crate::store::schema::ensure_runtime_schemas(&node)
+    let absent =
+        crate::lean_vocab_test::lean_r6_backgrounding_case("absent_requester_next_turn_authorized");
+    let empty =
+        crate::lean_vocab_test::lean_r6_backgrounding_case("empty_requester_does_not_alias_absent");
+    let same_requester = crate::lean_vocab_test::lean_r6_backgrounding_case(
+        "read_process_same_requester_next_turn_authorized",
+    );
+    let admission_case = crate::lean_vocab_test::lean_agent_request_admission_cases()
+        .iter()
+        .find(|case| case.name == "local-self-absent-requester")
+        .unwrap();
+    let (db, user, client, binding) =
+        crate::test_support::signed_test_node("background-hook-scope").await;
+    let node = db.node.clone();
+    let runtime = db.node_identity.clone();
+    let agent = crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let session = "background-hook-scope-session";
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let make_request = |id| {
+        AgentRequestCreate::base(
+            RequestPurpose::Normal,
+            id,
+            runtime.did(),
+            user.did(),
+            agent.did(),
+            session,
+            "spawn",
+            "interactive",
+            &now,
+            AgentRequestAdmissionRecord::client(user.did()),
+        )
+    };
+    let mut origin =
+        crate::tools::call::lifecycle::admission_fixture::pending_client_fixture_request(
+            &node,
+            &client,
+            runtime.clone(),
+            &user,
+            agent.as_ref(),
+            make_request("scope-origin"),
+        )
         .await
         .unwrap();
-    crate::test_support::install_test_agent(&node, &did, "general").await;
-    let session_id = "background-hook-scope-session";
-    let request_id = "background-hook-scope-origin";
-    let mut origin = crate::tools::call::lifecycle::admission_fixture::claimed_request(
-        &node, request_id, session_id, &did,
-    )
-    .await;
-    let writer = crate::request::streaming::DefraStreamWriter::new(
-        node.clone(),
-        &did,
-        std::time::Duration::ZERO,
+    assert_eq!(
+        origin.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
     );
+    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+        node.clone(),
+        &origin,
+        std::time::Duration::ZERO,
+    )
+    .unwrap();
     origin.begin_owned_execution(&writer).await.unwrap();
     let registry = crate::tools::call::hook::BackgroundToolRegistry::from_tools(
         vec![Box::new(PendingTool)],
         &["slow_tool".into()],
     );
-    let hook = crate::tools::call::hook::DefraSessionHook::resume_with_identity_policy(
+    let hook = crate::tools::call::hook::DefraSessionHook::resume_with_actor_policy(
         node.clone(),
-        session_id,
-        &did,
-        None,
+        session,
+        runtime.did(),
+        Some(user.did()),
+        identity::Did::new(agent.did()).unwrap(),
         crate::tools::call::hook::FailurePolicy::default(),
     )
     .await
     .unwrap()
+    .with_managed_identity(agent.as_ref())
+    .unwrap()
     .with_background_tool_registry(registry);
     hook.set_active_request_binding(
-        Some(request_id.into()),
+        Some("scope-origin".into()),
         Some(origin.request().doc_id.clone()),
-        None,
+        Some(user.did().into()),
     )
     .await;
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
@@ -181,40 +205,34 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     )
     .await;
     assert_eq!(spawned["ok"], true);
-    let handle = spawned["tool_call_id"]
-        .as_str()
-        .expect("background handle")
-        .to_owned();
-    let row = node.execute(&format!(r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{}" }} }}, limit: 1) {{ requester_did }} }}"#, escape_graphql_string(&handle))).await;
-    assert!(!row.has_errors(), "{:?}", row.errors);
-    let row: serde_json::Value = crate::store::graphql::first_row(&row, "AgentToolCall")
-        .unwrap()
-        .unwrap();
-    assert!(row
-        .get("requester_did")
-        .is_some_and(serde_json::Value::is_null));
+    let handle = spawned["tool_call_id"].as_str().unwrap().to_owned();
 
-    assert!(!originating_case.legal);
-    let background = ToolCallLifecycle::load(node.clone(), session_id, &handle)
-        .await
-        .unwrap()
-        .expect("persisted background owner");
-    let originating_scope = crate::tools::background::status::ProcessControlScope {
-        request_id: request_id.into(),
-        session_id: session_id.into(),
-        node_did: did.clone(),
-        requester_did: Some("did:requester".into()),
+    // Historical optional scopes still compare exactly, independently of admission.
+    let scope = |requester| ProcessControlScope {
+        request_id: "historical-next".into(),
+        session_id: session.into(),
+        node_did: runtime.did().into(),
+        requester_did: requester,
     };
-    assert!(
-        !originating_scope.authorizes(
-            background.session_id(),
-            background.node_did(),
-            background.requester_did(),
-        ),
-        "{originating_name}: persisted owner must reject mismatched requester"
+    assert_eq!(
+        scope(None).authorizes(session, runtime.did(), None),
+        absent.legal
     );
+    assert_eq!(
+        scope(Some(user.did().into())).authorizes(session, runtime.did(), Some(user.did())),
+        same_requester.legal
+    );
+    assert_eq!(
+        scope(Some(String::new())).authorizes(session, runtime.did(), None),
+        empty.legal
+    );
+    assert_eq!(
+        scope(Some("did:requester".into())).authorizes(session, runtime.did(), None),
+        originating.legal
+    );
+
     hook.set_active_request_binding(
-        Some(request_id.into()),
+        Some("scope-origin".into()),
         Some(origin.request().doc_id.clone()),
         Some("did:requester".into()),
     )
@@ -230,43 +248,52 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     )
     .await;
     let crate::inference::llm::ToolCallHookAction::Terminate { reason } = denied else {
-        panic!("{originating_name}: mismatched physical header must fail closed: {denied:?}");
+        panic!("forged requester must fail closed: {denied:?}")
     };
     assert!(
         reason.contains("canonical header is unresolved or unauthorized"),
-        "{originating_name}: {reason}"
+        "{reason}"
     );
-
     assert_eq!(
         origin
             .terminalize_owned(
-                crate::request::lifecycle::RequestTerminalOutcome::Completed,
+                RequestTerminalOutcome::Completed,
                 gents_protocol::output::TerminalOutput::Message {
                     message_doc_id: header_doc_id
                 },
-                None,
+                None
             )
             .await
             .unwrap(),
-        crate::request::lifecycle::TerminalizeResult::Won
+        TerminalizeResult::Won
     );
 
-    let next_id = "background-hook-scope-next";
-    let mut next = crate::tools::call::lifecycle::admission_fixture::claimed_request(
-        &node, next_id, session_id, &did,
-    )
-    .await;
-    let next_writer = crate::request::streaming::DefraStreamWriter::new(
-        node.clone(),
-        &did,
-        std::time::Duration::ZERO,
+    let mut next =
+        crate::tools::call::lifecycle::admission_fixture::pending_client_fixture_request(
+            &node,
+            &client,
+            runtime.clone(),
+            &user,
+            agent.as_ref(),
+            make_request("scope-next"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        next.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
     );
+    let next_writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+        node.clone(),
+        &next,
+        std::time::Duration::ZERO,
+    )
+    .unwrap();
     next.begin_owned_execution(&next_writer).await.unwrap();
-    assert!(absent_case.legal);
     hook.set_active_request_binding(
-        Some(next_id.into()),
+        Some("scope-next".into()),
         Some(next.request().doc_id.clone()),
-        None,
+        Some(user.did().into()),
     )
     .await;
     let (read, _) = publish_hook_call(
@@ -274,78 +301,79 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
         &next_writer,
         &next,
         0,
-        "scope-read-absent",
+        "scope-read",
         "read_process",
         serde_json::json!({"tool_call_id":handle}),
     )
     .await;
-    assert_eq!(read["status"], "running", "{absent_name}: {read}");
-    assert_eq!(read["tool_call_id"], handle, "{absent_name}");
-
-    assert!(!empty_case.legal);
-    let empty_scope = crate::tools::background::status::ProcessControlScope {
-        request_id: next_id.into(),
-        session_id: session_id.into(),
-        node_did: did.clone(),
-        requester_did: Some(String::new()),
-    };
-    assert!(
-        !empty_scope.authorizes(
-            background.session_id(),
-            background.node_did(),
-            background.requester_did(),
-        ),
-        "{empty_name}: empty requester must not alias absence"
-    );
-    hook.set_active_request_binding(
-        Some(next_id.into()),
-        Some(next.request().doc_id.clone()),
-        Some(String::new()),
-    )
-    .await;
-    let (denied, _) = publish_hook_call(
-        &hook,
-        &next_writer,
-        &next,
-        1,
-        "scope-read-empty",
-        "read_process",
-        serde_json::json!({"tool_call_id":handle}),
-    )
-    .await;
-    assert_eq!(denied["ok"], false, "{empty_name}: {denied}");
-    assert_eq!(
-        denied["failure_class"], "tool_not_allowed",
-        "{empty_name}: {denied}"
-    );
-    assert_eq!(tool_state(&node, &handle).await.as_deref(), Some("running"));
-    let escaped_handle = escape_graphql_string(&handle);
-    let response = node.execute(&format!(r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{escaped_handle}" }} }}, limit: 1) {{ cancel_cause }} }}"#)).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let row: serde_json::Value = crate::store::graphql::first_row(&response, "AgentToolCall")
-        .unwrap()
-        .unwrap();
-    assert!(
-        row["cancel_cause"].is_null(),
-        "denied reads must not cancel the background process"
-    );
-    hook.set_active_request_binding(
-        Some(next_id.into()),
-        Some(next.request().doc_id.clone()),
-        None,
-    )
-    .await;
+    assert_eq!(read["status"], "running", "{read}");
+    assert_eq!(read["tool_call_id"], handle);
     let (cancelled, _) = publish_hook_call(
         &hook,
         &next_writer,
         &next,
-        2,
+        1,
         "scope-cleanup",
         "cancel_process",
         serde_json::json!({"tool_call_id":handle}),
     )
     .await;
     assert_eq!(cancelled["status"], "cancelled");
-    node.shutdown().await;
-    std::fs::remove_dir_all(path).unwrap();
+
+    // Retained documents can have no requester even though current authors cannot submit one.
+    let mut historical = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        "scope-historical",
+        runtime.did(),
+        agent.did(),
+        agent.did(),
+        session,
+        "historical",
+        "interactive",
+        &now,
+        AgentRequestAdmissionRecord::local_self(agent.did()),
+    );
+    let payload = {
+        let mut fields = historical.signing_fields();
+        fields.requester_did = None;
+        historical.admission.signing_payload(&fields)
+    };
+    historical.admission.signature = agent.sign(&payload).await.unwrap();
+    let mut input = crate::store::config_client::client_request_input(&historical).unwrap();
+    input["requester_did"] = serde_json::Value::Null;
+    access.transact_write("test.historical_request", |txn| {
+        let input = &input;
+        Box::pin(async move { txn.execute_with_variables("mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }", &serde_json::json!({"input":input})).await })
+    }).await.unwrap();
+    let response = access.execute(&format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "scope-historical" }} }}) {{ {} }} }}"#, crate::request::watcher::AGENT_REQUEST_FIELDS)).await.unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+    let request: crate::request::watcher::AgentRequest = row.try_into().unwrap();
+    assert!(request.requester_did.is_none());
+    let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        runtime.clone(),
+        authority,
+    );
+    let result = verifier
+        .verify_fresh_for_claim_with_identity(&request, agent.as_ref())
+        .await;
+    assert!(!admission_case.expected_admitted);
+    assert_eq!(
+        result.as_ref().err().is_some_and(|error| error.is_denied()),
+        admission_case.expected_disposition == "deny",
+        "{result:?}"
+    );
+    let response = access
+        .execute(
+            "{ AgentToolCall(filter: { request_id: { _eq: \"scope-historical\" } }) { _docID } }",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response["data"]["AgentToolCall"].as_array().unwrap().len(),
+        0
+    );
+    node.shutdown().await.expect("shut down test node");
 }

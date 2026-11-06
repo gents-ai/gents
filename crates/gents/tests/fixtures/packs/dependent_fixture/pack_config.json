@@ -2,11 +2,11 @@
   "node": {},
   "agents": [
     {
-      "agent_id": "fixture-dependent",
       "display_name": "Fixture dependent",
       "description": "A tool-less agent bound to the worker slot.",
       "context_id": "fixture-dependent-context",
-      "inference_profile_id": "gents:inference-slot:worker"
+      "inference_profile_id": "gents:inference-slot:worker",
+      "agent_slot": "fixture-dependent"
     }
   ],
   "contexts": [

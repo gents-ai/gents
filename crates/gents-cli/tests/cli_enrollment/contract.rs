@@ -143,7 +143,7 @@ async fn run_contract_with_streaming_cadence(
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let agent = default_agent_id_for_node(&node_did);
+    let agent = agent_did_from_init(&init)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let debug_filter = std::env::var("RUST_LOG").ok();
@@ -224,7 +224,7 @@ async fn run_contract_with_streaming_cadence(
                 reached("client_readiness_revision");
             }
             let nodes = query_collection_dids(core.node(), "Node").await?;
-            anyhow::ensure!(nodes.iter().all(|did| did == &node_did), "app holds a Node other than the runtime's replica: {nodes:?}");
+            anyhow::ensure!(nodes.is_empty(), "client unexpectedly replicated runtime Node documents: {nodes:?}");
             Ok::<_, anyhow::Error>(())
         }).await;
         sampler.abort();
@@ -282,7 +282,7 @@ async fn run_contract_with_streaming_cadence(
             let route_ready = reconnect_started.elapsed();
             wait_for_client_node_readiness(&core, &node_did).await?;
             let agent_ready = reconnect_started.elapsed();
-            wait_for_replicated_reply(&core, &session, &node_did, &request, OFFLINE_REPLY).await?;
+            wait_for_runtime_reply(&core, &session, &node_did, &request, OFFLINE_REPLY).await?;
             Ok::<_, anyhow::Error>((route_ready, agent_ready, reconnect_started.elapsed()))
         }).await;
         let (route_ready, agent_ready, reply_ready) = match recovered {
@@ -318,7 +318,7 @@ async fn run_contract_with_streaming_cadence(
         assert_local_pagination(&core, &graphql, &session, &node_did).await?;
         assert_observer_did_not_overflow(&core).await?;
         let nodes = query_collection_dids(core.node(), "Node").await?;
-        anyhow::ensure!(nodes.iter().all(|did| did == &node_did), "reopened app holds a Node other than the runtime's replica: {nodes:?}");
+        anyhow::ensure!(nodes.is_empty(), "reopened client unexpectedly replicated runtime Node documents: {nodes:?}");
         core.shutdown().await?;
         anyhow::ensure!(model.captured_chat_requests().iter().any(|request| {
             request_contains_role_text(request, "user", FOLLOWUP_PROMPT)
@@ -346,7 +346,7 @@ async fn visible_turn(
     core: &Arc<ClientCore>,
     graphql: &str,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     session: &str,
     prompt: &str,
     stream_gate: Option<&tokio::sync::Semaphore>,
@@ -355,7 +355,7 @@ async fn visible_turn(
 ) -> Result<()> {
     let started = Instant::now();
     let result = timeout(TURN_BUDGET, async {
-        core.submit_request(session, node_did, prompt, Some(agent_id))
+        core.submit_request(session, node_did, prompt, Some(agent_did))
             .await?;
         let local_submit_completed = started.elapsed();
         let (request, _, _) =
@@ -401,7 +401,7 @@ async fn visible_turn(
                     gate.add_permits(1);
                     visibility?;
                 }
-                wait_for_replicated_reply(core, session, node_did, &request, expected).await?;
+                wait_for_runtime_reply(core, session, node_did, &request, expected).await?;
                 Ok::<_, anyhow::Error>(started.elapsed())
             },
         )?;
@@ -462,20 +462,20 @@ async fn assert_observer_did_not_overflow(core: &ClientCore) -> Result<()> {
     Ok(())
 }
 
-async fn select_session(core: &ClientCore, session: &str, agent: &str) -> Result<()> {
-    use gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
-    loop {
-        core.ensure_session_hydration_started(session, agent)
-            .await?;
-        match core.session_hydration_progress(session, agent).await?.phase {
-            ClientHydrationPhase::Idle => sleep(Duration::from_millis(100)).await,
-            ClientHydrationPhase::Failed => bail!("session selection was rejected"),
-            _ => return Ok(()),
-        }
-    }
+async fn select_session(core: &ClientCore, session: &str, node_did: &str) -> Result<()> {
+    let access = core.operator_access(node_did)?;
+    let query = format!("{{ AgentSession(filter: {{ session_id: {{ _eq: \"{}\" }}, node_did: {{ _eq: \"{}\" }} }}) {{ _docID }} }}", escape_graphql_string(session), escape_graphql_string(node_did));
+    let response = access.execute(&query).await?;
+    anyhow::ensure!(
+        response["data"]["AgentSession"]
+            .as_array()
+            .is_some_and(|rows| rows.len() == 1),
+        "selected runtime session unavailable"
+    );
+    Ok(())
 }
 
-async fn wait_for_replicated_reply(
+async fn wait_for_runtime_reply(
     core: &ClientCore,
     session: &str,
     agent: &str,
@@ -504,13 +504,9 @@ async fn wait_for_replicated_reply(
         let mut stages_seen = [false; 3];
         let mut terminal_ready_at = None;
         loop {
-            let result = core.node().execute(&query).await;
-            anyhow::ensure!(
-                !result.has_errors(),
-                "replica query failed: {:?}",
-                result.errors
-            );
-            let data = result.data.context("replica query missing data")?;
+            let access = core.operator_access(agent)?;
+            let result = access.execute(&query).await?;
+            let data = result.get("data").context("runtime query missing data")?;
             let rows = |collection: &str| {
                 data.get(collection)
                     .and_then(Value::as_array)
@@ -534,7 +530,7 @@ async fn wait_for_replicated_reply(
                     typed.session_id.as_deref() == Some(session)
                         && typed.node_did.as_deref() == Some(agent)
                         && typed.requester_did.as_deref() == Some(core.node_identity().did()),
-                    "replica AgentRequest row lost tenancy lineage for {request}: {row}"
+                    "runtime AgentRequest row lost tenancy lineage for {request}: {row}"
                 );
                 if typed.is_terminal()
                     && typed.terminal_output.is_some()
@@ -546,7 +542,7 @@ async fn wait_for_replicated_reply(
             let mut body = String::new();
             if let Some(row) = terminal_request_row {
                 match gents::session::observe_request_output(
-                    &gents::ConfigAccess::local(core.node_arc()),
+                    &access,
                     &row,
                 )
                 .await
@@ -568,7 +564,7 @@ async fn wait_for_replicated_reply(
                     }
                     Ok(_) => {}
                     Err(error) => bail!(
-                        "canonical terminal reconstruction failed on the replica for {request}: {error:#}"
+                        "canonical terminal reconstruction failed on the runtime for {request}: {error:#}"
                     ),
                 }
             }
@@ -582,12 +578,12 @@ async fn wait_for_replicated_reply(
             {
                 if ready && !stages_seen[index] {
                     stages_seen[index] = true;
-                    tracing::debug!(request, stage, documents = ?requests.iter().filter_map(|row| row["_docID"].as_str()).collect::<Vec<_>>(), "replica stage document identities");
+                    tracing::debug!(request, stage, documents = ?requests.iter().filter_map(|row| row["_docID"].as_str()).collect::<Vec<_>>(), "runtime stage document identities");
                     tracing::info!(
                         request,
                         stage,
                         elapsed_ms = visibility_started.elapsed().as_millis(),
-                        "client replica delivery stage"
+                        "runtime observation stage"
                     );
                 }
             }
@@ -595,7 +591,7 @@ async fn wait_for_replicated_reply(
                 !requests
                     .iter()
                     .any(|row| row["lifecycle_state"] == "failed"),
-                "replicated failed request: {requests:?}"
+                "runtime request failed: {requests:?}"
             );
             if request_completed && terminal_selection && body.contains(expected_reply) {
                 return Ok::<_, anyhow::Error>((
@@ -659,7 +655,7 @@ async fn wait_for_replicated_reply(
 
 #[derive(Clone)]
 struct ReadinessProbe {
-    node: Arc<gents::defra_node::EmbeddedNode>,
+    node: Arc<gents::defra_node::Node>,
     p2p: Arc<dyn defra_p2p_adapter::P2POperations>,
     store: Arc<gents_desktop_core::client::ObservedStore>,
     graphql: String,
@@ -832,8 +828,8 @@ async fn local_transcript_keys(
     let mut keys = std::collections::BTreeSet::new();
     let mut cursor = None;
     loop {
-        let page = gents_desktop_core::client::load_session_transcript_page(
-            core.node(),
+        let page = gents_desktop_core::client::load_session_transcript_page_on(
+            &core.operator_access(agent)?,
             session,
             Some(agent),
             Some(core.node_identity().did()),
@@ -861,33 +857,13 @@ async fn assert_local_pagination(
     session: &str,
     agent: &str,
 ) -> Result<()> {
-    timeout(TURN_BUDGET, async {
-        use gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
-        loop {
-            match core.session_hydration_progress(session, agent).await?.phase {
-                ClientHydrationPhase::Complete => return Ok::<_, anyhow::Error>(()),
-                ClientHydrationPhase::Failed => bail!("session hydration failed before pagination"),
-                _ => sleep(Duration::from_millis(100)).await,
-            }
-        }
-    })
-    .await
-    .context("session hydration did not settle before pagination")??;
     let expected =
         runtime_transcript_keys(graphql, session, agent, core.node_identity().did()).await?;
-    timeout(TURN_BUDGET, async {
-        loop {
-            let local = local_transcript_keys(core, session, agent).await?;
-            if local == expected {
-                return Ok::<_, anyhow::Error>(());
-            }
-            sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await
-    .with_context(|| {
-        format!("client transcript did not replicate the runtime transcript before pagination: expected={expected:?}")
-    })??;
+    let actual = local_transcript_keys(core, session, agent).await?;
+    anyhow::ensure!(
+        actual == expected,
+        "runtime transcript page differs from canonical rows"
+    );
     let intent_query = "{ SessionHydrationRequest { _docID request_key status status_detail served_doc_count served_manifest_json processed_at outcome_signer_did outcome_signature } PeerPairingDesired { _docID peer_id collections profiles template source enrollment_request_digest enrollment_authorization_sequence enrollment_authorization_expires_at updated_at } }";
     let before = core.node().execute(intent_query).await;
     anyhow::ensure!(!before.has_errors(), "local intent query failed");
@@ -895,8 +871,8 @@ async fn assert_local_pagination(
     let mut seen = std::collections::BTreeSet::new();
     let mut last_sequence = i64::MAX;
     loop {
-        let page = gents_desktop_core::client::load_session_transcript_page(
-            core.node(),
+        let page = gents_desktop_core::client::load_session_transcript_page_on(
+            &core.operator_access(agent)?,
             session,
             Some(agent),
             Some(core.node_identity().did()),
@@ -928,7 +904,7 @@ async fn assert_local_pagination(
     }
     anyhow::ensure!(
         seen == expected,
-        "local paging must cover the replicated transcript exactly: seen={seen:?}, expected={expected:?}"
+        "runtime paging must cover the transcript exactly: seen={seen:?}, expected={expected:?}"
     );
     anyhow::ensure!(
         seen.len() >= 6,
@@ -1068,7 +1044,7 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let agent = default_agent_id_for_node(&node_did);
+    let agent = agent_did_from_init(&init)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let (mut server, _) =

@@ -1,5 +1,5 @@
 use super::*;
-use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::config_client::ConfigApplyTxn;
 use crate::tools::call::lifecycle::ToolCallLifecycle;
 use std::time::Duration;
 
@@ -10,29 +10,34 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
     );
     assert!(expected.legal);
     for during_completion in [false, true] {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        ensure_runtime_schemas(&node).await.unwrap();
-        let agent = "did:test:wait-settlement";
-        let hook = DefraSessionHook::with_identity(node.clone(), agent, FailurePolicy::FailClosed);
+        let fixture = super::background_budget::budget_hook_fixture(
+            "dropped-wait",
+            BackgroundToolRegistry::default(),
+            BackgroundExecutionRegistry::default(),
+        )
+        .await;
+        let super::background_budget::BudgetHookFixture {
+            db,
+            user,
+            access,
+            hook,
+            request_id,
+            session_id: session,
+            ..
+        } = fixture;
+        let node = db.node.clone();
+        let agent = db.node_identity.did();
         assert!(matches!(
             hook.on_completion_call(&user_text_message("Observe a process"), &[])
                 .await,
             HookAction::Continue
         ));
-        let session = hook.session_id().await.unwrap();
-        let request = "dropped-wait-request";
+        let request = request_id.as_str();
         let call = "dropped-wait-call";
         let args = r#"{"tool_call_id":"missing-process"}"#;
-        bind_interruptible_request(
-            &node,
-            &hook,
-            request,
-            &session,
-            chrono::Utc::now() + chrono::Duration::minutes(5),
-        )
-        .await;
+        let signer = hook_managed_identity(&hook, request).await;
         accept_hook_tool_call(&hook, call, "wait_process", args, None).await;
-        let admitted = fetch_tool_call_row(&node, &session, call).await;
+        let admitted = super::background_budget::tool_row(&access, &session, call).await;
         let document = admitted["_docID"].as_str().unwrap();
         if during_completion {
             let reached = Arc::new(tokio::sync::Notify::new());
@@ -58,7 +63,7 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
             let mut pending = Box::pin(hook.on_tool_call("wait_process", None, call, args));
             let committed = async {
                 loop {
-                    let row = fetch_tool_call_row(&node, &session, call).await;
+                    let row = super::background_budget::tool_row(&access, &session, call).await;
                     if row["lifecycle_state"] == "running" {
                         break;
                     }
@@ -77,14 +82,18 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
             drop(pending);
             drop(handles);
         }
-        let row = fetch_tool_call_row(&node, &session, call).await;
+        let row = super::background_budget::tool_row(&access, &session, call).await;
         assert_eq!(row["lifecycle_state"], "running");
         assert!(hook.in_flight_lifecycles.lock().await.is_empty());
         assert_eq!(
-            ToolCallLifecycle::reconcile_terminal_parent_owned_tools(&node, agent)
-                .await
-                .unwrap()
-                .tool_calls_terminalized,
+            ToolCallLifecycle::reconcile_terminal_parent_owned_tools(
+                &node,
+                agent,
+                std::slice::from_ref(&signer)
+            )
+            .await
+            .unwrap()
+            .tool_calls_terminalized,
             0,
             "a missing volatile handle is not authority to cancel a live parent's call"
         );
@@ -109,22 +118,26 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
                 .unwrap(),
             crate::request::lifecycle::TerminalizeResult::Won,
         );
-        let report = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(&node, agent)
-            .await
-            .unwrap();
+        let report = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(
+            &node,
+            agent,
+            std::slice::from_ref(&signer),
+        )
+        .await
+        .unwrap();
         assert_eq!(report.tool_calls_terminalized, 1);
-        let settled = fetch_tool_call_row(&node, &session, call).await;
+        let settled = super::background_budget::tool_row(&access, &session, call).await;
         assert_eq!(settled["_docID"], admitted["_docID"]);
         assert_eq!(
             settled["lifecycle_state"].as_str(),
             Some(expected.terminal_state.as_str())
         );
         let result = crate::tools::call::lifecycle::query::load_tool_call_result(
-            &ConfigAccess::local(node.clone()),
+            &access,
             document,
             agent,
             &session,
-            None,
+            Some(user.did()),
         )
         .await
         .unwrap();
@@ -133,13 +146,17 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
             ToolCallLifecycle::CANCEL_DURING_RUN_OUTPUT,
         );
         assert_eq!(
-            ToolCallLifecycle::reconcile_terminal_parent_owned_tools(&node, agent)
-                .await
-                .unwrap()
-                .tool_calls_terminalized,
+            ToolCallLifecycle::reconcile_terminal_parent_owned_tools(
+                &node,
+                agent,
+                std::slice::from_ref(&signer)
+            )
+            .await
+            .unwrap()
+            .tool_calls_terminalized,
             0
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 }
 
@@ -185,5 +202,5 @@ async fn wait_process_refuses_a_job_row_with_the_completion_message_text() {
         reason.contains("its result arrives only as a completion message"),
         "{reason}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

@@ -744,14 +744,17 @@ mod tests {
 
     #[tokio::test]
     async fn disallowed_service_returns_before_registry_lookup() {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let (node, _runtime) = super::super::tests::test_node().await;
+        let node_did = node.node_identity_did().unwrap().to_owned();
         let tool = DescribeToolTool::new(MetaToolContext {
+            configuration: crate::inference::resolved::ResolvedConfiguration::Static,
+            actor: identity::Did::new(&node_did).unwrap(),
             node,
             mcp_pool: McpPool::new(),
             health: ServiceHealthMap::new(),
             local_hostname: "studio-1".to_string(),
             local_subnet: None,
-            node_did: "did:key:z-test-agent".to_string(),
+            node_did,
             allowed_mcp_service_ids: vec!["x-data".to_string()],
             remote_tools: super::super::tests::remote_selection(&["x-data"], &["search_posts"]),
         });
@@ -777,15 +780,17 @@ mod tests {
 
     #[tokio::test]
     async fn missing_service_returns_structured_envelope() {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let (node, _runtime) = super::super::tests::test_node().await;
+        let node_did = node.node_identity_did().unwrap().to_owned();
         let tool = DescribeToolTool::new(MetaToolContext {
+            configuration: crate::inference::resolved::ResolvedConfiguration::Static,
+            actor: identity::Did::new(&node_did).unwrap(),
             node,
             mcp_pool: McpPool::new(),
             health: ServiceHealthMap::new(),
             local_hostname: "studio-1".to_string(),
             local_subnet: None,
-            node_did: "did:key:z-test-agent".to_string(),
+            node_did,
             allowed_mcp_service_ids: vec!["missing-service".to_string()],
             remote_tools: super::super::tests::remote_selection(
                 &["missing-service"],

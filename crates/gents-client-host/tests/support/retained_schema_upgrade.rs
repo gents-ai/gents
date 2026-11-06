@@ -221,7 +221,7 @@ async fn schema(paths: &DesktopPaths, did: &str) -> Result<defra_node::Collectio
     let identity = PrincipalIdentity::load_or_create(paths).await?;
     ensure!(identity.did() == did, "the retained identity changed");
     let node = key
-        .encrypt(defra_node::EmbeddedNode::builder().data_path(paths.node_data_dir()))
+        .encrypt(defra_node::Node::builder().data_path(paths.node_data_dir()))
         .with_node_identity_did(did.to_owned())
         .build()
         .await?;

@@ -177,7 +177,7 @@ fn task_document_round_trips_omitted_budget_as_none() {
     let task: Task = serde_json::from_value(serde_json::json!({
         "node_did": "did:key:zNODE",
         "task_id": "contract-task",
-        "agent_id": "contract",
+        "agent_did": "contract",
         "prompt_template": "do the thing",
         "goal_objective_template": "ship the capability contract",
         "goal_token_budget": null
@@ -192,7 +192,7 @@ fn task_document_round_trips_omitted_budget_as_none() {
     let omitted: Task = serde_json::from_value(serde_json::json!({
         "node_did": "did:key:zNODE",
         "task_id": "contract-task",
-        "agent_id": "contract",
+        "agent_did": "contract",
         "prompt_template": "do the thing"
     }))
     .expect("task document without any goal fields");

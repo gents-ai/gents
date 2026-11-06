@@ -11,6 +11,22 @@ pub(crate) fn installed_echo() -> (tempfile::TempDir, InstalledPlugin) {
     installed_plugin(ECHO_WAT, None)
 }
 
+#[test]
+fn staged_plugin_resolution_conforms_to_lean() {
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().pack_wire_lock_cases;
+    let (home, _) = installed_echo();
+    let executor = PluginExecutor::new(Some(home.path().to_owned()));
+    for case in cases {
+        let held = case["held"].as_bool().unwrap();
+        let _stage = held.then(|| store::try_lock_store(home.path()).unwrap());
+        assert_eq!(
+            executor.resolve("team/plugin", None).is_ok(),
+            case["resolve_allowed"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
+}
+
 pub(crate) fn installed_plugin(
     wat: &str,
     access: Option<crate::pack::BindAccess>,
@@ -1401,13 +1417,8 @@ mod data_calls {
 
     const NODE: &str = "did:key:z6Mknode";
 
-    async fn node_with(rows: &[(&str, &str)]) -> Arc<crate::defra_node::EmbeddedNode> {
-        let node = Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
-                .build()
-                .await
-                .unwrap(),
-        );
+    async fn node_with(rows: &[(&str, &str)]) -> Arc<crate::defra_node::Node> {
+        let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
         node.add_collection("type Note { owner: String body: String }")
             .await
             .unwrap();
@@ -1444,7 +1455,7 @@ mod data_calls {
     /// Runs a plugin that asks for `requests` once and echoes the answers.
     async fn ask(
         data: Option<PluginDataDeclaration>,
-        node: &Arc<crate::defra_node::EmbeddedNode>,
+        node: &Arc<crate::defra_node::Node>,
         requests: Value,
     ) -> crate::plugin::executor::PluginCall {
         let canned = json!({"data_calls": {"requests": requests, "state": {"page": 1}}});
@@ -1502,7 +1513,7 @@ mod data_calls {
             &node,
             json!([query(
                 "q",
-                json!({"filter": {"owner": {"_eq": "$caller.node_did"}}, "limit": 10})
+                json!({"filter": {"owner": {"_eq": "$caller.did"}}, "limit": 10})
             )]),
         )
         .await;
@@ -1515,7 +1526,7 @@ mod data_calls {
         let node = node_with(&[(NODE, "mine"), ("did:key:z6Mkother", "theirs")]).await;
         let requests = json!([query(
             "q",
-            json!({"filter": {"owner": {"_eq": "$caller.node_did"}}, "limit": 10})
+            json!({"filter": {"owner": {"_eq": "$caller.did"}}, "limit": 10})
         )]);
         let canned = json!({"data_calls": {"requests": requests, "state": {}}});
         let (home, mut record) = installed_plugin(
@@ -1524,7 +1535,11 @@ mod data_calls {
         );
         record.declaration.data = Some(declaration(&["query"]));
         store::write_record(home.path(), &record).unwrap();
-        let caller = DataCaller::operator(ConfigAccess::local(node), NODE).unwrap();
+        let caller = DataCaller::operator(
+            ConfigAccess::local_as(node, identity::Did::new(NODE.to_owned()).unwrap()),
+            "did:key:z6Mkruntime",
+        )
+        .unwrap();
         let call = PluginExecutor::new(Some(home.path().to_owned()))
             .call_with_data(&record, json!({}), caller)
             .await
@@ -1684,7 +1699,9 @@ mod tool_writes {
 
     use super::*;
     use crate::store::config_client::ConfigAccess;
-    use crate::tools::call::lifecycle::admission_fixture::published_spawn_parent;
+    use crate::tools::call::lifecycle::admission_fixture::{
+        published_admission, PublishedAdmissionOptions,
+    };
 
     const NODE: &str = "did:key:z6Mknode";
 
@@ -1719,7 +1736,7 @@ mod tool_writes {
     }
 
     struct Finished {
-        node: Arc<crate::defra_node::EmbeddedNode>,
+        node: Arc<crate::defra_node::Node>,
         path: std::path::PathBuf,
         tool_row: Value,
         result: Result<String, String>,
@@ -1740,7 +1757,7 @@ mod tool_writes {
         }
 
         async fn finish(self) {
-            self.node.shutdown().await;
+            self.node.shutdown().await.expect("node shutdown");
             std::fs::remove_dir_all(self.path).unwrap();
         }
     }
@@ -1764,7 +1781,18 @@ mod tool_writes {
         output: Value,
         transient_terminal: bool,
     ) -> Finished {
-        let (node, path, mut call) = published_spawn_parent(name).await;
+        let admission = published_admission(PublishedAdmissionOptions {
+            name: name.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .expect("publish canonical native tool admission");
+        let (node, path, mut call, runtime) = (
+            admission.node,
+            admission.path,
+            admission.tool,
+            admission.runtime,
+        );
         node.add_collection(
             "type Stamped { body: String job_row_doc_id: String } type Plain { body: String }",
         )
@@ -1777,9 +1805,14 @@ mod tool_writes {
         }
         store::write_record(home.path(), &record).unwrap();
         let executor = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
+        let node_did = node.node_identity_did().unwrap();
+        let binding = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
+        let agent_identity =
+            crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
         let tool = PluginTool::resolve(executor, &tool_ref(Some(&record.digest)), None)
             .unwrap()
-            .with_data_node(node.clone());
+            .with_agent_data(node.clone(), node_did, Some(agent_identity.did()))
+            .unwrap();
         let doc_id = call.doc_id().unwrap().to_owned();
         let registry = gents_loop::live_output::LiveToolOutputRegistry::default();
         let writer = registry.writer_for(doc_id.clone()).await;
@@ -1981,9 +2014,8 @@ mod job_calls {
     use crate::plugin::executor::PluginCall;
     use crate::plugin::job_calls::JobCaller;
     use crate::plugin::PluginVerdict;
-    use crate::store::config_client::ConfigAccess;
     use crate::tools::background::job::driver::{settle_plugin_job, Settlement};
-    use crate::tools::background::job::input::tests::{completed_request, open};
+    use crate::tools::background::job::input::tests::open;
     use crate::tools::background::job::keys::{job_session_id, job_spawn_key};
     use crate::tools::background::status::ProcessControlScope;
     use crate::tools::call::lifecycle::admission_fixture::{
@@ -1991,11 +2023,9 @@ mod job_calls {
     };
     use crate::tools::call::lifecycle::AwaitMode;
 
-    const CHAIN: &str = "chain-row";
-
     fn tool_output() -> StampContext {
         StampContext::ToolOutput {
-            node_did: "did:test:test".into(),
+            caller_did: "did:test:test".into(),
             session_id: "session".into(),
             request_doc_id: "request".into(),
             tool_call_doc_id: "tool".into(),
@@ -2048,18 +2078,168 @@ mod job_calls {
         json!({"id": id, "result": {"row_doc_id": row_doc_id, "offset": offset, "limit": limit}})
     }
 
-    async fn child_node(text: &str) -> Arc<crate::defra_node::EmbeddedNode> {
-        let node = open().await;
-        completed_request(
-            &node,
-            CHAIN,
-            "done",
-            &job_session_id("root", "slot-a", 0),
-            &job_spawn_key("root", "slot-a", 0),
+    async fn completed_child(admission: &PublishedAdmission, text: &str) -> String {
+        use crate::request::lifecycle::{SessionMessageCause, SessionMessageTarget};
+        use crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified;
+
+        let tool = &admission.tool;
+        let access = tool.access().unwrap();
+        let agent_did = tool.actor().as_str();
+        let chain = tool.doc_id().unwrap().to_owned();
+        let cause = SessionMessageCause {
+            caller_node_did: admission.node_did.clone(),
+            caller_agent_did: agent_did.to_owned(),
+            caller_session_id: tool.session_id().to_owned(),
+            caller_requester_did: tool.requester_did().map(str::to_owned),
+            caller_request_id: tool.request_id().to_owned(),
+            caller_request_doc_id: tool.request_doc_id().unwrap().to_owned(),
+            caller_hop: 0,
+            tool_call_id: tool.tool_call_id().to_owned(),
+            tool_call_doc_id: chain.clone(),
+            correlation: None,
+        };
+        let session = job_session_id(&chain, "slot-a", 0);
+        let target = SessionMessageTarget {
+            node_did: admission.node_did.clone(),
+            agent_did: agent_did.to_owned(),
+            session_id: session.clone(),
+        };
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let create =
+            crate::request::lifecycle::materialize::build_session_message_request_with_input(
+                &cause,
+                &target,
+                "child work",
+                Some("child"),
+                &request_id,
+                Some(job_spawn_key(&chain, "slot-a", 0)),
+                1,
+                gents_protocol::request_input::RequestInput {
+                    session_creation: Some(
+                        gents_protocol::request_input::SessionCreationIntent::PluginJob,
+                    ),
+                    ..Default::default()
+                },
+                &access.managed_agent_signer().unwrap(),
+            )
+            .await
+            .unwrap();
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_job_opening_cases;
+        let expected = |name: &str| {
+            cases.iter().find(|case| case["name"] == name).unwrap()["commits"]
+                .as_bool()
+                .unwrap()
+        };
+        let mut wrong_pin = create.clone();
+        wrong_pin.retry_key = Some(job_spawn_key("wrong-root", "slot-a", 0));
+        let wrong_plan = crate::session::message::Plan::request(session.clone(), 1, wrong_pin);
+        let rejected = access
+            .transact_write("test.job_calls.wrong_pin", |txn| {
+                let (cause, plan) = (&cause, &wrong_plan);
+                Box::pin(async move {
+                    crate::session::message::stage_planned_write_in_txn(txn, cause, plan).await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await;
+        assert_eq!(rejected.is_ok(), expected("wrong_pin"));
+        let escaped = crate::store::graphql::escape_graphql_string(&session);
+        let absent = access.execute(&format!(
+            r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID }} AgentRequest(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#
+        )).await.unwrap();
+        assert!(absent["data"]["AgentSession"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert!(absent["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+
+        let plan = crate::session::message::Plan::request(session.clone(), 1, create);
+        let staged_before_abort = std::sync::atomic::AtomicBool::new(false);
+        let rolled_back: anyhow::Result<()> = access
+            .transact_write("test.job_calls.rollback", |txn| {
+                let (cause, plan, staged) = (&cause, &plan, &staged_before_abort);
+                Box::pin(async move {
+                    crate::session::message::stage_planned_write_in_txn(txn, cause, plan).await?;
+                    staged.store(true, std::sync::atomic::Ordering::SeqCst);
+                    anyhow::bail!("abort the opening transaction")
+                })
+            })
+            .await;
+        assert_eq!(rolled_back.is_ok(), expected("failed_transaction"));
+        assert!(
+            staged_before_abort.load(std::sync::atomic::Ordering::SeqCst),
+            "{rolled_back:?}"
+        );
+        let absent = access.execute(&format!(
+            r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID }} AgentRequest(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#
+        )).await.unwrap();
+        assert!(absent["data"]["AgentSession"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert!(absent["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        let committed = access
+            .transact_write("test.job_calls.child", |txn| {
+                let (cause, plan) = (&cause, &plan);
+                Box::pin(async move {
+                    crate::session::message::stage_planned_write_in_txn(txn, cause, plan).await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await;
+        assert_eq!(committed.is_ok(), expected("valid"), "{committed:?}");
+
+        let origin = crate::session::origin::verified_creation_origin(
+            &access,
+            &crate::session::origin::SessionScope {
+                node_did: admission.node_did.clone(),
+                session_id: session,
+                requester_did: Some(agent_did.to_owned()),
+            },
+        )
+        .await
+        .unwrap()
+        .expect("the child has a verified creation receipt");
+        assert_eq!(
+            origin.cause,
+            gents_protocol::session::SessionCreationCause::PluginJob
+        );
+        let starter = origin
+            .starter
+            .expect("the receipt identifies the actual parent");
+        assert_eq!(starter.scope.session_id, tool.session_id());
+        assert_eq!(starter.cause_request_doc_id, tool.request_doc_id().unwrap());
+
+        let response = admission.client.execute(&format!(
+            r#"{{ Agent(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 2) {{ agent_did creation_nonce }} }}"#,
+            crate::store::graphql::escape_graphql_string(agent_did)
+        )).await.unwrap();
+        let [row] = response["data"]["Agent"].as_array().unwrap().as_slice() else {
+            panic!("expected one held Agent binding");
+        };
+        let binding = gents_protocol::agent_identity::AgentIdentityBinding {
+            agent_did: row["agent_did"].as_str().unwrap().to_owned(),
+            creation_nonce: row["creation_nonce"].as_str().unwrap().to_owned(),
+        };
+        let agent =
+            crate::store::identity::resolve_agent_identity(admission.runtime.as_ref(), &binding)
+                .unwrap();
+        complete_child_managed_verified(
+            &admission.node,
+            &request_id,
+            &admission.node_did,
             text,
+            agent.as_ref(),
+            admission.runtime.clone(),
         )
         .await;
-        node
+        chain
     }
 
     /// A background job row pinned to `plugin_ref`.
@@ -2084,14 +2264,19 @@ mod job_calls {
         );
         let pin = json!({"pin": gents_protocol::job::JobPin {
             plugin_ref: plugin_ref.to_owned(),
+            chain_root_doc_id: admission.tool.doc_id().unwrap().to_owned(),
             ..fixture_job_pin()
         }});
-        ConfigAccess::transact_local_write(&admission.node, None, "test.job_calls.pin", |txn| {
-            let (mutation, pin) = (&mutation, &pin);
-            Box::pin(async move { txn.execute_with_variables(mutation, pin).await })
-        })
-        .await
-        .unwrap();
+        admission
+            .tool
+            .access()
+            .unwrap()
+            .transact_write("test.job_calls.pin", |txn| {
+                let (mutation, pin) = (&mutation, &pin);
+                Box::pin(async move { txn.execute_with_variables(mutation, pin).await })
+            })
+            .await
+            .unwrap();
         admission
     }
 
@@ -2102,8 +2287,17 @@ mod job_calls {
     }
 
     async fn finish(admission: PublishedAdmission) {
-        admission.node.shutdown().await;
+        admission.node.shutdown().await.expect("node shutdown");
         let _ = std::fs::remove_dir_all(admission.path);
+    }
+
+    fn tool_output_for(admission: &PublishedAdmission) -> StampContext {
+        StampContext::ToolOutput {
+            caller_did: admission.tool.actor().as_str().to_owned(),
+            session_id: admission.tool.session_id().to_owned(),
+            request_doc_id: admission.tool.request_doc_id().unwrap().to_owned(),
+            tool_call_doc_id: admission.tool.doc_id().unwrap().to_owned(),
+        }
     }
 
     fn row_scope(admission: &PublishedAdmission) -> ProcessControlScope {
@@ -2131,9 +2325,15 @@ mod job_calls {
 
     #[tokio::test]
     async fn job_calls_child_output_pages_terminal_text_capped_at_result_bytes() {
-        let node = child_node("twelve bytes").await;
-        let caller = JobCaller::new(node.clone(), scope("session"), tool_output())
-            .with_children(vec![CHAIN.into()], 5);
+        let admission = job_row("job-calls-child-pages", "team/plugin").await;
+        let chain = completed_child(&admission, "twelve bytes").await;
+        let caller = JobCaller::new(
+            admission.node.clone(),
+            row_scope(&admission),
+            tool_output_for(&admission),
+        )
+        .with_agent_access(admission.tool.access().unwrap())
+        .with_children(vec![chain], 5);
         let call = run(
             json!([
                 child_output("head", &["slot-a"], 0, 100),
@@ -2170,7 +2370,7 @@ mod job_calls {
         assert!(
             matches!(&answers["missing"], RoundResult::Error { error } if error.contains("nope"))
         );
-        node.shutdown().await;
+        finish(admission).await;
     }
 
     #[tokio::test]
@@ -2182,8 +2382,12 @@ mod job_calls {
         let row = admission.tool.doc_id().unwrap().to_owned();
         let mut paged = String::new();
         loop {
-            let caller =
-                JobCaller::new(admission.node.clone(), row_scope(&admission), tool_output());
+            let caller = JobCaller::new(
+                admission.node.clone(),
+                row_scope(&admission),
+                tool_output_for(&admission),
+            )
+            .with_agent_access(admission.tool.access().unwrap());
             let offset = paged.len() as u64;
             let call = run(
                 json!([result_request("r", &row, offset, 4000)]),
@@ -2210,14 +2414,52 @@ mod job_calls {
         let mut ours = job_row("job-calls-result-ours", "team/plugin").await;
         settle(&mut ours, "done").await;
         let row = ours.tool.doc_id().unwrap().to_owned();
-        let outsider = JobCaller::new(ours.node.clone(), scope("another-session"), tool_output());
+        let missing_access =
+            JobCaller::new(ours.node.clone(), row_scope(&ours), tool_output_for(&ours));
+        let call = run(
+            json!([result_request("r", &row, 0, 100)]),
+            true,
+            missing_access,
+        )
+        .await;
+        assert!(refusal(&call).contains("scope"), "{}", refusal(&call));
+        let missing_access =
+            JobCaller::new(ours.node.clone(), row_scope(&ours), tool_output_for(&ours));
+        let call = run(
+            json!([child_output("c", &["slot-a"], 0, 100)]),
+            true,
+            missing_access,
+        )
+        .await;
+        assert!(matches!(
+            &answers::<ChildOutputResponse>(&call)["c"],
+            RoundResult::Error { error } if error.contains("scope")
+        ));
+        let mut outside_scope = row_scope(&ours);
+        outside_scope.session_id = "another-session".into();
+        let outsider = JobCaller::new(ours.node.clone(), outside_scope, tool_output_for(&ours))
+            .with_agent_access(ours.tool.access().unwrap());
         let call = run(json!([result_request("r", &row, 0, 100)]), true, outsider).await;
         assert!(refusal(&call).contains("scope"), "{}", refusal(&call));
-        let missing = JobCaller::new(ours.node.clone(), row_scope(&ours), tool_output());
+        let missing = JobCaller::new(ours.node.clone(), row_scope(&ours), tool_output_for(&ours))
+            .with_agent_access(ours.tool.access().unwrap());
         let call = run(
             json!([result_request("r", "no-such-row", 0, 100)]),
             true,
             missing,
+        )
+        .await;
+        assert!(refusal(&call).contains("scope"), "{}", refusal(&call));
+        let mut node_stamp = tool_output_for(&ours);
+        if let StampContext::ToolOutput { caller_did, .. } = &mut node_stamp {
+            *caller_did = ours.node_did.clone();
+        }
+        let node_caller = JobCaller::new(ours.node.clone(), row_scope(&ours), node_stamp)
+            .with_agent_access(ours.tool.access().unwrap());
+        let call = run(
+            json!([result_request("r", &row, 0, 100)]),
+            true,
+            node_caller,
         )
         .await;
         assert!(refusal(&call).contains("scope"), "{}", refusal(&call));
@@ -2226,7 +2468,12 @@ mod job_calls {
         let mut theirs = job_row("job-calls-result-theirs", "other/plugin").await;
         settle(&mut theirs, "done").await;
         let row = theirs.tool.doc_id().unwrap().to_owned();
-        let caller = JobCaller::new(theirs.node.clone(), row_scope(&theirs), tool_output());
+        let caller = JobCaller::new(
+            theirs.node.clone(),
+            row_scope(&theirs),
+            tool_output_for(&theirs),
+        )
+        .with_agent_access(theirs.tool.access().unwrap());
         let call = run(json!([result_request("r", &row, 0, 100)]), true, caller).await;
         assert!(
             refusal(&call).contains("another plugin"),
@@ -2240,7 +2487,12 @@ mod job_calls {
     async fn job_calls_result_on_a_running_row_is_not_terminal_with_the_next_call() {
         let admission = job_row("job-calls-result-running", "team/plugin").await;
         let row = admission.tool.doc_id().unwrap().to_owned();
-        let caller = JobCaller::new(admission.node.clone(), row_scope(&admission), tool_output());
+        let caller = JobCaller::new(
+            admission.node.clone(),
+            row_scope(&admission),
+            tool_output_for(&admission),
+        )
+        .with_agent_access(admission.tool.access().unwrap());
         let call = run(json!([result_request("r", &row, 0, 100)]), true, caller).await;
         let error = refusal(&call);
         assert!(error.starts_with("not_terminal"), "{error}");
@@ -2252,7 +2504,7 @@ mod job_calls {
     async fn callback_invocation_is_not_offered_job_calls_result() {
         let node = open().await;
         let callback = StampContext::Callback {
-            node_did: "did:test:test".into(),
+            caller_did: "did:test:test".into(),
         };
         let requests = json!([result_request("r", "row", 0, 100)]);
         let call = run(
@@ -2272,25 +2524,22 @@ mod job_calls {
         )
         .await;
         assert!(call.outcome.output.get("job_calls").is_none());
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
     async fn job_calls_answers_are_keyed_by_id_in_job_results() {
         let mut admission = job_row("job-calls-keyed", "team/plugin").await;
+        let chain = completed_child(&admission, "child text").await;
         settle(&mut admission, "stored").await;
         let row = admission.tool.doc_id().unwrap().to_owned();
-        completed_request(
-            &admission.node,
-            CHAIN,
-            "done",
-            &job_session_id("root", "slot-a", 0),
-            &job_spawn_key("root", "slot-a", 0),
-            "child text",
+        let caller = JobCaller::new(
+            admission.node.clone(),
+            row_scope(&admission),
+            tool_output_for(&admission),
         )
-        .await;
-        let caller = JobCaller::new(admission.node.clone(), row_scope(&admission), tool_output())
-            .with_children(vec![CHAIN.into()], 64);
+        .with_agent_access(admission.tool.access().unwrap())
+        .with_children(vec![chain], 64);
         let call = run(
             json!([
                 child_output("c", &["slot-a"], 0, 100),
@@ -2324,7 +2573,12 @@ mod job_calls {
         };
         assert_eq!(result.result, "stored");
 
-        let caller = JobCaller::new(admission.node.clone(), row_scope(&admission), tool_output());
+        let caller = JobCaller::new(
+            admission.node.clone(),
+            row_scope(&admission),
+            tool_output_for(&admission),
+        )
+        .with_agent_access(admission.tool.access().unwrap());
         let mut unknown = result_request("r", &row, 0, 1);
         unknown["extra"] = json!(true);
         let call = run(json!([unknown]), true, caller).await;

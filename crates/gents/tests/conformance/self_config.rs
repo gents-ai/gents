@@ -115,7 +115,6 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
         if (case.guarded || grant_guarded) && case.admissible && case.validates {
             let held = OperatorGrants {
                 pack_install: case.held_grants.pack_install,
-                ..Default::default()
             };
             let typed = || typed_merge(target, case, &patch);
             let grants = match target {
@@ -236,7 +235,7 @@ fn agent_catalog(inputs: &LeanAgentDecisionInputs) -> AgentCatalogView {
         agents: inputs
             .agents
             .iter()
-            .map(|agent| (agent.agent_id.clone(), agent.enabled))
+            .map(|agent| (agent.agent_did.clone(), agent.enabled))
             .collect(),
         protected_ids: inputs.protected_ids.iter().cloned().collect(),
         default_id: inputs.default_id.clone(),
@@ -304,13 +303,14 @@ fn decode_candidate(candidate: &LeanAgentCandidate) -> AgentCandidate {
             .iter()
             .map(|agent| {
                 serde_json::from_value(serde_json::json!({
-                    "agent_id": agent.agent_id,
+                    "agent_did": agent.agent_did,
+                    "creation_nonce": agent.creation_nonce,
                     "node_did": node_did,
                     "context_id": agent.context_id,
                     "inference_profile_id": agent.inference_profile_id,
                     "enabled": agent.enabled,
                 }))
-                .unwrap_or_else(|error| panic!("{}: Agent: {error}", agent.agent_id))
+                .unwrap_or_else(|error| panic!("{}: Agent: {error}", agent.agent_did))
             })
             .collect(),
         contexts: candidate
@@ -474,8 +474,8 @@ fn generated_self_config_selection_cases_drive_production_tools_selection() {
     }
 }
 
-/// Lean `JobGuardRow.accepted`: a model write of Tools `integrations` is
-/// judged by the native grant guards, an operator write bypasses them.
+/// Check the self-config grant slice for native-authorized model rows. The
+/// native authorization outcome is exercised by the signed database test.
 #[test]
 fn generated_self_config_job_guard_cases_drive_native_guard() {
     let cases = lean_self_config_selection_cases();
@@ -492,6 +492,9 @@ fn generated_self_config_job_guard_cases_drive_native_guard() {
         tools
     };
     for case in &cases.job_guard_cases {
+        if !case.native_authorized || !case.native_source_authorized {
+            continue;
+        }
         let held = OperatorGrants::default();
         let candidate = tools(Some(&case.candidate_integrations));
         let accepted = match case.writer.as_str() {

@@ -65,9 +65,13 @@ async fn recovery_leaves_session_message_row_and_its_request_running_after_calle
     let admitted = message.admission;
     terminalize_accepted_parent(&admitted, &mut owner, RequestTerminalOutcome::Interrupted).await;
     drop(owner);
-    let report = ToolCallLifecycle::recover_all(&admitted.node, &admitted.node_did)
-        .await
-        .expect("recover after the caller's interrupt");
+    let report = ToolCallLifecycle::recover_all(
+        &admitted.node,
+        &admitted.node_did,
+        &super::recovery_closeout_conformance::recovery_identities(&admitted),
+    )
+    .await
+    .expect("recover after the caller's interrupt");
     assert_eq!(report.tool_calls_recovered, 0);
     let tool_doc_id = admitted.tool.doc_id().unwrap().to_owned();
     let response = admitted
@@ -90,6 +94,6 @@ async fn recovery_leaves_session_message_row_and_its_request_running_after_calle
         data["AgentRequest"][0]["interrupt_requested_at"].is_null(),
         "interrupting the caller must not reach the request its call caused"
     );
-    admitted.node.shutdown().await;
+    admitted.node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(admitted.path).expect("remove exact recovery fixture database");
 }

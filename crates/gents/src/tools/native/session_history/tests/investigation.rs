@@ -6,11 +6,19 @@ async fn sessions_get_reports_timeline_tools_usage_and_compactions() {
     let tool = SessionHistoryTool::new(
         node,
         "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+        identity::Did::new(
+            ("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7").to_string(),
+        )
+        .unwrap(),
     );
 
-    let parsed = load_session_investigation(&tool.node, &tool.node_did, "session-a")
-        .await
-        .unwrap();
+    let parsed = load_session_investigation(
+        &crate::store::config_client::ConfigAccess::local(tool.node.clone()),
+        &tool.node_did,
+        "session-a",
+    )
+    .await
+    .unwrap();
 
     assert_eq!(parsed.session_id, "session-a");
     assert_eq!(parsed.requests.len(), 2);
@@ -100,7 +108,7 @@ async fn sessions_get_fails_usage_totals_closed_for_partial_rows() {
     );
 
     let snapshot = load_session_investigation(
-        &node,
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
         "session-a",
     )
@@ -200,7 +208,7 @@ async fn sessions_get_does_not_join_duplicate_logical_request_ids() {
     );
 
     let snapshot = load_session_investigation(
-        &node,
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
         "session-a",
     )

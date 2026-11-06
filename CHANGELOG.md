@@ -305,7 +305,7 @@ source consistency checks, not a separate runtime compatibility version.
 - A plugin job's spawns, its `job.agent_targets` and its
   `policy.dynamic_targets` now name AgentTargets by their `target_id`, as the
   protocol and `gents pack wire --targets-from` already did; a workflow whose
-  targets have a `target_id` different from their `agent_id` (such as
+  targets have a `target_id` different from their `agent_did` (such as
   code_review's) was refused `plugin_job_policy_denied` before any child
   started.
 - The plugin job recovery sweep no longer fails a healthy workflow run as
@@ -368,7 +368,7 @@ source consistency checks, not a separate runtime compatibility version.
   refuses.
 - Breaking: installations are Nodes and their configured behaviors are Agents.
   Collections, document fields, CLI commands and flags, and desktop preferences
-  use the new names (`gents config agent`, `--node-name`, `node_did`, `agent_id`).
+  use the new names (`gents config agent`, `--node-name`, `node_did`, `agent_did`).
   Persona requests are removed; Agent changes use authenticated configuration
   writes. Start with fresh stores and upgrade the desktop and all paired runtimes
   together; existing stores are not converted.

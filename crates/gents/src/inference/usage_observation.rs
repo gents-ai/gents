@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 pub use gents_loop::account_usage;
 use gents_loop::account_usage::{
     usage_from_headers, UsagePlan, UsageReport, UsageSource, READ_SKIP_WINDOW,
@@ -317,7 +317,13 @@ async fn write(
     report: UsageReport,
     read: Option<(DateTime<Utc>, Option<String>)>,
 ) -> Result<()> {
-    if let Some(target) = target(&ConfigAccess::local(node.clone()), account).await? {
+    let node_did = match account {
+        UsageAccount::Credential { node_did, .. } | UsageAccount::Backend { node_did, .. } => {
+            node_did
+        }
+    };
+    let access = crate::inference::auth::credential::runtime_credential_access(node, node_did)?;
+    if let Some(target) = target(&access, account).await? {
         cache.record(&target, report, read).await;
     }
     Ok(())
@@ -459,6 +465,7 @@ pub async fn read_account_usage(
     now: DateTime<Utc>,
 ) -> Result<UsageRead> {
     use crate::inference::backends::provider::BackendProviderKind as Kind;
+    let access = crate::inference::auth::credential::runtime_credential_access(&node, node_did)?;
     let kind = backend.provider_kind;
     if !backend.enabled {
         return Ok(UsageRead::Disabled);
@@ -471,13 +478,21 @@ pub async fn read_account_usage(
         return Ok(UsageRead::NotReported);
     }
     let api_key = match kind {
-        Kind::OpenRouter => match backend.auth.resolve_api_key() {
+        Kind::OpenRouter => match crate::inference::auth::credential::resolve_runtime_backend_auth(
+            &node,
+            node_did,
+            backend.provider_kind,
+            &backend.endpoint,
+            &backend.auth,
+        )
+        .await
+        .and_then(|auth| auth.resolve_api_key())
+        {
             Ok(Some(key)) => Some(key),
             _ => return Ok(unavailable("no key")),
         },
         _ => None,
     };
-    let access = ConfigAccess::local(node.clone());
     let mut account = UsageAccount::for_backend(node_did, backend);
     let Some(target) = target(&access, &account).await? else {
         return Ok(unavailable("no enabled account"));
@@ -490,7 +505,10 @@ pub async fn read_account_usage(
         return Ok(UsageRead::SkippedRecent);
     }
 
-    let http = reqwest::Client::builder().timeout(READ_TIMEOUT).build()?;
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(READ_TIMEOUT)
+        .build()?;
     let (request, parse): (reqwest::RequestBuilder, UsageParser) = match api_key {
         Some(key) => (
             http.get(format!("{}/key", backend.endpoint.trim_end_matches('/')))
@@ -614,6 +632,7 @@ impl AccountUsageRead {
     }
 }
 
+/// Uses the held Node identity for operational credential and metadata reads.
 pub async fn read_node_usage(
     cache: &UsageCache,
     node: Arc<EmbeddedNode>,
@@ -623,7 +642,7 @@ pub async fn read_node_usage(
     endpoints: &UsageEndpoints,
     now: DateTime<Utc>,
 ) -> Result<Vec<AccountUsageRead>> {
-    let access = ConfigAccess::local(node.clone());
+    let access = crate::inference::auth::credential::runtime_credential_access(&node, node_did)?;
     let accounts = crate::inference::auth::credential::list_accounts(&access, node_did).await?;
     let backends = access
         .transact_readonly("usage_observation.read_node", |txn| {
@@ -687,6 +706,7 @@ pub async fn read_node_usage(
     }
     let reads = jobs.into_iter().map(|(entry, account_enabled, backend)| {
         let node = node.clone();
+        let access = access.clone();
         async move {
             if !account_enabled {
                 return entry;
@@ -702,7 +722,7 @@ pub async fn read_node_usage(
             )
             .await
             .unwrap_or_else(|_| unavailable("account unavailable"));
-            let stored = usage_for_backend(cache, &ConfigAccess::local(node), node_did, &backend)
+            let stored = usage_for_backend(cache, &access, node_did, &backend)
                 .await
                 .ok()
                 .flatten();

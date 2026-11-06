@@ -137,7 +137,7 @@ pub async fn verify(
         .await?;
     ensure!(
         child.session.requester_did == source.session.requester_did
-            && child.session.agent_id == source.session.agent_id,
+            && child.session.agent_did == source.session.agent_did,
         "the recovered fork changed its requester or Agent"
     );
     let provenance = child

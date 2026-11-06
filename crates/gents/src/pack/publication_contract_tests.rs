@@ -18,7 +18,7 @@ async fn generated_local_publication_survives_notification_outcomes() {
                 false,
                 None,
                 &BTreeMap::new(),
-                |_| async { Ok(()) },
+                |_, _| async { Ok(()) },
             )
             .await
             .unwrap();
@@ -50,7 +50,7 @@ async fn generated_local_publication_survives_notification_outcomes() {
                     false,
                     None,
                     &bindings,
-                    move |_| async move {
+                    move |_, _| async move {
                         assert!(crate::plugin::store::try_lock_store(&notify_home).is_err());
                         Ok(())
                     },
@@ -66,7 +66,7 @@ async fn generated_local_publication_survives_notification_outcomes() {
                     false,
                     None,
                     &bindings,
-                    move |_| async move {
+                    move |_, _| async move {
                         assert!(crate::plugin::store::try_lock_store(&notify_home).is_err());
                         Err(super::PluginStoreChangeError::Unconfirmed(anyhow::anyhow!(
                             "notification response unavailable"
@@ -83,15 +83,22 @@ async fn generated_local_publication_survives_notification_outcomes() {
                 let notify_home = caller_home.clone();
                 let reached_notify = reached.clone();
                 let release_notify = release.clone();
-                let operation =
-                    tokio::spawn(async move {
-                        install(&caller_home, &next, false, None, &bindings, move |_| async move {
-                        assert!(crate::plugin::store::try_lock_store(&notify_home).is_err());
-                        reached_notify.notify_one();
-                        release_notify.notified().await;
-                        Ok(())
-                    }).await
-                    });
+                let operation = tokio::spawn(async move {
+                    install(
+                        &caller_home,
+                        &next,
+                        false,
+                        None,
+                        &bindings,
+                        move |_, _| async move {
+                            assert!(crate::plugin::store::try_lock_store(&notify_home).is_err());
+                            reached_notify.notify_one();
+                            release_notify.notified().await;
+                            Ok(())
+                        },
+                    )
+                    .await
+                });
                 tokio::time::timeout(std::time::Duration::from_secs(20), reached.notified())
                     .await
                     .unwrap();
@@ -147,9 +154,14 @@ async fn home_removal_excludes_reinstall_until_pin_and_records_are_removed() {
     let home = tempfile::tempdir().unwrap();
     let (_dir, _, archive) = fixture("1.0.0", false);
     let bindings = BTreeMap::new();
-    install(home.path(), &archive, false, None, &bindings, |_| async {
-        Ok(())
-    })
+    install(
+        home.path(),
+        &archive,
+        false,
+        None,
+        &bindings,
+        |_, _| async { Ok(()) },
+    )
     .await
     .unwrap();
     let prepare_error = super::plugin_lifecycle::remove_local(
@@ -207,9 +219,14 @@ async fn home_removal_excludes_reinstall_until_pin_and_records_are_removed() {
     assert!(crate::plugin::store::list_records(home.path())
         .unwrap()
         .is_empty());
-    install(home.path(), &archive, false, None, &bindings, |_| async {
-        Ok(())
-    })
+    install(
+        home.path(),
+        &archive,
+        false,
+        None,
+        &bindings,
+        |_, _| async { Ok(()) },
+    )
     .await
     .unwrap();
     assert!(
@@ -231,7 +248,7 @@ async fn non_pin_notification_rejection_restores_previous_plugin_and_home_record
         false,
         None,
         &BTreeMap::new(),
-        |_| async { Ok(()) },
+        |_, _| async { Ok(()) },
     )
     .await
     .unwrap();
@@ -257,29 +274,41 @@ async fn non_pin_notification_rejection_restores_previous_plugin_and_home_record
     .unwrap();
     let (packed, _) = crate::pack::archive::pack_dir(&next_dir.path().join("source")).unwrap();
     let next = crate::pack::archive::PackArchive::from_bytes(&packed).unwrap();
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
-    access.write("test.dangling_agent", r#"mutation { create_Agent(input: {agent_id: "broken", node_did: "did:test:owner", context_id: "missing", inference_profile_id: "profile"}) { _docID } }"#).await.unwrap();
+    let (_identity_dir, runtime, node, access) = super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime).to_owned();
+    let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
+    let input = serde_json::json!({"agent_did":binding.agent_did, "creation_nonce":binding.creation_nonce,
+        "node_did":owner, "context_id":"missing", "inference_profile_id":"profile"});
+    access.transact_write("test.dangling_agent", |txn| {
+        let input = &input;
+        Box::pin(async move {
+            txn.execute_client_signed_create(
+                "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                &serde_json::json!({"input":input}), gents_protocol::schemas::AGENT,
+            ).await.map(|_| ())
+        })
+    }).await.unwrap();
     let notify_access = access.clone();
     let notify_home = home.path().to_owned();
     let original_digest = old_plugin.digest.clone();
+    let notify_owner = owner.clone();
     let error = install(
         home.path(),
         &next,
         false,
-        Some("did:test:owner"),
+        Some(&owner),
         &BTreeMap::new(),
-        move |identity| async move {
+        move |identity, changes| async move {
             let staged =
                 crate::plugin::store::read_record(&notify_home, "fixture", "native_echo").unwrap();
             assert_ne!(staged.digest, original_digest);
-            super::record_plugin_store_change(
+            super::record_staged_plugin_store_change(
                 &notify_access,
-                "did:test:owner",
+                &notify_owner,
                 &notify_home,
                 &identity.coordinate,
                 Some(&identity),
+                &changes,
             )
             .await
         },
@@ -298,5 +327,5 @@ async fn non_pin_notification_rejection_restores_previous_plugin_and_home_record
         crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap(),
         old_plugin
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

@@ -85,7 +85,10 @@ export function AgentEditor({
   draft?: DraftMode;
   embedded?: boolean;
 }) {
-  const { changeConfig } = useApp().actions;
+  const { changeConfig, provisionAgentIdentity } = useApp().actions;
+  const pendingIdentity = useRef<Awaited<
+    ReturnType<typeof provisionAgentIdentity>
+  > | null>(null);
   const base = {
     name: "agent" as const,
     nodeDid: deployment.nodeDid,
@@ -150,6 +153,13 @@ export function AgentEditor({
       const want = (intent ?? {}) as SaveIntent;
       const written = await writeAgentDraft({
         changeConfig,
+        identity: async () => {
+          if (agent.creationNonce)
+            return { agent_did: agent.agentDid, creation_nonce: agent.creationNonce };
+          return (pendingIdentity.current ??= await provisionAgentIdentity(
+            deployment.nodeDid,
+          ));
+        },
         deployment,
         agent,
         next,
@@ -172,11 +182,12 @@ export function AgentEditor({
       problems: (next) => problems(deployment, next, draftMode !== undefined),
     },
   );
-  const id = (f: string) => `${agent.agentId}-${f}`;
+  const id = (f: string) => `${agent.agentDid}-${f}`;
   const errors = d.problems;
   const finish = async (intent: SaveIntent) => {
     const ok = await d.save(intent);
-    if (ok && draftMode) draftMode.onSaved(agent.agentId);
+    if (ok && draftMode)
+      draftMode.onSaved(pendingIdentity.current?.agent_did ?? agent.agentDid);
   };
   const fields = Object.fromEntries(
     FIELD_ORDER.map(([field, slug]) => [field, id(slug)]),
@@ -199,7 +210,7 @@ export function AgentEditor({
     deployment.contexts.find((c) => c.context_id === d.draft.copiedFrom) ?? null;
   const others = selected
     ? usersOf(deployment, selected.context_id).filter(
-        (b) => b.agentId !== agent.agentId,
+        (b) => b.agentDid !== agent.agentDid,
       )
     : [];
   const [confirmShared, setConfirmShared] = useState(false);
@@ -269,7 +280,7 @@ export function AgentEditor({
     ? href({ ...base, section: "contexts", item: selected.context_id })
     : null;
   const rememberOrigin = () => {
-    if (selected) rememberContextOrigin(selected.context_id, agent.agentId);
+    if (selected) rememberContextOrigin(selected.context_id, agent.agentDid);
   };
   const toolsSharers = d.draft.toolsId
     ? deployment.contexts.filter(
@@ -289,7 +300,7 @@ export function AgentEditor({
     : null;
   const agentLink = (b: AgentView) => (
     <a
-      href={href({ ...base, item: b.agentId })}
+      href={href({ ...base, item: b.agentDid })}
       className="text-foreground underline-offset-2 hover:underline"
     >
       {b.displayName}
@@ -301,7 +312,7 @@ export function AgentEditor({
         Shared with{" "}
         {others.length <= 2 ? (
           others.map((b, i) => (
-            <Fragment key={b.agentId}>
+            <Fragment key={b.agentDid}>
               {i > 0 && " and "}
               {agentLink(b)}
             </Fragment>
@@ -324,11 +335,11 @@ export function AgentEditor({
   const soleContext =
     context &&
     (usersByContext.get(context.context_id) ?? []).every(
-      (b) => b.agentId === agent.agentId,
+      (b) => b.agentDid === agent.agentDid,
     )
       ? context
       : null;
-  const readiness = agentReadiness(deployment, agent.agentId);
+  const readiness = agentReadiness(deployment, agent.agentDid);
   /* the sentence's parts are set in the agent's Tools; with none chosen, the
      Tools row is where to choose or make one */
   const openAccess = (part: AccessPart) => {
@@ -343,7 +354,7 @@ export function AgentEditor({
     }
     document.getElementById(id("tools"))?.scrollIntoView({ block: "center" });
   };
-  const env = deployment.agentEnvironments.find((e) => e.agentId === agent.agentId);
+  const env = deployment.agentEnvironments.find((e) => e.agentDid === agent.agentDid);
   const attention =
     agent.enabled && !readiness.ready ? `It can’t run: ${readiness.reason}.` : null;
   return (
@@ -425,7 +436,7 @@ export function AgentEditor({
                 )}
                 {attention && (
                   <p
-                    id={`${agent.agentId}-status-note`}
+                    id={`${agent.agentDid}-status-note`}
                     data-testid="agent-status-note"
                     className="mt-0.5 text-sm text-muted-foreground"
                   >
@@ -438,7 +449,7 @@ export function AgentEditor({
         </div>
       </header>
       {!draftMode && (
-        <AgentSummaryCards deployment={deployment} agentId={agent.agentId} />
+        <AgentSummaryCards deployment={deployment} agentDid={agent.agentDid} />
       )}
 
       <Unfold
@@ -448,7 +459,7 @@ export function AgentEditor({
         <Group title="About">
           {!draftMode && (
             <FactRow label="Agent ID" mono>
-              {agent.agentId}
+              {agent.agentDid}
             </FactRow>
           )}
           <TextRow
@@ -864,7 +875,7 @@ export function AgentEditor({
       {!draftMode && !embedded && (
         <DeleteButton
           label={agent.displayName}
-          warning={dependentsWarning(deployment, "agent", agent.agentId)}
+          warning={dependentsWarning(deployment, "agent", agent.agentDid)}
           base={base}
           companion={
             soleContext
@@ -880,7 +891,7 @@ export function AgentEditor({
           }
           onDelete={() =>
             changeConfig("deleteAgentConfig", {
-              agentId: agent.agentId,
+              agentDid: agent.agentDid,
               nodeDid: deployment.nodeDid,
             })
           }

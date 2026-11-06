@@ -57,7 +57,7 @@ impl Facts {
     fn intent(&mut self, value: &Value) -> Result<Intent> {
         let authored = number(value, "authored")?;
         let intent = Intent::new(
-            format!("client-{}", number(value, "client")?),
+            format!("did:key:client-{}", number(value, "client")?),
             self.node(number(value, "node")?)?,
             format!("command-{}", number(value, "command")?),
             format!("session-{}", number(value, "session")?),
@@ -81,7 +81,7 @@ impl Facts {
                 format!("request-{id}"),
                 &did,
                 &did,
-                "fixture-agent",
+                &did,
                 &session,
                 "goal objective",
                 "interactive",
@@ -109,7 +109,9 @@ impl Facts {
             command_id: format!("command-{}", number(value, "command")?),
             requester_did: did.clone(),
             requester_peer_id: None,
-            node_did: did,
+            node_did: did.clone(),
+            agent_did: did,
+            agent_doc_id: "fixture-agent-document".into(),
             session_id: session,
             session_doc_id: Some("fixture-session-document".into()),
             issued_at: created,
@@ -127,10 +129,14 @@ impl Facts {
                 GoalOperation::Pause {}
             },
             initial_request,
+            native_evidence: None,
             signature: Vec::new(),
         };
-        let command =
-            gents::goal::prepare_session_goal_control(&self.nodes[&node_id], command).await?;
+        let mut command = command;
+        command.signature = self.nodes[&node_id]
+            .sign(&command.signing_payload()?)
+            .await?;
+        command.validate_shape()?;
         let hash = command.computed_digest()?;
         self.digests.insert(hash.clone(), digest);
         self.commands.insert(hash, command.clone());
@@ -162,7 +168,8 @@ impl Facts {
             command_id: format!("command-{}", number(value, "command")?),
             command_digest: hash.clone(),
             requester_did: did.clone(),
-            node_did: did,
+            node_did: did.clone(),
+            agent_did: did,
             session_id: format!("session-{}", number(context, "session")?),
             outcome: if value["outcome"] == "applied" {
                 GoalControlOutcome::Applied {
@@ -195,6 +202,7 @@ impl Facts {
                 .as_ref()
                 .map(|r| r.request_id.clone()),
             requester_did: command.requester_did.clone(),
+            agent_did: command.agent_did.clone(),
         };
         let receipt = if value["receipt"].is_null() {
             None
@@ -317,6 +325,7 @@ async fn generated_goal_delivery_histories_bind_native_signed_preparations() -> 
                             .as_ref()
                             .map(|r| r.request_id.clone()),
                         requester_did: command.requester_did,
+                        agent_did: command.agent_did,
                     };
                     acknowledge(&mut records, &intent, &reference);
                     Value::Null

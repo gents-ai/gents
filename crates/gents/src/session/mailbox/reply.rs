@@ -41,6 +41,33 @@ pub(crate) async fn claim_reply_in_txn(
         .context("mailbox reply request disappeared")?;
     let authenticated =
         crate::request::admission::verify_request_receipt_signature(&record).is_ok();
+    let replay = item.parsed_status() == Some(MailboxStatus::Acted)
+        && item.resolved_doc_id.as_deref() == Some(request.doc_id.as_str());
+    let recipient_authorized = if authenticated && !replay {
+        let signer = record
+            .admission_signer_did
+            .as_deref()
+            .context("mailbox reply has no admission signer")?;
+        let subject = identity::Did::new(signer)?;
+        let decisions = txn
+            .observe_document_access(
+                &subject,
+                super::MAILBOX_COLLECTION,
+                std::slice::from_ref(&item.doc_id),
+                defra_node::DocumentAccessMode::Named {
+                    permission: "update".into(),
+                    node_permission: acp::nac::NodePermission::DocumentUpdate,
+                },
+            )
+            .await?;
+        match decisions.as_slice() {
+            [defra_node::DocumentAccessDecision::Allowed] => true,
+            [defra_node::DocumentAccessDecision::Denied] => false,
+            _ => anyhow::bail!("mailbox reply recipient permission is unavailable"),
+        }
+    } else {
+        false
+    };
     let signed_request = AgentRequest::try_from(record)?;
     let now_time = chrono::Utc::now();
     let deadline_valid = match item.deadline_at.as_deref() {
@@ -49,7 +76,14 @@ pub(crate) async fn claim_reply_in_txn(
             chrono::DateTime::parse_from_rfc3339(deadline).is_ok_and(|deadline| deadline > now_time)
         }
     };
-    validate_reply_claim(item, &signed_request, authenticated, deadline_valid).map_err(
+    validate_reply_claim(
+        item,
+        &signed_request,
+        authenticated,
+        recipient_authorized,
+        deadline_valid,
+    )
+    .map_err(
         |error| crate::request::lifecycle::ClaimAdmissionError::MailboxReplyRejected {
             item_id: item.doc_id.clone(),
             reason: error.to_string(),
@@ -58,7 +92,7 @@ pub(crate) async fn claim_reply_in_txn(
     ensure!(
         signed_request.node_did == request.node_did
             && signed_request.requester_did == request.requester_did
-            && signed_request.agent_id == request.agent_id
+            && signed_request.agent_did == request.agent_did
             && signed_request.session_id == request.session_id,
         "mailbox reply changed during admission"
     );
@@ -87,6 +121,7 @@ pub(super) fn validate_reply_claim(
     item: &MailboxItem,
     request: &AgentRequest,
     authenticated: bool,
+    recipient_authorized: bool,
     deadline_valid: bool,
 ) -> Result<()> {
     ensure!(
@@ -94,6 +129,12 @@ pub(super) fn validate_reply_claim(
         "mailbox item does not accept a request reply"
     );
     ensure!(authenticated, "mailbox reply is not authenticated");
+    ensure!(
+        recipient_authorized
+            || (item.parsed_status() == Some(MailboxStatus::Acted)
+                && item.resolved_doc_id.as_deref() == Some(request.doc_id.as_str())),
+        "mailbox reply recipient permission denied"
+    );
     ensure!(
         request.execution_origin.as_deref() == Some("interactive"),
         "mailbox reply must be interactive"
@@ -112,15 +153,15 @@ pub(super) fn validate_reply_claim(
         request
             .requester_did
             .as_deref()
-            .is_some_and(|did| !did.is_empty() && did == item.requester_did),
-        "mailbox reply requester does not match"
+            .is_some_and(|did| !did.is_empty()),
+        "mailbox reply session requester is missing"
     );
     ensure!(
         !request.node_did.is_empty() && request.node_did == item.target_node_did,
         "mailbox reply target node does not match"
     );
     ensure!(
-        !item.target_agent_id.is_empty() && request.agent_id == item.target_agent_id,
+        !item.target_agent_did.is_empty() && request.agent_did == item.target_agent_did,
         "mailbox reply target agent does not match"
     );
     ensure!(

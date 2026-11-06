@@ -1,11 +1,42 @@
 use super::evidence::home_usage;
 use super::install::{install, read_pack};
 use super::*;
-use crate::eval::runner::executor::InferenceBinding;
+use crate::eval::runner::executor::{InferenceBinding, StageSpec};
 use crate::eval::OutcomeKind;
 use crate::pack::digest_declared_assets;
 use crate::store::graphql::escape_graphql_string;
+use crate::NodeIdentity;
 use serde_json::{json, Value};
+
+pub(super) fn bind_test_evaluator(
+    spec: &mut TrialSpec,
+    home: &mut EmbeddedHome,
+) -> std::sync::Arc<crate::KeyIdentity> {
+    let identity = super::super::home::bind_test_evaluator(home);
+    spec.evaluator_did = identity.did().to_owned();
+    identity
+}
+
+pub(super) async fn configured_trial(
+    directory: &Path,
+    name: &str,
+) -> (EmbeddedHome, TrialSpec, String) {
+    let pack_dir = directory.join("pack");
+    write_slot_pack(&pack_dir, "gents:inference-slot:primary");
+    let workspace = directory.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let mut spec = TrialSpec {
+        pack_digest: materialized_digest(&pack_dir),
+        pack_dir,
+        agent_slot: "subject".into(),
+        inference: frozen_binding(json!("frozen-profile")),
+        ..TrialSpec::empty_for_tests(name)
+    };
+    let mut home = EmbeddedHome::create_temp(name).await.unwrap();
+    bind_test_evaluator(&mut spec, &mut home);
+    let agent = install(&spec, &home, &workspace).await.unwrap();
+    (home, spec, agent)
+}
 
 pub(super) fn assert_failure_class(
     observed: Option<OutcomeKind>,
@@ -54,20 +85,26 @@ async fn a_declared_slot_the_binding_cannot_fill_is_infrastructure() {
         .join("base")
         .join("pack");
     write_slot_pack(&pack_dir, "gents:inference-slot:primary");
-    let executor = EmbeddedExecutor::new(
-        DocumentRuntimeOptions::default(),
-        runs_dir.clone(),
-        crate::test_support::runtime_handle(),
-    );
-    let spec = TrialSpec {
+    let mut spec = TrialSpec {
         pack_digest: materialized_digest(&pack_dir),
         pack_dir,
+        agent_slot: "subject".into(),
         inference: frozen_binding(Value::Null),
         trial_dir: runs_dir.join("run-1").join("trials").join("t1"),
         ..TrialSpec::empty_for_tests("t1")
     };
 
-    let home = EmbeddedHome::create_temp("unbindable-slot").await.unwrap();
+    let mut home = EmbeddedHome::create_temp("unbindable-slot").await.unwrap();
+    let evaluator = bind_test_evaluator(&mut spec, &mut home);
+    let executor = EmbeddedExecutor::new(
+        DocumentRuntimeOptions::default(),
+        runs_dir.clone(),
+        crate::test_support::runtime_handle(),
+    )
+    .with_evaluator_identity(
+        evaluator.clone(),
+        evaluator.client_signing_capability().unwrap(),
+    );
     let error = install(&spec, &home, &dir.path().join("workspace"))
         .await
         .unwrap_err();
@@ -76,7 +113,7 @@ async fn a_declared_slot_the_binding_cannot_fill_is_infrastructure() {
         reason.contains("inference slots") && reason.contains("profile_id"),
         "{reason}"
     );
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("shutdown node");
 
     executor.provision(&spec).await;
     let evidence = executor.execute(&spec, CancellationToken::new()).await;
@@ -146,7 +183,7 @@ pub(super) fn write_slot_pack(root: &Path, inference_profile_id: &str) {
         serde_json::to_vec(&json!({
             "node": {},
             "agents": [{
-                "agent_id": "subject",
+                "agent_slot": "subject",
                 "display_name": "Subject",
                 "inference_profile_id": inference_profile_id,
             }],
@@ -200,7 +237,7 @@ async fn provision_then_execute_on_a_bad_pack_digest_is_infrastructure() {
         .await
         .expect("the trial home survives the close");
     assert_eq!(reopened.did(), locator.trial_node_did);
-    reopened.node.shutdown().await;
+    reopened.node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -250,28 +287,164 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
         .unwrap();
     let expected = OutcomeKind::parse(case["outcome"].as_str().unwrap()).unwrap();
     let runs = tempfile::tempdir().unwrap();
-    let home = EmbeddedHome::create_retained(&runs.path().join("trial/home"))
+    let trial_dir = runs.path().join("trial");
+    let pack_dir = trial_dir.join("pack");
+    write_slot_pack(&pack_dir, "gents:inference-slot:primary");
+    let workspace = trial_dir.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let mut spec = TrialSpec {
+        pack_digest: materialized_digest(&pack_dir),
+        pack_dir,
+        agent_slot: "subject".into(),
+        inference: frozen_binding(json!("frozen-profile")),
+        ..TrialSpec::empty_for_tests("recollect")
+    };
+    let mut home = EmbeddedHome::create_retained(&trial_dir.join("home"))
         .await
         .unwrap();
-    for state in ["pending", "processing"] {
-        seed_request_with_state(&home, &format!("retained-{state}"), state).await;
-    }
+    let evaluator = bind_test_evaluator(&mut spec, &mut home);
+    let agent_did = install(&spec, &home, &workspace).await.unwrap();
     let locator = TrialLocator {
         trial_node_did: home.did().to_owned(),
         session_id: "s-1".into(),
         home_hint: Some("trial".into()),
     };
+    let stage = StageSpec {
+        stage_id: "retained".into(),
+        prompt: "x".into(),
+        seed: None,
+        deadline_secs: None,
+        settle: false,
+        continuation: None,
+        review_previous: false,
+        captures: Vec::new(),
+    };
+    super::submit::submit_stage(
+        &home,
+        &spec.evaluator_did,
+        &locator,
+        &agent_did,
+        &stage,
+        "retained-processing",
+    )
+    .await
+    .unwrap();
+    let client = home.client_access(&spec.evaluator_did).unwrap();
+    let agents = client
+        .execute("{ Agent { agent_did creation_nonce } }")
+        .await
+        .unwrap();
+    let binding: gents_protocol::agent_identity::AgentIdentityBinding = serde_json::from_value(
+        agents["data"]["Agent"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["agent_did"] == agent_did)
+            .unwrap()
+            .clone(),
+    )
+    .unwrap();
+    let agent =
+        crate::store::identity::resolve_agent_identity(home.identity.as_ref(), &binding).unwrap();
+    let agent_access = crate::ConfigAccess::local_managed_agent(
+        home.node.clone(),
+        ::identity::Did::new(&agent_did).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let response = agent_access.execute(&format!(
+        r#"{{ AgentRequest(filter: {{request_id: {{_eq: "retained-processing"}}}}) {{ {} }} }}"#,
+        crate::request::watcher::AGENT_REQUEST_FIELDS,
+    )).await.unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+    let request = row.try_into().unwrap();
+    let (_authority_owner, authority) =
+        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        home.node.clone(),
+        home.identity.clone(),
+        authority,
+    );
+    let (request, admission) = verifier
+        .verify_fresh_for_claim_with_identity(&request, agent.as_ref())
+        .await
+        .unwrap();
+    let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
+        home.node.clone(),
+        &agent_did,
+        home.did(),
+        request,
+        60,
+    );
+    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
+    lifecycle.set_client_claim_admission(admission);
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        crate::request::lifecycle::ClaimOutcome::Claimed
+    );
+    drop(lifecycle);
+    drop(verifier);
+    drop(agent_access);
+    super::submit::submit_stage(
+        &home,
+        &spec.evaluator_did,
+        &locator,
+        &agent_did,
+        &stage,
+        "retained-pending",
+    )
+    .await
+    .unwrap();
+    let subject = crate::eval::runner::subject_binding::SubjectAgent {
+        slot: "subject".into(),
+        agent_did,
+    };
+    crate::eval::runner::view::write_evidence_record(
+        &runs.path().join("trial"),
+        &crate::eval::runner::view::EvidenceRecord {
+            evidence_digest: "retained".into(),
+            subject_agent: Some(subject.clone()),
+            evaluator_did: Some(spec.evaluator_did.clone()),
+            anchor: crate::eval::Anchor {
+                terminal_states: vec![],
+                requests: 2,
+                inference_calls: 0,
+            },
+            ended_at: None,
+            live: None,
+            goal: vec![],
+        },
+    )
+    .unwrap();
     close(home).await;
 
     let executor = EmbeddedExecutor::new(
         DocumentRuntimeOptions::default(),
         runs.path().to_owned(),
         crate::test_support::runtime_handle(),
+    )
+    .with_evaluator_identity(
+        evaluator.clone(),
+        evaluator.client_signing_capability().unwrap(),
     );
-    let evidence = executor.recollect(&locator, &[]).await.unwrap();
+    let capture = Capture::Documents {
+        name: "subject-requests".into(),
+        collection: "AgentRequest".into(),
+        filter: json!({"agent_did":{"_eq":"gents:agent-slot:subject"}, "requester_did":{"_eq":"$evaluator"}}),
+        fields: vec!["request_id".into()],
+    };
+    let evidence = executor.recollect(&locator, &[capture]).await.unwrap();
     assert_eq!(evidence.stages.len(), 2);
     assert!(evidence.anchor.terminal_states.is_empty());
     for stage in evidence.stages {
+        assert_eq!(stage.subject_agent.as_ref(), Some(&subject));
+        let crate::eval::runner::CaptureResult::Documents { rows } =
+            &stage.captures["subject-requests"]
+        else {
+            panic!("subject capture")
+        };
+        assert_eq!(rows.len(), 2);
         assert_eq!(
             serde_json::to_value(stage.terminal_state).unwrap(),
             case["observed_terminal_state"]
@@ -286,19 +459,44 @@ async fn recollect_refuses_a_home_hint_outside_the_runs_directory() {
     let dir = tempfile::tempdir().unwrap();
     let runs_dir = dir.path().join("runs");
     let outside = dir.path().join("outside");
-    close(
-        EmbeddedHome::create_retained(&outside.join("home"))
-            .await
-            .unwrap(),
+    let mut home = EmbeddedHome::create_retained(&outside.join("home"))
+        .await
+        .unwrap();
+    let mut spec = TrialSpec::empty_for_tests("recollect-paths");
+    let evaluator = bind_test_evaluator(&mut spec, &mut home);
+    super::install::grant_trial_operations(&home, &spec.evaluator_did)
+        .await
+        .unwrap();
+    let node_did = home.did().to_owned();
+    crate::eval::runner::view::write_evidence_record(
+        &outside,
+        &crate::eval::runner::view::EvidenceRecord {
+            evidence_digest: "retained".into(),
+            subject_agent: None,
+            evaluator_did: Some(spec.evaluator_did.clone()),
+            anchor: crate::eval::Anchor {
+                terminal_states: vec![],
+                requests: 0,
+                inference_calls: 0,
+            },
+            ended_at: None,
+            live: None,
+            goal: vec![],
+        },
     )
-    .await;
+    .unwrap();
+    close(home).await;
     let executor = EmbeddedExecutor::new(
         DocumentRuntimeOptions::default(),
         runs_dir.clone(),
         crate::test_support::runtime_handle(),
+    )
+    .with_evaluator_identity(
+        evaluator.clone(),
+        evaluator.client_signing_capability().unwrap(),
     );
     let locator = |hint: &str| TrialLocator {
-        trial_node_did: "did:key:zAny".to_string(),
+        trial_node_did: node_did.clone(),
         session_id: "s-1".to_string(),
         home_hint: Some(hint.to_string()),
     };
@@ -417,7 +615,7 @@ pub(super) async fn seed_request_with_state(home: &EmbeddedHome, request_id: &st
     let request_id = escape_graphql_string(request_id);
     let state = escape_graphql_string(state);
     let mutation = format!(
-        r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "seeded-agent", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "{state}", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
+        r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", requester_did: "{node_did}", agent_did: "seeded-agent", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "{state}", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
     );
     let response = home.node.execute(&mutation).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);

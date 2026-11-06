@@ -17,12 +17,12 @@ function choice() {
 describe("new-session agent choice", () => {
   it("shows only the selection's decision and never retains a shadow selection", () => {
     const { app, result } = choice();
-    expect(result.current.agentId).toBe("default");
+    expect(result.current.agentDid).toBe("default");
     act(() => result.current.setPicked("ops"));
-    expect(app.stores.selection.getState().agentId).toBe("ops");
-    expect(result.current.agentId).toBe("ops");
+    expect(app.stores.selection.getState().agentDid).toBe("ops");
+    expect(result.current.agentDid).toBe("ops");
     act(() => app.actions.selectNode("did:key:other"));
-    expect(result.current.agentId).toBeNull();
+    expect(result.current.agentDid).toBeNull();
   });
 
   it("forgets the agent explicitly picked for the previous session", () => {
@@ -30,6 +30,6 @@ describe("new-session agent choice", () => {
     act(() => result.current.setPicked("ops"));
     act(() => app.actions.selectSession("session-1"));
     act(() => app.actions.startNewSession());
-    expect(result.current.agentId).toBe("default");
+    expect(result.current.agentDid).toBe("default");
   });
 });

@@ -14,7 +14,7 @@ pub struct TaskGoalRequestBinding {
     #[serde(default)]
     pub node_did: String,
     #[serde(default)]
-    pub agent_id: String,
+    pub agent_did: String,
     #[serde(default)]
     pub session_id: String,
     #[serde(default)]

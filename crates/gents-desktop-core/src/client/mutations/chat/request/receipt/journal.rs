@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
-use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::store::graphql::escape_graphql_string;
 use std::sync::Arc;
 
 use super::correlated::{Outcome, Record};
@@ -9,6 +9,15 @@ use super::UnresolvedSubmission;
 
 pub(crate) mod caller;
 pub(crate) mod goal;
+pub(crate) mod publication;
+
+pub(crate) fn require_client_signer(node: &EmbeddedNode, client: &str) -> Result<()> {
+    anyhow::ensure!(
+        !client.is_empty() && node.node_identity_did() == Some(client),
+        "client journal actor differs from the local client signer"
+    );
+    Ok(())
+}
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", content = "record", deny_unknown_fields)]
@@ -17,12 +26,15 @@ enum Envelope {
     Caller(Box<Record>),
     #[serde(rename = "goalCallerReceipt-v1")]
     Goal(Box<super::goal_delivery::Record>),
+    #[serde(rename = "agentPublication-v1")]
+    Publication(Box<publication::Record>),
 }
 
 enum Entry {
     Uncorrelated(Box<UnresolvedSubmission>),
     Caller(Box<Record>),
     Goal(Box<super::goal_delivery::Record>),
+    Publication(Box<publication::Record>),
 }
 
 fn decode(payload: &str, request_id: &str) -> Result<Entry> {
@@ -47,6 +59,14 @@ fn decode(payload: &str, request_id: &str) -> Result<Entry> {
                     "retained Goal caller binding is invalid"
                 );
                 Ok(Entry::Goal(record))
+            }
+            Envelope::Publication(record) => {
+                anyhow::ensure!(
+                    record.key() == request_id,
+                    "retained publication binding is invalid"
+                );
+                record.validate()?;
+                Ok(Entry::Publication(record))
             }
         }
     } else {
@@ -96,43 +116,58 @@ async fn read_in_txn(
     )
 }
 
+fn require_written(response: &serde_json::Value, field: &str) -> Result<()> {
+    let rows = gents::store::graphql::mutation_documents(response, field)?
+        .context("client journal mutation omitted its result")?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "client journal mutation did not write exactly one document"
+    );
+    Ok(())
+}
+
 /// The local encrypted store retains signed intent before the owner can see it.
 /// This collection stays outside the desktop replication catalog.
-pub(crate) async fn save(node: &Arc<EmbeddedNode>, pending: &UnresolvedSubmission) -> Result<()> {
+pub(crate) async fn save(
+    node: &Arc<EmbeddedNode>,
+    client: &str,
+    pending: &UnresolvedSubmission,
+) -> Result<()> {
     let request_id = escape_graphql_string(&pending.request_id);
     let payload = escape_graphql_string(&serde_json::to_string(pending)?);
-    ConfigAccess::write_local(
-        node,
+    let response = ConfigAccess::local_as(node.clone(), identity::Did::new(client)?).write(
         "desktop.chat.retain_submission",
         &format!("mutation {{ create_PendingChatSubmission(input: {{request_id: \"{request_id}\", payload: \"{payload}\"}}) {{ _docID }} }}"),
     )
     .await?;
-    Ok(())
+    require_written(&response, "create_PendingChatSubmission")
 }
 
 pub(crate) async fn load(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
+    client: &str,
     request_id: &str,
 ) -> Result<Option<UnresolvedSubmission>> {
-    let response =
-        graphql_with_transaction_retry(node, &query(request_id), "desktop.chat.load_submission")
-            .await?;
+    let response = ConfigAccess::local_as(node.clone(), identity::Did::new(client)?)
+        .execute(&query(request_id))
+        .await?;
     let data = response
-        .data
-        .as_ref()
+        .get("data")
         .context("pending submission query omitted data")?;
     Ok(row(data, request_id)?.and_then(|(_, entry)| match entry {
         Entry::Uncorrelated(pending) => Some(*pending),
         Entry::Caller(record) if record.outcome == Outcome::Unresolved => record.pending,
         Entry::Caller(_) => None,
         Entry::Goal(_) => None,
+        Entry::Publication(_) => None,
     }))
 }
 
-pub(crate) async fn forget(node: &Arc<EmbeddedNode>, request_id: &str) {
-    let result = ConfigAccess::transact_local_idempotent(
+pub(crate) async fn forget(node: &Arc<EmbeddedNode>, client: &str, request_id: &str) -> Result<()> {
+    let actor = identity::Did::new(client)?;
+    ConfigAccess::transact_local_idempotent(
         node,
-        None,
+        Some(actor),
         IdempotentTransactionRetry::Standard,
         "desktop.chat.forget_submission",
         move |txn| {
@@ -140,17 +175,30 @@ pub(crate) async fn forget(node: &Arc<EmbeddedNode>, request_id: &str) {
                 if let Some((doc_id, Entry::Uncorrelated(_))) = read_in_txn(txn, request_id).await?
                 {
                     let id = escape_graphql_string(&doc_id);
-                    txn.execute(&format!(
+                    let response = txn
+                        .execute(&format!(
                         "mutation {{ delete_PendingChatSubmission(docID: \"{id}\") {{ _docID }} }}"
                     ))
-                    .await?;
+                        .await?;
+                    require_written(&response, "delete_PendingChatSubmission")?;
                 }
                 Ok::<_, anyhow::Error>(())
             })
         },
     )
-    .await;
-    if let Err(error) = result {
-        tracing::warn!(%request_id, %error, "retained submission cleanup failed after its outcome was resolved");
+    .await
+    .context("client journal cleanup failed")
+}
+
+#[cfg(test)]
+mod mutation_result_tests {
+    use super::require_written;
+
+    #[test]
+    fn journal_mutation_requires_one_written_document() {
+        let empty = serde_json::json!({"data": {"update_PendingChatSubmission": []}});
+        assert!(require_written(&empty, "update_PendingChatSubmission").is_err());
+        let written = serde_json::json!({"data": {"update_PendingChatSubmission": [{"_docID": "owner-document"}]}});
+        require_written(&written, "update_PendingChatSubmission").unwrap();
     }
 }

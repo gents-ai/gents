@@ -22,7 +22,7 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_id": "clerk",
+                  "agent_did": "clerk",
                   "agent": [
                     {
                       "field": "display_name",
@@ -64,10 +64,14 @@
                       "field": "datastore.datastore_tool_surface_ids",
                       "matches": "^(null|\\[\\])$"
                     }
-                  ]
+                  ],
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^clerk$"
+                  }
                 },
                 {
-                  "agent_id": "engineer",
+                  "agent_did": "gents:agent-slot:engineer",
                   "agent": [
                     {
                       "field": "display_name",
@@ -103,7 +107,9 @@
                     },
                     {
                       "field": "built_ins",
-                      "equals": null
+                      "equals": {
+                        "enable_schema_tool": true
+                      }
                     },
                     {
                       "field": "integrations",
@@ -179,7 +185,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",
@@ -295,6 +301,20 @@
       "capture": [
         {
           "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
           "name": "clerk_fires",
           "collection": "TriggerFire",
           "filter": {
@@ -335,8 +355,17 @@
             "node_did": {
               "_eq": "$trial"
             },
-            "agent_id": {
-              "_like": "%:clerk"
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^clerk$"
+                  },
+                  "field": "agent_did"
+                }
+              }
             },
             "purpose": {
               "_eq": "normal"
@@ -344,7 +373,7 @@
           },
           "fields": [
             "request_id",
-            "agent_id",
+            "agent_did",
             "caused_by_trigger_id",
             "caused_by_source_doc_id",
             "lifecycle_state",

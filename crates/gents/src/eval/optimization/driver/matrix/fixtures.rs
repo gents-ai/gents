@@ -3,7 +3,6 @@ use serde_json::{json, Value};
 use crate::eval::optimization::job::Budgets;
 use crate::eval::optimization::policy::PolicyV2;
 use crate::eval::optimization::proposer::ScriptedProposer;
-use crate::eval::runner::freeze::tests::OWNER;
 use crate::eval::runner::{ScriptKey, ScriptedExecutor, TrialEvidence};
 use crate::eval::TrialUsage;
 use crate::Collection;
@@ -40,6 +39,7 @@ fn case(case_id: &str, split: &str, check: &str) -> Value {
 }
 
 pub(crate) fn definition(
+    owner: &str,
     definition_id: &str,
     check: &str,
     validation: &[&str],
@@ -53,19 +53,19 @@ pub(crate) fn definition(
     cases.extend(HELD_OUT_CASES.iter().map(|id| case(id, "held_out", check)));
     json!({
         "definition_id": definition_id,
-        "node_did": OWNER,
+        "node_did": owner,
         "comparability_version": version,
         "subject": {"kind": "agent", "inference_slots": ["primary"]},
         "cases": cases,
     })
 }
 
-pub(super) fn behavior(display_name: &str) -> (Collection, Value) {
+pub(super) fn behavior(owner: &str, display_name: &str) -> (Collection, Value) {
     (
         Collection::Agent,
         json!({
-            "agent_id": "monitor",
-            "node_did": OWNER,
+            "agent_slot": "monitor",
+            "node_did": owner,
             "display_name": display_name,
             "context_id": "monitor-context",
             "inference_profile_id": "local",
@@ -73,12 +73,12 @@ pub(super) fn behavior(display_name: &str) -> (Collection, Value) {
     )
 }
 
-pub(super) fn context(prompt: &str) -> (Collection, Value) {
+pub(super) fn context(owner: &str, prompt: &str) -> (Collection, Value) {
     (
         Collection::AgentContext,
         json!({
             "context_id": "monitor-context",
-            "node_did": OWNER,
+            "node_did": owner,
             "display_name": "Monitor",
             "system_prompt": prompt,
             "tools_id": "monitor-tools",
@@ -86,12 +86,12 @@ pub(super) fn context(prompt: &str) -> (Collection, Value) {
     )
 }
 
-pub(super) fn tools() -> (Collection, Value) {
+pub(super) fn tools(owner: &str) -> (Collection, Value) {
     (
         Collection::Tools,
         json!({
             "tools_id": "monitor-tools",
-            "node_did": OWNER,
+            "node_did": owner,
             "display_name": "Monitor tools",
             "host": {"bash": {"mode": "Off"}},
         }),

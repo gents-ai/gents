@@ -64,12 +64,12 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
         created.get("committed").and_then(Value::as_bool),
         Some(true)
     );
-    let agent_id = created
-        .get("agent_id")
+    let agent_did = created
+        .get("agent_did")
         .and_then(Value::as_str)
-        .context("create output missing agent_id")?
+        .context("create output missing agent_did")?
         .to_string();
-    assert_eq!(agent_id, format!("{node_did}:research-assistant"));
+    assert_eq!(agent_did, format!("{node_did}:research-assistant"));
 
     let cloned = run_cli_json(
         &home_dir,
@@ -77,7 +77,7 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
             "config",
             "agent",
             "clone",
-            &agent_id,
+            &agent_did,
             "--graphql",
             &graphql,
             "--display-name",
@@ -88,9 +88,9 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
     )?;
     assert_eq!(cloned.get("committed").and_then(Value::as_bool), Some(true));
     let cloned_id = cloned
-        .get("agent_id")
+        .get("agent_did")
         .and_then(Value::as_str)
-        .context("clone output missing agent_id")?
+        .context("clone output missing agent_did")?
         .to_string();
     assert_eq!(cloned_id, format!("{node_did}:cloned-assistant"));
 
@@ -110,7 +110,7 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
         Some(true)
     );
     assert_eq!(
-        disabled.get("agent_id").and_then(Value::as_str),
+        disabled.get("agent_did").and_then(Value::as_str),
         Some(cloned_id.as_str())
     );
 
@@ -125,7 +125,7 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
 
     let write_show = run_cli_json(
         &home_dir,
-        &["config", "agent", "show", &agent_id, "--graphql", &graphql],
+        &["config", "agent", "show", &agent_did, "--graphql", &graphql],
     )?;
     assert_eq!(
         write_show
@@ -164,9 +164,9 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
         ],
     )?;
     let readonly_id = readonly_created
-        .get("agent_id")
+        .get("agent_did")
         .and_then(Value::as_str)
-        .context("create output missing agent_id")?
+        .context("create output missing agent_did")?
         .to_string();
 
     let readonly_show = run_cli_json(

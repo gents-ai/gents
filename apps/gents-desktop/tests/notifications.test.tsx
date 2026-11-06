@@ -56,7 +56,7 @@ const question = (itemId: string, sessionId: string) =>
     sourceKind: "session",
     sourceId: sessionId,
     requestId: "request",
-    targetAgentId: "default",
+    targetAgentDid: "default",
     sessionId,
     payload: JSON.stringify({
       version: 1,

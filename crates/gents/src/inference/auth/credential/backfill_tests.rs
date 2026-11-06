@@ -1,8 +1,8 @@
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-use super::test_support::{one_shot_token_server, test_node, unsigned_jwt, TOKEN_URL_ENV};
+use super::test_support::{one_shot_token_server, unsigned_jwt, TOKEN_URL_ENV};
 use super::*;
 use crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
 use crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
@@ -20,7 +20,7 @@ fn token_response(access_claims: Value) -> &'static str {
     Box::leak(body.to_string().into_boxed_str())
 }
 
-async fn seed_expired_grok(node: &Arc<EmbeddedNode>, did: &str, key: Option<&str>) {
+async fn seed_expired_grok(access: &ConfigAccess, did: &str, key: Option<&str>) {
     let credential = OAuthCredential {
         doc_id: None,
         credential_id: oauth_credential_id(did, XAI_OAUTH_PROVIDER),
@@ -40,7 +40,9 @@ async fn seed_expired_grok(node: &Arc<EmbeddedNode>, did: &str, key: Option<&str
         provider_account_key: key.map(str::to_owned),
         label: None,
     };
-    upsert_oauth_credential(node, &credential).await.unwrap();
+    upsert_oauth_credential_on(access, &credential)
+        .await
+        .unwrap();
 }
 
 async fn refresh_once(
@@ -79,9 +81,12 @@ async fn refresh_once(
 
 #[tokio::test]
 async fn refresh_fills_an_empty_key_from_the_refreshed_claims() {
-    let node = test_node().await;
-    let did = "did:key:zBackfillFill";
-    seed_expired_grok(&node, did, None).await;
+    let (db, _user, _user_access, _binding) =
+        crate::test_support::signed_test_node("credential-refresh").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let access = super::rows::runtime_credential_access(&node, did).unwrap();
+    seed_expired_grok(&access, did, None).await;
     let body = token_response(json!({ "principal_type": "user", "principal_id": "principal-1" }));
     let stored = refresh_once(&node, did, XAI_OAUTH_PROVIDER, OAuthRefreshKind::Xai, body).await;
     assert_eq!(stored.refresh_token, "refresh-rotated");
@@ -93,9 +98,12 @@ async fn refresh_fills_an_empty_key_from_the_refreshed_claims() {
 
 #[tokio::test]
 async fn refresh_never_changes_a_present_key() {
-    let node = test_node().await;
-    let did = "did:key:zBackfillPresent";
-    seed_expired_grok(&node, did, Some("user:principal-old")).await;
+    let (db, _user, _user_access, _binding) =
+        crate::test_support::signed_test_node("credential-refresh").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let access = super::rows::runtime_credential_access(&node, did).unwrap();
+    seed_expired_grok(&access, did, Some("user:principal-old")).await;
     let body = token_response(json!({ "principal_type": "user", "principal_id": "principal-1" }));
     let stored = refresh_once(&node, did, XAI_OAUTH_PROVIDER, OAuthRefreshKind::Xai, body).await;
     assert_eq!(stored.refresh_token, "refresh-rotated");
@@ -107,9 +115,12 @@ async fn refresh_never_changes_a_present_key() {
 
 #[tokio::test]
 async fn refresh_leaves_the_key_empty_without_the_claim() {
-    let node = test_node().await;
-    let did = "did:key:zBackfillNoClaim";
-    seed_expired_grok(&node, did, None).await;
+    let (db, _user, _user_access, _binding) =
+        crate::test_support::signed_test_node("credential-refresh").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let access = super::rows::runtime_credential_access(&node, did).unwrap();
+    seed_expired_grok(&access, did, None).await;
     let body = token_response(json!({ "sub": "user-a" }));
     let stored = refresh_once(&node, did, XAI_OAUTH_PROVIDER, OAuthRefreshKind::Xai, body).await;
     assert_eq!(stored.refresh_token, "refresh-rotated");
@@ -149,20 +160,21 @@ where
 
 #[tokio::test]
 async fn a_refresh_racing_a_remove_does_not_revive_the_row() {
-    let node = test_node().await;
-    let did = "did:key:z6MkTestRaceRemove";
-    seed_expired_grok(&node, did, None).await;
+    let (db, _user, _user_access, _binding) =
+        crate::test_support::signed_test_node("credential-refresh").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let access = super::rows::runtime_credential_access(&node, did).unwrap();
+    seed_expired_grok(&access, did, None).await;
     let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
     refresh_racing(&node, did, async {
-        ConfigAccess::write_local(
-            &node,
-            "test.remove",
-            &format!(
-                r#"mutation {{ delete_OAuthCredential(filter: {{ credential_id: {{ _eq: "{credential_id}" }} }}) {{ _docID }} }}"#
-            ),
-        )
-        .await
-        .unwrap();
+        access
+            .transact_write("test.remove", |txn| {
+                let credential_id = credential_id.clone();
+                Box::pin(async move { remove_account_in_txn(txn, did, &credential_id).await })
+            })
+            .await
+            .unwrap();
     })
     .await;
     assert_eq!(
@@ -175,20 +187,17 @@ async fn a_refresh_racing_a_remove_does_not_revive_the_row() {
 
 #[tokio::test]
 async fn a_refresh_racing_a_disable_keeps_it_disabled() {
-    let node = test_node().await;
-    let did = "did:key:z6MkTestRaceDisable";
-    seed_expired_grok(&node, did, None).await;
+    let (db, _user, _user_access, _binding) =
+        crate::test_support::signed_test_node("credential-refresh").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let access = super::rows::runtime_credential_access(&node, did).unwrap();
+    seed_expired_grok(&access, did, None).await;
     let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
     refresh_racing(&node, did, async {
-        ConfigAccess::write_local(
-            &node,
-            "test.disable",
-            &format!(
-                r#"mutation {{ update_OAuthCredential(filter: {{ credential_id: {{ _eq: "{credential_id}" }} }}, input: {{ enabled: false }}) {{ _docID }} }}"#
-            ),
-        )
-        .await
-        .unwrap();
+        set_account_enabled(&access, did, &credential_id, false)
+            .await
+            .unwrap();
     })
     .await;
     let stored = lookup_oauth_credential_by_id(&node, &credential_id)
@@ -205,9 +214,12 @@ async fn a_refresh_racing_a_disable_keeps_it_disabled() {
 
 #[tokio::test]
 async fn a_refresh_racing_a_sign_in_keeps_the_sign_in() {
-    let node = test_node().await;
-    let did = "did:key:z6MkTestRaceSignIn";
-    seed_expired_grok(&node, did, None).await;
+    let (db, _user, _user_access, _binding) =
+        crate::test_support::signed_test_node("credential-refresh").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let access = super::rows::runtime_credential_access(&node, did).unwrap();
+    seed_expired_grok(&access, did, None).await;
     let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
     let sign_in = crate::inference::auth::xai_login::credential_from_login_tokens(
         did,
@@ -222,7 +234,6 @@ async fn a_refresh_racing_a_sign_in_keeps_the_sign_in() {
         },
         Utc::now(),
     );
-    let access = ConfigAccess::local(node.clone());
     let bearer = refresh_racing(&node, did, async {
         let signed = store_sign_in(&access, sign_in.clone(), None).await.unwrap();
         assert_eq!(signed.result, SignInResult::Refreshed);
@@ -253,9 +264,12 @@ async fn a_refresh_racing_a_sign_in_keeps_the_sign_in() {
 
 #[tokio::test]
 async fn a_refresh_racing_a_replaced_sign_in_keeps_the_new_row() {
-    let node = test_node().await;
-    let did = "did:key:z6MkTestRaceReplaced";
-    seed_expired_grok(&node, did, None).await;
+    let (db, _user, _user_access, _binding) =
+        crate::test_support::signed_test_node("credential-refresh").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let access = super::rows::runtime_credential_access(&node, did).unwrap();
+    seed_expired_grok(&access, did, None).await;
     let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
     let sign_in = crate::inference::auth::xai_login::credential_from_login_tokens(
         did,
@@ -270,17 +284,14 @@ async fn a_refresh_racing_a_replaced_sign_in_keeps_the_new_row() {
         },
         Utc::now(),
     );
-    let access = ConfigAccess::local(node.clone());
     refresh_racing(&node, did, async {
-        ConfigAccess::write_local(
-            &node,
-            "test.remove",
-            &format!(
-                r#"mutation {{ delete_OAuthCredential(filter: {{ credential_id: {{ _eq: "{credential_id}" }} }}) {{ _docID }} }}"#
-            ),
-        )
-        .await
-        .unwrap();
+        access
+            .transact_write("test.remove", |txn| {
+                let credential_id = credential_id.clone();
+                Box::pin(async move { remove_account_in_txn(txn, did, &credential_id).await })
+            })
+            .await
+            .unwrap();
         let signed = store_sign_in(&access, sign_in.clone(), None).await.unwrap();
         assert_eq!(signed.result, SignInResult::Added);
         assert_eq!(signed.credential.credential_id, credential_id);
@@ -300,9 +311,12 @@ async fn a_refresh_racing_a_replaced_sign_in_keeps_the_new_row() {
 
 #[tokio::test]
 async fn a_refresh_adopts_a_replaced_document() {
-    let node = test_node().await;
-    let did = "did:key:z6MkTestRefreshReplaced";
-    seed_expired_grok(&node, did, None).await;
+    let (db, _user, _user_access, _binding) =
+        crate::test_support::signed_test_node("credential-refresh").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let access = super::rows::runtime_credential_access(&node, did).unwrap();
+    seed_expired_grok(&access, did, None).await;
     let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
     let mut removed = lookup_oauth_credential_by_id(&node, &credential_id)
         .await
@@ -332,40 +346,50 @@ async fn a_refresh_adopts_a_replaced_document() {
     assert!(request.contains("refresh-TEST"), "{request}");
 }
 
-async fn seed_upgraded_row(node: &Arc<EmbeddedNode>, did: &str, provider: &str, account_id: &str) {
-    let credential_id = oauth_credential_id(did, provider);
-    let mutation = format!(
-        r#"mutation {{ create_OAuthCredential(input: {{
-            credential_id: "{credential_id}"
-            node_did: "{did}"
-            provider: "{provider}"
-            access_token: "placeholder-access"
-            refresh_token: "placeholder-refresh"
-            {account_id}
-            is_fedramp: false
-            access_token_expires_at: "2020-01-01T00:00:00Z"
-            last_refresh: "2019-12-31T00:00:00Z"
-            enabled: true
-        }}) {{ _docID }} }}"#
-    );
-    ConfigAccess::write_local(node, "test.seed_upgraded_row", &mutation)
-        .await
-        .expect("seed upgraded row");
+async fn seed_upgraded_row(
+    access: &ConfigAccess,
+    did: &str,
+    provider: &str,
+    account_id: Option<&str>,
+) {
+    let mut input = json!({
+        "credential_id": oauth_credential_id(did, provider),
+        "node_did": did,
+        "provider": provider,
+        "access_token": "placeholder-access",
+        "refresh_token": "placeholder-refresh",
+        "is_fedramp": false,
+        "access_token_expires_at": "2020-01-01T00:00:00Z",
+        "last_refresh": "2019-12-31T00:00:00Z",
+        "enabled": true,
+    });
+    if let Some(account_id) = account_id {
+        input["account_id"] = json!(account_id);
+    }
+    access.transact_write("test.seed_upgraded_row", |txn| {
+        let input = input.clone();
+        Box::pin(async move {
+            let response = txn.execute_client_signed_create(
+                "mutation($input: OAuthCredentialMutationInputArg!) { create_OAuthCredential(input: $input) { _docID } }",
+                &json!({"input": input}),
+                gents_protocol::schemas::OAUTH_CREDENTIAL,
+            ).await?;
+            let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")?;
+            crate::store::config_client::publish_secret_configuration_in_txn(txn, "OAuthCredential", &doc, did).await?;
+            Ok::<(), anyhow::Error>(())
+        })
+    }).await.unwrap();
 }
 
 #[tokio::test]
 async fn upgraded_rows_keep_their_identity_and_fill_the_key_on_first_refresh() {
-    let node = test_node().await;
-    let did = "did:key:zUpgradedRows";
-    let access = ConfigAccess::local(node.clone());
-    seed_upgraded_row(
-        &node,
-        did,
-        CHATGPT_CODEX_PROVIDER,
-        r#"account_id: "acct-ws""#,
-    )
-    .await;
-    seed_upgraded_row(&node, did, XAI_OAUTH_PROVIDER, "").await;
+    let (db, _user, _user_access, _binding) =
+        crate::test_support::signed_test_node("credential-refresh").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let access = super::rows::runtime_credential_access(&node, did).unwrap();
+    seed_upgraded_row(&access, did, CHATGPT_CODEX_PROVIDER, Some("acct-ws")).await;
+    seed_upgraded_row(&access, did, XAI_OAUTH_PROVIDER, None).await;
     let cases = [
         (
             CHATGPT_CODEX_PROVIDER,

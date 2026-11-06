@@ -6,11 +6,9 @@ use serde::Deserialize;
 use serde_json::json;
 use tracing::Instrument;
 
-use crate::documents::load_agent;
 use crate::tools::background::status::r4c_args::{ListBackgroundToolsArgs, ReadToolOutputArgs};
 use crate::tools::background::status::{
-    handle_list_background_tools, handle_read_tool_output, BackgroundToolArgs, CancelToolArgs,
-    ProcessControlScope, ReadToolOutputOutcome, WaitToolArgs,
+    BackgroundToolArgs, CancelToolArgs, ProcessControlScope, ReadToolOutputOutcome, WaitToolArgs,
 };
 use crate::tools::call::lifecycle::query::load_tool_call_result;
 use crate::tools::call::lifecycle::{AwaitMode, CancelCause, FailureClass, ToolCallLifecycle};

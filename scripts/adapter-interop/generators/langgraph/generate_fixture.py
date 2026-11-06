@@ -477,7 +477,7 @@ def build_projection(capture: dict[str, Any]) -> dict[str, Any]:
         "source_request_id": REQUEST_ID,
         "source_session_id": THREAD_ID,
         "source_node_did": "did:test:langgraph-fixture",
-        "source_agent_id": "langgraph-research-flow",
+        "source_agent_did": "langgraph-research-flow",
         "redaction_mode": "full",
         "provenance": {
             "runtime": "gents",
@@ -522,7 +522,7 @@ def build_subgraph_projection(capture: dict[str, Any]) -> dict[str, Any]:
         "source_request_id": SUBGRAPH_REQUEST_ID,
         "source_session_id": SUBGRAPH_THREAD_ID,
         "source_node_did": "did:test:langgraph-subgraph-fixture",
-        "source_agent_id": "langgraph-review-subgraph-flow",
+        "source_agent_did": "langgraph-review-subgraph-flow",
         "redaction_mode": "full",
         "provenance": {
             "runtime": "gents",
@@ -569,7 +569,7 @@ def build_provider_projection(capture: dict[str, Any]) -> dict[str, Any]:
         "source_request_id": PROVIDER_REQUEST_ID,
         "source_session_id": PROVIDER_THREAD_ID,
         "source_node_did": "did:test:langgraph-provider-fixture",
-        "source_agent_id": "langgraph-provider-backed-flow",
+        "source_agent_did": "langgraph-provider-backed-flow",
         "redaction_mode": "training_safe",
         "provenance": {
             "runtime": "gents",
@@ -839,7 +839,7 @@ def build_import_mapping(
     request_id: str,
     thread_id: str,
     node_did: str,
-    agent_id: str,
+    agent_did: str,
     capture: dict[str, Any],
 ) -> dict[str, Any]:
     status = str(capture["result"].get("status", "completed"))
@@ -849,7 +849,7 @@ def build_import_mapping(
         "request_id": request_id,
         "session_id": thread_id,
         "node_did": node_did,
-        "agent_id": agent_id,
+        "agent_did": agent_did,
         "actor_did": "did:test:langgraph-fixture-reader",
         "status": status,
     }

@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents::{DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
@@ -44,12 +44,12 @@ async fn create_task(
     node: &Arc<EmbeddedNode>,
     owner: &str,
     task_id: &str,
-    agent_id: &str,
+    agent_did: &str,
     prompt_template: &str,
 ) {
     let escaped_owner = escape_graphql_string(owner);
     let escaped_task_id = escape_graphql_string(task_id);
-    let escaped_agent_id = escape_graphql_string(agent_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_prompt_template = escape_graphql_string(prompt_template);
     let mutation = format!(
         r#"mutation {{
@@ -57,7 +57,7 @@ async fn create_task(
                 node_did: "{escaped_owner}",
                 task_id: "{escaped_task_id}",
                 display_name: "{escaped_task_id}",
-                agent_id: "{escaped_agent_id}",
+                agent_did: "{escaped_agent_did}",
                 prompt_template: "{escaped_prompt_template}",
                 enabled: true
             }}) {{ _docID }}
@@ -374,7 +374,7 @@ async fn p2p_replicated_doc_fires_event_trigger() {
     .await
     .unwrap();
     let node_did = agent.node_did().to_string();
-    let default_agent_id = agent.default_agent_id().to_string();
+    let default_agent_did = agent.default_agent_did().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
@@ -388,7 +388,7 @@ async fn p2p_replicated_doc_fires_event_trigger() {
         &db_agent.node,
         &node_did,
         TASK_ID,
-        &default_agent_id,
+        &default_agent_did,
         PROMPT_TEMPLATE,
     )
     .await;
@@ -509,6 +509,6 @@ async fn p2p_replicated_doc_fires_event_trigger() {
 
     let _ = shutdown_tx.send(true);
     handle.await.unwrap().unwrap();
-    db_writer.node.shutdown().await;
-    db_agent.node.shutdown().await;
+    db_writer.node.shutdown().await.expect("node shutdown");
+    db_agent.node.shutdown().await.expect("node shutdown");
 }

@@ -1,6 +1,8 @@
-type EnrollmentOperatorNonce {
+type EnrollmentOperatorNonce @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "operations") {
     nonce_key: String @index(unique: true) @immutable
     admin_did: String @index @immutable
     expires_at: DateTime @index(direction: ASC) @immutable
     consumed_at: DateTime @immutable
+    node_doc_id: String
+    parent_linked: Boolean
 }

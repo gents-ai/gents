@@ -1,6 +1,7 @@
-type WorkspaceBinding @index(fields: ["owner_node_did", "binding_id"], unique: true) @branchable {
+type WorkspaceBinding @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "workspace_children") @index(fields: ["owner_node_did", "binding_id"], unique: true) {
     binding_id: String @index @immutable
     workspace_id: String @index @immutable
+    workspace_doc_id: String @index @immutable
     request_id: String @index @immutable
     request_doc_id: String @index @immutable
     authority: String @immutable

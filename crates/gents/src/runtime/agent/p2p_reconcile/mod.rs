@@ -32,7 +32,7 @@ pub use diff::{
     PairingActual, PairingApplied, PairingDesired,
 };
 pub use embedded_impl::EmbeddedRemoteP2pAdmin;
-pub use endpoint::{peer_endpoint_upsert_mutation, run_endpoint_heartbeat};
+pub use endpoint::{peer_registry_endpoint_upsert_mutation, run_endpoint_heartbeat};
 pub use engine::{
     materialize_enrollment_desired_in_txn, merge_layered_desired,
     observe_owned_pairing_live_matches, reconcile_peer_tick, run_pairing_reconciler,
@@ -61,7 +61,6 @@ pub use registry::{
     RegistryEntry, UpsertKind, DEFAULT_NETWORK_ID, NETWORK_ID_ENV, REGISTRY_HEARTBEAT_INTERVAL,
     REGISTRY_STALE_AFTER,
 };
-pub use session_hydration_reconcile::run_session_hydration_reconciler;
 pub use templates::{
     builtin_templates, combine_filters, compare_client_replicated_schema, decode_pairing_filters,
     equality_filter, filter_conditions, read_client_replicated_schema, read_replicated_schema,

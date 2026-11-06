@@ -154,6 +154,11 @@ pub(super) fn classify_client_start_error(
             BridgeError::new(BridgeErrorCode::IncompatibleLocalStore, store.to_string()),
             Some(store),
         ),
-        None => (BridgeError::untyped(error.to_string()), None),
+        None => (
+            BridgeError::untyped(
+                gents_protocol::error_chain::ErrorChain(error.as_ref()).to_string(),
+            ),
+            None,
+        ),
     }
 }

@@ -2,6 +2,7 @@ import Proofs.PluginJob.Admission
 import Proofs.PluginJob.Adoption
 import Proofs.PluginJob.Step
 import Proofs.PluginJob.Authority
+import Proofs.PluginJob.ExecutionIdentity
 import Proofs.PluginJob.RecoveryTrace
 import Proofs.Recovery.Sweeps.PluginJob
 import Lean
@@ -21,7 +22,8 @@ by `provenanceOf`, `recordAfterInstall`, `callOrigin`,
 samples built from the `Types` constructors and rendered in the
 `gents_protocol::job` spellings, with echoes from `stepEcho`, origin from
 `callOrigin` and host codes from `Refusal.code`. Lineage: by `DurableLineage.openingRequest`.
-Recovery: by one tick of the registered `pluginJobRecoverySweep`.
+Recovery: by one tick of the registered `pluginJobRecoverySweep`. Wake: by
+`ExecutionIdentity.wakeOutcome` over the agent labels `selected` and `other`.
 -/
 
 open PluginJob ToolPolicy Lean
@@ -162,6 +164,12 @@ def admissionCases : List AdmissionCase :=
   -- A dynamic call's step-0 pin must name its script (`pinMismatch`).
   , ⟨"dynamic_pin_names_its_script_admitted", scriptContext, scriptStepZero,
       effects [spawn "1:a" targetA] (some scriptPin)⟩
+  , ⟨"dynamic_check_spawn_refused",
+      { scriptContext with policy := { scriptContext.policy with mode := .check } },
+      scriptStepZero, effects [spawn "1:a" targetA] (some scriptPin)⟩
+  , ⟨"caller_target_unconfigured_refused",
+      { context with bindings := [], callerTargets := scope [] }, stepZero,
+      effects [spawn "1:a" targetA] (some guestPin)⟩
   , ⟨"dynamic_pin_wrong_script_id_refused", scriptContext, scriptStepZero,
       effects [spawn "1:a" targetA] (some { scriptPin with scriptId := "sha-other" })⟩
   , ⟨"dynamic_pin_wrong_source_digest_refused", scriptContext, scriptStepZero,
@@ -214,6 +222,8 @@ theorem admission_regressions :
       , (some "plugin_job_resume_unknown", none, 0)
       , (some "plugin_job_resume_not_head", none, 0)
       , (none, some (.running, 1, 1), 0)
+      , (some "plugin_job_policy_denied", none, 0)
+      , (some "plugin_job_policy_denied", none, 0)
       , (some "plugin_job_pin_mismatch", none, 0)
       , (some "plugin_job_pin_mismatch", none, 0)
       , (none, some (.running, 1, 1), 0) ] := by native_decide
@@ -1139,10 +1149,16 @@ private def renderWire (c : WireCase) : Json :=
     ("expected", Json.mkObj [("policy", policyJson p), ("job_targets", targetsJson job),
       ("caller_targets", targetsJson caller)])]
 
+private def renderPublishedRead (publicationInProgress : Bool) : Json :=
+  Json.mkObj [("name", toJson (if publicationInProgress then "staged_read_deferred" else "published_read_observed")),
+    ("kind", toJson "published_read"), ("publication_in_progress", toJson publicationInProgress),
+    ("expected", Json.mkObj [("deferred", toJson (deferPublishedPluginRead publicationInProgress))])]
+
 def authorityCasesJson : String :=
   (toJson (provenanceCases.map renderProvenance ++ installCases.map renderInstall ++
     originCases.map renderOrigin ++ packBlockCases.map renderPackBlock ++
-    policyCases.map renderPolicy ++ wireCases.map renderWire)).compress
+    policyCases.map renderPolicy ++ wireCases.map renderWire ++
+    [true, false].map renderPublishedRead)).compress
 
 /-- A target's wire spelling is its AgentTarget id; the host resolves it to the
 `(node, agent)` pair. -/
@@ -1342,6 +1358,9 @@ private def wireInputJson (s : InputSample) : Json :=
   let j := s.job
   let echo := stepEcho j
   let c := context
+  let targets := match j.pin with
+    | none => c.live.targets
+    | some pin => TargetResolution.meetIds c.live.targets pin.ceilingAtPin.targets
   Json.mkObj ([("protocol", toJson (1 : Nat)),
     ("job", Json.mkObj [("row_doc_id", toJson j.rowDoc), ("chain_root_doc_id", toJson j.root),
       ("chain", toJson (if j.root == j.rowDoc then [j.rowDoc] else [j.root, j.rowDoc])),
@@ -1349,7 +1368,7 @@ private def wireInputJson (s : InputSample) : Json :=
     ("caller", Json.mkObj [("session_id", toJson j.callerSession),
       ("request_id", toJson c.callerScope.requestId), ("request_doc_id", toJson "request-doc-1"),
       ("tool_call_id", toJson "call-1"), ("node_did", toJson c.callerScope.nodeDid),
-      ("agent_id", toJson "engineer"), ("request_hop", toJson j.callerHop),
+      ("agent_did", toJson "engineer"), ("request_hop", toJson j.callerHop),
       ("correlation", Json.null), ("cwd", toJson j.callerCwd),
       ("started_by_job", toJson c.startedByJob)]),
     ("argv", toJson j.call.argv)] ++
@@ -1359,7 +1378,7 @@ private def wireInputJson (s : InputSample) : Json :=
     optField "root_call" (echo.rootCall.map wireRootCallJson) ++
     [("pin", toJson (j.pin.map wirePinJson)),
      ("origin", toJson (j.pin.map fun p => originJson p.origin)),
-     ("ceiling", Json.mkObj [("targets", toJson c.live.targets),
+     ("ceiling", Json.mkObj [("targets", toJson (TargetResolution.guestTargets targets c.bindings)),
         ("max_live", toJson c.live.maxLive),
         ("remaining_spawns", toJson (Step.remainingSpawns c.live.maxSpawns j)),
         ("max_messages_per_slot", toJson c.live.maxMessagesPerSlot),
@@ -1657,6 +1676,21 @@ private def wireRecoveryCases : List Json := Id.run do
               let c := { c with name := s!"wire_recovery_{cases.length}" }
               cases := cases ++ [render c trace]
   return cases
+
+def wakeCases : List (String × ExecutionIdentity.Work × ExecutionIdentity.Work) :=
+  [ ("same_agent_coalesces", ⟨"row", "selected"⟩, ⟨"row", "selected"⟩)
+  , ("changed_agent_refused", ⟨"row", "selected"⟩, ⟨"row", "other"⟩)
+  , ("other_row_independent", ⟨"row", "selected"⟩, ⟨"other-row", "selected"⟩)
+  , ("other_row_other_agent_independent", ⟨"row", "selected"⟩, ⟨"other-row", "other"⟩) ]
+
+private def workJson (work : ExecutionIdentity.Work) : Json :=
+  Json.mkObj [("document", toJson work.document), ("agent", toJson work.agent)]
+
+def wakeCasesJson : String :=
+  (toJson (wakeCases.map fun (name, running, wake) => Json.mkObj
+    [("name", toJson name), ("running", workJson running), ("wake", workJson wake),
+     ("expected", Json.mkObj
+       [("outcome", toJson (ExecutionIdentity.wakeOutcome running wake).toContract)])])).compress
 
 def admissionCasesJson : String :=
   (toJson (((admissionCases ++ sourceBoundaryCases).map fun c => render c) ++

@@ -17,10 +17,10 @@ use uuid::Uuid;
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
-    let (runtime, core, node_did) = start_core_with_local_route(tempdir.path()).await?;
+    let (runtime, core, node_did, agent_did) = start_core_with_local_route(tempdir.path()).await?;
 
     let session_id = Uuid::new_v4().to_string();
-    core.submit_request(&session_id, &node_did, "hello", Some("amy-code"))
+    core.submit_request(&session_id, &node_did, "hello", Some(&agent_did))
         .await?;
     let response = core
         .node()
@@ -60,16 +60,15 @@ async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
-    let (runtime, core, node_did) = start_core_with_local_route(tempdir.path()).await?;
+    let (runtime, core, node_did, agent_did) = start_core_with_local_route(tempdir.path()).await?;
 
     let session_id = Uuid::new_v4().to_string();
-    let agent_id = gents::default_agent_id_for_node(&node_did);
     let submitted = core
         .submit_request(
             &session_id,
             &node_did,
             "  hello   there\noperator  ",
-            Some(&agent_id),
+            Some(&agent_did),
         )
         .await?;
 
@@ -82,7 +81,7 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
                     node_did
                     requester_did
                     admission_signer_did
-                    agent_id
+                    agent_did
                     session_id
                     content
                     lifecycle_state
@@ -102,12 +101,15 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
     assert_eq!(request.request_id, submitted.request_id);
     assert_eq!(request.node_did.as_deref(), Some(node_did.as_str()));
     assert_ne!(core.node_identity().did(), node_did);
-    assert_eq!(request.requester_did.as_deref(), Some(node_did.as_str()));
+    assert_eq!(
+        request.requester_did.as_deref(),
+        Some(core.node_identity().did())
+    );
     assert_eq!(
         request.admission_signer_did.as_deref(),
-        Some(node_did.as_str())
+        Some(core.node_identity().did())
     );
-    assert_eq!(request.agent_id.as_deref(), Some(agent_id.as_str()));
+    assert_eq!(request.agent_did.as_deref(), Some(agent_did.as_str()));
     assert_eq!(request.session_id.as_deref(), Some(session_id.as_str()));
     assert_eq!(request.content.as_deref(), Some("hello   there\noperator"));
     assert_eq!(
@@ -137,10 +139,9 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn resend_preserves_request_lineage_without_caller_inference_overrides() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
-    let (runtime, core, node_did) = start_core_with_local_route(tempdir.path()).await?;
+    let (runtime, core, node_did, agent_did) = start_core_with_local_route(tempdir.path()).await?;
 
     let session_id = Uuid::new_v4().to_string();
-    let agent_id = gents::default_agent_id_for_node(&node_did);
 
     let options = SubmitRequestOptions::default();
     let original = core
@@ -148,7 +149,7 @@ async fn resend_preserves_request_lineage_without_caller_inference_overrides() -
             &session_id,
             &node_did,
             "please preserve this request",
-            Some(&agent_id),
+            Some(&agent_did),
             options,
         )
         .await?;
@@ -210,12 +211,15 @@ async fn resend_preserves_request_lineage_without_caller_inference_overrides() -
     Ok(())
 }
 
-async fn start_core_with_local_route(root: &Path) -> Result<(ClientCore, ClientCore, String)> {
+async fn start_core_with_local_route(
+    root: &Path,
+) -> Result<(ClientCore, ClientCore, String, String)> {
     let node_home = root.join("node-home");
     std::fs::create_dir_all(&node_home)?;
     let key_path = node_home.join("node.key");
     let identity = gents::store::identity::KeyIdentity::load_or_create(&key_path, None)?;
     let node_did = identity.did().to_string();
+    let binding = gents::store::identity::provision_agent_identity(&identity)?;
     let key_path_text = key_path.display().to_string();
     std::fs::write(
         node_home.join("init.json"),
@@ -248,10 +252,10 @@ async fn start_core_with_local_route(root: &Path) -> Result<(ClientCore, ClientC
     )
     .await?;
     client.add_local_standard_peer_for_test(&node_did).await?;
-    Ok((runtime, client, node_did))
+    Ok((runtime, client, node_did, binding.agent_did))
 }
 
-async fn query_single<T>(node: &defra_node::EmbeddedNode, query: &str, root: &str) -> Result<T>
+async fn query_single<T>(node: &defra_node::Node, query: &str, root: &str) -> Result<T>
 where
     T: for<'de> Deserialize<'de>,
 {

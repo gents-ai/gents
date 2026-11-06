@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
@@ -85,8 +85,8 @@ impl InferenceProfile {
     }
 }
 
-pub fn default_inference_profile_id_for_agent(agent_id: &str) -> String {
-    format!("{agent_id}-profile")
+pub fn default_inference_profile_id_for_agent(agent_did: &str) -> String {
+    format!("{agent_did}-profile")
 }
 
 pub fn default_inference_profile_id_for_node(node_did: &str) -> String {

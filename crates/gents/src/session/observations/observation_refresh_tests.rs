@@ -25,7 +25,7 @@ async fn request_head_uses_exact_scope_and_timestamp_then_logical_id() {
                 txn.execute_with_variables(
                     "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
                     &serde_json::json!({"input": {"request_id": id, "purpose": "normal", "node_did": agent,
-                        "requester_did": requester, "session_id": "head-session", "agent_id": "head-agent",
+                        "requester_did": requester, "session_id": "head-session", "agent_did": "head-agent",
                         "content": "prompt", "created_at": time, "lifecycle_state": "pending"}}),
                 ).await?;
             }
@@ -73,7 +73,7 @@ async fn batched_request_heads_preserve_scope_order_and_bound_query_count() {
                             "purpose": "normal",
                             "node_did": "did:test:batch-heads",
                             "session_id": session_id,
-                            "agent_id": "batch-agent",
+                            "agent_did": "batch-agent",
                             "content": "prompt",
                             "created_at": "2030-01-01T00:00:00Z",
                             "lifecycle_state": "pending"
@@ -95,7 +95,7 @@ async fn batched_request_heads_preserve_scope_order_and_bound_query_count() {
                             "node_did": node_did,
                             "requester_did": requester_did,
                             "session_id": session_ids[0],
-                            "agent_id": "batch-agent",
+                            "agent_did": "batch-agent",
                             "content": "prompt",
                             "created_at": created_at,
                             "lifecycle_state": "pending"
@@ -158,7 +158,7 @@ async fn refresh_accepts_null_requester_and_rejects_changed_session_scope() {
             r#"mutation {
         create_AgentRequest(input: {
             request_id: "refresh-request", purpose: "normal", node_did: "did:test:refresh",
-            session_id: "refresh-session", agent_id: "refresh-agent",
+            session_id: "refresh-session", agent_did: "refresh-agent",
             content: "prompt", created_at: "2030-01-01T00:00:00Z",
             lifecycle_state: "processing"
         }) { _docID }
@@ -216,7 +216,7 @@ async fn refresh_accepts_null_requester_and_rejects_changed_session_scope() {
                     "purpose": "normal",
                     "node_did": "did:test:refresh",
                     "session_id": "other-session",
-                    "agent_id": "refresh-agent",
+                    "agent_did": "refresh-agent",
                     "content": "foreign prompt",
                     "created_at": "2030-01-01T00:00:04Z",
                     "lifecycle_state": "failed"

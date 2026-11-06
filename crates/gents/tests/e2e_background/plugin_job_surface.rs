@@ -7,7 +7,7 @@ use gents::plugin::data::StampContext;
 use gents::plugin::job_calls::{result as read_result, JobCaller};
 use gents::tools::background::job::job::JobState;
 use gents::tools::background::status::ProcessControlScope;
-use gents::ConfigAccess;
+use gents::NodeIdentity;
 use gents_protocol::job::JobResultRequest;
 use serde_json::{json, Value};
 
@@ -68,27 +68,48 @@ async fn completed_harness(name: &str, value: Value) -> (JobHarness, String) {
     (h, row)
 }
 
-fn caller(h: &JobHarness, session_id: &str, request_doc_id: &str, row_doc_id: &str) -> JobCaller {
+async fn caller(
+    h: &JobHarness,
+    session_id: &str,
+    request_doc_id: &str,
+    row_doc_id: &str,
+) -> JobCaller {
     let node_did = h.db.node_identity.did().to_string();
+    let response = h
+        .actors
+        .fixture
+        .access
+        .clone()
+        .execute(&format!(
+            r#"{{ AgentRequest(docID: "{}") {{ agent_did }} }}"#,
+            gents::store::graphql::escape_graphql_string(request_doc_id),
+        ))
+        .await
+        .expect("load selected parent agent");
+    let caller_did = response["data"]["AgentRequest"][0]["agent_did"]
+        .as_str()
+        .expect("parent agent DID")
+        .to_owned();
     JobCaller::new(
         h.db.node.clone(),
         ProcessControlScope {
             request_id: format!("{session_id}-parent"),
             session_id: session_id.into(),
             node_did: node_did.clone(),
-            requester_did: Some(node_did.clone()),
+            requester_did: Some(h.actors.fixture.user.did().to_string()),
         },
         StampContext::ToolOutput {
-            node_did,
+            caller_did,
             session_id: session_id.into(),
             request_doc_id: request_doc_id.into(),
             tool_call_doc_id: row_doc_id.into(),
         },
     )
+    .with_agent_access(h.agent_access())
 }
 
 async fn parent_request_doc_id(h: &JobHarness) -> String {
-    let response = ConfigAccess::local(h.db.node.clone())
+    let response = h.actors.fixture.access.clone()
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}-parent" }} }}, limit: 1) {{ _docID }} }}"#,
             gents::store::graphql::escape_graphql_string(&h.session_id)
@@ -102,31 +123,11 @@ async fn parent_request_doc_id(h: &JobHarness) -> String {
 }
 
 async fn session_texts(h: &JobHarness) -> Vec<String> {
-    let node = h.db.node.as_ref();
-    let session_id = gents::store::graphql::escape_graphql_string(&h.session_id);
-    let response = node
-        .execute(&format!(
-            r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, order: {{ sequence: ASC }}) {{ _docID node_did requester_did }} }}"#
-        ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let headers = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentMessage"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let messages =
+        crate::support::fixtures::held_fixture_history(&h.db, &h.actors.fixture, &h.session_id)
+            .await;
     let mut texts = Vec::new();
-    for header in headers {
-        let (_, message) = gents::session::load_canonical_message_from_node(
-            node,
-            header["_docID"].as_str().expect("message _docID"),
-            header["node_did"].as_str().expect("message node_did"),
-            header["requester_did"].as_str(),
-        )
-        .await
-        .expect("reconstruct the message");
+    for message in messages {
         if let gents::inference::llm::message::Message::User { content } = message {
             texts.extend(content.into_iter().filter_map(|item| match item {
                 gents::inference::llm::message::UserContent::Text(text) => Some(text.text),
@@ -174,7 +175,7 @@ async fn job_result_over_4000_bytes_is_truncated_in_the_notification_and_paged_i
     assert!(shown.len() <= 4000, "{} bytes shown", shown.len());
 
     let request_doc_id = parent_request_doc_id(&h).await;
-    let caller = caller(&h, &h.session_id, &request_doc_id, &row_doc_id);
+    let caller = caller(&h, &h.session_id, &request_doc_id, &row_doc_id).await;
     let page = |offset: u64, limit: u64| {
         let request = JobResultRequest {
             row_doc_id: row_doc_id.clone(),
@@ -205,7 +206,7 @@ async fn job_calls_result_refuses_a_row_outside_process_control_scope() {
     let (h, row_doc_id) = completed_harness("plugin-job-surface-scope", json!("done")).await;
     let request_doc_id = parent_request_doc_id(&h).await;
 
-    let caller = caller(&h, "another-session", &request_doc_id, &row_doc_id);
+    let caller = caller(&h, "another-session", &request_doc_id, &row_doc_id).await;
     let error = read_result(
         &caller,
         PLUGIN,

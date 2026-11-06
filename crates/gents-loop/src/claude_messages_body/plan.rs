@@ -38,11 +38,11 @@ pub const CLAUDE_REQUEST_PARAM: &str = "_gents_claude_request";
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClaudeAgentIdentity {
-    /// The subagent's id (`gents_claude::metadata::agent_id` of its session).
-    pub agent_id: String,
+    /// The subagent's id (`gents_claude::metadata::agent_did` of its session).
+    pub agent_did: String,
     /// The id of the subagent that spawned this one; absent when the main thread did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_agent_id: Option<String>,
+    pub parent_agent_did: Option<String>,
 }
 
 /// What a request is, supplied by the caller that knows the session and the

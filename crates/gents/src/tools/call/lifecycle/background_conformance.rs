@@ -3,17 +3,17 @@ use crate::store::config_client::ConfigAccess;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission, PublishedAdmission, PublishedAdmissionOptions,
 };
-use defra_node::EmbeddedNode;
 
-async fn row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
-    let response = node
+/// Reads through the owning Agent's access; ACP hides the row from the node.
+async fn row(access: &ConfigAccess, doc_id: &str) -> serde_json::Value {
+    let response = access
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id await_mode lifecycle_state cancel_cause status }} }}"#,
             crate::store::graphql::escape_graphql_string(doc_id)
         ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let rows = response.data.unwrap()["AgentToolCall"]
+        .await
+        .unwrap();
+    let rows = response["data"]["AgentToolCall"]
         .as_array()
         .unwrap()
         .clone();
@@ -22,7 +22,11 @@ async fn row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
 }
 
 async fn teardown(admission: PublishedAdmission) {
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -76,7 +80,7 @@ async fn generated_background_lifecycle_cases_use_canonical_admission_owner() {
             other => panic!("unhandled modeled lifecycle action {other}"),
         }
 
-        let actual = row(&admission.node, &tool_doc_id).await;
+        let actual = row(&admission.tool.access().unwrap(), &tool_doc_id).await;
         assert_eq!(actual["request_doc_id"], request_doc_id, "{}", case.name);
         assert_eq!(actual["await_mode"], case.await_mode, "{}", case.name);
         let lifecycle_state = if case.legal {

@@ -128,7 +128,9 @@ fn checked(
             "unknown_check",
         );
     };
-    let verdict = implementation.evaluate(&check.params, observed);
+    let verdict = registry
+        .evaluate_bound(&check.check, &check.params, observed)
+        .expect("registered check");
     VerdictRow {
         stage_id: stage.stage_id.clone(),
         check: check.check.clone(),

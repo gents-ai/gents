@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::inference::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents::{CompactionStrategy, Gents, NodeIdentity, ToolCeiling};
 use serde_json::Value;
@@ -32,7 +32,7 @@ use crate::support::{test_db, TestDb};
 
 const MODEL: &str = "budget-model";
 const BACKEND_ID: &str = "budget-backend";
-const AGENT_ID: &str = "budget-agent";
+const AGENT_DID: &str = "budget-agent";
 const TOOL: &str = "audit_probe";
 
 const SESSIONS: usize = 3;
@@ -115,7 +115,7 @@ async fn per_request_store_growth_follows_new_content_not_history() {
             let doc_id = create_runtime_request(
                 db.node.as_ref(),
                 &agent.node_did,
-                AGENT_ID,
+                AGENT_DID,
                 &format!("req-{marker}"),
                 &session_id(session),
                 &prompt(&marker),
@@ -267,7 +267,7 @@ async fn calibrate_segments(
         let doc_id = create_runtime_request(
             db.node.as_ref(),
             &agent.node_did,
-            AGENT_ID,
+            AGENT_DID,
             &format!("req-{marker}"),
             &format!("session-{marker}"),
             &format!("{marker}: answer without tools."),
@@ -385,9 +385,13 @@ fn assert_transcripts_reconstruct_streams(transcripts: &[String]) {
 
 async fn load_transcripts(db: &TestDb, node_did: &str) -> Vec<String> {
     let mut transcripts = Vec::new();
+    let access = gents::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(node_did).expect("authenticated transcript requester"),
+    );
     for session in 0..SESSIONS {
         let messages = gents::observe::trace_export::load_trace_transcript(
-            db.node.as_ref(),
+            &access,
             &session_id(session),
             node_did,
             Some(node_did),
@@ -707,9 +711,9 @@ async fn boot_agent(db: &TestDb, identity: Arc<dyn NodeIdentity>) -> BootedAgent
     let agent = Gents::builder()
         .node(db.node.clone())
         .identity(identity)
-        .default_agent_id(AGENT_ID)
+        .default_agent_did(AGENT_DID)
         .tool_ceiling(ToolCeiling::meta_only())
-        .agent(AGENT_ID)
+        .agent(AGENT_DID)
         .backend_id(BACKEND_ID)
         .model_name(MODEL)
         .stream_batch_ms(STREAM_BATCH_MS)
@@ -734,7 +738,7 @@ async fn install_backend(node: &Arc<EmbeddedNode>, owner: &str, endpoint: &str) 
         ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     gents::ensure_node(node, owner).await.unwrap();
-    let profile_id = format!("{AGENT_ID}:inference");
+    let profile_id = format!("{AGENT_DID}:inference");
     let documents = [
         (
             gents::Collection::InferenceBackend,
@@ -750,7 +754,7 @@ async fn install_backend(node: &Arc<EmbeddedNode>, owner: &str, endpoint: &str) 
         ),
         (
             gents::Collection::Agent,
-            serde_json::json!({"node_did":owner,"agent_id":AGENT_ID,
+            serde_json::json!({"node_did":owner,"agent_did":AGENT_DID,
                 "inference_profile_id":profile_id}),
         ),
     ];

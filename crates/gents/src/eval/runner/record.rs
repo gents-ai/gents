@@ -129,9 +129,30 @@ mod tests {
         })
         .await
         .unwrap();
-        let access = ConfigAccess::graphql(format!("http://{address}/api/v0/graphql"));
+        use crate::store::identity::NodeIdentity;
+        let keys = tempfile::tempdir().unwrap();
+        let user = crate::KeyIdentity::load_or_create(keys.path().join("user.key"), None).unwrap();
+        let access = ConfigAccess::Graphql(
+            crate::store::config_client::GraphqlEndpoint::as_principal(
+                format!("http://{address}/api/v0/graphql"),
+                user.did(),
+            )
+            .with_client_signing_capability(user.client_signing_capability().unwrap())
+            .unwrap()
+            .with_client_signed_agent_creates(),
+        );
+        let owner = node.node_identity_did().unwrap();
+        let node_input = json!({"input": {"node_did": owner}});
+        access.transact_write("test.recorder.node", |txn| {
+            let node_input = &node_input;
+            Box::pin(async move {
+                txn.execute_client_signed_create(
+                    "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                    node_input, gents_protocol::schemas::NODE,
+                ).await.map(|_| ())
+            })
+        }).await.unwrap();
         let recorder = DocumentRecorder::new(&access);
-        let owner = "did:key:eval-recorder-test";
         let completion = TrialCompletion {
             ended_at: "2026-09-30T00:00:00Z".into(),
             stages: Vec::new(),
@@ -207,6 +228,6 @@ mod tests {
                 .len(),
             32
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("shutdown node");
     }
 }

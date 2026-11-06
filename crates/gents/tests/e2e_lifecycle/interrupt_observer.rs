@@ -17,6 +17,7 @@ async fn observer_sends_intent_when_field_becomes_non_null() {
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
     let observer = spawn_request_interrupt_observer(
         db.node.clone(),
+        gents::ConfigAccess::local(db.node.clone()),
         doc_id.clone(),
         interrupt_tx,
         shutdown_rx,
@@ -63,6 +64,7 @@ async fn observer_exits_on_shutdown_signal() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let observer = spawn_request_interrupt_observer(
         db.node.clone(),
+        gents::ConfigAccess::local(db.node.clone()),
         doc_id.clone(),
         interrupt_tx,
         shutdown_rx,
@@ -96,6 +98,7 @@ async fn observer_survives_malformed_interrupt_timestamp() {
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
     let observer = spawn_request_interrupt_observer(
         db.node.clone(),
+        gents::ConfigAccess::local(db.node.clone()),
         doc_id.clone(),
         interrupt_tx,
         shutdown_rx,
@@ -144,6 +147,7 @@ async fn observer_picks_up_already_set_interrupt_on_first_poll() {
     let start = tokio::time::Instant::now();
     let _observer = spawn_request_interrupt_observer(
         db.node.clone(),
+        gents::ConfigAccess::local(db.node.clone()),
         doc_id.clone(),
         interrupt_tx,
         shutdown_rx,
@@ -175,6 +179,7 @@ async fn observer_exits_on_abort() {
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
     let observer = spawn_request_interrupt_observer(
         db.node.clone(),
+        gents::ConfigAccess::local(db.node.clone()),
         doc_id.clone(),
         interrupt_tx,
         shutdown_rx,

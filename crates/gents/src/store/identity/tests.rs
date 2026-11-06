@@ -39,7 +39,7 @@ async fn key_identity_signs_embedded_node_commits() {
         commit_signer_identity_for_did(&did).unwrap(),
         expected_signer
     );
-    let node = defra_node::EmbeddedNode::builder()
+    let node = defra_node::Node::builder()
         .with_node_identity_did(&did)
         .build()
         .await
@@ -78,7 +78,7 @@ async fn key_identity_signs_embedded_node_commits() {
             == Some(&expected_signer)
     }));
 
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]

@@ -10,31 +10,27 @@ fn bindings() -> BTreeMap<String, String> {
 
 #[tokio::test]
 async fn timeline_canonical_messages_share_one_request_payload_scan() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    for sequence in 1..=3 {
-        let key = format!("timeline-message-{sequence}");
-        crate::session::import_history_observation(
-            &node,
-            "doc-timeline-shared",
-            "session-timeline-shared",
-            "did:test:timeline-shared",
-            None,
-            &format!("message {sequence}"),
-            &crate::session::canonical_rows::authored_message_key("doc-timeline-shared", &key),
-            sequence,
-            None,
-        )
-        .await;
-    }
-
-    let access = ConfigAccess::local(node.clone());
+    use crate::store::identity::NodeIdentity;
+    let (db, user, access, binding) =
+        crate::test_support::signed_test_node("timeline-shared-scan").await;
+    let messages = (1..=3)
+        .map(|sequence| format!("message {sequence}"))
+        .collect::<Vec<_>>();
+    crate::session::publish_shared_signed_history(
+        &db,
+        &user,
+        &access,
+        &binding,
+        "session-timeline-shared",
+        &messages,
+    )
+    .await;
     let (messages, scans) = crate::session::count_request_output_scans(
         super::event_loaders::resolve_timeline_messages_for_session(
             &access,
-            "did:test:timeline-shared",
+            db.node_identity.did(),
             "session-timeline-shared",
-            None,
+            Some(user.did()),
         ),
     )
     .await;
@@ -43,57 +39,44 @@ async fn timeline_canonical_messages_share_one_request_payload_scan() {
         scans, 1,
         "one timeline session pass scans a shared request once"
     );
-    node.shutdown().await;
+    db.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn timeline_resolves_fork_origin_payloads_without_cross_request_membership() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let owner = "did:test:timeline-fork";
-    crate::test_support::install_test_agent(&node, owner, "timeline-fork").await;
-    crate::session::create_session_with_agent_id(
-        &node,
+    use crate::store::identity::NodeIdentity;
+    let (db, user, access, binding) = crate::test_support::signed_test_node("timeline-fork").await;
+    let node_did = db.node_identity.did();
+    let messages = (1..=3)
+        .map(|sequence| format!("message {sequence}"))
+        .collect::<Vec<_>>();
+    crate::session::publish_signed_history(
+        &db,
+        &user,
+        &access,
+        &binding,
         "timeline-fork-source",
-        owner,
-        "timeline-fork",
+        &messages,
     )
-    .await
-    .unwrap();
-    for sequence in 1..=3u32 {
-        crate::session::import_history_observation(
-            &node,
-            "doc-timeline-fork-shared",
-            "timeline-fork-source",
-            owner,
-            None,
-            &format!("message {sequence}"),
-            &format!("timeline-fork:{sequence}"),
-            sequence,
-            None,
-        )
-        .await;
-    }
-    let outcome = crate::session::fork(
-        &node,
+    .await;
+    let outcome = crate::session::fork_on(
+        &access,
         crate::session::ForkParams {
             source_session_id: "timeline-fork-source",
             boundary: crate::session::ForkBoundary::UserTurn(3),
-            caller_node_did: owner,
-            caller_requester_did: None,
-            target_agent_id: None,
+            caller_node_did: node_did,
+            caller_requester_did: Some(user.did()),
+            target_agent_did: None,
         },
     )
     .await
     .unwrap();
-
-    let access = ConfigAccess::local(node.clone());
     let (messages, scans) = crate::session::count_request_output_scans(
         super::event_loaders::resolve_timeline_messages_for_session(
             &access,
-            owner,
+            node_did,
             &outcome.session_id,
-            None,
+            Some(user.did()),
         ),
     )
     .await;
@@ -108,33 +91,90 @@ async fn timeline_resolves_fork_origin_payloads_without_cross_request_membership
         scans, 3,
         "each unbound fork header resolves its own origin request"
     );
-    node.shutdown().await;
+    db.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn timeline_batches_request_local_events_and_restores_request_sequence_order() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let response = node
-        .execute(
-            r#"mutation {
-                seed_InferenceCall_1: create_InferenceCall(input: { call_id: "call-b-2", request_id: "req-b", request_doc_id: "doc-b", call_seq: 2, attempt: 0, call_state: "completed", call_kind: "chat" }) { _docID }
-                seed_InferenceCall_2: create_InferenceCall(input: { call_id: "call-b-1", request_id: "req-b", request_doc_id: "doc-b", call_seq: 1, attempt: 0, call_state: "completed", call_kind: "chat" }) { _docID }
-                seed_InferenceCall_3: create_InferenceCall(input: { call_id: "call-a-1", request_id: "req-a", request_doc_id: "doc-a", call_seq: 1, attempt: 0, call_state: "completed", call_kind: "chat" }) { _docID }
-                seed_ProviderContextReduction_1: create_ProviderContextReduction(input: { reduction_key: "reduction-b-2", request_id: "req-b", request_doc_id: "doc-b", session_id: "s-1", reduction_index: 2, turn_index: 1, messages_compacted: 0, original_tokens: 0, compacted_tokens: 0 }) { _docID }
-                seed_ProviderContextReduction_2: create_ProviderContextReduction(input: { reduction_key: "reduction-b-1", request_id: "req-b", request_doc_id: "doc-b", session_id: "s-1", reduction_index: 1, turn_index: 1, messages_compacted: 0, original_tokens: 0, compacted_tokens: 0 }) { _docID }
-                seed_ProviderContextReduction_3: create_ProviderContextReduction(input: { reduction_key: "reduction-a-1", request_id: "req-a", request_doc_id: "doc-a", session_id: "s-1", reduction_index: 1, turn_index: 1, messages_compacted: 0, original_tokens: 0, compacted_tokens: 0 }) { _docID }
-            }"#,
-        )
-        .await;
-    assert!(
-        !response.has_errors(),
-        "seed request-local timeline rows: {:?}",
-        response.errors
-    );
-
-    let access = ConfigAccess::local(node.clone());
-    let request_doc_ids = vec!["doc-a".to_owned(), "doc-b".to_owned()];
+    use crate::store::identity::NodeIdentity;
+    let (db, user, access, binding) = crate::test_support::signed_test_node("timeline-batch").await;
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let agent_access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let session_id = "timeline-batch-session";
+    crate::session::publish_signed_history(
+        &db,
+        &user,
+        &access,
+        &binding,
+        session_id,
+        &["a".into(), "b".into()],
+    )
+    .await;
+    let session_response = agent_access.execute(r#"{AgentSession(filter: {session_id: {_eq: "timeline-batch-session"}}, limit: 2) {_docID}}"#).await.unwrap();
+    let [session] = session_response["data"]["AgentSession"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("fixture session must be unique")
+    };
+    let session_doc = session["_docID"].as_str().unwrap().to_owned();
+    let mut request_doc_ids = Vec::new();
+    for index in 0..2 {
+        let id = format!("{session_id}-request-{index}");
+        let response = agent_access
+            .execute(&format!(
+                r#"{{AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{_docID}}}}"#,
+                escape_graphql_string(&id)
+            ))
+            .await
+            .unwrap();
+        let [row] = response["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .as_slice()
+        else {
+            panic!("fixture request must be unique")
+        };
+        request_doc_ids.push(row["_docID"].as_str().unwrap().to_owned());
+    }
+    for (slot, seq, label) in [(1, 2, "b"), (1, 1, "b"), (0, 1, "a")] {
+        let request_id = format!("{session_id}-request-{slot}");
+        let call = serde_json::json!({
+            "call_id": format!("call-{label}-{seq}"), "request_id": request_id,
+            "request_doc_id": request_doc_ids[slot], "session_id": session_id,
+            "node_did": db.node_identity.did(), "agent_did": binding.agent_did,
+            "call_seq": seq, "attempt": 0, "call_state": "completed", "call_kind": "chat",
+        });
+        let reduction = serde_json::json!({
+            "reduction_key": format!("reduction-{label}-{seq}"), "request_id": request_id,
+            "request_doc_id": request_doc_ids[slot], "session_id": session_id,
+            "session_doc_id": session_doc, "node_did": db.node_identity.did(),
+            "requester_did": user.did(), "agent_did": binding.agent_did,
+            "reduction_index": seq, "turn_index": 1,
+            "messages_compacted": 0, "original_tokens": 0, "compacted_tokens": 0,
+        });
+        agent_access.transact_write("test.timeline.batch_rows", |txn| {
+            let call = &call; let reduction = &reduction; let session_doc = &session_doc;
+            Box::pin(async move {
+                for (collection, mutation, input) in [
+                    ("InferenceCall", "mutation($input: InferenceCallMutationInputArg!) { create_InferenceCall(input: $input) { _docID } }", call),
+                    ("ProviderContextReduction", "mutation($input: ProviderContextReductionMutationInputArg!) { create_ProviderContextReduction(input: $input) { _docID } }", reduction),
+                ] {
+                    let response = txn.execute_with_variables(mutation, &serde_json::json!({"input": input})).await?;
+                    let doc = crate::store::graphql::created_doc_id(&response, collection)?;
+                    txn.add_resource_relationship(collection, &doc, "parent", "sessions", session_doc).await?;
+                }
+                Ok::<_, anyhow::Error>(())
+            })
+        }).await.unwrap();
+    }
     let inference_calls =
         super::event_loaders::load_timeline_inference_calls_for_requests(&access, &request_doc_ids)
             .await
@@ -159,7 +199,7 @@ async fn timeline_batches_request_local_events_and_restores_request_sequence_ord
             .collect::<Vec<_>>(),
         vec!["reduction-a-1", "reduction-b-1", "reduction-b-2"]
     );
-    node.shutdown().await;
+    db.node.shutdown().await.expect("node shutdown");
 }
 
 #[test]
@@ -269,68 +309,79 @@ fn child_bridge_requires_the_exact_parent_tool_document() {
 async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is_null() {
     use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
     use crate::request::streaming::DefraStreamWriter;
+    use crate::store::identity::NodeIdentity;
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
-    use std::{sync::Arc, time::Duration};
+    use std::time::Duration;
 
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::store::schema::ensure_runtime_schemas(node.as_ref())
+    let (db, user, access, binding) =
+        crate::test_support::signed_test_node("timeline-pending-tool").await;
+    let node = db.node.clone();
+    let node_did = db.node_identity.did().to_owned();
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let create = crate::request::lifecycle::build_signed_client_request(
+        &access,
+        crate::request::lifecycle::RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            crate::request::lifecycle::RequestIdentity {
+                request_id: "pending-tool-request".into(),
+                node_did: node_did.clone(),
+                requester_did: Some(user.did().to_owned()),
+                agent_did: binding.agent_did.clone(),
+                session_id: "pending-tool-session".into(),
+                content: "publish an accepted tool".into(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: "2026-09-22T00:00:00Z".into(),
+            },
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+        ),
+        crate::request::lifecycle::RequestSigner::Identity(&user),
+    )
+    .await
+    .unwrap();
+    crate::request::lifecycle::submit_client_request(&access, &create)
         .await
         .unwrap();
-    let response = node
-        .execute(
-            r#"mutation {
-                create_AgentSession(input: {
-                    session_id: "pending-tool-session"
-                    node_did: "did:test:timeline"
-                    agent_id: "general"
-                    created_at: "2026-09-22T00:00:00Z"
-                }) { _docID }
-                create_AgentRequest(input: {
-                    request_id: "pending-tool-request"
-                    purpose: "normal"
-                    node_did: "did:test:timeline"
-                    agent_id: "general"
-                    session_id: "pending-tool-session"
-                    retry_parent_request: ""
-                    retry_root_request: "pending-tool-request"
-                    superseded_by_request: ""
-                    content: "publish an accepted tool"
-                    lifecycle_state: "pending"
-                    backend_id: ""
-                    execution_origin: "interactive"
-                    failure_reason: ""
-                    created_at: "2026-09-22T00:00:00Z"
-                    retry_count: 0
-                    max_retries: 3
-                    request_hop: 0
-                }) { _docID }
-            }"#,
-        )
-        .await;
-    assert!(
-        !response.has_errors(),
-        "seed accepted pending fixture: {:?}",
-        response.errors
-    );
-    let request_response = node
+    let agent_access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let request_response = agent_access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "pending-tool-request" }} }}) {{ {} }} }}"#,
             crate::request::watcher::AGENT_REQUEST_FIELDS
         ))
-        .await;
+        .await
+        .unwrap();
     let request: gents_protocol::row::AgentRequestRow =
-        crate::store::graphql::first_row(&request_response, "AgentRequest")
-            .unwrap()
-            .expect("pending fixture request");
-    let mut lifecycle = RequestLifecycle::new_with_node_did(
+        serde_json::from_value(request_response["data"]["AgentRequest"][0].clone()).unwrap();
+    let request = request.try_into().unwrap();
+    let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
-        "general",
-        "did:test:timeline",
-        request.try_into().unwrap(),
-        60,
+        db.node_identity.clone(),
+        authority,
     );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    let writer = DefraStreamWriter::new(node.clone(), "did:test:timeline", Duration::ZERO);
+    let (request, admission) = verifier
+        .verify_fresh_for_claim_with_identity(&request, agent.as_ref())
+        .await
+        .unwrap();
+    assert!(
+        admission.is_some(),
+        "client claim must retain its verified admission"
+    );
+    let mut lifecycle =
+        RequestLifecycle::new_with_node_did(node.clone(), agent.did(), &node_did, request, 60);
+    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
+    lifecycle.set_client_claim_admission(admission);
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    let writer =
+        DefraStreamWriter::new_for_lifecycle(node.clone(), &lifecycle, Duration::ZERO).unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     writer
         .start_provider_attempt(
@@ -355,12 +406,11 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
             additional_params: None,
         })],
     };
-    let access = ConfigAccess::local(node.clone());
     let earlier_tools = event_loaders::load_timeline_tool_observations_for_session(
         &access,
-        "did:test:timeline",
+        &node_did,
         "pending-tool-session",
-        None,
+        Some(user.did()),
     )
     .await
     .unwrap();
@@ -373,18 +423,18 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
 
     let later_messages = resolve_timeline_messages_for_session(
         &access,
-        "did:test:timeline",
+        &node_did,
         "pending-tool-session",
-        None,
+        Some(user.did()),
     )
     .await
     .unwrap();
     assert_eq!(later_messages.len(), 1);
     assert!(event_loaders::resolve_timeline_tool_observations(
         &access,
-        "did:test:timeline",
+        &node_did,
         "pending-tool-session",
-        None,
+        Some(user.did()),
         earlier_tools,
         &later_messages,
     )
@@ -392,7 +442,7 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
     .unwrap()
     .is_empty());
 
-    let rows = load_run_timeline_rows(&ConfigAccess::local(node.clone()), "pending-tool-request")
+    let rows = load_run_timeline_rows(&access, "pending-tool-request")
         .await
         .expect("accepted pending call must remain timeline-readable");
     let tool = rows.tool_calls.first().expect("one accepted tool");
@@ -402,7 +452,7 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
     assert_eq!(tool.args, r#"{"path":"/tmp/pending-tool"}"#);
     assert!(tool.result.is_none());
 
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[test]
@@ -473,13 +523,14 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
 
     let first_doc = admitted.tool.doc_id().expect("first bridge").to_owned();
     let second_doc = second.doc_id().expect("second bridge").to_owned();
-    let bridge = node
+    let bridge = admitted.client
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ node_did session_id requester_did request_doc_id }} }}"#,
             escape_graphql_string(&second_doc)
         ))
-        .await;
-    let bridge = &bridge.data.expect("bridge scope")["AgentToolCall"][0];
+        .await
+        .unwrap();
+    let bridge = &bridge["data"]["AgentToolCall"][0];
     let text = |field: &str| bridge[field].as_str().map(str::to_owned);
     let (node_did, session_id) = (text("node_did").unwrap(), text("session_id").unwrap());
     let requester_did = text("requester_did");
@@ -512,31 +563,53 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
             additional_params: None,
         }],
     };
-    let variables =
-        crate::session::canonical_rows::transcript_message_create_variables(&unresolvable).unwrap();
-    ConfigAccess::transact_local_write(&node, None, "test.unrelated_message", |txn| {
-        let variables = variables.clone();
-        Box::pin(async move {
-            txn.execute_with_variables(
-                crate::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
-                &variables,
-            )
-            .await
-            .map(|_| ())
+    let signer = owner.managed_agent_signer().expect("claimed Agent signer");
+    let agent_access = ConfigAccess::local_with_agent_signer(
+        node.clone(),
+        identity::Did::new(&owner.request().agent_did).unwrap(),
+        signer,
+    )
+    .unwrap();
+    agent_access
+        .transact_write("test.unrelated_message", |txn| {
+            let unresolvable = &unresolvable;
+            Box::pin(async move {
+                let variables = crate::session::canonical_rows::transcript_message_bound_variables(
+                    txn,
+                    unresolvable,
+                )
+                .await?;
+                let session_doc = variables["input"]["session_doc_id"].as_str().unwrap();
+                let response = txn
+                    .execute_with_variables(
+                        crate::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
+                        &variables,
+                    )
+                    .await?;
+                let doc = crate::store::graphql::created_doc_id(&response, "AgentMessage")?;
+                txn.add_resource_relationship(
+                    "AgentMessage",
+                    &doc,
+                    "parent",
+                    "sessions",
+                    session_doc,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
         })
-    })
-    .await
-    .expect("persist unrelated message");
+        .await
+        .expect("persist unrelated message");
 
-    let access = ConfigAccess::local(node.clone());
+    let access = &admitted.client;
     assert!(
-        load_session_tool_calls(&access, &node_did, &session_id, requester_did.as_deref())
+        load_session_tool_calls(access, &node_did, &session_id, requester_did.as_deref())
             .await
             .is_err(),
         "premise: the session-wide reader resolves every message in the session"
     );
     let accepted = load_accepted_tool_calls(
-        &access,
+        access,
         &node_did,
         &session_id,
         requester_did.as_deref(),
@@ -551,14 +624,14 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
         .collect::<BTreeMap<_, _>>();
     assert_eq!(
         serde_json::from_str::<Value>(&accepted[&first_doc]).unwrap(),
-        serde_json::json!({"agent": "general", "prompt": "work"})
+        serde_json::json!({"agent": owner.request().agent_did, "prompt": "work"})
     );
     assert_eq!(
         serde_json::from_str::<Value>(&accepted[&second_doc]).unwrap(),
         second_arguments
     );
     assert!(load_accepted_tool_arguments(
-        &access,
+        access,
         &node_did,
         "another-session",
         requester_did.as_deref(),
@@ -569,6 +642,6 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
     .is_empty());
 
     drop(owner);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     std::fs::remove_dir_all(admitted.path).unwrap();
 }

@@ -59,7 +59,7 @@ function heldSession(over: Partial<DesktopSessionSnapshot> = {}) {
   return {
     sessionId: "session",
     nodeDid: NODE,
-    agentId: "default",
+    agentDid: "default",
     title: "Session",
     turnState: "interrupted",
     timelineItems: [],
@@ -188,17 +188,18 @@ describe("SessionScreen canonical composer admission", () => {
       const deployment = {
         nodeDid: "did:key:agent",
         dialSucceeded: true,
+        runtimeConnection: "connected",
         chatSafe: true,
-        node: { nodeDid: "did:key:agent", defaultAgentId: "default" },
+        node: { nodeDid: "did:key:agent", defaultAgentDid: "default" },
         agents: [
           {
-            agentId: "default",
+            agentDid: "default",
             displayName: "Default",
             enabled: true,
             isDefault: true,
           },
           {
-            agentId: "selected",
+            agentDid: "selected",
             displayName: "Selected",
             enabled: true,
             isDefault: false,
@@ -211,17 +212,17 @@ describe("SessionScreen canonical composer admission", () => {
           updatedAt: "2026-09-15T00:00:00Z",
           agents: [
             defaultReady
-              ? { state: "ready", agentId: "default" }
+              ? { state: "ready", agentDid: "default" }
               : {
                   state: "unavailable",
-                  agentId: "default",
+                  agentDid: "default",
                   reason: "backend_disabled",
                 },
             selectedReady
-              ? { state: "ready", agentId: "selected" }
+              ? { state: "ready", agentDid: "selected" }
               : {
                   state: "unavailable",
-                  agentId: "selected",
+                  agentDid: "selected",
                   reason: "backend_disabled",
                 },
           ],
@@ -266,7 +267,7 @@ describe("SessionScreen canonical composer admission", () => {
     expect(sendChatMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         content: "hello",
-        agentId: "default",
+        agentDid: "default",
         sessionId: expect.any(String),
       }),
     );
@@ -300,10 +301,12 @@ describe("SessionScreen canonical composer admission", () => {
   });
 
   it("preserves a canonical blocker for a non-empty local draft", () => {
-    const { app, sendChatMessage } = screenApp({ nodeOverrides: { chatSafe: false } });
+    const { app, sendChatMessage } = screenApp({
+      nodeOverrides: { runtimeConnection: "connecting" },
+    });
     renderScreen(app);
     const status = app.view.getState().shellProjection.nonEmptyContentSendStatus;
-    expect(status.kind).toBe("disabled");
+    expect(status).toMatchObject({ kind: "disabled", reason: "runtimeNotConnected" });
 
     typeInComposer(screen.getByLabelText("Message"), "hello");
     const send = screen.getByRole("button", { name: "Send" });
@@ -846,7 +849,7 @@ describe("SessionScreen automated inputs", () => {
             sessionId: "session-reviewer",
             nodeDid: NODE,
             title: "Review the parser change",
-            agentId: "default",
+            agentDid: "default",
             tags: [],
           },
         ],

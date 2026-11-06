@@ -1,4 +1,4 @@
-use super::tests::{build_agent_node, call_config_tool, config, node_identity};
+use super::tests::{call_config_tool, config, node_identity, SelfConfigFixture};
 use super::*;
 
 type Tools = Vec<Box<dyn ToolDyn>>;
@@ -27,118 +27,76 @@ async fn refused(tools: &Tools, args: Value) -> String {
     }
 }
 
-async fn setup(label: &str, categories: &[&str]) -> (Arc<EmbeddedNode>, String, Tools) {
-    let node = build_agent_node().await;
-    let identity = node_identity(label);
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    let mut grants = config(categories);
-    grants.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &grants,
-        std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
-    );
-    (node, owner, tools)
+async fn authenticated_setup(label: &str, categories: &[&str]) -> (SelfConfigFixture, Tools) {
+    let fixture = SelfConfigFixture::new(label).await;
+    fixture.grant_selected_configuration().await;
+    let tools = fixture.tools(categories);
+    (fixture, tools)
 }
 
 #[tokio::test]
-async fn agent_ids_resolve_from_their_node_local_slug() {
-    let (node, owner, tools) = setup("slug", &["node", "tools", "profile"]).await;
-    let worker = format!("{owner}:worker-a");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+async fn agent_selection_requires_exact_did_and_suggests_display_name() {
+    let (fixture, tools) =
+        authenticated_setup("agent-selection", &["node", "tools", "profile"]).await;
+    let worker = fixture.install_sibling("worker-a").await;
+    fixture.grant_node_reader().await;
 
-    let read = ok(
-        &tools,
-        json!({"argv":["tools","get"],"options":{"agent":"worker-a"}}),
-    )
-    .await;
-    assert_eq!(read["document"]["tools_id"], format!("{worker}:tools"));
-    let read = ok(&tools, json!({"argv":["agent","get","worker-a"]})).await;
-    assert!(read.to_string().contains(&worker), "{read}");
-
-    let receipt = ok(
-        &tools,
-        json!({"argv":["profile","preview"],"options":{"agent":"worker-a"},"set":{"display_name":"Worker"}}),
-    )
-    .await;
-    assert_eq!(receipt["agent_id"], worker);
-    assert_eq!(receipt["target_id"], format!("{worker}:inference"));
-
-    let error = refused(
-        &tools,
-        json!({"argv":["profile","preview"],"set":{"display_name":"Mine"}}),
-    )
-    .await;
+    let missing = refused(&tools, json!({"argv": ["agent", "get", "worker-a"]})).await;
     assert!(
-        error.contains("needs options.agent") && error.contains(&worker),
+        missing.contains(&worker),
+        "display-name lookup suggests the exact DID: {missing}"
+    );
+    let read = ok(&tools, json!({"argv": ["agent", "get", worker]})).await;
+    assert_eq!(read["agent_did"], worker);
+    let tools_read = ok(
+        &tools,
+        json!({"argv": ["tools", "get"], "options": {"agent": worker}}),
+    )
+    .await;
+    assert_eq!(
+        tools_read["document"]["tools_id"],
+        format!("{worker}:tools")
+    );
+    let preview = ok(&tools, json!({"argv": ["profile", "preview"], "options": {"agent": worker}, "set": {"display_name": "Worker"}})).await;
+    assert_eq!(preview["agent_did"], worker);
+    assert_eq!(preview["target_id"], format!("{worker}:inference"));
+
+    let missing = refused(
+        &tools,
+        json!({"argv": ["tools", "get"], "options": {"agent": "nope"}}),
+    )
+    .await;
+    assert!(missing.contains("next_call"), "{missing}");
+    let error = refused(&tools, json!({"argv": ["agent", "create"], "options": {"id": "x", "display-name": "X", "system-prompt": "p", "preset": "readonly", "profile": format!("{}:inference", fixture.agent_did())}})).await;
+    assert!(
+        error.contains("provisions a fresh agent DID"),
         "{error}"
     );
-
-    ok(
-        &tools,
-        json!({"argv":["agent-target","create"],"target_id":"worker","set":{"name":"worker","target_node_did":owner,"agent_id":"worker-a"}}),
-    )
-    .await;
-    let target = ok(
-        &tools,
-        json!({"argv":["agent-target","get"],"target_id":"worker"}),
-    )
-    .await;
-    assert_eq!(target["document"]["agent_id"], worker);
-
-    crate::test_support::install_test_agent(&node, &owner, "worker-b").await;
-    crate::test_support::install_test_agent(&node, &owner, &format!("{owner}:worker-b")).await;
-    let read = ok(
-        &tools,
-        json!({"argv":["tools","get"],"options":{"agent":"worker-b"}}),
-    )
-    .await;
-    assert_eq!(read["document"]["tools_id"], "worker-b:tools");
-
-    let error = refused(
-        &tools,
-        json!({"argv":["tools","get"],"options":{"agent":"nope"}}),
-    )
-    .await;
-    assert!(
-        error.contains("[\\\"agent\\\",\\\"list\\\"]") && error.contains("next_call"),
-        "{error}"
-    );
-
-    let error = refused(
-        &tools,
-        json!({"argv":["agent","create"],"options":{"id":"x","display-name":"X","system-prompt":"p","preset":"readonly","profile":"beh-test:inference"}}),
-    )
-    .await;
-    assert!(error.contains("takes no id"), "{error}");
 }
 
 #[tokio::test]
 async fn profile_receipts_name_the_default_target_and_preview_edit_means_preview() {
-    let (_node, _owner, tools) = setup("profile-target", &["node", "profile"]).await;
+    let (fixture, tools) = authenticated_setup("profile-target", &["node", "profile"]).await;
+    let agent_did = fixture.agent_did();
     let receipt = ok(
         &tools,
         json!({"argv":["profile","preview"],"set":{"display_name":"Mine"}}),
     )
     .await;
-    assert_eq!(receipt["agent_id"], "beh-test");
-    assert_eq!(receipt["target_id"], "beh-test:inference");
+    assert_eq!(receipt["agent_did"], agent_did);
+    assert_eq!(receipt["target_id"], format!("{agent_did}:inference"));
     let aliased = ok(
         &tools,
         json!({"argv":["profile","preview","edit"],"set":{"display_name":"Mine"}}),
     )
     .await;
     assert_eq!(aliased["committed"], false);
-    assert_eq!(aliased["target_id"], "beh-test:inference");
+    assert_eq!(aliased["target_id"], format!("{agent_did}:inference"));
 }
 
 #[tokio::test]
 async fn guessed_verbs_resolve_or_name_the_working_form() {
-    let (_node, _owner, tools) = setup("verbs", &["node", "tools", "automation"]).await;
+    let (_fixture, tools) = authenticated_setup("verbs", &["node", "tools", "automation"]).await;
     let task = |verb: &[&str]| {
         let mut argv = vec!["automation"];
         argv.extend_from_slice(verb);
@@ -184,7 +142,7 @@ async fn guessed_verbs_resolve_or_name_the_working_form() {
 
 #[tokio::test]
 async fn type_errors_name_the_field_path_and_shape() {
-    let (_node, _owner, tools) = setup("shapes", &["tools"]).await;
+    let (_fixture, tools) = authenticated_setup("shapes", &["tools"]).await;
     let error = refused(
         &tools,
         json!({"argv":["tools","preview"],"set":{"integrations":{"lsp":"gents-mailbox"}}}),
@@ -208,34 +166,19 @@ async fn type_errors_name_the_field_path_and_shape() {
 
 #[tokio::test]
 async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
-    let node = build_agent_node().await;
-    let identity = node_identity("tools-drop");
-    let owner = identity.did().to_string();
-    for agent in ["setup", "worker"] {
-        crate::test_support::install_test_agent(&node, &owner, agent).await;
-    }
+    let fixture = SelfConfigFixture::new("tools-drop").await;
+    fixture.grant_selected_configuration().await;
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
     let mut grants = config(&["node", "tools"]);
-    grants.agent_id = "setup".into();
+    grants.agent_did = fixture.agent_did().to_owned();
     grants.preview = true;
     grants.no_lockout = true;
     let mut unguarded = grants.clone();
     unguarded.no_lockout = false;
-    let setup_tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity.clone()),
-        &unguarded,
-        std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
-    );
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &grants,
-        std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
-    );
+    let setup_tools = fixture.tools_with_config(&unguarded);
+    let tools = fixture.tools_with_config(&grants);
+    let tools_id = format!("{}:tools", fixture.agent_did());
     for surface in ["engineer-mailbox", "worker-surface"] {
         ok(
             &setup_tools,
@@ -243,7 +186,7 @@ async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
         )
         .await;
     }
-    let setup_core = SelfConfigCore::new(node.clone(), owner.clone(), "setup".into()).unwrap();
+    let setup_core = fixture.core();
     setup_core
         .apply(tools_request(
             &setup_core,
@@ -274,9 +217,9 @@ async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
             && error.contains("allow-drop"),
         "{error}"
     );
-    let exact_error = refused(&tools, json!({"argv":["tools","preview","update"],"target_id":"setup:tools","set":{"datastore":partial}})).await;
+    let exact_error = refused(&tools, json!({"argv":["tools","preview","update"],"target_id":tools_id,"set":{"datastore":partial}})).await;
     assert!(exact_error.contains("allow-drop"), "{exact_error}");
-    let exact_lockout = refused(&tools, json!({"argv":["tools","update"],"target_id":"setup:tools","set":{"self_config":{"enable_self_config":false}}})).await;
+    let exact_lockout = refused(&tools, json!({"argv":["tools","update"],"target_id":tools_id,"set":{"self_config":{"enable_self_config":false}}})).await;
     assert!(exact_lockout.contains("no-lockout"), "{exact_lockout}");
     let error = refused(
         &tools,
@@ -296,17 +239,17 @@ async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
     .await;
     ok(
         &tools,
-        json!({"argv":["tools","preview"],"options":{"agent":"worker"},"set":{"datastore":partial}}),
+        json!({"argv":["tools","preview"],"options":{"agent":worker},"set":{"datastore":partial}}),
     )
     .await;
 }
 
 #[tokio::test]
 async fn automation_validation_refuses_what_every_fire_would_reject() {
-    let (node, _owner, tools) = setup("automation-gaps", &["automation"]).await;
-    node.add_collection("type GapInput { message: String reply_session_id: String }")
-        .await
-        .unwrap();
+    let (fixture, tools) = authenticated_setup("automation-gaps", &["automation"]).await;
+    fixture
+        .add_collection("type GapInput { message: String reply_session_id: String }")
+        .await;
     let edit = |kind: &str, id: &str, set: Value| json!({"argv":["automation","edit",kind],"target_id":id,"set":set});
 
     let error = refused(
@@ -475,7 +418,7 @@ async fn automation_validation_refuses_what_every_fire_would_reject() {
 
 #[tokio::test]
 async fn execution_deadlines_are_bounded_where_a_claim_can_represent_them() {
-    let (_node, _owner, tools) = setup("deadline", &["profile"]).await;
+    let (_fixture, tools) = authenticated_setup("deadline", &["profile"]).await;
     let create = |deadline: i64| json!({"argv":["execution","preview","create"],"target_id":"long","set":{"deadline_duration_secs":deadline}});
     let error = refused(&tools, create(i64::MAX)).await;
     assert!(error.contains("at most 3153600000"), "{error}");
@@ -484,23 +427,12 @@ async fn execution_deadlines_are_bounded_where_a_claim_can_represent_them() {
 
 #[tokio::test]
 async fn help_is_layered_and_its_recipes_run_as_written() {
-    let node = build_agent_node().await;
-    let identity = node_identity("recipes");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "setup").await;
-    crate::test_support::install_test_agent(&node, &owner, &format!("{owner}:worker")).await;
-    let mut grants = config(&["node", "tools", "profile", "automation"]);
-    grants.agent_id = "setup".into();
-    grants.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity.clone()),
-        &grants,
-        std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
-    );
-
+    let (fixture, tools) =
+        authenticated_setup("recipes", &["node", "tools", "profile", "automation"]).await;
+    let owner = fixture.node_did();
+    let agent = fixture.agent_did();
+    let backend = format!("{agent}:backend");
+    fixture.grant_agent_schema().await;
     let index = call_config_tool(&tools, vec!["help".into()]).await.unwrap();
     assert!(index.len() < 2_000, "help index is {} chars", index.len());
     for resource in [
@@ -535,24 +467,31 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
             .unwrap_or_else(|error| panic!("{alias}: {error}"));
     }
 
-    let substitute = |call: &Value| -> Value {
-        let text = call
-            .to_string()
-            .replace("<BACKEND_ID>", "setup:backend")
-            .replace("<AGENT_ID>", "setup")
-            .replace("<MODEL>", "test-model")
-            .replace("<PROMPT>", "Lead the work.")
-            .replace("<DID>", &owner);
-        serde_json::from_str(&text).unwrap()
-    };
+    let mut created_agent: Option<String> = None;
+
     for resource in ["agent", "execution", "datastore", "automation", "profile"] {
         for (title, steps) in command::help::recipes(resource) {
             for (call, _) in steps {
-                let call = substitute(&call);
+                let mut text = call
+                    .to_string()
+                    .replace("<BACKEND_ID>", &backend)
+                    .replace("<AGENT_DID>", agent)
+                    .replace("<MODEL>", "test-model")
+                    .replace("<PROMPT>", "Lead the work.")
+                    .replace("<DID>", owner);
+                if text.contains("<CREATED_AGENT_DID>") {
+                    text = text.replace(
+                        "<CREATED_AGENT_DID>",
+                        created_agent
+                            .as_deref()
+                            .expect("the previous create receipt supplied an Agent DID"),
+                    );
+                }
+                let call: Value = serde_json::from_str(&text).unwrap();
+                let creates_agent = call["argv"] == json!(["agent", "create"]);
                 let result = if call["tool"] == "schema" {
                     let args = call["args"].clone();
-                    let schema_tool =
-                        crate::tools::builtin::schema_help::SchemaTool::new(node.clone());
+                    let schema_tool = fixture.schema_tool();
                     let preview = Tool::call(&schema_tool, serde_json::from_value(args).unwrap())
                         .await
                         .unwrap();
@@ -568,19 +507,25 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
                     ok(&tools, call.clone()).await
                 };
                 assert!(!result.is_null(), "{resource} recipe {title}");
+                if creates_agent {
+                    created_agent = Some(
+                        result["agent_did"]
+                            .as_str()
+                            .expect("agent create receipt has a DID")
+                            .to_owned(),
+                    );
+                }
             }
         }
     }
-    let lead = ok(&tools, json!({"argv":["agent","get","lead"]})).await;
-    assert!(
-        lead.to_string().contains(&format!("{owner}:lead")),
-        "{lead}"
-    );
+    let lead_did = created_agent.expect("agent recipe created a helper");
+    let lead = ok(&tools, json!({"argv":["agent","get",lead_did]})).await;
+    assert_eq!(lead["agent_did"], lead_did);
 }
 
 #[tokio::test]
 async fn results_put_the_answer_first_and_execution_metadata_last() {
-    let (_node, _owner, tools) = setup("key-order", &["node", "profile"]).await;
+    let (_fixture, tools) = authenticated_setup("key-order", &["node", "profile"]).await;
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -615,7 +560,7 @@ async fn results_put_the_answer_first_and_execution_metadata_last() {
             "committed",
             "collection",
             "target_id",
-            "agent_id",
+            "agent_did",
             "changed",
             "effect",
             "config_execution",
@@ -635,7 +580,7 @@ async fn results_put_the_answer_first_and_execution_metadata_last() {
 
 #[tokio::test]
 async fn lists_include_unselected_documents() {
-    let (_node, _owner, tools) = setup("lists", &["node", "tools", "automation"]).await;
+    let (_fixture, tools) = authenticated_setup("lists", &["node", "tools", "automation"]).await;
     ok(
         &tools,
         json!({"argv":["datastore","create","unselected"],"set":{"entries":[]}}),
@@ -659,36 +604,39 @@ async fn lists_include_unselected_documents() {
 
 #[tokio::test]
 async fn target_id_fills_a_positional_id() {
-    let (_node, _owner, tools) = setup("positional", &["node", "tools"]).await;
+    let (fixture, tools) = authenticated_setup("positional", &["node", "tools"]).await;
+    let agent_did = fixture.agent_did();
     for args in [
-        json!({"argv":["agent","get"],"target_id":"beh-test"}),
-        json!({"argv":["agent","get","beh-test"],"target_id":"beh-test"}),
+        json!({"argv":["agent","get"],"target_id":agent_did}),
+        json!({"argv":["agent","get",agent_did],"target_id":agent_did}),
     ] {
         let read = ok(&tools, args.clone()).await;
-        assert_eq!(read["agent_id"], "beh-test", "{args}");
+        assert_eq!(read["agent_did"], agent_did, "{args}");
     }
     let conflict = refused(
         &tools,
-        json!({"argv":["agent","get","beh-test"],"target_id":"other"}),
+        json!({"argv":["agent","get",agent_did],"target_id":"other"}),
     )
     .await;
     assert!(
-        conflict.contains(r#"target ID \"beh-test\" in argv conflicts with target_id \"other\""#),
+        conflict.contains(&format!(
+            r#"target ID \"{agent_did}\" in argv conflicts with target_id \"other\""#
+        )),
         "{conflict}"
     );
     let unsupported = refused(&tools, json!({"argv":["tools","get"],"target_id":"x"})).await;
     assert!(unsupported.contains("no owned Tools"), "{unsupported}");
     let recovered = ok(
         &tools,
-        json!({"argv":["tools","get"],"options":{"agent":"beh-test"}}),
+        json!({"argv":["tools","get"],"options":{"agent":agent_did}}),
     )
     .await;
-    assert_eq!(recovered["document"]["tools_id"], "beh-test:tools");
+    assert_eq!(recovered["document"]["tools_id"], format!("{agent_did}:tools"));
 }
 
 #[tokio::test]
 async fn mailbox_help_states_the_identity_choice() {
-    let (_node, _owner, tools) = setup("mailbox-help", &["tools"]).await;
+    let (_fixture, tools) = authenticated_setup("mailbox-help", &["tools"]).await;
     let choice = "condition identity: one open item per stable finding, updated across requests; event identity: a new item for every request";
     for argv in [
         json!(["help", "datastore"]),
@@ -706,8 +654,38 @@ async fn mailbox_help_states_the_identity_choice() {
 }
 
 #[tokio::test]
+async fn unsupported_surface_mutations_point_to_scoped_tools_help() {
+    let (_fixture, tools) = authenticated_setup("surface-mutation-help", &["tools"]).await;
+    for kind in ["update", "delete"] {
+        let failure = structured_failure(
+            &tools,
+            json!({"argv":["datastore","preview","create"],"target_id":"shipments",
+                "set":{"entries":[{"kind":kind,"tool_name":"change_shipment",
+                    "collection":"Shipment","fields":[]}]}}),
+        )
+        .await;
+        assert_eq!(failure["config_execution"]["mutation_entered"], false);
+        let recovery = failure["recovery"]["next_call"].clone();
+        let help = ok(&tools, recovery).await;
+        let help = help.as_str().unwrap();
+        assert!(
+            help.contains("Named surface entries support create and query only"),
+            "{help}"
+        );
+        assert!(
+            help.contains(r#"{"argv":["tools","update","--help"]}"#),
+            "{help}"
+        );
+    }
+    let tools_help = ok(&tools, json!({"argv":["tools","update","--help"]})).await;
+    let tools_help = tools_help.as_str().unwrap();
+    assert!(tools_help.contains("enable_defra_query"), "{tools_help}");
+    assert!(tools_help.contains("write_collections"), "{tools_help}");
+}
+
+#[tokio::test]
 async fn datastore_help_says_what_fill_means() {
-    let (_node, _owner, tools) = setup("fill-help", &["tools"]).await;
+    let (_fixture, tools) = authenticated_setup("fill-help", &["tools"]).await;
     let page = ok(&tools, json!({"argv":["help","datastore"]})).await;
     let page = page.as_str().unwrap();
     for line in [
@@ -731,7 +709,7 @@ async fn datastore_help_says_what_fill_means() {
 
 #[tokio::test]
 async fn crud_documents_share_verbs_and_preserve_reference_and_identity_checks() {
-    let (_node, owner, tools) = setup(
+    let (fixture, tools) = authenticated_setup(
         "crud",
         &[
             "node",
@@ -743,6 +721,8 @@ async fn crud_documents_share_verbs_and_preserve_reference_and_identity_checks()
         ],
     )
     .await;
+    fixture.grant_agent_delete().await;
+    let owner = fixture.node_did();
     for (resource, fields) in [
         ("sampling", json!({"temperature":0.8})),
         ("retry-policy", json!({"display_name":"Retry"})),
@@ -863,7 +843,7 @@ async fn crud_documents_share_verbs_and_preserve_reference_and_identity_checks()
 
 #[tokio::test]
 async fn crud_batch_reports_partial_commits_and_stops_before_later_operations() {
-    let (_node, _owner, tools) = setup("crud-batch", &["profile"]).await;
+    let (_fixture, tools) = authenticated_setup("crud-batch", &["profile"]).await;
     let error = refused(
         &tools,
         json!({"argv":["batch"],"options":{"operations":[
@@ -924,9 +904,12 @@ async fn crud_batch_reports_partial_commits_and_stops_before_later_operations() 
 
 #[tokio::test]
 async fn crud_automation_keeps_strict_creation_and_selected_task_owner() {
-    let (node, owner, tools) = setup("crud-routing", &["node", "automation"]).await;
-    let worker = format!("{owner}:worker");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) = authenticated_setup("crud-routing", &["node", "automation"]).await;
+    fixture.grant_agent_delete().await;
+    let current = fixture.agent_did();
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&worker).await;
     for (resource, id, fields) in [
         (
             "task",
@@ -967,17 +950,17 @@ async fn crud_automation_keeps_strict_creation_and_selected_task_owner() {
             json!({"argv":[resource,"update",id],"set":{"tags":["inferred-owner"]}}),
         )
         .await;
-        assert_eq!(changed["agent_id"], worker);
+        assert_eq!(changed["agent_did"], worker);
     }
     assert!(refused(
         &tools,
-        json!({"argv":["task","update","job"],"options":{"agent":"beh-test"},"set":{"prompt_template":"Wrong owner."}})
+        json!({"argv":["task","update","job"],"options":{"agent":current},"set":{"prompt_template":"Wrong owner."}})
     )
     .await
     .contains("belongs to agent"));
     let failure = structured_failure(
         &tools,
-        json!({"argv":["trigger","update","tick"],"options":{"agent":"beh-test"},"set":{"tags":["wrong"]}})
+        json!({"argv":["trigger","update","tick"],"options":{"agent":current},"set":{"tags":["wrong"]}})
     ).await;
     let message = failure["error"].as_str().unwrap();
     assert!(message.contains("selected agent"), "{failure}");
@@ -1006,9 +989,11 @@ async fn crud_automation_keeps_strict_creation_and_selected_task_owner() {
 
 #[tokio::test]
 async fn crud_exact_context_and_tools_preserve_shared_document_guards() {
-    let (node, owner, tools) = setup("crud-sharing", &["node", "tools", "agent"]).await;
-    let worker = format!("{owner}:worker");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) = authenticated_setup("crud-sharing", &["node", "tools", "agent"]).await;
+    let current = fixture.agent_did();
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&worker).await;
     let context_id = format!("{worker}:context");
     let tools_id = format!("{worker}:tools");
     ok(&tools,json!({"argv":["context","update"],"target_id":context_id,"set":{"system_prompt":"Review clearly."}})).await;
@@ -1019,7 +1004,7 @@ async fn crud_exact_context_and_tools_preserve_shared_document_guards() {
     .await;
     ok(
         &tools,
-        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context_id}}),
+        json!({"argv":["agent","update",current],"set":{"context_id":context_id}}),
     )
     .await;
     for (resource, id) in [("context", context_id), ("tools", tools_id)] {
@@ -1036,14 +1021,17 @@ async fn crud_exact_context_and_tools_preserve_shared_document_guards() {
 /// accepted with the acknowledgement, and the receipt lists every agent.
 #[tokio::test]
 async fn shared_context_edit_is_refused_by_default_and_accepted_with_acknowledgement() {
-    let (node, owner, tools) = setup("shared-context-ack", &["node", "tools", "agent"]).await;
-    let worker = "aaa-worker".to_string();
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) =
+        authenticated_setup("shared-context-ack", &["node", "tools", "agent"]).await;
+    let current = fixture.agent_did();
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&worker).await;
     let context_id = format!("{worker}:context");
     // Two agents select one Context: the invoking agent and the worker.
     ok(
         &tools,
-        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context_id}}),
+        json!({"argv":["agent","update",current],"set":{"context_id":context_id}}),
     )
     .await;
 
@@ -1058,7 +1046,7 @@ async fn shared_context_edit_is_refused_by_default_and_accepted_with_acknowledge
         "the refusal must point at the acknowledgement: {refusal}"
     );
     assert!(
-        refusal.contains("beh-test") && refusal.contains(&worker),
+        refusal.contains(current) && refusal.contains(&worker),
         "the refusal must name every affected agent: {refusal}"
     );
 
@@ -1069,7 +1057,7 @@ async fn shared_context_edit_is_refused_by_default_and_accepted_with_acknowledge
     .await;
     assert_eq!(receipt["committed"], true);
     assert_eq!(
-        receipt["agent_id"], "beh-test",
+        receipt["agent_did"], current,
         "the invoking referrer owns the edit"
     );
     let agents = receipt["shared"]["agents"]
@@ -1081,7 +1069,9 @@ async fn shared_context_edit_is_refused_by_default_and_accepted_with_acknowledge
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
     named.sort();
-    assert_eq!(named, vec![worker.clone(), "beh-test".to_string()]);
+    let mut expected = vec![worker.clone(), current.to_string()];
+    expected.sort();
+    assert_eq!(named, expected);
     let digest = receipt["shared"]["sha256"]
         .as_str()
         .unwrap_or_else(|| panic!("receipt must carry the new sha256: {receipt}"));
@@ -1100,14 +1090,17 @@ async fn shared_context_edit_is_refused_by_default_and_accepted_with_acknowledge
 /// The same rule for Tools, reached through a shared Context.
 #[tokio::test]
 async fn shared_tools_edit_is_refused_by_default_and_accepted_with_acknowledgement() {
-    let (node, owner, tools) = setup("shared-tools-ack", &["node", "tools", "agent"]).await;
-    let worker = format!("{owner}:worker");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) =
+        authenticated_setup("shared-tools-ack", &["node", "tools", "agent"]).await;
+    let current = fixture.agent_did();
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&worker).await;
     let context_id = format!("{worker}:context");
     let tools_id = format!("{worker}:tools");
     ok(
         &tools,
-        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context_id}}),
+        json!({"argv":["agent","update",current],"set":{"context_id":context_id}}),
     )
     .await;
 
@@ -1146,14 +1139,16 @@ async fn shared_tools_edit_is_refused_by_default_and_accepted_with_acknowledgeme
 /// exact-ID path already required `node` at the command layer.
 #[tokio::test]
 async fn shared_acknowledgement_does_not_widen_who_may_write() {
-    let (node, owner, tools) = setup("shared-authority", &["tools", "agent"]).await;
-    let worker = format!("{owner}:worker");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) = authenticated_setup("shared-authority", &["tools", "agent"]).await;
+    let current = fixture.agent_did();
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&worker).await;
     let context_id = format!("{worker}:context");
     // Two agents select one Context: the invoking agent and the worker.
     ok(
         &tools,
-        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context_id}}),
+        json!({"argv":["agent","update",current],"set":{"context_id":context_id}}),
     )
     .await;
 
@@ -1169,18 +1164,21 @@ async fn shared_acknowledgement_does_not_widen_who_may_write() {
         "the refusal must name the missing grant: {refusal}"
     );
     assert!(
-        refusal.contains("beh-test") && refusal.contains(&worker),
+        refusal.contains(current) && refusal.contains(&worker),
         "the refusal must name every affected agent: {refusal}"
     );
 
     // The same call with the node grant lands.
-    let (node2, owner2, tools2) = setup("shared-authority-node", &["node", "tools", "agent"]).await;
-    let worker2 = format!("{owner2}:worker");
-    crate::test_support::install_test_agent(&node2, &owner2, &worker2).await;
+    let (fixture2, tools2) =
+        authenticated_setup("shared-authority-node", &["node", "tools", "agent"]).await;
+    let current2 = fixture2.agent_did();
+    let worker2 = fixture2.install_sibling("worker").await;
+    fixture2.grant_node_reader().await;
+    fixture2.grant_sibling_configuration(&worker2).await;
     let context2 = format!("{worker2}:context");
     ok(
         &tools2,
-        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context2}}),
+        json!({"argv":["agent","update",current2],"set":{"context_id":context2}}),
     )
     .await;
     let receipt = ok(
@@ -1196,13 +1194,15 @@ async fn shared_acknowledgement_does_not_widen_who_may_write() {
 /// `shared_ack` before the caller assigned it, so it always refused.
 #[tokio::test]
 async fn bound_context_update_honours_the_acknowledgement() {
-    let (node, owner, tools) = setup("bound-ack", &["node", "tools", "agent"]).await;
-    let worker = format!("{owner}:worker");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) = authenticated_setup("bound-ack", &["node", "tools", "agent"]).await;
+    let current = fixture.agent_did();
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&worker).await;
     let context_id = format!("{worker}:context");
     ok(
         &tools,
-        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context_id}}),
+        json!({"argv":["agent","update",current],"set":{"context_id":context_id}}),
     )
     .await;
 
@@ -1223,7 +1223,7 @@ async fn bound_context_update_honours_the_acknowledgement() {
     assert_eq!(receipt["committed"], true);
     let read = ok(
         &tools,
-        json!({"argv":["context","get"],"options":{"agent":"worker"}}),
+        json!({"argv":["context","get"],"options":{"agent":worker}}),
     )
     .await;
     assert_eq!(read["document"]["system_prompt"], "Bound prompt.");
@@ -1232,13 +1232,16 @@ async fn bound_context_update_honours_the_acknowledgement() {
 /// The bound `context preview` path must honour it too, and write nothing.
 #[tokio::test]
 async fn bound_context_preview_honours_the_acknowledgement() {
-    let (node, owner, tools) = setup("bound-ack-preview", &["node", "tools", "agent"]).await;
-    let worker = format!("{owner}:worker");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) =
+        authenticated_setup("bound-ack-preview", &["node", "tools", "agent"]).await;
+    let current = fixture.agent_did();
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&worker).await;
     let context_id = format!("{worker}:context");
     ok(
         &tools,
-        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context_id}}),
+        json!({"argv":["agent","update",current],"set":{"context_id":context_id}}),
     )
     .await;
 
@@ -1250,7 +1253,7 @@ async fn bound_context_preview_honours_the_acknowledgement() {
     assert_eq!(preview["committed"], false);
     let read = ok(
         &tools,
-        json!({"argv":["context","get"],"options":{"agent":"worker"}}),
+        json!({"argv":["context","get"],"options":{"agent":worker}}),
     )
     .await;
     assert_ne!(read["document"]["system_prompt"], "Previewed prompt.");
@@ -1261,13 +1264,15 @@ async fn bound_context_preview_honours_the_acknowledgement() {
 /// the order the fields were set in.
 #[tokio::test]
 async fn shared_receipt_digest_is_over_the_published_projection() {
-    let (node, owner, tools) = setup("shared-digest", &["node", "tools", "agent"]).await;
-    let worker = format!("{owner}:worker");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) = authenticated_setup("shared-digest", &["node", "tools", "agent"]).await;
+    let current = fixture.agent_did();
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&worker).await;
     let context_id = format!("{worker}:context");
     ok(
         &tools,
-        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context_id}}),
+        json!({"argv":["agent","update",current],"set":{"context_id":context_id}}),
     )
     .await;
 
@@ -1296,9 +1301,11 @@ async fn shared_receipt_digest_is_over_the_published_projection() {
 /// An unshared edit keeps its old receipt: no `shared` block appears.
 #[tokio::test]
 async fn unshared_context_edit_receipt_has_no_shared_block() {
-    let (node, owner, tools) = setup("unshared-receipt", &["node", "tools", "agent"]).await;
-    let worker = format!("{owner}:worker");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) =
+        authenticated_setup("unshared-receipt", &["node", "tools", "agent"]).await;
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&worker).await;
     let context_id = format!("{worker}:context");
     let receipt = ok(
         &tools,
@@ -1316,9 +1323,10 @@ async fn unshared_context_edit_receipt_has_no_shared_block() {
 /// something.
 #[tokio::test]
 async fn shared_option_rejects_other_values_and_other_resources() {
-    let (node, owner, tools) = setup("shared-option", &["node", "tools", "agent"]).await;
-    let worker = format!("{owner}:worker");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) = authenticated_setup("shared-option", &["node", "tools", "agent"]).await;
+    let current = fixture.agent_did();
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
     let context_id = format!("{worker}:context");
     let error = refused(
         &tools,
@@ -1328,7 +1336,7 @@ async fn shared_option_rejects_other_values_and_other_resources() {
     assert!(error.contains("acknowledge"), "{error}");
     let error = refused(
         &tools,
-        json!({"argv":["agent","update","beh-test"],"options":{"shared":"acknowledge"},"set":{"display_name":"x"}}),
+        json!({"argv":["agent","update",current],"options":{"shared":"acknowledge"},"set":{"display_name":"x"}}),
     )
     .await;
     assert!(error.contains("shared applies only"), "{error}");
@@ -1336,7 +1344,7 @@ async fn shared_option_rejects_other_values_and_other_resources() {
 
 #[tokio::test]
 async fn crud_backend_creation_preserves_auth_boundary() {
-    let (_node, _owner, tools) = setup("crud-backend", &["backend"]).await;
+    let (_fixture, tools) = authenticated_setup("crud-backend", &["backend"]).await;
     ok(
         &tools,
         json!({"argv":["backend","create","local"],"set":{"endpoint":"http://127.0.0.1:8000/v1"}}),
@@ -1355,7 +1363,7 @@ async fn crud_backend_creation_preserves_auth_boundary() {
 
 #[tokio::test]
 async fn job_block_help_topic_states_bounds_defaults_and_policy() {
-    let (_node, _owner, tools) = setup("job-help", &["tools"]).await;
+    let (_fixture, tools) = authenticated_setup("job-help", &["tools"]).await;
     let page = call_config_tool(&tools, vec!["help".into(), "tools".into()])
         .await
         .unwrap();
@@ -1376,7 +1384,7 @@ async fn job_block_help_topic_states_bounds_defaults_and_policy() {
         "dynamic: off|check|run; default check",
         "dynamic_targets",
         "trusted_packs",
-        "operator-only",
+        "Tools updates require native document authorization",
     ] {
         assert!(shapes.contains(detail), "missing {detail:?}: {shapes}");
     }
@@ -1384,8 +1392,8 @@ async fn job_block_help_topic_states_bounds_defaults_and_policy() {
 
 #[tokio::test]
 async fn crud_help_exposes_parameters_for_the_named_resource_and_verb() {
-    let (_node, _owner, tools) =
-        setup("crud-help", &["node", "tools", "profile", "automation"]).await;
+    let (_fixture, tools) =
+        authenticated_setup("crud-help", &["node", "tools", "profile", "automation"]).await;
     for (resource, field) in [
         ("context", "system_prompt"),
         ("sampling", "temperature"),
@@ -1445,33 +1453,45 @@ async fn crud_help_exposes_parameters_for_the_named_resource_and_verb() {
 
 #[tokio::test]
 async fn local_target_creation_defaults_identity_but_updates_preserve_remote_destination() {
-    let (node, owner, tools) = setup("target-default", &["node", "tools"]).await;
-    let helper = format!("{owner}:helper");
-    crate::test_support::install_test_agent(&node, &owner, &helper).await;
-    let receipt = ok(&tools, json!({"argv":["agent-target","create"],"target_id":"local","set":{"name":"helper","agent_id":"helper"}})).await;
+    let (fixture, tools) = authenticated_setup("target-default", &["node", "tools"]).await;
+    let owner = fixture.node_did();
+    let helper = fixture.install_sibling("helper").await;
+    fixture.grant_node_reader().await;
+    let receipt = ok(&tools, json!({"argv":["agent-target","create"],"target_id":"local","set":{"name":"helper","agent_did":helper}})).await;
     assert_eq!(receipt["connection"]["kind"], "local");
     assert_eq!(receipt["connection"]["target_node_did"], owner);
-    assert_eq!(receipt["connection"]["agent_id"], helper);
+    assert_eq!(receipt["connection"]["agent_did"], helper);
     assert_eq!(receipt["connection"]["runtime_verified"], false);
     let local = ok(&tools, json!({"argv":["agent-target","get","local"]})).await;
     assert_eq!(local["document"]["target_node_did"], owner);
-    assert_eq!(local["document"]["agent_id"], helper);
+    assert_eq!(local["document"]["agent_did"], helper);
 
-    assert!(call(&tools, json!({"argv":["agent-target","create"],"target_id":"missing","set":{"name":"missing","agent_id":"does-not-exist"}})).await.is_err());
+    assert!(call(&tools, json!({"argv":["agent-target","create"],"target_id":"missing","set":{"name":"missing","agent_did":"does-not-exist"}})).await.is_err());
     assert!(
         call(&tools, json!({"argv":["agent-target","get","missing"]}))
             .await
             .is_err()
     );
-    let remote = node_identity("remote-target-owner").did().to_string();
-    ok(&tools, json!({"argv":["agent-target","create"],"target_id":"remote","set":{"name":"remote","target_node_did":remote,"agent_id":"helper"}})).await;
+    let (remote, remote_agent, next_agent) = tokio::task::spawn_blocking(|| {
+        (
+            node_identity("remote-target-owner"),
+            node_identity("remote-target-agent"),
+            node_identity("remote-target-next-agent"),
+        )
+    })
+    .await
+    .unwrap();
+    let remote = remote.did();
+    let remote_agent = remote_agent.did();
+    let next_agent = next_agent.did();
+    ok(&tools, json!({"argv":["agent-target","create"],"target_id":"remote","set":{"name":"remote","target_node_did":remote,"agent_did":remote_agent}})).await;
     let changed = ok(&tools, json!({"argv":["agent-target","update"],"target_id":"remote","set":{"description":"Remote helper"}})).await;
     assert_eq!(changed["connection"]["kind"], "remote");
     assert_eq!(changed["connection"]["target_node_did"], remote);
-    assert_eq!(changed["connection"]["agent_id"], "helper");
-    let changed = ok(&tools, json!({"argv":["agent-target","update"],"target_id":"remote","set":{"agent_id":"helper-2"}})).await;
+    assert_eq!(changed["connection"]["agent_did"], remote_agent);
+    let changed = ok(&tools, json!({"argv":["agent-target","update"],"target_id":"remote","set":{"agent_did":next_agent}})).await;
     assert_eq!(changed["connection"]["target_node_did"], remote);
-    assert_eq!(changed["connection"]["agent_id"], "helper-2");
+    assert_eq!(changed["connection"]["agent_did"], next_agent);
     assert!(call(
         &tools,
         json!({"argv":["agent-target","update"],"target_id":"remote","clear":["target_node_did"]})
@@ -1484,17 +1504,18 @@ async fn local_target_creation_defaults_identity_but_updates_preserve_remote_des
 
 #[tokio::test]
 async fn profile_receipt_selects_current_agent_without_changing_original_profile() {
-    let (_node, _owner, tools) = setup("selection-receipt", &["node", "profile"]).await;
+    let (fixture, tools) = authenticated_setup("selection-receipt", &["node", "profile"]).await;
+    let agent_did = fixture.agent_did();
     let before = ok(
         &tools,
-        json!({"argv":["profile","get","beh-test:inference"]}),
+        json!({"argv":["profile","get",format!("{agent_did}:inference")]}),
     )
     .await;
-    let receipt = ok(&tools, json!({"argv":["profile","create"],"target_id":"research","set":{"backend_id":"beh-test:backend","model_name":"test-model"}})).await;
-    assert_eq!(receipt["connection"]["agent_id"], "beh-test");
+    let receipt = ok(&tools, json!({"argv":["profile","create"],"target_id":"research","set":{"backend_id":format!("{agent_did}:backend"),"model_name":"test-model"}})).await;
+    assert_eq!(receipt["connection"]["agent_did"], agent_did);
     assert_eq!(
         receipt["connection"]["selected_profile_id"],
-        "beh-test:inference"
+        format!("{agent_did}:inference")
     );
     assert_eq!(receipt["connection"]["selected"], false);
     ok(&tools, receipt["connection"]["select_with"].clone()).await;
@@ -1503,7 +1524,7 @@ async fn profile_receipt_selects_current_agent_without_changing_original_profile
     assert!(changed["connection"].get("select_with").is_none());
     let after = ok(
         &tools,
-        json!({"argv":["profile","get","beh-test:inference"]}),
+        json!({"argv":["profile","get",format!("{agent_did}:inference")]}),
     )
     .await;
     assert_eq!(before["document"], after["document"]);
@@ -1524,14 +1545,16 @@ async fn structured_failure(tools: &Tools, args: Value) -> Value {
 
 #[tokio::test]
 async fn config_usage_errors_return_executable_resource_verb_recovery() {
-    let (_node, _owner, tools) = setup("usage-recovery", &["node", "tools", "automation"]).await;
+    let (fixture, tools) =
+        authenticated_setup("usage-recovery", &["node", "tools", "automation"]).await;
+    let agent_did = fixture.agent_did();
     for args in [
-        json!({"argv":["get"],"target_id":"beh-test"}),
-        json!({"argv":["get","beh-test"]}),
+        json!({"argv":["get"],"target_id":agent_did}),
+        json!({"argv":["get",agent_did]}),
         json!({"argv":["trigger","state","t"]}),
         json!({"argv":["schema","list"]}),
-        json!({"argv":["agent","clone","beh-test"]}),
-        json!({"argv":["agent","clone"],"options":{"source":"beh-test"}}),
+        json!({"argv":["agent","clone",agent_did]}),
+        json!({"argv":["agent","clone"],"options":{"source":agent_did}}),
     ] {
         let failure = structured_failure(&tools, args).await;
         assert_eq!(failure["config_execution"]["mutation_entered"], false);
@@ -1541,7 +1564,7 @@ async fn config_usage_errors_return_executable_resource_verb_recovery() {
     }
     let failure = structured_failure(
         &tools,
-        json!({"argv":["batch"],"options":{"operations":[{"argv":["get","beh-test"]}]}}),
+        json!({"argv":["batch"],"options":{"operations":[{"argv":["get",agent_did]}]}}),
     )
     .await;
     ok(
@@ -1553,7 +1576,9 @@ async fn config_usage_errors_return_executable_resource_verb_recovery() {
 
 #[tokio::test]
 async fn saved_config_audit_reports_broken_references_without_mutation_and_accepts_repair() {
-    let (node, owner, tools) = setup("saved-audit", &["node", "tools"]).await;
+    let (fixture, tools) = authenticated_setup("saved-audit", &["node", "tools"]).await;
+    let context_id = format!("{}:context", fixture.agent_did());
+    let tools_id = format!("{}:tools", fixture.agent_did());
     let failure = structured_failure(&tools, json!({"argv":["datastore","validate"]})).await;
     assert_eq!(failure["config_execution"]["mutation_entered"], false);
     assert!(!failure["error"].as_str().unwrap().contains("sessions"));
@@ -1563,11 +1588,15 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_accep
     assert_eq!(valid["valid"], true);
     assert!(valid["checked_documents"].as_u64().unwrap() > 0);
     assert_eq!(valid["collections"]["Agent"], 1);
-    let owner = crate::store::graphql::escape_graphql_string(&owner);
-    crate::ConfigAccess::write_local(&node, "test.audit.corrupt", &format!(
-        r#"mutation {{ update_AgentContext(filter: {{node_did: {{_eq: "{owner}"}}, context_id: {{_eq: "beh-test:context"}}}}, input: {{tools_id: "absent-tools"}}) {{context_id}} }}"#
-    )).await.unwrap();
-    let access = crate::ConfigAccess::local(node.clone());
+    fixture
+        .update_signed_configuration(
+            crate::Collection::AgentContext,
+            &context_id,
+            json!({"tools_id": "absent-tools"}),
+        )
+        .await;
+    let owner = crate::store::graphql::escape_graphql_string(fixture.node_did());
+    let access = fixture.user_access();
     let query = format!(
         r#"{{ AgentContext(filter: {{node_did: {{_eq: "{owner}"}}}}) {{context_id tools_id}} }}"#
     );
@@ -1581,7 +1610,11 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_accep
     assert_eq!(invalid["errors"][0]["missing"]["id"], "absent-tools");
     assert_eq!(before, access.execute(&query).await.unwrap());
     ok(&tools, invalid["errors"][0]["inspect_with"].clone()).await;
-    ok(&tools, json!({"argv":["context","update"],"target_id":"beh-test:context","set":{"tools_id":"beh-test:tools"}})).await;
+    ok(
+        &tools,
+        json!({"argv":["context","update"],"target_id":context_id,"set":{"tools_id":tools_id}}),
+    )
+    .await;
     assert_eq!(
         ok(&tools, json!({"argv":["validate"]})).await["valid"],
         true
@@ -1590,28 +1623,51 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_accep
 
 #[tokio::test]
 async fn saved_config_audit_is_node_scoped_and_does_not_require_preview() {
-    let (node, owner, tools) = setup("audit-scope", &["node"]).await;
-    let foreign = node_identity("audit-foreign").did().to_string();
-    crate::ConfigAccess::write_local(&node, "test.audit.foreign", &format!(
-        r#"mutation {{create_AgentContext(input: {{node_did: "{}", context_id: "foreign-context", tools_id: "missing-foreign-tools"}}) {{context_id}}}}"#,
-        crate::store::graphql::escape_graphql_string(&foreign)
-    )).await.unwrap();
+    let (fixture, tools) = authenticated_setup("audit-scope", &["node"]).await;
+    let foreign = tokio::task::spawn_blocking(|| node_identity("audit-foreign"))
+        .await
+        .unwrap();
+    let access = fixture.user_access();
+    crate::test_support::bootstrap_signed_test_node(access, foreign.did()).await;
+    let node_response = access
+        .execute(&format!(
+            r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
+            crate::store::graphql::escape_graphql_string(foreign.did()),
+        ))
+        .await
+        .unwrap();
+    let foreign_node = node_response["data"]["Node"][0]["_docID"].as_str().unwrap();
+    let foreign_did = foreign.did().to_owned();
+    let created = access.transact_write("test.audit.foreign", |txn| {
+        let foreign_did = &foreign_did;
+        Box::pin(async move {
+            txn.execute_client_signed_create(
+                "mutation($input: AgentContextMutationInputArg!) { create_AgentContext(input: $input) { _docID } }",
+                &json!({"input": {"node_did": foreign_did, "context_id": "foreign-context", "tools_id": "missing-foreign-tools"}}),
+                gents_protocol::schemas::AGENT_CONTEXT,
+            ).await
+        })
+    }).await.unwrap();
+    let foreign_doc = crate::store::graphql::created_doc_id(&created, "AgentContext").unwrap();
+    access
+        .add_resource_relationship(
+            "AgentContext",
+            &foreign_doc,
+            "parent",
+            "nodes",
+            foreign_node,
+        )
+        .await
+        .unwrap();
     let valid = ok(&tools, json!({"argv":["validate"]})).await;
     assert_eq!(valid["valid"], true, "{valid}");
     assert_eq!(valid["collections"]["AgentContext"], 1);
     assert!(!valid.to_string().contains("foreign-context"));
-    let identity = node_identity("audit-scope");
     for (categories, allowed) in [(&["node"][..], true), (&["tools"][..], false)] {
         let mut grants = config(categories);
+        grants.agent_did = fixture.agent_did().to_owned();
         grants.preview = false;
-        let tools = build_self_config_tools(
-            std::sync::Arc::default(),
-            node.clone(),
-            owner.clone(),
-            Some(identity.clone()),
-            &grants,
-            std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
-        );
+        let tools = fixture.tools_with_config(&grants);
         assert_eq!(
             call(&tools, json!({"argv":["validate"]})).await.is_ok(),
             allowed
@@ -1626,10 +1682,14 @@ async fn saved_config_audit_is_node_scoped_and_does_not_require_preview() {
     )
     .await
     .is_err());
-    crate::ConfigAccess::write_local(&node, "test.audit.restricted", &format!(
-        r#"mutation {{update_InferenceProfile(filter: {{node_did: {{_eq: "{}"}}, profile_id: {{_eq: "beh-test:inference"}}}}, input: {{backend_id: "missing-backend"}}) {{profile_id}}}}"#,
-        crate::store::graphql::escape_graphql_string(&owner)
-    )).await.unwrap();
+    let profile_id = format!("{}:inference", fixture.agent_did());
+    fixture
+        .update_signed_configuration(
+            crate::Collection::InferenceProfile,
+            &profile_id,
+            json!({"backend_id": "missing-backend"}),
+        )
+        .await;
     let invalid = ok(&tools, json!({"argv":["validate"]})).await;
     assert_eq!(invalid["valid"], false);
     assert_eq!(invalid["errors"][0]["collection"], "InferenceProfile");
@@ -1638,11 +1698,12 @@ async fn saved_config_audit_is_node_scoped_and_does_not_require_preview() {
 
 #[tokio::test]
 async fn config_error_recovery_is_executable_for_single_and_batch_calls() {
-    let (_node, _owner, tools) = setup(
+    let (fixture, tools) = authenticated_setup(
         "error-guidance",
         &["node", "tools", "profile", "automation"],
     )
     .await;
+    let agent_did = fixture.agent_did();
     let before = ok(&tools, json!({"argv":["agent","get"]})).await;
     for args in [
         json!({"argv":["agent","create"],"set":{"display_name":"Helper"}}),
@@ -1651,13 +1712,13 @@ async fn config_error_recovery_is_executable_for_single_and_batch_calls() {
         json!({"argv":["tools","preview","update"],"target_id":"absent-tools","set":{"display_name":"Missing"}}),
         json!({"argv":["task","preview","remove","absent-task"]}),
         json!({"argv":["tools","update"],"set":{"bash":{}}}),
-        json!({"argv":["agent","update"],"target_id":"beh-test","set":{"system_prompt":"new instructions"}}),
+        json!({"argv":["agent","update"],"target_id":agent_did,"set":{"system_prompt":"new instructions"}}),
     ] {
         let failure = structured_failure(&tools, args.clone()).await;
         let recovery = failure["recovery"]["next_call"].clone();
         assert!(recovery.is_object(), "{failure}");
         ok(&tools, recovery.clone()).await;
-        let batch = structured_failure(&tools, json!({"argv":["batch"],"options":{"operations":[args, {"argv":["agent","update"],"target_id":"beh-test","set":{"display_name":"must not execute"}}]}})).await;
+        let batch = structured_failure(&tools, json!({"argv":["batch"],"options":{"operations":[args, {"argv":["agent","update"],"target_id":agent_did,"set":{"display_name":"must not execute"}}]}})).await;
         assert_eq!(batch["batch"]["failed_index"], 0);
         assert_eq!(batch["batch"]["unattempted"], 1);
         assert_eq!(
@@ -1679,7 +1740,7 @@ async fn config_error_recovery_is_executable_for_single_and_batch_calls() {
 
 #[tokio::test]
 async fn trigger_decode_errors_name_the_nested_field_and_offer_working_help() {
-    let (_node, _owner, tools) = setup("nested-guidance", &["node", "automation"]).await;
+    let (_fixture, tools) = authenticated_setup("nested-guidance", &["node", "automation"]).await;
     ok(&tools, json!({"argv":["task","create"],"target_id":"inspect","set":{"prompt_template":"Inspect the input"}})).await;
     let failure = structured_failure(&tools, json!({"argv":["trigger","create"],"target_id":"inspect-trigger","set":{"task_id":"inspect","source":{"event_source_id":"input"}}})).await;
     let error = failure["error"].as_str().unwrap();
@@ -1698,7 +1759,8 @@ async fn trigger_decode_errors_name_the_nested_field_and_offer_working_help() {
 
 #[tokio::test]
 async fn delete_recovery_previews_the_same_resource_before_committing() {
-    let (_node, _owner, tools) = setup("delete-recovery", &["node", "automation"]).await;
+    let (fixture, tools) = authenticated_setup("delete-recovery", &["node", "automation"]).await;
+    fixture.grant_agent_delete().await;
     ok(&tools, json!({"argv":["task","create"],"target_id":"disposable","set":{"prompt_template":"Review the input"}})).await;
     let failure = structured_failure(
         &tools,
@@ -1726,14 +1788,15 @@ async fn delete_recovery_previews_the_same_resource_before_committing() {
 
 #[tokio::test]
 async fn composition_help_and_field_placement_match_the_accepted_calls() {
-    let (_node, _owner, tools) = setup(
+    let (fixture, tools) = authenticated_setup(
         "composition-help",
         &["node", "tools", "profile", "automation"],
     )
     .await;
+    let agent_did = fixture.agent_did();
     let bound = ok(
         &tools,
-        json!({"argv":["context","get"],"options":{"agent":"beh-test"}}),
+        json!({"argv":["context","get"],"options":{"agent":agent_did}}),
     )
     .await;
     let exact = ok(
@@ -1751,10 +1814,11 @@ async fn composition_help_and_field_placement_match_the_accepted_calls() {
         ok(&tools, error["recovery"]["next_call"].clone()).await;
     }
     for verb in ["create", "clone"] {
-        let help = ok(&tools, json!({"argv":["agent",verb,"--help"]}))
-            .await
-            .to_string();
+        let help = ok(&tools, json!({"argv":["agent",verb,"--help"]})).await;
+        let help = help.as_str().unwrap();
         assert!(help.contains("ID is allocated"), "{help}");
+        assert!(help.contains("WorkspaceRoot access"), "{help}");
+        assert!(help.contains(r#"["help","tools"]"#), "{help}");
         assert!(
             !help.contains("Agent fields") && !help.contains("AgentContext fields"),
             "{help}"
@@ -1767,6 +1831,21 @@ async fn composition_help_and_field_placement_match_the_accepted_calls() {
         let help = ok(&tools, json!({"argv":argv})).await.to_string();
         assert!(help.contains("Do not combine them"), "{help}");
     }
+    let root_help = ok(&tools, json!({"argv":["help","tools"]})).await;
+    let root_help = root_help.as_str().unwrap();
+    assert!(
+        root_help.contains("Node owner or administrator"),
+        "{root_help}"
+    );
+    assert!(
+        root_help.contains("own authenticated client"),
+        "{root_help}"
+    );
+    assert!(root_help.contains("gents config workspace-root grant-reader --graphql GRAPHQL_URL --path PUBLISHED_ROOT --agent-did AGENT_DID"), "{root_help}");
+    assert!(
+        root_help.contains("config tool cannot grant"),
+        "{root_help}"
+    );
     let error = structured_failure(&tools, json!({"argv":["execution","create"],"target_id":"limits","options":{"display_name":"Limits"}})).await;
     assert!(
         error["error"]
@@ -1789,10 +1868,11 @@ async fn composition_help_and_field_placement_match_the_accepted_calls() {
 
 #[tokio::test]
 async fn saved_config_audit_checks_selected_schema_fields_and_accepts_updates() {
-    let (node, _owner, tools) = setup("saved-schema-audit", &["node", "tools"]).await;
-    node.add_collection("type AuditRecord { message: String }")
-        .await
-        .unwrap();
+    let (fixture, tools) = authenticated_setup("saved-schema-audit", &["node", "tools"]).await;
+    fixture
+        .add_collection("type AuditRecord { message: String }")
+        .await;
+    let tools_id = format!("{}:tools", fixture.agent_did());
     let entries = json!([
         {"kind":"create","tool_name":"write_audit_record","collection":"AuditRecord","description":"Write a record","fields":[{"name":"message","required":true},{"name":"correlation","fill":"correlation"}]},
         {"kind":"query","tool_name":"find_audit_records","collection":"AuditRecord","description":"Read records","fields":["message","missing_projection"],"filter_fields":[{"name":"missing_filter"}]}
@@ -1806,7 +1886,7 @@ async fn saved_config_audit_checks_selected_schema_fields_and_accepts_updates() 
         ok(&tools, json!({"argv":["validate"]})).await["valid"],
         true
     );
-    ok(&tools, json!({"argv":["tools","update","beh-test:tools"],"set":{"datastore":{"datastore_tool_surface_ids":["audit"]}}})).await;
+    ok(&tools, json!({"argv":["tools","update",tools_id],"set":{"datastore":{"datastore_tool_surface_ids":["audit"]}}})).await;
     let before = ok(&tools, json!({"argv":["datastore","get","audit"]})).await;
     let invalid = ok(&tools, json!({"argv":["validate"]})).await;
     assert_eq!(invalid["valid"], false, "{invalid}");
@@ -1856,9 +1936,10 @@ async fn saved_config_audit_checks_selected_schema_fields_and_accepts_updates() 
 
 #[tokio::test]
 async fn receipts_summarize_long_text_by_length_and_sha256() {
-    let (node, owner, tools) = setup("long-prompt", &["node", "tools", "agent"]).await;
-    let worker = format!("{owner}:worker");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) = authenticated_setup("long-prompt", &["node", "tools", "agent"]).await;
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&worker).await;
     let context_id = format!("{worker}:context");
     let prompt = "Review the deployment notes before each change.\n".repeat(100);
     let receipt = ok(

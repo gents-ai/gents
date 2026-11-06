@@ -17,7 +17,7 @@ describeLive("Tauri app live agent sessions", () => {
   it("starts a session with a configured target and projects its provenance", async () => {
     await withLiveDesktop(async ({ runner, driver, deployment }) => {
       const defaultAgent = deployment.agents.find(
-        (agent) => agent.agentId === deployment.node.defaultAgentId,
+        (agent) => agent.agentDid === deployment.node.defaultAgentDid,
       );
       const context = deployment.contexts.find(
         (candidate) => candidate.context_id === defaultAgent?.contextId,
@@ -30,12 +30,12 @@ describeLive("Tauri app live agent sessions", () => {
         (target) => target.target_id === targetId,
       );
       expect(agentTarget, "live fixture did not expose an agent target").toBeDefined();
-      const targetAgentId = agentTarget?.agent_id;
+      const targetAgentDid = agentTarget?.agent_did;
       expect(defaultTools?.agents?.enabled).toBe(true);
 
       await driver.ready();
       await driver.openChat();
-      logTurn(`agent target driver ready target=${targetAgentId}`);
+      logTurn(`agent target driver ready target=${targetAgentDid}`);
 
       await driver.typeComposer(AGENT_TARGET_PROMPT);
       await driver.pressEnter();
@@ -69,7 +69,7 @@ describeLive("Tauri app live agent sessions", () => {
         `expected agent_new in tool names: ${JSON.stringify(toolNames)}`,
       ).toBe(true);
 
-      await waitFor(
+      const child = await waitFor(
         async () => {
           const fleet = await runner.adapter.fetchDesktopSnapshot();
           const parentSummary = fleet.client?.deployments
@@ -104,7 +104,7 @@ describeLive("Tauri app live agent sessions", () => {
                 candidate.sessionId === child.sessionId &&
                 candidate.requesterDid === child.requesterDid,
             );
-          expect(childSummary?.agentId).toBe(targetAgentId);
+          expect(childSummary?.agentDid).toBe(targetAgentDid);
           expect(
             childSummary?.turnState,
             `expected the started session to complete; started=${JSON.stringify(provenance.started)}`,
@@ -120,16 +120,42 @@ describeLive("Tauri app live agent sessions", () => {
           const childProfile = deployment.inferenceProfiles.find(
             (profile) =>
               profile.profile_id ===
-              deployment.agents.find((agent) => agent.agentId === childSummary?.agentId)
-                ?.inferenceProfileId,
+              deployment.agents.find(
+                (agent) => agent.agentDid === childSummary?.agentDid,
+              )?.inferenceProfileId,
           );
           expect(
             childProfile,
             "the target agent should reference a resolvable inference profile",
           ).toBeDefined();
+          return child;
         },
         { timeout: 120_000 },
       );
+
+      const childSnapshot = await runner.adapter.fetchSessionSnapshot(
+        child.sessionId,
+        child.nodeDid,
+      );
+      expect(childSnapshot?.sessionId).toBe(child.sessionId);
+      expect(childSnapshot?.agentDid).toBe(targetAgentDid);
+      expect(
+        hasAssistantResponse(childSnapshot?.timelineItems ?? []),
+        "the user should be able to read the spawned session transcript",
+      ).toBe(true);
+      const childTitle = "User updated spawned session";
+      await runner.adapter.renameSession({
+        nodeDid: child.nodeDid,
+        sessionId: child.sessionId,
+        title: childTitle,
+      });
+      await waitFor(async () => {
+        const renamed = await runner.adapter.fetchSessionSnapshot(
+          child.sessionId,
+          child.nodeDid,
+        );
+        expect(renamed?.title).toBe(childTitle);
+      });
 
       try {
         await waitFor(

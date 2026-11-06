@@ -144,6 +144,7 @@ export function createSessionReads({
     } catch (error) {
       if (refreshSeq === currentRefresh) {
         const code = error instanceof BridgeInvokeError ? error.code : null;
+        if (code === "permissionDenied") setSession(null);
         const delivery = code ? sessionDeliveryPhase(code) : null;
         const phase = code === "projectionPending" ? "pending" : (delivery ?? "failed");
         const message =
@@ -167,7 +168,7 @@ export function createSessionReads({
     }
   }
 
-  async function retrySessionHydration(
+  async function reloadSession(
     nextSessionId: string | null,
   ): Promise<DesktopSessionSnapshot | null> {
     if (!nextSessionId) return null;
@@ -184,7 +185,7 @@ export function createSessionReads({
         : null;
     try {
       setError(null);
-      await api.retrySessionHydration(nextSessionId, nodeDid);
+      await api.reloadSession(nextSessionId, nodeDid);
       if (!stillCurrent()) return null;
       return await refreshSession(nextSessionId, nodeDid);
     } catch (error) {
@@ -251,12 +252,33 @@ export function createSessionReads({
     const current = readSession(sessionStore);
     if (!current) return null;
     const nodeDid = current.nodeDid ?? store.getState().nodeDid;
-    const rows = await api.fetchSessionRows({
-      sessionId: current.sessionId,
-      nodeDid,
-      window,
-      limit,
-    });
+    let rows: SessionRowsView | null;
+    try {
+      rows = await api.fetchSessionRows({
+        sessionId: current.sessionId,
+        nodeDid,
+        window,
+        limit,
+      });
+    } catch (error) {
+      if (
+        error instanceof BridgeInvokeError &&
+        error.code === "permissionDenied" &&
+        capturedRun === runEpoch &&
+        store.getState().sessionId === current.sessionId &&
+        (store.getState().nodeDid ?? nodeDid) === nodeDid
+      ) {
+        setSession(null);
+        setSessionLoad({
+          phase: "failed",
+          sessionId: current.sessionId,
+          nodeDid,
+          found: null,
+          error: error.message,
+        });
+      }
+      throw error;
+    }
     if (
       capturedRun !== runEpoch ||
       store.getState().sessionId !== current.sessionId ||
@@ -305,7 +327,7 @@ export function createSessionReads({
       liveSeq += 1;
     },
     refreshSession,
-    retrySessionHydration,
+    reloadSession,
     readSessionUpdate,
     loadSessionRows,
   };

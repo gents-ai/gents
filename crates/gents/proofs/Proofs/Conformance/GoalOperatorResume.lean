@@ -1,7 +1,17 @@
 import Proofs.GoalAutomation.OperatorResume
 import Proofs.Conformance.ContractTypes
+import Lean.Data.Json.FromToJson
 namespace Conformance.GoalOperatorResumeContracts
 open GoalAutomation.OperatorResume Conformance.Contracts
+
+def publicationCasesJson : String :=
+  let cases : List (String × Bool × Bool × Bool) :=
+    [("pending-failed", true, true, false), ("pending-completed", true, true, true),
+     ("completed-no-replay", false, true, false)]
+  (Lean.toJson (cases.map fun (name, pending, authorized, granted) => Lean.Json.mkObj
+    [("name", Lean.toJson name), ("pending", Lean.toJson pending),
+     ("authorized", Lean.toJson authorized), ("granted", Lean.toJson granted),
+     ("expected_pending", Lean.toJson (publicationPending pending authorized granted))])).compress
 
 def parentBinding : Binding :=
   ⟨1, "owner", "session", 10, 100, some "graph-correlation", some "source",

@@ -19,6 +19,13 @@ pub(super) const REQUEST_SIBLING_MAX_ATTEMPTS: u32 =
 /// callback errors are searched by [`access_error_in`].
 pub trait TransactionFailure {
     fn config_client_error(&self) -> Option<&ConfigClientError>;
+
+    /// [`ConfigClientError::is_permission_denied`] for the access error this
+    /// failure carries; a failure without one is not a denial.
+    fn permission_denied(&self) -> bool {
+        self.config_client_error()
+            .is_some_and(ConfigClientError::is_permission_denied)
+    }
 }
 
 impl TransactionFailure for ConfigClientError {
@@ -77,8 +84,27 @@ where
     error.config_client_error()?.transaction_conflict()
 }
 
+impl ConfigClientError {
+    /// The pinned DefraDB mutation adapter reports an inaccessible or missing
+    /// document with this shared GraphQL message and no structured error code.
+    /// Both cases are permanent for this attempted write, not storage failures,
+    /// and the adapter does not say which one occurred.
+    pub(crate) fn is_missing_or_denied_write(&self) -> bool {
+        matches!(self,
+            ConfigClientError::EmbeddedGraphqlErrors { errors }
+            if !errors.is_empty() && errors.iter().all(|item|
+                item.message == "document not found: document not found or not authorized to access"))
+    }
+}
+
 pub(super) fn transaction_storage_failure(error: ConfigClientError) -> ConfigClientError {
-    if error.transaction_conflict().is_some() {
+    if error.transaction_conflict().is_some()
+        || error.is_missing_or_denied_write()
+        || matches!(
+            error,
+            ConfigClientError::ClientAgentSignerRequired | ConfigClientError::ClientSignerMismatch
+        )
+    {
         error
     } else {
         ConfigClientError::StorageFailure(Box::new(error))
@@ -141,6 +167,19 @@ mod tests {
         #[error("callback step")]
         struct Step(#[source] ConfigClientError);
         Box::new(Step(error))
+    }
+
+    #[test]
+    fn missing_or_mismatched_client_signer_is_not_a_storage_failure() {
+        let missing = transaction_storage_failure(ConfigClientError::ClientAgentSignerRequired);
+        assert!(!missing.is_storage_failure());
+        assert!(matches!(
+            missing,
+            ConfigClientError::ClientAgentSignerRequired
+        ));
+        let mismatch = transaction_storage_failure(ConfigClientError::ClientSignerMismatch);
+        assert!(!mismatch.is_storage_failure());
+        assert!(matches!(mismatch, ConfigClientError::ClientSignerMismatch));
     }
 
     #[test]

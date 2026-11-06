@@ -73,6 +73,10 @@ function harness() {
     saveNodeConfig: vi.fn().mockResolvedValue({}),
     setDefaultAgent: vi.fn().mockResolvedValue({}),
     saveAgentConfig: vi.fn().mockResolvedValue({}),
+    provisionAgentIdentity: vi.fn().mockResolvedValue({
+      agent_did: "did:test:provisioned-agent",
+      creation_nonce: "03".repeat(32),
+    }),
     patchConfigComponents: vi.fn().mockResolvedValue({}),
     applyConfigComponents: vi.fn().mockResolvedValue({}),
     saveBackendConfig: vi.fn().mockResolvedValue({}),
@@ -553,7 +557,8 @@ describe("configuration panels", () => {
           claudeAccount("cred-original", null, "original-identity"),
         ]);
         const selectedAgent =
-          claudeDeployment.node?.defaultAgentId ?? claudeDeployment.agents[0]!.agentId;
+          claudeDeployment.node?.defaultAgentDid ??
+          claudeDeployment.agents[0]!.agentDid;
         const blocked = {
           ...claudeDeployment,
           nodeReadiness: {
@@ -561,7 +566,9 @@ describe("configuration panels", () => {
             source: { state: "current" as const },
             activeGeneration: 4,
             routerGeneration: 4,
-            agents: [{ state: "unavailable" as const, agentId: selectedAgent, reason }],
+            agents: [
+              { state: "unavailable" as const, agentDid: selectedAgent, reason },
+            ],
           },
         };
         renderIn(app, <InferencePanel deployment={blocked} />);
@@ -1658,7 +1665,7 @@ describe("configuration panels", () => {
 
   it("validates and saves every behavior-owned setting without changing Setup", async () => {
     const { api, app } = harness();
-    renderIn(app, <AgentsPanel deployment={deployment} agentId="ops" />);
+    renderIn(app, <AgentsPanel deployment={deployment} agentDid="ops" />);
     expectFields([
       "Display name",
       "Description",
@@ -1677,7 +1684,7 @@ describe("configuration panels", () => {
   it("opens a new behavior as an unsaved, disabled draft until the operator saves it", async () => {
     const { api, app } = harness();
     renderRouted(app, agentsRoute, (route) => (
-      <AgentsPanel deployment={deployment} agentId={itemOf(route)} />
+      <AgentsPanel deployment={deployment} agentDid={itemOf(route)} />
     ));
     const user = userEvent.setup();
 
@@ -1704,7 +1711,7 @@ describe("configuration panels", () => {
   it("keeps a new agent's draft in the history until it is saved", async () => {
     const { app } = harness();
     const view = renderRouted(app, agentsRoute, (route) => (
-      <AgentsPanel deployment={deployment} agentId={itemOf(route)} />
+      <AgentsPanel deployment={deployment} agentDid={itemOf(route)} />
     ));
     const user = userEvent.setup();
 
@@ -1761,6 +1768,12 @@ describe("configuration panels", () => {
       (call) => call[0].document.contexts[0].context_id,
     );
     expect(second).toBe(first);
+    expect(api.provisionAgentIdentity).toHaveBeenCalledTimes(1);
+    const [firstAgent, secondAgent] = api.applyConfigComponents.mock.calls.map(
+      (call) => call[0].document.agents[0],
+    );
+    expect(secondAgent.agent_did).toBe(firstAgent.agent_did);
+    expect(secondAgent.creation_nonce).toBe(firstAgent.creation_nonce);
   });
 
   it("creates a prefilled new profile as it stands, and closes only on success", async () => {
@@ -1808,7 +1821,7 @@ describe("configuration panels", () => {
   it("turns an agent on or off from its row with a patch of enabled alone", async () => {
     const { api, app } = harness();
     renderIn(app, <AgentsPanel deployment={deployment} />);
-    const ops = deployment.agents.find((b) => b.agentId === "ops")!;
+    const ops = deployment.agents.find((b) => b.agentDid === "ops")!;
     const toggle = screen.getAllByRole("switch", {
       name: `${ops.displayName} is ${ops.enabled ? "enabled" : "disabled"}`,
     })[0]!;
@@ -1832,7 +1845,7 @@ describe("configuration panels", () => {
     const { api, app } = harness();
     renderIn(app, <AgentsPanel deployment={deployment} />);
     const user = userEvent.setup();
-    const ops = deployment.agents.find((b) => b.agentId === "ops")!;
+    const ops = deployment.agents.find((b) => b.agentDid === "ops")!;
     await user.click(
       screen.getAllByRole("button", { name: `More for ${ops.displayName}` })[0]!,
     );
@@ -1840,7 +1853,7 @@ describe("configuration panels", () => {
     await waitFor(() =>
       expect(api.setDefaultAgent).toHaveBeenCalledWith({
         nodeDid: deployment.nodeDid,
-        agentId: "ops",
+        agentDid: "ops",
       }),
     );
     expect(api.saveNodeConfig).not.toHaveBeenCalled();
@@ -1870,7 +1883,7 @@ describe("configuration panels", () => {
     const withOps = (changes: Partial<(typeof deployment.agents)[number]>) => ({
       ...deployment,
       agents: deployment.agents.map((b) =>
-        b.agentId === "ops" ? { ...b, ...changes } : b,
+        b.agentDid === "ops" ? { ...b, ...changes } : b,
       ),
     });
 
@@ -1885,7 +1898,7 @@ describe("configuration panels", () => {
       await waitFor(() =>
         expect(api.setDefaultAgent).toHaveBeenCalledWith({
           nodeDid: deployment.nodeDid,
-          agentId: "ops",
+          agentDid: "ops",
         }),
       );
       expect(api.patchConfigComponents).not.toHaveBeenCalled();
@@ -1906,7 +1919,7 @@ describe("configuration panels", () => {
       await waitFor(() =>
         expect(api.setDefaultAgent).toHaveBeenCalledWith({
           nodeDid: deployment.nodeDid,
-          agentId: "ops",
+          agentDid: "ops",
         }),
       );
     });
@@ -1937,7 +1950,7 @@ describe("configuration panels", () => {
       await waitFor(() => expect(api.saveNodeConfig).toHaveBeenCalled());
       expect(api.setDefaultAgent).toHaveBeenCalledWith({
         nodeDid: deployment.nodeDid,
-        agentId: "ops",
+        agentDid: "ops",
       });
       expect(api.setDefaultAgent.mock.invocationCallOrder[0]).toBeLessThan(
         api.saveNodeConfig.mock.invocationCallOrder[0]!,
@@ -1966,7 +1979,7 @@ describe("configuration panels", () => {
 
   it("patches only the changed context field and the agent in one call", async () => {
     const { api, app } = harness();
-    renderIn(app, <AgentsPanel deployment={deployment} agentId="ops" />);
+    renderIn(app, <AgentsPanel deployment={deployment} agentDid="ops" />);
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Raw" }));
     const prompt = screen.getByLabelText("System prompt");
@@ -2007,10 +2020,10 @@ describe("configuration panels", () => {
         agents: [
           {
             state: "unavailable",
-            agentId: "default",
+            agentDid: "default",
             reason: "credentials_required",
           },
-          { state: "ready", agentId: "ops" },
+          { state: "ready", agentDid: "ops" },
         ],
       },
     } as typeof deployment;
@@ -2093,7 +2106,7 @@ describe("configuration panels", () => {
   it("creates only the new behavior's context and represents empty lists as null", async () => {
     const { api, app } = harness();
     renderRouted(app, agentsRoute, (route) => (
-      <AgentsPanel deployment={deployment} agentId={itemOf(route)} />
+      <AgentsPanel deployment={deployment} agentDid={itemOf(route)} />
     ));
     const user = userEvent.setup();
 
@@ -2604,7 +2617,7 @@ describe("configuration panels", () => {
       method: string;
     }> = [
       {
-        renderPanel: () => <AgentsPanel deployment={deployment} agentId="ops" />,
+        renderPanel: () => <AgentsPanel deployment={deployment} agentDid="ops" />,
         field: "Display name",
         value: "Ops edited",
         method: "saveAgentConfig",
@@ -2744,9 +2757,9 @@ describe("configuration panels", () => {
       request: Record<string, string>;
     }> = [
       {
-        renderPanel: () => <AgentsPanel deployment={deployment} agentId="ops" />,
+        renderPanel: () => <AgentsPanel deployment={deployment} agentDid="ops" />,
         method: "deleteAgentConfig",
-        request: { agentId: "ops", nodeDid: deployment.nodeDid },
+        request: { agentDid: "ops", nodeDid: deployment.nodeDid },
       },
       {
         renderPanel: () => <InferencePanel deployment={deployment} item="backend-a" />,

@@ -21,6 +21,50 @@ use super::{
 };
 use crate::tools::native::normalize_workspace_lifecycle_state;
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "reservation retains the configured workspace provenance"
+)]
+pub(crate) fn prepare_workspace_reservation(
+    action: &CreateWorkspaceAction,
+    repository: &super::RepositoryPlacementRef,
+    ceiling: Option<&Path>,
+    owner_node_did: &str,
+    writer: &str,
+    integrator: &str,
+    invocation: &str,
+    correlation: &str,
+) -> Result<super::super::documents::IsolatedWorkspaceDoc> {
+    anyhow::ensure!(
+        repository.enabled
+            && repository.repository_id == action.repository_id
+            && repository.owner_node_did == owner_node_did,
+        "workspace repository is unavailable or mismatched"
+    );
+    workspace_host_path(
+        &repository.host_path,
+        &action.workspace_id,
+        &action.branch,
+        ceiling,
+    )?;
+    let mut identity = action.identity();
+    identity.base_sha = resolve_base_sha(&repository.host_path, &action.base_sha)?;
+    let manifest = capture_instruction_manifest(&repository.host_path, &identity.base_sha)?;
+    Ok(new_isolated_workspace(
+        &identity,
+        action.creation_policy,
+        action.adapter,
+        owner_node_did,
+        writer,
+        integrator,
+        invocation,
+        correlation,
+        "provisioning",
+        manifest,
+        None,
+    ))
+}
+
 pub fn execute_create_workspace_plan(
     plan: &ActionPlan,
     journal: &mut Vec<ActionJournalEntry>,
@@ -369,7 +413,9 @@ fn instruction_manifest_for_persist(
     base_sha: &str,
 ) -> Result<String> {
     if let Some(existing) = documents.load_isolated_workspace(workspace_id)? {
-        if !is_empty_manifest(&existing.instruction_manifest) {
+        if normalize_workspace_lifecycle_state(&existing.lifecycle_state) == Some("provisioning")
+            || !is_empty_manifest(&existing.instruction_manifest)
+        {
             return Ok(existing.instruction_manifest);
         }
     }

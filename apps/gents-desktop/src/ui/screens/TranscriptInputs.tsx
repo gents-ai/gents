@@ -181,7 +181,7 @@ type BackgroundName = {
   subject: string;
   outcome: string;
   /** the session a worker step reached, named as that step names it */
-  worker?: { sessionId: string | null; agentId: string | null };
+  worker?: { sessionId: string | null; agentDid: string | null };
 };
 
 /** the call a background result reports on, by what the step that started
@@ -201,7 +201,7 @@ export function backgroundName(
       outcome,
       worker: {
         sessionId: reached?.request.sessionId ?? p.sessionId ?? null,
-        agentId: reached?.summary?.agentId ?? null,
+        agentDid: reached?.summary?.agentDid ?? null,
       },
     };
   const subject = !call
@@ -479,16 +479,16 @@ export function AutomatedInput({
       label
     );
     icon = sender ? (
-      avatar(agentName(sender.agentId, senderNode ?? node))
+      avatar(agentName(sender.agentDid, senderNode ?? node))
     ) : (
       <OriginIcon origin={origin} />
     );
   } else if (origin.kind === "backgroundCompletion") {
     label = backgroundText(named, content);
     title = <BackgroundTitle named={named} content={content} />;
-    const agentId = named?.worker?.agentId;
-    icon = agentId ? (
-      avatar(agentName(agentId, node))
+    const agentDid = named?.worker?.agentDid;
+    icon = agentDid ? (
+      avatar(agentName(agentDid, node))
     ) : call ? (
       <ToolIcon tool={call} className="size-3.5 shrink-0" />
     ) : (

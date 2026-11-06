@@ -18,7 +18,7 @@ async fn session_observer_preserves_handoff_and_delivers_late_wake() {
     let graphql = spawn_mock_graphql(node.clone()).await;
     let manager = Arc::new(TurnManager::new(
         node.clone(),
-        test_config(graphql, &node_did),
+        test_config(graphql, &node_did, &node).await,
     ));
     let engine = test_engine(node.clone());
     let (buffer, sender) = buffer_sender();

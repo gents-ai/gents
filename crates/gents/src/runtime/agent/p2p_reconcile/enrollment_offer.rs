@@ -26,7 +26,7 @@ pub struct EnrollmentOfferIssuer {
     identity: Arc<dyn NodeIdentity>,
     p2p: Arc<dyn P2POperations>,
     network_id: String,
-    owner_agent: String,
+    owner_node_did: String,
     profile: String,
 }
 
@@ -41,14 +41,14 @@ impl EnrollmentOfferIssuer {
         identity: Arc<dyn NodeIdentity>,
         p2p: Arc<dyn P2POperations>,
         network_id: String,
-        owner_agent: String,
+        owner_node_did: String,
         profile: String,
     ) -> Self {
         Self {
             identity,
             p2p,
             network_id,
-            owner_agent,
+            owner_node_did,
             profile,
         }
     }
@@ -107,7 +107,7 @@ impl EnrollmentOfferIssuer {
             admin_did: self.identity.did().to_string(),
             server_peer,
             server_ticket,
-            owner_agent: self.owner_agent.clone(),
+            owner_node_did: self.owner_node_did.clone(),
             profile: self.profile.clone(),
             schema_fingerprint: enrollment_schema_fingerprint(),
             issued_at,

@@ -8,9 +8,9 @@ import { NodeAgentStack } from "../src/ui/screens/NodeBehaviorStack";
 import { node, renderIn, testApp } from "./app-fixture";
 import { deployment } from "./config-panel-wiring/fixtures";
 
-const agent = (agentId: string, displayName: string) => ({
+const agent = (agentDid: string, displayName: string) => ({
   ...deployment.agents[0],
-  agentId,
+  agentDid,
   displayName,
 });
 
@@ -18,7 +18,7 @@ const summary = (over: Partial<SessionSummary>) =>
   ({
     sessionId: "session",
     nodeDid: "did:key:here",
-    agentId: null,
+    agentDid: null,
     title: null,
     turnState: null,
     updatedAt: null,
@@ -53,7 +53,7 @@ describe("a agent on another node", () => {
   it("is named by the node that runs it, not the selected one", () => {
     renderIn(
       twoNodes(),
-      <NodeAgentStack nodeDid="did:key:there" agentId="reviewer" keyboard />,
+      <NodeAgentStack nodeDid="did:key:there" agentDid="reviewer" keyboard />,
     );
     expect(
       screen.getByRole("button", { name: "About Code Reviewer agent" }),
@@ -64,11 +64,11 @@ describe("a agent on another node", () => {
     const worker = summary({
       sessionId: "worker",
       nodeDid: "did:key:there",
-      agentId: "reviewer",
+      agentDid: "reviewer",
     });
     renderIn(
       twoNodes(),
-      <NodeAgentStack nodeDid="did:key:here" agentId="default" workers={[worker]} />,
+      <NodeAgentStack nodeDid="did:key:here" agentDid="default" workers={[worker]} />,
     );
     expect(screen.getByText("Cr")).toBeInTheDocument();
   });
@@ -89,18 +89,22 @@ describe("a agent on another node", () => {
       app,
       <NodeAgentStack
         nodeDid="did:key:here"
-        agentId="default"
+        agentDid="default"
         workers={[
-          summary({ sessionId: "first", nodeDid: "did:key:there", agentId: "default" }),
+          summary({
+            sessionId: "first",
+            nodeDid: "did:key:there",
+            agentDid: "default",
+          }),
           summary({
             sessionId: "duplicate",
             nodeDid: "did:key:there",
-            agentId: "default",
+            agentDid: "default",
           }),
           summary({
             sessionId: "second",
             nodeDid: "did:key:other",
-            agentId: "default",
+            agentDid: "default",
           }),
         ]}
       />,
@@ -128,7 +132,7 @@ describe("a agent on another node", () => {
       requestId: null,
       causeDocId: null,
       targetNodeDid: "did:key:there",
-      targetAgentId: "reviewer",
+      targetAgentDid: "reviewer",
       expectedCollection: null,
       parentItemId: null,
       deadlineAt: null,

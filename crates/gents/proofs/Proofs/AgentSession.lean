@@ -33,18 +33,33 @@ structure StarterEvidence where
   parentRequestDoc : Nat
   deriving DecidableEq, Repr
 
-/-- A node-signed receipt is issued only in the transaction that creates a
-session. Its request and causal kind bind the verified opening evidence; a
+/-- A receipt is signed by the creating Agent in the transaction that creates
+the session. For agent_new and PluginJob that is the requester; the selected Agent is the
+worker and may differ. The node identifier is routing data, not the signer. Its
+request and causal kind bind the verified opening evidence; a
 pre-existing session never receives one from a later request. -/
 structure CreationReceipt where
   scope : Scope
   sessionDoc : Nat
-  agent : AgentId
+  agent : AgentDid
   openingRequestDoc : Nat
   causalKind : Nat
   causeBinding : Nat
   starter : Option StarterEvidence := none
   deriving DecidableEq, Repr
+
+def creationReceiptSigner (creatorSigned : Bool) (requester : Option AgentDid)
+    (selected : AgentDid) : Option AgentDid :=
+  if creatorSigned then requester else some selected
+
+theorem agent_new_receipt_uses_creator (creator worker : AgentDid) :
+    creationReceiptSigner true (some creator) worker = some creator := rfl
+
+theorem agent_new_receipt_requires_creator (worker : AgentDid) :
+    creationReceiptSigner true none worker = none := rfl
+
+theorem plugin_job_receipt_uses_creator (creator worker : AgentDid) :
+    creationReceiptSigner true (some creator) worker = some creator := rfl
 
 def creationReceiptAtEnsure (existing : Bool) (receipt : CreationReceipt) : Option CreationReceipt :=
   if existing then none else some receipt
@@ -57,6 +72,36 @@ theorem new_session_receives_creation_receipt (receipt : CreationReceipt) :
     creationReceiptAtEnsure false receipt = some receipt := by
   simp [creationReceiptAtEnsure]
 
+/-- A PluginJob opening binds the signed immediate author, accepted parent
+tool and pinned spawn identity before reserving the target. The session,
+opening request, working-agent link and creation receipt commit together. -/
+structure PluginJobOpening where
+  authorMatches : Bool
+  parentVerified : Bool
+  pinnedSpawnMatches : Bool
+  targetAbsent : Bool
+  writesComplete : Bool
+  deriving DecidableEq, Repr
+
+def pluginJobOpeningCommits (opening : PluginJobOpening) : Bool :=
+  opening.authorMatches && opening.parentVerified && opening.pinnedSpawnMatches &&
+    opening.targetAbsent && opening.writesComplete
+
+theorem plugin_job_missing_parent_refused (opening : PluginJobOpening)
+    (missing : opening.parentVerified = false) :
+    pluginJobOpeningCommits opening = false := by
+  simp [pluginJobOpeningCommits, missing]
+
+theorem plugin_job_incomplete_write_refused (opening : PluginJobOpening)
+    (incomplete : opening.writesComplete = false) :
+    pluginJobOpeningCommits opening = false := by
+  simp [pluginJobOpeningCommits, incomplete]
+
+theorem plugin_job_existing_target_refused (opening : PluginJobOpening)
+    (existing : opening.targetAbsent = false) :
+    pluginJobOpeningCommits opening = false := by
+  simp [pluginJobOpeningCommits, existing]
+
 structure Provenance where
   task : Option Nat := none
   parentRequestDoc : Option Nat := none
@@ -66,7 +111,7 @@ structure Provenance where
       access or creates runtime hierarchy. The absent requester remains exact
       absence, never a wildcard. Older sessions may have no recorded scope. -/
   startedBy : Option Scope := none
-  /-- The request whose claim or refusal created this session through a
+  /-- The request whose admission created this session through a
       calling tool call or a Task delivery. It is written once and
       never rewritten (`advance`, `rename` and `setClosed` keep
       `provenance`). `DurableLineage.openingRequest` opens the session at
@@ -154,7 +199,7 @@ structure Observation where
   deriving DecidableEq, Repr
 structure Document where
   scope : Scope
-  agent : AgentId
+  agent : AgentDid
   createdAt : Time
   closedAt : Option Time := none
   stoppedAt : Option Time := none
@@ -166,8 +211,14 @@ structure Document where
   observation : Option Observation := none
   deriving DecidableEq, Repr
 
-/-- Creation reserves immutable scope and agent selection. Reuse preserves
-the complete document, including closed state and presentation metadata. -/
+/-- Creation reserves immutable scope and agent selection. A Client submission
+ensures a new session and inserts its signed request in one transaction under the
+client actor: the session's native document owner is that user. An unattended
+agent submission creates its session under that agent. Reuse preserves the complete
+document and its native owner, including closed state and presentation metadata.
+Runtime admission requires an existing Client session and must never repair a
+missing one under agent authority. Atomic commit/rollback and native owner assignment
+are obligations of the database transaction adapter, not application ACP checks. -/
 def ensure? (existing : Option Document) (requested : Document) : Option Document :=
   match existing with
   | none => some requested
@@ -179,7 +230,125 @@ theorem ensure_existing_preserves_document (current requested : Document)
     (scope : current.scope = requested.scope) (agent : current.agent = requested.agent) :
     ensure? (some current) requested = some current := by simp [ensure?, scope, agent]
 
-/-- Indexed display is evidence only when the target receipt is authenticated,
+/-- The completed logical admission retains its existing session and identifies
+the request/session creators and intended relationships. ACP1 installs the
+relationships after document commit; `OwnershipPublication` models that window.
+Existing sessions retain owner, title, provenance and creation receipt. -/
+structure AdmissionState where
+  session : Option Document := none
+  sessionOwner : Option Nat := none
+  sessionDoc : Option Nat := none
+  sessionParent : Option Nat := none
+  sessionWorker : Option Nat := none
+  receipt : Option CreationReceipt := none
+  requestDoc : Option Nat := none
+  requestOwner : Option Nat := none
+  requestParent : Option Nat := none
+  requestWorker : Option Nat := none
+  deriving DecidableEq, Repr
+
+structure AdmissionInput where
+  requested : Document
+  actor : Nat
+  sessionDoc : Nat
+  agentDoc : Nat
+  requestDoc : Nat
+  receipt : Option CreationReceipt
+  authorized : Bool
+  commit : Bool
+  deriving DecidableEq, Repr
+
+def admitRequest (before : AdmissionState) (input : AdmissionInput) : AdmissionState :=
+  if !input.authorized || !input.commit || (before.session.isSome && before.sessionDoc.isNone)
+  then before else
+  match ensure? before.session input.requested with
+  | none => before
+  | some session =>
+    let fresh := before.session.isNone
+    let sessionDoc := if fresh then input.sessionDoc else before.sessionDoc.getD input.sessionDoc
+    { session := some session
+      sessionOwner := if fresh then some input.actor else before.sessionOwner
+      sessionDoc := some sessionDoc
+      sessionParent := if fresh then some input.agentDoc else before.sessionParent
+      sessionWorker := if fresh && input.actor != session.agent then some session.agent else before.sessionWorker
+      receipt := if fresh then input.receipt else before.receipt
+      requestDoc := some input.requestDoc
+      requestOwner := some input.actor
+      requestParent := some sessionDoc
+      requestWorker := if input.actor != session.agent then some session.agent else none }
+
+theorem failed_admission_is_unchanged (before : AdmissionState) (input : AdmissionInput)
+    (aborted : input.commit = false) : admitRequest before input = before := by
+  simp [admitRequest, aborted]
+
+theorem unauthorized_admission_is_unchanged (before : AdmissionState) (input : AdmissionInput)
+    (denied : input.authorized = false) : admitRequest before input = before := by
+  simp [admitRequest, denied]
+
+/-- ACP1 creation commits the authenticated owner's document before relation
+updates. Missing relationships deny the corresponding inherited access, while
+the owner retains native access during recovery. Node-level document-write
+grants are a trusted-actors trial premise; they do not enforce per-agent invoke
+or target isolation. Recovery retries each owner-authorized grant idempotently
+without substituting node authority. -/
+structure OwnershipPublication where
+  committed : Bool := false
+  owner : Option Nat := none
+  parent : Bool := false
+  worker : Bool := false
+  deriving DecidableEq, Repr
+
+def publishOwned (actor : Nat) : OwnershipPublication := ⟨true, some actor, false, false⟩
+
+def grantParent (publication : OwnershipPublication) (actor : Nat) : OwnershipPublication :=
+  if publication.committed && publication.owner == some actor then
+    { publication with parent := true }
+  else publication
+
+def grantWorker (publication : OwnershipPublication) (actor : Nat) : OwnershipPublication :=
+  if publication.committed && publication.owner == some actor then
+    { publication with worker := true }
+  else publication
+
+theorem published_owner_retains_access_before_grants (actor : Nat) :
+    (publishOwned actor).owner = some actor ∧
+      (publishOwned actor).parent = false ∧ (publishOwned actor).worker = false := by
+  exact ⟨rfl, rfl, rfl⟩
+
+theorem owner_can_recover_publication (actor : Nat) :
+    let completed := grantWorker (grantParent (publishOwned actor) actor) actor
+    completed.parent = true ∧ completed.worker = true := by simp [publishOwned, grantParent, grantWorker]
+
+theorem repeated_grants_are_idempotent (publication : OwnershipPublication) (actor : Nat) :
+    grantWorker (grantWorker publication actor) actor = grantWorker publication actor := by
+  simp [grantWorker]; split <;> simp_all
+
+/-- The physical opening request is staged first so the creator can bind its
+session provenance to that document. Session creation precedes Goal creation;
+all three become visible together on commit, or none do on failure. -/
+structure GoalAdmission where
+  request : Bool := false
+  session : Bool := false
+  goal : Bool := false
+  owner : Option Nat := none
+  deriving DecidableEq, Repr
+
+def admitGoal (before : GoalAdmission) (actor : Nat)
+    (requestStaged sessionStaged goalStaged commit : Bool) : GoalAdmission :=
+  if requestStaged && sessionStaged && goalStaged && commit then
+    ⟨true, true, true, some actor⟩
+  else before
+
+theorem incomplete_goal_admission_is_unchanged (before : GoalAdmission) (actor : Nat)
+    (requestStaged goalStaged commit : Bool) :
+    admitGoal before actor requestStaged false goalStaged commit = before := by
+  simp [admitGoal]
+
+theorem committed_goal_admission_binds_creator (before : GoalAdmission) (actor : Nat) :
+    admitGoal before actor true true true true = ⟨true, true, true, some actor⟩ := by rfl
+
+/-- Indexed display is evidence only when the target receipt is authenticated
+    against its selected Agent DID,
     belongs to the physical session and binds the same source, parent and index.
     These observations do not authorize session control. -/
 def verifiedStarter (receipt : CreationReceipt) (physical : Nat)
@@ -255,7 +424,7 @@ theorem ensure_cannot_rebind_agent (current requested : Document)
 structure RequestFact where
   purpose : RequestPurpose
   scope : Scope
-  agent : AgentId
+  agent : AgentDid
   createdAt : Time
   observed : RequestObservation
   deriving DecidableEq, Repr

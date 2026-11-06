@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
@@ -23,7 +23,7 @@ pub struct Node {
     pub avatar: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub default_agent_id: Option<String>,
+    pub default_agent_did: Option<String>,
     #[serde(
         default = "super::serde_helpers::default_enabled",
         deserialize_with = "super::serde_helpers::deserialize_enabled",
@@ -73,7 +73,7 @@ pub(crate) async fn load_node_record(
                 node_did
                 display_name
                 avatar
-                default_agent_id
+                default_agent_did
                 enabled
                 created_at
                 created_by
@@ -95,7 +95,7 @@ pub(crate) async fn upsert_node(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     display_name: Option<&str>,
-    default_agent_id: Option<&str>,
+    default_agent_did: Option<&str>,
     enabled: bool,
     max_request_hop: Option<u32>,
 ) -> Result<()> {
@@ -105,7 +105,7 @@ pub(crate) async fn upsert_node(
     let display_name =
         normalize_optional_string(display_name).unwrap_or(fallback_display_name.as_str());
     let escaped_display_name = escape_graphql_string(display_name);
-    let default_agent_id = normalize_optional_string(default_agent_id)
+    let default_agent_did = normalize_optional_string(default_agent_did)
         .map(|id| format!("\"{}\"", escape_graphql_string(id)))
         .unwrap_or_else(|| "null".to_string());
     let max_request_hop = max_request_hop.map_or_else(|| "null".to_string(), |hop| hop.to_string());
@@ -118,7 +118,7 @@ pub(crate) async fn upsert_node(
                 add: {{
                     node_did: "{escaped_node_did}",
                     display_name: "{escaped_display_name}",
-                    default_agent_id: {default_agent_id},
+                    default_agent_did: {default_agent_did},
                     enabled: {enabled},
                     max_request_hop: {max_request_hop},
                     created_at: "{created_at}",
@@ -126,7 +126,7 @@ pub(crate) async fn upsert_node(
                 }},
                 update: {{
                     display_name: "{escaped_display_name}",
-                    default_agent_id: {default_agent_id},
+                    default_agent_did: {default_agent_did},
                     enabled: {enabled},
                     max_request_hop: {max_request_hop}
                 }}

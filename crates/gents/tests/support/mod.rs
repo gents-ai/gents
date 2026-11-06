@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use gents::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
+use gents::defra_node::{Node as EmbeddedNode, P2PConfig, QueryResponse};
 use gents::eval::runner::embedded::EmbeddedHome;
 use gents::store::graphql::escape_graphql_string;
 use gents::{request::watcher::AgentRequest, NodeIdentity};
@@ -21,6 +21,7 @@ pub mod mock_endpoint;
 pub mod mock_subscription;
 pub mod p2p_waits;
 pub mod pairing_conformance;
+pub mod signed_mailbox;
 pub mod snapshots;
 pub mod streaming_backend;
 pub mod waits;
@@ -49,7 +50,7 @@ pub fn materialization_identity_for(did: &str) -> Arc<dyn NodeIdentity> {
 }
 
 pub struct TestDb {
-    home: EmbeddedHome,
+    pub(crate) home: EmbeddedHome,
     pub node: Arc<EmbeddedNode>,
     pub node_identity: Arc<dyn NodeIdentity>,
     pub process_generation: u64,
@@ -58,6 +59,25 @@ pub struct TestDb {
 impl TestDb {
     pub fn data_path(&self) -> &std::path::Path {
         self.home.path()
+    }
+
+    pub fn client_access(&self, identity: &dyn NodeIdentity) -> gents::ConfigAccess {
+        let endpoint = self
+            .home
+            .graphql_endpoint()
+            .expect("test home GraphQL endpoint");
+        gents::ConfigAccess::Graphql(
+            gents::store::config_client::GraphqlEndpoint::as_principal(endpoint, identity.did())
+                .with_client_signing_capability(identity.client_signing_capability().unwrap())
+                .unwrap()
+                .with_client_signed_agent_creates(),
+        )
+    }
+
+    pub fn client_endpoint(&self) -> &str {
+        self.home
+            .graphql_endpoint()
+            .expect("test database HTTP endpoint")
     }
 
     pub async fn simulate_process_crash(&mut self) -> anyhow::Result<()> {
@@ -85,6 +105,160 @@ pub fn test_db_from_home(home: EmbeddedHome) -> TestDb {
         node_identity,
         process_generation: 0,
     }
+}
+
+pub async fn managed_agent(db: &TestDb) -> Arc<dyn NodeIdentity> {
+    managed_agent_with_binding(db).await.0
+}
+
+pub async fn managed_agent_with_binding(
+    db: &TestDb,
+) -> (
+    Arc<dyn NodeIdentity>,
+    gents_protocol::agent_identity::AgentIdentityBinding,
+) {
+    let fixture = managed_agent_fixture(db).await;
+    (fixture.agent, fixture.binding)
+}
+
+pub struct ManagedAgentFixture {
+    pub user: gents::KeyIdentity,
+    pub access: gents::ConfigAccess,
+    pub agent: Arc<dyn NodeIdentity>,
+    pub binding: gents_protocol::agent_identity::AgentIdentityBinding,
+}
+
+pub async fn managed_fixture_user(db: &TestDb) -> gents::KeyIdentity {
+    let path = db.data_path().join("fixture-user.key");
+    tokio::task::spawn_blocking(move || gents::KeyIdentity::load_or_create(path, None))
+        .await
+        .expect("join held test user setup")
+        .expect("create held test user")
+}
+
+pub async fn load_managed_fixture_user(db: &TestDb) -> gents::KeyIdentity {
+    let path = db.data_path().join("fixture-user.key");
+    tokio::task::spawn_blocking(move || gents::KeyIdentity::load_existing(path, None))
+        .await
+        .expect("join retained test user load")
+        .expect("load retained test user")
+}
+
+pub async fn managed_agent_fixture(db: &TestDb) -> ManagedAgentFixture {
+    use gents::store::config_client::{
+        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
+    };
+
+    let user = managed_fixture_user(db).await;
+    let user_did = identity::Did::new(user.did()).expect("valid user DID");
+    let runtime = db.node_identity.as_ref();
+    assert_ne!(user.did(), runtime.did());
+    let admin = gents::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(runtime.did()).expect("valid runtime DID"),
+    );
+    for permission in [
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::DacRelationAdd,
+        NodePermission::CollectionGet,
+    ] {
+        admin
+            .grant_node_permission(&user_did, permission)
+            .await
+            .expect("grant test user Node access");
+    }
+    let access = db.client_access(&user);
+    let node = serde_json::json!({"node_did": runtime.did()});
+    let node_plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: gents::Collection::Node,
+        add: node.clone(),
+        update: node,
+    }])
+    .expect("render test Node");
+    access
+        .transact_write("test.managed_agent.node", |txn| {
+            let plan = &node_plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .expect("install test Node as user");
+    let (agent, binding) = install_managed_agent(db, &access, &user, "Test agent").await;
+    ManagedAgentFixture {
+        user,
+        access,
+        agent,
+        binding,
+    }
+}
+
+pub async fn install_managed_agent(
+    db: &TestDb,
+    access: &gents::ConfigAccess,
+    user: &gents::KeyIdentity,
+    display_name: &str,
+) -> (
+    Arc<dyn NodeIdentity>,
+    gents_protocol::agent_identity::AgentIdentityBinding,
+) {
+    use gents::store::config_client::{
+        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
+    let runtime = db.node_identity.as_ref();
+    let user_did = identity::Did::new(user.did()).expect("valid user DID");
+    let binding =
+        gents::store::identity::provision_agent_identity_authorized(&db.node, runtime, &user_did)
+            .await
+            .expect("provision managed test Agent");
+    let agent = gents::store::identity::resolve_agent_identity(runtime, &binding)
+        .expect("resolve managed test Agent");
+    let document = serde_json::json!({
+        "node_did": runtime.did(),
+        "agent_did": binding.agent_did,
+        "creation_nonce": binding.creation_nonce,
+        "display_name": display_name,
+        "inference_profile_id": format!("{}:inference", binding.agent_did),
+        "enabled": true,
+    });
+    let backend_id = format!("{}:backend", binding.agent_did);
+    let profile_id = format!("{}:inference", binding.agent_did);
+    let backend = serde_json::json!({
+        "node_did": runtime.did(),
+        "backend_id": backend_id,
+        "name": "Test inference",
+        "provider_kind": "OpenAiCompatible",
+        "endpoint": "http://127.0.0.1:1/v1",
+        "auth": {"kind": "unauthenticated"},
+    });
+    let profile = serde_json::json!({
+        "node_did": runtime.did(),
+        "profile_id": profile_id,
+        "backend_id": backend_id,
+        "model_name": "test-model",
+    });
+    let agent_plan = DesiredStateApplyPlan::new(
+        [
+            (gents::Collection::InferenceBackend, backend),
+            (gents::Collection::InferenceProfile, profile),
+            (gents::Collection::Agent, document),
+        ]
+        .into_iter()
+        .map(|(collection, value)| DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        })
+        .collect(),
+    )
+    .expect("render test Agent");
+    access
+        .transact_write("test.managed_agent", |txn| {
+            let plan = &agent_plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .expect("install managed test Agent as user");
+    (agent, binding)
 }
 
 pub async fn test_db(name: &str) -> TestDb {
@@ -148,25 +322,59 @@ pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission)
     )
     .await
     .expect("p2p embedded home");
-    test_db_from_home(home)
+    let db = test_db_from_home(home);
+    install_runtime_node(&db).await;
+    db
+}
+
+/// Writes the runtime's Node document as the runtime owner. Publication and
+/// enrollment owners require exactly one visible local Node before they publish.
+async fn install_runtime_node(db: &TestDb) {
+    use gents::store::config_client::{
+        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
+
+    let runtime = db.node_identity.as_ref();
+    let admin = gents::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(runtime.did()).expect("valid runtime DID"),
+    );
+    let node = serde_json::json!({"node_did": runtime.did()});
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: gents::Collection::Node,
+        add: node.clone(),
+        update: node,
+    }])
+    .expect("render runtime Node");
+    admin
+        .transact_write("test.p2p.runtime_node", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .expect("install runtime Node");
 }
 
 pub fn test_p2p_config(admission: &TestP2pAdmission, data_path: &std::path::Path) -> P2PConfig {
     P2PConfig {
-        port: 0,
+        port: Some(0),
         bind_addr: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
         relay_mode: p2p::iroh::IrohRelayModeConfig::Disabled,
         discovery: p2p::iroh::IrohDiscoveryConfig::Disabled,
         allowlist: p2p::iroh::IrohAllowlistConfig::AcceptAll,
         max_concurrent_multipath_paths: None,
         secret_key_path: Some(data_path.join("p2p.key")),
+        peer_key: defra_node::PeerKeySource::File,
         load_persisted_collections: true,
-        max_concurrent_dag_fetches: admission.max_concurrent_dag_fetches,
-        max_concurrent_push_tasks: admission.max_concurrent_push_tasks,
-        rate_limit_burst: admission.rate_limit_burst,
-        rate_limit_rate: admission.rate_limit_rate,
-        max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-        max_pending_dags: admission.max_pending_dags,
+        sync: defra_node::SyncTuning {
+            max_concurrent_dag_fetches: admission.max_concurrent_dag_fetches,
+            max_concurrent_push_tasks: admission.max_concurrent_push_tasks,
+            rate_limit_burst: admission.rate_limit_burst,
+            rate_limit_rate: admission.rate_limit_rate,
+            max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
+            max_pending_dags: admission.max_pending_dags,
+            ..Default::default()
+        },
         rebroadcast_on_merge: false,
     }
 }
@@ -268,7 +476,7 @@ pub async fn create_request_for_agent_with_signed_fields(
                 request_id: "{request_id}",
                 purpose: "normal",
                 node_did: "{node_did}",
-                agent_id: "{AGENT_NAME}",
+                agent_did: "{AGENT_NAME}",
                 session_id: "{session_id}",
                 retry_parent_request: "{retry_parent_request}",
                 retry_root_request: "{retry_root_request}",
@@ -374,7 +582,7 @@ pub async fn create_retry_request(node: &EmbeddedNode, spec: &RetryRequestSpec<'
                 request_id: "{request_id_escaped}",
                 purpose: "normal",
                 node_did: "{NODE_DID}",
-                agent_id: "{AGENT_NAME}",
+                agent_did: "{AGENT_NAME}",
                 session_id: "{session_id_escaped}",
                 retry_parent_request: "{retry_parent_escaped}",
                 retry_root_request: "{retry_root_escaped}",
@@ -474,7 +682,7 @@ pub fn build_request(
         request_id,
         node_did: NODE_DID.into(),
         requester_did: None,
-        agent_id: AGENT_NAME.into(),
+        agent_did: AGENT_NAME.into(),
         session_id,
         content: "hello".into(),
         max_total_tokens: None,
@@ -583,14 +791,14 @@ pub async fn seed_session_observation(
 
 pub fn session_document(
     session_id: &str,
-    agent_id: &str,
+    agent_did: &str,
     created_at: &str,
 ) -> gents_protocol::session::AgentSession {
     gents_protocol::session::AgentSession {
         session_id: session_id.into(),
         node_did: NODE_DID.into(),
         requester_did: None,
-        agent_id: agent_id.into(),
+        agent_did: agent_did.into(),
         created_at: created_at.into(),
         closed_at: None,
         archived_at: None,
@@ -606,34 +814,34 @@ pub fn session_document(
 pub fn session_document_in_scope(
     node_did: &str,
     session_id: &str,
-    agent_id: &str,
+    agent_did: &str,
     created_at: &str,
 ) -> gents_protocol::session::AgentSession {
     gents_protocol::session::AgentSession {
         node_did: node_did.into(),
-        ..session_document(session_id, agent_id, created_at)
+        ..session_document(session_id, agent_did, created_at)
     }
 }
 
 pub async fn create_agent_session(
     node: &EmbeddedNode,
     session_id: &str,
-    agent_id: &str,
+    agent_did: &str,
     created_at: &str,
 ) {
-    create_session_document(node, &session_document(session_id, agent_id, created_at)).await;
+    create_session_document(node, &session_document(session_id, agent_did, created_at)).await;
 }
 
 pub async fn create_agent_session_in_scope(
     node: &EmbeddedNode,
     node_did: &str,
     session_id: &str,
-    agent_id: &str,
+    agent_did: &str,
     created_at: &str,
 ) {
     create_session_document(
         node,
-        &session_document_in_scope(node_did, session_id, agent_id, created_at),
+        &session_document_in_scope(node_did, session_id, agent_did, created_at),
     )
     .await;
 }
@@ -877,15 +1085,15 @@ pub async fn create_compaction_entry(
     );
 }
 
-pub async fn create_agent(node: &EmbeddedNode, agent_id: &str, node_did: &str) {
-    let profile_id = format!("{agent_id}-inference");
+pub async fn create_agent(node: &EmbeddedNode, agent_did: &str, node_did: &str) {
+    let profile_id = format!("{agent_did}-inference");
     let profile: gents::documents::InferenceProfile = serde_json::from_value(
         serde_json::json!({"node_did": node_did, "profile_id": profile_id,
             "backend_id": BACKEND_ID, "model_name": "test-model"}),
     )
     .expect("canonical inference fixture");
     let agent: gents::documents::Agent = serde_json::from_value(
-        serde_json::json!({"node_did": node_did, "agent_id": agent_id,
+        serde_json::json!({"node_did": node_did, "agent_did": agent_did,
             "display_name": "test behavior", "inference_profile_id": profile_id,
             "created_at": "2026-04-21T00:00:00Z"}),
     )
@@ -946,7 +1154,7 @@ where
 
 pub async fn begin_owned_execution(
     lifecycle: &mut gents::RequestLifecycle,
-    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<gents::defra_node::Node>,
 ) -> anyhow::Result<String> {
     let writer = gents::DefraStreamWriter::new(
         node.clone(),
@@ -962,8 +1170,8 @@ pub async fn complete_pending_request_with_canonical_output(
     row: gents_protocol::row::AgentRequestRow,
     text: &str,
 ) -> anyhow::Result<String> {
-    let agent_id = row
-        .agent_id
+    let agent_did = row
+        .agent_did
         .clone()
         .context("completion fixture request omitted agent")?;
     let prompt = row
@@ -993,7 +1201,7 @@ pub async fn complete_pending_request_with_canonical_output(
     fixtures::bind_agent_backend(
         &db.node,
         db.node_identity.did(),
-        &agent_id,
+        &agent_did,
         &backend_id,
         backend.endpoint(),
         "fixture-completion-model",
@@ -1064,7 +1272,7 @@ pub async fn load_request_row_by_logical_id(
     let response = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 2) {{
-                _docID request_id purpose node_did requester_did agent_id session_id content input
+                _docID request_id purpose node_did requester_did agent_did session_id content input
                 execution_origin created_at deadline valid_until request_hop
                 caused_by_parent_request_id caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id lifecycle_state

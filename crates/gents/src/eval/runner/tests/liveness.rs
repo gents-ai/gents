@@ -34,7 +34,7 @@ async fn run_and_resume_refuse_a_run_held_by_a_live_process() {
     holder.heartbeat(Duration::ZERO);
     let resumed = resume(
         &launching.access,
-        OWNER,
+        launching.owner(),
         "run-held",
         &launching.runs_dir(),
         &ScriptedExecutor::new().with_default(passed()),
@@ -58,10 +58,12 @@ async fn run_and_resume_refuse_a_run_held_by_a_live_process() {
         "run refuses before freezing rewrites the run's files"
     );
     assert!(running_elsewhere(&frozen.run_dir));
-    assert!(load_trials(&launching.access, OWNER, "run-held")
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        load_trials(&launching.access, launching.owner(), "run-held")
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -233,7 +235,7 @@ async fn a_run_is_finished_when_it_owes_nothing_and_no_live_process_holds_a_slot
     let frozen = freeze(&launching.access, &request, Isolation::Embedded)
         .await
         .unwrap();
-    let record = load_run(&launching.access, OWNER, "run-fin")
+    let record = load_run(&launching.access, launching.owner(), "run-fin")
         .await
         .unwrap()
         .unwrap();
@@ -250,7 +252,7 @@ async fn a_run_is_finished_when_it_owes_nothing_and_no_live_process_holds_a_slot
     )
     .await
     .unwrap();
-    let trials = load_trials(&launching.access, OWNER, "run-fin")
+    let trials = load_trials(&launching.access, launching.owner(), "run-fin")
         .await
         .unwrap();
     assert_eq!(slots_owed(&record, &trials), 0);

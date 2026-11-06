@@ -220,14 +220,56 @@ pub(super) async fn query_collection(
             escape_graphql_string(id)
         ));
     }
-    let fields = gents::store::config_client::config_projection(spec.collection, None)?
-        .0
-        .join(" ");
-    let query = format!(
-        "{{ {}(filter: {{ {filter} }}) {{ _docID {fields} }} }}",
-        spec.collection.graphql_type()
-    );
-    let rows = graphql_rows(access, spec.collection.graphql_type(), &query).await?;
+    let rows = if spec.collection == Collection::InferenceBackend {
+        access
+            .transact_readonly("cli.config.backend.read", |txn| {
+                Box::pin(async move {
+                    if let Some(id) = id {
+                        let record = gents::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            Collection::InferenceBackend,
+                            node_did,
+                            id,
+                        )
+                        .await?;
+                        return record
+                            .into_iter()
+                            .map(|(doc_id, mut row)| {
+                                row.as_object_mut()
+                                    .context("backend must be an object")?
+                                    .insert("_docID".into(), Value::String(doc_id));
+                                Ok(row)
+                            })
+                            .collect::<Result<Vec<_>>>();
+                    }
+                    gents::store::config_client::list_inference_backends_in_txn(txn, node_did)
+                        .await?
+                        .into_iter()
+                        .map(|backend| {
+                            let doc_id = backend
+                                .physical_doc_id
+                                .clone()
+                                .context("backend has no physical ID")?;
+                            let mut row = serde_json::to_value(backend)?;
+                            row.as_object_mut()
+                                .context("backend must be an object")?
+                                .insert("_docID".into(), Value::String(doc_id));
+                            Ok(row)
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+            })
+            .await?
+    } else {
+        let fields = gents::store::config_client::config_projection(spec.collection, None)?
+            .0
+            .join(" ");
+        let query = format!(
+            "{{ {}(filter: {{ {filter} }}) {{ _docID {fields} }} }}",
+            spec.collection.graphql_type()
+        );
+        graphql_rows(access, spec.collection.graphql_type(), &query).await?
+    };
     let mut ids = std::collections::BTreeSet::new();
     for row in &rows {
         anyhow::ensure!(
@@ -378,6 +420,31 @@ mod tests {
     use std::sync::Arc;
 
     #[tokio::test]
+    async fn backend_reads_use_metadata_for_list_and_exact_show() -> Result<()> {
+        let node = Arc::new(crate::shared::test_support::node_builder().build().await?);
+        gents::ensure_runtime_schemas(&node).await?;
+        let access = ConfigAccess::local(node.clone());
+        for owner in ["owner-a", "owner-b"] {
+            access.write("test.backend.metadata", &format!(
+                r#"mutation {{ create_InferenceBackendMetadata(input: {{node_did: "{owner}", backend_id: "same", name: "{owner}", provider_kind: "OpenAiCompatible", endpoint: "http://127.0.0.1:9/v1", auth_kind: "credential", credential_id: "private-ref", credential_version: "version"}}) {{_docID}} }}"#
+            )).await?;
+        }
+        let rows = query_collection(&access, BACKEND_SPEC, "owner-a", None).await?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["name"], "owner-a");
+        assert_eq!(rows[0]["auth"]["kind"], "credential");
+        assert!(rows[0]["_docID"].as_str().is_some());
+        assert!(!rows[0].to_string().contains("secret"));
+        let exact = load_one(&access, BACKEND_SPEC, "owner-b", "same").await?;
+        assert_eq!(exact["name"], "owner-b");
+        assert!(load_one(&access, BACKEND_SPEC, "owner-a", "missing")
+            .await
+            .is_err());
+        node.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn canonical_reads_keep_shared_labels_in_the_selected_owner() -> Result<()> {
         let node = Arc::new(crate::shared::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
@@ -407,7 +474,7 @@ mod tests {
         assert!(load_one(&access, TOOLS_SPEC, "absent", "same")
             .await
             .is_err());
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         Ok(())
     }
 }

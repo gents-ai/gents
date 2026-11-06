@@ -255,6 +255,7 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
         node.clone(),
         &executions,
         identity.did(),
+        identity.did(),
         hook.active_requester_did().await.as_deref(),
         &session_id,
         tool_call_id,
@@ -271,7 +272,7 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
         .lock()
         .await
         .remove(&hook_execution_fixture_key(&hook, request_id));
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -316,7 +317,7 @@ async fn run_process_control_scope(requester_did: Option<&str>) {
         .await;
     let session_id = owner.session_id().await.unwrap();
     for did in [owner_did, foreign_did] {
-        crate::session::ensure_session_with_agent_id_and_requester_did(
+        crate::session::ensure_session_with_agent_did_and_requester_did(
             &node,
             &session_id,
             did,
@@ -443,6 +444,7 @@ async fn run_process_control_scope(requester_did: Option<&str>) {
         node.clone(),
         &BackgroundExecutionRegistry::default(),
         foreign_did,
+        foreign_did,
         requester_did,
         &session_id,
         &tool_call_id,
@@ -499,7 +501,7 @@ async fn run_process_control_scope(requester_did: Option<&str>) {
         .lock()
         .await
         .remove(&hook_execution_fixture_key(&owner, &owner_cancel_request));
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 mod job_control {
@@ -735,7 +737,7 @@ mod job_control {
                     "node_did": self.owner.node_did,
                     "requester_did": self.owner.node_did,
                     "session_id": "child-session-slot-a",
-                    "agent_id": "general",
+                    "agent_did": "general",
                     "lifecycle_state": "processing",
                     "retry_key": job_spawn_key(row, "slot-a", 0),
                     "created_at": "2026-01-01T00:00:00Z",
@@ -765,7 +767,7 @@ mod job_control {
                 .lock()
                 .await
                 .remove(&hook_execution_fixture_key(&self.owner, &self.request_id));
-            self.node.shutdown().await;
+            self.node.shutdown().await.expect("shut down test node");
         }
     }
 
@@ -1013,6 +1015,7 @@ mod job_control {
         let outcome = cancel_background_tool_call(
             hook.node.clone(),
             &hook.executions,
+            &hook.owner.node_did,
             &hook.session_id,
             "job-operator",
         )
@@ -1043,6 +1046,7 @@ mod job_control {
             hook.node.clone(),
             &hook.executions,
             &hook.owner.node_did,
+            &hook.owner.node_did,
             Some("did:key:another-requester"),
             &hook.session_id,
             "job-client",
@@ -1057,6 +1061,7 @@ mod job_control {
         let outcome = cancel_session_background_process(
             hook.node.clone(),
             &hook.executions,
+            &hook.owner.node_did,
             &hook.owner.node_did,
             Some(&hook.owner.node_did),
             &hook.session_id,
@@ -1089,6 +1094,7 @@ mod job_control {
         let outcome = cancel_background_tool_call(
             hook.node.clone(),
             &hook.executions,
+            &hook.owner.node_did,
             &hook.session_id,
             "job-late",
         )

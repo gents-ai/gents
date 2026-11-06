@@ -39,12 +39,19 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_id": "engineer",
+                  "agent_did": "gents:agent-slot:engineer",
                   "delegates": {
                     "targets": "targets",
                     "agents": [
                       "review-helper"
                     ]
+                  }
+                },
+                {
+                  "agent_did": "review-helper",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^review[ -]helper$"
                   }
                 }
               ]
@@ -65,7 +72,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",
@@ -118,7 +125,7 @@
             "node_did",
             "name",
             "target_node_did",
-            "agent_id"
+            "agent_did"
           ]
         }
       ]
@@ -180,8 +187,6 @@
             "links": [
               {
                 "capture": "helper-request",
-                "key": "agent_id",
-                "id": "review-helper",
                 "field": "caused_by_parent_tool_call_doc_id",
                 "target_capture": "delegation_calls",
                 "target_key": "_docID",
@@ -194,7 +199,23 @@
                     "field": "completion_notification_delivered_at",
                     "matches": "^[0-9]{4}-"
                   }
-                ]
+                ],
+                "source_match": {
+                  "field": "content",
+                  "contains": "FIX2-888"
+                },
+                "exact": true
+              },
+              {
+                "capture": "helper-request",
+                "source_match": {
+                  "field": "content",
+                  "contains": "FIX2-888"
+                },
+                "field": "session_id",
+                "target_capture": "helper-session",
+                "target_key": "session_id",
+                "exact": true
               }
             ],
             "agents": {
@@ -203,12 +224,19 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_id": "engineer",
+                  "agent_did": "gents:agent-slot:engineer",
                   "delegates": {
                     "targets": "targets",
                     "agents": [
                       "review-helper"
                     ]
+                  }
+                },
+                {
+                  "agent_did": "review-helper",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^review[ -]helper$"
                   }
                 }
               ]
@@ -231,14 +259,37 @@
       "capture": [
         {
           "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
           "name": "helper-request",
           "collection": "AgentRequest",
           "filter": {
             "node_did": {
               "_eq": "$trial"
             },
-            "agent_id": {
-              "_like": "%:review-helper"
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^review[ -]helper$"
+                  },
+                  "field": "agent_did"
+                }
+              }
             },
             "purpose": {
               "_eq": "normal"
@@ -246,7 +297,7 @@
           },
           "fields": [
             "request_id",
-            "agent_id",
+            "agent_did",
             "session_id",
             "content",
             "lifecycle_state",
@@ -262,13 +313,22 @@
             "node_did": {
               "_eq": "$trial"
             },
-            "agent_id": {
-              "_like": "%:review-helper"
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^review[ -]helper$"
+                  },
+                  "field": "agent_did"
+                }
+              }
             }
           },
           "fields": [
             "session_id",
-            "agent_id",
+            "agent_did",
             "node_did"
           ]
         },
@@ -285,6 +345,9 @@
                 "agent_new",
                 "agent_message"
               ]
+            },
+            "request_id": {
+              "_eq": "$request"
             }
           },
           "fields": [
@@ -303,7 +366,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",
@@ -356,7 +419,7 @@
             "node_did",
             "name",
             "target_node_did",
-            "agent_id"
+            "agent_did"
           ]
         }
       ],

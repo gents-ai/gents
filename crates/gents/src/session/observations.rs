@@ -1,4 +1,4 @@
-use super::query::{decode_session_row, load_agent_session, validate_agent_session};
+use super::query::{decode_session_row, validate_agent_session};
 use super::sessions::{
     load_agent_session_row_in_txn, patch_session_in_txn, touch_activity_value, touched_observation,
     SESSION_SCOPE_FIELDS,
@@ -16,7 +16,7 @@ pub struct SessionRequestFact {
     pub session_id: String,
     /// Exact requester scope; `None` is its own scope, not a wildcard.
     pub requester_did: Option<String>,
-    pub agent_id: String,
+    pub agent_did: String,
     pub created_at: String,
     pub hop: u32,
     pub observed: gents_protocol::session::SessionRequestObservation,
@@ -137,7 +137,7 @@ fn request_fact_query(filter: &str) -> String {
     format!(
         r#"{{
             AgentRequest({filter}) {{
-                _docID request_id node_did session_id requester_did agent_id created_at lifecycle_state
+                _docID request_id node_did session_id requester_did agent_did created_at lifecycle_state
                 request_hop
             }}
         }}"#
@@ -174,10 +174,10 @@ fn decode_request_facts(response: &serde_json::Value) -> Result<Vec<SessionReque
                     .get("requester_did")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string),
-                agent_id: row
-                    .get("agent_id")
+                agent_did: row
+                    .get("agent_did")
                     .and_then(serde_json::Value::as_str)
-                    .context("request row omitted agent_id")?
+                    .context("request row omitted agent_did")?
                     .to_string(),
                 created_at: row
                     .get("created_at")
@@ -241,13 +241,14 @@ pub(crate) async fn load_session_current_hop_in_txn(
 
 pub(crate) async fn load_session_current_hop(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: &::identity::Did,
     node_did: &str,
     session_id: &str,
 ) -> Result<u32> {
     let (node_did, session_id) = (node_did.to_owned(), session_id.to_owned());
     crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
-        None,
+        Some(actor.clone()),
         "session.current_hop",
         |txn| {
             let (node_did, session_id) = (node_did.clone(), session_id.clone());
@@ -349,7 +350,7 @@ fn validate_incoming_scope(
     anyhow::ensure!(
         incoming.node_did == session.node_did
             && incoming.session_id == session.session_id
-            && incoming.agent_id == session.agent_id
+            && incoming.agent_did == session.agent_did
             && incoming.requester_did == session.requester_did,
         "incoming request does not match the session owner/session/requester/agent scope"
     );
@@ -525,7 +526,7 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
                 }},
                 limit: 2
             ) {{
-                _docID request_id node_did session_id requester_did agent_id created_at lifecycle_state
+                _docID request_id node_did session_id requester_did agent_did created_at lifecycle_state
             }}
         }}"#
     );
@@ -560,8 +561,8 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
             == Some(session.session.session_id.as_str())
         && row.get("requester_did").and_then(serde_json::Value::as_str)
             == session.session.requester_did.as_deref()
-        && row.get("agent_id").and_then(serde_json::Value::as_str)
-            == Some(session.session.agent_id.as_str());
+        && row.get("agent_did").and_then(serde_json::Value::as_str)
+            == Some(session.session.agent_did.as_str());
     if !scope_ok {
         return Ok(false);
     }
@@ -586,7 +587,7 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
 }
 
 pub(crate) async fn update_session_title_with_source(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
@@ -595,11 +596,8 @@ pub(crate) async fn update_session_title_with_source(
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     chrono::DateTime::parse_from_rfc3339(&now).context("invalid title update timestamp")?;
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "session.update_title",
-        move |txn| {
+    access
+        .transact_write("session.update_title", move |txn| {
             let title = title.to_string();
             let now = now.clone();
             Box::pin(async move {
@@ -615,9 +613,37 @@ pub(crate) async fn update_session_title_with_source(
                 .await?;
                 Ok::<_, anyhow::Error>(())
             })
-        },
-    )
-    .await
+        })
+        .await
+}
+
+/// Rename through the held client identity, rebuilding from the current session
+/// only when the transaction owner confirms that a conflicting attempt aborted.
+pub async fn rename_session_on(
+    access: &crate::ConfigAccess,
+    node_did: &str,
+    requester_did: &str,
+    session_id: &str,
+    title: &str,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    access
+        .transact_signed_conflict_rebuild("rename_session", |txn| {
+            let now = &now;
+            Box::pin(async move {
+                apply_title_in_txn(
+                    txn,
+                    node_did,
+                    Some(requester_did),
+                    session_id,
+                    Some(title),
+                    gents_protocol::session::SessionTitleSource::User,
+                    now,
+                )
+                .await
+            })
+        })
+        .await
 }
 
 pub async fn apply_title_in_txn(
@@ -670,7 +696,7 @@ pub async fn apply_title_in_txn(
 }
 
 pub(crate) async fn load_recent_titles_for_agent(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     node_did: &str,
     exclude_session_id: &str,
     limit: usize,
@@ -692,14 +718,10 @@ pub(crate) async fn load_recent_titles_for_agent(
         }}"#
     );
 
-    let resp = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "load_recent_titles_for_agent",
-    )
-    .await?;
-
-    let rows = crate::store::graphql::rows::<serde_json::Value>(&resp, "AgentSession")?;
+    let resp = access.execute(&query).await?;
+    let rows = resp["data"]["AgentSession"]
+        .as_array()
+        .context("recent title query omitted AgentSession rows")?;
     let mut sessions: Vec<gents_protocol::session::AgentSession> = rows
         .iter()
         .map(|row| decode_session_row(row).map(|row| row.session))
@@ -738,14 +760,25 @@ pub(crate) async fn load_recent_titles_for_agent(
 }
 
 pub(crate) async fn session_needs_generated_title(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
 ) -> Result<bool> {
-    let Some(session) = load_agent_session(node, node_did, session_id, requester_did).await? else {
+    let Some(row) = access
+        .transact_readonly("session.needs_generated_title", |txn| {
+            Box::pin(load_agent_session_row_in_txn(
+                txn,
+                node_did,
+                session_id,
+                requester_did,
+            ))
+        })
+        .await?
+    else {
         return Ok(false);
     };
+    let session = row.session;
     validate_agent_session(&session)?;
 
     Ok(match session.title.as_ref() {

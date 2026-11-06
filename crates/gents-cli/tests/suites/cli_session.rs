@@ -42,10 +42,10 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
         &["config", "export", "--root", &root.to_string_lossy()],
     )?;
     let config = read_json_file(&root.join("pack_config.json"))?;
-    let agent_id = config["node"]
-        .get("default_agent_id")
+    let agent_did = config["node"]
+        .get("default_agent_did")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("missing default_agent_id after export"))?
+        .ok_or_else(|| anyhow!("missing default_agent_did after export"))?
         .to_string();
 
     let session_id = format!("session-{}", Uuid::new_v4().simple());
@@ -55,20 +55,20 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
                 create_AgentSession(input: {{
                     session_id: "{}",
                     node_did: "{}",
-                    agent_id: "{}",
+                    agent_did: "{}",
                     created_at: "2026-06-12T10:00:00Z"
                 }}) {{ _docID }}
             }}"#,
             escape_graphql_string(&session_id),
             escape_graphql_string(&node_did),
-            escape_graphql_string(&agent_id),
+            escape_graphql_string(&agent_did),
         ),
         format!(
             r#"mutation {{
                 create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{}",
                     node_did: "{}",
-                    agent_id: "{}",
+                    agent_did: "{}",
                     session_id: "{}",
                     lifecycle_state: "completed",
                     created_at: "2026-06-12T10:01:00Z"
@@ -76,7 +76,7 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
             }}"#,
             escape_graphql_string(&format!("{session_id}-request-a")),
             escape_graphql_string(&node_did),
-            escape_graphql_string(&agent_id),
+            escape_graphql_string(&agent_did),
             escape_graphql_string(&session_id),
         ),
         format!(
@@ -84,7 +84,7 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
                 create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{}",
                     node_did: "{}",
-                    agent_id: "{}",
+                    agent_did: "{}",
                     session_id: "{}",
                     lifecycle_state: "completed",
                     created_at: "2026-06-12T10:02:00Z"
@@ -92,7 +92,7 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
             }}"#,
             escape_graphql_string(&format!("{session_id}-request-b")),
             escape_graphql_string(&node_did),
-            escape_graphql_string(&agent_id),
+            escape_graphql_string(&agent_did),
             escape_graphql_string(&session_id),
         ),
     ] {

@@ -498,8 +498,10 @@ export function BackendEditor({
               id={id("key")}
               label="API key"
               description={
-                backend.apiKeyConfigured
-                  ? "A key is stored; enter one to replace it."
+                backend.authKind === "credential"
+                  ? "A credential is stored; enter an API key to replace it."
+                  : backend.apiKeyConfigured
+                    ? "A key is stored; enter one to replace it."
                   : "Stored by the bridge, never shown again."
               }
               value={d.draft.apiKey}
@@ -508,7 +510,7 @@ export function BackendEditor({
               password
             />
             {backend.apiKeyConfigured && (
-              <Row label="Stored key">
+              <Row label={backend.authKind === "credential" ? "Stored credential" : "Stored key"}>
                 <Button
                   size="sm"
                   variant="quiet"

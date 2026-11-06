@@ -21,14 +21,15 @@ pub async fn submit_pending_user_edit(
     session_id: &str,
     edit: PendingQueueEdit,
 ) -> Result<SessionInputEditReceipt> {
-    let requester_did = signer.did();
+    let requester_did =
+        crate::session::client_requester_scope(access, node_did, session_id, signer.did()).await?;
     let replacements = super::prepare_pending_user_edit(
         access,
         signer,
         admission,
         node_did,
         session_id,
-        requester_did,
+        &requester_did,
         &edit,
     )
     .await?;
@@ -73,13 +74,15 @@ pub async fn submit_pending_user_steer(
             }
         })
         .collect::<Vec<_>>();
+    let requester_did =
+        crate::session::client_requester_scope(access, node_did, session_id, signer.did()).await?;
     let replacements = super::management::prepare_pending_user_edit_with_deliveries(
         access,
         signer,
         admission,
         node_did,
         session_id,
-        signer.did(),
+        &requester_did,
         &edit,
         Some(&deliveries),
         request_id,
@@ -108,6 +111,46 @@ async fn submit_prepared_edit(
     replacements: Vec<gents_protocol::request_admission::AgentRequestCreate>,
 ) -> Result<SessionInputEditReceipt> {
     let requester_did = signer.did();
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(requester_did),
+        "edit actor differs from signer"
+    );
+    let (session_doc_id, agent_did, agent_doc_id) = access
+        .transact_readonly("queue.edit.targets", |txn| {
+            Box::pin(async move {
+                let session =
+                    crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+                        .await?
+                        .context("edit session unavailable")?;
+                let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Agent,
+                    node_did,
+                    &session.session.agent_did,
+                )
+                .await?
+                .context("edit Agent unavailable")?;
+                Ok::<_, anyhow::Error>((session.doc_id, session.session.agent_did, agent_doc))
+            })
+        })
+        .await?;
+    let mut replacement_evidence = Vec::with_capacity(replacements.len());
+    for create in &replacements {
+        anyhow::ensure!(
+            create.session_doc_id.as_deref() == Some(session_doc_id.as_str())
+                && create.agent_doc_id.as_deref() == Some(agent_doc_id.as_str())
+                && create.agent_did == agent_did
+                && create.admission.signer_did == requester_did,
+            "replacement physical targets or signer changed"
+        );
+        replacement_evidence.push(
+            crate::store::config_client::prepare_request_evidence(
+                signer,
+                crate::store::config_client::client_request_input(create)?,
+            )
+            .await?,
+        );
+    }
     let now = chrono::Utc::now();
     let mut command = SessionInputEdit {
         version: SESSION_INPUT_EDIT_VERSION,
@@ -118,36 +161,19 @@ async fn submit_prepared_edit(
             .map(str::to_owned),
         node_did: node_did.to_owned(),
         session_id: session_id.to_owned(),
+        session_doc_id,
+        agent_did,
+        agent_doc_id,
         issued_at: now.to_rfc3339(),
         expires_at: (now + COMMAND_LIFETIME).to_rfc3339(),
         edit,
         replacements,
+        replacement_evidence,
         signature: Vec::new(),
     };
     command.signature = signer.sign(&command.signing_payload()).await?;
     command.validate_shape()?;
-    let peer = command
-        .requester_peer_id
-        .as_deref()
-        .map(|peer| format!(r#""{}""#, escape_graphql_string(peer)))
-        .unwrap_or_else(|| "null".into());
-    let response = access
-        .write(
-            "queue.submit_pending_edit",
-            &format!(
-                r#"mutation {{ create_AgentSessionInputEdit(input: {{
-                command_id: "{}", requester_did: "{}", requester_peer_id: {peer},
-                node_did: "{}", session_id: "{}", intent_json: "{}"
-            }}) {{ _docID }} }}"#,
-                escape_graphql_string(&command.command_id),
-                escape_graphql_string(&command.requester_did),
-                escape_graphql_string(node_did),
-                escape_graphql_string(session_id),
-                escape_graphql_string(&serde_json::to_string(&command)?),
-            ),
-        )
-        .await?;
-    let doc_id = crate::store::graphql::created_doc_id(&response, "AgentSessionInputEdit")?;
+    let doc_id = publish_edit_command(access, &command).await?;
     match tokio::time::timeout(RECEIPT_WAIT, answered(access, &doc_id, &command)).await {
         Ok(receipt) => receipt,
         Err(_) => anyhow::bail!(
@@ -155,6 +181,39 @@ async fn submit_prepared_edit(
             command.command_id
         ),
     }
+}
+
+/// Publish the exact signed edit and its native session and Agent relationships atomically.
+pub async fn publish_edit_command(
+    access: &ConfigAccess,
+    command: &SessionInputEdit,
+) -> Result<String> {
+    command.validate_shape()?;
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(command.requester_did.as_str()),
+        "edit actor differs from author"
+    );
+    let input = serde_json::json!({"command_id":command.command_id, "requester_did":command.requester_did,
+        "requester_peer_id":command.requester_peer_id, "node_did":command.node_did,
+        "session_id":command.session_id, "intent_json":serde_json::to_string(&command)?});
+    access.transact_write_with_finality("queue.submit_pending_edit", |txn| {
+        let input = &input;
+        let command = &command;
+        Box::pin(async move {
+            let response = txn.execute_client_signed_create(
+                "mutation($input: AgentSessionInputEditMutationInputArg!) { create_AgentSessionInputEdit(input: $input) { _docID } }",
+                &serde_json::json!({"input":input}), gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT,
+            ).await?;
+            let doc = crate::store::graphql::created_doc_id(&response, "AgentSessionInputEdit")?;
+            txn.add_resource_relationship("AgentSessionInputEdit", &doc, "parent", "sessions", &command.session_doc_id).await?;
+            txn.add_actor_relationship("AgentSessionInputEdit", &doc, "working_agent", &identity::Did::new(&command.agent_did)?).await?;
+            Ok::<_, anyhow::Error>(doc)
+        })
+    }).await.map_err(|failure| {
+        if failure.unconfirmed {
+            failure.error.context(format!("Pending edit {} may have been saved; inspect it before resending", command.command_id))
+        } else { failure.error }
+    })
 }
 
 async fn answered(

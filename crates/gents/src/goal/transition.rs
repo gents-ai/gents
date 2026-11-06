@@ -91,12 +91,10 @@ pub fn goal_submission_step(
             staged_goal: true,
             ..state
         },
-        GoalSubmissionAction::StageRequest if state.staged_goal || state.durable_goal => {
-            GoalSubmissionState {
-                staged_request: true,
-                ..state
-            }
-        }
+        GoalSubmissionAction::StageRequest => GoalSubmissionState {
+            staged_request: true,
+            ..state
+        },
         GoalSubmissionAction::Commit if state.staged_goal && state.staged_request => {
             GoalSubmissionState {
                 durable_goal: true,

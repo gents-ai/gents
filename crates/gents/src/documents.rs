@@ -36,7 +36,7 @@ pub use principal::{load_node, Node};
 
 pub use callback::{
     BuiltInCallback, Callback, CallbackBinding, CallbackHandler, CallbackInvocationOrigin,
-    CallbackModule, PortCardinality, PortSpec,
+    CallbackModule, PortCardinality, PortSpec, WorkspaceAgentSelection, WorkspaceReaderSelection,
 };
 pub use compaction::CompactionConfig;
 pub use context::AgentContext;
@@ -49,6 +49,7 @@ pub use installation::{
     ProjectionAcpBinding, ProjectionAcpObservation, RepositoryPlacement, ToolServiceRegistry,
 };
 pub use pack_config::PackConfig;
+pub(crate) use references::{references_of, RequiredReference};
 pub use references::{ConfigReferences, MissingReference};
 
 #[allow(unused_imports)]
@@ -56,8 +57,9 @@ pub(crate) use behavior::{list_agent_records, load_agent_record};
 pub use behavior::{list_agents, load_agent, upsert_agent, Agent};
 
 pub use inference_backend::{
-    AdvertisedModel, BackendAuth, BackendModelCatalog, ClaudePlatform, InferenceBackend,
-    InferenceBackendObservation,
+    AdvertisedModel, BackendAuth, BackendAuthSelection, BackendAuthSelectionFields,
+    BackendModelCatalog, ClaudePlatform, InferenceBackend, InferenceBackendMetadata,
+    InferenceBackendObservation, InvalidBackendAuthSelection,
 };
 pub use inference_execution::{
     InferenceExecution, InferenceRetryPolicy, MAX_DEADLINE_DURATION_SECS,
@@ -76,6 +78,8 @@ pub use serde_helpers::deserialize_dual_shape;
 pub(crate) use serde_helpers::{
     accepts_null, deserialize_default_on_null, noted, string_list_schema, widen_schema,
 };
+#[cfg(test)]
+pub(crate) use surface_tool::{confirm_visible_datastore_tool, revalidate_datastore_tool_in_txn};
 #[allow(unused_imports)]
 pub(crate) use surface_tool::{
     deserialize_optional_surface_tools, validate_query_tool_declarations,
@@ -83,6 +87,9 @@ pub(crate) use surface_tool::{
 };
 pub use surface_tool::{
     merge_datastore_tool_surfaces, MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl,
+};
+pub(crate) use surface_tool::{
+    validate_datastore_surface, DatastoreSurfaceScope, DatastoreToolSource,
 };
 pub use tools::{load_agent_context_and_tools_in_txn, load_agent_tools_in_txn};
 pub use tools::{unwire_plugin, wire_plugin, WireReport};
@@ -117,74 +124,15 @@ pub use task::{Task, TaskHook, TaskHookPhase};
 pub use trigger::{ConcurrencyMode, Trigger, TriggerObservation, TriggerSource};
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
-pub fn default_agent_id_for_node(node_did: &str) -> String {
-    format!("{node_did}:default")
-}
-
-/// Ensure the runtime's node exists without inventing executable configuration.
+/// Runtime startup requires a Node created by an authenticated client.
 pub async fn ensure_node(node: &std::sync::Arc<EmbeddedNode>, node_did: &str) -> Result<Node> {
-    use crate::store::collection::Collection;
-    use crate::store::config_client::{
-        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
+    use anyhow::Context;
     anyhow::ensure!(!node_did.trim().is_empty(), "node DID must not be blank");
-    let owner = node_did.to_owned();
-    let existing: Option<Node> =
-        ConfigAccess::transact_local_readonly(node, None, "ensure_node.read", |txn| {
-            let owner = &owner;
-            Box::pin(async move {
-                crate::store::config_client::read_desired_state_record_in_txn(
-                    txn,
-                    Collection::Node,
-                    owner,
-                    owner,
-                )
-                .await?
-                .map(|(_, value)| serde_json::from_value(value).map_err(anyhow::Error::from))
-                .transpose()
-            })
-        })
-        .await?;
-    if let Some(principal) = existing {
-        return Ok(principal);
-    }
-    ConfigAccess::transact_local_write(node, None, "ensure_node", move |txn| {
-        let owner = owner.clone();
-        Box::pin(async move {
-            if let Some((_, value)) = crate::store::config_client::read_desired_state_record_in_txn(
-                txn,
-                Collection::Node,
-                &owner,
-                &owner,
-            )
-            .await?
-            {
-                return Ok(serde_json::from_value(value)?);
-            }
-            let principal = Node {
-                node_did: owner.clone(),
-                display_name: Some(serde_helpers::default_display_name_for_did(&owner)),
-                avatar: None,
-                default_agent_id: None,
-                enabled: true,
-                created_at: Some(chrono::Utc::now().to_rfc3339()),
-                created_by: Some(owner),
-                max_request_hop: None,
-                tags: Vec::new(),
-            };
-            let value = serde_json::to_value(&principal)?;
-            let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                collection: Collection::Node,
-                add: value.clone(),
-                update: value,
-            }])?;
-            crate::store::config_client::apply_desired_state_plan(txn, &plan).await?;
-            Ok(principal)
-        })
-    })
-    .await
+    load_node(node, node_did)
+        .await?
+        .context("Node must be created by an authenticated client")
 }
 
 #[cfg(test)]

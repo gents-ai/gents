@@ -136,3 +136,77 @@ fn extracts_raw_tool_call_json_from_persisted_assistant_message() {
     assert!(extract_raw_tool_call_json(&message, "call-1", "read").is_none());
     assert!(extract_raw_tool_call_json(&message, "internal-1", "other").is_none());
 }
+
+#[tokio::test]
+async fn transcript_uses_the_callers_authenticated_access_and_preserves_denials() {
+    use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
+    use base64::Engine as _;
+    use std::sync::{Arc, Mutex};
+
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    let app = Router::new()
+        .route(
+            "/api/v0/graphql",
+            post(|State(seen): State<Arc<Mutex<Vec<String>>>>,
+                  headers: HeaderMap,
+                  Json(body): Json<Value>| async move {
+                assert!(body["query"].as_str().unwrap().contains("AgentMessage"));
+                let bearer = headers
+                    .get(axum::http::header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or_default()
+                    .to_owned();
+                let mut calls = seen.lock().unwrap();
+                calls.push(bearer);
+                if calls.len() == 1 {
+                    Json(json!({"data": {"AgentMessage": []}}))
+                } else {
+                    Json(json!({"errors": [{"message": "not allowed", "extensions": {"code": "PERMISSION_DENIED"}}]}))
+                }
+            }),
+        )
+        .with_state(seen.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let directory = tempfile::tempdir().unwrap();
+    let key_path = directory.path().join("reader.key");
+    let identity = tokio::task::spawn_blocking(move || {
+        crate::store::identity::KeyIdentity::load_or_create(key_path, None)
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let did = crate::store::identity::NodeIdentity::did(&identity).to_owned();
+    let access = crate::ConfigAccess::Graphql(
+        crate::store::config_client::GraphqlEndpoint::as_principal(endpoint, &did)
+            .with_client_signing_capability(
+                crate::store::identity::NodeIdentity::client_signing_capability(&identity).unwrap(),
+            )
+            .unwrap(),
+    );
+    let read =
+        || load_trace_transcript(&access, "session", "did:test:node", None, None, None, None);
+    assert!(read().await.unwrap().is_empty());
+    let error = read().await.expect_err("explicit permission denial");
+    assert!(
+        crate::store::config_client::TransactionFailure::config_client_error(&error)
+            .is_some_and(crate::store::config_client::ConfigClientError::is_permission_denied)
+    );
+    server.abort();
+    let calls = seen.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    for bearer in calls.iter() {
+        let payload = bearer
+            .strip_prefix("Bearer ")
+            .and_then(|token| token.split('.').nth(1))
+            .expect("authenticated bearer");
+        let claims: Value = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(payload)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(claims["iss"], did);
+    }
+}

@@ -2,12 +2,10 @@ use gents::inference::llm::tool::BoxFuture;
 use gents::inference::llm::tool::ToolDefinition;
 use gents::inference::llm::tool::{ToolDyn, ToolError};
 use gents::inference::llm::ToolCallHookAction;
-use gents::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
+use gents::{BackgroundToolRegistry, DefraSessionHook};
 use serde_json::{json, Value};
 
-use super::r4c_private_support::{
-    accepted_call, assert_accepted_control_rows, bind_accepted_request,
-};
+use super::r4c_private_support::{accepted_call, assert_accepted_control_rows, setup_private_hook};
 use crate::support::test_db;
 
 struct StaticTool {
@@ -64,36 +62,7 @@ async fn setup_hook(
     let db = test_db(test_name).await;
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-request");
-    let did = db.node_identity.did();
-    gents::session::ensure_session_with_agent_id_and_requester_did(
-        &db.node,
-        &session_id,
-        did,
-        "r4c-read-tool-output",
-        Some(did),
-    )
-    .await
-    .expect("ensure canonical read-process parent session");
-
-    let hook = DefraSessionHook::resume_with_identity_policy(
-        db.node.clone(),
-        &session_id,
-        did,
-        Some(did),
-        FailurePolicy::default(),
-    )
-    .await
-    .unwrap()
-    .with_background_tool_registry(registry);
-    bind_accepted_request(
-        &db,
-        &hook,
-        "r4c-read-tool-output",
-        &request_id,
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    let hook = setup_private_hook(&db, &request_id, &session_id, registry).await;
     (db, hook, session_id, request_id)
 }
 
@@ -103,35 +72,7 @@ async fn setup_hook_on_db(
     session_id: &str,
     registry: BackgroundToolRegistry,
 ) -> (DefraSessionHook, String, String) {
-    let did = db.node_identity.did();
-    gents::session::ensure_session_with_agent_id_and_requester_did(
-        &db.node,
-        session_id,
-        did,
-        "r4c-read-tool-output",
-        Some(did),
-    )
-    .await
-    .expect("ensure canonical read-process parent session");
-    let hook = DefraSessionHook::resume_with_identity_policy(
-        db.node.clone(),
-        session_id,
-        did,
-        Some(did),
-        FailurePolicy::default(),
-    )
-    .await
-    .unwrap()
-    .with_background_tool_registry(registry);
-    bind_accepted_request(
-        db,
-        &hook,
-        "r4c-read-tool-output",
-        request_id,
-        session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    let hook = setup_private_hook(db, request_id, session_id, registry).await;
     (hook, session_id.to_string(), request_id.to_string())
 }
 

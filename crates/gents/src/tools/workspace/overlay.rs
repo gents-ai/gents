@@ -2,22 +2,23 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use anyhow::{anyhow, bail, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
 use crate::request::watcher::AgentRequest;
-use crate::store::graphql::{
-    escape_graphql_string, first_row, graphql_with_transaction_retry, rows,
-};
+use crate::store::graphql::escape_graphql_string;
+#[cfg(test)]
+use crate::store::graphql::{first_row, graphql_with_transaction_retry, rows};
 use crate::tools::native::{workspace_write_sandbox_enforced, WorkspaceAuthority};
 use crate::tools::surface::{resolve_configured_tool_root, FileToolMode};
 
+#[cfg(test)]
 use super::binding::{admit_workspace_binding, new_binding, AdmitBinding};
-use super::documents::{
-    workspace_binding_upsert_mutation, workspace_bindings_upsert_mutation, WorkspaceBindingDoc,
-};
+use super::documents::WorkspaceBindingDoc;
+#[cfg(test)]
+use super::documents::{workspace_binding_upsert_mutation, workspace_bindings_upsert_mutation};
 
 static PROCESS_OPERATOR_TOOL_ROOT: RwLock<Option<PathBuf>> = RwLock::new(None);
 
@@ -115,7 +116,7 @@ pub(crate) fn require_workspace_principal(
     };
     if principal_did.trim() != required.trim() {
         bail!(
-            "node {principal_did} is not authorized for {} on workspace {}",
+            "Agent {principal_did} is not selected for {} on workspace {}",
             authority.as_str(),
             workspace.workspace_id
         );
@@ -124,6 +125,7 @@ pub(crate) fn require_workspace_principal(
 }
 
 #[inline(never)]
+#[cfg(test)]
 pub(crate) async fn resolve_request_workspace_overlay(
     node: &Arc<EmbeddedNode>,
     request: &AgentRequest,
@@ -142,6 +144,61 @@ pub(crate) async fn resolve_request_workspace_overlay(
     .await
 }
 
+pub(crate) async fn resolve_request_workspace_overlay_with_identity(
+    node: &Arc<EmbeddedNode>,
+    agent_identity: &dyn crate::store::identity::NodeIdentity,
+    request: &AgentRequest,
+    execution_generation: &str,
+    artifact_requested: bool,
+    operator_tool_root: Option<&Path>,
+) -> Result<Option<WorkspaceOverlay>> {
+    let access = super::runtime::completion_access(node, agent_identity, &request.agent_did)?;
+    let Some((workspace, mut overlay)) = load_request_workspace_overlay(
+        node,
+        Some(&access),
+        request,
+        artifact_requested,
+        operator_tool_root,
+        workspace_write_sandbox_enforced(),
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let lineage = crate::request::lifecycle::WorkspaceLineage {
+        workspace_id: request.workspace_id.clone(),
+        workspace_owner_node_did: request.workspace_owner_node_did.clone(),
+        workspace_authority: request.workspace_authority.clone(),
+        workspace_seal_hash: request.workspace_seal_hash.clone(),
+    };
+    super::runtime::materialize_workspace_binding(
+        node,
+        &request.request_id,
+        &request.doc_id,
+        agent_identity,
+        &lineage,
+    )
+    .await?;
+    if artifact_requested {
+        overlay.workspace_artifact = Some(
+            super::ArtifactGrant::create_with_access(
+                access,
+                request,
+                execution_generation,
+                &overlay.root,
+                &workspace.owner_node_did,
+                workspace
+                    .seal_hash
+                    .as_deref()
+                    .context("artifact workspace requires a seal")?,
+            )
+            .await?,
+        );
+    }
+    Ok(Some(overlay))
+}
+
+#[cfg(test)]
 async fn resolve_request_workspace_overlay_on_host(
     node: &Arc<EmbeddedNode>,
     request: &AgentRequest,
@@ -152,6 +209,7 @@ async fn resolve_request_workspace_overlay_on_host(
 ) -> Result<Option<WorkspaceOverlay>> {
     let Some((workspace, mut overlay)) = load_request_workspace_overlay(
         node,
+        None,
         request,
         artifact_requested,
         operator_tool_root,
@@ -188,6 +246,7 @@ async fn resolve_request_workspace_overlay_on_host(
     Ok(Some(overlay))
 }
 
+#[cfg(test)]
 pub(crate) async fn validate_request_workspace_input(
     node: &Arc<EmbeddedNode>,
     request: &AgentRequest,
@@ -210,6 +269,65 @@ pub(crate) async fn validate_request_workspace_input(
     }
     load_request_workspace_overlay(
         node,
+        None,
+        request,
+        artifact_requested,
+        operator_root.as_deref(),
+        workspace_write_sandbox_enforced(),
+    )
+    .await?;
+    Ok(())
+}
+
+pub(crate) fn validate_unbound_request_workspace_input(
+    request: &AgentRequest,
+    artifact_requested: bool,
+) -> Result<()> {
+    anyhow::ensure!(
+        optional_id(request.workspace_id.as_deref()).is_none(),
+        "workspace access requires the selected Agent"
+    );
+    if artifact_requested {
+        bail!("artifact_write requires a sealed ReadOnly workspace binding");
+    }
+    if let Some(cwd) = request_workspace_cwd(request) {
+        let cwd = std::fs::canonicalize(&cwd).context("resolve invocation cwd")?;
+        anyhow::ensure!(cwd.is_dir(), "invocation cwd is not a directory");
+        require_under_ceiling(&cwd, process_operator_tool_root().as_deref())?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn validate_request_workspace_input_with_identity(
+    node: &Arc<EmbeddedNode>,
+    agent_identity: &dyn crate::store::identity::NodeIdentity,
+    request: &AgentRequest,
+    artifact_requested: bool,
+) -> Result<()> {
+    let operator_root = process_operator_tool_root();
+    let access = super::runtime::completion_access(node, agent_identity, &request.agent_did)?;
+    if super::runtime::writer_request_already_sealed_with_identity(node, agent_identity, request)
+        .await?
+    {
+        let workspace_id = request
+            .workspace_id
+            .as_deref()
+            .context("sealed writer lacks workspace")?;
+        let placement = load_workspace_placement_with_access(
+            &access,
+            workspace_id,
+            request_workspace_owner(request)?,
+        )
+        .await?
+        .context("sealed writer workspace placement missing")?;
+        let root = canonicalize_placement_path(&placement.host_path)?;
+        require_under_ceiling(&root, operator_root.as_deref())?;
+        resolve_bound_cwd(&root, request_workspace_cwd(request).as_deref())?;
+        return Ok(());
+    }
+    load_request_workspace_overlay(
+        node,
+        Some(&access),
         request,
         artifact_requested,
         operator_root.as_deref(),
@@ -220,7 +338,8 @@ pub(crate) async fn validate_request_workspace_input(
 }
 
 async fn load_request_workspace_overlay(
-    node: &EmbeddedNode,
+    _node: &EmbeddedNode,
+    access: Option<&crate::ConfigAccess>,
     request: &AgentRequest,
     artifact_requested: bool,
     operator_tool_root: Option<&Path>,
@@ -245,15 +364,36 @@ async fn load_request_workspace_overlay(
         _ => bail!("workspace-bound request {workspace_id} is missing workspace_authority"),
     };
 
-    let workspace =
-        load_isolated_workspace_record(node, workspace_id, request_workspace_owner(request)?)
+    let workspace = match access {
+        Some(access) => {
+            load_isolated_workspace_record_with_access(
+                access,
+                workspace_id,
+                request_workspace_owner(request)?,
+            )
             .await?
-            .ok_or_else(|| anyhow!("isolated workspace {workspace_id} not found"))?;
-    require_workspace_principal(&workspace, &request.node_did, authority)?;
+        }
+        #[cfg(test)]
+        None => {
+            load_isolated_workspace_record(_node, workspace_id, request_workspace_owner(request)?)
+                .await?
+        }
+        #[cfg(not(test))]
+        None => bail!("workspace access requires the selected Agent"),
+    }
+    .ok_or_else(|| anyhow!("isolated workspace {workspace_id} not found"))?;
+    require_workspace_principal(&workspace, &request.agent_did, authority)?;
     let node_did = request_workspace_owner(request)?;
-    let placement = load_workspace_placement(node, workspace_id, node_did)
-        .await?
-        .ok_or_else(|| anyhow!("workspace placement for {workspace_id} not found on this node"))?;
+    let placement = match access {
+        Some(access) => {
+            load_workspace_placement_with_access(access, workspace_id, node_did).await?
+        }
+        #[cfg(test)]
+        None => load_workspace_placement(_node, workspace_id, node_did).await?,
+        #[cfg(not(test))]
+        None => bail!("workspace access requires the selected Agent"),
+    }
+    .ok_or_else(|| anyhow!("workspace placement for {workspace_id} not found on this node"))?;
     let request_cwd = request_workspace_cwd(request);
     let sealed =
         crate::tools::native::normalize_workspace_lifecycle_state(&workspace.lifecycle_state)
@@ -449,6 +589,7 @@ pub(crate) fn request_workspace_cwd(request: &AgentRequest) -> Option<PathBuf> {
     request.input.cwd.as_deref().map(PathBuf::from)
 }
 
+#[cfg(test)]
 async fn ensure_request_binding(
     node: &Arc<EmbeddedNode>,
     request: &AgentRequest,
@@ -459,7 +600,7 @@ async fn ensure_request_binding(
     let existing =
         load_workspace_bindings_for(node, &workspace.workspace_id, &workspace.owner_node_did)
             .await?;
-    let candidate = new_binding(
+    let mut candidate = new_binding(
         &workspace.workspace_id,
         &request.request_id,
         &request.doc_id,
@@ -467,6 +608,22 @@ async fn ensure_request_binding(
         node_did,
         optional_id(request.workspace_seal_hash.as_deref())
             .or(optional_id(workspace.seal_hash.as_deref())),
+    );
+    let response = graphql_with_transaction_retry(
+        node,
+        &isolated_workspace_record_query(&workspace.workspace_id, &workspace.owner_node_did),
+        "test workspace physical identity",
+    )
+    .await?;
+    candidate.workspace_doc_id = Some(
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data["IsolatedWorkspace"].as_array())
+            .and_then(|rows| rows.first())
+            .and_then(|row| row["_docID"].as_str())
+            .context("test workspace physical identity missing")?
+            .to_owned(),
     );
     let release_previous = matches!(
         authority,
@@ -490,13 +647,14 @@ async fn ensure_request_binding(
         AdmitBinding::Reuse(_) => Ok(()),
         AdmitBinding::Create { binding, release } => {
             for released in release {
-                persist_workspace_binding_doc(node, &released).await?;
+                persist_workspace_binding_doc(node, &request.agent_did, &released).await?;
             }
-            persist_workspace_binding_doc(node, &binding).await
+            persist_workspace_binding_doc(node, &request.agent_did, &binding).await
         }
     }
 }
 
+#[cfg(test)]
 pub(super) async fn previous_exclusive_is_stale(
     node: &EmbeddedNode,
     workspace_id: &str,
@@ -504,6 +662,56 @@ pub(super) async fn previous_exclusive_is_stale(
     request_id: &str,
     integrate: bool,
 ) -> Result<bool> {
+    let Some(active) = previous_exclusive_binding(workspace_id, existing, request_id, integrate)?
+    else {
+        return Ok(false);
+    };
+    Ok(!request_is_live(
+        node,
+        &active.request_doc_id,
+        &active.request_id,
+        workspace_id,
+        &active.owner_node_did,
+    )
+    .await?)
+}
+
+#[cfg(test)]
+pub(super) async fn previous_exclusive_is_stale_with_access(
+    access: &crate::ConfigAccess,
+    workspace_id: &str,
+    existing: &[WorkspaceBindingDoc],
+    request_id: &str,
+    integrate: bool,
+) -> Result<bool> {
+    let Some(active) = previous_exclusive_binding(workspace_id, existing, request_id, integrate)?
+    else {
+        return Ok(false);
+    };
+    let query = request_liveness_query(&active.request_doc_id)?;
+    let response = access.execute(&query).await?;
+    let values = response
+        .pointer("/data/AgentRequest")
+        .context("workspace request query omitted rows")?;
+    let mut rows: Vec<AgentRequestRow> = serde_json::from_value(values.clone())?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "workspace binding request is unavailable or ambiguous"
+    );
+    Ok(!validate_request_liveness(
+        rows.remove(0),
+        &active.request_id,
+        workspace_id,
+        &active.owner_node_did,
+    )?)
+}
+
+pub(super) fn previous_exclusive_binding<'a>(
+    workspace_id: &str,
+    existing: &'a [WorkspaceBindingDoc],
+    request_id: &str,
+    integrate: bool,
+) -> Result<Option<&'a WorkspaceBindingDoc>> {
     let others: Vec<_> = existing
         .iter()
         .filter(|binding| {
@@ -521,17 +729,7 @@ pub(super) async fn previous_exclusive_is_stale(
             "multiple Active {label} bindings exist for workspace {workspace_id}; failing closed"
         );
     }
-    let Some(active) = others.into_iter().next() else {
-        return Ok(false);
-    };
-    Ok(!request_is_live(
-        node,
-        &active.request_doc_id,
-        &active.request_id,
-        workspace_id,
-        &active.owner_node_did,
-    )
-    .await?)
+    Ok(others.into_iter().next())
 }
 
 fn request_lifecycle_is_live(lifecycle_state: Option<RequestLifecycleState>) -> bool {
@@ -541,6 +739,7 @@ fn request_lifecycle_is_live(lifecycle_state: Option<RequestLifecycleState>) -> 
     !state.is_terminal()
 }
 
+#[cfg(test)]
 async fn request_is_live(
     node: &EmbeddedNode,
     request_doc_id: &str,
@@ -548,12 +747,22 @@ async fn request_is_live(
     workspace_id: &str,
     node_did: &str,
 ) -> Result<bool> {
+    let query = request_liveness_query(request_doc_id)?;
+    let response =
+        graphql_with_transaction_retry(node, &query, "load AgentRequest liveness").await?;
+    let Some(row) = first_row::<AgentRequestRow>(&response, "AgentRequest")? else {
+        bail!("workspace binding request is unavailable");
+    };
+    validate_request_liveness(row, request_id, workspace_id, node_did)
+}
+
+pub(super) fn request_liveness_query(request_doc_id: &str) -> Result<String> {
     anyhow::ensure!(
         !request_doc_id.trim().is_empty(),
         "workspace binding lacks physical request ID"
     );
     let escaped = escape_graphql_string(request_doc_id);
-    let query = format!(
+    Ok(format!(
         r#"{{
             AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{
                 request_id
@@ -562,12 +771,15 @@ async fn request_is_live(
                 workspace_id workspace_owner_node_did
             }}
         }}"#
-    );
-    let response =
-        graphql_with_transaction_retry(node, &query, "load AgentRequest liveness").await?;
-    let Some(row) = first_row::<AgentRequestRow>(&response, "AgentRequest")? else {
-        return Ok(false);
-    };
+    ))
+}
+
+pub(super) fn validate_request_liveness(
+    row: AgentRequestRow,
+    request_id: &str,
+    workspace_id: &str,
+    node_did: &str,
+) -> Result<bool> {
     anyhow::ensure!(
         row.request_id == request_id
             && row.workspace_id.as_deref() == Some(workspace_id)
@@ -578,23 +790,52 @@ async fn request_is_live(
                 .is_some_and(|did| !did.trim().is_empty()),
         "workspace binding physical request has different logical identity or workspace owner"
     );
+    anyhow::ensure!(
+        row.lifecycle_state.is_some(),
+        "workspace binding request has no lifecycle state"
+    );
     Ok(request_lifecycle_is_live(row.lifecycle_state))
 }
 
+#[cfg(test)]
 pub(super) async fn load_workspace_bindings_for(
     node: &EmbeddedNode,
     workspace_id: &str,
     node_did: &str,
 ) -> Result<Vec<WorkspaceBindingDoc>> {
+    let query = workspace_bindings_query(workspace_id, node_did);
+    let response = graphql_with_transaction_retry(node, &query, "load WorkspaceBinding").await?;
+    validate_workspace_bindings(
+        rows::<WorkspaceBindingDoc>(&response, "WorkspaceBinding")?,
+        workspace_id,
+    )
+}
+
+pub(super) async fn load_workspace_bindings_for_access(
+    access: &crate::ConfigAccess,
+    workspace_id: &str,
+    node_did: &str,
+) -> Result<Vec<WorkspaceBindingDoc>> {
+    let response = access
+        .execute(&workspace_bindings_query(workspace_id, node_did))
+        .await?;
+    let rows = response
+        .pointer("/data/WorkspaceBinding")
+        .context("workspace binding query omitted rows")?;
+    validate_workspace_bindings(serde_json::from_value(rows.clone())?, workspace_id)
+}
+
+pub(super) fn workspace_bindings_query(workspace_id: &str, node_did: &str) -> String {
     let owner = escape_graphql_string(node_did);
     let escaped = escape_graphql_string(workspace_id);
-    let query = format!(
+    format!(
         r#"{{
             WorkspaceBinding(
                 filter: {{ workspace_id: {{ _eq: "{escaped}" }}, owner_node_did: {{ _eq: "{owner}" }} }}
             ) {{
                 binding_id
                 workspace_id
+                workspace_doc_id
                 request_id
                 request_doc_id
                 authority
@@ -603,9 +844,20 @@ pub(super) async fn load_workspace_bindings_for(
                 lifecycle_state
             }}
         }}"#
-    );
-    let response = graphql_with_transaction_retry(node, &query, "load WorkspaceBinding").await?;
-    let bindings = rows::<WorkspaceBindingDoc>(&response, "WorkspaceBinding")?;
+    )
+}
+
+pub(super) fn workspace_bindings_for_parent_query(workspace_doc_id: &str) -> String {
+    format!(
+        r#"{{ WorkspaceBinding(filter: {{ workspace_doc_id: {{ _eq: "{}" }} }}) {{ binding_id workspace_id workspace_doc_id request_id request_doc_id authority owner_node_did seal_hash lifecycle_state }} }}"#,
+        escape_graphql_string(workspace_doc_id)
+    )
+}
+
+pub(super) fn validate_workspace_bindings(
+    bindings: Vec<WorkspaceBindingDoc>,
+    workspace_id: &str,
+) -> Result<Vec<WorkspaceBindingDoc>> {
     anyhow::ensure!(
         bindings
             .iter()
@@ -617,15 +869,31 @@ pub(super) async fn load_workspace_bindings_for(
     Ok(bindings)
 }
 
+#[cfg(test)]
 pub(super) async fn persist_workspace_binding_doc(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor_did: &str,
     doc: &WorkspaceBindingDoc,
 ) -> Result<()> {
-    persist_workspace_binding_docs(node, std::slice::from_ref(doc)).await
+    persist_workspace_binding_docs(node, actor_did, std::slice::from_ref(doc)).await
 }
 
+#[cfg(test)]
 pub(super) async fn persist_workspace_binding_docs(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor_did: &str,
+    docs: &[WorkspaceBindingDoc],
+) -> Result<()> {
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(actor_did.to_owned())?,
+    );
+    persist_workspace_binding_docs_with_access(&access, docs).await
+}
+
+#[cfg(test)]
+pub(super) async fn persist_workspace_binding_docs_with_access(
+    access: &crate::ConfigAccess,
     docs: &[WorkspaceBindingDoc],
 ) -> Result<()> {
     if docs.is_empty() {
@@ -636,26 +904,23 @@ pub(super) async fn persist_workspace_binding_docs(
     } else {
         workspace_bindings_upsert_mutation(docs)
     };
-    crate::store::config_client::ConfigAccess::write_local(
-        node,
-        "workspace.upsert_binding",
-        &mutation,
-    )
-    .await
-    .with_context(|| {
-        format!(
-            "persist WorkspaceBinding {}",
-            docs.iter()
-                .map(|doc| doc.binding_id.as_str())
-                .collect::<Vec<_>>()
-                .join(",")
-        )
-    })?;
+    access
+        .write("workspace.upsert_binding", &mutation)
+        .await
+        .with_context(|| {
+            format!(
+                "persist WorkspaceBinding {}",
+                docs.iter()
+                    .map(|doc| doc.binding_id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        })?;
     Ok(())
 }
 
 #[derive(Deserialize)]
-struct IsolatedWorkspaceRow {
+pub(super) struct IsolatedWorkspaceRow {
     workspace_id: Option<String>,
     work_unit_id: Option<String>,
     caused_by_invocation_id: Option<String>,
@@ -684,6 +949,7 @@ pub(crate) fn isolated_workspace_record_query(workspace_id: &str, node_did: &str
                 filter: {{ workspace_id: {{ _eq: "{escaped}" }}, owner_node_did: {{ _eq: "{owner}" }} }},
                 limit: 2
             ) {{
+                _docID
                 workspace_id
                 work_unit_id
                 caused_by_invocation_id
@@ -698,7 +964,9 @@ pub(crate) fn isolated_workspace_record_query(workspace_id: &str, node_did: &str
     )
 }
 
-fn decode_isolated_workspace_record(row: IsolatedWorkspaceRow) -> Result<IsolatedWorkspaceRecord> {
+pub(super) fn decode_isolated_workspace_record(
+    row: IsolatedWorkspaceRow,
+) -> Result<IsolatedWorkspaceRecord> {
     let workspace_id = optional_id(row.workspace_id.as_deref())
         .ok_or_else(|| anyhow!("IsolatedWorkspace is missing workspace_id"))?
         .to_string();
@@ -729,6 +997,7 @@ fn decode_isolated_workspace_record(row: IsolatedWorkspaceRow) -> Result<Isolate
     })
 }
 
+#[cfg(test)]
 pub(crate) async fn load_isolated_workspace_record(
     node: &EmbeddedNode,
     workspace_id: &str,
@@ -744,14 +1013,57 @@ pub(crate) async fn load_isolated_workspace_record(
         .transpose()
 }
 
+pub(crate) async fn load_isolated_workspace_record_with_access(
+    access: &crate::ConfigAccess,
+    workspace_id: &str,
+    node_did: &str,
+) -> Result<Option<IsolatedWorkspaceRecord>> {
+    let response = access
+        .execute(&isolated_workspace_record_query(workspace_id, node_did))
+        .await?;
+    let values = response
+        .pointer("/data/IsolatedWorkspace")
+        .context("workspace query omitted rows")?;
+    let mut found: Vec<IsolatedWorkspaceRow> = serde_json::from_value(values.clone())?;
+    anyhow::ensure!(found.len() <= 1, "ambiguous node-scoped workspace");
+    found
+        .pop()
+        .map(decode_isolated_workspace_record)
+        .transpose()
+}
+
+#[cfg(test)]
 async fn load_workspace_placement(
     node: &EmbeddedNode,
     workspace_id: &str,
     node_did: &str,
 ) -> Result<Option<WorkspacePlacementRecord>> {
+    let query = workspace_placement_query(workspace_id, node_did);
+    let response = graphql_with_transaction_retry(node, &query, "load WorkspacePlacement").await?;
+    decode_workspace_placement(rows::<WorkspacePlacementRow>(
+        &response,
+        "WorkspacePlacement",
+    )?)
+}
+
+async fn load_workspace_placement_with_access(
+    access: &crate::ConfigAccess,
+    workspace_id: &str,
+    node_did: &str,
+) -> Result<Option<WorkspacePlacementRecord>> {
+    let response = access
+        .execute(&workspace_placement_query(workspace_id, node_did))
+        .await?;
+    let values = response
+        .pointer("/data/WorkspacePlacement")
+        .context("workspace placement query omitted rows")?;
+    decode_workspace_placement(serde_json::from_value(values.clone())?)
+}
+
+fn workspace_placement_query(workspace_id: &str, node_did: &str) -> String {
     let escaped_workspace = escape_graphql_string(workspace_id);
     let escaped_owner = escape_graphql_string(node_did);
-    let query = format!(
+    format!(
         r#"{{
             WorkspacePlacement(
                 filter: {{
@@ -766,9 +1078,12 @@ async fn load_workspace_placement(
                 observed_tree_hash
             }}
         }}"#
-    );
-    let response = graphql_with_transaction_retry(node, &query, "load WorkspacePlacement").await?;
-    let mut found = rows::<WorkspacePlacementRow>(&response, "WorkspacePlacement")?;
+    )
+}
+
+fn decode_workspace_placement(
+    mut found: Vec<WorkspacePlacementRow>,
+) -> Result<Option<WorkspacePlacementRecord>> {
     anyhow::ensure!(
         found.len() <= 1,
         "ambiguous node-scoped workspace placement"

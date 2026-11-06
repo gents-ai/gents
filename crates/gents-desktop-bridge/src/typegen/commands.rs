@@ -41,6 +41,18 @@ impl Types {
                 if let Some(alias) = self.aliases.get(&name) {
                     name = alias.rsplit("::").next().unwrap().to_owned();
                 }
+                let qualified = path
+                    .path
+                    .segments
+                    .iter()
+                    .map(|part| part.ident.to_string())
+                    .collect::<Vec<_>>()
+                    .join("::");
+                let tauri_channel = qualified == "tauri::ipc::Channel"
+                    || self
+                        .aliases
+                        .get(&qualified)
+                        .is_some_and(|alias| alias == "tauri::ipc::Channel");
                 let arguments = match &segment.arguments {
                     PathArguments::None => Vec::new(),
                     PathArguments::AngleBracketed(args) => args
@@ -56,15 +68,7 @@ impl Types {
                 match (name.as_str(), arguments.as_slice()) {
                     ("Option", [value]) => Ok(format!("{value} | null")),
                     ("Vec", [value]) => Ok(format!("Array<{value}>")),
-                    ("Channel", [value])
-                        if path
-                            .path
-                            .segments
-                            .iter()
-                            .map(|part| part.ident.to_string())
-                            .collect::<Vec<_>>()
-                            == ["tauri", "ipc", "Channel"] =>
-                    {
+                    ("Channel", [value]) if tauri_channel => {
                         self.imports.insert(
                             "import type { Channel } from \"@tauri-apps/api/core\";".into(),
                         );

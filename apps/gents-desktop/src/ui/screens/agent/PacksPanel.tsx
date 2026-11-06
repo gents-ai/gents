@@ -251,7 +251,7 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
         <WirePackDialog
           {...wiring}
           agents={deployment.agents}
-          agent={defaultAgentOf(deployment)?.agentId}
+          agent={defaultAgentOf(deployment)?.agentDid}
           onClose={(wired) => {
             setWiring(null);
             if (wired) void refresh();

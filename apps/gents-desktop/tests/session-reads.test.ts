@@ -21,7 +21,7 @@ function session(
     liveCursor: "cursor",
     sessionId: "session-1",
     nodeDid: "did:key:test",
-    agentId: "agent-1",
+    agentDid: "agent-1",
     title: "Test",
     previewText: null,
     status: "active",
@@ -94,6 +94,67 @@ function readsFor(
 }
 
 describe("createSessionReads", () => {
+  it("clears an already displayed session when a snapshot read is denied", async () => {
+    const tip = session(["k1"], {
+      totalItems: 1,
+      pageItems: 1,
+      hasOlder: false,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k1",
+    });
+    const denied = new BridgeInvokeError({
+      code: "permissionDenied",
+      message: "Access denied",
+      retryable: false,
+      endpoint: null,
+    });
+    const fetchSessionSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(tip)
+      .mockRejectedValueOnce(denied);
+    const reads = readsFor({ fetchSessionSnapshot } as unknown as DesktopApiAdapter);
+    await reads.refreshSession("session-1");
+    expect(readSession(reads.sessionStore)).not.toBeNull();
+    await reads.refreshSession("session-1");
+    expect(readSession(reads.sessionStore)).toBeNull();
+    expect(reads.sessionStore.getState().load).toMatchObject({
+      phase: "failed",
+      error: "BridgeInvokeError: Access denied",
+    });
+  });
+
+  it("clears the selected session on an explicit history permission denial", async () => {
+    const tip = session(["k1"], {
+      totalItems: 1,
+      pageItems: 1,
+      hasOlder: true,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k1",
+    });
+    const denied = new BridgeInvokeError({
+      code: "permissionDenied",
+      message: "Access denied",
+      retryable: false,
+      endpoint: null,
+    });
+    const reads = readsFor({
+      fetchSessionSnapshot: vi.fn().mockResolvedValue(tip),
+      fetchSessionRows: vi.fn().mockRejectedValue(denied),
+    } as unknown as DesktopApiAdapter);
+    await reads.refreshSession("session-1");
+    await expect(reads.loadSessionRows({ kind: "before", sequence: 1 })).rejects.toBe(
+      denied,
+    );
+    expect(readSession(reads.sessionStore)).toBeNull();
+    expect(reads.sessionStore.getState().load).toMatchObject({
+      phase: "failed",
+      sessionId: "session-1",
+      error: "Access denied",
+    });
+  });
+
   it("keeps the transcript while a selected request is pending and recovers on arrival", async () => {
     const tip = session(["k1"], {
       totalItems: 1,
@@ -238,7 +299,7 @@ describe("createSessionReads", () => {
     const reads = readsFor(
       {
         fetchSessionSnapshot: vi.fn().mockResolvedValue(tip),
-        retrySessionHydration: () =>
+        reloadSession: () =>
           new Promise<void>((_, reject) => {
             failHydration = reject;
           }),
@@ -247,7 +308,7 @@ describe("createSessionReads", () => {
       setError,
     );
     await reads.refreshSession("session-1");
-    const hydration = reads.retrySessionHydration("session-1");
+    const hydration = reads.reloadSession("session-1");
     await reads.refreshSession("session-1");
     failHydration(new Error("hydration failed"));
     expect(await hydration).toBeNull();
@@ -272,7 +333,7 @@ describe("createSessionReads", () => {
         new Promise<SessionRowsView>((resolve) => {
           finishRows = resolve;
         }),
-      retrySessionHydration: () =>
+      reloadSession: () =>
         new Promise<void>((resolve) => {
           finishHydration = resolve;
         }),
@@ -282,7 +343,7 @@ describe("createSessionReads", () => {
     reads.invalidateSessionReads();
     finishRows(rowsRead("session-1"));
     expect(await rows).toBeNull();
-    const hydration = reads.retrySessionHydration("session-1");
+    const hydration = reads.reloadSession("session-1");
     reads.invalidateSessionReads();
     finishHydration();
     expect(await hydration).toBeNull();

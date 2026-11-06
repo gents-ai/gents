@@ -52,7 +52,7 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
             trigger_config_document_binding_current: case.trigger_config_document_binding_current,
             source_document_binding_current: case.source_document_binding_current,
             target_policy_allows: case.target_policy_allows,
-            peer_authority_allows: case.peer_authority_allows,
+            native_create_authorized: case.native_create_authorized,
             hop_within_bound: case.hop_within_bound,
         };
         let actual = gents::final_claim_admission_disposition(true, observation)
@@ -74,6 +74,7 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
     }
     for kind in [
         AgentRequestAdmissionKind::Enrollment,
+        AgentRequestAdmissionKind::Client,
         AgentRequestAdmissionKind::LocalSelf,
         AgentRequestAdmissionKind::RuntimeInternal,
         AgentRequestAdmissionKind::Peer,
@@ -85,6 +86,7 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
         );
     }
     for kind in [
+        AgentRequestAdmissionKind::Client,
         AgentRequestAdmissionKind::LocalSelf,
         AgentRequestAdmissionKind::Peer,
     ] {
@@ -98,10 +100,33 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
 
 #[test]
 fn generated_causal_hop_cases_match_native_materializer() {
-    use gents::{next_request_hop, request_hop_within_bound, RequestHopCause};
+    use gents::{
+        next_request_hop, request_hop_within_bound, RequestHopCapObservation, RequestHopCause,
+    };
 
     let contract = lean_causal_hop_contract();
     assert_eq!(contract.default_max_request_hop, None);
+    assert!(contract
+        .cap_observation_cases
+        .iter()
+        .any(|case| !case.visible));
+    for case in &contract.cap_observation_cases {
+        let observation = if case.visible {
+            RequestHopCapObservation::Visible(case.cap)
+        } else {
+            RequestHopCapObservation::Unavailable
+        };
+        assert_eq!(observation.admit(case.hop), case.expected, "{}", case.name);
+        assert_eq!(observation.bound(), case.expected_bound, "{}", case.name);
+        if case.hop > 0 {
+            assert_eq!(
+                request_hop_within_bound(observation.bound(), case.hop),
+                case.expected.unwrap_or(false),
+                "{}",
+                case.name
+            );
+        }
+    }
     let cause = |name: &str, cause_hop: Option<u32>| match name {
         "root" => RequestHopCause::Root,
         "cross_session" => RequestHopCause::CrossSession {

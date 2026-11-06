@@ -105,3 +105,22 @@ async fn graphql_response_errors_remain_distinct_from_transport_failures() {
         }
     }
 }
+
+#[test]
+fn authenticated_delegation_preserves_actor_without_minting_a_token() {
+    let actor =
+        identity::Did::new("did:key:z6MkeXBLjYiSvqnhFb6D7sHm8yKm4jV45wwBFRaatf1cfZ76".to_owned())
+            .unwrap();
+    let endpoint = GraphqlEndpoint::with_authenticated_delegation(
+        "http://127.0.0.1:9181/api/v0/graphql",
+        "Bearer original-caller-token",
+        actor.clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        endpoint.authorization().unwrap().as_deref(),
+        Some("Bearer original-caller-token")
+    );
+    let access = super::ConfigAccess::Graphql(endpoint);
+    assert_eq!(access.actor_did().as_deref(), Some(actor.as_ref()));
+}

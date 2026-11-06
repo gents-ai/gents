@@ -132,7 +132,7 @@ pub struct PluginJobDeclaration(pub bool);
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum StampedField {
-    NodeDid,
+    CallerDid,
     SessionId,
     RequestDocId,
     ToolCallDocId,

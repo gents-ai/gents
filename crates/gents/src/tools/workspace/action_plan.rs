@@ -24,7 +24,7 @@ pub struct ActionPlan {
 #[serde(tag = "type")]
 pub enum HostAction {
     #[serde(rename = "create_workspace")]
-    CreateWorkspace(CreateWorkspaceAction),
+    CreateWorkspace(Box<CreateWorkspaceAction>),
     #[serde(rename = "freeze_workspace_base")]
     FreezeWorkspaceBase(FreezeWorkspaceBaseAction),
     #[serde(rename = "seal_workspace")]
@@ -74,6 +74,16 @@ impl WorkspaceAdapterKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CreateWorkspaceAction {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer_agent_did: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer_agent_doc_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrator_agent_did: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrator_agent_doc_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub readers: Vec<WorkspaceReaderBinding>,
     pub path_capability: super::WorkspacePathCapability,
     pub workspace_id: String,
     pub work_unit_id: String,
@@ -86,6 +96,14 @@ pub struct CreateWorkspaceAction {
     pub adapter: WorkspaceAdapterKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clone_artifacts: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceReaderBinding {
+    pub agent_did: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_doc_id: Option<String>,
 }
 
 fn default_creation_policy() -> CreationPolicy {
@@ -149,7 +167,7 @@ pub struct CleanupWorkspaceAction {
 pub fn emit_create_workspace_plan(action: CreateWorkspaceAction) -> ActionPlan {
     ActionPlan {
         abi: ACTION_PLAN_ABI,
-        actions: vec![HostAction::CreateWorkspace(action)],
+        actions: vec![HostAction::CreateWorkspace(Box::new(action))],
     }
 }
 

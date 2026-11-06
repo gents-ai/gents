@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crypto::keys::PrivateKey;
 use defra_core::signing::{RemoteSigner, SigningAuthorization, SigningConfig, SigningKeyType};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use identity::{Identity as _, RawIdentity};
 use serde::Deserialize;
 use tokio::sync::Notify;
@@ -179,7 +179,7 @@ async fn shutdown_then_reacquire_store_lock(
     })
     .await
     .expect("the Gents-owned native operation drops its claimed gate");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     drop(node);
     crate::store::local::home::lock_store(home, data)
         .expect("the store lock is reacquirable after the owned node shuts down")

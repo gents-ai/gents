@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::inference::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
@@ -48,15 +48,13 @@ use lean_vocab_test::{
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
-    fetch_request_lineage_snapshot, fetch_request_lineage_snapshot_by_tuple,
-    fetch_request_snapshot, fetch_request_snapshot_raw, fetch_session_snapshot,
-    RequestLineageSnapshot, RequestSnapshot,
+    fetch_request_lineage_snapshot, fetch_request_snapshot, fetch_request_snapshot_raw,
+    fetch_session_snapshot, RequestLineageSnapshot, RequestSnapshot,
 };
 use support::{
-    build_request, create_agent_session, create_request, create_request_with_signed_fields,
-    create_request_with_valid_until, first_optional_row, first_row, materialization_identity,
-    set_interrupt_requested_at, set_request_lifecycle_state, test_db, AGENT_NAME, BACKEND_ID,
-    DEADLINE_SECS, NODE_DID,
+    build_request, create_request, create_request_with_signed_fields,
+    create_request_with_valid_until, first_optional_row, first_row, set_interrupt_requested_at,
+    set_request_lifecycle_state, test_db, AGENT_NAME, BACKEND_ID, DEADLINE_SECS, NODE_DID,
 };
 
 #[path = "conformance/backend_health.rs"]
@@ -75,8 +73,6 @@ mod command_policy;
 mod compaction_gate;
 #[path = "conformance/completion_retry.rs"]
 mod completion_retry;
-#[path = "conformance/config_replication.rs"]
-mod config_replication;
 #[path = "conformance/coverage.rs"]
 mod coverage;
 #[path = "conformance/directory_projection.rs"]

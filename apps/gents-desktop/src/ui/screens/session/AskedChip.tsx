@@ -14,7 +14,7 @@ export function AskedChip({
   onAnswer: () => void;
 }) {
   const filer = useFleet((state) => nodeOf(state, item.nodeDid));
-  const agent = agentName(item.targetAgentId, filer);
+  const agent = agentName(item.targetAgentDid, filer);
   return (
     <p className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
       <CircleHelp className="size-3.5 shrink-0" />

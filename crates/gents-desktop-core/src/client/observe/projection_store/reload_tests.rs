@@ -260,7 +260,7 @@ fn generated_scoped_replacement_case_matches_client_store_ownership() {
                         "session_id": row["key"],
                         "node_did": did(owner),
                         "requester_did": null,
-                        "agent_id": "agent",
+                        "agent_did": "agent",
                         "created_at": "2026-01-01T00:00:00Z",
                         "title": {"text": row["value"], "source": "user"}
                     }))
@@ -483,7 +483,7 @@ async fn generated_scoped_publications_preserve_independent_nodes_during_a_block
                     serde_json::from_value(serde_json::json!({
                         "node_did": did(row["owner"].as_u64().unwrap()),
                         "session_id": row["key"],
-                        "agent_id": "agent",
+                        "agent_did": "agent",
                         "created_at": "2026-01-01T00:00:00Z",
                         "title": {"text": row["value"], "source": "user"}
                     }))
@@ -706,4 +706,32 @@ async fn generated_recovery_cases_preserve_scopes_without_self_waking() {
         assert_eq!(full, expected_full);
         assert_eq!(pending, expected_scopes, "modeled recovery case {name}");
     }
+}
+
+#[test]
+fn denied_resource_read_invalidates_stale_snapshot_and_allows_fresh_visible_rows() {
+    let (store, _) = ObservedStore::new(requests(&["before"]));
+    let read = store.capture_read();
+    let node = "did:test:reload";
+    store.observe_runtime_connection(node, RuntimeConnectionEvent::SnapshotSucceeded);
+    store.invalidate_node_after_denied_read(node);
+    assert_eq!(
+        store.runtime_connection(node),
+        Some(RuntimeConnectionStatus::Connected)
+    );
+    assert!(store.snapshot().requests.is_empty());
+    assert!(!store.replace_reloaded_snapshot_at_read(&read, Some(node), requests(&["stale"])));
+    assert!(store.snapshot().requests.is_empty());
+    assert_eq!(store.take_resync_requests(), (false, vec![node.to_owned()]));
+    let fresh = store.capture_read();
+    assert!(store.replace_reloaded_snapshot_at_read(
+        &fresh,
+        Some(node),
+        requests(&["unrelated-visible"])
+    ));
+    assert_eq!(store.snapshot().requests[0].request_id, "unrelated-visible");
+    assert_eq!(
+        store.runtime_connection(node),
+        Some(RuntimeConnectionStatus::Connected)
+    );
 }

@@ -1,10 +1,12 @@
+use crate::NodeIdentity;
 use anyhow::Context;
 use serde_json::{json, Value};
+use std::sync::Arc;
 use tempfile::TempDir;
 
 use super::snapshot::DEFINITION_FILE;
 use super::*;
-use crate::documents::{ensure_node, EvalSplit};
+use crate::documents::EvalSplit;
 use crate::eval::invalidate_run;
 use crate::eval::runner::embedded::EmbeddedHome;
 use crate::eval::scoring::PILOT_PURPOSE;
@@ -12,8 +14,6 @@ use crate::store::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
     DesiredStateApplyPlan,
 };
-
-pub(crate) const OWNER: &str = "did:key:eval-owner";
 
 pub(crate) struct Launching {
     home: EmbeddedHome,
@@ -23,20 +23,36 @@ pub(crate) struct Launching {
 
 impl Launching {
     pub(crate) async fn new() -> Self {
-        let home = EmbeddedHome::create_temp("freeze").await.unwrap();
-        let access = ConfigAccess::local(home.node.clone());
-        ensure_node(&home.node, OWNER).await.unwrap();
-        let launching = Self {
-            home,
-            access,
-            dirs: tempfile::tempdir().unwrap(),
-        };
+        let mut home = EmbeddedHome::create_temp("freeze").await.unwrap();
+        let dirs = tempfile::tempdir().unwrap();
+        let evaluator_path = dirs.path().join("evaluator.key");
+        let evaluator = Arc::new(
+            tokio::task::spawn_blocking(move || {
+                crate::store::identity::KeyIdentity::load_or_create(evaluator_path, None)
+            })
+            .await
+            .unwrap()
+            .unwrap(),
+        );
+        let evaluator_did = evaluator.did().to_owned();
+        let capability = evaluator.client_signing_capability().unwrap();
+        home.set_evaluator(evaluator, capability);
+        crate::eval::runner::embedded::executor::install::grant_trial_operations(
+            &home,
+            &evaluator_did,
+        )
+        .await
+        .unwrap();
+        let access = home.client_access(&evaluator_did).unwrap();
+        let launching = Self { home, access, dirs };
         launching
             .install(vec![
-                (Collection::EvalDefinition, definition()),
+                (Collection::Node, json!({"node_did": launching.owner()})),
+                (Collection::EvalDefinition, definition(launching.owner())),
                 (
                     Collection::InferenceBackend,
                     backend(
+                        launching.owner(),
                         "backend",
                         "OpenAiCompatible",
                         json!({"kind": "unauthenticated"}),
@@ -44,18 +60,36 @@ impl Launching {
                 ),
                 (
                     Collection::InferenceSampling,
-                    json!({"node_did": OWNER, "sampling_id": "sampling", "temperature": 0.0}),
+                    json!({"node_did": launching.owner(), "sampling_id": "sampling", "temperature": 0.0}),
                 ),
                 (
                     Collection::InferenceProfile,
-                    profile("local", "backend", Some("sampling")),
+                    profile(launching.owner(), "local", "backend", Some("sampling")),
                 ),
             ])
             .await;
         launching
     }
 
+    /// The Node owner's own signed access. Source-projected documents (Agent,
+    /// Tools, AgentContext) are refused for the evaluator's client access, so
+    /// fixtures that install them must write as the owner.
+    pub(crate) fn owner_access(&self) -> anyhow::Result<ConfigAccess> {
+        Ok(ConfigAccess::local_as(
+            self.home.node.clone(),
+            identity::Did::new(self.owner())?,
+        ))
+    }
+
     pub(crate) async fn install(&self, documents: Vec<(Collection, Value)>) {
+        self.install_as(&self.access, documents).await;
+    }
+
+    pub(crate) async fn install_as(
+        &self,
+        access: &ConfigAccess,
+        documents: Vec<(Collection, Value)>,
+    ) {
         let plan = DesiredStateApplyPlan::new(
             documents
                 .into_iter()
@@ -67,7 +101,7 @@ impl Launching {
                 .collect(),
         )
         .unwrap();
-        self.access
+        access
             .transact_write("freeze.test_fixture", |txn| {
                 let plan = &plan;
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
@@ -81,21 +115,34 @@ impl Launching {
             .transact_write("freeze.test_delete", |txn| {
                 Box::pin(async move {
                     let (doc_id, _) =
-                        read_desired_state_record_in_txn(txn, collection, OWNER, id)
+                        read_desired_state_record_in_txn(txn, collection, self.owner(), id)
                             .await?
                             .context("document to delete")?;
-                    txn.execute(&format!(
-                        r#"mutation {{ delete_{name}(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{ _docID }} }}"#,
-                        name = collection.graphql_type(),
-                        doc_id = crate::store::graphql::escape_graphql_string(&doc_id),
-                    ))
-                    .await
-                    .map(|_| ())
-                    .map_err(anyhow::Error::from)
+                    txn.delete_configuration_document(collection.graphql_type(), &doc_id)
+                        .await
+                        .map_err(anyhow::Error::from)
                 })
             })
             .await
             .unwrap();
+    }
+
+    pub(crate) async fn grant_node_permissions(
+        &self,
+        actor: &str,
+        permissions: &[crate::store::config_client::NodePermission],
+    ) -> anyhow::Result<()> {
+        let admin =
+            ConfigAccess::local_as(self.home.node.clone(), identity::Did::new(self.owner())?);
+        let actor = identity::Did::new(actor)?;
+        for permission in permissions {
+            admin.grant_node_permission(&actor, *permission).await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn owner(&self) -> &str {
+        self.home.did()
     }
 
     pub(crate) fn runs_dir(&self) -> PathBuf {
@@ -103,7 +150,11 @@ impl Launching {
     }
 
     pub(crate) fn evaluator_did(&self) -> String {
-        self.home.did().to_string()
+        self.access.actor_did().unwrap()
+    }
+
+    pub(crate) fn provision_agent(&self) -> gents_protocol::agent_identity::AgentIdentityBinding {
+        crate::store::identity::provision_agent_identity(self.home.identity.as_ref()).unwrap()
     }
 
     pub(crate) fn pack(&self, name: &str, bash_mode: &str) -> PathBuf {
@@ -115,7 +166,7 @@ impl Launching {
     fn request(&self, run_id: &str, pack: &Path) -> RunRequest {
         RunRequest {
             run_id: run_id.into(),
-            owner: OWNER.into(),
+            owner: self.owner().into(),
             evaluator_did: self.evaluator_did(),
             definition_id: "monitor-findings".into(),
             split: EvalSplit::Validation,
@@ -124,7 +175,7 @@ impl Launching {
                 cell_id: "baseline".into(),
                 label: "baseline".into(),
                 source: CellSource::Directory(pack.to_path_buf()),
-                agent_id: "monitor".into(),
+                agent_slot: "monitor".into(),
                 inference_profile_id: "local".into(),
             }],
             trials_per_case: 2,
@@ -142,10 +193,70 @@ impl Launching {
     }
 }
 
-fn definition() -> Value {
+#[tokio::test]
+async fn launching_fixture_commits_user_signed_node_and_denies_ungranted_client() {
+    let launching = Launching::new().await;
+    let response = launching
+        .access
+        .execute("{ Node { _docID _version { cid } } }")
+        .await
+        .unwrap();
+    let rows = response["data"]["Node"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    let cid = rows[0]["_version"][0]["cid"].as_str().unwrap();
+    let evaluator = launching.evaluator_did();
+    let (block, signature) = launching
+        .home
+        .node
+        .authorized_signed_block_bytes(cid, Some(&evaluator))
+        .await
+        .unwrap();
+    let block = defra_core::block::Block::from_dag_cbor(&block).unwrap();
+    let signature = defra_core::block::Signature::from_dag_cbor(&signature).unwrap();
+    assert_eq!(
+        db::block::verify::verified_signature_signer_did(&block, &signature).unwrap(),
+        evaluator
+    );
+    assert_ne!(launching.owner(), evaluator);
+
+    let stranger_path = launching.dirs.path().join("ungranted.key");
+    let stranger = tokio::task::spawn_blocking(move || {
+        crate::store::identity::KeyIdentity::load_or_create(stranger_path, None)
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let outsider = ConfigAccess::Graphql(
+        crate::store::config_client::GraphqlEndpoint::as_principal(
+            launching.home.graphql_endpoint().unwrap(),
+            stranger.did(),
+        )
+        .with_client_signing_capability(stranger.client_signing_capability().unwrap())
+        .unwrap()
+        .with_client_signed_agent_creates(),
+    );
+    let stranger_did = stranger.did().to_owned();
+    let result = outsider
+        .transact_write("freeze.ungranted", |txn| {
+            let stranger_did = &stranger_did;
+            Box::pin(async move {
+                txn.execute_desired_state_mutation(
+                    "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                    &json!({"input": {"node_did": stranger_did}}),
+                    Collection::Node,
+                    true,
+                )
+                .await
+            })
+        })
+        .await;
+    assert!(result.is_err(), "ungranted user must not publish a Node");
+}
+
+fn definition(owner: &str) -> Value {
     json!({
         "definition_id": "monitor-findings",
-        "node_did": OWNER,
+        "node_did": owner,
         "comparability_version": 1,
         "subject": {"kind": "agent", "inference_slots": ["primary"]},
         "cases": [
@@ -162,7 +273,8 @@ fn frozen_files_preserve_complete_snapshots_for_existing_readers() {
         breaker_threshold: 5,
         captures: Vec::new(),
     };
-    let original: EvalDefinition = serde_json::from_value(definition()).unwrap();
+    let runtime = crate::KeyIdentity::load_or_create(dir.path().join("runtime.key"), None).unwrap();
+    let original: EvalDefinition = serde_json::from_value(definition(runtime.did())).unwrap();
     write_sidecar(dir.path(), &before).unwrap();
     write_frozen_definition(dir.path(), &original).unwrap();
     let sidecar_reader = std::fs::File::open(sidecar_path(dir.path())).unwrap();
@@ -192,6 +304,25 @@ fn frozen_files_preserve_complete_snapshots_for_existing_readers() {
     );
 }
 
+#[test]
+fn seed_schema_is_covered_by_the_frozen_definition_digest() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut value = definition("did:key:owner");
+    value["cases"][0]["fixtures"] = json!({"seed_schemas": ["type Seed { message: String }"]});
+    let original: EvalDefinition = serde_json::from_value(value).unwrap();
+    let reference = definition_ref(&original).unwrap();
+    write_frozen_definition(dir.path(), &original).unwrap();
+    assert_eq!(
+        read_frozen_definition(dir.path(), &reference).unwrap(),
+        Some(original.clone())
+    );
+    let mut altered = original;
+    altered.cases[0].fixtures.as_mut().unwrap().seed_schemas[0] =
+        "type Seed { message: Int }".into();
+    write_frozen_definition(dir.path(), &altered).unwrap();
+    assert!(read_frozen_definition(dir.path(), &reference).is_err());
+}
+
 fn case(case_id: &str, split: &str) -> Value {
     json!({
         "case_id": case_id,
@@ -205,9 +336,9 @@ fn case(case_id: &str, split: &str) -> Value {
     })
 }
 
-fn backend(backend_id: &str, provider_kind: &str, auth: Value) -> Value {
+fn backend(owner: &str, backend_id: &str, provider_kind: &str, auth: Value) -> Value {
     json!({
-        "node_did": OWNER,
+        "node_did": owner,
         "backend_id": backend_id,
         "name": "Workstation",
         "provider_kind": provider_kind,
@@ -216,9 +347,9 @@ fn backend(backend_id: &str, provider_kind: &str, auth: Value) -> Value {
     })
 }
 
-fn profile(profile_id: &str, backend_id: &str, sampling_id: Option<&str>) -> Value {
+fn profile(owner: &str, profile_id: &str, backend_id: &str, sampling_id: Option<&str>) -> Value {
     json!({
-        "node_did": OWNER,
+        "node_did": owner,
         "profile_id": profile_id,
         "backend_id": backend_id,
         "model_name": "test-model",
@@ -259,7 +390,7 @@ pub(crate) fn write_fixture_pack(root: &Path, bash_mode: &str) {
     let config = json!({
         "node": {},
         "agents": [{
-            "agent_id": "monitor",
+            "agent_slot": "monitor",
             "display_name": "Monitor",
             "context_id": "monitor-context",
             "inference_profile_id": "gents:inference-slot:primary",
@@ -316,7 +447,7 @@ async fn freeze_writes_the_run_materializes_the_pack_and_is_idempotent() {
     assert_eq!(frozen.definition.definition_id, "monitor-findings");
 
     let cell = &frozen.cells[0];
-    assert_eq!(cell.spec.subject.agent_id, "monitor");
+    assert_eq!(cell.spec.subject.agent_slot, "monitor");
     assert!(cell.spec.subject.pack_digest.starts_with("sha256:"));
     assert_eq!(
         frozen.record.origin.cells[0].subject.pack_digest,
@@ -358,7 +489,7 @@ async fn freeze_records_the_requested_evaluator_and_refuses_an_empty_one() {
         frozen.record.evaluator_did, frozen.record.owner,
         "the launching home is not the owning principal in this fixture"
     );
-    let stored = load_run(&launching.access, OWNER, "run-1")
+    let stored = load_run(&launching.access, launching.owner(), "run-1")
         .await
         .unwrap()
         .expect("the frozen run");
@@ -583,6 +714,7 @@ async fn freeze_refuses_an_oauth_backend() {
             (
                 Collection::InferenceBackend,
                 backend(
+                    launching.owner(),
                     "subscription",
                     "ClaudeCliSubscription",
                     json!({"kind": "node_oauth"}),
@@ -590,7 +722,7 @@ async fn freeze_refuses_an_oauth_backend() {
             ),
             (
                 Collection::InferenceProfile,
-                profile("borrowed", "subscription", None),
+                profile(launching.owner(), "borrowed", "subscription", None),
             ),
         ])
         .await;
@@ -611,11 +743,11 @@ async fn freeze_refuses_a_profile_whose_sampling_document_is_missing() {
         .install(vec![
             (
                 Collection::InferenceSampling,
-                json!({"node_did": OWNER, "sampling_id": "spare", "temperature": 1.0}),
+                json!({"node_did": launching.owner(), "sampling_id": "spare", "temperature": 1.0}),
             ),
             (
                 Collection::InferenceProfile,
-                profile("dangling", "backend", Some("spare")),
+                profile(launching.owner(), "dangling", "backend", Some("spare")),
             ),
         ])
         .await;
@@ -659,12 +791,24 @@ async fn freeze_refuses_an_invalidated_run() {
         purpose: "eval".into(),
         breaker_threshold: 5,
     };
-    create_run(&launching.access, "run-1", OWNER, OWNER, &origin)
-        .await
-        .unwrap();
-    invalidate_run(&launching.access, OWNER, "run-1", OWNER, "grader bug")
-        .await
-        .unwrap();
+    create_run(
+        &launching.access,
+        "run-1",
+        launching.owner(),
+        &launching.evaluator_did(),
+        &origin,
+    )
+    .await
+    .unwrap();
+    invalidate_run(
+        &launching.access,
+        launching.owner(),
+        "run-1",
+        &launching.evaluator_did(),
+        "grader bug",
+    )
+    .await
+    .unwrap();
 
     let error = freeze(&launching.access, &request, Isolation::Embedded)
         .await
@@ -753,7 +897,7 @@ async fn freeze_writes_the_definition_it_froze_and_resume_reads_it_back() {
         .await;
     let thawed = thaw(
         &launching.access,
-        OWNER,
+        launching.owner(),
         "run-def",
         &launching.runs_dir(),
         Isolation::Embedded,
@@ -770,7 +914,7 @@ async fn freeze_writes_the_definition_it_froze_and_resume_reads_it_back() {
     assert!(refusal(&error).contains("no longer digests"), "{error:#}");
     let error = thaw(
         &launching.access,
-        OWNER,
+        launching.owner(),
         "run-def",
         &launching.runs_dir(),
         Isolation::Embedded,
@@ -798,7 +942,7 @@ async fn a_run_frozen_without_the_file_falls_back_to_the_live_definition() {
     );
     let thawed = thaw(
         &launching.access,
-        OWNER,
+        launching.owner(),
         "run-old",
         &launching.runs_dir(),
         Isolation::Embedded,

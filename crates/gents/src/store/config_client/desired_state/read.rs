@@ -94,7 +94,11 @@ async fn read_records_paged(
     if unique_ids.is_empty() {
         return Ok(out);
     }
-    let (fields, _) = config_projection(collection, None)?;
+    let fields = if collection == Collection::InferenceBackend {
+        super::super::backend_metadata_fields()?
+    } else {
+        config_projection(collection, None)?.0
+    };
     let name = collection.graphql_type();
     let unique_field = collection.unique_field();
     let ordered: Vec<&str> = unique_ids.into_iter().collect();
@@ -140,6 +144,11 @@ async fn read_records_paged(
                 .remove("_docID")
                 .and_then(|value| value.as_str().map(str::to_owned))
                 .context("configuration row missing physical ID")?;
+            if collection == Collection::InferenceBackend {
+                let metadata: crate::documents::InferenceBackendMetadata =
+                    serde_json::from_value(row)?;
+                row = serde_json::to_value(metadata.into_backend()?)?;
+            }
             let (_, value) = config_projection(collection, Some(&row))?;
             out.insert(id, (doc_id, value.context("canonical projection missing")?));
         }

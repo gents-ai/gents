@@ -8,15 +8,45 @@ use serde_json::json;
 use super::super::*;
 use crate::store::identity::KeyIdentity;
 
-pub(super) async fn test_node() -> Arc<EmbeddedNode> {
-    let identity = test_identity("agent-test-node");
-    Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
+pub(super) async fn test_node(
+    name: &str,
+) -> (crate::support::TestDb, KeyIdentity, crate::ConfigAccess) {
+    let db = crate::support::test_db(name).await;
+    crate::test_support::signed_test_node_without_agent_from_db(db, name).await
+}
+
+pub(super) async fn install_agent(
+    node: &Arc<EmbeddedNode>,
+    identity: &dyn NodeIdentity,
+    owner: &crate::ConfigAccess,
+    name: &str,
+) -> String {
+    let owner_did = owner.actor_did().expect("signed fixture owner");
+    let binding = crate::store::identity::provision_agent_identity_authorized(
+        node,
+        identity,
+        &identity::Did::new(owner_did).unwrap(),
     )
+    .await
+    .unwrap();
+    crate::test_support::install_test_agent_binding_with_access(
+        identity.did(),
+        name,
+        &binding,
+        owner,
+    )
+    .await;
+    binding.agent_did
+}
+
+pub(super) async fn install_default_agent(
+    node: &Arc<EmbeddedNode>,
+    identity: &dyn NodeIdentity,
+    owner: &crate::ConfigAccess,
+) -> String {
+    let did = install_agent(node, identity, owner, "Default fixture agent").await;
+    crate::test_support::set_test_default_agent_as(owner, identity.did(), &did).await;
+    did
 }
 
 pub(super) fn test_identity(name: &str) -> KeyIdentity {
@@ -66,12 +96,11 @@ impl Tool for EchoTool {
 }
 
 pub(super) async fn insert_backend(
-    node: &Arc<EmbeddedNode>,
     node_did: &str,
+    owner: &crate::ConfigAccess,
     backend_id: &str,
     endpoint: &str,
 ) {
-    crate::ensure_node(node, node_did).await.unwrap();
     let value = serde_json::json!({
         "node_did": node_did,
         "backend_id": backend_id,
@@ -89,21 +118,17 @@ pub(super) async fn insert_backend(
         },
     ])
     .unwrap();
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "test.insert_backend",
-        |txn| {
+    owner
+        .transact_write("test.insert_backend", |txn| {
             let plan = &plan;
             Box::pin(async move {
                 crate::store::config_client::apply_desired_state_plan(txn, plan).await
             })
-        },
-    )
-    .await
-    .unwrap();
-    crate::inference::backends::registry::set_backend_probe_status(
-        node, node_did, backend_id, "healthy",
+        })
+        .await
+        .unwrap();
+    crate::inference::backends::registry::set_backend_probe_status_as(
+        owner, node_did, backend_id, "healthy",
     )
     .await
     .unwrap();

@@ -51,7 +51,7 @@ gents-desktop-core.workspace = true
 gents = { path = "../gents" }
 gents-fs-runner = { path = "../gents-fs-runner" }
 gents-protocol.workspace = true
-defra-node.workspace = true
+defra-node = { workspace = true, features = ["http"] }
 defra-http.workspace = true
 defra-p2p-adapter.workspace = true
 events.workspace = true
@@ -85,6 +85,7 @@ serde_yaml.workspace = true
 subtle.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-native-roots"] }
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
@@ -142,9 +143,10 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Syste
 [dev-dependencies]
 acp.workspace = true
 crypto.workspace = true
+db.workspace = true
+defra-core.workspace = true
 futures = "0.3"
 gents-lean-contract.workspace = true
-tokio-tungstenite = "0.26.2"
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2"

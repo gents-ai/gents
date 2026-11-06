@@ -44,6 +44,8 @@ mod tests {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(node);
+        crate::test_support::bootstrap_signed_test_node(&access, "did:key:owner").await;
+        crate::test_support::bootstrap_signed_test_node(&access, "did:key:other").await;
         let mut tools: Tools = serde_json::from_value(json!({
             "node_did":"did:key:owner", "tools_id":"same",
             "host":{"files":{"mode":"ReadOnly"}},

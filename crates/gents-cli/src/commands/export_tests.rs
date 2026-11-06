@@ -9,12 +9,7 @@ use super::export::{publish, stage_export};
 
 #[tokio::test]
 async fn native_export_keeps_long_fields_and_all_cursor_pages() {
-    let node = Arc::new(
-        gents::defra_node::EmbeddedNode::builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node = Arc::new(gents::defra_node::Node::builder().build().await.unwrap());
     let access = ConfigAccess::local(node.clone());
     access
         .add_collection("type ExportRecord { body: String group: String }")
@@ -72,17 +67,12 @@ async fn native_export_keeps_long_fields_and_all_cursor_pages() {
             bytes.len()
         )
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn native_export_retains_relationship_ids() {
-    let node = Arc::new(
-        gents::defra_node::EmbeddedNode::builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node = Arc::new(gents::defra_node::Node::builder().build().await.unwrap());
     let access = ConfigAccess::local(node.clone());
     access.add_collection("type ExportAuthor { name: String books: [ExportBook] }\ntype ExportBook { title: String author: ExportAuthor }").await.unwrap();
     let author = ConfigAccess::write_local(
@@ -131,17 +121,12 @@ async fn native_export_retains_relationship_ids() {
     assert_eq!(book_row["_authorID"], author_id);
     assert_eq!(book_row["author"]["_docID"], author_id);
     assert_eq!(author_row["books"][0]["_docID"], book_id);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn native_export_preserves_fields_beyond_selection_width_limit() {
-    let node = Arc::new(
-        gents::defra_node::EmbeddedNode::builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node = Arc::new(gents::defra_node::Node::builder().build().await.unwrap());
     let access = ConfigAccess::local(node.clone());
     let fields = (0..130)
         .map(|index| format!("f_{index}: String"))
@@ -182,5 +167,5 @@ async fn native_export_preserves_fields_beyond_selection_width_limit() {
     for index in 0..130 {
         assert_eq!(row[format!("f_{index}")], format!("value_{index}"));
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

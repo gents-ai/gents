@@ -2,10 +2,8 @@ use super::*;
 
 pub(super) fn model_resources(categories: &BTreeSet<String>, pack: bool) -> Vec<&'static str> {
     let mut resources = Vec::new();
-    if categories.contains("node") {
+    if agent_command_exposed(categories) {
         resources.push("agent");
-    } else if categories.contains("agent") {
-        resources.push("agent (current only)");
     }
     for (category, resource) in [
         ("node", "context"),
@@ -49,6 +47,10 @@ pub(super) fn model_resources(categories: &BTreeSet<String>, pack: bool) -> Vec<
     resources
 }
 
+pub(super) fn agent_command_exposed(categories: &BTreeSet<String>) -> bool {
+    categories.contains("node") || categories.contains("agent")
+}
+
 impl ConfigCommandTool {
     pub(super) fn ensure_resource(&self, resource: &str) -> Result<()> {
         let category = match resource {
@@ -66,12 +68,11 @@ impl ConfigCommandTool {
     pub(super) fn ensure_agent_catalog(
         &self,
         operation: &str,
-        agent_id: Option<&str>,
+        _agent_did: Option<&str>,
     ) -> Result<()> {
-        let current_only = agent_id.is_some_and(|id| id == self.core.agent_id());
         anyhow::ensure!(
-            self.categories.contains("node") || current_only,
-            "agent {operation} outside the current agent is not granted; the agent catalog grant (category node) is required"
+            agent_command_exposed(&self.categories),
+            "agent {operation} is not exposed"
         );
         Ok(())
     }
@@ -79,13 +80,11 @@ impl ConfigCommandTool {
     pub(super) fn ensure_agent_operation(
         &self,
         operation: &str,
-        agent_id: Option<&str>,
+        _agent_did: Option<&str>,
     ) -> Result<()> {
-        let current_edit =
-            operation == "edit" && agent_id.is_some_and(|id| id == self.core.agent_id());
         anyhow::ensure!(
-            self.categories.contains("node") || current_edit,
-            "agent {operation} is not granted; only editing the current agent is allowed without the agent catalog grant (category node)"
+            agent_command_exposed(&self.categories),
+            "agent {operation} is not exposed"
         );
         Ok(())
     }
@@ -93,10 +92,12 @@ impl ConfigCommandTool {
     pub(super) fn ensure_agent_stays_enabled(
         &self,
         operation: &str,
-        agent_id: Option<&str>,
+        agent_did: Option<&str>,
     ) -> Result<()> {
         anyhow::ensure!(
-            !(self.no_lockout && operation == "disable" && agent_id == Some(self.core.agent_id())),
+            !(self.no_lockout
+                && operation == "disable"
+                && agent_did == Some(self.core.agent_did())),
             "no-lockout guard: agent must remain enabled"
         );
         Ok(())
@@ -116,5 +117,33 @@ impl ConfigCommandTool {
             "--default changes the node's agent selection and requires the agent catalog grant (category node)"
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod creation_exposure_tests {
+    use super::*;
+
+    #[test]
+    fn modeled_agent_creation_exposure_controls_the_command() {
+        for case in
+            &crate::lean_vocab_test::lean_contract_snapshot().identity_agent_creation_exposure_cases
+        {
+            let mut categories = BTreeSet::new();
+            if case["node_category"].as_bool().unwrap() {
+                categories.insert("node".to_owned());
+            }
+            if case["agent_category"].as_bool().unwrap() {
+                categories.insert("agent".to_owned());
+            }
+            for operation in ["create", "clone", "edit", "disable"] {
+                assert_eq!(
+                    agent_command_exposed(&categories),
+                    case["exposed"].as_bool().unwrap(),
+                    "{} {operation}",
+                    case["name"]
+                );
+            }
+        }
     }
 }

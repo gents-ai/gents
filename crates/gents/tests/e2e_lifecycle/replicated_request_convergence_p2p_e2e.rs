@@ -1,500 +1,487 @@
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use gents::defra_node::EmbeddedNode;
-use gents::runtime::agent::p2p_reconcile::{
-    equality_filter, EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin,
+use gents::defra_node::{HttpConfig, Node as EmbeddedNode};
+use gents::request::lifecycle::{
+    build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
+    RequestSigner, RequestSpec,
 };
+use gents::runtime::agent::p2p_reconcile::{
+    expand_p2p_collection_profile_ids, EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin,
+};
+use gents::store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
 use gents::store::graphql::escape_graphql_string;
-use gents::{RequestLifecycle, TERMINAL_REDRIVE_CAP};
+use gents::{KeyIdentity, NodeIdentity, RequestLifecycle, TERMINAL_REDRIVE_CAP};
+use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
-use crate::support::test_p2p_db;
+use crate::support::p2p_waits::wait_for_connected_peer;
+use crate::support::{test_p2p_config, test_p2p_db, TestDb, TestP2pAdmission};
 
-const OWNER_DID: &str = "did:test:convergence-p2p-owner";
-const PEER_DID: &str = "did:test:convergence-p2p-peer";
-const AGENT_ID: &str = "convergence-p2p-behavior";
+struct DeliveryFixture {
+    _directory: tempfile::TempDir,
+    node: Arc<EmbeddedNode>,
+    node_identity: Arc<dyn NodeIdentity>,
+    agent_identity: Arc<dyn NodeIdentity>,
+    peer: TestDb,
+    requester: ConfigAccess,
+    outsider: ConfigAccess,
+    agent: ConfigAccess,
+}
 
-async fn install_one_way_replicator(
-    sender: &Arc<EmbeddedNode>,
-    receiver: &Arc<EmbeddedNode>,
-    collections: &[&str],
-    requester_scoped: bool,
-) {
-    let sender_addr = wait_for_listen_addr(sender).await;
-    let receiver_addr = wait_for_listen_addr(receiver).await;
-    let sender_p2p = sender.p2p().expect("sender p2p");
-    let receiver_p2p = receiver.p2p().expect("receiver p2p");
+fn authenticated_http(endpoint: &str, signer: &dyn NodeIdentity) -> ConfigAccess {
+    ConfigAccess::Graphql(
+        GraphqlEndpoint::as_principal(endpoint, signer.did())
+            .with_client_signing_capability(signer.client_signing_capability().unwrap())
+            .unwrap()
+            .with_client_signed_agent_creates(),
+    )
+}
 
-    sender_p2p
-        .connect_peer(&receiver_addr)
-        .await
-        .expect("connect sender to receiver");
-    wait_for_connected_peer(sender).await;
-    wait_for_connected_peer(receiver).await;
-
-    let collection_names = collections
-        .iter()
-        .map(|name| (*name).to_string())
-        .collect::<Vec<_>>();
-    sender_p2p
-        .add_collections(collection_names.clone())
-        .await
-        .expect("add sender p2p collections");
-    receiver_p2p
-        .add_collections(collection_names.clone())
-        .await
-        .expect("add receiver p2p collections");
-    receiver_p2p
-        .add_replicator(
-            collection_names.clone(),
-            Some(&sender_addr),
-            Default::default(),
-            Vec::new(),
-            None,
+impl DeliveryFixture {
+    async fn new(name: &str) -> Self {
+        let directory = tempfile::Builder::new().prefix(name).tempdir().unwrap();
+        let node_identity: Arc<dyn NodeIdentity> =
+            Arc::new(KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap());
+        let peer = test_p2p_db(&format!("{name}-peer")).await;
+        let outsider =
+            KeyIdentity::load_or_create(directory.path().join("outsider.key"), None).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(directory.path().join("db"))
+                .with_node_identity_did(node_identity.did())
+                .with_node_acp_enabled()
+                .with_p2p(test_p2p_config(
+                    &TestP2pAdmission::default(),
+                    directory.path(),
+                ))
+                .with_http(HttpConfig::with_listener(listener).unwrap())
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let admin = ConfigAccess::local_as(node.clone(), node_identity.did().parse().unwrap());
+        for actor in [peer.node_identity.did(), outsider.did()] {
+            for permission in [NodePermission::DocumentRead, NodePermission::DocumentUpdate] {
+                admin
+                    .grant_node_permission(&actor.parse().unwrap(), permission)
+                    .await
+                    .unwrap();
+            }
+        }
+        for permission in [
+            NodePermission::DacRelationAdd,
+            NodePermission::DacRelationDelete,
+        ] {
+            admin
+                .grant_node_permission(&peer.node_identity.did().parse().unwrap(), permission)
+                .await
+                .unwrap();
+        }
+        let node_input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+            "node_did": node_identity.did(),
+        }))
+        .unwrap();
+        let created = admin
+            .write(
+                "test.delivery.node",
+                &format!("mutation {{ create_Node(input: {node_input}) {{ _docID }} }}"),
+            )
+            .await
+            .unwrap();
+        let node_doc = gents::store::graphql::created_doc_id(&created, "Node").unwrap();
+        let binding = gents::store::identity::provision_agent_identity_authorized(
+            &node,
+            node_identity.as_ref(),
+            &node_identity.did().parse().unwrap(),
         )
         .await
-        .expect("authorize sender as receiver-side replicator");
-    let sender_admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(sender));
-    let mut filters = PairingFilters::new();
-    if requester_scoped {
-        filters.insert(
-            "AgentRequest".to_string(),
-            equality_filter("requester_did", PEER_DID),
-        );
-    }
-    sender_admin
-        .add_replicator(&[receiver_addr], &collection_names, &filters)
-        .await
-        .expect("install sender to receiver replicator");
-}
-
-async fn wait_for_acknowledged(owner: &Arc<EmbeddedNode>, peer: &EmbeddedNode, doc_ids: &[String]) {
-    let peer_id = peer
-        .p2p()
-        .expect("peer p2p")
-        .local_peer_id()
-        .await
-        .expect("peer id");
-    let admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(owner));
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let acknowledged = admin
-            .documents_acknowledged(&peer_id, "AgentRequest", doc_ids)
+        .unwrap();
+        let agent_identity =
+            gents::store::identity::resolve_agent_identity(node_identity.as_ref(), &binding)
+                .unwrap();
+        let agent_input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+            "node_did": node_identity.did(),
+            "agent_did": binding.agent_did,
+            "creation_nonce": binding.creation_nonce,
+            "display_name": "Delivery agent",
+            "inference_profile_id": "delivery-profile",
+            "enabled": true,
+        }))
+        .unwrap();
+        let created = admin
+            .write(
+                "test.delivery.agent",
+                &format!("mutation {{ create_Agent(input: {agent_input}) {{ _docID }} }}"),
+            )
             .await
-            .expect("replication acknowledgement");
-        if acknowledged.iter().all(|acknowledged| *acknowledged) {
-            return;
+            .unwrap();
+        let agent_doc = gents::store::graphql::created_doc_id(&created, "Agent").unwrap();
+        admin
+            .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
+            .await
+            .unwrap();
+        admin
+            .add_actor_relationship(
+                "Agent",
+                &agent_doc,
+                "executor",
+                &agent_identity.did().parse().unwrap(),
+            )
+            .await
+            .unwrap();
+        admin
+            .add_actor_relationship(
+                "Agent",
+                &agent_doc,
+                "session_writer",
+                &peer.node_identity.did().parse().unwrap(),
+            )
+            .await
+            .unwrap();
+        let requester = authenticated_http(&endpoint, peer.node_identity.as_ref());
+        let outsider = authenticated_http(&endpoint, &outsider);
+        let agent = ConfigAccess::local_managed_agent(
+            node.clone(),
+            agent_identity.did().parse().unwrap(),
+            agent_identity.as_ref(),
+        )
+        .unwrap();
+        Self {
+            _directory: directory,
+            node,
+            node_identity,
+            agent_identity,
+            peer,
+            requester,
+            outsider,
+            agent,
         }
-        assert!(
-            Instant::now() < deadline,
-            "peer never acknowledged {doc_ids:?}: {acknowledged:?} peer={peer_id} status={} replicators={:?}",
-            push_backlog_status(owner).await,
-            owner.p2p().unwrap().get_replicators().await
+    }
+
+    async fn submit(&self, request_id: &str, session_id: &str) -> String {
+        let spec = RequestSpec::new(
+            RequestPurpose::Normal,
+            RequestIdentity {
+                request_id: request_id.into(),
+                node_did: self.node_identity.did().into(),
+                requester_did: Some(self.peer.node_identity.did().into()),
+                agent_did: self.agent_identity.did().into(),
+                session_id: session_id.into(),
+                content: "convergence delivery e2e".into(),
+                execution_origin: ExecutionOrigin::Interactive,
+                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            },
+            AgentRequestAdmissionRecord::client(self.peer.node_identity.did()),
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
-async fn push_backlog_status(node: &EmbeddedNode) -> serde_json::Value {
-    node.p2p()
-        .expect("p2p should be enabled")
-        .sync_status()
+        let request = build_signed_client_request(
+            &self.requester,
+            spec,
+            RequestSigner::Identity(self.peer.node_identity.as_ref()),
+        )
         .await
-        .expect("p2p sync status")
-}
-
-async fn wait_for_push_backlog_idle(node: &EmbeddedNode) -> serde_json::Value {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let status = push_backlog_status(node).await;
-        let backlog = &status["push_backlog"];
-        if backlog["queued_items"].as_u64() == Some(0) && backlog["active_jobs"].as_u64() == Some(0)
-        {
-            return status;
-        }
-        if Instant::now() >= deadline {
-            panic!("push backlog never became idle; last={status}");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        .unwrap();
+        submit_client_request(&self.requester, &request)
+            .await
+            .unwrap();
+        self.read(&self.requester, request_id)
+            .await
+            .unwrap()
+            .doc_id
+            .unwrap()
     }
-}
 
-async fn wait_for_push_enqueues(
-    node: &EmbeddedNode,
-    minimum_enqueued_total: u64,
-) -> serde_json::Value {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let status = push_backlog_status(node).await;
-        let backlog = &status["push_backlog"];
-        if backlog["enqueued_total"].as_u64().unwrap_or(0) >= minimum_enqueued_total {
-            return status;
-        }
-        if Instant::now() >= deadline {
-            panic!(
-                "push backlog never reached enqueued_total={minimum_enqueued_total}; last={status}"
-            );
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+    async fn set_state(&self, doc_id: &str, state: &str) {
+        let doc_id = escape_graphql_string(doc_id);
+        let state = escape_graphql_string(state);
+        let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+        let response = self.agent.write("test.delivery.set_state", &format!(
+            r#"mutation {{ update_AgentRequest(docID: "{doc_id}", input: {{ lifecycle_state: "{state}", terminalized_at: "{terminalized_at}", terminal_redrive_attempts: 0 }}) {{ _docID }} }}"#,
+        )).await.unwrap();
+        assert_eq!(
+            response["data"]["update_AgentRequest"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
     }
-}
 
-async fn create_request(
-    node: &EmbeddedNode,
-    request_id: &str,
-    session_id: &str,
-    node_did: &str,
-    lifecycle_state: &str,
-) {
-    let request_id = escape_graphql_string(request_id);
-    let session_id = escape_graphql_string(session_id);
-    let node_did = escape_graphql_string(node_did);
-    let lifecycle_state = escape_graphql_string(lifecycle_state);
-    let created_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    let terminal_fields = if matches!(lifecycle_state.as_str(), "completed" | "failed") {
-        format!(", terminalized_at: \"{created_at}\", terminal_redrive_attempts: 0")
-    } else {
-        String::new()
-    };
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{request_id}",
-                purpose: "normal",
-                node_did: "{node_did}",
-                requester_did: "{PEER_DID}",
-                agent_id: "{AGENT_ID}",
-                session_id: "{session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{request_id}",
-                superseded_by_request: "",
-                content: "convergence p2p e2e",
-                lifecycle_state: "{lifecycle_state}",
-                backend_id: "",
-                execution_origin: "interactive",
-                failure_reason: "",
-                created_at: "{created_at}",
-                retry_count: 0,
-                max_retries: 3,
-                request_hop: 0
-                {terminal_fields}
-            }}) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create AgentRequest failed: {:?}",
-        resp.errors
-    );
-}
-
-async fn terminalize_request(
-    node: &EmbeddedNode,
-    request_id: &str,
-    node_did: &str,
-    lifecycle_state: &str,
-) {
-    let request_id = escape_graphql_string(request_id);
-    let node_did = escape_graphql_string(node_did);
-    let lifecycle_state = escape_graphql_string(lifecycle_state);
-    let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{
-                    request_id: {{ _eq: "{request_id}" }},
-                    node_did: {{ _eq: "{node_did}" }}
-                }},
-                input: {{
-                    lifecycle_state: "{lifecycle_state}",
-                    terminalized_at: "{terminalized_at}",
-                    terminal_redrive_attempts: 0
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "terminalize AgentRequest failed: {:?}",
-        resp.errors
-    );
-}
-
-async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> Option<AgentRequestRow> {
-    let request_id = escape_graphql_string(request_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
-                _docID
-                request_id
-                node_did
-                lifecycle_state
-            }}
-        }}"#
-    );
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        return None;
+    async fn read(&self, access: &ConfigAccess, request_id: &str) -> Option<AgentRequestRow> {
+        let request_id = escape_graphql_string(request_id);
+        let response = access.execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ _docID request_id node_did requester_did agent_did lifecycle_state terminal_redrive_attempts }} }}"#,
+        )).await.unwrap();
+        response["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .first()
+            .cloned()
+            .map(|row| serde_json::from_value(row).unwrap())
     }
-    resp.data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .and_then(|rows| rows.first())
-        .cloned()
-        .and_then(|row| serde_json::from_value(row).ok())
-}
 
-async fn wait_for_request_lifecycle(
-    node: &EmbeddedNode,
-    request_id: &str,
-    expected_lifecycle: RequestLifecycleState,
-    timeout: Duration,
-    label: &str,
-) -> AgentRequestRow {
-    let deadline = Instant::now() + timeout;
-    let mut last: Option<AgentRequestRow> = None;
-    loop {
-        if let Some(row) = fetch_request(node, request_id).await {
-            if row.lifecycle_state == Some(expected_lifecycle) {
-                return row;
-            }
-            last = Some(row);
-        }
-        if Instant::now() >= deadline {
-            panic!(
-                "timed out waiting for AgentRequest({request_id}) \
-                 lifecycle_state={expected_lifecycle} on {label}; last={last:?}"
-            );
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+    async fn redrive(&self) -> gents::TerminalRedriveReport {
+        RequestLifecycle::redrive_terminal_convergence_with_identities(
+            &self.node,
+            self.node_identity.did(),
+            std::slice::from_ref(&self.agent_identity),
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn shutdown(self) {
+        self.node.shutdown().await.unwrap();
+        self.peer.node.shutdown().await.unwrap();
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
-    let owner = test_p2p_db("convergence-p2p-owner-live").await;
-    let peer = test_p2p_db("convergence-p2p-peer-live").await;
-
-    // The pinned DefraDB records no acknowledgement for a filtered
-    // replicator's pushes, so acknowledgement is observed on a collection route.
-    install_one_way_replicator(&owner.node, &peer.node, &["AgentRequest"], false).await;
-
-    let request_id = "convergence-p2p-live-req";
-    let session_id = "convergence-p2p-live-session";
-
-    create_request(
-        owner.node.as_ref(),
-        request_id,
-        session_id,
-        OWNER_DID,
-        "processing",
-    )
-    .await;
-
-    let on_peer_processing = wait_for_request_lifecycle(
-        peer.node.as_ref(),
-        request_id,
-        RequestLifecycleState::Processing,
-        Duration::from_secs(30),
-        "peer (intermediate)",
-    )
-    .await;
+async fn authenticated_requester_observes_owner_terminal_and_bounded_redrive() {
+    let fixture = DeliveryFixture::new("convergence-http-owner").await;
+    let request_id = "convergence-http-live";
+    let doc = fixture.submit(request_id, "convergence-http-session").await;
+    let escaped = escape_graphql_string(&doc);
+    let commits = fixture.requester.execute(&format!(
+        r#"{{ _commits(docID: "{escaped}", filter: {{ fieldName: {{ _eq: "_C" }} }}, order: {{ height: ASC }}, limit: 1) {{ cid }} }}"#,
+    )).await.unwrap();
+    let genesis = commits["data"]["_commits"][0]["cid"].as_str().unwrap();
     assert_eq!(
-        on_peer_processing.node_did.as_deref(),
-        Some(OWNER_DID),
-        "peer replica must retain the owner's DID (peer is passive)"
+        fixture
+            .node
+            .verified_block_signer_did(genesis)
+            .await
+            .unwrap(),
+        fixture.peer.node_identity.did()
     );
-    assert_ne!(on_peer_processing.node_did.as_deref(), Some(PEER_DID));
-
-    terminalize_request(owner.node.as_ref(), request_id, OWNER_DID, "completed").await;
-
-    let on_owner = wait_for_request_lifecycle(
-        owner.node.as_ref(),
-        request_id,
-        RequestLifecycleState::Completed,
-        Duration::from_secs(5),
-        "owner",
-    )
-    .await;
-
-    let on_peer_terminal = wait_for_request_lifecycle(
-        peer.node.as_ref(),
-        request_id,
-        RequestLifecycleState::Completed,
-        Duration::from_secs(30),
-        "peer (terminal, first delivery)",
-    )
-    .await;
-    assert_eq!(on_peer_terminal.node_did.as_deref(), Some(OWNER_DID));
+    fixture.set_state(&doc, "processing").await;
+    let processing = fixture.read(&fixture.requester, request_id).await.unwrap();
     assert_eq!(
-        on_peer_terminal.lifecycle_state, on_owner.lifecycle_state,
-        "peer must match owner terminal exactly"
+        processing.lifecycle_state,
+        Some(RequestLifecycleState::Processing)
     );
-
-    let doc_id = on_owner.doc_id.clone().expect("owner doc id");
-    wait_for_acknowledged(
-        &owner.node,
-        peer.node.as_ref(),
-        std::slice::from_ref(&doc_id),
-    )
-    .await;
-
-    let first = RequestLifecycle::redrive_terminal_convergence(&owner.node, OWNER_DID)
-        .await
-        .expect("redrive");
     assert_eq!(
-        (first.acknowledged, first.reasserted),
-        (1, 0),
-        "an acknowledged terminal request is retired, never re-asserted; report={first:?}"
+        processing.node_did.as_deref(),
+        Some(fixture.node_identity.did())
     );
-    let retired = RequestLifecycle::redrive_terminal_convergence(&owner.node, OWNER_DID)
-        .await
-        .expect("redrive after retirement");
-    assert!(
-        retired.is_noop(),
-        "a retired request leaves the re-drive budget; report={retired:?}"
-    );
-
-    let final_peer = fetch_request(peer.node.as_ref(), request_id)
-        .await
-        .expect("peer still has the request");
     assert_eq!(
-        final_peer.lifecycle_state,
+        processing.requester_did.as_deref(),
+        Some(fixture.peer.node_identity.did())
+    );
+    assert_ne!(
+        processing.node_did.as_deref(),
+        processing.requester_did.as_deref()
+    );
+    assert!(fixture.read(&fixture.outsider, request_id).await.is_none());
+
+    let doc_escaped = escape_graphql_string(&doc);
+    let denied = fixture.outsider.write("test.delivery.deny", &format!(
+        r#"mutation {{ update_AgentRequest(docID: "{doc_escaped}", input: {{ lifecycle_state: "failed" }}) {{ _docID }} }}"#,
+    )).await.unwrap();
+    assert!(denied["data"]["update_AgentRequest"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    fixture.set_state(&doc, "completed").await;
+    let terminal = fixture.read(&fixture.requester, request_id).await.unwrap();
+    assert_eq!(
+        terminal.lifecycle_state,
         Some(RequestLifecycleState::Completed)
     );
-    assert_eq!(final_peer.node_did.as_deref(), Some(OWNER_DID));
+    assert_eq!(terminal.doc_id.as_deref(), Some(doc.as_str()));
+    assert_eq!(
+        terminal.node_did.as_deref(),
+        Some(fixture.node_identity.did())
+    );
+    assert_eq!(
+        terminal.requester_did.as_deref(),
+        Some(fixture.peer.node_identity.did())
+    );
 
-    owner.node.shutdown().await;
-    peer.node.shutdown().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn p2p_full_replay_converges_after_offline_peer_exhausts_redrive_cap() {
-    let owner = test_p2p_db("convergence-p2p-owner-late").await;
-    let peer = test_p2p_db("convergence-p2p-peer-late").await;
-
-    let request_id = "convergence-p2p-late-req";
-    let session_id = "convergence-p2p-late-session";
-
-    create_request(
-        owner.node.as_ref(),
-        request_id,
-        session_id,
-        OWNER_DID,
-        "completed",
-    )
-    .await;
-    wait_for_request_lifecycle(
-        owner.node.as_ref(),
-        request_id,
-        RequestLifecycleState::Completed,
-        Duration::from_secs(5),
-        "owner (pre-join)",
-    )
-    .await;
-
-    let mut reasserted_total = 0usize;
-    for _ in 0..TERMINAL_REDRIVE_CAP {
-        let report = RequestLifecycle::redrive_terminal_convergence(&owner.node, OWNER_DID)
-            .await
-            .expect("redrive while peer unavailable");
-        reasserted_total += report.reasserted;
+    for attempt in 1..=TERMINAL_REDRIVE_CAP {
+        let report = fixture.redrive().await;
+        assert_eq!(
+            (
+                report.scanned,
+                report.acknowledged,
+                report.reasserted,
+                report.failed
+            ),
+            (1, 0, 1, 0)
+        );
+        let observed = fixture.read(&fixture.requester, request_id).await.unwrap();
+        assert_eq!(
+            observed.lifecycle_state,
+            Some(RequestLifecycleState::Completed)
+        );
+        assert_eq!(observed.terminal_redrive_attempts, Some(attempt.into()));
     }
-    assert_eq!(reasserted_total, TERMINAL_REDRIVE_CAP as usize);
-    let exhausted = RequestLifecycle::redrive_terminal_convergence(&owner.node, OWNER_DID)
-        .await
-        .expect("redrive after persistent cap");
-    assert!(exhausted.is_noop(), "persistent cap must be exhausted");
-
-    install_one_way_replicator(&owner.node, &peer.node, &["AgentRequest"], true).await;
-
-    let on_peer = wait_for_request_lifecycle(
-        peer.node.as_ref(),
-        request_id,
-        RequestLifecycleState::Completed,
-        Duration::from_secs(30),
-        "peer (after full replay)",
-    )
-    .await;
-    assert_eq!(on_peer.node_did.as_deref(), Some(OWNER_DID));
-    let still_exhausted = RequestLifecycle::redrive_terminal_convergence(&owner.node, OWNER_DID)
-        .await
-        .expect("redrive remains exhausted after peer replay");
-    assert!(still_exhausted.is_noop());
-
-    owner.node.shutdown().await;
-    peer.node.shutdown().await;
+    assert!(fixture.redrive().await.is_noop());
+    assert!(fixture.read(&fixture.outsider, request_id).await.is_none());
+    fixture.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn p2p_terminal_redrive_pushes_once_per_routed_request() {
+async fn authenticated_requester_observes_each_terminal_in_a_recovery_wave() {
     const REQUESTS: usize = 13;
-    const FORMER_PAIRINGS: u64 = 16;
-
-    let owner = test_p2p_db("convergence-p2p-wave-owner").await;
-    let peer = test_p2p_db("convergence-p2p-wave-peer").await;
-    install_one_way_replicator(&owner.node, &peer.node, &["AgentRequest"], true).await;
-
-    let mut doc_ids = Vec::with_capacity(REQUESTS);
+    let fixture = DeliveryFixture::new("convergence-http-wave").await;
+    let mut requests = Vec::new();
     for index in 0..REQUESTS {
-        let request_id = format!("convergence-p2p-wave-{index:02}");
-        let session_id = format!("convergence-p2p-wave-session-{index:02}");
-        create_request(
-            owner.node.as_ref(),
-            &request_id,
-            &session_id,
-            OWNER_DID,
-            "completed",
-        )
-        .await;
-        let on_peer = wait_for_request_lifecycle(
-            peer.node.as_ref(),
-            &request_id,
-            RequestLifecycleState::Completed,
-            Duration::from_secs(30),
-            "peer (wave seed)",
-        )
-        .await;
-        doc_ids.push(on_peer.doc_id.expect("peer doc id"));
+        let request_id = format!("convergence-http-wave-{index:02}");
+        let doc = fixture
+            .submit(&request_id, &format!("convergence-http-session-{index:02}"))
+            .await;
+        fixture.set_state(&doc, "completed").await;
+        requests.push((request_id, doc));
     }
-    wait_for_acknowledged(&owner.node, peer.node.as_ref(), &doc_ids).await;
+    let report = fixture.redrive().await;
+    assert_eq!(
+        (
+            report.scanned,
+            report.acknowledged,
+            report.reasserted,
+            report.failed
+        ),
+        (REQUESTS, 0, REQUESTS, 0)
+    );
+    for (request_id, doc) in requests {
+        let row = fixture.read(&fixture.requester, &request_id).await.unwrap();
+        assert_eq!(row.doc_id.as_deref(), Some(doc.as_str()));
+        assert_eq!(row.node_did.as_deref(), Some(fixture.node_identity.did()));
+        assert_eq!(
+            row.requester_did.as_deref(),
+            Some(fixture.peer.node_identity.did())
+        );
+        assert_eq!(row.lifecycle_state, Some(RequestLifecycleState::Completed));
+        assert_eq!(row.terminal_redrive_attempts, Some(1));
+        assert!(fixture.read(&fixture.outsider, &request_id).await.is_none());
+    }
+    fixture.shutdown().await;
+}
 
-    let baseline = wait_for_push_backlog_idle(owner.node.as_ref()).await;
-    let enqueued_before = baseline["push_backlog"]["enqueued_total"]
-        .as_u64()
-        .expect("enqueued_total counter");
-    let report = RequestLifecycle::redrive_terminal_convergence(&owner.node, OWNER_DID)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn discovery_replicates_while_request_documents_remain_runtime_local() {
+    let fixture = DeliveryFixture::new("convergence-discovery").await;
+    let request_id = "convergence-private-request";
+    let doc = fixture
+        .submit(request_id, "convergence-private-session")
+        .await;
+    fixture.set_state(&doc, "completed").await;
+    assert!(expand_p2p_collection_profile_ids(["AgentRequest"], []).is_err());
+    assert!(expand_p2p_collection_profile_ids(["AgentSession"], []).is_err());
+    assert!(expand_p2p_collection_profile_ids([], ["discovery"]).is_ok());
+
+    let created = ConfigAccess::local_as(fixture.node.clone(), fixture.node_identity.did().parse().unwrap())
+        .write("test.discovery.probe", r#"mutation { create_PeerRegistry(input: {peer_id: "convergence-discovery-probe", node_did: "did:key:probe", addresses: ["probe"]}) { _docID } }"#)
+        .await.unwrap();
+    let public_doc = gents::store::graphql::created_doc_id(&created, "PeerRegistry").unwrap();
+    let (_, owner_address) =
+        crate::support::enrollment::wait_for_peer_identity(&fixture.node).await;
+    let (_, peer_address) =
+        crate::support::enrollment::wait_for_peer_identity(&fixture.peer.node).await;
+    let owner_admin = EmbeddedRemoteP2pAdmin::new(fixture.node.clone());
+    let peer_admin = EmbeddedRemoteP2pAdmin::new(fixture.peer.node.clone());
+    peer_admin.connect(&[owner_address]).await.unwrap();
+    wait_for_connected_peer(&fixture.peer.node).await;
+    assert!(matches!(
+        owner_admin
+            .add_replicator(
+                std::slice::from_ref(&peer_address),
+                &["AgentRequest".into()],
+                &PairingFilters::default(),
+            )
+            .await,
+        Err(gents::runtime::agent::p2p_reconcile::RemoteP2pAdminError::RuntimeLocalCollection(_))
+    ));
+    owner_admin
+        .add_replicator(
+            &[peer_address],
+            &["PeerRegistry".into()],
+            &PairingFilters::default(),
+        )
         .await
-        .expect("terminal redrive wave");
+        .unwrap();
+    fixture
+        .peer
+        .node
+        .p2p()
+        .unwrap()
+        .sync_documents(
+            "PeerRegistry",
+            vec![public_doc.clone()],
+            Some(Duration::from_secs(5)),
+        )
+        .await
+        .unwrap();
+    let public_doc = escape_graphql_string(&public_doc);
+    let public = ConfigAccess::local(fixture.peer.node.clone())
+        .execute(&format!(
+            r#"{{ PeerRegistry(filter: {{ _docID: {{ _eq: "{public_doc}" }} }}) {{ peer_id }} }}"#,
+        ))
+        .await
+        .unwrap();
     assert_eq!(
-        (report.acknowledged, report.reasserted),
-        (REQUESTS, 0),
-        "acknowledged terminal requests are retired, never re-asserted; report={report:?}"
+        public["data"]["PeerRegistry"][0]["peer_id"],
+        "convergence-discovery-probe"
     );
-
-    let after =
-        wait_for_push_enqueues(owner.node.as_ref(), enqueued_before + REQUESTS as u64).await;
-    let enqueued_after = after["push_backlog"]["enqueued_total"]
-        .as_u64()
-        .expect("enqueued_total counter");
-    let measured_pushes = enqueued_after - enqueued_before;
-    assert_eq!(
-        measured_pushes, REQUESTS as u64,
-        "one request-party route must enqueue one outbound push per document the wave writes"
-    );
-
-    let former_pushes = REQUESTS as u64 * FORMER_PAIRINGS;
+    fixture
+        .peer
+        .node
+        .document_acp()
+        .register_doc_object(
+            &fixture.peer.node_identity.did().parse().unwrap(),
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+            "delivered_requests",
+            &doc,
+        )
+        .await
+        .unwrap();
+    let escaped_doc = escape_graphql_string(&doc);
+    let commits = fixture.requester.execute(&format!(
+        r#"{{ _commits(docID: "{escaped_doc}", filter: {{ fieldName: {{ _eq: "_C" }} }}, order: {{ height: ASC }}, limit: 1) {{ cid }} }}"#,
+    )).await.unwrap();
+    let cid = commits["data"]["_commits"][0]["cid"].as_str().unwrap();
+    let pull = fixture
+        .peer
+        .node
+        .p2p()
+        .unwrap()
+        .sync_documents("AgentRequest", vec![doc], Some(Duration::from_secs(5)))
+        .await;
+    let peer_rows = ConfigAccess::local_as(
+        fixture.peer.node.clone(),
+        fixture.peer.node_identity.did().parse().unwrap(),
+    )
+    .execute("{ AgentRequest { _docID } }")
+    .await
+    .unwrap();
     assert!(
-        former_pushes / measured_pushes >= 5,
-        "request wave-volume reduction must be at least 5x; former={former_pushes}, current={measured_pushes}"
+        fixture
+            .peer
+            .node
+            .authorized_signed_block_bytes(cid, Some(fixture.peer.node_identity.did()))
+            .await
+            .is_err(),
+        "peer obtained a runtime-local request block: {pull:?}"
     );
-
-    owner.node.shutdown().await;
-    peer.node.shutdown().await;
+    assert!(
+        peer_rows["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "runtime-local request copied to peer: {pull:?}"
+    );
+    assert_eq!(
+        fixture
+            .read(&fixture.requester, request_id)
+            .await
+            .unwrap()
+            .lifecycle_state,
+        Some(RequestLifecycleState::Completed)
+    );
+    fixture.shutdown().await;
 }

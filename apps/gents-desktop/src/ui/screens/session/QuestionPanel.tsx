@@ -106,7 +106,7 @@ function QuestionForm({
     actions: { answerMailboxQuestion },
   } = useApp();
   const filer = useFleet((state) => nodeOf(state, item.nodeDid));
-  const agent = agentName(item.targetAgentId, filer);
+  const agent = agentName(item.targetAgentDid, filer);
   const root = useRef<HTMLElement>(null);
   const field = useRef<HTMLInputElement>(null);
   const mounted = useRef(true);

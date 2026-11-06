@@ -20,7 +20,7 @@ function renderPanel(patch: ReturnType<typeof vi.fn>, node: typeof deployment) {
 const withOps = (changes: Partial<(typeof deployment.agents)[number]>) => ({
   ...deployment,
   agents: deployment.agents.map((a) =>
-    a.agentId === "ops" ? { ...a, ...changes } : a,
+    a.agentDid === "ops" ? { ...a, ...changes } : a,
   ),
 });
 

@@ -27,19 +27,19 @@ const INFERENCE_TITLE: Record<string, (name: string) => string> = {
 
 export function composerReason(
   deployment: NodeView | null,
-  agentId: string | null,
+  agentDid: string | null,
   status: SendStatus,
 ): ComposerReason | null {
   if (status.kind !== "disabled") return null;
   if (status.reason === "sessionNotOwned")
     return { kind: "unsendable", text: status.hint };
-  if (status.reason !== "routeNotReady" && status.reason !== "agentUnavailable")
+  if (status.reason !== "runtimeNotConnected" && status.reason !== "agentUnavailable")
     return null;
   if (!deployment) return null;
   const name = deployment.node.displayName ?? deployment.label;
-  if (!deployment.dialSucceeded) return { kind: "offline", name };
+  if (deployment.runtimeConnection === "disconnected") return { kind: "offline", name };
   if (status.reason !== "agentUnavailable") return null;
-  const decision = selectedNodeReadinessDecision(deployment, agentId);
+  const decision = selectedNodeReadinessDecision(deployment, agentDid);
   if (decision.kind !== "unavailable") return null;
   const title = INFERENCE_TITLE[decision.reason];
   return title

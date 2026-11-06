@@ -2,13 +2,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::documents::{Agent, InferenceBackend, InferenceProfile, InferenceSampling, Node};
 use gents::store::config_client::DesiredStateApplyPlan;
 use gents::store::graphql::escape_graphql_string;
 use gents::{
-    default_agent_id_for_node, default_inference_profile_id_for_agent, ensure_node, Collection,
-    DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling,
+    default_inference_profile_id_for_agent, ensure_node, Collection, DocumentRuntimeOptions, Gents,
+    NodeIdentity, ToolCeiling,
 };
 use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
 use gents_protocol::output::{OutputSegment, TranscriptMessage};
@@ -33,16 +33,18 @@ pub async fn bind_target(
 ) -> (String, String) {
     let node_did = identity.did().to_string();
     let mut node_doc = ensure_node(node, &node_did).await.expect("ensure node");
-    let agent_id = default_agent_id_for_node(&node_did);
-    let profile_id = default_inference_profile_id_for_agent(&agent_id);
-    node_doc.default_agent_id = Some(agent_id.clone());
+    let binding = gents::store::identity::provision_agent_identity(identity).unwrap();
+    let agent_did = binding.agent_did;
+    let profile_id = default_inference_profile_id_for_agent(&agent_did);
+    node_doc.default_agent_did = Some(agent_did.clone());
     let backend = target.backend(&node_did);
     let profile = InferenceProfile {
         profile_id: profile_id.clone(),
         ..target.profile(&node_did)
     };
     let agent = Agent {
-        agent_id: agent_id.clone(),
+        agent_did: agent_did.clone(),
+        creation_nonce: binding.creation_nonce,
         node_did: node_did.clone(),
         display_name: Some("Live default agent".to_string()),
         description: None,
@@ -62,7 +64,7 @@ pub async fn bind_target(
         agent,
     )
     .await;
-    (node_did, agent_id)
+    (node_did, agent_did)
 }
 
 async fn apply_live_backend_documents(

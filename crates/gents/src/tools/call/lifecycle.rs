@@ -133,7 +133,7 @@ impl CancelCause {
 
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 pub(crate) mod delivery;
 pub(crate) use delivery::publish_background_receipt_in_txn;
@@ -141,9 +141,7 @@ pub(crate) mod file_inventory;
 mod file_review_access;
 pub(crate) mod query;
 pub use crate::tools::native::file_contents::ContentDocument;
-pub(crate) use file_review_access::grant_source_file_read;
 pub use file_review_access::VerifiedFileImageReceipt;
-pub(crate) use query::load_tool_file_change_observation_in_txn;
 pub use query::{
     load_tool_call_arguments, load_tool_call_file_changes, load_tool_call_presentation,
     load_tool_call_result, load_tool_file_change_observation, render_tool_result,
@@ -239,6 +237,8 @@ impl ToolRowKind {
 
 #[derive(Clone)]
 pub struct ToolCallLifecycle {
+    actor: identity::Did,
+    agent_signer: Option<crate::store::identity::ManagedAgentSigner>,
     node: Arc<EmbeddedNode>,
     request_id: String,
     request_doc_id: Option<String>,
@@ -324,6 +324,37 @@ pub(crate) struct SpawnedBackgroundToolAdmission {
 }
 
 impl ToolCallLifecycle {
+    pub(crate) fn access(&self) -> anyhow::Result<crate::ConfigAccess> {
+        Ok(crate::ConfigAccess::local_with_optional_agent_signer(
+            self.node.clone(),
+            self.actor.clone(),
+            self.agent_signer.clone(),
+        )?)
+    }
+
+    pub(crate) fn inherit_signer(&mut self, source: &Self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.actor == source.actor && self.node_did == source.node_did,
+            "reloaded tool actor differs from its original binding"
+        );
+        self.agent_signer = source.agent_signer.clone();
+        Ok(())
+    }
+
+    pub(crate) fn bind_agent_signer(
+        &mut self,
+        signer: Option<crate::store::identity::ManagedAgentSigner>,
+    ) -> anyhow::Result<()> {
+        if let Some(signer) = &signer {
+            crate::ConfigAccess::local_with_agent_signer(
+                self.node.clone(),
+                self.actor.clone(),
+                signer.clone(),
+            )?;
+        }
+        self.agent_signer = signer;
+        Ok(())
+    }
     /// Adopt a pending row atomically published with an accepted provider header.
     pub(crate) fn from_accepted(
         node: Arc<EmbeddedNode>,
@@ -338,6 +369,8 @@ impl ToolCallLifecycle {
             "dispatch await mode conflicts with the accepted background publication"
         );
         Ok(Self {
+            actor: accepted.actor.clone(),
+            agent_signer: accepted.agent_signer.clone(),
             node,
             request_id: String::new(),
             request_doc_id: Some(accepted.request_doc_id),
@@ -409,6 +442,7 @@ impl ToolCallLifecycle {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         node: Arc<EmbeddedNode>,
+        actor: identity::Did,
         request_id: String,
         session_id: String,
         node_did: String,
@@ -419,6 +453,8 @@ impl ToolCallLifecycle {
         deadline_at: chrono::DateTime<chrono::Utc>,
     ) -> Self {
         Self {
+            actor,
+            agent_signer: None,
             node,
             request_id,
             request_doc_id: None,
@@ -478,6 +514,7 @@ impl ToolCallLifecycle {
     #[allow(clippy::too_many_arguments)]
     pub fn new_background_tool(
         node: Arc<EmbeddedNode>,
+        actor: identity::Did,
         request_id: String,
         session_id: String,
         node_did: String,
@@ -488,6 +525,8 @@ impl ToolCallLifecycle {
         deadline_at: chrono::DateTime<chrono::Utc>,
     ) -> Self {
         Self {
+            actor,
+            agent_signer: None,
             node,
             request_id,
             request_doc_id: None,
@@ -554,7 +593,11 @@ impl ToolCallLifecycle {
         }
     }
 
-    pub(crate) fn node(&self) -> &std::sync::Arc<defra_node::EmbeddedNode> {
+    pub(crate) fn actor(&self) -> &identity::Did {
+        &self.actor
+    }
+
+    pub(crate) fn node(&self) -> &std::sync::Arc<defra_node::Node> {
         &self.node
     }
 
@@ -586,9 +629,12 @@ impl ToolCallLifecycle {
             .request_doc_id
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("tool invocation lacks its calling request document"))?;
-        let request = crate::request::binding::load_agent_request_by_doc_id(&self.node, doc_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("tool invocation's calling request disappeared"))?;
+        let request = crate::request::binding::load_agent_request_by_doc_id_with_access(
+            &self.access()?,
+            doc_id,
+        )
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("tool invocation's calling request disappeared"))?;
         anyhow::ensure!(
             request.node_did == self.node_did
                 && request.session_id == self.session_id
@@ -616,12 +662,19 @@ impl ToolCallLifecycle {
     }
 
     pub(crate) async fn output_budget(&self) -> usize {
-        let agent_id = match &self.request_doc_id {
+        let agent_did = match &self.request_doc_id {
             Some(doc_id) => {
-                match crate::request::binding::load_agent_request_by_doc_id(&self.node, doc_id)
-                    .await
-                {
-                    Ok(request) => request.map(|request| request.agent_id),
+                let request = match self.access() {
+                    Ok(access) => {
+                        crate::request::binding::load_agent_request_by_doc_id_with_access(
+                            &access, doc_id,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
+                match request {
+                    Ok(request) => request.map(|request| request.agent_did),
                     Err(error) => {
                         tracing::warn!(
                             request_doc_id = %doc_id,
@@ -635,12 +688,12 @@ impl ToolCallLifecycle {
             }
             None => None,
         };
-        match agent_id {
-            Some(agent_id) => {
+        match agent_did {
+            Some(agent_did) => {
                 crate::tools::surface::configured_output_budget(
                     &self.node,
                     &self.node_did,
-                    &agent_id,
+                    &agent_did,
                     &self.tool_name,
                 )
                 .await
@@ -659,10 +712,12 @@ impl ToolCallLifecycle {
         &self.tool_call_id
     }
 
+    #[cfg(test)]
     pub(crate) fn execution_generation(&self) -> Option<&str> {
         self.execution_generation.as_deref()
     }
 
+    #[cfg(test)]
     pub(crate) fn accepted_header_doc_id(&self) -> Option<&str> {
         self.accepted_header_doc_id.as_deref()
     }
@@ -696,11 +751,12 @@ mod tests {
 
     #[tokio::test]
     async fn tool_row_kind_is_session_message_for_agent_new_and_agent_message() {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
         let deadline = chrono::Utc::now() + chrono::Duration::minutes(1);
         let kind_of = |tool_name: &str| {
             ToolCallLifecycle::new(
                 node.clone(),
+                identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
                 "request".into(),
                 "session".into(),
                 "did:test:owner".into(),
@@ -721,7 +777,7 @@ mod tests {
             ToolRowKind::SessionMessage
         );
         assert_eq!(kind_of("tool"), ToolRowKind::Native);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     use crate::lean_vocab_test::{

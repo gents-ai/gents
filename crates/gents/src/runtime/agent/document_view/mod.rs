@@ -3,19 +3,17 @@ mod automation;
 mod load;
 mod snapshot;
 
+pub(crate) use automation::resolved_task_from;
+
 pub(crate) use apply::{apply_control_update, control_collection_names};
+#[cfg(test)]
 pub(crate) use load::load_document_runtime_view;
+pub(crate) use load::load_document_runtime_view_as;
 pub(crate) use snapshot::resolve_document_runtime_snapshot_from_view;
 
 use crate::documents::*;
 use crate::inference::auth::credential::OAuthCredential;
 use rapidhash::RapidHashMap;
-
-/// Ids in these namespaces were minted only by the retired graph publisher and
-/// are never authored; a stored document carrying one stays inert forever.
-pub(crate) fn is_retired_reserved_id(id: &str) -> bool {
-    id.starts_with("graph-trigger-") || id.starts_with("pkg-")
-}
 
 #[derive(Debug, Clone)]
 pub(crate) struct DocumentRecord<T> {
@@ -97,7 +95,7 @@ impl DocumentRuntimeView {
 
     pub(crate) fn pending_visibility_details(&self) -> Vec<String> {
         let mut details = Vec::new();
-        if let Some(id) = self.node.value.default_agent_id.as_deref() {
+        if let Some(id) = self.node.value.default_agent_did.as_deref() {
             if !self.agents.contains_key(id) {
                 details.push(format!(
                     "principal {} references missing default agent {id}",

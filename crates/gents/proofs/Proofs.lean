@@ -1,4 +1,5 @@
 import Proofs.StorageFailure
+import Proofs.Identity.RelationshipReplay
 import Proofs.Basic
 import Proofs.Process
 import Proofs.Persistence

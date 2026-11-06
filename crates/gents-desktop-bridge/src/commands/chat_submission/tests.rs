@@ -13,7 +13,7 @@ use crate::host::{
 fn original(node_did: &str, client_did: &str) -> Result<ChatSendRequest> {
     Ok(serde_json::from_value(json!({
         "requestId":uuid::Uuid::new_v4().to_string(), "nodeDid":node_did, "clientDid":client_did,
-        "agentId":"fixture-agent", "sessionId":null, "content":"Retain this authored message",
+        "agentDid":"fixture-agent", "sessionId":null, "content":"Retain this authored message",
         "delivery":"queue"
     }))?)
 }
@@ -45,7 +45,7 @@ fn submission_recovery_and_acknowledgement_are_mutating_wire_commands() -> Resul
     assert!(ClientCommand::NAMES.contains(&"desktop_chat_submission_recover"));
     let acknowledge: ClientCommand = serde_json::from_value(json!({
         "name":"desktop_chat_submission_acknowledge", "args":{"receipt":{
-            "nodeDid":"node", "requestId":"request", "sessionId":"session", "agentId":null,
+            "nodeDid":"node", "requestId":"request", "sessionId":"session", "agentDid":null,
             "envelopeHash":"hash", "signedPayloadHash":"payload"
         }}
     }))?;

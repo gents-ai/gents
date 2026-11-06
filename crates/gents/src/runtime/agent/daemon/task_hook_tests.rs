@@ -78,11 +78,14 @@ enum Lineage {
 }
 
 struct Harness {
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
     agent_config: Arc<ResolvedAgent>,
     calls: Arc<AtomicUsize>,
     marks: tempfile::TempDir,
-    _data: tempfile::TempDir,
+    _db: crate::support::TestDb,
+    _user: crate::KeyIdentity,
+    user_access: ConfigAccess,
+    agent_access: ConfigAccess,
 }
 
 impl Harness {
@@ -91,28 +94,45 @@ impl Harness {
     }
 
     async fn with_deadline(deadline: Duration) -> Self {
-        let data = tempfile::tempdir().expect("node data directory");
-        let node = Arc::new(
-            crate::test_support::node_builder()
-                .data_path(data.path())
-                .build()
+        use crate::store::config_client::NodePermission;
+        let (db, user, user_access, binding) =
+            crate::test_support::signed_test_node("task-hooks").await;
+        let node = db.node.clone();
+        let agent_identity =
+            crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+                .unwrap();
+        let agent_did = identity::Did::new(agent_identity.did()).unwrap();
+        let admin = ConfigAccess::local_as(node.clone(), db.node_identity.did().parse().unwrap());
+        for permission in [
+            NodePermission::CollectionGet,
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::DocumentDelete,
+            NodePermission::DacRelationAdd,
+            NodePermission::DacRelationDelete,
+        ] {
+            admin
+                .grant_node_permission(&agent_did, permission)
                 .await
-                .expect("embedded node"),
-        );
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let agent_config = super::inference::tests::test_agent_with_deadline(deadline);
-        crate::test_support::install_test_agent(
-            &node,
-            agent_config.node_did(),
-            &agent_config.agent_id,
-        )
-        .await;
+                .unwrap();
+        }
+        let agent_access =
+            ConfigAccess::local_managed_agent(node.clone(), agent_did, agent_identity.as_ref())
+                .unwrap();
+        let mut agent_config = crate::runtime::agent::PendingAgent::new("task-hooks")
+            .with_identity_binding_for_test(binding)
+            .build_with_identity_arc_for_test(db.node_identity.clone());
+        agent_config.deadline_duration = deadline;
+        let agent_config = Arc::new(agent_config);
         Self {
             node,
             agent_config,
             calls: Arc::new(AtomicUsize::new(0)),
             marks: tempfile::tempdir().expect("hook marker directory"),
-            _data: data,
+            _db: db,
+            _user: user,
+            user_access,
+            agent_access,
         }
     }
 
@@ -140,14 +160,15 @@ impl Harness {
                 .collect(),
         )
         .unwrap();
-        ConfigAccess::transact_local_write(&self.node, None, "test.task_hooks", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+        self.user_access
+            .transact_write("test.task_hooks", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                })
             })
-        })
-        .await
-        .unwrap();
+            .await
+            .unwrap();
     }
 
     async fn install_task(&self, hooks: serde_json::Value) {
@@ -166,7 +187,7 @@ impl Harness {
                 json!({
                     "node_did": owner,
                     "task_id": TASK_ID,
-                    "agent_id": self.agent_config.agent_id,
+                    "agent_did": self.agent_config.agent_did,
                     "prompt_template": "run the gate",
                     "hooks": hooks,
                 }),
@@ -185,20 +206,15 @@ impl Harness {
     }
 
     async fn trigger_doc_id(&self) -> String {
-        let response = crate::store::graphql::graphql_with_transaction_retry(
-            self.node.as_ref(),
-            &format!(
-                r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
-                crate::store::graphql::escape_graphql_string(self.owner()),
-                crate::store::graphql::escape_graphql_string(TRIGGER_ID),
-            ),
-            "test.load_task_hook_trigger",
-        )
-        .await
-        .unwrap();
-        let row: serde_json::Value = crate::store::graphql::first_row(&response, "Trigger")
-            .unwrap()
-            .expect("installed Trigger");
+        let response = self.user_access.execute(&format!(
+            r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
+            crate::store::graphql::escape_graphql_string(self.owner()),
+            crate::store::graphql::escape_graphql_string(TRIGGER_ID),
+        )).await.unwrap();
+        let rows = response["data"]["Trigger"].as_array().unwrap();
+        let [row] = rows.as_slice() else {
+            panic!("installed Trigger must be unique")
+        };
         row["_docID"].as_str().expect("Trigger doc id").to_owned()
     }
 
@@ -235,14 +251,14 @@ impl Harness {
             Some(fire) => (
                 fire.request_id.clone(),
                 fire.session_id.clone(),
-                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&owner),
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&self.agent_config.agent_did),
                 "interactive",
             ),
             None => (
                 uuid::Uuid::new_v4().to_string(),
                 uuid::Uuid::new_v4().to_string(),
                 gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_automated_trigger(
-                    &owner, TRIGGER_ID,
+                    &self.agent_config.agent_did, TRIGGER_ID,
                 ),
                 "scheduled",
             ),
@@ -251,8 +267,8 @@ impl Harness {
             gents_protocol::request_admission::RequestPurpose::Normal,
             request_id,
             &owner,
-            &owner,
-            &self.agent_config.agent_id,
+            &self.agent_config.agent_did,
+            &self.agent_config.agent_did,
             session_id,
             "run the gate",
             origin,
@@ -275,32 +291,41 @@ impl Harness {
             create.workspace_authority = Some("readWrite".into());
             create.workspace_owner_node_did = Some(owner.clone());
         }
-        crate::sign_agent_request_create(self.agent_config.node_identity().as_ref(), &mut create)
+        crate::sign_agent_request_create(self.agent_config.agent_identity.as_ref(), &mut create)
             .await
             .unwrap();
         let doc_id = match &fire {
             Some(fire) => {
-                let access = ConfigAccess::local(self.node.clone());
-                crate::request::lifecycle::write_task_delivery(&access, fire, false, &create)
-                    .await
-                    .expect("admit the manual Task fire and its request")
-                    .request
-                    .doc_id
-            }
-            None => {
-                let response = ConfigAccess::write_local(
-                    &self.node,
-                    "test.create_task_hook_request",
-                    &create.graphql_mutation().unwrap(),
+                crate::request::lifecycle::write_task_delivery(
+                    &self.agent_access,
+                    fire,
+                    false,
+                    &create,
                 )
                 .await
-                .expect("create task-hook AgentRequest");
+                .expect("admit the manual Task fire and its request")
+                .request
+                .doc_id
+            }
+            None => {
+                let response = self
+                    .agent_access
+                    .write(
+                        "test.create_task_hook_request",
+                        &create.graphql_mutation().unwrap(),
+                    )
+                    .await
+                    .expect("create task-hook AgentRequest");
                 crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
             }
         };
-        crate::request::admission::load_request_for_admission_test(self.node.as_ref(), &doc_id)
-            .await
-            .unwrap()
+        crate::request::admission::load_request_for_admission_test_as(
+            &self.node,
+            &doc_id,
+            &self.agent_config.agent_did,
+        )
+        .await
+        .unwrap()
     }
 
     fn daemon(&self, fail: bool) -> AgentDaemon<ScriptedModel> {
@@ -323,7 +348,7 @@ impl Harness {
     ) -> AgentDaemon<ScriptedModel> {
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &self.agent_config.system_prompt,
-            &self.agent_config.agent_id,
+            &self.agent_config.agent_did,
             &[],
             false,
             &[],
@@ -342,9 +367,11 @@ impl Harness {
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                     self.node.clone(),
-                ),
+                    self.agent_config.agent_identity.as_ref(),
+                )
+                .unwrap(),
             ),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_execution_registry: executions,
@@ -364,25 +391,23 @@ impl Harness {
     }
 
     async fn request_row(&self, doc_id: &str) -> serde_json::Value {
-        let response = crate::store::graphql::graphql_with_transaction_retry(
-            self.node.as_ref(),
-            &format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state failure_reason }} }}"#,
-                crate::store::graphql::escape_graphql_string(doc_id),
-            ),
-            "test.load_task_hook_request",
-        )
-        .await
-        .unwrap();
-        crate::store::graphql::first_row(&response, "AgentRequest")
-            .unwrap()
-            .expect("AgentRequest row")
+        let response = self.agent_access.execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state failure_reason }} }}"#,
+            crate::store::graphql::escape_graphql_string(doc_id),
+        )).await.unwrap();
+        let rows = response["data"]["AgentRequest"].as_array().unwrap();
+        let [row] = rows.as_slice() else {
+            panic!("held Agent request must be unique")
+        };
+        row.clone()
     }
 
     async fn run(&self, request: AgentRequest, fail: bool) -> serde_json::Value {
         self.run_with_capacity(request, fail, None).await
     }
 
+    /// Keep the daemon request state machine out of the test future, as the
+    /// runtime worker does when it dispatches a request.
     async fn run_with_capacity(
         &self,
         request: AgentRequest,
@@ -392,13 +417,12 @@ impl Harness {
         let doc_id = request.doc_id.clone();
         let mut daemon = self.daemon(fail);
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-        tokio::time::timeout(
-            Duration::from_secs(90),
-            daemon.process_request_with_capacity(request, capacity, shutdown_rx),
-        )
-        .await
-        .expect("request processing finished")
-        .expect("request processing returned");
+        let process =
+            Box::pin(daemon.process_request_with_capacity(request, capacity, shutdown_rx));
+        tokio::time::timeout(Duration::from_secs(90), process)
+            .await
+            .expect("request processing finished")
+            .expect("request processing returned");
         self.request_row(&doc_id).await
     }
 
@@ -414,7 +438,7 @@ impl Harness {
                 &self.node,
                 &doc_id,
                 self.owner(),
-                Some(self.owner()),
+                Some(&self.agent_config.agent_did),
             )
             .await
             .expect("interrupt the running request");
@@ -553,6 +577,16 @@ async fn passing_hooks_leave_a_manual_task_run_completed() {
         ]))
         .await;
     let request = harness.create_request(Lineage::ManualFire, false).await;
+    let fire_query = format!(
+        r#"{{ TriggerFire(filter: {{request_id: {{_eq: "{}"}}}}) {{_docID task_id}} }}"#,
+        crate::store::graphql::escape_graphql_string(&request.request_id),
+    );
+    let selected = harness.agent_access.execute(&fire_query).await.unwrap();
+    assert_eq!(selected["data"]["TriggerFire"][0]["task_id"], TASK_ID);
+    let node_view = ConfigAccess::local(harness.node.clone())
+        .execute(&fire_query)
+        .await;
+    assert!(node_view.is_err() || node_view.unwrap()["data"]["TriggerFire"] == json!([]));
     let row = harness.run(request, false).await;
     assert_eq!(harness.calls(), 1, "{row}");
     assert_eq!(row["lifecycle_state"], "completed", "{row}");
@@ -675,8 +709,8 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
             .as_str()
             .to_string(),
         owner_node_did: owner.clone(),
-        writer_principal: owner.clone(),
-        integrator_principal: owner.clone(),
+        writer_principal: harness.agent_config.agent_did.clone(),
+        integrator_principal: harness.agent_config.agent_did.clone(),
         instruction_manifest: String::new(),
         seal_hash: None,
         lifecycle_state: "ready".to_string(),
@@ -702,7 +736,9 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
         crate::tools::workspace::isolated_workspace_upsert_mutation(&workspace),
         crate::tools::workspace::workspace_placement_upsert_mutation(&placement, &updated_at),
     ] {
-        ConfigAccess::write_local(&harness.node, "test.task_hook_workspace", &mutation)
+        harness
+            .agent_access
+            .write("test.task_hook_workspace", &mutation)
             .await
             .expect("install isolated workspace and placement");
     }
@@ -711,17 +747,16 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
 async fn workspace_bindings(
     harness: &Harness,
 ) -> Vec<crate::tools::workspace::WorkspaceBindingDoc> {
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        &harness.node,
+    let response = harness.agent_access.execute(
         &format!(
             r#"{{ WorkspaceBinding(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}) {{ binding_id workspace_id request_id request_doc_id authority owner_node_did seal_hash lifecycle_state }} }}"#,
             crate::store::graphql::escape_graphql_string(WORKSPACE_ID),
             crate::store::graphql::escape_graphql_string(harness.owner()),
         ),
-        "test.task_hook_bindings",
     )
     .await
     .unwrap();
+    let response: query::QueryResponse = serde_json::from_value(response).unwrap();
     crate::store::graphql::rows(&response, "WorkspaceBinding").unwrap()
 }
 
@@ -730,7 +765,7 @@ async fn materialize_writer_binding(harness: &Harness, request: &AgentRequest) {
         &harness.node,
         &request.request_id,
         &request.doc_id,
-        harness.owner(),
+        harness.agent_config.agent_identity.as_ref(),
         &crate::request::lifecycle::WorkspaceLineage {
             workspace_id: request.workspace_id.clone(),
             workspace_authority: request.workspace_authority.clone(),
@@ -754,8 +789,7 @@ async fn claim_admission_rejection_releases_the_bound_workspace() {
         .await
         .iter()
         .any(|binding| binding.is_active_read_write()));
-    ConfigAccess::write_local(
-        &harness.node,
+    harness.agent_access.write(
         "test.remove_workspace_placement",
         &format!(
             r#"mutation {{ delete_WorkspacePlacement(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
@@ -880,9 +914,10 @@ impl Harness {
         let registry =
             BackgroundExecutionRegistry::default().with_task_hook_records(records.to_path_buf());
         for _ in 0..40 {
-            let outcome = crate::runtime::startup_recovery::run_startup_recovery_with_executions(
+            let outcome = crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
                 &self.node,
                 self.owner(),
+                std::slice::from_ref(&self.agent_config.agent_identity),
                 &registry,
             )
             .await;
@@ -898,12 +933,14 @@ impl Harness {
             "request recovery must decide the abandoned request: {row}"
         );
         assert!(registry.task_hook_records().list().is_empty());
-        let again = crate::runtime::startup_recovery::run_startup_recovery_with_executions(
-            &self.node,
-            self.owner(),
-            &registry,
-        )
-        .await;
+        let again =
+            crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
+                &self.node,
+                self.owner(),
+                std::slice::from_ref(&self.agent_config.agent_identity),
+                &registry,
+            )
+            .await;
         assert!(again.task_hooks.expect("second pass") == 0);
     }
 
@@ -998,8 +1035,7 @@ async fn losing_the_lease_mid_work_skips_after_failure_and_still_cleans_up() {
         while harness.calls() == 0 {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        ConfigAccess::write_local(
-            &harness.node,
+        harness.agent_access.write(
             "test.replace_task_hook_generation",
             &format!(
                 r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
@@ -1054,12 +1090,14 @@ async fn shutdown_before_any_hook_launches_leaves_no_record_to_recover() {
         "an execution that never started leaves nothing for recovery"
     );
     let restarted = BackgroundExecutionRegistry::default().with_task_hook_records(records);
-    let outcome = crate::runtime::startup_recovery::run_startup_recovery_with_executions(
-        &harness.node,
-        harness.owner(),
-        &restarted,
-    )
-    .await;
+    let outcome =
+        crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
+            &harness.node,
+            harness.owner(),
+            std::slice::from_ref(&harness.agent_config.agent_identity),
+            &restarted,
+        )
+        .await;
     assert!(outcome.task_hooks.unwrap() == 0);
 }
 
@@ -1074,7 +1112,7 @@ async fn a_request_bound_to_a_disabled_hookless_task_fails_closed() {
             json!({
                 "node_did": harness.owner(),
                 "task_id": TASK_ID,
-                "agent_id": harness.agent_config.agent_id,
+                "agent_did": harness.agent_config.agent_did,
                 "prompt_template": "run the gate",
                 "enabled": false,
             }),
@@ -1124,7 +1162,7 @@ async fn workspace_seal_completes_before_the_after_phase_is_selected() {
         &harness.node,
         &request.request_id,
         &request.doc_id,
-        harness.owner(),
+        harness.agent_config.agent_identity.as_ref(),
         &crate::request::lifecycle::WorkspaceLineage {
             workspace_id: request.workspace_id.clone(),
             workspace_authority: request.workspace_authority.clone(),
@@ -1157,8 +1195,7 @@ impl Harness {
             while !marker.exists() {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
-            ConfigAccess::write_local(
-                &self.node,
+            self.agent_access.write(
                 "test.supersede_task_hook_execution",
                 &format!(
                     r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
@@ -1267,7 +1304,7 @@ async fn revocation_between_hooks_is_checked_before_the_next_renewal_poll() {
         while !harness.mark("ready").exists() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        ConfigAccess::write_local(&harness.node, "test.revoke_between_task_hooks", &format!(
+        harness.agent_access.write("test.revoke_between_task_hooks", &format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
             crate::store::graphql::escape_graphql_string(&doc_id)
         )).await.unwrap();

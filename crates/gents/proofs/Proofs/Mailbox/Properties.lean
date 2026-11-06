@@ -37,14 +37,19 @@ theorem acted_has_satisfying_document (item post : Item) (docId : String)
     exact ⟨rfl, rfl, admitted.2⟩
   · simp_all
 
-theorem dismiss_is_owner_only (item post : Item) (principalDid : String)
+theorem dismissal_is_independent_of_session_provenance
+    (item : Item) (actor other : String) :
+    applyResolution? item (.dismiss actor) = applyResolution? item (.dismiss other) := by
+  rfl
+
+theorem dismiss_records_terminal_status (item post : Item) (principalDid : String)
     (h : applyResolution? item (.dismiss principalDid) = some post) :
-    principalDid = item.identity.requesterDid ∧ post.status = .dismissed := by
+    post.status = .dismissed := by
   simp only [applyResolution?] at h
   split at h
   · rename_i admitted
     cases h
-    exact ⟨admitted.2, rfl⟩
+    rfl
   · simp_all
 
 theorem deadline_expiry (item : Item) (hopen : item.status = .open) :

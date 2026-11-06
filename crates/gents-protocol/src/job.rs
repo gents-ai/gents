@@ -17,7 +17,7 @@ pub use settings::{
 pub use step::{
     DataOp, DataQuery, DataWrite, JobControlKind, JobControlRequest, JobEffects, JobFailure,
     JobInterrupt, JobMessage, JobScratch, JobSpawn, JobStepInput, JobSuspend, JobSuspendKind,
-    OnConflict, CALLER_NODE_DID_FILTER,
+    OnConflict, CALLER_DID_FILTER,
 };
 pub use step_output::JobStepOutput;
 pub use view::{
@@ -253,7 +253,7 @@ pub struct JobCaller {
     pub request_doc_id: String,
     pub tool_call_id: String,
     pub node_did: String,
-    pub agent_id: String,
+    pub agent_did: String,
     pub request_hop: u32,
     pub correlation: Option<String>,
     pub cwd: String,

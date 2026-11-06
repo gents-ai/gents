@@ -9,7 +9,7 @@ fn snapshot_coalesces_shared_roots_and_splits_strict_projections() {
     assert_eq!(query.matches("triggers: Trigger(").count(), 1);
     assert_eq!(
         query
-            .matches("inference_backends: InferenceBackend(")
+            .matches("inference_backends: InferenceBackendMetadata(")
             .count(),
         1
     );
@@ -21,26 +21,14 @@ fn snapshot_coalesces_shared_roots_and_splits_strict_projections() {
             .0
             .join(" ")
     );
-    assert_eq!(
-        {
-            let mut fields = INFERENCE_BACKEND_FIELDS
-                .split_whitespace()
-                .collect::<Vec<_>>();
-            fields.sort_unstable();
-            fields
-        },
-        {
-            let mut fields = gents::store::config_client::config_projection(
-                gents::Collection::InferenceBackend,
-                None,
-            )
-            .unwrap()
-            .0
-            .to_vec();
-            fields.sort_unstable();
-            fields
-        }
-    );
+    for field in INFERENCE_BACKEND_FIELDS.split_whitespace() {
+        assert!(
+            gents_protocol::schemas::INFERENCE_BACKEND_METADATA
+                .lines()
+                .any(|line| line.trim_start().starts_with(&format!("{field}:"))),
+            "missing metadata field {field}"
+        );
+    }
 
     let data = serde_json::json!({"triggers": [{
         "node_did": "did:alpha", "trigger_id": "trigger-1", "task_id": "task-1",
@@ -191,7 +179,7 @@ async fn bounded_task_history_preserves_physical_twins_at_the_cutoff() {
         docs[..8],
         "same top eight as complete history, including physical ties"
     );
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
 }
 
 #[test]
@@ -250,10 +238,10 @@ fn combined_snapshot_keeps_unknown_config_fields_rejected_and_observations_indep
         "inference_backends": [{
             "node_did": "did:alpha", "backend_id": "b", "name": "backend",
             "provider_kind": "OpenAiCompatible", "openai_wire_api": "chat_completions",
-            "endpoint": "http://localhost:8000/v1", "auth": {"kind": "unauthenticated"},
-            "enabled": true, "future_backend_config": true,
-            "catalogs": [], "last_probe": null, "probe_status": "ready"
-        }]
+            "endpoint": "http://localhost:8000/v1", "auth_kind": "unauthenticated",
+            "enabled": true, "future_backend_config": true
+        }],
+        "backend_observations": [{"node_did":"did:alpha", "backend_id":"b", "catalogs":[], "last_probe":null, "probe_status":"ready"}]
     });
 
     let triggers: Vec<Trigger> = parse_projected_query_rows(
@@ -271,29 +259,26 @@ fn combined_snapshot_keeps_unknown_config_fields_rejected_and_observations_indep
     )
     .expect("trigger observation remains independently decodable")
     .0;
-    let backends: Vec<InferenceBackend> = parse_projected_query_rows(
-        &data,
-        "inference_backends",
-        INFERENCE_BACKEND_FIELDS,
-        INFERENCE_BACKEND_OBSERVATION_FIELDS,
-    )
-    .expect("row-level malformed config is skipped");
+    let backends: Vec<gents::documents::InferenceBackendMetadata> =
+        parse_projected_query_rows(&data, "inference_backends", INFERENCE_BACKEND_FIELDS, "")
+            .expect("row-level malformed config is skipped");
     let mut valid_backend_data = data.clone();
     valid_backend_data["inference_backends"][0]
         .as_object_mut()
         .expect("backend row")
         .remove("future_backend_config");
-    let valid_backends: Vec<InferenceBackend> = parse_projected_query_rows(
-        &valid_backend_data,
-        "inference_backends",
-        INFERENCE_BACKEND_FIELDS,
-        INFERENCE_BACKEND_OBSERVATION_FIELDS,
-    )
-    .expect("canonical backend fixture");
+    let valid_backends: Vec<gents::documents::InferenceBackendMetadata> =
+        parse_projected_query_rows(
+            &valid_backend_data,
+            "inference_backends",
+            INFERENCE_BACKEND_FIELDS,
+            "",
+        )
+        .expect("canonical backend fixture");
     let backend_observations: Vec<InferenceBackendObservation> =
         parse_observation_query_rows_with_source(
             &data,
-            "inference_backends",
+            "backend_observations",
             INFERENCE_BACKEND_OBSERVATION_FIELDS,
             None,
         )
@@ -351,17 +336,19 @@ fn full_and_scoped_snapshots_preserve_observation_owners() {
                 {
                     "node_did": "did:alpha", "backend_id": "shared-backend", "name": "alpha",
                     "provider_kind": "OpenAiCompatible", "openai_wire_api": "chat_completions",
-                    "endpoint": "http://alpha.invalid/v1", "auth": {"kind": "unauthenticated"},
-                    "enabled": true, "catalogs": [], "last_probe": "2026-10-14T00:00:00Z",
-                    "probe_status": alpha_probe
+                    "endpoint": "http://alpha.invalid/v1", "auth_kind": "unauthenticated",
+                    "enabled": true
                 },
                 {
                     "node_did": "did:beta", "backend_id": "shared-backend", "name": "beta",
                     "provider_kind": "OpenAiCompatible", "openai_wire_api": "chat_completions",
-                    "endpoint": "http://beta.invalid/v1", "auth": {"kind": "unauthenticated"},
-                    "enabled": true, "catalogs": [], "last_probe": "2026-10-14T00:00:00Z",
-                    "probe_status": "beta-probe"
+                    "endpoint": "http://beta.invalid/v1", "auth_kind": "unauthenticated",
+                    "enabled": true
                 }
+            ],
+            "backend_observations": [
+                {"node_did":"did:alpha", "backend_id":"shared-backend", "catalogs":[], "last_probe":"2026-10-14T00:00:00Z", "probe_status":alpha_probe},
+                {"node_did":"did:beta", "backend_id":"shared-backend", "catalogs":[], "last_probe":"2026-10-14T00:00:00Z", "probe_status":"beta-probe"}
             ]
         })
     };
@@ -453,14 +440,14 @@ fn malformed_default_backend_keeps_operator_config_authority_unresolved() {
         "inference_execution": [], "tasks": [], "schedules": [], "triggers": [],
         "skills": [], "compactions": [], "tool_service_registries": [],
         "event_sources": [], "agent_targets": [], "datastore_tool_surfaces": [],
-        "sessions": [], "requests": [],
+        "sessions": [], "requests": [], "goals": [], "mailbox_items": [],
         "inference_backends": [{
             "node_did": "did:alpha", "backend_id": "b", "name": "backend",
             "provider_kind": "OpenAiCompatible", "openai_wire_api": "chat_completions",
-            "endpoint": "http://localhost:8000/v1", "auth": {"kind": "unauthenticated"},
-            "enabled": true, "future_backend_config": true, "catalogs": [],
-            "last_probe": null, "probe_status": "ready"
-        }]
+            "endpoint": "http://localhost:8000/v1", "auth_kind": "unauthenticated",
+            "enabled": true, "future_backend_config": true
+        }],
+        "backend_observations": [{"node_did":"did:alpha", "backend_id":"b", "catalogs":[], "last_probe":null, "probe_status":"ready"}]
     });
 
     let partial = operator_config_store_from_data(&data, "did:alpha")
@@ -468,6 +455,15 @@ fn malformed_default_backend_keeps_operator_config_authority_unresolved() {
     assert!(partial.inference_backends.is_empty());
     assert_eq!(partial.backend_observations.len(), 1);
     assert!(!partial
+        .operator_config_authoritative_node_dids
+        .contains("did:alpha"));
+    let snapshot = super::super::snapshot_loaders::authenticated_node_snapshot_rows(
+        &data,
+        "did:alpha",
+        Vec::new(),
+    )
+    .expect("partial authenticated snapshot");
+    assert!(!snapshot
         .operator_config_authoritative_node_dids
         .contains("did:alpha"));
     let local = ClientStore::from_rows(ClientStoreRows {
@@ -487,6 +483,15 @@ fn malformed_default_backend_keeps_operator_config_authority_unresolved() {
         operator_config_store_from_data(&data, "did:alpha").expect("canonical config rows decode");
     assert_eq!(complete.inference_backends.len(), 1);
     assert!(complete
+        .operator_config_authoritative_node_dids
+        .contains("did:alpha"));
+    let snapshot = super::super::snapshot_loaders::authenticated_node_snapshot_rows(
+        &data,
+        "did:alpha",
+        Vec::new(),
+    )
+    .expect("complete authenticated snapshot");
+    assert!(snapshot
         .operator_config_authoritative_node_dids
         .contains("did:alpha"));
     let projected = local.overlay_node_operator_config("did:alpha", &complete);
@@ -731,7 +736,7 @@ fn node_runtime_queries_cannot_reintroduce_readiness_authority() {
         "process_state",
         "active_generation",
         "router_generation",
-        "default_agent_id",
+        "default_agent_did",
         "runnable_agent_count",
         "unavailable_agent_count",
     ] {
@@ -926,14 +931,14 @@ async fn load_node_scoped_snapshot_excludes_other_nodes() {
         alpha: create_AgentSession(input: {
             session_id: "alpha-1",
             node_did: "did:alpha",
-            agent_id: "default",
+            agent_did: "default",
             title: { text: "alpha", source: "user" },
             created_at: "2026-05-07T00:00:00Z"
         }) { _docID }
         beta: create_AgentSession(input: {
             session_id: "beta-1",
             node_did: "did:beta",
-            agent_id: "default",
+            agent_did: "default",
             title: { text: "beta", source: "user" },
             created_at: "2026-05-07T00:00:00Z"
         }) { _docID }

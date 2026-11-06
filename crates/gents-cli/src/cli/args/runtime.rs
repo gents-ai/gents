@@ -37,6 +37,11 @@ pub(crate) struct McpRegisterArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint to update instead of local home state")]
     pub(crate) graphql: Option<String>,
+    #[arg(
+        long,
+        help = "Target Node DID; defaults to the Node in the selected home"
+    )]
+    pub(crate) node_did: Option<String>,
     #[arg(value_name = "SERVICE")]
     pub(crate) service: String,
     #[arg(long, value_name = "URL", help = "Streamable HTTP MCP endpoint")]
@@ -60,7 +65,12 @@ pub(crate) struct McpProbeArgs {
         help = "GraphQL endpoint to read registry rows instead of local home state"
     )]
     pub(crate) graphql: Option<String>,
-    #[arg(long, action = ArgAction::SetTrue, help = "Probe every online MCP service")]
+    #[arg(
+        long,
+        help = "Target Node DID; defaults to the Node in the selected home"
+    )]
+    pub(crate) node_did: Option<String>,
+    #[arg(long, action = ArgAction::SetTrue, help = "Probe every enabled MCP service")]
     pub(crate) all: bool,
     #[arg(long, default_value = "5s", value_name = "DURATION")]
     pub(crate) timeout: String,
@@ -216,7 +226,7 @@ pub(crate) struct WriteArgs {
 pub(crate) enum DocumentCommand {
     #[command(
         about = "Create one document in a collection and print its document id",
-        long_about = "Create one document in a collection and print its document id.\n\nThis is an operator command: it refuses protected eval/optimization and canonical configuration collections. Writes to the home runtime are signed as the home node; an unrelated explicit endpoint uses anonymous access with a warning. The mutation input schema is validated before writing."
+        long_about = "Create one application document using the held User identity. Supply the locally authored schema for the collection; remote schema observations cannot authorize signing."
     )]
     Create(DocumentCreateArgs),
 }
@@ -227,6 +237,8 @@ pub(crate) struct DocumentCreateArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint for the live runtime")]
     pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Locally authored SDL for the application collection")]
+    pub(crate) schema: PathBuf,
     #[arg(
         value_name = "COLLECTION",
         help = "Collection (GraphQL type), e.g. Goal"

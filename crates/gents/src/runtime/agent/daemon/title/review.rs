@@ -98,8 +98,12 @@ where
                             return Ok(None);
                         }
                         let policy = task::load(&worker.node, &parent, &invocation.task).await?;
-                        let history = crate::session::load_sequenced_history_projection(
-                            &worker.node,
+                        let access = crate::store::config_client::ConfigAccess::local_as(
+                            worker.node.clone(),
+                            identity::Did::new(&parent.agent_did)?,
+                        );
+                        let history = crate::session::load_sequenced_history_projection_on(
+                            &access,
                             &parent.session_id,
                             &parent.node_did,
                             parent.requester_did.as_deref(),
@@ -125,6 +129,11 @@ where
                             "access review input is too large"
                         );
                         let node = worker.node.clone();
+                        let signer = worker
+                            .agent_config
+                            .agent_identity
+                            .managed_agent_signer()
+                            .context("access review requires a managed Agent signer")?;
                         let request =
                             crate::request::lifecycle::materialize::write_pending_auxiliary_request(
                                 &node,
@@ -135,6 +144,7 @@ where
                                     (chrono::Utc::now() + chrono::Duration::seconds(60))
                                         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                                 ),
+                                &signer,
                             )
                             .await?;
                         let result = worker

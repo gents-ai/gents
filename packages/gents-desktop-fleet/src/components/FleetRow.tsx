@@ -73,7 +73,7 @@ export function FleetRow({
     (session) => session.turnState && !isTerminalTurnState(session.turnState),
   ).length;
   const defaultAgent = deployment.agents.find(
-    (agent) => agent.agentId === deployment.node.defaultAgentId,
+    (agent) => agent.agentDid === deployment.node.defaultAgentDid,
   );
   const toolIcons = toolCeilingIcons(
     deployment.tools,

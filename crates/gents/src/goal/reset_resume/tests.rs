@@ -1,4 +1,4 @@
-use super::contract_tests::{at, connect_accounts_at, usage_limit};
+use super::contract_tests::{at, connect_accounts_at, disable_backend, usage_limit};
 use super::support::*;
 use super::*;
 use crate::request::lifecycle::queue::goal_continuation_identity;
@@ -62,7 +62,7 @@ impl Reset {
             panic!("not a usage limit: {failure}");
         };
         execute(
-            &self.f.node,
+            &self.f.agent_access(),
             &format!(
                 r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ status: "usage_limited", last_failure: "{}" }}) {{ _docID }} }}"#,
                 escape_graphql_string(&self.f.goal.doc_id),
@@ -86,10 +86,7 @@ impl Reset {
     }
 
     async fn goal(&self) -> GoalDocument {
-        load_canonical_goal(&self.f.node, self.f.identity.did(), SESSION)
-            .await
-            .unwrap()
-            .unwrap()
+        self.f.current_goal().await
     }
 
     async fn resume(&self, now: i64) -> Option<GoalResumeReceipt> {
@@ -97,9 +94,15 @@ impl Reset {
     }
 
     async fn resume_with(&self, goal: &GoalDocument, now: i64) -> Option<GoalResumeReceipt> {
-        resume_at_reset(&self.f.node, self.f.identity.as_ref(), goal, at(now))
-            .await
-            .unwrap()
+        resume_at_reset(
+            &self.f.node,
+            self.f.identity.as_ref(),
+            self.f.agent.as_ref(),
+            goal,
+            at(now),
+        )
+        .await
+        .unwrap()
     }
 
     async fn waits(&self) {
@@ -214,6 +217,17 @@ async fn waits_after_the_account_was_disabled() {
 #[tokio::test]
 async fn waits_after_the_account_was_removed() {
     let reset = Reset::new("inference", Some(T)).await;
+    let admin = ConfigAccess::local_as(
+        reset.f.node.clone(),
+        ::identity::Did::new(reset.f.identity.did()).unwrap(),
+    );
+    admin
+        .grant_node_permission(
+            &::identity::Did::new(reset.f.user.did()).unwrap(),
+            crate::store::config_client::NodePermission::DocumentDelete,
+        )
+        .await
+        .unwrap();
     let (did, credential) = (reset.f.identity.did(), reset.accounts.a_credential.as_str());
     reset
         .accounts
@@ -231,15 +245,7 @@ async fn waits_after_the_account_was_removed() {
 #[tokio::test]
 async fn waits_after_the_backend_was_disabled() {
     let reset = Reset::new("inference", Some(T)).await;
-    execute(
-        &reset.f.node,
-        &format!(
-            r#"mutation {{ update_InferenceBackend(filter: {{ node_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}, input: {{ enabled: false }}) {{ _docID }} }}"#,
-            escape_graphql_string(reset.f.identity.did()),
-            escape_graphql_string(&reset.accounts.a)
-        ),
-    )
-    .await;
+    disable_backend(&reset.f, &reset.accounts.a).await;
 
     assert!(reset.resume(T).await.is_none());
     assert_eq!(reset.f.goal_status().await, "usage_limited");

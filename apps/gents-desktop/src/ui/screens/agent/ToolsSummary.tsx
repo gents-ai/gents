@@ -71,17 +71,17 @@ export function ToolsUsedBy({
     <CompactSummary label="Used by">
       {agents.length ? (
         <>
-          <AgentMarks deployment={deployment} agentIds={agents.map((a) => a.agentId)} />
+          <AgentMarks deployment={deployment} agentIds={agents.map((a) => a.agentDid)} />
           <span className="min-w-0 truncate">
             {agents.map((a, i) => (
-              <span key={a.agentId}>
+              <span key={a.agentDid}>
                 {i > 0 && ", "}
                 <a
                   href={href({
                     name: "agent",
                     nodeDid: deployment.nodeDid,
                     section: "agents",
-                    item: a.agentId,
+                    item: a.agentDid,
                   })}
                   className="underline-offset-2 hover:underline"
                 >

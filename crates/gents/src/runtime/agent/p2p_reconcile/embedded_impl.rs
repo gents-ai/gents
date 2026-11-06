@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use defra_p2p_adapter::{P2PError, P2PResult, P2pDocumentRequest};
 use tokio::time::timeout;
 
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node as EmbeddedNode;
 
 use super::templates::{live_filter_string_eq, to_replication_filters, PairingFilters};
 use super::{
@@ -33,6 +33,22 @@ impl EmbeddedRemoteP2pAdmin {
 
     pub fn with_timeout(node: Arc<EmbeddedNode>, timeout: Duration) -> Self {
         Self { node, timeout }
+    }
+
+    fn require_protocol_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()> {
+        if collections.is_empty() {
+            return Err(RemoteP2pAdminError::LocalError(
+                "replication requires explicit discovery or enrollment collections".into(),
+            ));
+        }
+        for token in collections {
+            let name = resolve_embedded_collection_name(&self.node, token)?
+                .unwrap_or_else(|| token.clone());
+            if !gents_protocol::schemas::is_replicated_protocol_collection(&name) {
+                return Err(RemoteP2pAdminError::RuntimeLocalCollection(name));
+            }
+        }
+        Ok(())
     }
 
     fn p2p(&self) -> RemoteP2pAdminResult<Arc<dyn defra_p2p_adapter::P2POperations>> {
@@ -215,6 +231,7 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
         collections: &[String],
         filters: &PairingFilters,
     ) -> RemoteP2pAdminResult<()> {
+        self.require_protocol_collections(collections)?;
         let p2p = self.p2p()?;
         let addr = addresses.first().map(String::as_str);
         let defra_filters =
@@ -254,6 +271,7 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
     }
 
     async fn add_p2p_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()> {
+        self.require_protocol_collections(collections)?;
         let p2p = self.p2p()?;
         self.run("add_collections", p2p.add_collections(collections.to_vec()))
             .await
@@ -274,10 +292,11 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
         Ok(documents.into_iter().map(|d| d.doc_id).collect())
     }
 
-    async fn add_p2p_documents(&self, doc_ids: &[String]) -> RemoteP2pAdminResult<()> {
-        let p2p = self.p2p()?;
-        let docs = document_requests(doc_ids);
-        self.run("add_documents", p2p.add_documents(docs)).await
+    async fn add_p2p_documents(&self, _doc_ids: &[String]) -> RemoteP2pAdminResult<()> {
+        Err(RemoteP2pAdminError::LocalError(
+            "document subscriptions require an explicit protocol collection; use sync_documents"
+                .into(),
+        ))
     }
 
     async fn delete_p2p_documents(&self, doc_ids: &[String]) -> RemoteP2pAdminResult<()> {
@@ -293,6 +312,7 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
         doc_ids: &[String],
         timeout_override: Option<Duration>,
     ) -> RemoteP2pAdminResult<()> {
+        self.require_protocol_collections(&[collection_name.to_owned()])?;
         let p2p = self.p2p()?;
         let within = timeout_override.unwrap_or(self.timeout);
         self.run_within(
@@ -322,6 +342,7 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
         collection_id: &str,
         timeout_override: Option<Duration>,
     ) -> RemoteP2pAdminResult<()> {
+        self.require_protocol_collections(&[collection_id.to_owned()])?;
         let p2p = self.p2p()?;
         self.run_within(
             "sync_branchable_collection",
@@ -343,6 +364,7 @@ fn document_requests(doc_ids: &[String]) -> Vec<P2pDocumentRequest> {
         .collect()
 }
 
+#[cfg(test)]
 pub(super) async fn push_documents_to_peer(
     node: &Arc<EmbeddedNode>,
     peer_id: &str,
@@ -350,6 +372,12 @@ pub(super) async fn push_documents_to_peer(
 ) -> anyhow::Result<()> {
     use anyhow::Context as _;
 
+    let admin = EmbeddedRemoteP2pAdmin::new(node.clone());
+    let collections = documents
+        .iter()
+        .map(|document| document.collection.clone())
+        .collect::<Vec<_>>();
+    admin.require_protocol_collections(&collections)?;
     let p2p = crate::store::identity::node_p2p(node)
         .context("embedded node has no P2P transport for hydration delivery")?;
     p2p.push_documents_to_peer(peer_id, documents)
@@ -360,13 +388,13 @@ pub(super) async fn push_documents_to_peer(
 fn map_p2p_error(operation: &'static str, error: P2PError) -> RemoteP2pAdminError {
     match error {
         P2PError::NotFound(message) => RemoteP2pAdminError::RemoteNotFound(message),
+        P2PError::Unauthorized(_) => RemoteP2pAdminError::RemoteUnauthorized,
         P2PError::Transport(message) | P2PError::Internal(message) => {
             RemoteP2pAdminError::RpcError(format!("{operation}: {message}"))
         }
         P2PError::InvalidInput(message) | P2PError::Unsupported(message) => {
             RemoteP2pAdminError::LocalError(format!("{operation}: {message}"))
         }
-        _ => RemoteP2pAdminError::RpcError(format!("{operation}: {error}")),
     }
 }
 

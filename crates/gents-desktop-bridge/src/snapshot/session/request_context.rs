@@ -488,6 +488,27 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn context_history_propagates_explicit_database_denial() {
+        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "errors": [{"message":"opaque", "extensions":{"code":"PERMISSION_DENIED"}}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let access = ConfigAccess::graphql(server.uri());
+        let mut items = Vec::new();
+        let result =
+            attach_context_history_rows(&access, "session", "node", None, &[], &mut items).await;
+        let Err(error) = result else {
+            panic!("explicit denial must be returned");
+        };
+        assert!(error.permission_denied());
+    }
+
+    #[tokio::test]
     async fn context_details_reject_foreign_physical_requests_before_reading_capture() {
         use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
         use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
@@ -860,7 +881,8 @@ mod tests {
             Some("requester"),
             &mut markers,
         )
-        .await;
+        .await
+        .expect("marker summaries");
         let summaries = markers
             .iter()
             .map(|(_, item)| match item {

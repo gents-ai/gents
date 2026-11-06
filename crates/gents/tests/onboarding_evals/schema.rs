@@ -89,12 +89,7 @@ async fn admiral_search_fixture_grades_native_writes_and_ranked_results() {
     ))
     .unwrap();
     let registry = CheckRegistry::builtin();
-    let node = Arc::new(
-        gents::defra_node::EmbeddedNode::builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node = Arc::new(gents::defra_node::Node::builder().build().await.unwrap());
     let access = ConfigAccess::local(node.clone());
     let configure = &case["stages"][0];
     let schema_params = &configure["checks"][0]["params"];
@@ -252,5 +247,5 @@ async fn admiral_search_fixture_grades_native_writes_and_ranked_results() {
     assert_eq!(grader.evaluate(params, &evidence).score_bp, Some(0));
     evidence.tool_calls.clear();
     assert_eq!(grader.evaluate(params, &evidence).score_bp, Some(0));
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

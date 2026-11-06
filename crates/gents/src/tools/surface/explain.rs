@@ -11,8 +11,6 @@ use crate::tools::native::{
 
 use super::{AgentToolSurfaceConfig, RuntimeToolAvailability, ToolPolicySurface, ToolSurface};
 
-const MEMORY_TOOL_NAME: &str = "memory";
-
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ToolSurfaceExplanation {
@@ -68,7 +66,6 @@ impl ToolSurfaceExplanation {
                 .iter()
                 .map(|tool| tool.name().to_string()),
         );
-        explain_memory(config, &mut builder);
         explain_builtin_reads(config, surface, &mut builder);
         builder.include_many(
             "write_tools",
@@ -115,13 +112,13 @@ impl AgentToolSurfaceConfig {
         &self,
         mcp_services_online: bool,
         own_node_did: &str,
-        active_agent_ids: &RapidHashSet<String>,
+        active_agent_dids: &RapidHashSet<String>,
     ) -> ToolSurfaceExplanation {
         let availability = RuntimeToolAvailability::for_mcp_presence(mcp_services_online);
         let surface = self.resolve_with_available_agent_targets_for_runtime_availability(
             availability.clone(),
             own_node_did,
-            active_agent_ids,
+            active_agent_dids,
         );
         ToolSurfaceExplanation::from_resolved_with_runtime(self, &availability, &surface)
     }
@@ -130,11 +127,11 @@ impl AgentToolSurfaceConfig {
         &self,
         availability: RuntimeToolAvailability,
         own_node_did: &str,
-        active_agent_ids: &RapidHashSet<String>,
+        active_agent_dids: &RapidHashSet<String>,
     ) -> ToolSurface {
         let mut agent_tools = self.agent_tools().clone();
         agent_tools.targets.retain(|target| {
-            target.target_node_did != own_node_did || active_agent_ids.contains(&target.agent_id)
+            target.target_node_did != own_node_did || active_agent_dids.contains(&target.agent_did)
         });
         self.resolve_with_agent_tools_for_runtime_availability(availability, agent_tools)
     }
@@ -143,12 +140,12 @@ impl AgentToolSurfaceConfig {
         &self,
         availability: RuntimeToolAvailability,
         own_node_did: &str,
-        active_agent_ids: &RapidHashSet<String>,
+        active_agent_dids: &RapidHashSet<String>,
     ) -> ToolSurfaceExplanation {
         let surface = self.resolve_with_available_agent_targets_for_runtime_availability(
             availability.clone(),
             own_node_did,
-            active_agent_ids,
+            active_agent_dids,
         );
         ToolSurfaceExplanation::from_resolved_with_runtime(self, &availability, &surface)
     }
@@ -363,30 +360,6 @@ fn explain_background(
     }
 }
 
-fn explain_memory(config: &AgentToolSurfaceConfig, builder: &mut ExplanationBuilder) {
-    if !config.memory_requested() {
-        builder.exclude("built_in_memory", MEMORY_TOOL_NAME);
-        return;
-    }
-
-    #[cfg(feature = "agent-memory")]
-    {
-        builder.include_many(
-            "built_in_memory",
-            [crate::tools::native::MEMORY_TOOL_NAME.to_string()],
-        );
-    }
-
-    #[cfg(not(feature = "agent-memory"))]
-    {
-        builder.unavailable("built_in_memory", MEMORY_TOOL_NAME);
-        builder.warn(
-            "memory_requested_compiled_out",
-            "enable_memory is true, but this binary was built without the agent-memory feature.",
-        );
-    }
-}
-
 fn explain_builtin_reads(
     config: &AgentToolSurfaceConfig,
     surface: &ToolSurface,
@@ -547,14 +520,6 @@ fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {
     summary.insert(
         "skills".to_string(),
         vec![format!("enabled:{}", policy.skills)],
-    );
-    summary.insert(
-        "built_in_memory".to_string(),
-        policy
-            .memory
-            .then_some(MEMORY_TOOL_NAME.to_string())
-            .into_iter()
-            .collect(),
     );
     summary.insert(
         "write_tools".to_string(),

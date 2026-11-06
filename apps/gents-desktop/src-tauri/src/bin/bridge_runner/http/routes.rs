@@ -146,7 +146,16 @@ pub(super) async fn handle_request(
         }
         ("GET", "/desktop/packs/installed") => {
             let home = fixture.node_home().to_path_buf();
-            json(run_pack(runtime, move || packs::installed(home, None)).await?)
+            let node_did = fixture.node_did().to_owned();
+            let access = fixture
+                .desktop_core()
+                .local_home_operator_access(&node_did, &home)?;
+            json(
+                run_pack(runtime, move || {
+                    packs::installed_with_access(home, None, access, node_did)
+                })
+                .await?,
+            )
         }
         ("POST", "/desktop/packs/search") => {
             let query = decode::<PackSearchRequest>(&request.body, "decoding pack search")?;
@@ -250,24 +259,24 @@ pub(super) async fn handle_request(
                 .as_ref()
                 .and_then(|client| client.deployments.first())
                 .ok_or_else(|| anyhow!("live bridge runner has no deployment"))?;
-            let server = fixture.remote_core();
-            let identity: Arc<dyn gents::NodeIdentity> = Arc::new(server.node_identity().clone());
+            let node = fixture.runtime_node()?;
+            let identity = Arc::clone(fixture.runtime_identity()?);
             let network = gents_desktop_bridge::enrollment::ensure_enrollment_network(
-                &server.node_arc(),
+                node,
                 identity.as_ref(),
                 fixture.deployment_label(),
             )
             .await?;
             let issuer = gents_desktop_bridge::enrollment::EnrollmentOfferIssuer::new(
                 identity,
-                Arc::clone(server.p2p()),
+                fixture.runtime_p2p()?,
                 network.network_id,
                 fixture.node_did().to_string(),
                 "client".to_string(),
             );
             let enrollment = issuer.mint().await?;
             let schema = gents::runtime::agent::p2p_reconcile::read_client_replicated_schema(
-                server.node_arc(),
+                Arc::clone(node),
             )
             .await?;
             Ok(HttpResponse::json_ok(
@@ -389,8 +398,7 @@ pub(super) async fn handle_request(
                 .await?
                 .context("desktop has no shareable address for route drift")?;
             fixture
-                .remote_core()
-                .p2p()
+                .runtime_p2p()?
                 .add_replicator(
                     vec!["Network".to_string()],
                     Some(&desktop_address),
@@ -399,12 +407,12 @@ pub(super) async fn handle_request(
                     None,
                 )
                 .await?;
-            let replicators = fixture.remote_core().p2p().get_replicators().await?;
+            let replicators = fixture.runtime_p2p()?.get_replicators().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
         }
         ("GET", "/desktop/test-fixture/remote-replicators") => {
             require_live_fixture()?;
-            let replicators = fixture.remote_core().p2p().get_replicators().await?;
+            let replicators = fixture.runtime_p2p()?.get_replicators().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
         }
         ("POST", "/desktop/peer/status") => {
@@ -485,7 +493,7 @@ pub(super) async fn handle_request(
             .await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&delta)?))
         }
-        ("POST", "/desktop/session/hydration/retry") => {
+        ("POST", "/desktop/session/reload") => {
             let request = serde_json::from_str::<SessionSnapshotRequest>(&request.body)
                 .context("decoding session hydration retry request")?;
             let node_did = request.node_did.or_else(|| {
@@ -500,10 +508,10 @@ pub(super) async fn handle_request(
             });
             let node_did = node_did
                 .as_deref()
-                .ok_or_else(|| anyhow!("session hydration retry requires a node"))?;
+                .ok_or_else(|| anyhow!("session reload requires a node"))?;
             fixture
                 .desktop_core()
-                .retry_session_hydration(&request.session_id, node_did)
+                .reload_session(&request.session_id, node_did)
                 .await?;
             Ok(HttpResponse::json_ok("null".to_string()))
         }
@@ -527,8 +535,9 @@ pub(super) async fn handle_request(
                 .request_id
                 .as_deref()
                 .ok_or_else(|| anyhow!("requestId is required"))?;
+            let access = fixture.desktop_core().operator_access(fixture.node_did())?;
             let result = retained_provider_reasoning(
-                fixture.remote_core().as_ref(),
+                &access,
                 fixture.node_did(),
                 &request.session_id,
                 request_id,
@@ -541,8 +550,12 @@ pub(super) async fn handle_request(
                 &request.body,
                 "decoding operations snapshot request",
             )?;
-            let snapshot =
-                operations_snapshot_response(Arc::clone(fixture.desktop_core()), request).await?;
+            let node_did = request
+                .node_did
+                .as_deref()
+                .unwrap_or_else(|| fixture.node_did());
+            let access = fixture.desktop_core().operator_access(node_did)?;
+            let snapshot = operations_snapshot_response(&access, request).await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
         }
         ("POST", "/desktop/session-provenance") => {
@@ -670,8 +683,7 @@ pub(super) async fn handle_request(
             save_agent_config(fixture.desktop_core().as_ref(), request).await?;
             snapshot_response(fixture).await
         }
-        // Test-only: write on the remote core so the desktop-snapshot read
-        // exercises the real P2P propagation path (cross-node witness).
+        // Test-only: write to the runtime as the desktop User for the propagation witness.
         ("POST", "/desktop/test-fixture/remote-save-agent") => {
             if std::env::var("GENTS_TAURI_LIVE").as_deref() != Ok("1") {
                 return Ok(HttpResponse::json_error(
@@ -681,8 +693,8 @@ pub(super) async fn handle_request(
             }
             let req =
                 decode::<AgentSaveRequest>(&request.body, "decoding remote agent save request")?;
-            tracing::info!(agent_id = %req.document.agent_id, "remote-save-agent: writing to remote core");
-            save_agent_config(fixture.remote_core().as_ref(), req).await?;
+            tracing::info!(agent_did = %req.document.agent_did, "remote-save-agent: writing to runtime as desktop user");
+            save_agent_config(fixture.desktop_core().as_ref(), req).await?;
             Ok(HttpResponse::json_ok(
                 serde_json::json!({ "ok": true }).to_string(),
             ))
@@ -706,25 +718,25 @@ pub(super) async fn handle_request(
         // the same wire shapes as a deployed runtime's HTTP client.
         ("GET", "/p2p/info") => {
             require_live_fixture()?;
-            let addresses = fixture.remote_core().p2p().listen_addresses().await?;
+            let addresses = fixture.runtime_p2p()?.listen_addresses().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&addresses)?))
         }
         ("GET", "/p2p/active-peers") => {
             require_live_fixture()?;
-            let peers = fixture.remote_core().p2p().connected_peers().await?;
+            let peers = fixture.runtime_p2p()?.connected_peers().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&peers)?))
         }
         ("POST", "/p2p/connect") => {
             require_live_fixture()?;
             let addresses = decode::<Vec<String>>(&request.body, "decoding P2P connect")?;
             for address in addresses {
-                fixture.remote_core().p2p().connect_peer(&address).await?;
+                fixture.runtime_p2p()?.connect_peer(&address).await?;
             }
             Ok(HttpResponse::json_ok("{}".to_string()))
         }
         ("GET", "/p2p/replicators") => {
             require_live_fixture()?;
-            let replicators = fixture.remote_core().p2p().get_replicators().await?;
+            let replicators = fixture.runtime_p2p()?.get_replicators().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
         }
         ("POST", "/p2p/replicators") => {
@@ -734,8 +746,7 @@ pub(super) async fn handle_request(
             let filters = serde_json::from_value(request.filters)
                 .context("decoding P2P replication filters")?;
             fixture
-                .remote_core()
-                .p2p()
+                .runtime_p2p()?
                 .add_replicator(
                     request.collections,
                     request.addresses.first().map(String::as_str),
@@ -753,26 +764,21 @@ pub(super) async fn handle_request(
                 "decoding P2P replicator teardown",
             )?;
             fixture
-                .remote_core()
-                .p2p()
+                .runtime_p2p()?
                 .remove_replicator(request.collections, Some(&request.id))
                 .await?;
             Ok(HttpResponse::json_ok("{}".to_string()))
         }
         ("GET", "/p2p/collections") => {
             require_live_fixture()?;
-            let collections = fixture.remote_core().p2p().get_collections().await?;
+            let collections = fixture.runtime_p2p()?.get_collections().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&collections)?))
         }
         ("POST", "/p2p/collections") => {
             require_live_fixture()?;
             let collections =
                 decode::<Vec<String>>(&request.body, "decoding P2P collection install")?;
-            fixture
-                .remote_core()
-                .p2p()
-                .add_collections(collections)
-                .await?;
+            fixture.runtime_p2p()?.add_collections(collections).await?;
             Ok(HttpResponse::json_ok("{}".to_string()))
         }
         ("DELETE", "/p2p/collections") => {
@@ -780,8 +786,7 @@ pub(super) async fn handle_request(
             let collections =
                 decode::<Vec<String>>(&request.body, "decoding P2P collection teardown")?;
             fixture
-                .remote_core()
-                .p2p()
+                .runtime_p2p()?
                 .remove_collections(collections)
                 .await?;
             Ok(HttpResponse::json_ok("{}".to_string()))
@@ -842,7 +847,7 @@ pub(super) async fn handle_request(
                 "decoding component apply request",
             )?;
             gents_desktop_bridge::commands::apply_config_components(
-                fixture.remote_core().as_ref(),
+                fixture.desktop_core().as_ref(),
                 request,
             )
             .await?;
@@ -854,7 +859,7 @@ pub(super) async fn handle_request(
                 "decoding component patch request",
             )?;
             gents_desktop_bridge::commands::patch_config_components(
-                fixture.remote_core().as_ref(),
+                fixture.desktop_core().as_ref(),
                 request,
             )
             .await?;

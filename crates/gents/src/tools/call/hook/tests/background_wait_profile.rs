@@ -29,7 +29,7 @@ async fn background_wait_read_profile() {
             request_id,
             session_id,
             node_did: db.node_identity.did().to_owned(),
-            requester_did: Some(db.node_identity.did().to_owned()),
+            requester_did: hook.active_requester_did().await,
         };
         let collections =
             crate::collection_ids(&db.node, ["AgentToolCall", "AgentRequest"]).unwrap();

@@ -2,42 +2,92 @@ use super::{
     admission_fixture::{published_admission, PublishedAdmission, PublishedAdmissionOptions},
     AwaitMode, ToolCallLifecycle,
 };
-use crate::goal::{load_canonical_goal, set_goal, GoalStatus};
+use crate::goal::{load_canonical_goal_in_txn, set_goal_from_access, GoalStatus};
 use crate::lean_vocab_test::{
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, LeanR6BackgroundingCase,
 };
+use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
 use anyhow::Context;
-use defra_node::EmbeddedNode;
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
 use serde_json::{json, Value};
 
-async fn rows(node: &EmbeddedNode, query: &str, field: &str) -> Vec<Value> {
-    let response = node.execute(query).await;
-    assert!(!response.has_errors(), "{field}: {:?}", response.errors);
-    response.data.expect("query data")[field]
-        .as_array()
-        .expect("rows")
-        .clone()
+async fn rows(access: &ConfigAccess, query: &str, field: &str) -> Vec<Value> {
+    let response = access.execute(query).await.expect("read fixture rows");
+    response["data"][field].as_array().expect("rows").clone()
 }
 
-async fn update(node: &EmbeddedNode, collection: &str, doc_id: &str, fields: &str) {
-    let response = node.execute(&format!(
+async fn update(access: &ConfigAccess, collection: &str, doc_id: &str, fields: &str) {
+    let response = access.write("test.completion.update", &format!(
         r#"mutation {{ update_{collection}(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#,
         escape_graphql_string(doc_id),
-    )).await;
-    assert!(
-        !response.has_errors(),
-        "{collection}: {:?}",
-        response.errors
-    );
+    )).await.expect("update fixture row");
     assert_eq!(
-        response.data.unwrap()[&format!("update_{collection}")]
+        response["data"][&format!("update_{collection}")]
             .as_array()
             .unwrap()
             .len(),
         1
     );
+}
+
+async fn canonical_goal(
+    access: &ConfigAccess,
+    node_did: &str,
+    session: &str,
+) -> Option<crate::goal::GoalDocument> {
+    access
+        .transact_readonly("test.completion.goal", |txn| {
+            Box::pin(async move { load_canonical_goal_in_txn(txn, node_did, session).await })
+        })
+        .await
+        .expect("load modeled Goal under held actor")
+}
+
+async fn create_failed_wake(admission: &PublishedAdmission, mutation: &str) {
+    let access = admission.tool.access().unwrap();
+    let node_did = &admission.node_did;
+    let session_id = &admission.tool.session_id;
+    let agent_did = admission.tool.actor().as_str();
+    let requester_did = admission.requester_identity.did();
+    access
+        .transact_write("test.completion.failed_wake", |txn| {
+            Box::pin(async move {
+                let session = crate::session::load_agent_session_row_in_txn(
+                    txn,
+                    node_did,
+                    session_id,
+                    Some(requester_did),
+                )
+                .await?
+                .context("fixture session unavailable")?;
+                anyhow::ensure!(
+                    session.session.agent_did == agent_did,
+                    "fixture Agent mismatch"
+                );
+                let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Agent,
+                    node_did,
+                    agent_did,
+                )
+                .await?
+                .context("fixture Agent unavailable")?;
+                let response = txn.execute(mutation).await?;
+                let request_doc = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                crate::request::lifecycle::stage_request_relationships_in_txn(
+                    txn,
+                    &request_doc,
+                    &agent_doc,
+                    &session.doc_id,
+                    agent_did,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .expect("publish failed wake with Agent relationships");
 }
 
 fn goal_status(case: &LeanR6BackgroundingCase) -> Option<GoalStatus> {
@@ -72,7 +122,7 @@ async fn admitted_parent(case: &LeanR6BackgroundingCase, branch: &str) -> Publis
     .expect("publish accepted background invocation on claimed request");
     let parent_doc = admission.tool.request_doc_id().unwrap();
     update(
-        &admission.node,
+        &admission.tool.access().unwrap(),
         "AgentRequest",
         parent_doc,
         r#"lifecycle_state: "completed""#,
@@ -80,13 +130,14 @@ async fn admitted_parent(case: &LeanR6BackgroundingCase, branch: &str) -> Publis
     .await;
     let session = admission.tool.session_id.as_str();
     if let Some(status) = goal_status(case) {
-        set_goal(
-            &admission.node,
+        set_goal_from_access(
+            &admission.tool.access().unwrap(),
             &admission.node_did,
             session,
             Some("One continuation owner"),
             Some(status),
             Some(Some(10)),
+            None,
         )
         .await
         .expect("persist modeled Goal state");
@@ -99,15 +150,16 @@ async fn notification_texts(admission: &PublishedAdmission) -> Vec<(Value, Strin
         r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID request_doc_id role publication }} }}"#,
         escape_graphql_string(&admission.tool.session_id)
     );
-    let headers = rows(&admission.node, &query, "AgentMessage").await;
+    let response = admission.client.execute(&query).await.unwrap();
+    let headers = response["data"]["AgentMessage"].as_array().unwrap().clone();
     let mut notifications = Vec::new();
     for header in headers {
         let doc_id = header["_docID"].as_str().unwrap();
-        let (_, native) = crate::session::load_canonical_message_from_node(
-            &admission.node,
+        let (_, native) = crate::session::load_canonical_message(
+            &admission.client,
             doc_id,
             &admission.node_did,
-            Some(&admission.node_did),
+            Some(admission.requester_identity.did()),
         )
         .await
         .expect("reconstruct exact canonical header");
@@ -127,14 +179,28 @@ async fn notification_texts(admission: &PublishedAdmission) -> Vec<(Value, Strin
     notifications
 }
 
+fn recovery_identities(
+    admission: &PublishedAdmission,
+) -> Vec<std::sync::Arc<dyn crate::store::identity::NodeIdentity>> {
+    vec![std::sync::Arc::new(
+        admission
+            .tool
+            .access()
+            .unwrap()
+            .managed_agent_signer()
+            .unwrap(),
+    )]
+}
+
 async fn drive_notification(case: &LeanR6BackgroundingCase) {
     let mut admission = admitted_parent(case, "notification").await;
     let node = &admission.node;
+    let access = admission.tool.access().unwrap();
     let did = admission.node_did.as_str();
     let session = admission.tool.session_id.clone();
     let parent_doc = admission.tool.request_doc_id().unwrap().to_owned();
     let parent_row = rows(
-        node,
+        &access,
         &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id }} }}"#,
             escape_graphql_string(&parent_doc)
@@ -145,26 +211,34 @@ async fn drive_notification(case: &LeanR6BackgroundingCase) {
     assert_eq!(parent_row.len(), 1);
     let parent = parent_row[0]["request_id"].as_str().unwrap().to_owned();
     let tool_doc = admission.tool.doc_id().unwrap().to_owned();
-    let before = load_canonical_goal(node, did, &session).await.unwrap();
+    let before = canonical_goal(&access, did, &session).await;
     assert!(admission
         .tool
         .complete_owned("durable native output", None)
         .await
         .unwrap());
-    let pending = rows(node, &format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID status lifecycle_state request_doc_id }} }}"#,
+    let pending = rows(&access, &format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID status lifecycle_state request_doc_id }} }}"#,
         escape_graphql_string(&tool_doc)), "AgentToolCall").await;
     assert_eq!(pending.len(), 1, "{}", case.name);
     assert_eq!(pending[0]["status"], "completionPending", "{}", case.name);
     assert_eq!(pending[0]["lifecycle_state"], "completed", "{}", case.name);
     assert_eq!(pending[0]["request_doc_id"], parent_doc, "{}", case.name);
 
-    let first = ToolCallLifecycle::reconcile_background_completion_side_effects(node, did)
-        .await
-        .expect("redrive durable native completion side effects");
+    let first = ToolCallLifecycle::reconcile_background_completion_side_effects(
+        node,
+        did,
+        &recovery_identities(&admission),
+    )
+    .await
+    .expect("redrive durable native completion side effects");
     assert_eq!(first.side_effects_converged, 1, "{}: {first:?}", case.name);
-    let second = ToolCallLifecycle::reconcile_background_completion_side_effects(node, did)
-        .await
-        .expect("replay completion side effects");
+    let second = ToolCallLifecycle::reconcile_background_completion_side_effects(
+        node,
+        did,
+        &recovery_identities(&admission),
+    )
+    .await
+    .expect("replay completion side effects");
     assert!(second.is_noop(), "{}: {second:?}", case.name);
 
     let notifications = notification_texts(&admission).await;
@@ -185,7 +259,7 @@ async fn drive_notification(case: &LeanR6BackgroundingCase) {
         "{}",
         case.name
     );
-    let requests = rows(node, &format!(r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID request_id lifecycle_state execution_origin input }} }}"#,
+    let requests = rows(&access, &format!(r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID request_id lifecycle_state execution_origin input }} }}"#,
         escape_graphql_string(&session)), "AgentRequest").await;
     assert_eq!(
         requests.len(),
@@ -223,7 +297,7 @@ async fn drive_notification(case: &LeanR6BackgroundingCase) {
             case.name
         );
     }
-    let tool = rows(node, &format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID status lifecycle_state completion_notification_delivered_at }} }}"#,
+    let tool = rows(&access, &format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID status lifecycle_state completion_notification_delivered_at }} }}"#,
         escape_graphql_string(&tool_doc)), "AgentToolCall").await;
     assert_eq!(tool.len(), 1);
     assert_eq!(tool[0]["status"], "completed", "{}", case.name);
@@ -233,18 +307,22 @@ async fn drive_notification(case: &LeanR6BackgroundingCase) {
         "{}",
         case.name
     );
-    let after = load_canonical_goal(node, did, &session).await.unwrap();
+    let after = canonical_goal(&access, did, &session).await;
     assert_eq!(
         json!(before),
         json!(after),
         "{}: completion changed Goal",
         case.name
     );
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
-async fn seed_session_head(node: &EmbeddedNode, session: &str, request: &Value) {
+async fn seed_session_head(access: &ConfigAccess, session: &str, request: &Value) {
     let observation = gents_protocol::session::SessionObservation {
         reply_preview: None,
         last_activity_at: request["created_at"].as_str().unwrap().to_owned(),
@@ -258,19 +336,27 @@ async fn seed_session_head(node: &EmbeddedNode, session: &str, request: &Value) 
     let input =
         gents_protocol::graphql::graphql_input_literal(&json!({"observation": observation}))
             .unwrap();
-    let response = node.execute(&format!(r#"mutation {{ update_AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}, input: {input}) {{ _docID }} }}"#,
-        escape_graphql_string(session))).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    let response = access.write("test.completion.session_head", &format!(r#"mutation {{ update_AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}, input: {input}) {{ _docID }} }}"#,
+        escape_graphql_string(session))).await.expect("update session head");
+    assert_eq!(
+        response["data"]["update_AgentSession"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 async fn drive_redrive(case: &LeanR6BackgroundingCase) {
     let admission = admitted_parent(case, "redrive").await;
     let node = &admission.node;
+    let access = admission.tool.access().unwrap();
     let did = admission.node_did.as_str();
+    let agent_did = escape_graphql_string(admission.tool.actor().as_str());
     let session = admission.tool.session_id.as_str();
     let parent_doc = admission.tool.request_doc_id().unwrap();
     let parent_row = rows(
-        node,
+        &access,
         &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id }} }}"#,
             escape_graphql_string(parent_doc)
@@ -293,7 +379,7 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
         chrono::DateTime::from_timestamp(model.pre_execution_deadline.unwrap() as i64, 0)
             .unwrap()
             .to_rfc3339();
-    let before = load_canonical_goal(node, did, session).await.unwrap();
+    let before = canonical_goal(&access, did, session).await;
     let input = RequestInput {
         queue: Some(RequestQueue {
             delivery: Default::default(),
@@ -310,8 +396,9 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
     let input =
         gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(input).unwrap())
             .unwrap();
-    let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
-        request_id: "{}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_id: "general",
+    let mutation = format!(
+        r#"mutation {{ create_AgentRequest(input: {{
+        request_id: "{}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_did: "{agent_did}",
         session_id: "{}", content: "background input", input: {input},
         execution_origin: "scheduled", lifecycle_state: "failed",
         failure_reason: "backend admission failed", terminalized_at: "2026-07-15T00:00:00Z",
@@ -320,19 +407,28 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
         request_hop: {source_depth}, deadline: "{}",
         caused_by_parent_request_id: "{}", caused_by_parent_request_doc_id: "{}"
     }}) {{ _docID }} }}"#,
-        escape_graphql_string(&failed_wake), escape_graphql_string(did), escape_graphql_string(did),
-        escape_graphql_string(session), escape_graphql_string(&failed_wake),
-        escape_graphql_string(&source_deadline), escape_graphql_string(parent),
-        escape_graphql_string(parent_doc))).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let source = rows(node, &format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID request_id lifecycle_state created_at }} }}"#,
+        escape_graphql_string(&failed_wake),
+        escape_graphql_string(did),
+        escape_graphql_string(admission.requester_identity.did()),
+        escape_graphql_string(session),
+        escape_graphql_string(&failed_wake),
+        escape_graphql_string(&source_deadline),
+        escape_graphql_string(parent),
+        escape_graphql_string(parent_doc)
+    );
+    create_failed_wake(&admission, &mutation).await;
+    let source = rows(&access, &format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID request_id lifecycle_state created_at }} }}"#,
         escape_graphql_string(&failed_wake)), "AgentRequest").await;
     assert_eq!(source.len(), 1);
-    seed_session_head(node, session, &source[0]).await;
+    seed_session_head(&access, session, &source[0]).await;
 
-    let first = crate::RequestLifecycle::redrive_failed_background_wakeups(node, did)
-        .await
-        .unwrap();
+    let first = crate::RequestLifecycle::redrive_failed_background_wakeups_with_identities(
+        node,
+        did,
+        &recovery_identities(&admission),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         first.redriven > 0,
         case.redrive_allowed.unwrap(),
@@ -340,12 +436,16 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
         case.name
     );
     assert_eq!(first.failed, 0, "{}: {first:?}", case.name);
-    let second = crate::RequestLifecycle::redrive_failed_background_wakeups(node, did)
-        .await
-        .unwrap();
+    let second = crate::RequestLifecycle::redrive_failed_background_wakeups_with_identities(
+        node,
+        did,
+        &recovery_identities(&admission),
+    )
+    .await
+    .unwrap();
     assert_eq!(second.redriven, 0, "{}: replay added successor", case.name);
     let requests = rows(
-        node,
+        &access,
         &format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{
         _docID request_id retry_count retry_parent_request retry_parent_request_doc_id max_retries
@@ -397,14 +497,18 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
         assert!(successor["backend_id"].is_null(), "{}", case.name);
         assert!(successor["deadline"].is_null(), "{}", case.name);
     }
-    let after = load_canonical_goal(node, did, session).await.unwrap();
+    let after = canonical_goal(&access, did, session).await;
     assert_eq!(
         json!(before),
         json!(after),
         "{}: redrive changed Goal",
         case.name
     );
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -432,6 +536,164 @@ async fn generated_r6_completion_owner_cases_use_accepted_native_output() {
     }
 }
 
+#[tokio::test]
+async fn background_wake_is_visible_to_the_owning_user_and_selected_agent() {
+    use crate::store::config_client::{ConfigAccess, NodePermission};
+    use crate::store::identity::NodeIdentity;
+
+    let cases = lean_r6_backgrounding_cases();
+    let case = cases
+        .iter()
+        .find(|case| {
+            case.group == "completion_continuation_owner" && case.wake_created == Some(true)
+        })
+        .expect("modeled completion with a fresh wake");
+    let mut admission = admitted_parent(case, "user-visible-wake").await;
+    assert!(admission
+        .tool
+        .complete_owned("durable native output", None)
+        .await
+        .unwrap());
+    let recovered = ToolCallLifecycle::reconcile_background_completion_side_effects(
+        &admission.node,
+        &admission.node_did,
+        &recovery_identities(&admission),
+    )
+    .await
+    .unwrap();
+    assert_eq!(recovered.side_effects_converged, 1);
+    let replay = ToolCallLifecycle::reconcile_background_completion_side_effects(
+        &admission.node,
+        &admission.node_did,
+        &recovery_identities(&admission),
+    )
+    .await
+    .unwrap();
+    assert!(replay.is_noop());
+
+    let notifications = notification_texts(&admission).await;
+    assert_eq!(notifications.len(), 1);
+    let wake_doc = notifications[0].0["request_doc_id"].as_str().unwrap();
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID agent_did session_id }} }}"#,
+        escape_graphql_string(wake_doc)
+    );
+    let worker_access = admission.tool.access().unwrap();
+    for reader in [&admission.client, &worker_access] {
+        let rows = reader.execute(&query).await.unwrap();
+        let rows = rows["data"]["AgentRequest"].as_array().unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "the owning User and working Agent see the wake"
+        );
+        assert_eq!(rows[0]["_docID"], wake_doc);
+        assert_eq!(rows[0]["agent_did"], admission.tool.actor.as_str());
+        assert_eq!(rows[0]["session_id"], admission.tool.session_id);
+    }
+
+    let stranger = tokio::task::spawn_blocking(|| {
+        crate::support::fixtures::test_identity("unrelated-wake-user")
+    })
+    .await
+    .unwrap();
+    let user_did = identity::Did::new(admission.requester_identity.did()).unwrap();
+    let binding = crate::store::identity::provision_agent_identity_authorized(
+        &admission.node,
+        admission.runtime.as_ref(),
+        &user_did,
+    )
+    .await
+    .unwrap();
+    crate::test_support::install_test_agent_binding_with_access(
+        admission.runtime.did(),
+        "Unrelated agent",
+        &binding,
+        &admission.client,
+    )
+    .await;
+    let sibling =
+        crate::store::identity::resolve_agent_identity(admission.runtime.as_ref(), &binding)
+            .unwrap();
+    let admin = ConfigAccess::local_as(
+        admission.node.clone(),
+        identity::Did::new(&admission.node_did).unwrap(),
+    );
+    for did in [stranger.did(), sibling.did()] {
+        let did = identity::Did::new(did).unwrap();
+        for permission in [NodePermission::DocumentRead, NodePermission::CollectionGet] {
+            admin.grant_node_permission(&did, permission).await.unwrap();
+        }
+    }
+    let stranger_access = ConfigAccess::local_as(
+        admission.node.clone(),
+        identity::Did::new(stranger.did()).unwrap(),
+    );
+    let sibling_access = ConfigAccess::local_managed_agent(
+        admission.node.clone(),
+        identity::Did::new(sibling.did()).unwrap(),
+        sibling.as_ref(),
+    )
+    .unwrap();
+    for reader in [&stranger_access, &sibling_access] {
+        let rows = reader.execute(&query).await.unwrap();
+        assert!(rows["data"]["AgentRequest"].as_array().unwrap().is_empty());
+    }
+    let agent_did = admission.tool.actor.as_str();
+    let session_id = admission.tool.session_id.as_str();
+    let targets = admission
+        .client
+        .execute(&format!(
+            r#"{{
+        Agent(filter: {{agent_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}}
+        AgentSession(filter: {{session_id: {{_eq: "{}"}}}}, limit: 2) {{_docID}}
+    }}"#,
+            escape_graphql_string(agent_did),
+            escape_graphql_string(session_id)
+        ))
+        .await
+        .unwrap();
+    let agent_doc = targets["data"]["Agent"][0]["_docID"].as_str().unwrap();
+    let session_doc = targets["data"]["AgentSession"][0]["_docID"]
+        .as_str()
+        .unwrap();
+    admin
+        .grant_node_permission(
+            &identity::Did::new(agent_did).unwrap(),
+            NodePermission::DacRelationDelete,
+        )
+        .await
+        .unwrap();
+    worker_access
+        .delete_resource_relationship("AgentRequest", wake_doc, "parent", "agents", agent_doc)
+        .await
+        .unwrap();
+    worker_access
+        .delete_resource_relationship("AgentRequest", wake_doc, "session", "sessions", session_doc)
+        .await
+        .unwrap();
+    let hidden = admission.client.execute(&query).await.unwrap();
+    assert!(hidden["data"]["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let replay = ToolCallLifecycle::reconcile_background_completion_side_effects(
+        &admission.node,
+        &admission.node_did,
+        &recovery_identities(&admission),
+    )
+    .await
+    .unwrap();
+    assert!(replay.is_noop());
+    let hidden_after_replay = admission.client.execute(&query).await.unwrap();
+    assert!(hidden_after_replay["data"]["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    admission.node.shutdown().await.unwrap();
+    std::fs::remove_dir_all(admission.path).unwrap();
+}
+
 pub(crate) struct SelectedBackgroundWake {
     pub admission: PublishedAdmission,
     pub wake: crate::request::watcher::AgentRequest,
@@ -449,7 +711,8 @@ pub(crate) async fn selected_background_wake_with_successor(
     prepare_successor: bool,
 ) -> (SelectedBackgroundWake, Option<String>) {
     use super::admission_fixture::{
-        complete_child, publish_accepted_on_claimed_request, published_session_message_with_owner,
+        complete_child_managed_verified, publish_accepted_on_claimed_request,
+        published_session_message_with_owner,
     };
     use crate::request::lifecycle::{RequestTerminalOutcome, TerminalizeResult};
     use crate::request::watcher::{DefraWatcher, Watcher};
@@ -482,7 +745,6 @@ pub(crate) async fn selected_background_wake_with_successor(
     let node = &admission.node;
     let did = &admission.node_did;
     let session = admission.tool.session_id.clone();
-    crate::test_support::install_test_agent(node, did, "general").await;
 
     let mut wait = publish_accepted_on_claimed_request(
         node.clone(),
@@ -525,46 +787,60 @@ pub(crate) async fn selected_background_wake_with_successor(
         None
     };
     let wait_header = wait.accepted_header_doc_id().unwrap().to_owned();
-    complete_child(
+    complete_child_managed_verified(
         node,
         &message.caused_request_id,
         did,
         "durable native output",
+        &admission
+            .tool
+            .access()
+            .unwrap()
+            .managed_agent_signer()
+            .unwrap(),
+        admission.runtime.clone(),
     )
     .await;
     let settled =
-        crate::tools::background::completion::settle_running_session_message_rows(node, did)
-            .await
-            .unwrap();
+        crate::tools::background::completion::settle_running_session_message_rows_with_access(
+            node,
+            &admission.tool.access().unwrap(),
+            did,
+        )
+        .await
+        .unwrap();
     assert_eq!(settled, 1, "the caused request's terminal settles its row");
 
     let notifications = notification_texts(&admission).await;
     assert_eq!(notifications.len(), 1);
     let notification_id = notifications[0].0["_docID"].as_str().unwrap();
-    let (wait_record, wait_native) =
-        crate::session::load_canonical_message_from_node(node, &wait_header, did, Some(did))
-            .await
-            .unwrap();
-    let (notification_record, _) =
-        crate::session::load_canonical_message_from_node(node, notification_id, did, Some(did))
-            .await
-            .unwrap();
+    let (wait_record, wait_native) = crate::session::load_canonical_message(
+        &admission.client,
+        &wait_header,
+        did,
+        Some(admission.requester_identity.did()),
+    )
+    .await
+    .unwrap();
+    let (notification_record, _) = crate::session::load_canonical_message(
+        &admission.client,
+        notification_id,
+        did,
+        Some(admission.requester_identity.did()),
+    )
+    .await
+    .unwrap();
     assert!(matches!(wait_native, Message::Assistant { ref content, .. }
         if content.iter().any(|part| matches!(part, AssistantContent::ToolCall(call) if call.function.name == crate::tools::native::LIST_PROCESSES_TOOL_NAME))));
     assert!(wait_record.sequence < notification_record.sequence);
     assert!(notifications[0].1.contains("<tool-completion"));
     assert!(notifications[0].1.contains("durable native output"));
 
-    let requests = rows(
-        node,
-        &format!(
-            r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ {} lifecycle_state }} }}"#,
-            escape_graphql_string(&session),
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
-        ),
-        "AgentRequest",
-    )
-    .await;
+    let response = admission.client.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ {} lifecycle_state }} }}"#,
+        escape_graphql_string(&session), crate::request::watcher::AGENT_REQUEST_FIELDS,
+    )).await.unwrap();
+    let requests = response["data"]["AgentRequest"].as_array().unwrap().clone();
     let wakes: Vec<gents_protocol::row::AgentRequestRow> = requests
         .into_iter()
         .map(|row| serde_json::from_value(row).unwrap())
@@ -605,7 +881,15 @@ pub(crate) async fn selected_background_wake_with_successor(
             .unwrap(),
         TerminalizeResult::Won
     );
-    let mut watcher = DefraWatcher::new(node.clone(), did).expect("request watcher");
+    let signer = admission
+        .tool
+        .access()
+        .unwrap()
+        .managed_agent_signer()
+        .unwrap();
+    let mut watcher =
+        DefraWatcher::for_agents(node.clone(), did, vec![std::sync::Arc::new(signer)])
+            .expect("request watcher");
     let selected = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             let selected = watcher
@@ -649,7 +933,7 @@ async fn generated_r6_notification_precedes_continuation_claim() {
     } = selected_background_wake().await;
     let node = &admission.node;
     let did = &admission.node_did;
-    let behavior = selected.agent_id.clone();
+    let behavior = selected.agent_did.clone();
     let mut continuation = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         &behavior,
@@ -657,6 +941,13 @@ async fn generated_r6_notification_precedes_continuation_claim() {
         selected,
         60,
     );
+    let signer = admission
+        .tool
+        .access()
+        .unwrap()
+        .managed_agent_signer()
+        .unwrap();
+    continuation.bind_managed_agent(&signer).unwrap();
     assert_eq!(
         continuation.claim_with_identity().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed,
@@ -667,16 +958,20 @@ async fn generated_r6_notification_precedes_continuation_claim() {
         after, notifications,
         "claim preserves immutable notification history"
     );
-    let (_, wait_after) =
-        crate::session::load_canonical_message_from_node(node, &wait_header, did, Some(did))
-            .await
-            .unwrap();
+    let (_, wait_after) = crate::session::load_canonical_message(
+        &admission.client,
+        &wait_header,
+        did,
+        Some(admission.requester_identity.did()),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         wait_after, wait_native,
         "claim preserves the preceding assistant wait"
     );
     drop(continuation);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -685,14 +980,39 @@ async fn a_retried_over_bound_wake_is_refused_again() {
     let case = lean_r6_backgrounding_case("failed_background_wake_with_budget_redrives");
     let admission = admitted_parent(case, "over-bound-redrive").await;
     let node = &admission.node;
+    let access = admission.tool.access().unwrap();
     let did = admission.node_did.as_str();
-    crate::documents::upsert_node(node, did, None, Some("general"), true, Some(8))
+    let agent_did = escape_graphql_string(admission.tool.actor().as_str());
+    admission
+        .client
+        .transact_write("test.completion.configure_hop_bound", |txn| {
+            Box::pin(async move {
+                let (_, mut node_input) =
+                    crate::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Node,
+                        did,
+                        did,
+                    )
+                    .await?
+                    .context("owned Node is unavailable")?;
+                node_input["max_request_hop"] = json!(8);
+                let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+                    crate::store::config_client::DesiredStateApplyDocument {
+                        collection: crate::Collection::Node,
+                        add: node_input.clone(),
+                        update: node_input,
+                    },
+                ])?;
+                crate::store::config_client::apply_desired_state_plan(txn, &plan).await
+            })
+        })
         .await
-        .expect("set node hop cap");
+        .expect("configure Node hop bound as the signed owning User");
     let session = admission.tool.session_id.as_str();
     let parent_doc = admission.tool.request_doc_id().unwrap();
     let parent = rows(
-        node,
+        &access,
         &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ request_id }} }}"#,
             escape_graphql_string(parent_doc)
@@ -730,8 +1050,9 @@ async fn a_retried_over_bound_wake_is_refused_again() {
         gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(input).unwrap())
             .unwrap();
     let deadline = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
-    let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
-        request_id: "{refused_wake}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_id: "general",
+    let mutation = format!(
+        r#"mutation {{ create_AgentRequest(input: {{
+        request_id: "{refused_wake}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_did: "{agent_did}",
         session_id: "{}", content: "background input", input: {input},
         execution_origin: "scheduled", lifecycle_state: "failed",
         failure_reason: "AgentRequest causal hop exceeds the target node's max_request_hop",
@@ -740,19 +1061,28 @@ async fn a_retried_over_bound_wake_is_refused_again() {
         request_hop: {}, deadline: "{}",
         caused_by_parent_request_id: "{}", caused_by_parent_request_doc_id: "{}"
     }}) {{ _docID }} }}"#,
-        escape_graphql_string(did), escape_graphql_string(did), escape_graphql_string(session),
-        over_bound, escape_graphql_string(&deadline), escape_graphql_string(&parent),
-        escape_graphql_string(parent_doc))).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let source = rows(node, &format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{refused_wake}" }} }}) {{ _docID request_id lifecycle_state created_at }} }}"#), "AgentRequest").await;
-    seed_session_head(node, session, &source[0]).await;
+        escape_graphql_string(did),
+        escape_graphql_string(admission.requester_identity.did()),
+        escape_graphql_string(session),
+        over_bound,
+        escape_graphql_string(&deadline),
+        escape_graphql_string(&parent),
+        escape_graphql_string(parent_doc)
+    );
+    create_failed_wake(&admission, &mutation).await;
+    let source = rows(&access, &format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{refused_wake}" }} }}) {{ _docID request_id lifecycle_state created_at }} }}"#), "AgentRequest").await;
+    seed_session_head(&access, session, &source[0]).await;
 
-    let report = crate::RequestLifecycle::redrive_failed_background_wakeups(node, did)
-        .await
-        .unwrap();
+    let report = crate::RequestLifecycle::redrive_failed_background_wakeups_with_identities(
+        node,
+        did,
+        &recovery_identities(&admission),
+    )
+    .await
+    .unwrap();
     assert_eq!(report.redriven, 1, "{report:?}");
     let successor = rows(
-        node,
+        &access,
         &format!(
             r#"{{ AgentRequest(filter: {{ retry_parent_request: {{ _eq: "{refused_wake}" }} }}) {{ request_hop }} }}"#
         ),
@@ -766,6 +1096,10 @@ async fn a_retried_over_bound_wake_is_refused_again() {
         Some(bound),
         hop
     ));
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }

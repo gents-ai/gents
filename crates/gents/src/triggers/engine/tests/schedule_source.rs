@@ -1,9 +1,10 @@
+use crate::store::identity::NodeIdentity;
 use chrono::Timelike;
 
 use super::*;
 
 async fn read_trigger_cursor(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     owner_did: &str,
     trigger_id: &str,
 ) -> anyhow::Result<Option<String>> {
@@ -24,7 +25,7 @@ fn schedule_test_behavior() -> Arc<ResolvedAgent> {
 }
 
 async fn create_schedule_cadence_doc(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     owner_did: &str,
     schedule_id: &str,
     cadence: serde_json::Value,
@@ -64,7 +65,7 @@ struct ScheduleFixture<'a> {
 }
 
 async fn create_schedule_with_next_run_at(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     owner_did: &str,
     fixture: ScheduleFixture<'_>,
 ) -> String {
@@ -128,7 +129,7 @@ async fn create_schedule_with_next_run_at(
 }
 
 async fn observed_trigger(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     owner_did: &str,
     trigger_id: &str,
 ) -> serde_json::Value {
@@ -149,7 +150,7 @@ async fn observed_trigger(
 }
 
 async fn observed_schedule_cadence(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     owner_did: &str,
     schedule_id: &str,
 ) -> ScheduleCadence {
@@ -167,6 +168,16 @@ async fn observed_schedule_cadence(
         "owner-scoped schedule {schedule_id} disappeared or is ambiguous"
     );
     serde_json::from_value(rows[0]["cadence"].clone()).expect("decode canonical ScheduleCadence")
+}
+
+async fn schedule_doc_id(node: &defra_node::Node, owner: &str, id: &str) -> String {
+    let response = node.execute(&format!(
+        r#"{{ Schedule(filter: {{ node_did: {{ _eq: "{}" }}, schedule_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID }} }}"#,
+        escape_graphql_string(owner), escape_graphql_string(id),
+    )).await;
+    let rows = crate::store::graphql::rows::<serde_json::Value>(&response, "Schedule").unwrap();
+    assert_eq!(rows.len(), 1);
+    rows[0]["_docID"].as_str().unwrap().to_owned()
 }
 
 fn interval_cadence_json() -> serde_json::Value {
@@ -221,7 +232,7 @@ async fn schedule_cursor_batch_matches_exact_owner_reads_and_isolates_scope_erro
         batch[2].is_err(),
         "invalid owner error must remain per-trigger"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -240,15 +251,23 @@ async fn schedule_cursor_batches_more_than_one_chunk() {
     assert_eq!(cursors.len(), 128);
     assert!(cursors.iter().all(|cursor| matches!(cursor, Ok(None))));
     assert_eq!(query_count, 2, "128 scopes use two 64-alias queries");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let behavior = schedule_test_behavior();
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(behavior.node_did())
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let task = resolved_task("due schedule");
-    let schedules = (0..128)
+    let mut task = resolved_task("due schedule");
+    task.agent_did = behavior.agent_did.clone();
+    let mut schedules = (0..128)
         .map(|index| {
             let trigger_id = format!("lazy-schedule-trigger-{index}");
             (
@@ -257,14 +276,12 @@ async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
             )
         })
         .collect::<RapidHashMap<_, _>>();
-    let snapshot = snapshot_with_schedules(schedules);
-    let first_trigger_id = snapshot
-        .active_schedules()
+    let first_trigger_id = schedules
         .keys()
         .next()
         .expect("snapshot has active schedules")
         .clone();
-    let owner = schedule_test_behavior().node_did().to_owned();
+    let owner = behavior.node_did().to_owned();
     let past = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
     create_schedule_with_next_run_at(
         &node,
@@ -279,6 +296,11 @@ async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
         },
     )
     .await;
+    let schedule_doc = schedule_doc_id(&node, &owner, &first_trigger_id).await;
+    for schedule in schedules.values_mut() {
+        schedule.schedule_doc_id = schedule_doc.clone();
+    }
+    let snapshot = snapshot_with_agent_and_schedules(behavior, schedules);
 
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let cancel = CancellationToken::new();
@@ -298,15 +320,20 @@ async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
     );
     drop(intent);
     cancel.cancel();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-
     let behavior = schedule_test_behavior();
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(behavior.node_did())
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let owner_did = behavior.node_did().to_string();
     let past = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
     let trigger_doc_id = create_schedule_with_next_run_at(
@@ -331,7 +358,7 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
         emit_outcome: false,
         task_id: "task-1".to_string(),
         name: None,
-        agent_id: "general".to_string(),
+        agent_did: behavior.agent_did.clone(),
         prompt_template: "hi".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -341,6 +368,7 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
     let schedule = ResolvedSchedule {
         session_id_template: None,
         trigger_doc_id,
+        schedule_doc_id: schedule_doc_id(&node, &owner_did, "sched-1").await,
         schedule_id: "sched-1".to_string(),
         task_id: task.task_id.clone(),
         task,
@@ -390,10 +418,15 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
 
 #[tokio::test]
 async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-
     let behavior = schedule_test_behavior();
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(behavior.node_did())
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let owner_did = behavior.node_did().to_string();
 
     let initial_next_run_at = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
@@ -415,7 +448,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
         emit_outcome: false,
         task_id: "task-1".to_string(),
         name: None,
-        agent_id: "general".to_string(),
+        agent_did: behavior.agent_did.clone(),
         prompt_template: "hi".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -425,6 +458,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
     let schedule = ResolvedSchedule {
         session_id_template: None,
         trigger_doc_id,
+        schedule_doc_id: schedule_doc_id(&node, &owner_did, "sched-1").await,
         schedule_id: "sched-1".to_string(),
         task_id: task.task_id.clone(),
         task,
@@ -598,31 +632,109 @@ async fn schedule_source_next_fire_honors_cancellation_token() {
 
 #[tokio::test]
 async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let template = schedule_test_behavior();
+    let runtime = template.node.identity.clone();
+    let binding = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
+    let mut resolved = template.as_ref().clone();
+    resolved.agent_did = binding.agent_did.clone();
+    resolved.agent_identity =
+        crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
+    let behavior = Arc::new(resolved);
+    let directory = tempfile::tempdir().unwrap();
+    let user = crate::KeyIdentity::load_or_create(directory.path().join("user.key"), None).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(behavior.node_did())
+            .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-
-    let behavior = schedule_test_behavior();
     let owner_did = behavior.node_did().to_string();
     let past = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
-    let trigger_doc_id = create_schedule_with_next_run_at(
+    let endpoint = crate::store::config_client::GraphqlEndpoint::as_principal(
+        format!("http://{address}/api/v0/graphql"),
+        user.did(),
+    )
+    .with_client_signing_capability(user.client_signing_capability().unwrap())
+    .unwrap()
+    .with_client_signed_agent_creates();
+    let user_access = crate::store::config_client::ConfigAccess::Graphql(endpoint);
+    let node_input = serde_json::json!({"node_did":owner_did});
+    let created = user_access
+        .transact_write("test.schedule.node", |txn| {
+            let input = &node_input;
+            Box::pin(async move {
+                txn.execute_desired_state_mutation(
+            "mutation($input: NodeMutationInputArg!) { create_Node(input:$input) { _docID } }",
+            &serde_json::json!({"input":input}), crate::Collection::Node, true).await
+            })
+        })
+        .await
+        .unwrap();
+    let node_doc = gents_protocol::graphql::extract_mutation_doc_id(&created, "Node").unwrap();
+    user_access
+        .add_actor_relationship(
+            "Node",
+            &node_doc,
+            "runtime_reader",
+            &identity::Did::new(&owner_did).unwrap(),
+        )
+        .await
+        .unwrap();
+    let documents = [
+        (crate::Collection::Agent, serde_json::json!({"node_did":owner_did, "agent_did":binding.agent_did,
+            "creation_nonce":binding.creation_nonce, "inference_profile_id":"profile"})),
+        (crate::Collection::InferenceProfile, serde_json::json!({"node_did":owner_did, "profile_id":"profile",
+            "backend_id":"backend-it", "model_name":"test-model"})),
+        (crate::Collection::InferenceBackend, serde_json::json!({"node_did":owner_did, "backend_id":"backend-it",
+            "name":"test", "provider_kind":"OpenAiCompatible", "endpoint":"http://127.0.0.1:1/v1", "auth":{"kind":"unauthenticated"}})),
+        (crate::Collection::Task, serde_json::json!({"node_did":owner_did, "task_id":"task-e2e", "agent_did":behavior.agent_did,
+            "prompt_template":"integration fire"})),
+        (crate::Collection::Schedule, serde_json::json!({"node_did":owner_did, "schedule_id":"sched-e2e", "cadence":interval_cadence_json()})),
+        (crate::Collection::Trigger, serde_json::json!({"node_did":owner_did, "trigger_id":"sched-e2e", "task_id":"task-e2e",
+            "source":{"kind":"schedule", "schedule_id":"sched-e2e"}, "enabled":true, "concurrency":"serial"})),
+    ].into_iter().map(|(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
+        collection, add:value.clone(), update:value,
+    }).collect();
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(documents).unwrap();
+    user_access
+        .transact_write("test.schedule.install", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .unwrap();
+    crate::documents::update_trigger_runtime_fields(
         &node,
         &owner_did,
-        ScheduleFixture {
-            trigger_id: "sched-e2e",
-            schedule_id: "sched-e2e",
-            task_id: "task-e2e",
-            cadence: interval_cadence_json(),
-            next_run_at: Some(&past),
-            concurrency: "serial",
+        "sched-e2e",
+        crate::documents::TriggerRuntimeUpdate {
+            next_run_at: Some(past),
+            last_fired_source_doc_id: None,
+            last_attempt_at: None,
+            last_status: None,
+            last_error: None,
+            fire_count_delta: None,
         },
     )
-    .await;
+    .await
+    .unwrap();
+    let trigger_doc_id = observed_trigger(&node, &owner_did, "sched-e2e").await["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
 
     let task = ResolvedTask {
         emit_outcome: false,
         task_id: "task-e2e".to_string(),
         name: Some("Mini Host Health".to_string()),
-        agent_id: behavior.agent_id.clone(),
+        agent_did: behavior.agent_did.clone(),
         prompt_template: "integration fire".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -632,6 +744,7 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
     let schedule = ResolvedSchedule {
         session_id_template: None,
         trigger_doc_id,
+        schedule_doc_id: schedule_doc_id(&node, &owner_did, "sched-e2e").await,
         schedule_id: "sched-e2e".to_string(),
         task_id: task.task_id.clone(),
         task,
@@ -639,6 +752,10 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
     };
+    let agent_access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(&behavior.agent_did).unwrap(),
+    );
     let snapshot = snapshot_with_agent_and_schedules(
         behavior,
         RapidHashMap::from_iter([("sched-e2e".to_string(), schedule)]),
@@ -676,15 +793,12 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
                 input
             }
         }"#;
-        let resp = node.execute(query).await;
-        assert!(
-            !resp.has_errors(),
-            "AgentRequest query errored: {:?}",
-            resp.errors
-        );
+        let resp = agent_access
+            .execute(query)
+            .await
+            .expect("query AgentRequest as the selected Agent");
         let rows = resp
-            .data
-            .as_ref()
+            .get("data")
             .and_then(|d| d.get("AgentRequest"))
             .and_then(|v| v.as_array())
             .cloned()
@@ -757,9 +871,15 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
 
 #[tokio::test]
 async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = schedule_test_behavior();
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(behavior.node_did())
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let owner_did = behavior.node_did().to_string();
     let trigger_doc_id = create_schedule_with_next_run_at(
         &node,
@@ -785,7 +905,7 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
         emit_outcome: false,
         task_id: "task-null".to_string(),
         name: None,
-        agent_id: "general".to_string(),
+        agent_did: behavior.agent_did.clone(),
         prompt_template: "hi".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -795,6 +915,7 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
     let schedule = ResolvedSchedule {
         session_id_template: None,
         trigger_doc_id,
+        schedule_doc_id: schedule_doc_id(&node, &owner_did, "sched-null").await,
         schedule_id: "sched-null".to_string(),
         task_id: task.task_id.clone(),
         task,
@@ -836,10 +957,15 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
 
 #[tokio::test]
 async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-
     let behavior = schedule_test_behavior();
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(behavior.node_did())
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let owner_did = behavior.node_did().to_string();
 
     let trigger_doc_id = create_schedule_with_next_run_at(
@@ -865,7 +991,7 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
         emit_outcome: false,
         task_id: "task-cron".to_string(),
         name: None,
-        agent_id: "general".to_string(),
+        agent_did: behavior.agent_did.clone(),
         prompt_template: "hi".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -875,6 +1001,7 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
     let schedule = ResolvedSchedule {
         session_id_template: None,
         trigger_doc_id,
+        schedule_doc_id: schedule_doc_id(&node, &owner_did, "sched-cron-null").await,
         schedule_id: "sched-cron-null".to_string(),
         task_id: task.task_id.clone(),
         task,

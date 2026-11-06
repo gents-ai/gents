@@ -122,6 +122,16 @@ pub(crate) enum AgentCommand {
         about = "Disable an Agent through the shared agent materializer"
     )]
     Disable(AgentDisableArgs),
+    #[command(
+        name = "grant-self-config",
+        about = "Grant an agent permission to update its own Agent document"
+    )]
+    GrantSelfConfig(AgentSelfConfigPermissionArgs),
+    #[command(
+        name = "revoke-self-config",
+        about = "Revoke an agent's permission to update its own Agent document"
+    )]
+    RevokeSelfConfig(AgentSelfConfigPermissionArgs),
     #[command(name = "list", about = "List Agent documents")]
     List(ConfigListArgs),
     #[command(name = "show", about = "Show an Agent document")]
@@ -134,6 +144,16 @@ pub(crate) enum AgentCommand {
 pub(crate) enum WorkspaceRootCommand {
     #[command(name = "set")]
     Set(WorkspaceRootUpsertArgs),
+    #[command(
+        name = "grant-reader",
+        about = "Grant a selected Agent access to a workspace root"
+    )]
+    GrantReader(WorkspaceRootReaderArgs),
+    #[command(
+        name = "revoke-reader",
+        about = "Revoke a selected Agent's access to a workspace root"
+    )]
+    RevokeReader(WorkspaceRootReaderArgs),
     #[command(name = "list", about = "List WorkspaceRoot documents")]
     List(ConfigListArgs),
     #[command(name = "show", about = "Show a WorkspaceRoot document")]
@@ -170,7 +190,7 @@ pub(crate) struct AgentTargetEntryArgs {
     #[arg(long, help = "Model-facing target name")]
     pub(crate) name: String,
     #[arg(long)]
-    pub(crate) agent_id: String,
+    pub(crate) agent_did: String,
     #[arg(long)]
     pub(crate) description: Option<String>,
 }
@@ -218,8 +238,8 @@ pub(crate) struct ToolExplainArgs {
     pub(crate) graphql: Option<String>,
     #[arg(long)]
     pub(crate) node_did: Option<String>,
-    #[arg(long, help = "Only explain one agent_id")]
-    pub(crate) agent_id: Option<String>,
+    #[arg(long, help = "Only explain one agent_did")]
+    pub(crate) agent_did: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -332,6 +352,13 @@ pub(crate) struct ConfigShowArgs {
 pub(crate) struct WorkspaceRootUpsertArgs {
     #[arg(long)]
     pub(crate) graphql: String,
+    #[arg(long)]
+    pub(crate) node_did: String,
+    #[arg(
+        long = "reader-agent",
+        help = "Grant read access to this explicitly selected Agent DID"
+    )]
+    pub(crate) reader_agents: Vec<String>,
     #[arg(long, help = "Absolute path to register as a workspace root")]
     pub(crate) path: PathBuf,
     #[arg(long)]
@@ -344,13 +371,23 @@ pub(crate) struct WorkspaceRootUpsertArgs {
 }
 
 #[derive(clap::Args)]
+pub(crate) struct WorkspaceRootReaderArgs {
+    #[arg(long)]
+    pub(crate) graphql: String,
+    #[arg(long)]
+    pub(crate) path: PathBuf,
+    #[arg(long)]
+    pub(crate) agent_did: String,
+}
+
+#[derive(clap::Args)]
 pub(crate) struct AgentUpsertArgs {
     #[arg(long)]
     pub(crate) graphql: String,
     #[arg(long)]
     pub(crate) node_did: String,
     #[arg(long)]
-    pub(crate) agent_id: Option<String>,
+    pub(crate) agent_did: Option<String>,
     #[arg(long)]
     pub(crate) display_name: Option<String>,
     #[arg(long)]
@@ -397,7 +434,7 @@ pub(crate) struct AgentCreateArgs {
     pub(crate) root: Option<String>,
     #[arg(
         long,
-        help = "agent_id of an existing enabled agent to clone the context/tools from; mutually exclusive with --preset"
+        help = "agent_did of an existing enabled agent to clone the context/tools from; mutually exclusive with --preset"
     )]
     pub(crate) clone_from: Option<String>,
     #[arg(
@@ -413,8 +450,8 @@ pub(crate) struct AgentCloneArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: String,
-    #[arg(value_name = "SOURCE_AGENT_ID")]
-    pub(crate) source_agent_id: String,
+    #[arg(value_name = "SOURCE_AGENT_DID")]
+    pub(crate) source_agent_did: String,
     #[arg(long, help = "Display name for the cloned agent")]
     pub(crate) display_name: String,
     #[arg(long, help = "Override the source agent/context description")]
@@ -436,8 +473,18 @@ pub(crate) struct AgentDisableArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: String,
-    #[arg(value_name = "AGENT_ID")]
-    pub(crate) agent_id: String,
+    #[arg(value_name = "AGENT_DID")]
+    pub(crate) agent_did: String,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct AgentSelfConfigPermissionArgs {
+    #[arg(long)]
+    pub(crate) graphql: String,
+    #[arg(long)]
+    pub(crate) node_did: String,
+    #[arg(value_name = "AGENT_DID")]
+    pub(crate) agent_did: String,
 }
 
 #[derive(Debug, clap::Args)]

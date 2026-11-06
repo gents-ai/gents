@@ -1,7 +1,7 @@
 use crate::store::identity::NodeIdentity;
 use crate::tools::call::lifecycle::admission_fixture::{
-    complete_child, published_session_message, published_session_message_with_owner,
-    PublishedAdmissionOptions,
+    complete_child_managed_verified, published_session_message,
+    published_session_message_with_owner, PublishedAdmissionOptions,
 };
 use crate::tools::call::lifecycle::{AwaitMode, ToolCallLifecycle};
 use std::sync::Arc;
@@ -19,68 +19,106 @@ async fn caused_result_is_delivered_after_the_row_outlives_its_stored_deadline()
     .await
     .expect("publish accepted session message and materialize its request");
     let admission = &message.admission;
+    let signer = admission
+        .tool
+        .access()
+        .unwrap()
+        .managed_agent_signer()
+        .unwrap();
+    let identities: Vec<Arc<dyn NodeIdentity>> = vec![Arc::new(signer.clone())];
     let node = &admission.node;
+    let access = admission.tool.access().unwrap();
     let did = admission.node_did.clone();
     let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
     let session_id = admission.tool.session_id().to_owned();
-    update(node, &tool_doc_id, r#"deadline_at: "2020-01-01T00:00:00Z""#).await;
+    update(&access, &tool_doc_id, r#"deadline_at: "2020-01-01T00:00:00Z""#).await;
 
-    let restart = ToolCallLifecycle::recover_all(node, &did).await.unwrap();
+    let restart = ToolCallLifecycle::recover_all(node, &did, &identities)
+        .await
+        .unwrap();
     assert_eq!(restart.tool_calls_recovered, 0);
     assert_eq!(
-        crate::tools::background::completion::settle_running_session_message_rows(node, &did)
-            .await
-            .unwrap(),
+        crate::tools::background::completion::settle_running_session_message_rows_with_access(
+            node,
+            &admission.tool.access().unwrap(),
+            &did
+        )
+        .await
+        .unwrap(),
         0
     );
-    let row = |node: Arc<crate::defra_node::EmbeddedNode>| {
+    let row = |access: crate::ConfigAccess| {
         let tool_doc_id = tool_doc_id.clone();
         async move {
-            let response = node
+            let response = access
                 .execute(&format!(
                     r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state cancel_cause }} }}"#,
                     crate::store::graphql::escape_graphql_string(&tool_doc_id)
                 ))
-                .await;
-            assert!(!response.has_errors(), "{:?}", response.errors);
-            response.data.unwrap()["AgentToolCall"][0].clone()
+                .await
+                .unwrap();
+            response["data"]["AgentToolCall"][0].clone()
         }
     };
-    assert_eq!(row(node.clone()).await["lifecycle_state"], "running");
-    let (notifications, _) = completion_obligations(node, &session_id, &did).await;
+    assert_eq!(row(access.clone()).await["lifecycle_state"], "running");
+    let (notifications, _) =
+        completion_obligations(&access, &session_id, &did, admission.tool.requester_did()).await;
     assert!(notifications.is_empty(), "{notifications:?}");
 
-    complete_child(node, &message.caused_request_id, &did, "late caused result").await;
+    complete_child_managed_verified(
+        node,
+        &message.caused_request_id,
+        &did,
+        "late caused result",
+        &signer,
+        message.admission.runtime.clone(),
+    )
+    .await;
     assert_eq!(
-        crate::tools::background::completion::settle_running_session_message_rows(node, &did)
-            .await
-            .unwrap(),
+        crate::tools::background::completion::settle_running_session_message_rows_with_access(
+            node,
+            &admission.tool.access().unwrap(),
+            &did
+        )
+        .await
+        .unwrap(),
         1
     );
-    let settled = row(node.clone()).await;
+    let settled = row(access.clone()).await;
     assert_eq!(settled["lifecycle_state"], "completed");
     assert!(settled["cancel_cause"].is_null());
-    let (notifications, wakes) = completion_obligations(node, &session_id, &did).await;
+    let (notifications, wakes) =
+        completion_obligations(&access, &session_id, &did, admission.tool.requester_did()).await;
     assert_eq!(notifications.len(), 1, "{notifications:?}");
     assert!(notifications[0].contains("late caused result"));
     assert_eq!(wakes.len(), 1);
 
     assert_eq!(
-        ToolCallLifecycle::recover_all(node, &did)
+        ToolCallLifecycle::recover_all(node, &did, &identities)
             .await
             .unwrap()
             .tool_calls_recovered,
         0
     );
     assert_eq!(
-        crate::tools::background::completion::settle_running_session_message_rows(node, &did)
-            .await
-            .unwrap(),
+        crate::tools::background::completion::settle_running_session_message_rows_with_access(
+            node,
+            &admission.tool.access().unwrap(),
+            &did
+        )
+        .await
+        .unwrap(),
         0
     );
-    let (notifications, _) = completion_obligations(node, &session_id, &did).await;
+    let (notifications, _) =
+        completion_obligations(&access, &session_id, &did, admission.tool.requester_did()).await;
     assert_eq!(notifications.len(), 1, "delivered exactly once");
-    message.admission.node.shutdown().await;
+    message
+        .admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).expect("remove exact recovery fixture");
 }
 
@@ -95,6 +133,13 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     })
     .await
     .expect("publish accepted session message and materialize its request");
+    let signer = message
+        .admission
+        .tool
+        .access()
+        .unwrap()
+        .managed_agent_signer()
+        .unwrap();
     let node = message.admission.node.clone();
     let did = message.admission.node_did.clone();
     let session_id = message.admission.tool.session_id().to_owned();
@@ -108,15 +153,14 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let identity: Arc<dyn NodeIdentity> = Arc::new(
-        crate::KeyIdentity::load_or_create(message.admission.path.join("test-agent.key"), None)
-            .unwrap(),
+        crate::KeyIdentity::load_existing(message.admission.path.join("node.key"), None).unwrap(),
     );
     let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         identity,
         crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
     );
-    let pending_wakes = |node: Arc<crate::defra_node::EmbeddedNode>, session: String| async move {
+    let pending_wakes = |node: Arc<crate::defra_node::Node>, session: String| async move {
         let response = node
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }}, execution_origin: {{ _eq: "scheduled" }}, lifecycle_state: {{ _eq: "pending" }} }}) {{ _docID }} }}"#,
@@ -134,16 +178,16 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     let admit = |doc_id: String| {
         let node = node.clone();
         let verifier = &verifier;
+        let signer = &signer;
         async move {
             let request = crate::request::binding::load_agent_request_by_doc_id(&node, &doc_id)
                 .await
                 .unwrap()
                 .unwrap();
-            let behavior = request.agent_id.clone();
             let admitted = crate::runtime::agent::daemon::verify_request_at_claim_boundary(
                 verifier,
                 node.clone(),
-                &behavior,
+                signer,
                 request,
             )
             .await;
@@ -160,20 +204,32 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         }
     };
 
-    complete_child(
+    complete_child_managed_verified(
         &node,
         &message.caused_request_id,
         &did,
         "result at the bound",
+        &signer,
+        message.admission.runtime.clone(),
     )
     .await;
     assert_eq!(
-        crate::tools::background::completion::settle_running_session_message_rows(&node, &did)
-            .await
-            .unwrap(),
+        crate::tools::background::completion::settle_running_session_message_rows_with_access(
+            &node,
+            &message.admission.tool.access().unwrap(),
+            &did
+        )
+        .await
+        .unwrap(),
         1
     );
-    let (notifications, _) = completion_obligations(&node, &session_id, &did).await;
+    let (notifications, _) = completion_obligations(
+        &message.admission.tool.access().unwrap(),
+        &session_id,
+        &did,
+        message.admission.tool.requester_did(),
+    )
+    .await;
     assert_eq!(notifications.len(), 1, "{notifications:?}");
     assert!(notifications[0].contains("result at the bound"));
     let wakes = pending_wakes(node.clone(), session_id.clone()).await;
@@ -184,7 +240,8 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         .unwrap()
         .unwrap();
     let native =
-        crate::request::lifecycle::queue::persist_background_completion_with_message_waking(
+        crate::request::lifecycle::queue::persist_background_completion_with_message_waking_with_access(
+            &message.admission.tool.access().unwrap(),
             &node,
             &caller,
             "process done",
@@ -207,12 +264,11 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         .unwrap();
     assert!(!native.created_request);
     assert_eq!(pending_wakes(node.clone(), session_id.clone()).await, wakes);
-    crate::test_support::install_test_agent(&node, &did, &caller.agent_id).await;
     let (admitted, row) = admit(wakes[0].clone()).await;
     assert!(admitted, "{row}");
     assert_eq!(row["request_hop"], caller.request_hop);
     assert_eq!(row["lifecycle_state"], "pending");
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -227,6 +283,14 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     })
     .await
     .expect("publish a paired client's agent_new and materialize its request");
+    let signer = message
+        .admission
+        .tool
+        .access()
+        .unwrap()
+        .managed_agent_signer()
+        .unwrap();
+    let identities: Vec<Arc<dyn NodeIdentity>> = vec![Arc::new(signer.clone())];
     let node = message.admission.node.clone();
     let did = message.admission.node_did.clone();
     let session_id = message.admission.tool.session_id().to_owned();
@@ -241,14 +305,26 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
         .expect("paired client requester");
     assert_ne!(client, did);
 
-    complete_child(&node, &message.caused_request_id, &did, "gatekeeper answer").await;
+    complete_child_managed_verified(
+        &node,
+        &message.caused_request_id,
+        &did,
+        "gatekeeper answer",
+        &signer,
+        message.admission.runtime.clone(),
+    )
+    .await;
     assert_eq!(
-        crate::tools::background::completion::settle_running_session_message_rows(&node, &did)
-            .await
-            .unwrap(),
+        crate::tools::background::completion::settle_running_session_message_rows_with_access(
+            &node,
+            &message.admission.tool.access().unwrap(),
+            &did
+        )
+        .await
+        .unwrap(),
         1
     );
-    ToolCallLifecycle::reconcile_background_completion_side_effects(&node, &did)
+    ToolCallLifecycle::reconcile_background_completion_side_effects(&node, &did, &identities)
         .await
         .unwrap();
     let response = node
@@ -288,31 +364,31 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
         .await
         .unwrap();
 
-    crate::test_support::install_test_agent(&node, &did, &caller.agent_id).await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(
-        crate::KeyIdentity::load_or_create(message.admission.path.join("test-agent.key"), None)
-            .unwrap(),
+        crate::KeyIdentity::load_existing(message.admission.path.join("node.key"), None).unwrap(),
     );
     let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         identity,
         crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
     );
-    let verified = crate::runtime::agent::daemon::verify_request_at_claim_boundary(
+    let (verified, client_claim) = crate::runtime::agent::daemon::verify_request_at_claim_boundary(
         &verifier,
         node.clone(),
-        &wake.agent_id,
+        &signer,
         wake.clone(),
     )
     .await
     .expect("the returned result is admitted into the client's session");
     let mut lifecycle = crate::RequestLifecycle::new_with_node_did(
         node.clone(),
-        &wake.agent_id,
+        &wake.agent_did,
         &did,
         verified.clone(),
         60,
     );
+    lifecycle.bind_managed_agent(&signer).unwrap();
+    lifecycle.set_client_claim_admission(client_claim);
     assert_eq!(
         lifecycle.claim_with_identity().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed
@@ -326,6 +402,6 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     )
     .await
     .expect("the result resumes the client's session");
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }

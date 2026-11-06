@@ -25,6 +25,12 @@ pub async fn materialize_enrollment_desired_in_txn(
     entry: &EnrollmentEndpointEntry,
     collections: &BTreeSet<String>,
 ) -> Result<String> {
+    anyhow::ensure!(!owner.is_empty(), "desired route target Node is missing");
+    let actor = identity::Did::new(
+        txn.actor_did()
+            .context("desired route has no local actor")?,
+    )?;
+    txn.validate_runtime_actor(&actor)?;
     anyhow::ensure!(
         enrollment_entry_is_fresh_at(entry, Utc::now()),
         "enrollment authorization expired before route materialization"
@@ -33,7 +39,7 @@ pub async fn materialize_enrollment_desired_in_txn(
     let response = txn
         .execute(
             r#"{ PeerPairingDesired {
-        _docID peer_id node_did source template collections profiles replicator_addresses enrollment_request_digest
+        _docID peer_id node_did actor_did source template collections profiles replicator_addresses enrollment_request_digest
         enrollment_authorization_sequence enrollment_authorization_expires_at
     } }"#,
         )
@@ -49,9 +55,25 @@ pub async fn materialize_enrollment_desired_in_txn(
         .filter(|row| row.peer_id.as_deref() == Some(entry.desired_id.as_str()))
         .collect::<Vec<_>>();
     matches.sort_by(|left, right| left.doc_id.cmp(&right.doc_id));
+    if !matches.is_empty() {
+        let ids = matches
+            .iter()
+            .map(|row| row.doc_id.clone())
+            .collect::<Vec<_>>();
+        let owners = txn.document_owners("PeerPairingDesired", &ids).await?;
+        anyhow::ensure!(
+            owners.len() == ids.len()
+                && owners
+                    .iter()
+                    .all(|row| row.visible && row.owner.as_ref() == Some(&actor)),
+            "desired route has another native owner"
+        );
+    }
     for row in &matches {
         anyhow::ensure!(
-            row.node_did.as_deref() == Some(owner) && row.source.as_deref() == Some("enrollment"),
+            row.node_did.as_deref() == Some(owner)
+                && row.actor_did.as_deref() == Some(actor.as_str())
+                && row.source.as_deref() == Some("enrollment"),
             "desired route {} has another materialization owner",
             entry.desired_id
         );
@@ -76,6 +98,13 @@ pub async fn materialize_enrollment_desired_in_txn(
                 .is_none_or(|profiles| profiles.is_empty())
             && row.replicator_addresses.as_deref() == Some(std::slice::from_ref(&entry.address))
         {
+            crate::store::config_client::maybe_link_deferred_operation_in_txn(
+                txn,
+                "PeerPairingDesired",
+                &row.doc_id,
+                &actor,
+            )
+            .await?;
             return Ok(row.doc_id.clone());
         }
     }
@@ -99,8 +128,9 @@ pub async fn materialize_enrollment_desired_in_txn(
             escape_graphql_string(&row.doc_id)
         ),
         None => format!(
-            r#"mutation {{ saved: create_PeerPairingDesired(input: {{ peer_id: "{}", created_at: "{}", {fields} }}) {{ _docID }} }}"#,
+            r#"mutation {{ saved: create_PeerPairingDesired(input: {{ peer_id: "{}", actor_did: "{}", created_at: "{}", parent_linked: false, {fields} }}) {{ _docID }} }}"#,
             escape_graphql_string(&entry.desired_id),
+            escape_graphql_string(actor.as_str()),
             escape_graphql_string(&now)
         ),
     };
@@ -112,11 +142,19 @@ pub async fn materialize_enrollment_desired_in_txn(
         .as_array()
         .map_or(Some(saved), |rows| rows.first())
         .context("route materialization saved no row")?;
-    Ok(saved
+    let doc = saved
         .get("_docID")
         .and_then(serde_json::Value::as_str)
         .context("route materialization omitted document ID")?
-        .to_owned())
+        .to_owned();
+    crate::store::config_client::maybe_link_deferred_operation_in_txn(
+        txn,
+        "PeerPairingDesired",
+        &doc,
+        &actor,
+    )
+    .await?;
+    Ok(doc)
 }
 
 #[derive(Deserialize)]
@@ -125,6 +163,7 @@ struct DesiredWitness {
     doc_id: String,
     peer_id: Option<String>,
     node_did: Option<String>,
+    actor_did: Option<String>,
     source: Option<String>,
     template: Option<String>,
     collections: Option<Vec<String>>,

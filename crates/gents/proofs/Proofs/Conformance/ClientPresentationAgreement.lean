@@ -21,6 +21,7 @@ def blockers : List (String × SendBlockedReason) :=
   , ("sessionMissingFromSnapshot", .sessionAbsent)
   , ("inconsistentTurnObservation", .inconsistentObservation)
   , ("routeNotReady", .workflowBlocked)
+  , ("runtimeNotConnected", .workflowBlocked)
   ]
 
 def cases : List PresentationCase :=

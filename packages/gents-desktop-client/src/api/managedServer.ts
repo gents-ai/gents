@@ -4,6 +4,7 @@ import type { DesktopApiAdapter } from "./types.js";
 type ManagedServerCommand =
   | "managedServerStatus"
   | "startManagedServer"
+  | "enrollManagedServer"
   | "restartManagedServer"
   | "resetManagedServer"
   | "validateManagedServerRoot"
@@ -17,6 +18,7 @@ export function createManagedServerCommands(
 ): Pick<DesktopApiAdapter, ManagedServerCommand> {
   return {
     managedServerStatus: () => invokeDesktop("desktop_managed_server_status"),
+    enrollManagedServer: () => invokeDesktop("desktop_managed_server_enroll"),
     startManagedServer: (nodeName, authority) =>
       invokeDesktop("desktop_managed_server_start", {
         request: {

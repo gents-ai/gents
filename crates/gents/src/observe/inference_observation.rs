@@ -176,17 +176,6 @@ impl Drop for InferenceObservationGuard {
 }
 
 impl crate::runtime::agent::Gents {
-    pub async fn inference_observation_authorized(&self, actor: &str) -> anyhow::Result<bool> {
-        if crate::runtime::agent::p2p_reconcile::enrollment_reconcile::runtime_observation_admitted(
-            Some(actor),
-            self.node_did(),
-            None,
-        ) {
-            return Ok(true);
-        }
-        self.client_observation_authorized(actor).await
-    }
-
     /// Returns only a currently claimed request visible to the authenticated actor.
     pub async fn read_inference_observation(
         &self,
@@ -204,24 +193,15 @@ impl crate::runtime::agent::Gents {
 }
 
 async fn observation_visible(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     actor: &identity::Did,
     key: &InferenceKey,
 ) -> anyhow::Result<bool> {
-    let scope = if crate::tools::background::job::control::operator_control_authorized(
-        &key.node,
-        &key.node,
-        &key.node,
-        Some(actor.as_ref()),
-    ) {
-        format!(
-            r#"node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}"#,
-            crate::store::graphql::escape_graphql_string(&key.node),
-            crate::store::graphql::escape_graphql_string(&key.session)
-        )
-    } else {
-        crate::session::session_scope_filter(&key.node, &key.session, Some(actor.as_ref()))
-    };
+    let scope = format!(
+        r#"node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}"#,
+        crate::store::graphql::escape_graphql_string(&key.node),
+        crate::store::graphql::escape_graphql_string(&key.session)
+    );
     let request = crate::store::graphql::escape_graphql_string(&key.request);
     let generation = crate::store::graphql::escape_graphql_string(&key.generation);
     let query = format!(
@@ -229,86 +209,89 @@ async fn observation_visible(
     );
     crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
-        None,
+        Some(actor.clone()),
         "inference_observation.authorize",
         |txn| {
             Box::pin(async {
                 let response = txn.execute(&query).await?;
-                let sessions = response
-                    .pointer("/data/AgentSession")
-                    .and_then(serde_json::Value::as_array);
-                let requests = response
-                    .pointer("/data/AgentRequest")
-                    .and_then(serde_json::Value::as_array);
-                let (Some(sessions), Some(requests)) = (sessions, requests) else {
-                    return Ok(false);
-                };
-                if sessions.len() != 1 || requests.len() != 1 {
-                    return Ok(false);
-                }
-                let Some(session_doc) = sessions[0]
-                    .get("_docID")
-                    .and_then(serde_json::Value::as_str)
-                else {
-                    return Ok(false);
-                };
-                let Some(request_doc) = requests[0]
-                    .get("_docID")
-                    .and_then(serde_json::Value::as_str)
-                else {
-                    return Ok(false);
-                };
-                let state = requests[0]
-                    .get("lifecycle_state")
-                    .and_then(serde_json::Value::as_str);
-                if !matches!(
-                    gents_protocol::request_lifecycle::RequestLifecycleState::parse_opt(state),
-                    Some(
-                        gents_protocol::request_lifecycle::RequestLifecycleState::Claimed
-                            | gents_protocol::request_lifecycle::RequestLifecycleState::Processing
-                    )
-                ) {
-                    return Ok(false);
-                }
-                let sessions = txn
-                    .document_visibility_as(
-                        actor.clone(),
-                        "AgentSession",
-                        &[session_doc.to_owned()],
-                    )
-                    .await?;
-                let requests = txn
-                    .document_visibility_as(
-                        actor.clone(),
-                        "AgentRequest",
-                        &[request_doc.to_owned()],
-                    )
-                    .await?;
-                Ok::<_, anyhow::Error>(
-                    sessions.len() == 1
-                        && sessions[0].visible
-                        && requests.len() == 1
-                        && requests[0].visible,
-                )
+                Ok::<_, anyhow::Error>(activity_visible(&response))
             })
         },
     )
     .await
 }
 
+fn activity_visible(response: &serde_json::Value) -> bool {
+    let sessions = response
+        .pointer("/data/AgentSession")
+        .and_then(serde_json::Value::as_array);
+    let requests = response
+        .pointer("/data/AgentRequest")
+        .and_then(serde_json::Value::as_array);
+    let (Some([session]), Some([request])) =
+        (sessions.map(Vec::as_slice), requests.map(Vec::as_slice))
+    else {
+        return false;
+    };
+    if session
+        .get("_docID")
+        .and_then(serde_json::Value::as_str)
+        .is_none()
+        || request
+            .get("_docID")
+            .and_then(serde_json::Value::as_str)
+            .is_none()
+    {
+        return false;
+    }
+    let state = request
+        .get("lifecycle_state")
+        .and_then(serde_json::Value::as_str);
+    matches!(
+        gents_protocol::request_lifecycle::RequestLifecycleState::parse_opt(state),
+        Some(
+            gents_protocol::request_lifecycle::RequestLifecycleState::Claimed
+                | gents_protocol::request_lifecycle::RequestLifecycleState::Processing
+        )
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn visibility_matches_lean_for_direct_reads() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().inference_visibility_cases;
+        for case in cases {
+            let sessions = case["sessions"].as_u64().unwrap() as usize;
+            let requests = case["requests"].as_u64().unwrap() as usize;
+            let state = if case["active"].as_bool().unwrap() {
+                "processing"
+            } else {
+                "completed"
+            };
+            let response = serde_json::json!({"data": {
+                "AgentSession": vec![serde_json::json!({"_docID":"session"}); sessions],
+                "AgentRequest": vec![serde_json::json!({"_docID":"request", "lifecycle_state":state}); requests],
+            }});
+            assert_eq!(
+                activity_visible(&response),
+                case["expected"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+    }
+
     #[tokio::test]
-    async fn matching_requester_still_requires_both_document_permissions() {
+    async fn delegated_reader_requires_both_document_permissions() {
         use crate::NodeIdentity;
         let home = tempfile::tempdir().unwrap();
         let owner = crate::KeyIdentity::load_or_create(home.path().join("owner"), None).unwrap();
         let requester =
             crate::KeyIdentity::load_or_create(home.path().join("requester"), None).unwrap();
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .with_node_identity_did(owner.did())
                 .with_node_acp_enabled()
                 .build()
@@ -316,8 +299,8 @@ mod tests {
                 .unwrap(),
         );
         let policy = node
-            .add_dac_policy(
-                owner.did(),
+            .add_dac_policy_as(
+                &defra_core::RequestContext::default().with_identity(Some(owner.did().to_owned())),
                 r#"
 name: Activity read
 resources:
@@ -340,13 +323,17 @@ resources:
         ] { access.add_collection(&schema).await.unwrap(); }
         let actor: identity::Did = requester.did().parse().unwrap();
         let owner_did: identity::Did = owner.did().parse().unwrap();
+        crate::store::config_client::ConfigAccess::local_as(node.clone(), owner_did.clone())
+            .grant_node_permission(&actor, acp::nac::NodePermission::DocumentRead)
+            .await
+            .unwrap();
         let key = InferenceKey {
             node: "runtime".into(),
             session: "session".into(),
             request: "request".into(),
             generation: "generation".into(),
         };
-        let requester_did = requester.did();
+        let requester_did = owner.did();
         let (session_doc, request_doc) = crate::store::config_client::ConfigAccess::transact_local_write(&node, Some(owner_did), "test.activity.acp", |txn| {
             Box::pin(async move {
                 let session = txn.execute_with_variables("mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }", &serde_json::json!({"input":{"node_did":"runtime","session_id":"session","requester_did":requester_did}})).await?;
@@ -375,7 +362,7 @@ resources:
         .await
         .unwrap();
         assert!(observation_visible(&node, &actor, &key).await.unwrap());
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     fn key() -> InferenceKey {

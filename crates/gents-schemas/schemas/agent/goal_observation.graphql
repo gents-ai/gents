@@ -1,5 +1,6 @@
-type GoalObservation @branchable {
+type GoalObservation @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "children") {
     session_doc_id: String @index(unique: true) @immutable
+    agent_did: String @immutable
     node_did: String @index @immutable
     session_id: String @index @immutable
     requester_did: String @index @immutable

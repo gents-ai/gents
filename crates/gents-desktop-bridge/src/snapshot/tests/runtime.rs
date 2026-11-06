@@ -7,7 +7,7 @@ use crate::types::{SessionSummary, TriggerView};
 fn canonical_session(requester: Option<&str>) -> AgentSession {
     serde_json::from_value(serde_json::json!({
         "session_id":"session", "node_did":"did:test:owner", "requester_did":requester,
-        "agent_id":"agent", "created_at":"2026-09-01T00:00:00Z",
+        "agent_did":"agent", "created_at":"2026-09-01T00:00:00Z",
         "title":{"text":"Saved title","source":"user"}, "tags":["review"],
         "provenance":{"task_id":"task","fork":{"source_session_id":"parent","at_user_turn":2}}
     }))
@@ -37,7 +37,7 @@ fn indexed_request(requester: Option<&str>) -> AgentRequestRow {
         node_did: Some("did:test:owner".into()),
         requester_did: requester.map(str::to_owned),
         session_id: Some("session".into()),
-        agent_id: Some("agent".into()),
+        agent_did: Some("agent".into()),
         lifecycle_state: Some(RequestLifecycleState::Processing),
         ..Default::default()
     }
@@ -276,7 +276,7 @@ fn manual_task_history_uses_exact_opening_and_preserves_later_turns() {
     foreign.requester_did = Some("other".into());
     let mut wrong_agent = opening.clone();
     wrong_agent.request_id = "wrong-agent".into();
-    wrong_agent.agent_id = Some("other".into());
+    wrong_agent.agent_did = Some("other".into());
     let later = indexed_request(Some("requester"));
     let store = ClientStore::from_rows(ClientStoreRows {
         sessions: vec![session.clone()],
@@ -459,7 +459,7 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
                 request_id: request_id.clone(),
                 node_did: Some("did:test:contract-node".to_string()),
                 requester_did: None,
-                agent_id: Some("contract-agent".to_string()),
+                agent_did: Some("contract-agent".to_string()),
                 session_id: Some(format!("contract-session-{index}")),
                 retry_parent_request: None,
                 retry_root_request: None,
@@ -562,7 +562,7 @@ fn starter_receipt(
         session_id: session.session_id.clone(),
         session_doc_id: session_doc_id.into(),
         requester_did: session.requester_did.clone(),
-        agent_id: session.agent_id.clone(),
+        agent_did: session.agent_did.clone(),
         opening_request_doc_id: "opening".into(),
         cause: gents_protocol::session::SessionCreationCause::AgentNew,
         cause_binding: "tool".into(),
@@ -581,6 +581,7 @@ async fn fleet_snapshot_verifies_indexed_starters_once_per_evidence() {
     let (core, tmp) = crate::tests::support::boot_core().await;
     let signer = gents::KeyIdentity::load_or_create(tmp.path().join("fleet.key"), None).unwrap();
     let node_did = signer.did().to_owned();
+    let creator = crate::tests::support::fixture_signer(7);
     let source = |session_id: &str| gents_protocol::session::SessionReference {
         node_did: "did:test:remote-node".into(),
         session_id: session_id.into(),
@@ -594,7 +595,7 @@ async fn fleet_snapshot_verifies_indexed_starters_once_per_evidence() {
     ] {
         crate::tests::support::create_started_session(
             &core,
-            &signer,
+            &creator,
             crate::tests::support::fixture_session(&node_did, child),
             &source(parent_session),
             parent,

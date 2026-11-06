@@ -79,35 +79,39 @@ async fn drain_pending_session_requests_where_in_txn(
     );
     let rows: Vec<AgentRequestRow> = serde_json::from_value(pending.clone())?;
 
-    let escaped_reason = escape_graphql_string(reason);
     let mut drained = Vec::new();
     for row in rows.into_iter().filter(should_drain) {
-        let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+        let terminalized_at = chrono::Utc::now().to_rfc3339();
         let doc_id = row
             .doc_id
             .as_deref()
             .context("pending AgentRequest row is missing _docID")?;
         let escaped_doc_id = escape_graphql_string(doc_id);
         let mutation = format!(
-            r#"mutation {{
+            r#"mutation($input: AgentRequestMutationInputArg!) {{
                 update_AgentRequest(
-                    docID: "{escaped_doc_id}", filter: {{
+                    filter: {{
                         _docID: {{ _eq: "{escaped_doc_id}" }},
                         {scope},
                         lifecycle_state: {{ _eq: "{pending}" }}
                     }},
-                    input: {{
-                        lifecycle_state: "{interrupted}",
-                        failure_reason: "{escaped_reason}",
-                        terminalized_at: "{terminalized_at}",
-                        terminal_redrive_attempts: 0
-                    }}
+                    input: $input
                 ) {{ _docID }}
             }}"#,
             pending = RequestLifecycleState::Pending.as_str(),
-            interrupted = RequestLifecycleState::Interrupted.as_str()
         );
-        let response = txn.execute(&mutation).await?;
+        let response = txn
+            .execute_client_signed_update(
+                &mutation,
+                &serde_json::json!({"input": {
+                    "lifecycle_state": RequestLifecycleState::Interrupted.as_str(),
+                    "failure_reason": reason,
+                    "terminalized_at": terminalized_at,
+                    "terminal_redrive_attempts": 0,
+                }}),
+                gents_protocol::schemas::AGENT_REQUEST,
+            )
+            .await?;
         let updated = response["data"]
             .get("update_AgentRequest")
             .context("pending AgentRequest drain mutation omitted affected rows")?;

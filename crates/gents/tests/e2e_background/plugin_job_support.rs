@@ -18,16 +18,18 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::support::accepted_turn::{
-    boot_prepared_accepted_turn, prepare_accepted_turn, AcceptedTurnRuntime, AcceptedTurnSpec,
-    PreparedAcceptedTurn,
+    boot_prepared_accepted_turn, prepare_managed_accepted_turn, AcceptedTurnRuntime,
+    AcceptedTurnSpec, PreparedAcceptedTurn,
 };
 use crate::support::fixtures::{
-    agent_target, bind_agent_backend, configure_agent_tools, configure_child_agent,
+    agent_target, bind_selected_managed_agent_backend, configure_agent_tools_as,
 };
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse,
 };
-use crate::support::{test_db, test_db_from_home, TestDb};
+use crate::support::{
+    managed_agent_fixture, test_db, test_db_from_home, ManagedAgentFixture, TestDb,
+};
 
 pub(crate) const PARENT: &str = "plugin-job-parent";
 pub(crate) const CHILD: &str = "plugin-job-child";
@@ -134,17 +136,23 @@ pub(crate) fn job_call(tool_call_id: &str, plan: &[PlanEntry]) -> StreamChunk {
     )
 }
 
-/// Installs the fixture pack through the document-pack install owners and
-/// wires the parent and child agents around it.
+pub(crate) struct JobActors {
+    pub fixture: ManagedAgentFixture,
+    pub child_did: String,
+}
+
 pub(crate) async fn install_job_fixture(
     db: &TestDb,
     plugin_home: &Path,
     settings: PluginJobSettings,
-) {
+) -> JobActors {
+    let fixture = managed_agent_fixture(db).await;
+    let (_, child) =
+        crate::support::install_managed_agent(db, &fixture.access, &fixture.user, "Job child")
+            .await;
     let did = db.node_identity.did().to_string();
-    gents::ensure_node(&db.node, &did)
-        .await
-        .expect("create the node document the pack install requires");
+    let parent_did = fixture.binding.agent_did.clone();
+    let child_did = child.agent_did;
     let (bytes, _) = pack_dir(&fixture_dir()).expect("pack the job fixture");
     let archive = PackArchive::from_bytes(&bytes).expect("read the job fixture archive");
     let config = load_pack_config(
@@ -156,9 +164,9 @@ pub(crate) async fn install_job_fixture(
         &|_| None,
     )
     .expect("load the job fixture pack config");
-    let access = ConfigAccess::local(db.node.clone());
+    let access = &fixture.access;
     let prepared = prepare_document_pack_install(
-        &access,
+        access,
         &did,
         archive.manifest(),
         &config,
@@ -172,7 +180,7 @@ pub(crate) async fn install_job_fixture(
     .await
     .expect("prepare the job fixture install");
     install_prepared_document_pack(
-        &access,
+        access,
         &did,
         &archive,
         &[],
@@ -185,28 +193,27 @@ pub(crate) async fn install_job_fixture(
     .await
     .expect("install the job fixture pack");
 
-    configure_child_agent(
-        &db.node,
+    configure_agent_tools_as(
+        access,
         &did,
-        CHILD,
-        &format!("{CHILD}:tools"),
+        &child_did,
+        None,
+        Tools {
+            tools_id: format!("{CHILD}:tools"),
+            node_did: did.clone(),
+            agents: Some(AgentTools {
+                target_ids: Vec::new(),
+                enabled: Some(false),
+            }),
+            ..Default::default()
+        },
         Vec::new(),
-        false,
     )
     .await;
-    configure_child_agent(
-        &db.node,
+    configure_agent_tools_as(
+        access,
         &did,
-        PARENT,
-        &format!("{PARENT}:tools"),
-        Vec::new(),
-        false,
-    )
-    .await;
-    configure_agent_tools(
-        &db.node,
-        &did,
-        PARENT,
+        &parent_did,
         None,
         Tools {
             tools_id: format!("{PARENT}:tools"),
@@ -229,18 +236,31 @@ pub(crate) async fn install_job_fixture(
         },
         vec![(
             gents::Collection::AgentTarget,
-            serde_json::to_value(agent_target(&did, CHILD, &did, CHILD))
+            serde_json::to_value(agent_target(&did, CHILD, &did, &child_did))
                 .expect("serialize the child target"),
         )],
     )
     .await;
+    JobActors { fixture, child_did }
 }
 
 pub(crate) struct JobHarness {
     pub db: TestDb,
+    pub actors: JobActors,
     pub plugin_home: PathBuf,
     pub runtime: AcceptedTurnRuntime,
     pub session_id: String,
+}
+
+impl JobHarness {
+    pub fn agent_access(&self) -> ConfigAccess {
+        ConfigAccess::local_managed_agent(
+            self.db.node.clone(),
+            ::identity::Did::new(self.actors.fixture.agent.did()).unwrap(),
+            self.actors.fixture.agent.as_ref(),
+        )
+        .expect("managed job Agent access")
+    }
 }
 
 async fn boot_runtime(
@@ -269,7 +289,7 @@ pub(crate) async fn boot_job_harness(
     accepted_chunks: Vec<StreamChunk>,
     child_plans: Vec<StreamPlan>,
 ) -> JobHarness {
-    install_job_fixture(&db, &plugin_home, job_settings()).await;
+    let actors = install_job_fixture(&db, &plugin_home, job_settings()).await;
     // A child inherits the pin's cwd, and an empty one cannot be resolved.
     let cwd = db.data_path().join("job_cwd");
     std::fs::create_dir_all(&cwd).expect("create the job working folder");
@@ -278,13 +298,14 @@ pub(crate) async fn boot_job_harness(
         .expect("resolve the job working folder")
         .to_string_lossy()
         .into_owned();
-    let prepared = prepare_accepted_turn(
+    let prepared = prepare_managed_accepted_turn(
         &db,
+        &actors.fixture,
         AcceptedTurnSpec {
             backend_id: BACKEND_ID,
             model: MODEL,
-            parent_agent_id: PARENT,
-            configured_agent_ids: &[PARENT, CHILD],
+            parent_agent_did: &actors.fixture.binding.agent_did,
+            configured_agent_dids: &[&actors.fixture.binding.agent_did, &actors.child_did],
             request_id: &format!("{session_id}-parent"),
             session_id,
             prompt: &format!("{session_id} start"),
@@ -299,6 +320,7 @@ pub(crate) async fn boot_job_harness(
     let runtime = boot_runtime(&db, &plugin_home, prepared).await;
     JobHarness {
         db,
+        actors,
         plugin_home,
         runtime,
         session_id: session_id.into(),
@@ -318,13 +340,55 @@ pub(crate) async fn reboot_job_harness(
             .await
             .expect("reopen the retained store"),
     );
+    let user = crate::support::load_managed_fixture_user(&db).await;
+    let access = db.client_access(&user);
+    let response = access.execute("{ Node { node_did default_agent_did } Agent { node_did agent_did creation_nonce display_name } }").await.expect("read retained job identities");
+    let rows = response["data"]["Agent"]
+        .as_array()
+        .expect("retained job Agents");
+    let parent_did = response["data"]["Node"]
+        .as_array()
+        .expect("retained Node")
+        .iter()
+        .find(|node| node["node_did"] == db.node_identity.did())
+        .and_then(|node| node["default_agent_did"].as_str())
+        .expect("retained default Agent");
+    let parent = rows
+        .iter()
+        .find(|row| row["agent_did"] == parent_did)
+        .expect("retained parent Agent");
+    let binding = gents_protocol::agent_identity::AgentIdentityBinding {
+        agent_did: parent_did.into(),
+        creation_nonce: parent["creation_nonce"]
+            .as_str()
+            .expect("parent creation nonce")
+            .into(),
+    };
+    let agent = gents::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .expect("resolve retained parent Agent");
+    let child_did = rows
+        .iter()
+        .find(|row| row["node_did"] == db.node_identity.did() && row["display_name"] == "Job child")
+        .and_then(|row| row["agent_did"].as_str())
+        .expect("retained child Agent")
+        .to_owned();
+    let actors = JobActors {
+        fixture: ManagedAgentFixture {
+            user,
+            access,
+            agent,
+            binding,
+        },
+        child_did,
+    };
     let backend =
         MockStreamingBackend::start_with_plans(MODEL, plans).expect("start the restart backend");
-    for agent_id in [PARENT, CHILD] {
-        bind_agent_backend(
-            &db.node,
-            db.node_identity.did(),
-            agent_id,
+    for agent_did in [&actors.fixture.binding.agent_did, &actors.child_did] {
+        bind_selected_managed_agent_backend(
+            &db,
+            &actors.fixture,
+            agent_did,
+            agent_did == &actors.fixture.binding.agent_did,
             BACKEND_ID,
             backend.endpoint(),
             MODEL,
@@ -334,6 +398,7 @@ pub(crate) async fn reboot_job_harness(
     let runtime = boot_runtime(&db, &plugin_home, PreparedAcceptedTurn { backend }).await;
     JobHarness {
         db,
+        actors,
         plugin_home,
         runtime,
         session_id: session_id.into(),
@@ -348,14 +413,10 @@ fn address(h: &JobHarness, tool_call_id: &str) -> JobKey {
 }
 
 pub(crate) async fn job_row(h: &JobHarness, tool_call_id: &str) -> String {
-    load_job_view(
-        &ConfigAccess::local(h.db.node.clone()),
-        None,
-        address(h, tool_call_id),
-    )
-    .await
-    .expect("read the job view")
-    .row_doc_id
+    load_job_view(&h.actors.fixture.access, None, address(h, tool_call_id))
+        .await
+        .expect("read the job view")
+        .row_doc_id
 }
 
 pub(crate) async fn wait_job(
@@ -364,7 +425,7 @@ pub(crate) async fn wait_job(
     until: impl Fn(&JobView) -> bool,
     timeout: Duration,
 ) -> JobView {
-    let access = ConfigAccess::local(h.db.node.clone());
+    let access = h.actors.fixture.access.clone();
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let last = load_job_view(&access, None, address(h, tool_call_id)).await;
@@ -428,7 +489,11 @@ async fn scripted_job_adopts_one_child_and_completes() {
     assert_eq!(view.children[0].state, JobChildState::Completed);
 
     let row_doc_id = job_row(&h, "job-1").await;
-    let response = ConfigAccess::local(h.db.node.clone())
+    let response = h
+        .actors
+        .fixture
+        .access
+        .clone()
         .execute(&format!(
             r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state plugin_execution_receipt }} }}"#,
             gents::store::graphql::escape_graphql_string(&row_doc_id),

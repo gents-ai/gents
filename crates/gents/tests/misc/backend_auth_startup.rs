@@ -1,12 +1,15 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
+use gents::eval::runner::embedded::EmbeddedHome;
 use gents::store::graphql::escape_graphql_string;
 use gents::{ensure_runtime_schemas, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use serde_json::Value;
 
-use crate::support::fixtures::{bind_default_agent_backend, test_agent, test_identity};
+use crate::support::fixtures::{
+    bind_default_agent_backend, test_agent, test_agent_with_identity, test_identity, test_node_for,
+};
 use crate::support::mock_endpoint::MockModelEndpoint;
 
 #[tokio::test]
@@ -96,7 +99,7 @@ async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> 
     let default_agent = agent
         .agents()
         .iter()
-        .find(|behavior| behavior.agent_id == agent.default_agent_id())
+        .find(|behavior| behavior.agent_did == agent.default_agent_did())
         .expect("document runtime should load the default behavior");
     assert_eq!(default_agent.completion_client_api_key()?, "backend-key");
 
@@ -104,59 +107,78 @@ async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> 
 }
 
 #[tokio::test]
-async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
+async fn oneshot_refuses_admission_bound_to_another_node() -> Result<()> {
+    use gents::store::local::backend_protection::BackendProtectionError;
+
+    let admitted = EmbeddedHome::create_temp("oneshot-admitted").await?;
+    let other = EmbeddedHome::create_temp("oneshot-other").await?;
+    let behavior = test_agent("oneshot-wrong-node", "backend-oneshot-wrong-node", None);
+
+    let error = gents::run_openai_oneshot_admitted(
+        other.node.clone(),
+        &behavior,
+        "ping",
+        &admitted.backend_admission(),
+    )
+    .await
+    .expect_err("an admission bound to another node must not admit this one-shot");
+    assert!(matches!(
+        error.downcast_ref::<BackendProtectionError>(),
+        Some(BackendProtectionError::WrongNode)
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn admitted_openrouter_oneshot_completes_one_request_with_its_terminal_message() -> Result<()>
+{
     use gents::BackendProviderKind;
 
-    let mut behavior = test_agent("openrouter-oneshot", "backend-openrouter", None);
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(behavior.node_did())
-            .build()
-            .await?,
+    let db = crate::support::test_db_from_home(
+        EmbeddedHome::create_temp("oneshot-admitted-openrouter").await?,
     );
-    ensure_runtime_schemas(node.as_ref()).await?;
+    let fixture = crate::support::managed_agent_fixture(&db).await;
+    let mut behavior = test_agent_with_identity(
+        test_node_for(db.node_identity.clone(), fixture.binding.agent_did.clone()),
+        fixture.agent.clone(),
+    );
     let mock_endpoint = MockModelEndpoint::start_with_required_bearer(
         "openai/gpt-4o-mini",
         Some("openrouter-key"),
     )?;
+    behavior.backend_id = Some(format!("{}:backend", fixture.binding.agent_did));
     behavior.backend_provider_kind = BackendProviderKind::OpenRouter;
     behavior.backend_endpoint = mock_endpoint.endpoint().to_string();
     behavior.backend_auth = gents::documents::BackendAuth::ApiKey {
         key: "openrouter-key".to_string(),
     };
     behavior.model_name = "openai/gpt-4o-mini".to_string();
-    crate::support::fixtures::bind_agent_backend(
-        &node,
-        behavior.node_did(),
-        &behavior.agent_id,
-        "backend-openrouter",
-        mock_endpoint.endpoint(),
-        "openai/gpt-4o-mini",
-    )
-    .await;
 
-    let result =
-        gents::run_openai_oneshot(node.clone(), &behavior, "Say hello in one sentence.").await?;
+    let result = gents::run_openai_oneshot_admitted(
+        db.node.clone(),
+        &behavior,
+        "Say hello in one sentence.",
+        &db.home.backend_admission(),
+    )
+    .await?;
     assert_eq!(result.response_text, "mock response");
 
-    let projection = node
+    let projection = fixture
+        .access
         .execute(
             r#"{
                 AgentRequest { _docID node_did requester_did lifecycle_state terminal_output }
                 AgentSession { observation }
             }"#,
         )
-        .await;
-    assert!(!projection.has_errors(), "{:?}", projection.errors);
-    let request_rows = projection.data.as_ref().unwrap()["AgentRequest"]
+        .await?;
+    let projection = &projection["data"];
+    let request_rows = projection["AgentRequest"]
         .as_array()
         .expect("one-shot request rows");
-    assert_eq!(
-        request_rows.len(),
-        1,
-        "one-shot creates exactly one request"
-    );
-    let request_row = &request_rows[0];
+    let [request_row] = request_rows.as_slice() else {
+        panic!("one-shot creates exactly one request: {request_rows:?}");
+    };
     assert_eq!(request_row["lifecycle_state"], "completed");
     let terminal: gents_protocol::output::TerminalOutput =
         serde_json::from_value(request_row["terminal_output"].clone())
@@ -164,38 +186,28 @@ async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
     let gents_protocol::output::TerminalOutput::Message { message_doc_id } = terminal else {
         panic!("one-shot completion must select a published message");
     };
-    let owner = request_row["node_did"]
-        .as_str()
-        .expect("canonical request owner");
-    let requester = request_row["requester_did"].as_str();
-    let request_doc_id = request_row["_docID"]
-        .as_str()
-        .expect("canonical request identity");
-    let (header, message) = gents::session::load_canonical_message_from_node(
-        node.as_ref(),
+    let (header, message) = gents::session::load_canonical_message(
+        &fixture.access,
         &message_doc_id,
-        owner,
-        requester,
+        request_row["node_did"]
+            .as_str()
+            .expect("canonical request owner"),
+        request_row["requester_did"].as_str(),
     )
     .await
     .expect("reconstruct terminal assistant message");
     assert_eq!(
         header.request_doc_id.as_deref(),
-        Some(request_doc_id),
+        request_row["_docID"].as_str(),
         "terminal message must belong to the completed request"
     );
-    assert!(
-        matches!(message, gents_protocol::message::Message::Assistant { .. }),
-        "terminal output must reconstruct the assistant transcript row"
-    );
+    let gents_protocol::message::Message::Assistant { .. } = &message else {
+        panic!("terminal output must reconstruct the assistant transcript row");
+    };
     let body = gents_protocol::transcript::present_message(&message).body_markdown;
-    assert!(
-        body.contains("mock response"),
-        "assistant body must contain the mock response, got: {body:?}"
-    );
+    assert!(body.contains("mock response"), "assistant body: {body:?}");
     assert_eq!(
-        projection.data.as_ref().unwrap()["AgentSession"][0]["observation"]["latest_request"]
-            ["lifecycle_state"],
+        projection["AgentSession"][0]["observation"]["latest_request"]["lifecycle_state"],
         "completed"
     );
 
@@ -205,9 +217,7 @@ async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
         .find(|request| request.method == "POST" && request.path.ends_with("/chat/completions"))
         .expect("completion request should be recorded");
     let body: Value = serde_json::from_str(&completion_request.body)?;
-
     assert_eq!(body["provider"]["require_parameters"], true);
     assert_eq!(body["model"], "openai/gpt-4o-mini");
-
     Ok(())
 }

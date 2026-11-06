@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use super::*;
 use crate::store::identity::NodeIdentity;
@@ -10,9 +10,169 @@ const FIXTURE_CLOSE: &[MailboxCloseCollection] = &[MailboxCloseCollection {
     correlation_field: "mailbox_item_key",
 }];
 
+pub(super) fn root_identity() -> crate::store::identity::KeyIdentity {
+    let home = tempfile::tempdir().unwrap();
+    crate::request::lifecycle::test_support::pin_fixed_signing_identity(home.path())
+}
+
+pub(super) fn agent_identity() -> Arc<dyn NodeIdentity> {
+    let root = root_identity();
+    let nonce = "b".repeat(64);
+    let binding = gents_protocol::agent_identity::AgentIdentityBinding {
+        agent_did: crate::store::identity::derive_agent_identity(&root, &nonce)
+            .unwrap()
+            .did()
+            .to_owned(),
+        creation_nonce: nonce,
+    };
+    crate::store::identity::resolve_agent_identity(&root, &binding).unwrap()
+}
+
+pub(super) fn agent_access(node: &Arc<EmbeddedNode>) -> crate::ConfigAccess {
+    let agent = agent_identity();
+    crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap()
+}
+
+pub(super) fn fixture_recipient(label: &str) -> String {
+    if !label.starts_with("did:test:") {
+        return label.to_owned();
+    }
+    static RECIPIENTS: std::sync::OnceLock<Vec<(&'static str, crate::KeyIdentity)>> =
+        std::sync::OnceLock::new();
+    let recipients = RECIPIENTS.get_or_init(|| {
+        let directory = tempfile::tempdir().unwrap();
+        [
+            "did:test:owner",
+            "did:test:owner-a",
+            "did:test:owner-b",
+            "did:test:delegate",
+            "did:test:alice",
+            "did:test:bob",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, label)| {
+            (
+                label,
+                crate::KeyIdentity::load_or_create(
+                    directory.path().join(format!("client-{index}.key")),
+                    None,
+                )
+                .unwrap(),
+            )
+        })
+        .collect()
+    });
+    recipients
+        .iter()
+        .find(|(name, _)| *name == label)
+        .expect("known mailbox client fixture")
+        .1
+        .did()
+        .to_owned()
+}
+
+pub(super) async fn load_as_creator(
+    node: &Arc<EmbeddedNode>,
+    doc_id: &str,
+) -> Result<Option<MailboxItem>> {
+    load_mailbox_item_with_access(&agent_access(node), doc_id).await
+}
+
+pub(super) async fn list_as_creator(
+    node: &Arc<EmbeddedNode>,
+    requester: &str,
+    status: Option<MailboxStatus>,
+) -> Result<Vec<MailboxItem>> {
+    list_mailbox_items_on(&agent_access(node), &fixture_recipient(requester), status).await
+}
+
+pub(super) async fn dismiss_as_creator(
+    node: &Arc<EmbeddedNode>,
+    doc_id: &str,
+) -> Result<MailboxItem> {
+    dismiss_mailbox_item_on(&agent_access(node), doc_id).await
+}
+
+pub(super) async fn stamp_create(
+    node: &Arc<EmbeddedNode>,
+    context: &MailboxStampContext,
+    args: FileMailboxItemArgs,
+) -> Result<MailboxItem> {
+    stamp_create_with_access(
+        node,
+        &agent_access(node),
+        context,
+        args,
+        MAILBOX_CLOSE_COLLECTIONS,
+    )
+    .await
+}
+
+pub(super) async fn stamp_create_with_close_collections(
+    node: &Arc<EmbeddedNode>,
+    context: &MailboxStampContext,
+    args: FileMailboxItemArgs,
+    collections: &[MailboxCloseCollection],
+) -> Result<MailboxItem> {
+    anyhow::ensure!(
+        context.node_did == root_identity().did(),
+        "foreign-node mailbox observations require replication from their owning node"
+    );
+    stamp_create_with_access(node, &agent_access(node), context, args, collections).await
+}
+
+/// A foreign node label exercises the page predicate; transport provenance is
+/// covered by the separate exact-peer-pull regression.
+async fn seed_foreign_mailbox_row(
+    node: &Arc<EmbeddedNode>,
+    source: &str,
+    deadline: &str,
+) -> String {
+    let source = escape_graphql_string(source);
+    let deadline = escape_graphql_string(deadline);
+    let agent = escape_graphql_string(agent_identity().did());
+    let now = Utc::now().to_rfc3339();
+    let response = agent_access(node).write("test.mailbox.foreign_label", &format!(r#"mutation {{ create_MailboxItem(input: {{
+        item_key: "session:{source}:ask:1", requester_did: "did:test:owner", node_did: "did:test:foreign",
+        status: "open", kind: "ask", action: "write_document", title: "fixture", source_kind: "session",
+        source_id: "{source}", target_node_did: "did:test:foreign", target_agent_did: "{agent}",
+        expected_collection: "MailboxFixture", deadline_at: "{deadline}", created_at: "{now}", updated_at: "{now}"
+    }}) {{ _docID }} }}"#)).await.unwrap();
+    crate::store::graphql::created_doc_id(&response, MAILBOX_COLLECTION).unwrap()
+}
+
 pub(super) async fn test_node() -> Arc<EmbeddedNode> {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let root = root_identity();
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .enable_signing()
+            .with_node_identity_did(root.did())
+            .with_node_acp_enabled()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let root_access =
+        crate::ConfigAccess::local_as(node.clone(), identity::Did::new(root.did()).unwrap());
+    let agent = identity::Did::new(agent_identity().did()).unwrap();
+    for permission in [
+        crate::store::config_client::NodePermission::DocumentRead,
+        crate::store::config_client::NodePermission::DocumentUpdate,
+        crate::store::config_client::NodePermission::CollectionGet,
+        crate::store::config_client::NodePermission::DacRelationAdd,
+    ] {
+        root_access
+            .grant_node_permission(&agent, permission)
+            .await
+            .unwrap();
+    }
     node.add_collection(
         r#"
         type MailboxFixture {
@@ -28,9 +188,9 @@ pub(super) async fn test_node() -> Arc<EmbeddedNode> {
 
 pub(super) fn context(owner: &str) -> MailboxStampContext {
     MailboxStampContext {
-        requester_did: owner.into(),
-        node_did: "did:test:agent".into(),
-        agent_id: "operator".into(),
+        requester_did: fixture_recipient(owner),
+        node_did: root_identity().did().into(),
+        agent_did: agent_identity().did().into(),
         session_id: Some("session-1".into()),
     }
 }
@@ -86,9 +246,7 @@ async fn stamping_is_owner_scoped_idempotent_and_never_reopens() {
     assert!(dismiss_mailbox_item(&node, &first.doc_id, "did:test:other")
         .await
         .is_err());
-    dismiss_mailbox_item(&node, &first.doc_id, "did:test:owner-a")
-        .await
-        .unwrap();
+    dismiss_as_creator(&node, &first.doc_id).await.unwrap();
     let second = stamp_create(
         &node,
         &context("did:test:owner-a"),
@@ -106,15 +264,21 @@ async fn stamping_is_owner_scoped_idempotent_and_never_reopens() {
             title: "duplicate", summary: null, payload: null, source_kind: "session",
             source_id: "wait-1", session_id: null, request_id: null,
             cause_doc_id: null, target_node_did: "did:test:agent",
-            target_agent_id: "operator", expected_collection: null, parent_item_id: null,
+            target_agent_did: "operator", expected_collection: null, parent_item_id: null,
             deadline_at: null, created_at: "{}", updated_at: "{}",
             resolved_at: null, resolved_doc_id: null
         }}) {{ _docID }} }}"#,
         Utc::now().to_rfc3339(),
         Utc::now().to_rfc3339()
     );
-    let response = node.execute(&duplicate_open).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    let duplicate_open = duplicate_open
+        .replace("did:test:owner-a", &fixture_recipient("did:test:owner-a"))
+        .replace("did:test:agent", root_identity().did())
+        .replace("operator", agent_identity().did());
+    agent_access(&node)
+        .write("test.mailbox.duplicate", &duplicate_open)
+        .await
+        .unwrap();
     let error = stamp_create(
         &node,
         &context("did:test:owner-a"),
@@ -162,6 +326,7 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
     let node = Arc::new(
         EmbeddedNode::builder()
             .with_node_identity_did(identity.did())
+            .with_node_acp_owner(identity.did().to_owned())
             .build()
             .await
             .unwrap(),
@@ -178,10 +343,35 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
         .source_fields
         .get("requester_did")
         .map(String::as_str);
-    let source_item = stamp_create(
+    let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
+    let agent = crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
+    let root_access =
+        crate::ConfigAccess::local_as(node.clone(), identity::Did::new(identity.did()).unwrap());
+    for permission in [
+        crate::store::config_client::NodePermission::DocumentRead,
+        crate::store::config_client::NodePermission::DocumentUpdate,
+        crate::store::config_client::NodePermission::DacRelationAdd,
+    ] {
+        root_access
+            .grant_node_permission(&identity::Did::new(agent.did()).unwrap(), permission)
+            .await
+            .unwrap();
+    }
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let mut stamp_context = context(identity.did());
+    stamp_context.node_did = identity.did().into();
+    stamp_context.agent_did = agent.did().into();
+    let source_item = stamp_create_with_access(
         &node,
-        &context(identity.did()),
+        &access,
+        &stamp_context,
         args(MailboxAction::StartRequest, "event-observed-mailbox"),
+        MAILBOX_CLOSE_COLLECTIONS,
     )
     .await
     .unwrap();
@@ -189,7 +379,7 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
         &node,
         ::identity::Did::new(identity.did().to_owned()).expect("fixture creator DID"),
         identity.did(),
-        "operator",
+        agent.did(),
         "continue the run",
         crate::request::lifecycle::ExecutionOrigin::Scheduled,
         crate::request::lifecycle::TriggerLineage {
@@ -205,6 +395,7 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
         requester_did,
         Some("event-trigger-config-doc-1"),
         None,
+        &identity,
     )
     .await
     .unwrap();
@@ -252,7 +443,7 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
     .await
     .unwrap();
     assert_eq!(
-        load_mailbox_item(&node, &source_item.doc_id)
+        load_as_creator(&node, &source_item.doc_id)
             .await
             .unwrap()
             .unwrap()
@@ -274,7 +465,7 @@ async fn close_engines_are_disjoint_and_unsigned_replies_do_not_prevent_expiry()
     let event_child = format!(
         r#"mutation {{ create_AgentRequest(input: {{
             request_id: "mailbox-observer-child", purpose: "normal", node_did: "did:test:agent",
-            requester_did: "did:test:owner", agent_id: "operator",
+            requester_did: "did:test:owner", agent_did: "operator",
             session_id: "session-1", content: "observe",
             lifecycle_state: "pending", execution_origin: "scheduled",
             caused_by_trigger_kind: "event", caused_by_source_doc_id: "{}",
@@ -283,10 +474,18 @@ async fn close_engines_are_disjoint_and_unsigned_replies_do_not_prevent_expiry()
         escape_graphql_string(&observed_item.doc_id),
         Utc::now().to_rfc3339()
     );
-    assert!(!node.execute(&event_child).await.has_errors());
+    let event_child = event_child
+        .replace("did:test:owner", &fixture_recipient("did:test:owner"))
+        .replace("did:test:agent", root_identity().did())
+        .replace("operator", agent_identity().did());
+    agent_access(&node)
+        .write("test.mailbox.event_child", &event_child)
+        .await
+        .unwrap();
     let observer_report = sweep_open_mailbox_items_with_close_collections(
         &node,
-        "did:test:agent",
+        root_identity().did(),
+        &[agent_identity()],
         None,
         FIXTURE_CLOSE,
     )
@@ -295,7 +494,7 @@ async fn close_engines_are_disjoint_and_unsigned_replies_do_not_prevent_expiry()
     .report;
     assert_eq!(observer_report.acted, 0);
     assert_eq!(
-        load_mailbox_item(&node, &observed_item.doc_id)
+        load_as_creator(&node, &observed_item.doc_id)
             .await
             .unwrap()
             .unwrap()
@@ -312,7 +511,7 @@ async fn close_engines_are_disjoint_and_unsigned_replies_do_not_prevent_expiry()
     let create_request = format!(
         r#"mutation {{ create_AgentRequest(input: {{
             request_id: "mailbox-request", purpose: "normal", node_did: "did:test:agent",
-            requester_did: "did:test:owner", agent_id: "operator",
+            requester_did: "did:test:owner", agent_did: "operator",
             session_id: "session-1", content: "continue",
             lifecycle_state: "pending", execution_origin: "interactive",
             caused_by_source_doc_id: "{}", created_at: "{}"
@@ -320,10 +519,18 @@ async fn close_engines_are_disjoint_and_unsigned_replies_do_not_prevent_expiry()
         escape_graphql_string(&request_item.doc_id),
         Utc::now().to_rfc3339()
     );
-    assert!(!node.execute(&create_request).await.has_errors());
+    let create_request = create_request
+        .replace("did:test:owner", &fixture_recipient("did:test:owner"))
+        .replace("did:test:agent", root_identity().did())
+        .replace("operator", agent_identity().did());
+    agent_access(&node)
+        .write("test.mailbox.unsigned_reply", &create_request)
+        .await
+        .unwrap();
     let report = sweep_open_mailbox_items_with_close_collections(
         &node,
-        "did:test:agent",
+        root_identity().did(),
+        &[agent_identity()],
         None,
         FIXTURE_CLOSE,
     )
@@ -346,15 +553,23 @@ async fn close_engines_are_disjoint_and_unsigned_replies_do_not_prevent_expiry()
         r#"mutation {{ create_AgentRequest(input: {{ request_id: "transport-only",
             purpose: "normal",
             node_did: "did:test:agent", requester_did: "did:test:owner",
-            agent_id: "operator", session_id: "session-1", content: "draft",
+            agent_did: "operator", session_id: "session-1", content: "draft",
             caused_by_source_doc_id: "{}", created_at: "{}" }}) {{ _docID }} }}"#,
         escape_graphql_string(&domain_item.doc_id),
         Utc::now().to_rfc3339()
     );
-    assert!(!node.execute(&unrelated_request).await.has_errors());
+    let unrelated_request = unrelated_request
+        .replace("did:test:owner", &fixture_recipient("did:test:owner"))
+        .replace("did:test:agent", root_identity().did())
+        .replace("operator", agent_identity().did());
+    agent_access(&node)
+        .write("test.mailbox.unrelated_request", &unrelated_request)
+        .await
+        .unwrap();
     let request_only = sweep_open_mailbox_items_with_close_collections(
         &node,
-        "did:test:agent",
+        root_identity().did(),
+        &[agent_identity()],
         None,
         FIXTURE_CLOSE,
     )
@@ -364,7 +579,7 @@ async fn close_engines_are_disjoint_and_unsigned_replies_do_not_prevent_expiry()
     assert_eq!(request_only.acted, 0);
     assert_eq!(request_only.expired, 0);
     assert_eq!(
-        load_mailbox_item(&node, &domain_item.doc_id)
+        load_as_creator(&node, &domain_item.doc_id)
             .await
             .unwrap()
             .unwrap()
@@ -378,7 +593,8 @@ async fn close_engines_are_disjoint_and_unsigned_replies_do_not_prevent_expiry()
     assert!(!node.execute(&fixture).await.has_errors());
     let report = sweep_open_mailbox_items_with_close_collections(
         &node,
-        "did:test:agent",
+        root_identity().did(),
+        &[agent_identity()],
         None,
         FIXTURE_CLOSE,
     )
@@ -387,7 +603,7 @@ async fn close_engines_are_disjoint_and_unsigned_replies_do_not_prevent_expiry()
     .report;
     assert_eq!(report.acted, 1);
     assert_eq!(report.expired, 0);
-    let closed = load_mailbox_item(&node, &domain_item.doc_id)
+    let closed = load_as_creator(&node, &domain_item.doc_id)
         .await
         .unwrap()
         .unwrap();
@@ -405,12 +621,19 @@ async fn a_0_21_graph_sourced_item_still_lists() {
             node_did: "did:test:agent", status: "open", kind: "ask", action: "ack",
             title: "from a graph run", source_kind: "graph", source_id: "wait-1",
             graph_run_id: "run-1", target_node_did: "did:test:agent",
-            target_agent_id: "operator", created_at: "{now}", updated_at: "{now}"
+            target_agent_did: "operator", created_at: "{now}", updated_at: "{now}"
         }}) {{ _docID }} }}"#
     );
-    assert!(!node.execute(&stored).await.has_errors());
+    let stored = stored
+        .replace("did:test:owner", &fixture_recipient("did:test:owner"))
+        .replace("did:test:agent", root_identity().did())
+        .replace("operator", agent_identity().did());
+    agent_access(&node)
+        .write("test.mailbox.graph", &stored)
+        .await
+        .unwrap();
 
-    let items = list_mailbox_items(&node, "did:test:owner", None)
+    let items = list_as_creator(&node, "did:test:owner", None)
         .await
         .unwrap();
     assert_eq!(items.len(), 1);
@@ -427,20 +650,32 @@ async fn poisoned_item_does_not_block_later_expiry() {
             node_did: "did:test:agent", status: "open", kind: "gate",
             action: "write_document", title: "hostile", source_kind: "session",
             source_id: "hostile", target_node_did: "did:test:agent",
-            target_agent_id: "operator", created_at: "{now}", updated_at: "{now}"
+            target_agent_did: "operator", created_at: "{now}", updated_at: "{now}"
         }}) {{ _docID }} }}"#
     );
-    assert!(!node.execute(&hostile).await.has_errors());
+    let hostile = hostile
+        .replace("did:test:agent", root_identity().did())
+        .replace("operator", agent_identity().did());
+    agent_access(&node)
+        .write("test.mailbox.hostile", &hostile)
+        .await
+        .unwrap();
     let undecodable = format!(
         r#"mutation {{ create_MailboxItem(input: {{
             item_key: "session:undecodable:gate:1", requester_did: "did:test:owner",
             node_did: "did:test:agent", status: "open", kind: "gate",
             action: "ack", source_kind: "session", source_id: "undecodable",
-            target_node_did: "did:test:agent", target_agent_id: "operator",
+            target_node_did: "did:test:agent", target_agent_did: "operator",
             created_at: "{now}", updated_at: "{now}"
         }}) {{ _docID }} }}"#
     );
-    assert!(!node.execute(&undecodable).await.has_errors());
+    let undecodable = undecodable
+        .replace("did:test:agent", root_identity().did())
+        .replace("operator", agent_identity().did());
+    agent_access(&node)
+        .write("test.mailbox.undecodable", &undecodable)
+        .await
+        .unwrap();
 
     let mut expiring_args = args(MailboxAction::Ack, "wait-expiry");
     expiring_args.deadline_at = Some((Utc::now() - chrono::Duration::minutes(1)).to_rfc3339());
@@ -450,7 +685,8 @@ async fn poisoned_item_does_not_block_later_expiry() {
 
     let report = sweep_open_mailbox_items_with_close_collections(
         &node,
-        "did:test:agent",
+        root_identity().did(),
+        &[agent_identity()],
         None,
         FIXTURE_CLOSE,
     )
@@ -460,7 +696,7 @@ async fn poisoned_item_does_not_block_later_expiry() {
     assert_eq!(report.skipped_errors, 2);
     assert_eq!(report.expired, 1);
     assert_eq!(
-        load_mailbox_item(&node, &expiring.doc_id)
+        load_as_creator(&node, &expiring.doc_id)
             .await
             .unwrap()
             .unwrap()
@@ -502,33 +738,31 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
         let model_id = row["doc_id"].as_u64().unwrap();
         let due = row["due"].as_bool().unwrap();
         modeled_due.insert(model_id, due);
-        let mut row_context = context("did:test:owner");
         let local = row["node_did"].as_str().unwrap() == node_did;
-        if !local {
-            row_context.node_did = "did:test:foreign".into();
-        }
+        let row_context = context("did:test:owner");
         let mut row_args = args(
             MailboxAction::WriteDocument,
             &format!("model-row-{model_id:04}"),
         );
         row_args.deadline_at = Some(future.clone());
-        let created =
-            stamp_create_with_close_collections(&node, &row_context, row_args, FIXTURE_CLOSE)
-                .await
-                .unwrap();
         if local {
+            let created =
+                stamp_create_with_close_collections(&node, &row_context, row_args, FIXTURE_CLOSE)
+                    .await
+                    .unwrap();
             modeled_doc_ids.insert(model_id, created.doc_id.clone());
             modeled_item_keys.insert(model_id, created.item_key.clone());
             modeled_ids_by_doc.insert(created.doc_id.clone(), model_id);
             modeled_ids_by_item_key.insert(created.item_key, model_id);
             created_local_ids.push(created.doc_id);
         } else {
-            foreign_doc_id = Some(created.doc_id);
+            foreign_doc_id =
+                Some(seed_foreign_mailbox_row(&node, &row_args.source_id, &future).await);
         }
     }
 
     for index in 0..64 {
-        let mut closed_context = context("did:test:owner");
+        let closed_context = context("did:test:owner");
         let mut closed_args = args(
             MailboxAction::WriteDocument,
             &format!("000-closed-{index:04}"),
@@ -539,36 +773,24 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
                 .await
                 .unwrap();
         assert!(
-            transition_open_item(&node, &closed, MailboxStatus::Acted, None)
+            transition_open_item(&agent_access(&node), &closed, MailboxStatus::Acted, None)
                 .await
                 .unwrap()
         );
 
-        closed_context.node_did = "did:test:foreign".into();
-        let mut foreign_args = args(
-            MailboxAction::WriteDocument,
-            &format!("000-foreign-{index:04}"),
-        );
-        foreign_args.deadline_at = Some(future.clone());
-        stamp_create_with_close_collections(&node, &closed_context, foreign_args, FIXTURE_CLOSE)
-            .await
-            .unwrap();
+        seed_foreign_mailbox_row(&node, &format!("000-foreign-{index:04}"), &future).await;
     }
-    let response = node
+    let response = agent_access(&node)
         .execute(&format!(
             r#"{{ MailboxItem(filter: {{ _and: [
                 {{ node_did: {{ _eq: "{}" }} }},
                 {{ status: {{ _eq: "open" }} }}
             ] }}, order: {{ item_key: ASC }}) {{ _docID item_key }} }}"#,
-            escape_graphql_string("did:test:agent")
+            escape_graphql_string(root_identity().did())
         ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "mailbox fixture order: {:?}",
-        response.errors
-    );
-    let ordered_rows = response.data.unwrap()[MAILBOX_COLLECTION]
+        .await
+        .unwrap();
+    let ordered_rows = response["data"][MAILBOX_COLLECTION]
         .as_array()
         .unwrap()
         .iter()
@@ -584,7 +806,7 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
         let model_id = modeled_ids_by_doc[&doc_id];
         assert_eq!(modeled_item_keys[&model_id], item_key);
         if modeled_due[&model_id] {
-            let item = load_mailbox_item(&node, &doc_id).await.unwrap().unwrap();
+            let item = load_as_creator(&node, &doc_id).await.unwrap().unwrap();
             let response = node.execute(&format!(
                 r#"mutation {{ create_MailboxFixture(input: {{ mailbox_item_key: "{}", body: "done" }}) {{ _docID }} }}"#,
                 escape_graphql_string(&item.item_key),
@@ -639,7 +861,7 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
             for model_id in [4, cursor_model_id + 4] {
                 assert!(!modeled_due[&model_id]);
                 assert_eq!(
-                    load_mailbox_item(&node, &modeled_doc_ids[&model_id])
+                    load_as_creator(&node, &modeled_doc_ids[&model_id])
                         .await
                         .unwrap()
                         .unwrap()
@@ -648,22 +870,26 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
                     "residual open row {model_id} should remain on either side of the cursor"
                 );
             }
-            let page_query = open_mailbox_page_query("did:test:agent", Some(current_cursor));
-            let planned = node
+            let page_query = open_mailbox_page_query(
+                root_identity().did(),
+                agent_identity().did(),
+                Some(current_cursor),
+            );
+            let planned = agent_access(&node)
                 .execute(&format!("query @explain(type: simple) {page_query}"))
-                .await;
-            assert!(!planned.has_errors(), "mailbox simple explain: {planned:?}");
-            let plan = planned.data.as_ref().unwrap().get("explain").unwrap();
+                .await
+                .unwrap();
+            let plan = planned["data"].get("explain").unwrap();
             assert!(
                 plan.to_string()
                     .contains("MailboxItem_node_status_item_key"),
                 "mailbox page must select its registered compound index: {plan}"
             );
-            let explain = node
+            let explain = agent_access(&node)
                 .execute(&format!("query @explain(type: execute) {page_query}"))
-                .await;
-            assert!(!explain.has_errors(), "mailbox keyset explain: {explain:?}");
-            let execution = explain.data.as_ref().unwrap().get("explain").unwrap();
+                .await
+                .unwrap();
+            let execution = explain["data"].get("explain").unwrap();
             assert_eq!(execution["executionSuccess"], true, "{execution}");
             let roots = execution["operationNode"].as_array().unwrap();
             assert_eq!(roots.len(), 1);
@@ -693,7 +919,8 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
         let turn_started = Instant::now();
         let page = sweep_open_mailbox_items_with_clock(
             &node,
-            "did:test:agent",
+            root_identity().did(),
+            &[agent_identity()],
             cursor.as_deref(),
             FIXTURE_CLOSE,
             || turn_started,
@@ -735,7 +962,7 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
             "open"
         };
         assert_eq!(
-            load_mailbox_item(&node, doc_id)
+            load_as_creator(&node, doc_id)
                 .await
                 .unwrap()
                 .unwrap()
@@ -744,11 +971,106 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
         );
     }
     assert_eq!(
-        load_mailbox_item(&node, foreign_doc_id.as_deref().unwrap())
+        load_as_creator(&node, foreign_doc_id.as_deref().unwrap())
             .await
             .unwrap()
             .unwrap()
             .status,
         "open"
     );
+}
+
+#[tokio::test]
+async fn remote_client_signs_conditional_mailbox_dismissal() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let actor = crate::store::identity::KeyIdentity::load_or_create(
+        directory.path().join("user.key"),
+        None,
+    )?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .enable_signing()
+            .with_node_acp_owner(actor.did().to_owned())
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .build()
+            .await?,
+    );
+    let owner_context =
+        defra_core::RequestContext::default().with_identity(Some(actor.did().to_owned()));
+    node.add_dac_policy_with_counter_as(
+        &owner_context,
+        gents_protocol::schemas::MAILBOX_POLICY,
+        0,
+    )
+    .await?;
+    node.add_collection(gents_protocol::schemas::MAILBOX_ITEM)
+        .await?;
+    let endpoint = crate::store::config_client::GraphqlEndpoint::as_principal(
+        format!("http://{address}/api/v0/graphql"),
+        actor.did(),
+    )
+    .with_client_signing_capability(actor.client_signing_capability()?)?;
+    let access = crate::ConfigAccess::Graphql(endpoint);
+    let now = Utc::now().to_rfc3339();
+    let input = json!({"item_key":"mailbox:one", "requester_did":actor.did(), "node_did":"did:key:node", "status":"open", "kind":"ask", "action":"ack", "title":"Review", "source_kind":"session", "source_id":"one", "target_node_did":"did:key:node", "target_agent_did":"did:key:agent", "created_at":now, "updated_at":now});
+    let created = access.transact_write("test.client_mailbox_create", |txn| {
+        let input = &input;
+        Box::pin(async move {
+            txn.execute_client_signed_create(
+                "mutation($input: MailboxItemMutationInputArg!) { create_MailboxItem(input:$input) { _docID _version { cid } } }",
+                &json!({"input": input}), gents_protocol::schemas::MAILBOX_ITEM,
+            ).await
+        })
+    }).await?;
+    let row = &created["data"]["add_MailboxItem"][0];
+    let doc_id = row["_docID"].as_str().unwrap();
+    let initial_cid = row["_version"][0]["cid"].as_str().unwrap();
+    assert_eq!(
+        node.verified_block_signer_did(initial_cid).await?,
+        actor.did()
+    );
+    let dismissed = dismiss_mailbox_item_on(&access, doc_id).await?;
+    assert_eq!(dismissed.status, "dismissed");
+    let query = format!(
+        r#"{{ MailboxItem(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _version {{ cid }} }} }}"#,
+        escape_graphql_string(doc_id)
+    );
+    let updated = access.execute(&query).await?;
+    let cid = updated["data"]["MailboxItem"][0]["_version"][0]["cid"]
+        .as_str()
+        .unwrap();
+    assert_ne!(cid, initial_cid);
+    assert_eq!(node.verified_block_signer_did(cid).await?, actor.did());
+    assert_eq!(
+        dismiss_mailbox_item_on(&access, doc_id).await?.status,
+        "dismissed"
+    );
+    let replay = access.execute(&query).await?;
+    assert_eq!(replay["data"]["MailboxItem"][0]["_version"][0]["cid"], cid);
+
+    let mut question = input.clone();
+    question["item_key"] = json!("mailbox:question");
+    question["source_id"] = json!("question");
+    question["action"] = json!("start_request");
+    question["payload"] = json!(json!({"version":2,"prompt":"Any constraints?","options":[],"allow_free_text":true,"optional":true}).to_string());
+    let created = access.transact_write("test.client_mailbox_question", |txn| {
+        let question = &question;
+        Box::pin(async move {
+            txn.execute_client_signed_create(
+                "mutation($input: MailboxItemMutationInputArg!) { create_MailboxItem(input:$input) { _docID } }",
+                &json!({"input": question}), gents_protocol::schemas::MAILBOX_ITEM,
+            ).await
+        })
+    }).await?;
+    let question_id = created["data"]["add_MailboxItem"][0]["_docID"]
+        .as_str()
+        .unwrap();
+    let error = dismiss_mailbox_item_on(&access, question_id)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("original item"));
+    node.shutdown().await?;
+    Ok(())
 }

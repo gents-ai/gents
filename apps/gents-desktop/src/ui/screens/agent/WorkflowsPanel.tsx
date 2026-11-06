@@ -74,7 +74,7 @@ export function WorkflowsPanel({ deployment }: { deployment: NodeView }) {
                 description={[
                   `${w.runs} ${w.runs === 1 ? "run" : "runs"}`,
                   `last ${new Date(w.last_run_at).toLocaleString()}`,
-                  w.agent_id,
+                  w.agent_did,
                   w.promoted_as.length > 0 && `promoted as ${w.promoted_as.join(", ")}`,
                 ]
                   .filter(Boolean)

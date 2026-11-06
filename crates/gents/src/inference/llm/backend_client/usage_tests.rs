@@ -1,4 +1,4 @@
-use super::tests::test_agent;
+use super::tests::{held_test_agent, test_agent};
 use super::*;
 
 async fn one_openai_completion(client: BackendClient) {
@@ -30,7 +30,9 @@ const OPENAI_USAGE_HEADERS: &[(&str, &str)] = &[
 async fn usage_wiring_openai_compatible_records_under_the_backend_id() {
     let cache: std::sync::Arc<crate::inference::usage_observation::UsageCache> =
         std::sync::Arc::default();
-    let node = crate::inference::auth::credential::test_support::test_node().await;
+    let (db, _user, _access, binding) =
+        crate::test_support::signed_test_node("backend-usage").await;
+    let node = db.node.clone();
     for (wire, backend_id) in [
         (crate::OpenAiWireApi::ChatCompletions, "backend-usage-chat"),
         (crate::OpenAiWireApi::Responses, "backend-usage-responses"),
@@ -41,7 +43,8 @@ async fn usage_wiring_openai_compatible_records_under_the_backend_id() {
             "",
         )
         .await;
-        let mut behavior = test_agent(BackendProviderKind::OpenAiCompatible, wire);
+        let mut behavior =
+            held_test_agent(&db, &binding, BackendProviderKind::OpenAiCompatible, wire);
         behavior.backend_id = Some(backend_id.to_string());
         behavior.backend_endpoint = format!("{url}/v1");
         let client = build_backend_client(

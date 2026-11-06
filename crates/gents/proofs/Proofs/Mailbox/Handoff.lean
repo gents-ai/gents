@@ -130,7 +130,7 @@ theorem successful_linked_reply_has_original_session_and_new_request
     envelope.sessionId = some receipt.question.sessionId ∧
       reply.sessionId = receipt.question.sessionId ∧
       reply.sourceDocId = receipt.question.docId ∧
-      reply.requesterDid = receipt.question.identity.requesterDid ∧
+      reply.authenticated = true ∧
       reply.nodeDid = receipt.question.identity.nodeDid ∧
       reply.requestDocId ≠ receipt.producer.requestDocId := by
   unfold claimLinkedReply? at h
@@ -195,13 +195,13 @@ theorem foreign_agent_cannot_reuse_open_question :
 
 def replyEnvelope : ReplyEnvelope :=
   { docId := "mailbox-doc", handling := .startRequest,
-    targetNodeDid := "node", agentId := "repair",
+    targetNodeDid := "node", agentDid := "repair",
     sessionId := some "session", deadlineValid := true }
 
 def replyEvidence : ReplyEvidence :=
   { requestDocId := "reply-doc", sourceDocId := "mailbox-doc",
-    requesterDid := "owner", nodeDid := "node", agentId := "repair",
-    sessionId := "session", authenticated := true, interactive := true }
+    requesterDid := "owner", nodeDid := "node", agentDid := "repair",
+    sessionId := "session", authenticated := true, recipientAuthorized := true, interactive := true }
 
 theorem linked_reply_is_a_new_request_in_original_session :
     (match fileAndComplete? {} producer openQuestion 7 with

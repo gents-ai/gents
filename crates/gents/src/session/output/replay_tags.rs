@@ -1,16 +1,47 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
 use gents_protocol::output::OutputSource;
 
-use super::replay_candidates::load_canonical_assistant_candidates_with;
+use super::access::ReadAccess;
+use super::replay_candidates::load_canonical_assistant_candidates_using;
 use super::{replay_violation, CanonicalReplayScope};
 
 /// Resolve all requested tags from one physically bounded canonical candidate
 /// view. Preserve input order and every physical match (including zero or
 /// multiple matches) for the replay owner to reject, without a cross-boundary
 /// cache or a coordinate-to-single-winner map.
+pub(crate) async fn resolve_canonical_replay_tags_on(
+    access: &crate::store::config_client::ConfigAccess,
+    scope: CanonicalReplayScope<'_>,
+    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
+    tags: &[gents_loop::claude_messages_body::ReplayTag],
+) -> Result<
+    Vec<(
+        gents_loop::claude_messages_body::ReplayTag,
+        Vec<gents_loop::claude_messages_body::ResolvedReplayEvidence>,
+    )>,
+> {
+    resolve_canonical_replay_tags_using(ReadAccess::Config(access), access, scope, boundary, tags)
+        .await
+}
+
+#[cfg(test)]
 pub(crate) async fn resolve_canonical_replay_tags(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
+    scope: CanonicalReplayScope<'_>,
+    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
+    tags: &[gents_loop::claude_messages_body::ReplayTag],
+) -> Result<
+    Vec<(
+        gents_loop::claude_messages_body::ReplayTag,
+        Vec<gents_loop::claude_messages_body::ResolvedReplayEvidence>,
+    )>,
+> {
+    resolve_canonical_replay_tags_on(access, scope, boundary, tags).await
+}
+
+async fn resolve_canonical_replay_tags_using(
+    access: ReadAccess<'_, '_>,
+    requests: &impl super::replay_request::ReplayRequestReader,
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::turn::provider_context_reduction::SourceBoundary,
     tags: &[gents_loop::claude_messages_body::ReplayTag],
@@ -29,7 +60,8 @@ pub(crate) async fn resolve_canonical_replay_tags(
         );
     }
     let candidates =
-        load_canonical_assistant_candidates_with(node, node, scope, boundary, Some(tags)).await?;
+        load_canonical_assistant_candidates_using(access, requests, scope, boundary, Some(tags))
+            .await?;
     tags.iter()
         .map(|tag| {
             let OutputSource::ProviderTurn {
@@ -83,13 +115,13 @@ pub(crate) async fn resolve_canonical_replay_tags(
 
 #[cfg(test)]
 pub(crate) async fn resolve_canonical_replay_tag(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::turn::provider_context_reduction::SourceBoundary,
     tag: &gents_loop::claude_messages_body::ReplayTag,
 ) -> Result<Vec<gents_loop::claude_messages_body::ResolvedReplayEvidence>> {
     Ok(
-        resolve_canonical_replay_tags(node, scope, boundary, std::slice::from_ref(tag))
+        resolve_canonical_replay_tags(access, scope, boundary, std::slice::from_ref(tag))
             .await?
             .pop()
             .expect("singleton replay resolution returns one entry")

@@ -3,17 +3,18 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+#[cfg(test)]
+use defra_node::Node as EmbeddedNode;
 use serde_json::Value;
 
 use crate::request::watcher::AgentRequest;
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::escape_graphql_string;
 
 #[derive(Clone)]
 pub struct ArtifactGrant(Arc<ArtifactOwner>);
 
 struct ArtifactOwner {
-    node: Arc<EmbeddedNode>,
+    access: crate::ConfigAccess,
     source_root: PathBuf,
     git_dir: PathBuf,
     root: PathBuf,
@@ -170,8 +171,28 @@ impl ArtifactGrant {
         &self.0.execution_generation
     }
 
+    #[cfg(test)]
     pub(super) async fn create(
         node: Arc<EmbeddedNode>,
+        request: &AgentRequest,
+        execution_generation: &str,
+        source_root: &Path,
+        owner_node_did: &str,
+        seal_hash: &str,
+    ) -> Result<Self> {
+        Self::create_with_access(
+            crate::ConfigAccess::local(node),
+            request,
+            execution_generation,
+            source_root,
+            owner_node_did,
+            seal_hash,
+        )
+        .await
+    }
+
+    pub(super) async fn create_with_access(
+        access: crate::ConfigAccess,
         request: &AgentRequest,
         execution_generation: &str,
         source_root: &Path,
@@ -227,7 +248,7 @@ impl ArtifactGrant {
         .map(|p| checked_directory(&p).map(|identity| (p, identity)))
         .collect::<Result<Vec<_>>>()?;
         let grant = Self(Arc::new(ArtifactOwner {
-            node,
+            access,
             source_root: source_root.to_path_buf(),
             git_dir,
             root,
@@ -283,17 +304,11 @@ impl ArtifactGrant {
           }}
         }}"#
         );
-        let value = graphql_with_transaction_retry(
-            &owner.node,
-            &query,
-            "validate artifact execution grant",
-        )
-        .await?;
+        let value = owner.access.execute(&query).await?;
         validate_launch_rows(
             owner,
             value
-                .data
-                .as_ref()
+                .get("data")
                 .ok_or_else(|| anyhow!("missing artifact query data"))?,
             Utc::now(),
         )?;

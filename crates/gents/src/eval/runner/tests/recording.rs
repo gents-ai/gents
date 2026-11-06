@@ -198,7 +198,7 @@ async fn a_two_cell_run_completes_every_slot_and_writes_verdicts_before_completi
         }
     );
 
-    let trials = load_trials(&launching.access, OWNER, "run-1")
+    let trials = load_trials(&launching.access, launching.owner(), "run-1")
         .await
         .unwrap();
     assert_eq!(trials.len(), 8);
@@ -214,7 +214,7 @@ async fn a_two_cell_run_completes_every_slot_and_writes_verdicts_before_completi
     assert_eq!(completion.stages[0].stage_id, "check");
     assert_eq!(completion.stages[0].failure_kind, None);
 
-    let verdicts = load_verdicts(&launching.access, OWNER, "run-1")
+    let verdicts = load_verdicts(&launching.access, launching.owner(), "run-1")
         .await
         .unwrap();
     assert_eq!(verdicts.len(), 8);
@@ -279,14 +279,14 @@ async fn a_crash_after_create_trial_is_repaired_by_resume() {
     .unwrap_err();
     assert!(format!("{error:#}").contains("injected"), "{error:#}");
 
-    let trials = load_trials(&launching.access, OWNER, "run-1")
+    let trials = load_trials(&launching.access, launching.owner(), "run-1")
         .await
         .unwrap();
     assert_eq!(
         trial_keys(&trials),
         [("base".into(), "case-a".into(), 0, 1, false)]
     );
-    let verdicts = load_verdicts(&launching.access, OWNER, "run-1")
+    let verdicts = load_verdicts(&launching.access, launching.owner(), "run-1")
         .await
         .unwrap();
     assert_eq!(verdicts.len(), 1);
@@ -294,7 +294,7 @@ async fn a_crash_after_create_trial_is_repaired_by_resume() {
 
     let outcome = resume(
         &launching.access,
-        OWNER,
+        launching.owner(),
         "run-1",
         &launching.runs_dir(),
         &executor,
@@ -306,7 +306,7 @@ async fn a_crash_after_create_trial_is_repaired_by_resume() {
     .unwrap();
     assert_eq!(outcome.completed, 1);
 
-    let trials = load_trials(&launching.access, OWNER, "run-1")
+    let trials = load_trials(&launching.access, launching.owner(), "run-1")
         .await
         .unwrap();
     assert_eq!(
@@ -366,7 +366,7 @@ async fn a_trial_whose_row_cannot_be_written_is_handed_back_to_the_executor() {
         "a trial whose row was never written is not run"
     );
     assert!(
-        load_trials(&launching.access, OWNER, "run-1")
+        load_trials(&launching.access, launching.owner(), "run-1")
             .await
             .unwrap()
             .is_empty(),
@@ -420,7 +420,7 @@ async fn feedback_is_dropped_off_train() {
     )
     .await
     .unwrap();
-    let verdicts = load_verdicts(&launching.access, OWNER, "run-1")
+    let verdicts = load_verdicts(&launching.access, launching.owner(), "run-1")
         .await
         .unwrap();
     assert_eq!(verdicts.len(), 1);
@@ -442,7 +442,7 @@ async fn feedback_is_dropped_off_train() {
     )
     .await
     .unwrap();
-    let verdicts = load_verdicts(&launching.access, OWNER, "run-2")
+    let verdicts = load_verdicts(&launching.access, launching.owner(), "run-2")
         .await
         .unwrap();
     assert_eq!(verdicts.len(), 1);
@@ -472,10 +472,10 @@ async fn concurrency_32_writes_the_same_documents_as_one() {
         .await
         .unwrap();
         assert_eq!(outcome.completed, 32);
-        let trials = load_trials(&launching.access, OWNER, "run-1")
+        let trials = load_trials(&launching.access, launching.owner(), "run-1")
             .await
             .unwrap();
-        let verdicts = load_verdicts(&launching.access, OWNER, "run-1")
+        let verdicts = load_verdicts(&launching.access, launching.owner(), "run-1")
             .await
             .unwrap();
         (trial_keys(&trials), verdict_keys(&verdicts))

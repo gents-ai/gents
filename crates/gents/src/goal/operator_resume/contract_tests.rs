@@ -55,7 +55,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                 .await;
         }
         match case.name.as_str() {
-            "nonterminal_parent_cannot_publish" => execute(&f.node, &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{PARENT}" }} }}, input: {{ lifecycle_state: "processing" }}) {{ _docID }} }}"#)).await,
+            "nonterminal_parent_cannot_publish" => execute(&f.agent_access(), &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{PARENT}" }} }}, input: {{ lifecycle_state: "processing" }}) {{ _docID }} }}"#)).await,
             "busy_session_cannot_publish" => f.other_request("older-active", "2019-01-01T00:00:00Z", "processing").await,
             "atomic_publication" | "staging_failure_rolls_back" | "lost_ack_returns_same_child"
             | "retry_after_later_progress" | "unauthorized_cannot_publish" | "foreign_parent_cannot_recover"
@@ -63,14 +63,19 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
             name => panic!("unmapped generated resume case {name}"),
         }
         assert_eq!(f.observe().await, case.before, "{} initial", case.name);
-        let access = crate::ConfigAccess::local(f.node.clone());
+        let access = f.user_access();
         if !case.commit {
             assert_eq!(case.name, "staging_failure_rolls_back");
-            let txn = ConfigApplyTxn::begin_local(&f.node, None).await.unwrap();
-            let receipt =
-                stage_resume(&txn, f.identity.as_ref(), f.identity.did(), SESSION, PARENT)
-                    .await
-                    .unwrap();
+            let txn = ConfigApplyTxn::begin_local_with_signer(
+                &f.node,
+                ::identity::Did::new(f.agent.did()).unwrap(),
+                f.agent.managed_agent_signer().unwrap(),
+            )
+            .await
+            .unwrap();
+            let receipt = stage_resume(&txn, f.agent.as_ref(), f.identity.did(), SESSION, PARENT)
+                .await
+                .unwrap();
             assert!(receipt.created);
             let staged_goal = load_canonical_goal_in_txn(&txn, f.identity.did(), SESSION)
                 .await
@@ -98,7 +103,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
             let identity: &dyn NodeIdentity = if case.request["authorized"] == false {
                 &foreign
             } else {
-                f.identity.as_ref()
+                f.user.as_ref()
             };
             let predecessor = if case.request["parent_belongs_to_goal"] == false {
                 "foreign-parent"
@@ -123,7 +128,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                     let expected = goal_continuation_identity(&f.goal.goal_id, PARENT, 1).unwrap();
                     assert_eq!(receipt.request_id, expected.request_id);
                     assert_eq!(receipt.goal_id, f.goal.goal_id);
-                    let rows = request_rows(&f.node).await;
+                    let rows = request_rows(&f.agent_access()).await;
                     assert_eq!(
                         rows.iter()
                             .filter(|r| r.doc_id.as_deref() == Some(receipt.doc_id.as_str()))
@@ -144,11 +149,16 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                                 f.identity.clone(),
                                 authority,
                             );
-                        verifier
-                            .verify_fresh(&request, "contract-behavior")
+                        let (request, admission) = verifier
+                            .verify_fresh_for_claim_with_identity(&request, f.agent.as_ref())
                             .await
                             .expect("published continuation must pass actual execution admission");
-                        let allowed = access
+                        assert!(
+                            admission.is_some(),
+                            "client continuation must carry claim admission"
+                        );
+                        let allowed = f
+                            .agent_access()
                             .transact_write("test.goal.resume_claim_fence", |txn| {
                                 let request = &request;
                                 Box::pin(async move {
@@ -156,6 +166,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                                         txn,
                                         request,
                                         "2026-10-23T00:00:00Z",
+                                        true,
                                     )
                                     .await
                                 })
@@ -163,7 +174,8 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                             .await
                             .unwrap();
                         assert_eq!(
-                            allowed, opening_is_entry,
+                            allowed == crate::goal::GoalClaimFence::Allowed,
+                            opening_is_entry,
                             "the publication must pass the modeled assignment-opening claim fence"
                         );
                     }
@@ -171,7 +183,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                 "denied" | "illegal" | "conflict" => {
                     let error = format!("{:#}", result.unwrap_err());
                     let expected_reason = match case.name.as_str() {
-                        "unauthorized_cannot_publish" => "target node",
+                        "unauthorized_cannot_publish" => "signer must match",
                         "foreign_parent_cannot_recover" => "predecessor must uniquely belong",
                         "non_latest_parent_cannot_publish" => "no longer the latest",
                         "nonterminal_parent_cannot_publish" => "predecessor must be terminal",
@@ -191,7 +203,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
             "{} durable result",
             case.name
         );
-        f.node.shutdown().await;
+        f.node.shutdown().await.expect("node shutdown");
     }
 }
 
@@ -207,7 +219,7 @@ async fn generated_goal_config_reactivation_cases_drive_transactional_setter() {
             "children":[],"tokens_used":37,"token_budget":1000});
         let f = Fixture::new(&before).await;
         assert_eq!(f.observe().await, before);
-        let access = crate::ConfigAccess::local(f.node.clone());
+        let access = f.user_access();
         let result = set_goal_from_access(
             &access,
             f.identity.did(),
@@ -233,7 +245,7 @@ async fn generated_goal_config_reactivation_cases_drive_transactional_setter() {
             expected["status"] = json!(case.target);
         }
         assert_eq!(f.observe().await, expected);
-        f.node.shutdown().await;
+        f.node.shutdown().await.expect("node shutdown");
     }
 }
 
@@ -252,10 +264,10 @@ async fn waiting_requests_keep_resume_idle_guard_closed_without_duplicate_childr
         f.other_request("waiting-existing", "2019-01-01T00:00:00Z", state.as_str())
             .await;
         let before = f.observe().await;
-        let rows_before = serde_json::to_value(request_rows(&f.node).await).unwrap();
+        let rows_before = serde_json::to_value(request_rows(&f.agent_access()).await).unwrap();
         let error = resume_goal_request(
-            &crate::ConfigAccess::local(f.node.clone()),
-            f.identity.as_ref(),
+            &f.user_access(),
+            f.user.as_ref(),
             f.identity.did(),
             SESSION,
             PARENT,
@@ -268,11 +280,11 @@ async fn waiting_requests_keep_resume_idle_guard_closed_without_duplicate_childr
         );
         assert_eq!(f.observe().await, before);
         assert_eq!(
-            serde_json::to_value(request_rows(&f.node).await).unwrap(),
+            serde_json::to_value(request_rows(&f.agent_access()).await).unwrap(),
             rows_before,
             "{state:?}: resume duplicated existing work"
         );
-        f.node.shutdown().await;
+        f.node.shutdown().await.expect("node shutdown");
     }
 }
 
@@ -282,9 +294,14 @@ async fn overlapping_resume_and_native_goal_write_conflict_atomically() {
         node: &EmbeddedNode,
         handle: &query::TransactionHandle,
         query: &str,
+        actor: &str,
     ) -> serde_json::Value {
         let result = node
-            .execute_request_in_txn(defra_node::QueryRequest::new(query), handle)
+            .execute_request_in_txn(
+                defra_node::QueryRequest::new(query)
+                    .with_identity(Some(::identity::Did::new(actor).unwrap())),
+                handle,
+            )
             .await;
         assert!(!result.has_errors(), "{:?}", result.errors);
         result.data.unwrap()
@@ -303,24 +320,24 @@ async fn overlapping_resume_and_native_goal_write_conflict_atomically() {
         let query = format!(
             r#"{{ Goal(filter: {{ goal_id: {{ _eq: "{goal_id}" }} }}) {{ _docID status continuation_sequence updated_at }} }}"#
         );
-        let before = native(&f.node, &remote, &query).await;
+        let before = native(&f.node, &remote, &query, f.agent.did()).await;
         assert_eq!(before["Goal"][0]["status"], "paused");
-        let local = ConfigApplyTxn::begin_local(&f.node, None).await.unwrap();
-        let receipt = stage_resume(
-            &local,
-            f.identity.as_ref(),
-            f.identity.did(),
-            SESSION,
-            PARENT,
+        let local = ConfigApplyTxn::begin_local_with_signer(
+            &f.node,
+            ::identity::Did::new(f.agent.did()).unwrap(),
+            f.agent.managed_agent_signer().unwrap(),
         )
         .await
         .unwrap();
+        let receipt = stage_resume(&local, f.agent.as_ref(), f.identity.did(), SESSION, PARENT)
+            .await
+            .unwrap();
         assert!(receipt.created);
         let update = format!(
             r#"mutation {{ update_Goal(filter: {{ goal_id: {{ _eq: "{goal_id}" }}, status: {{ _eq: "paused" }}, continuation_sequence: {{ _eq: 0 }} }}, input: {{ status: "paused", updated_at: "2031-01-01T00:00:00Z" }}) {{ _docID }} }}"#
         );
         assert_eq!(
-            native(&f.node, &remote, &update).await["update_Goal"]
+            native(&f.node, &remote, &update, f.agent.did()).await["update_Goal"]
                 .as_array()
                 .unwrap()
                 .len(),
@@ -346,13 +363,13 @@ async fn overlapping_resume_and_native_goal_write_conflict_atomically() {
         );
         assert_eq!(observed["sequence"], if resume_first { 1 } else { 0 });
         assert_eq!(
-            request_rows(&f.node)
+            request_rows(&f.agent_access())
                 .await
                 .iter()
                 .filter(|row| row.request_id == receipt.request_id)
                 .count(),
             usize::from(resume_first)
         );
-        f.node.shutdown().await;
+        f.node.shutdown().await.expect("node shutdown");
     }
 }

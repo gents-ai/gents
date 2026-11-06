@@ -12,7 +12,7 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
         .iter()
         .find(|case| case.live_evidence == "never_spawned" && case.worker_released)
         .unwrap();
-    let mut harness = admission_harness(|_, root| {
+    let mut harness = admission_harness(|_, root, _, _| {
         BackgroundToolRegistry::from_tools(
             vec![crate::tools::native::write_capable_bash_for_test(root)],
             &["bash_unrestricted".into()],
@@ -24,10 +24,11 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
         .hook
         .with_background_execution_registry(executions.clone());
     let root = harness.root.path().canonicalize().unwrap();
+    let agent = hook_managed_identity(&harness.hook, &harness.request_id).await;
     let key = workspace::WorkspaceKey::canonical(
         &harness.hook.node_did,
-        &harness.hook.node_did,
-        "general",
+        &harness.user_did,
+        agent.did(),
         &root,
     )
     .unwrap();
@@ -49,7 +50,7 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
         Some(harness._dir.path()),
         &key.node_did,
         Some(&key.requester_did),
-        &key.agent_id,
+        &key.agent_did,
         Some(&root),
     )
     .unwrap()
@@ -79,7 +80,7 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
         .await
         .expect("approval was not reached");
     let session = harness.hook.session_id().await.unwrap();
-    let row = fetch_tool_call_row(&harness.node, &session, child).await;
+    let row = super::background_budget::tool_row(&harness.access, &session, child).await;
     let request = gents_protocol::process_control::OperatorProcessControlRequest {
         node_did: key.node_did.clone(),
         session_id: session.clone(),
@@ -100,7 +101,7 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
             live_execution_cancelled: true
         } | crate::tools::call::control::CancelBackgroundToolCallOutcome::AlreadyTerminal { .. }
     ));
-    let row = fetch_tool_call_row(&harness.node, &session, child).await;
+    let row = super::background_budget::tool_row(&harness.access, &session, child).await;
     assert_eq!(row["lifecycle_state"], expected.durable_state);
     assert!(executions
         .process_record(child, &request.tool_call_doc_id)
@@ -108,12 +109,14 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
     crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
         &harness.node,
         &key.node_did,
+        std::slice::from_ref(&agent),
         &executions,
     )
     .await
     .unwrap();
     assert_eq!(
-        fetch_tool_call_row(&harness.node, &session, child).await["lifecycle_state"],
+        super::background_budget::tool_row(&harness.access, &session, child).await
+            ["lifecycle_state"],
         expected.durable_state
     );
     hook_execution_fixtures()
@@ -123,7 +126,7 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
             &harness.hook,
             &harness.request_id,
         ));
-    harness.node.shutdown().await;
+    harness.node.shutdown().await.expect("shut down test node");
 }
 
 #[cfg(unix)]
@@ -182,7 +185,7 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
             })
             .expect("missing command isolation case");
         let allowed = expected == "allow" && guard_case["expected"] == true;
-        let mut harness = admission_harness(|_, root| {
+        let mut harness = admission_harness(|_, root, _, _| {
             BackgroundToolRegistry::from_tools(
                 vec![crate::tools::native::write_capable_bash_for_test(root)],
                 &["bash_unrestricted".into()],
@@ -194,10 +197,11 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
             .hook
             .with_background_execution_registry(executions.clone());
         let root = harness.root.path().canonicalize().unwrap();
+        let agent = hook_managed_identity(&harness.hook, &harness.request_id).await;
         let key = workspace::WorkspaceKey::canonical(
             &harness.hook.node_did,
-            &harness.hook.node_did,
-            "general",
+            &harness.user_did,
+            agent.did(),
             &root,
         )
         .unwrap();
@@ -217,7 +221,7 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
             Some(harness._dir.path()),
             &key.node_did,
             Some(&key.requester_did),
-            &key.agent_id,
+            &key.agent_did,
             Some(&root),
         )
         .unwrap()
@@ -281,7 +285,7 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
         .await
         .expect("background command did not settle");
         let session = harness.hook.session_id().await.unwrap();
-        let row = fetch_tool_call_row(&harness.node, &session, child).await;
+        let row = super::background_budget::tool_row(&harness.access, &session, child).await;
         assert_eq!(
             row["lifecycle_state"],
             if allowed { "completed" } else { "failed" },
@@ -305,7 +309,7 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
                 &harness.hook,
                 &harness.request_id,
             ));
-        harness.node.shutdown().await;
+        harness.node.shutdown().await.expect("shut down test node");
     }
 }
 
@@ -353,7 +357,13 @@ impl DeniedTarget {
         }
     }
 
-    fn registry(&self, node: &Arc<EmbeddedNode>, root: &std::path::Path) -> BackgroundToolRegistry {
+    fn registry(
+        &self,
+        node: &Arc<EmbeddedNode>,
+        root: &std::path::Path,
+        runtime: &str,
+        agent: &str,
+    ) -> BackgroundToolRegistry {
         match self {
             Self::ReadOnlyBash => BackgroundToolRegistry::from_tools(
                 vec![crate::tools::native::read_only_bash_for_test(
@@ -380,13 +390,14 @@ impl DeniedTarget {
             Self::McpAllowlist => BackgroundToolRegistry::from_tools(
                 vec![Box::new(crate::tools::mcp::meta::CallToolTool::new(
                     crate::tools::mcp::meta::MetaToolContext {
+                        configuration: crate::inference::resolved::ResolvedConfiguration::Static,
+                        actor: identity::Did::new(agent).unwrap(),
                         node: node.clone(),
-                        mcp_pool: crate::tools::mcp::pool::McpPool::new()
-                            .for_agent("did:test:test"),
+                        mcp_pool: crate::tools::mcp::pool::McpPool::new().for_agent(agent),
                         health: crate::tools::mcp::health::ServiceHealthMap::new(),
                         local_hostname: "local".into(),
                         local_subnet: None,
-                        node_did: "did:test:test".into(),
+                        node_did: runtime.into(),
                         allowed_mcp_service_ids: vec!["selected-service".into()],
                         remote_tools: crate::documents::RemoteTools {
                             services: vec![crate::documents::RemoteServiceTools {
@@ -404,7 +415,10 @@ impl DeniedTarget {
 }
 
 struct AdmissionHarness {
+    _db: crate::support::TestDb,
     _dir: tempfile::TempDir,
+    user_did: String,
+    access: crate::ConfigAccess,
     root: tempfile::TempDir,
     node: Arc<EmbeddedNode>,
     hook: DefraSessionHook,
@@ -412,43 +426,40 @@ struct AdmissionHarness {
 }
 
 async fn admission_harness(
-    registry: impl FnOnce(&Arc<EmbeddedNode>, &std::path::Path) -> BackgroundToolRegistry,
+    registry: impl FnOnce(&Arc<EmbeddedNode>, &std::path::Path, &str, &str) -> BackgroundToolRegistry,
 ) -> AdmissionHarness {
     let dir = tempfile::tempdir().unwrap();
-    let identity =
-        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
-            .unwrap();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(dir.path())
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_agent(&node, identity.did(), "general").await;
     let root = tempfile::tempdir().unwrap();
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
-            .with_background_tool_registry(registry(&node, root.path()));
-    hook.on_completion_call(&user_text_message("run in the background"), &[])
-        .await;
-    let session = hook.session_id().await.unwrap();
-    crate::session::create_session_with_agent_id(&node, &session, identity.did(), "general")
-        .await
-        .unwrap();
-    let request_id = format!("admission-{}", uuid::Uuid::new_v4());
-    bind_interruptible_request(
-        &node,
-        &hook,
-        &request_id,
-        &session,
-        Utc::now() + chrono::Duration::minutes(5),
+    let fixture = super::background_budget::budget_hook_fixture(
+        "background-admission",
+        BackgroundToolRegistry::default(),
+        BackgroundExecutionRegistry::default(),
     )
     .await;
+    let super::background_budget::BudgetHookFixture {
+        db,
+        user,
+        access,
+        agent,
+        hook,
+        request_id,
+        ..
+    } = fixture;
+    let node = db.node.clone();
+    let user_did = user.did().to_owned();
+    let hook = hook.with_background_tool_registry(registry(
+        &node,
+        root.path(),
+        db.node_identity.did(),
+        agent.did(),
+    ));
+    hook.on_completion_call(&user_text_message("run in the background"), &[])
+        .await;
     AdmissionHarness {
+        _db: db,
         _dir: dir,
+        user_did,
+        access,
         root,
         node,
         hook,
@@ -462,12 +473,16 @@ async fn spawned_target_rejection_case(
 ) {
     let expected = &case.expected;
     let AdmissionHarness {
+        _db,
         _dir,
+        user_did: _,
+        access,
         root,
         node,
         hook,
         request_id,
-    } = admission_harness(|node, root| target.registry(node, root)).await;
+    } = admission_harness(|node, root, runtime, agent| target.registry(node, root, runtime, agent))
+        .await;
     let args = target.spawn_arguments();
     accept_hook_tool_call(&hook, "spawn-denied", &case.parent_tool, args, None).await;
     let action = hook
@@ -480,14 +495,13 @@ async fn spawned_target_rejection_case(
         target.target()
     );
 
-    let response = node
+    let response = access
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ request_id: {{_eq: "{}"}} }}) {{ tool_name lifecycle_state started_at tool_failure_class spawned_by_tool_call_doc_id }} }}"#,
             crate::store::graphql::escape_graphql_string(&request_id),
         ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let data = response.data.unwrap();
+        .await.unwrap();
+    let data = &response["data"];
     let rows = data["AgentToolCall"].as_array().unwrap();
     let (parents, spawned): (Vec<_>, Vec<_>) = rows
         .iter()
@@ -542,7 +556,7 @@ async fn spawned_target_rejection_case(
         case.name,
         target.target()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -554,12 +568,15 @@ async fn spawn_process_rejects_unadvertised_arguments_before_spawned_admission()
         r#"{"tool_name":"bash","args":"{\"command\":\"ls\"}"}"#,
     ] {
         let AdmissionHarness {
+            _db,
             _dir,
+            user_did: _,
+            access,
             root: _root,
             node,
             hook,
             request_id,
-        } = admission_harness(|_, root| {
+        } = admission_harness(|_, root, _, _| {
             BackgroundToolRegistry::from_tools(
                 vec![crate::tools::native::read_only_bash_for_test(
                     root,
@@ -593,14 +610,13 @@ async fn spawn_process_rejects_unadvertised_arguments_before_spawned_admission()
             "{args}: {reason}"
         );
 
-        let response = node
+        let response = access
             .execute(&format!(
                 r#"{{ AgentToolCall(filter: {{ request_id: {{_eq: "{}"}} }}) {{ tool_name lifecycle_state tool_failure_class spawned_by_tool_call_doc_id }} }}"#,
                 crate::store::graphql::escape_graphql_string(&request_id),
             ))
-            .await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        let data = response.data.unwrap();
+            .await.unwrap();
+        let data = &response["data"];
         let rows = data["AgentToolCall"].as_array().unwrap();
         assert_eq!(rows.len(), 1, "{args}: {rows:?}");
         assert_eq!(
@@ -617,6 +633,6 @@ async fn spawn_process_rejects_unadvertised_arguments_before_spawned_admission()
             .lock()
             .await
             .remove(&hook_execution_fixture_key(&hook, &request_id));
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 }

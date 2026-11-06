@@ -27,8 +27,8 @@ impl AgentAdmissionObservation {
         self.process_state
     }
 
-    pub(crate) fn demotion_reason(&self, agent_id: &str) -> Option<&str> {
-        self.demotions.get(agent_id).map(String::as_str)
+    pub(crate) fn demotion_reason(&self, agent_did: &str) -> Option<&str> {
+        self.demotions.get(agent_did).map(String::as_str)
     }
 
     pub(crate) fn source_generation(&self) -> u64 {
@@ -92,7 +92,7 @@ pub(crate) trait NodeReadinessWriter: Send + Sync {
 }
 
 struct DefraNodeReadinessWriter {
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
 }
 
 #[async_trait::async_trait]
@@ -110,7 +110,7 @@ impl NodeReadinessWriter for DefraNodeReadinessWriter {
 #[derive(Clone)]
 struct ReadinessSource {
     active_generation: u64,
-    default_agent_id: String,
+    default_agent_did: String,
     entries: BTreeMap<String, AgentReadinessSourceEntry>,
     slot_generations: BTreeMap<String, u64>,
 }
@@ -144,7 +144,7 @@ impl std::error::Error for FatalNodeReadinessWrite {}
 
 enum Command {
     Initialize {
-        default_agent_id: String,
+        default_agent_did: String,
         ack: oneshot::Sender<Result<()>>,
     },
     PublishSource {
@@ -160,23 +160,23 @@ enum Command {
         ack: oneshot::Sender<Result<()>>,
     },
     RegisterSlot {
-        agent_id: String,
+        agent_did: String,
         generation: u64,
         ack: oneshot::Sender<Result<()>>,
     },
     MarkSlotReady {
-        agent_id: String,
+        agent_did: String,
         generation: u64,
         ack: oneshot::Sender<Result<bool>>,
     },
     DemoteSlot {
-        agent_id: String,
+        agent_did: String,
         generation: u64,
         diagnostic: String,
         ack: oneshot::Sender<Result<bool>>,
     },
     RetireSlot {
-        agent_id: String,
+        agent_did: String,
         generation: u64,
         ack: oneshot::Sender<Result<bool>>,
     },
@@ -187,7 +187,7 @@ enum Command {
 
 impl NodeReadinessPublisherHandle {
     pub(crate) fn start(
-        node: Arc<defra_node::EmbeddedNode>,
+        node: Arc<defra_node::Node>,
         node_did: impl Into<String>,
     ) -> (NodeReadinessPublisherOwner, Self) {
         Self::start_with_writer_and_timeout(
@@ -217,7 +217,7 @@ impl NodeReadinessPublisherHandle {
 
     #[cfg(test)]
     pub(crate) fn start_with_unbounded_test_clock(
-        node: Arc<defra_node::EmbeddedNode>,
+        node: Arc<defra_node::Node>,
         node_did: impl Into<String>,
     ) -> (NodeReadinessPublisherOwner, Self) {
         Self::start_with_writer_and_timeout(
@@ -285,40 +285,40 @@ impl NodeReadinessPublisherHandle {
         self.observation.clone()
     }
 
-    pub(crate) async fn initialize(&self, default_agent_id: &str) -> Result<()> {
+    pub(crate) async fn initialize(&self, default_agent_did: &str) -> Result<()> {
         self.send(|ack| Command::Initialize {
-            default_agent_id: default_agent_id.to_string(),
+            default_agent_did: default_agent_did.to_string(),
             ack,
         })
         .await
     }
 
     pub(crate) async fn publish_snapshot(&self, snapshot: &ActiveRuntimeSnapshot) -> Result<()> {
-        let agent_ids = snapshot
+        let agent_dids = snapshot
             .dispatchers
             .keys()
             .chain(snapshot.unavailable_agents.keys())
             .cloned()
             .collect::<std::collections::BTreeSet<_>>();
-        let entries = agent_ids
+        let entries = agent_dids
             .into_iter()
-            .map(|agent_id| {
+            .map(|agent_did| {
                 let entry = AgentReadinessSourceEntry {
-                    agent_id: agent_id.clone(),
-                    dispatcher_present: snapshot.dispatchers.contains_key(&agent_id),
+                    agent_did: agent_did.clone(),
+                    dispatcher_present: snapshot.dispatchers.contains_key(&agent_did),
                     unavailable_reason: snapshot
                         .unavailable_agents
-                        .get(&agent_id)
+                        .get(&agent_did)
                         .map(|unavailable| unavailable.public_reason),
                     startup_demoted: false,
                 };
-                (agent_id, entry)
+                (agent_did, entry)
             })
             .collect();
         self.send(|ack| Command::PublishSource {
             source: ReadinessSource {
                 active_generation: snapshot.generation,
-                default_agent_id: snapshot.default_agent_id.clone(),
+                default_agent_did: snapshot.default_agent_did.clone(),
                 entries,
                 slot_generations: BTreeMap::new(),
             },
@@ -340,18 +340,18 @@ impl NodeReadinessPublisherHandle {
             .await
     }
 
-    pub(crate) async fn register_slot(&self, agent_id: &str, generation: u64) -> Result<()> {
+    pub(crate) async fn register_slot(&self, agent_did: &str, generation: u64) -> Result<()> {
         self.send(|ack| Command::RegisterSlot {
-            agent_id: agent_id.to_string(),
+            agent_did: agent_did.to_string(),
             generation,
             ack,
         })
         .await
     }
 
-    pub(crate) async fn mark_slot_ready(&self, agent_id: &str, generation: u64) -> Result<bool> {
+    pub(crate) async fn mark_slot_ready(&self, agent_did: &str, generation: u64) -> Result<bool> {
         self.send(|ack| Command::MarkSlotReady {
-            agent_id: agent_id.to_string(),
+            agent_did: agent_did.to_string(),
             generation,
             ack,
         })
@@ -360,12 +360,12 @@ impl NodeReadinessPublisherHandle {
 
     pub(crate) async fn demote_slot(
         &self,
-        agent_id: &str,
+        agent_did: &str,
         generation: u64,
         diagnostic: String,
     ) -> Result<bool> {
         self.send(|ack| Command::DemoteSlot {
-            agent_id: agent_id.to_string(),
+            agent_did: agent_did.to_string(),
             generation,
             diagnostic,
             ack,
@@ -373,9 +373,9 @@ impl NodeReadinessPublisherHandle {
         .await
     }
 
-    pub(crate) async fn retire_slot(&self, agent_id: &str, generation: u64) -> Result<bool> {
+    pub(crate) async fn retire_slot(&self, agent_did: &str, generation: u64) -> Result<bool> {
         self.send(|ack| Command::RetireSlot {
-            agent_id: agent_id.to_string(),
+            agent_did: agent_did.to_string(),
             generation,
             ack,
         })
@@ -490,7 +490,7 @@ async fn run_publisher(
         let close = matches!(&command, Command::Close { .. });
         match command {
             Command::Initialize {
-                default_agent_id,
+                default_agent_did,
                 ack,
             } => {
                 let mut candidate = state.clone();
@@ -498,11 +498,11 @@ async fn run_publisher(
                 candidate.router_generation = 0;
                 candidate.source = Some(ReadinessSource {
                     active_generation: 0,
-                    default_agent_id: default_agent_id.clone(),
+                    default_agent_did: default_agent_did.clone(),
                     entries: BTreeMap::from([(
-                        default_agent_id.clone(),
+                        default_agent_did.clone(),
                         AgentReadinessSourceEntry {
-                            agent_id: default_agent_id,
+                            agent_did: default_agent_did,
                             dispatcher_present: false,
                             unavailable_reason: Some(
                                 AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
@@ -530,14 +530,14 @@ async fn run_publisher(
                     .entries
                     .iter()
                     .filter(|(_, entry)| entry.dispatcher_present)
-                    .filter_map(|(agent_id, _)| {
+                    .filter_map(|(agent_did, _)| {
                         candidate
                             .registered_slots
                             .iter()
-                            .filter(|(registered_id, _)| registered_id == agent_id)
+                            .filter(|(registered_id, _)| registered_id == agent_did)
                             .map(|(_, generation)| *generation)
                             .max()
-                            .map(|generation| (agent_id.clone(), generation))
+                            .map(|generation| (agent_did.clone(), generation))
                     })
                     .collect();
                 candidate.source = Some(source);
@@ -593,12 +593,12 @@ async fn run_publisher(
                 );
             }
             Command::RegisterSlot {
-                agent_id,
+                agent_did,
                 generation,
                 ack,
             } => {
                 let mut candidate = state.clone();
-                candidate.registered_slots.insert((agent_id, generation));
+                candidate.registered_slots.insert((agent_did, generation));
                 let _ = ack.send(
                     commit_candidate(
                         &writer,
@@ -612,16 +612,16 @@ async fn run_publisher(
                 );
             }
             Command::MarkSlotReady {
-                agent_id,
+                agent_did,
                 generation,
                 ack,
             } => {
                 let applied = state
                     .registered_slots
-                    .contains(&(agent_id.clone(), generation));
+                    .contains(&(agent_did.clone(), generation));
                 let mut candidate = state.clone();
                 if applied {
-                    candidate.demotions.remove(&(agent_id.clone(), generation));
+                    candidate.demotions.remove(&(agent_did.clone(), generation));
                 }
                 let result = if applied {
                     commit_candidate(
@@ -640,19 +640,19 @@ async fn run_publisher(
                 let _ = ack.send(result);
             }
             Command::DemoteSlot {
-                agent_id,
+                agent_did,
                 generation,
                 diagnostic,
                 ack,
             } => {
                 let applied = state
                     .registered_slots
-                    .contains(&(agent_id.clone(), generation));
+                    .contains(&(agent_did.clone(), generation));
                 let mut candidate = state.clone();
                 if applied {
                     candidate
                         .demotions
-                        .insert((agent_id, generation), diagnostic);
+                        .insert((agent_did, generation), diagnostic);
                 }
                 let result = if applied {
                     commit_candidate(
@@ -671,34 +671,34 @@ async fn run_publisher(
                 let _ = ack.send(result);
             }
             Command::RetireSlot {
-                agent_id,
+                agent_did,
                 generation,
                 ack,
             } => {
                 let applied = state
                     .registered_slots
-                    .contains(&(agent_id.clone(), generation));
+                    .contains(&(agent_did.clone(), generation));
                 let mut candidate = state.clone();
                 if applied {
                     candidate
                         .registered_slots
-                        .remove(&(agent_id.clone(), generation));
+                        .remove(&(agent_did.clone(), generation));
                     let source_uses_slot = candidate.source.as_ref().is_some_and(|source| {
-                        source.slot_generations.get(&agent_id) == Some(&generation)
+                        source.slot_generations.get(&agent_did) == Some(&generation)
                     });
                     if source_uses_slot {
                         let source = candidate
                             .source
                             .as_mut()
                             .expect("source slot mapping implies initialized source");
-                        source.slot_generations.remove(&agent_id);
-                        if let Some(entry) = source.entries.get_mut(&agent_id) {
+                        source.slot_generations.remove(&agent_did);
+                        if let Some(entry) = source.entries.get_mut(&agent_did) {
                             entry.dispatcher_present = false;
                             entry.unavailable_reason =
                                 Some(AgentReadinessUnavailableReason::ExecutorStartFailed);
                         }
                     }
-                    candidate.demotions.remove(&(agent_id, generation));
+                    candidate.demotions.remove(&(agent_did, generation));
                 }
                 let result = if applied {
                     commit_candidate(
@@ -756,11 +756,11 @@ async fn persist_candidate(
         entry.startup_demoted =
             source
                 .slot_generations
-                .get(&entry.agent_id)
+                .get(&entry.agent_did)
                 .is_some_and(|slot_generation| {
                     state
                         .demotions
-                        .contains_key(&(entry.agent_id.clone(), *slot_generation))
+                        .contains_key(&(entry.agent_did.clone(), *slot_generation))
                 });
         entry
     });
@@ -768,7 +768,7 @@ async fn persist_candidate(
         state.process_state,
         source.active_generation,
         state.router_generation,
-        source.default_agent_id.clone(),
+        source.default_agent_did.clone(),
         sources,
     )
     .map_err(anyhow::Error::msg)?;
@@ -819,11 +819,11 @@ async fn persist_candidate(
         demotions: source
             .slot_generations
             .iter()
-            .filter_map(|(agent_id, generation)| {
+            .filter_map(|(agent_did, generation)| {
                 state
                     .demotions
-                    .get(&(agent_id.clone(), *generation))
-                    .map(|diagnostic| (agent_id.clone(), diagnostic.clone()))
+                    .get(&(agent_did.clone(), *generation))
+                    .map(|diagnostic| (agent_did.clone(), diagnostic.clone()))
             })
             .collect(),
     })
@@ -844,40 +844,136 @@ fn is_fatal_node_readiness_write(error: &anyhow::Error) -> bool {
     }
 }
 
+/// Read the runtime's published readiness and its native ownership in one snapshot.
+/// A completed publication marker does not prove the parent grant still exists.
+pub(crate) async fn observe_published_readiness(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    runtime: &identity::Did,
+) -> Result<Option<gents_protocol::row::NodeReadinessRow>> {
+    anyhow::ensure!(
+        txn.actor_did() == Some(runtime.as_str()),
+        "readiness observation actor mismatch"
+    );
+    let did = escape_graphql_string(runtime.as_str());
+    let response = txn.execute(&format!(
+        r#"{{ Node(filter: {{node_did: {{_eq: "{did}"}}}}, limit: 2) {{_docID}}
+        NodeReadiness(filter: {{node_did: {{_eq: "{did}"}}}}, limit: 2) {{_docID node_did node_doc_id parent_linked snapshot_json updated_at}} }}"#
+    )).await?;
+    let parents = gents_protocol::graphql::graphql_rows_from_response(&response, "Node");
+    let rows = gents_protocol::graphql::graphql_rows_from_response(&response, "NodeReadiness");
+    let ([parent], [row]) = (parents.as_slice(), rows.as_slice()) else {
+        return Ok(None);
+    };
+    let Some(parent_id) = parent["_docID"].as_str().filter(|id| !id.is_empty()) else {
+        return Ok(None);
+    };
+    let Some(doc_id) = row["_docID"].as_str().filter(|id| !id.is_empty()) else {
+        return Ok(None);
+    };
+    if row["node_doc_id"].as_str() != Some(parent_id)
+        || row["parent_linked"].as_bool() != Some(true)
+    {
+        return Ok(None);
+    }
+    let parents = txn.document_owners("Node", &[parent_id.to_owned()]).await?;
+    let owners = txn
+        .document_owners("NodeReadiness", &[doc_id.to_owned()])
+        .await?;
+    if parents.len() != 1
+        || !parents[0].visible
+        || parents[0].owner.is_none()
+        || owners.len() != 1
+        || !owners[0].visible
+        || owners[0].owner.as_ref() != Some(runtime)
+    {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::from_value(row.clone())?))
+}
+
 pub(crate) async fn upsert_node_readiness(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     node_did: &str,
     snapshot: &NodeReadinessSnapshot,
     updated_at: &str,
 ) -> Result<()> {
-    let snapshot_json = serde_json::to_string(snapshot)?;
-    let mutation = format!(
-        r#"mutation {{
-            upsert_NodeReadiness(
-                filter: {{ node_did: {{ _eq: "{node_did}" }} }},
-                add: {{
-                    node_did: "{node_did}",
-                    snapshot_json: "{snapshot_json}",
-                    updated_at: "{updated_at}"
-                }},
-                update: {{
-                    snapshot_json: "{snapshot_json}",
-                    updated_at: "{updated_at}"
-                }}
-            ) {{ _docID }}
-        }}"#,
-        node_did = escape_graphql_string(node_did),
-        snapshot_json = escape_graphql_string(&snapshot_json),
-        updated_at = escape_graphql_string(updated_at),
+    anyhow::ensure!(
+        node.node_identity_did() == Some(node_did),
+        "readiness publisher DID does not match the configured node identity"
     );
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "upsert_node_readiness",
-        &mutation,
-    )
-    .await?;
-    if response.has_errors() {
-        anyhow::bail!("upsert NodeReadiness failed: {:?}", response.errors);
+    let actor = identity::Did::new(node_did)?;
+    let access = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
+    let snapshot_json = serde_json::to_string(snapshot)?;
+    let escaped_did = escape_graphql_string(node_did);
+    let escaped_snapshot = escape_graphql_string(&snapshot_json);
+    let escaped_updated_at = escape_graphql_string(updated_at);
+    let (doc_id, parent_id, pending) = access
+        .transact_write("readiness.publish", |txn| {
+            let actor = &actor;
+            let escaped_did = &escaped_did;
+            let escaped_snapshot = &escaped_snapshot;
+            let escaped_updated_at = &escaped_updated_at;
+            Box::pin(async move {
+                let response = txn.execute(&format!(
+                    r#"{{ Node(filter: {{node_did: {{_eq: "{escaped_did}"}}}}, limit: 2) {{_docID}}
+                        NodeReadiness(filter: {{node_did: {{_eq: "{escaped_did}"}}}}, limit: 2) {{_docID node_doc_id parent_linked}} }}"#
+                )).await?;
+                let parents = gents_protocol::graphql::graphql_rows_from_response(&response, "Node");
+                let [parent] = parents.as_slice() else {
+                    anyhow::bail!("readiness requires one visible Node parent");
+                };
+                let parent_id = parent["_docID"].as_str().filter(|id| !id.is_empty())
+                    .context("readiness Node parent has no document ID")?.to_owned();
+                let owners = txn.document_owners("Node", std::slice::from_ref(&parent_id)).await?;
+                anyhow::ensure!(owners.len() == 1 && owners[0].visible && owners[0].owner.is_some(),
+                    "readiness Node parent has no verified native owner");
+                let rows = gents_protocol::graphql::graphql_rows_from_response(&response, "NodeReadiness");
+                anyhow::ensure!(rows.len() <= 1, "readiness document is ambiguous");
+                if let Some(row) = rows.first() {
+                    let doc_id = row["_docID"].as_str().filter(|id| !id.is_empty())
+                        .context("readiness document has no ID")?.to_owned();
+                    let owners = txn.document_owners("NodeReadiness", std::slice::from_ref(&doc_id)).await?;
+                    anyhow::ensure!(owners.len() == 1 && owners[0].visible && owners[0].owner.as_ref() == Some(actor),
+                        "readiness document has no matching native runtime owner");
+                    anyhow::ensure!(row["node_doc_id"].as_str() == Some(parent_id.as_str()),
+                        "readiness Node parent changed or is missing");
+                    let linked = row["parent_linked"].as_bool()
+                        .context("readiness parent publication marker is missing")?;
+                    let response = txn.execute(&format!(
+                        r#"mutation {{ update_NodeReadiness(docID: "{}", input: {{snapshot_json: "{escaped_snapshot}", updated_at: "{escaped_updated_at}"}}) {{_docID}} }}"#,
+                        escape_graphql_string(&doc_id)
+                    )).await?;
+                    anyhow::ensure!(gents_protocol::graphql::extract_mutation_doc_id(&response, "NodeReadiness")? == doc_id,
+                        "readiness document disappeared while publishing");
+                    Ok::<_, anyhow::Error>((doc_id, parent_id, !linked))
+                } else {
+                    let response = txn.execute(&format!(
+                        r#"mutation {{ create_NodeReadiness(input: {{node_did: "{escaped_did}", node_doc_id: "{}", parent_linked: false, snapshot_json: "{escaped_snapshot}", updated_at: "{escaped_updated_at}"}}) {{_docID}} }}"#,
+                        escape_graphql_string(&parent_id)
+                    )).await?;
+                    let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, "NodeReadiness")?;
+                    Ok((doc_id, parent_id, true))
+                }
+            })
+        })
+        .await?;
+    if pending {
+        access
+            .add_resource_relationship("NodeReadiness", &doc_id, "parent", "nodes", &parent_id)
+            .await?;
+        let response = access.write("readiness.mark_parent_linked", &format!(
+            r#"mutation {{ update_NodeReadiness(docID: "{}", input: {{parent_linked: true}}) {{_docID}} }}"#,
+            escape_graphql_string(&doc_id)
+        )).await?;
+        anyhow::ensure!(
+            gents_protocol::graphql::extract_mutation_doc_id(&response, "NodeReadiness")? == doc_id,
+            "readiness document disappeared before its parent link was recorded"
+        );
+    }
+    if let Err(error) =
+        crate::store::config_client::recover_deferred_node_operations(node, node_did).await
+    {
+        tracing::warn!(node_did, error = %error, "deferred node operation relationship recovery failed");
     }
     Ok(())
 }

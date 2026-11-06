@@ -1,4 +1,5 @@
 import Proofs.ConfigDefaults
+import Proofs.Configuration.PackIdentity
 import Mathlib.Data.Rat.Defs
 
 /-!
@@ -181,7 +182,7 @@ structure Backend where
   deriving DecidableEq, Repr
 
 structure Task where
-  agentId : String
+  agentDid : String
   enabled : Bool
   deriving DecidableEq, Repr
 
@@ -242,9 +243,9 @@ def resolveContext (reg : Registry) (scope : String) : Option String → Except 
       | some key => reg.contexts scope key = some ⟨scope, context⟩ := by
   cases id <;> simp [resolveContext, eq_comm]
 
-def resolveAgent (reg : Registry) (scope agentId : String) :
+def resolveAgent (reg : Registry) (scope agentDid : String) :
     Except ResolveError ResolvedSessionConfig := do
-  let agent ← lookupOwned reg.agents scope agentId .missingAgent .foreignAgent
+  let agent ← lookupOwned reg.agents scope agentDid .missingAgent .foreignAgent
   if !agent.enabled then .error .disabledAgent else do
     let context ← resolveContext reg scope agent.contextId
     let inference ← lookupOwned reg.profiles scope agent.profileId .missingProfile .foreignProfile
@@ -258,12 +259,12 @@ def resolveTask (reg : Registry) (scope taskId : String) :
     Except ResolveError ResolvedSessionConfig := do
   let task ← lookupOwned reg.tasks scope taskId .missingTask .foreignTask
   if !task.enabled then .error .disabledTask
-  else resolveAgent reg scope task.agentId
+  else resolveAgent reg scope task.agentDid
 
-theorem resolveAgent_ok_iff (reg : Registry) (scope agentId : String)
+theorem resolveAgent_ok_iff (reg : Registry) (scope agentDid : String)
     (session : ResolvedSessionConfig) :
-    resolveAgent reg scope agentId = .ok session ↔
-      ∃ agent backend, reg.agents scope agentId = some ⟨scope, agent⟩ ∧
+    resolveAgent reg scope agentDid = .ok session ↔
+      ∃ agent backend, reg.agents scope agentDid = some ⟨scope, agent⟩ ∧
         agent.enabled = true ∧
         resolveContext reg scope agent.contextId = .ok session.context ∧
         reg.profiles scope agent.profileId = some ⟨scope, session.inference⟩ ∧
@@ -278,7 +279,7 @@ theorem resolveTask_ok_iff (reg : Registry) (scope taskId : String)
     (session : ResolvedSessionConfig) :
     resolveTask reg scope taskId = .ok session ↔
       ∃ task, reg.tasks scope taskId = some ⟨scope, task⟩ ∧ task.enabled = true ∧
-        resolveAgent reg scope task.agentId = .ok session := by
+        resolveAgent reg scope task.agentDid = .ok session := by
   simp [resolveTask, bind, resolution_bind_ok_iff, ite_eq_iff]
 
 /-- Omission removes capabilities rather than inheriting another agent's
@@ -294,7 +295,7 @@ theorem omitted_agent_context_is_empty (reg : Registry) (scope id : String)
 
 theorem resolveTask_owned_delegates (reg : Registry) (scope id : String) (task : Task)
     (ht : reg.tasks scope id = some ⟨scope, task⟩) (he : task.enabled = true) :
-    resolveTask reg scope id = resolveAgent reg scope task.agentId := by
+    resolveTask reg scope id = resolveAgent reg scope task.agentDid := by
   simp [resolveTask, lookupOwned, ht, he, bind, Except.bind]
 
 theorem resolveTask_missing_rejected (reg : Registry) (scope id : String)
@@ -316,7 +317,7 @@ theorem disabled_agent_rejected (reg : Registry) (scope id : String) (agent : Ag
     resolveAgent reg scope id = .error .disabledAgent := by
   simp [resolveAgent, lookupOwned, hb, he, bind, Except.bind]
 
-/-- A node's `default_agent_id` selects the agent for requests that
+/-- A node's `default_agent_did` selects the agent for requests that
 name none, so a default must be an owned, enabled agent. A disabled default
 would leave every such request to fail with `disabledAgent`; publication
 (`ConfigReferences`) rejects the candidate instead, whichever write disables the
@@ -426,17 +427,28 @@ account is first stored; `none` is the provider's original account.
 `nodeOAuthPool` rotates every call over all enabled accounts of the backend's
 provider on the executing node (`AccountRotation`); drawing paid extra usage
 when every account is past its limit is the operator's choice, off by default.
-`awsCredentials` and `googleCredentials` are static cloud credentials stored in
-the backend document like `apiKey`, so they are secrets under the same
-self-configuration guard (`SelfConfig.authPatchAllowed`). -/
+The raw credential constructors below also represent transient authoring
+inputs and legacy records. They must not be stored in Agent-readable backend
+metadata. `BackendMetadataAuth` is the storage selection for fresh metadata. -/
 inductive BackendAuth where
   | unauthenticated
   | apiKey (key : String)
+  | credential (id version : String)
   | environment (name : String)
   | nodeOAuth (account : Option String)
   | nodeOAuthPool (allowOverage : Bool)
   | awsCredentials (accessKeyId secretAccessKey : String) (sessionToken : Option String)
   | googleCredentials (credentialsJson : String)
+  deriving DecidableEq, Repr
+
+/-- User-managed metadata selects a private credential by opaque id and
+rotation version; the native secret resource owns its contents. -/
+inductive BackendMetadataAuth where
+  | unauthenticated
+  | credential (id version : String)
+  | environment (name : String)
+  | nodeOAuth (account : Option String)
+  | nodeOAuthPool (allowOverage : Bool)
   deriving DecidableEq, Repr
 
 def oauthLookupOwner (scope : String) : BackendAuth → Option String
@@ -604,6 +616,57 @@ def retainPluginPublication : PackDocumentOutcome → Bool
 theorem rejected_document_restores_plugin : retainPluginPublication .callbackRejected = false := rfl
 theorem unknown_commit_keeps_plugin : retainPluginPublication .unconfirmed = true := rfl
 
+/-- A hosted document effect is admitted only for the authenticated client,
+after verifying its signed graph against this transaction's snapshot and the
+client-approved pack plan. Native document ACP remains authoritative. -/
+def hostedPackEffectAllowed (actorMatches graphVerified planApproved nativeAuthorized : Bool) : Bool :=
+  actorMatches && graphVerified && planApproved && nativeAuthorized
+
+theorem hosted_effect_requires_verified_graph (actor plan native : Bool) :
+    hostedPackEffectAllowed actor false plan native = false := by
+  simp [hostedPackEffectAllowed]
+
+theorem hosted_effect_requires_approved_plan (actor graph native : Bool) :
+    hostedPackEffectAllowed actor graph false native = false := by
+  simp [hostedPackEffectAllowed]
+
+/-- Plugin-only hosted installation preserves existing pack documents. Its
+  installed plugin records are staged by the host from the reviewed archive;
+  the client independently replays the same native-authorized pack record. -/
+def hostedPluginInstallAllowed (reviewedDigest clientPlan nativeAuthorized : Bool) : Bool :=
+  reviewedDigest && clientPlan && nativeAuthorized
+
+theorem unreviewed_hosted_plugin_is_denied (plan native : Bool) :
+    hostedPluginInstallAllowed false plan native = false := by
+  simp [hostedPluginInstallAllowed]
+
+theorem hosted_plugin_needs_native_authority (reviewed plan : Bool) :
+    hostedPluginInstallAllowed reviewed plan false = false := by
+  simp [hostedPluginInstallAllowed]
+
+/-- A hosted graph reaches native commit only after the User's independent
+replay matches every proposed effect and signals that its plan is complete. -/
+def hostedPackCommitAllowed (effectsMatched clientFinished : Bool) : Bool :=
+  effectsMatched && clientFinished
+
+/-- A hosted install reports success only after its required host record has
+been written. A failed host write cannot undo a committed document graph. -/
+def hostedPackReportedSuccess (committed homeRequired homeWritten : Bool) : Bool :=
+  committed && (!homeRequired || homeWritten)
+
+theorem hosted_pack_missing_home_record_is_not_success :
+    hostedPackReportedSuccess true true false = false := by decide
+
+def hostedPackHomeCases : List Bool := [false, true]
+
+theorem hosted_pack_disconnect_before_finish_cannot_commit (effectsMatched : Bool) :
+    hostedPackCommitAllowed effectsMatched false = false := by
+  simp [hostedPackCommitAllowed]
+
+def hostedPackEffectCases : List (Bool × Bool × Bool) :=
+  [(false, false, true), (false, true, true), (true, false, true),
+    (true, true, false), (true, true, true)]
+
 /-- Once a commit request may have succeeded, later failed attempts cannot
 prove that the earlier attempt did not commit. A successful receipt resolves
 the operation; otherwise only histories with no uncertain commit may restore. -/
@@ -630,6 +693,12 @@ def installedPinCommitAllowed (pin : Option String) (underLock : String) : Bool 
 /-- Wiring holds the shared plugin store lock from reading the digest through
 configuration publication. Competing store mutation cannot publish in that interval. -/
 def wireAndPluginPublishAllowed (wireHoldsLock : Bool) : Bool := !wireHoldsLock
+
+/-- A staged replacement is not available to plugin execution until the
+publisher releases the store lock after native transaction finality. -/
+def stagedPluginResolutionAllowed (publisherHoldsLock : Bool) : Bool := !publisherHoldsLock
+
+theorem staged_plugin_cannot_be_resolved : stagedPluginResolutionAllowed true = false := by decide
 
 theorem plugin_publish_blocked_during_wire :
     wireAndPluginPublishAllowed true = false := by decide
@@ -658,6 +727,23 @@ References are collected after the same transaction's document deletions, so an
 agent removed with its pack does not prevent that pack's removal. -/
 def pluginRemovalSafe (references removed : List String) : Bool :=
   references.all fun reference => decide (reference ∉ removed)
+
+/-- ACP-filtered rows establish non-use only if a native inventory owner
+confirms the observation is complete in the same removal transaction. An
+empty retirement needs no inventory. -/
+def pluginRemovalObservedSafe (references removed : List String) (complete : Bool) : Bool :=
+  removed.isEmpty || (complete && pluginRemovalSafe references removed)
+
+theorem incomplete_plugin_inventory_refuses (references removed : List String)
+    (nonempty : removed.isEmpty = false) :
+    pluginRemovalObservedSafe references removed false = false := by
+  simp [pluginRemovalObservedSafe, nonempty]
+
+/-- A disappearance notice must keep the durable installation evidence when
+the plugin inventory cannot establish safe retirement. The notice may still
+refresh the record so watchers can observe externally removed files. -/
+def retainPluginStoreRecord (plugins : List String) (complete : Bool) : Bool :=
+  !plugins.isEmpty && !complete
 
 theorem pluginRemovalSafe_iff (references removed : List String) :
     pluginRemovalSafe references removed = true ↔

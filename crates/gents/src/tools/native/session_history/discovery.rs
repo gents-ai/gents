@@ -14,7 +14,7 @@ fn action_help(topic: Option<&str>) -> Result<&'static str> {
     Ok(match topic {
         None => HELP,
         Some("list") => {
-            r#"{"action":"list","filter":{"status":"closed","tag":"release"},"limit":10}. Filters: agent_id, status (open/closed), tag, created_after (inclusive), created_before (exclusive), text (title or ID substring). Order: created_at descending, then ID descending. Pass next_cursor as cursor with the same filter. Limit: 1–100."#
+            r#"{"action":"list","filter":{"status":"closed","tag":"release"},"limit":10}. Filters: agent_did, status (open/closed), tag, created_after (inclusive), created_before (exclusive), text (title or ID substring). Order: created_at descending, then ID descending. Pass next_cursor as cursor with the same filter. Limit: 1–100."#
         }
         Some("count") => {
             r#"{"action":"count","filter":{"status":"closed"}}. Exact count of authorized sessions, independent of request volume or list limits. Filters are the same as list; no cursor. Use help topic=list for filters."#
@@ -61,7 +61,7 @@ fn missing_search_query(args: &SessionHistoryParams) -> anyhow::Error {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionFilter {
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     pub status: Option<String>,
     pub tag: Option<String>,
     pub created_after: Option<String>,
@@ -92,8 +92,8 @@ fn scope(agent: &str, requester: Option<&str>) -> String {
 
 fn filter_query(filter: &SessionFilter, cursor: Option<&Cursor>) -> Result<String> {
     let mut parts = Vec::new();
-    if let Some(behavior) = &filter.agent_id {
-        parts.push(format!("{{ agent_id: {{_eq: {}}} }}", quoted(behavior)));
+    if let Some(behavior) = &filter.agent_did {
+        parts.push(format!("{{ agent_did: {{_eq: {}}} }}", quoted(behavior)));
     }
     if let Some(tag) = &filter.tag {
         parts.push(format!("{{ tags: {{_any: {{_eq: {}}}}} }}", quoted(tag)));
@@ -163,7 +163,7 @@ fn rows(response: Value, collection: &str) -> Result<Vec<Value>> {
 }
 
 fn compact(row: &Value, current_session: Option<&str>, agent: &str) -> Value {
-    json!({"session_id":row["session_id"],"title":row["title"]["text"],"created_at":row["created_at"],"closed_at":row["closed_at"],"agent_id":row["agent_id"],"tags":row["tags"],"node_did":row["node_did"],"requester_did":row["requester_did"],"is_current":current_session.is_some_and(|id|super::is_current_session(agent,id,row["node_did"].as_str().unwrap_or_default(),row["session_id"].as_str().unwrap_or_default())),"session_doc_id":row["_docID"]})
+    json!({"session_id":row["session_id"],"title":row["title"]["text"],"created_at":row["created_at"],"closed_at":row["closed_at"],"agent_did":row["agent_did"],"tags":row["tags"],"node_did":row["node_did"],"requester_did":row["requester_did"],"is_current":current_session.is_some_and(|id|super::is_current_session(agent,id,row["node_did"].as_str().unwrap_or_default(),row["session_id"].as_str().unwrap_or_default())),"session_doc_id":row["_docID"]})
 }
 
 const OUTPUT_PAGE_BYTES: usize = 16_000;
@@ -207,7 +207,7 @@ impl Serialize for AnswerFirst<'_> {
                     "excerpt",
                     "closed_at",
                     "created_at",
-                    "agent_id",
+                    "agent_did",
                     "tags",
                     "message_doc_id",
                     "session_doc_id",
@@ -261,9 +261,7 @@ pub(super) async fn run(
         .and_then(|context| context.requester_did.clone());
     let current_session = current.and_then(|context| context.session_id);
     let agent = tool.node_did.clone();
-    let identity = agent
-        .parse()
-        .context("sessions requires a valid running DID")?;
+    let identity = tool.actor.clone();
     let args = args.clone();
     let action = action.to_owned();
     ConfigAccess::transact_local_readonly(

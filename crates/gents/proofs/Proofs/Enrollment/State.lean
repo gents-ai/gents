@@ -22,6 +22,8 @@ inductive DecisionKind where | approved | denied deriving DecidableEq, Repr
 inductive RevisionKind where | active | revoked deriving DecidableEq, Repr
 inductive RouteDirection where | clientToServer | serverToClient deriving DecidableEq, Repr
 
+/-- Enrollment binds its signed offer and decisions to the hosting node DID;
+this is peer admission context, not an Agent DID or document access grant. -/
 structure Offer where
   offerId : String
   challenge : String

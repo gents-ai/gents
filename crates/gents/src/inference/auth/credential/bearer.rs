@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tokio::sync::Mutex;
 
 use super::*;
@@ -167,8 +167,9 @@ impl DbCredentialBearer {
     }
 
     async fn load_credential(&self) -> std::result::Result<OAuthCredential, OAuthCredentialError> {
+        let access = runtime_credential_access(&self.node, &self.node_did)?;
         let Some(credential) =
-            lookup_oauth_credential_by_id(self.node.as_ref(), &self.credential_id).await?
+            lookup_oauth_credential_by_id_on(&access, &self.credential_id).await?
         else {
             let label = self.cached().await.map_or_else(
                 || self.product.name.to_owned(),
@@ -238,16 +239,11 @@ impl DbCredentialBearer {
         key_filled: bool,
     ) -> Result<RefreshPersist> {
         let mutation = refresh_update_mutation(credential, stored_refresh_token, key_filled);
+        let access = runtime_credential_access(&self.node, &self.node_did)?;
         let mut last_error = None;
         let mut delay_ms = 200u64;
         for attempt in 0..3u32 {
-            match crate::store::config_client::ConfigAccess::write_local(
-                &self.node,
-                "oauth_credential.refresh",
-                &mutation,
-            )
-            .await
-            {
+            match access.write("oauth_credential.refresh", &mutation).await {
                 Ok(response) => {
                     let written = response
                         .get("data")
@@ -443,5 +439,255 @@ impl BearerSource for DbCredentialBearer {
 
     async fn invalidate(&self) {
         self.force_refresh.store(true, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod native_access_tests {
+    use super::*;
+    use crate::store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
+    use crate::NodeIdentity;
+
+    #[tokio::test]
+    async fn runtime_refresh_uses_native_writer_grant() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let user = crate::KeyIdentity::load_or_create(dir.path().join("user"), None)?;
+        let runtime = crate::KeyIdentity::load_or_create(dir.path().join("runtime"), None)?;
+        let agent = crate::KeyIdentity::load_or_create(dir.path().join("agent"), None)?;
+        let sibling = crate::KeyIdentity::load_or_create(dir.path().join("sibling"), None)?;
+        let outsider = crate::KeyIdentity::load_or_create(dir.path().join("outsider"), None)?;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(runtime.did())
+                .with_node_acp_enabled()
+                .with_http(defra_node::HttpConfig::with_listener(listener)?)
+                .with_storage_backend(defra_node::StorageBackend::Regolith)
+                .data_path(dir.path().join("node"))
+                .build()
+                .await?,
+        );
+        node.add_dac_policy_with_counter_as(
+            &defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned())),
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
+        .await?;
+        node.add_collection(gents_protocol::schemas::NODE).await?;
+        node.add_collection(gents_protocol::schemas::OAUTH_CREDENTIAL)
+            .await?;
+        let access = |actor: &crate::KeyIdentity| -> anyhow::Result<ConfigAccess> {
+            Ok(ConfigAccess::Graphql(
+                GraphqlEndpoint::as_principal(
+                    format!("http://{address}/api/v0/graphql"),
+                    actor.did(),
+                )
+                .with_client_signing_capability(actor.client_signing_capability()?)?,
+            ))
+        };
+        let user_access = access(&user)?;
+        let runtime_access =
+            ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
+        for actor in [&user, &agent, &sibling, &outsider] {
+            for permission in [
+                NodePermission::DocumentRead,
+                NodePermission::DocumentUpdate,
+                NodePermission::DacRelationAdd,
+            ] {
+                runtime_access
+                    .grant_node_permission(&identity::Did::new(actor.did())?, permission)
+                    .await?;
+            }
+        }
+        runtime_access
+            .grant_node_permission(
+                &identity::Did::new(user.did())?,
+                NodePermission::DacRelationDelete,
+            )
+            .await?;
+        let parent = user_access
+            .write(
+                "test.refresh.node",
+                &format!(
+                    r#"mutation {{ create_Node(input: {{node_did: "{}"}}) {{_docID}} }}"#,
+                    crate::store::graphql::escape_graphql_string(runtime.did()),
+                ),
+            )
+            .await?;
+        let parent = gents_protocol::graphql::extract_mutation_doc_id(&parent, "Node")?;
+        user_access
+            .add_actor_relationship(
+                "Node",
+                &parent,
+                "runtime_reader",
+                &identity::Did::new(runtime.did())?,
+            )
+            .await?;
+        let mut credential = OAuthCredential {
+            doc_id: None,
+            credential_id: "test-refresh".into(),
+            node_did: runtime.did().into(),
+            provider: crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER.into(),
+            access_token: "before".into(),
+            refresh_token: "before-refresh".into(),
+            id_token: None,
+            account_id: None,
+            chatgpt_plan_type: None,
+            is_fedramp: false,
+            access_token_expires_at: Utc::now(),
+            last_refresh: None,
+            enabled: true,
+            account_ref: None,
+            connected_at: None,
+            provider_account_key: None,
+            label: None,
+        };
+        let doc = upsert_oauth_credential_on(&user_access, &credential).await?;
+        assert_eq!(
+            upsert_oauth_credential_on(&user_access, &credential).await?,
+            doc
+        );
+        let signed_in = crate::inference::auth::credential::store_sign_in(
+            &user_access,
+            credential.clone(),
+            Some("primary"),
+        )
+        .await?;
+        assert_eq!(signed_in.doc_id, doc);
+        crate::inference::auth::credential::set_account_enabled(
+            &user_access,
+            runtime.did(),
+            &credential.credential_id,
+            false,
+        )
+        .await?;
+        crate::inference::auth::credential::set_account_enabled(
+            &user_access,
+            runtime.did(),
+            &credential.credential_id,
+            true,
+        )
+        .await?;
+        crate::inference::auth::credential::set_account_label(
+            &user_access,
+            runtime.did(),
+            &credential.credential_id,
+            "renamed",
+        )
+        .await?;
+        let configured = user_access
+            .execute("{ OAuthCredential { _docID label enabled } }")
+            .await?;
+        assert_eq!(configured["data"]["OAuthCredential"][0]["label"], "renamed");
+        assert_eq!(configured["data"]["OAuthCredential"][0]["enabled"], true);
+        credential.doc_id = Some(doc.clone());
+        credential.access_token = "after".into();
+        credential.refresh_token = "after-refresh".into();
+        let bearer = DbCredentialBearer::new(
+            node.clone(),
+            runtime.did(),
+            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+            "test-refresh",
+            true,
+            OAuthRefreshKind::Claude,
+            crate::inference::auth::claude::CLAUDE_OAUTH_PRODUCT,
+        );
+        assert!(matches!(
+            bearer
+                .persist_with_retry(&credential, "before-refresh", false)
+                .await?,
+            RefreshPersist::Written
+        ));
+        let query = "{ OAuthCredential { access_token refresh_token } }";
+        for actor in [&agent, &sibling, &outsider] {
+            let visible = access(actor)?.execute(query).await?;
+            assert!(gents_protocol::graphql::graphql_rows_from_response(
+                &visible,
+                "OAuthCredential"
+            )
+            .is_empty());
+        }
+        let denied = access(&outsider)?.write("test.oauth.denied", &format!(
+            r#"mutation {{ update_OAuthCredential(filter: {{_docID: {{_eq: "{}"}}}}, input: {{access_token: "stolen"}}) {{_docID}} }}"#,
+            crate::store::graphql::escape_graphql_string(&doc),
+        )).await;
+        assert!(
+            denied.is_err()
+                || denied
+                    .ok()
+                    .and_then(|value| gents_protocol::graphql::extract_mutation_doc_id(
+                        &value,
+                        "OAuthCredential"
+                    )
+                    .ok())
+                    .is_none()
+        );
+        let stored = user_access.execute(query).await?;
+        assert_eq!(
+            stored["data"]["OAuthCredential"][0]["refresh_token"],
+            "after-refresh"
+        );
+        user_access
+            .delete_actor_relationship(
+                "OAuthCredential",
+                &doc,
+                "runtime_writer",
+                &identity::Did::new(runtime.did())?,
+            )
+            .await?;
+        credential.access_token = "revoked".into();
+        credential.refresh_token = "revoked-refresh".into();
+        let result = bearer
+            .persist_with_retry(&credential, "after-refresh", false)
+            .await;
+        assert!(!matches!(result, Ok(RefreshPersist::Written)));
+        let stored = user_access.execute(query).await?;
+        assert_eq!(
+            stored["data"]["OAuthCredential"][0]["refresh_token"],
+            "after-refresh"
+        );
+        drop(bearer);
+        drop(user_access);
+        drop(runtime_access);
+        node.shutdown().await?;
+        drop(node);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let restarted = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(runtime.did())
+                .with_node_acp_enabled()
+                .with_http(defra_node::HttpConfig::with_listener(listener)?)
+                .with_storage_backend(defra_node::StorageBackend::Regolith)
+                .data_path(dir.path().join("node"))
+                .build()
+                .await?,
+        );
+        let user_access = ConfigAccess::Graphql(
+            GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), user.did())
+                .with_client_signing_capability(user.client_signing_capability()?)?,
+        );
+        assert_eq!(
+            user_access.execute(query).await?["data"]["OAuthCredential"][0]["refresh_token"],
+            "after-refresh"
+        );
+        let bearer = DbCredentialBearer::new(
+            restarted.clone(),
+            runtime.did(),
+            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+            "test-refresh",
+            true,
+            OAuthRefreshKind::Claude,
+            crate::inference::auth::claude::CLAUDE_OAUTH_PRODUCT,
+        );
+        assert!(!matches!(
+            bearer
+                .persist_with_retry(&credential, "after-refresh", false)
+                .await,
+            Ok(RefreshPersist::Written)
+        ));
+        restarted.shutdown().await?;
+        Ok(())
     }
 }

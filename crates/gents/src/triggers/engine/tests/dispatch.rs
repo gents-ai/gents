@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn dispatch_renders_goal_objective_with_the_request_template_scope() {
-    let mut task = resolved_task("work on {{ event.item }} for {{ args.owner }}");
+    let mut task = spy_resolved_task("work on {{ event.item }} for {{ args.owner }}");
     task.goal_objective_template =
         Some("deliver {{ event.item }} for {{ args.owner }} from {{ node.node_did }}".to_string());
     task.goal_token_budget = Some(4_096);
@@ -30,6 +30,7 @@ async fn dispatch_renders_goal_objective_with_the_request_template_scope() {
             args_vars: Some(serde_json::json!({"owner": "runtime"})),
             durable_fire_key: "dispatch-goal-fire".to_string(),
             pre_materialized_request_id: None,
+            event_source_generation: None,
             on_result: Box::new(|_| {}),
         })
         .await;
@@ -50,7 +51,7 @@ async fn dispatch_renders_goal_objective_with_the_request_template_scope() {
 
 #[tokio::test]
 async fn latest_only_goal_fire_retry_does_not_supersede_its_own_request() {
-    let mut task = resolved_task("durable work at {{ event.fired_at }}");
+    let mut task = spy_resolved_task("durable work at {{ event.fired_at }}");
     task.goal_objective_template =
         Some("finish durable work from {{ event.fired_at }}".to_string());
     let schedule = resolved_schedule_with_concurrency(
@@ -79,6 +80,7 @@ async fn latest_only_goal_fire_retry_does_not_supersede_its_own_request() {
         args_vars: None,
         durable_fire_key: "schedule:sched-goal-retry:2026-09-02T12:00:00Z".to_string(),
         pre_materialized_request_id: None,
+        event_source_generation: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -110,7 +112,7 @@ async fn latest_only_goal_fire_retry_does_not_supersede_its_own_request() {
 
 #[tokio::test]
 async fn goal_fire_retry_recovers_after_goal_declaration_is_removed() {
-    let mut goal_task = resolved_task("durable work at {{ event.fired_at }}");
+    let mut goal_task = spy_resolved_task("durable work at {{ event.fired_at }}");
     goal_task.goal_objective_template = Some("finish durable work".to_string());
     goal_task.goal_token_budget = Some(4_096);
     let ordinary_task = ResolvedTask {
@@ -145,6 +147,7 @@ async fn goal_fire_retry_recovers_after_goal_declaration_is_removed() {
         args_vars: None,
         durable_fire_key: durable_fire_key.to_string(),
         pre_materialized_request_id: None,
+        event_source_generation: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -176,8 +179,8 @@ async fn goal_fire_retry_recovers_after_goal_declaration_is_removed() {
 
 #[tokio::test]
 async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
-    let task = resolved_task("group {{ group.correlation_value }}");
-    let agent = integration_test_agent("general");
+    let task = spy_resolved_task("group {{ group.correlation_value }}");
+    let agent = spy_test_agent();
     let node_did = agent.node_did().to_string();
     let trigger = ResolvedEventTrigger {
         fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
@@ -191,8 +194,8 @@ async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
     };
     let snapshot = Arc::new(
         ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-            "general".to_string(),
-            vec![agent],
+            agent.agent_did.clone(),
+            vec![agent.clone()],
             RapidHashMap::new(),
             RapidHashMap::new(),
             RapidHashMap::new(),
@@ -201,7 +204,8 @@ async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
             event_triggers: RapidHashMap::from_iter([("group-trigger".to_string(), trigger)]),
             ..Default::default()
         })
-        .with_node(stub_principal())
+        .with_node(agent.node.clone())
+        .with_local_did(agent.node_did().to_string())
         .activate(1, RapidHashMap::new()),
     );
     let (_tx, rx) = watch::channel(snapshot);
@@ -226,6 +230,7 @@ async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
         args_vars: None,
         durable_fire_key: super::super::durable_fire_key("event-group", &["same-generation"]),
         pre_materialized_request_id: None,
+        event_source_generation: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -256,16 +261,16 @@ async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
 
 #[tokio::test]
 async fn dispatch_serial_per_document_is_trigger_wide_despite_correlation() {
-    let task = resolved_task("run {{ event.correlation }}");
+    let task = spy_resolved_task("run {{ event.correlation }}");
     let trigger = ResolvedEventTrigger {
         correlation_field: Some("run_id".to_string()),
         ..resolved_event_trigger_with_concurrency("event-1", task.clone(), ConcurrencyMode::Serial)
     };
-    let agent = integration_test_agent("general");
+    let agent = spy_test_agent();
     let snapshot = Arc::new(
         ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-            "general".to_string(),
-            vec![agent],
+            agent.agent_did.clone(),
+            vec![agent.clone()],
             RapidHashMap::new(),
             RapidHashMap::new(),
             RapidHashMap::new(),
@@ -274,7 +279,8 @@ async fn dispatch_serial_per_document_is_trigger_wide_despite_correlation() {
             event_triggers: RapidHashMap::from_iter([("event-1".to_string(), trigger)]),
             ..Default::default()
         })
-        .with_node(stub_principal())
+        .with_node(agent.node.clone())
+        .with_local_did(agent.node_did().to_string())
         .activate(1, RapidHashMap::new()),
     );
     let (_tx, rx) = watch::channel(snapshot);
@@ -298,6 +304,7 @@ async fn dispatch_serial_per_document_is_trigger_wide_despite_correlation() {
         args_vars: None,
         durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
+        event_source_generation: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -311,19 +318,19 @@ async fn dispatch_serial_per_document_is_trigger_wide_despite_correlation() {
 
 #[tokio::test]
 async fn dispatch_serial_per_group_separates_correlation_and_membership_generation() {
-    let task = resolved_task("run {{ group.correlation_value }}");
+    let task = spy_resolved_task("run {{ group.correlation_value }}");
     let trigger = ResolvedEventTrigger {
         fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".to_string()),
         expected_count: Some(2),
         ..resolved_event_trigger_with_concurrency("event-1", task.clone(), ConcurrencyMode::Serial)
     };
-    let agent = integration_test_agent("general");
+    let agent = spy_test_agent();
     let node_did = agent.node_did().to_owned();
     let snapshot = Arc::new(
         ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-            "general".to_string(),
-            vec![agent],
+            agent.agent_did.clone(),
+            vec![agent.clone()],
             RapidHashMap::new(),
             RapidHashMap::new(),
             RapidHashMap::new(),
@@ -332,7 +339,8 @@ async fn dispatch_serial_per_group_separates_correlation_and_membership_generati
             event_triggers: RapidHashMap::from_iter([("event-1".to_string(), trigger)]),
             ..Default::default()
         })
-        .with_node(stub_principal())
+        .with_node(agent.node.clone())
+        .with_local_did(agent.node_did().to_string())
         .activate(1, RapidHashMap::new()),
     );
     let (_tx, rx) = watch::channel(snapshot);
@@ -364,6 +372,7 @@ async fn dispatch_serial_per_group_separates_correlation_and_membership_generati
         args_vars: None,
         durable_fire_key: super::super::durable_fire_key("event-group", &[correlation]),
         pre_materialized_request_id: None,
+        event_source_generation: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -396,7 +405,7 @@ async fn dispatch_serial_per_group_separates_correlation_and_membership_generati
 
 #[tokio::test]
 async fn dispatch_latest_only_lock_blocks_second_supersede_until_first_materialize_finishes() {
-    let task = resolved_task("tick");
+    let task = spy_resolved_task("tick");
     let schedule = resolved_schedule("sched-1", task.clone());
     let snapshot =
         snapshot_with_schedules(RapidHashMap::from_iter([("sched-1".to_string(), schedule)]));
@@ -420,16 +429,21 @@ async fn dispatch_latest_only_lock_blocks_second_supersede_until_first_materiali
         args_vars: None,
         durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
+        event_source_generation: None,
         on_result: Box::new(|_| {}),
     };
 
     let engine1 = engine.clone();
     let first_intent = make_intent();
-    let first = tokio::spawn(async move { engine1.dispatch(first_intent).await });
-    entered_rx
-        .recv()
-        .await
-        .expect("first LatestOnly dispatch should enter materialize gate");
+    let mut first = tokio::spawn(async move { engine1.dispatch(first_intent).await });
+    tokio::select! {
+        entered = entered_rx.recv() => {
+            entered.expect("first LatestOnly dispatch should enter materialize gate");
+        }
+        completed = &mut first => {
+            panic!("first LatestOnly dispatch exited before materialize gate: {completed:?}");
+        }
+    }
     assert_eq!(
         materializer.supersede_calls(),
         vec!["sched-1".to_string()],
@@ -493,7 +507,7 @@ async fn dispatch_latest_only_lock_blocks_second_supersede_until_first_materiali
 
 #[tokio::test]
 async fn dispatch_errors_and_skips_materialize_on_template_render_failure() {
-    let task = resolved_task("{{ event.missing_field }}");
+    let task = spy_resolved_task("{{ event.missing_field }}");
     let schedule = resolved_schedule("sched-1", task.clone());
     let snapshot =
         snapshot_with_schedules(RapidHashMap::from_iter([("sched-1".to_string(), schedule)]));
@@ -517,6 +531,7 @@ async fn dispatch_errors_and_skips_materialize_on_template_render_failure() {
         args_vars: None,
         durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
+        event_source_generation: None,
         on_result: Box::new(move |r| {
             *capture.lock().unwrap() = Some(r);
         }),
@@ -553,14 +568,14 @@ async fn dispatch_errors_and_skips_materialize_on_template_render_failure() {
 
 #[tokio::test]
 async fn dispatch_scopes_concurrency_by_the_agents_node_did() {
-    let task = resolved_task("tick");
+    let task = spy_resolved_task("tick");
     let schedule = resolved_schedule("sched-did", task.clone());
     let snapshot = snapshot_with_schedules(RapidHashMap::from_iter([(
         "sched-did".to_string(),
         schedule,
     )]));
     let expected_did = snapshot
-        .agent("general")
+        .agent(&task.agent_did)
         .expect("test snapshot resolves the general agent")
         .node_did()
         .to_string();
@@ -582,6 +597,7 @@ async fn dispatch_scopes_concurrency_by_the_agents_node_did() {
         args_vars: None,
         durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
+        event_source_generation: None,
         on_result: Box::new(|_| {}),
     };
     assert!(matches!(
@@ -603,6 +619,7 @@ async fn dispatch_scopes_concurrency_by_the_agents_node_did() {
         args_vars: None,
         durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
+        event_source_generation: None,
         on_result: Box::new(|_| {}),
     };
     assert!(matches!(
@@ -614,13 +631,18 @@ async fn dispatch_scopes_concurrency_by_the_agents_node_did() {
 
 #[tokio::test]
 async fn scheduled_target_uses_stable_receipt_and_actual_session_template_scope() {
-    let task = resolved_task("session={{ session.session_id }} request={{ request.request_id }}");
+    let task =
+        spy_resolved_task("session={{ session.session_id }} request={{ request.request_id }}");
     let mut schedule = resolved_schedule("wake", task.clone());
     schedule.session_id_template = Some("captain-session".into());
     schedule.concurrency = ConcurrencyMode::QueuedSerial;
     let snapshot = snapshot_with_schedules(RapidHashMap::from_iter([("wake".into(), schedule)]));
     let identity = gents_protocol::trigger_delivery::FireIdentity {
-        owner_did: snapshot.agent("general").unwrap().node_did().to_string(),
+        owner_did: snapshot
+            .agent(&task.agent_did)
+            .unwrap()
+            .node_did()
+            .to_string(),
         trigger_id: "wake".into(),
         source_collection: "Schedule".into(),
         source_doc_id: "persisted-due-occurrence".into(),
@@ -643,6 +665,7 @@ async fn scheduled_target_uses_stable_receipt_and_actual_session_template_scope(
                 args_vars: None,
                 durable_fire_key: "persisted-due-occurrence".into(),
                 pre_materialized_request_id: None,
+                event_source_generation: None,
                 on_result: Box::new(|_| {}),
             })
             .await;

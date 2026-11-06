@@ -67,7 +67,7 @@ pub struct Fixture<'a> {
     pub home: &'a Path,
     pub binary: &'a Path,
     pub node_did: &'a str,
-    pub agent_id: &'a str,
+    pub agent_did: &'a str,
     pub session: &'a str,
     pub client_did: &'a str,
     pub original_doc_id: &'a str,
@@ -99,7 +99,7 @@ impl Fixture<'_> {
             self.access.execute(&provider_query).await?,
             "InferenceBackend",
         )?;
-        let session_query = format!("{{ AgentSession(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ _docID node_did session_id requester_did agent_id created_at }} }}", gents::store::graphql::escape_graphql_string(self.node_did), gents::store::graphql::escape_graphql_string(self.session));
+        let session_query = format!("{{ AgentSession(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ _docID node_did session_id requester_did agent_did created_at }} }}", gents::store::graphql::escape_graphql_string(self.node_did), gents::store::graphql::escape_graphql_string(self.session));
         let sessions = rows(self.access.execute(&session_query).await?, "AgentSession")?;
         let (mut replacement, ready) = self.start_replacement(original).await?;
         let RuntimePreparationResult::Ready {
@@ -158,7 +158,7 @@ impl Fixture<'_> {
                 *id,
                 "desktop_chat_send",
                 json!({"request": {
-                    "nodeDid":self.node_did, "sessionId":self.session, "agentId":self.agent_id,
+                    "nodeDid":self.node_did, "sessionId":self.session, "agentDid":self.agent_did,
                     "content":AFTER_UPDATE,"delivery":"queue",
                 }}),
             )

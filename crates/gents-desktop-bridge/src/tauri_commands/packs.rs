@@ -5,7 +5,7 @@ use tauri::State;
 use ts_rs::TS;
 
 use crate::error::{BridgeError, BridgeErrorCode};
-use crate::state::DesktopAppState;
+use crate::state::{current_core, DesktopAppState};
 use gents_server::packs::{self, EditedDocuments};
 
 fn home(state: &DesktopAppState) -> Result<std::path::PathBuf, BridgeError> {
@@ -56,7 +56,15 @@ pub async fn desktop_pack_installed(
 ) -> Result<InstalledPacksView, BridgeError> {
     {
         let home = home(&state)?;
-        run(move || packs::installed(home, registry)).await
+        if let Some(core) = current_core(&state) {
+            let node_did = packs::ux_installing_node(&home).map_err(failed)?;
+            let access = core
+                .local_home_operator_access(&node_did, &home)
+                .map_err(failed)?;
+            run(move || packs::installed_with_access(home, registry, access, node_did)).await
+        } else {
+            run(move || packs::installed(home, registry)).await
+        }
     }
 }
 

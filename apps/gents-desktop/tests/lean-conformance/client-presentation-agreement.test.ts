@@ -72,7 +72,7 @@ describe("ClientShell presentation agreement", () => {
   it("matches Lean-generated draft and automatic recovery cases", async () => {
     const { presentationCases: cases, recoveryCases } =
       await generatedPresentationCases();
-    expect(cases).toHaveLength(20);
+    expect(cases).toHaveLength(22);
     expect(recoveryCases).toHaveLength(10);
     for (const contractCase of recoveryCases) {
       const actual =
@@ -87,7 +87,14 @@ describe("ClientShell presentation agreement", () => {
               ? projectDeploymentOperationalState({
                   ...deployment,
                   dialSucceeded: false,
-                  lastError: "Denied",
+                  runtime: {
+                    reconcilePhase: null,
+                    lastReconcileResult: null,
+                    lastReconcileError: "Denied",
+                    updatedAt: null,
+                    agentExecutorCapacity: null,
+                    agentExecutorQueueDepth: null,
+                  },
                 }).summary
               : projectSyncOperationalStatus({
                   state: contractCase.surface,

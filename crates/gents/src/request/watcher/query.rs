@@ -8,13 +8,27 @@ use super::{AgentRequest, DefraWatcher};
 mod rows;
 use rows::{is_aged_background_completion_wakeup, is_pending, preclaim_signal, PreclaimSignal};
 
+#[derive(Debug, thiserror::Error)]
+enum WatcherScanError {
+    #[error("request scan for {actor} failed: {source}")]
+    Query {
+        actor: String,
+        #[source]
+        source: crate::store::config_client::ConfigClientError,
+    },
+    #[error("request scan for {actor} returned invalid rows: {reason}")]
+    Rows { actor: String, reason: String },
+    #[error("request arrival scan for {actor} failed: {reason}")]
+    Arrival { actor: String, reason: String },
+}
+
 pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
                     _docID
                     request_id
                     purpose
                     node_did
                     requester_did
-                    agent_id
+                    agent_did
                     session_id
                     content
                     retry_parent_request_doc_id
@@ -44,67 +58,48 @@ pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
 
 impl DefraWatcher {
     pub async fn try_fetch_request(&self, doc_id: &str) -> anyhow::Result<Option<AgentRequest>> {
-        let escaped_doc_id = crate::store::graphql::escape_graphql_string(doc_id);
-        let escaped_node_did = crate::store::graphql::escape_graphql_string(&self.node_did);
-        let query = format!(
-            r#"{{
-                AgentRequest(
-                    filter: {{
-                        _docID: {{ _eq: "{doc_id}" }},
-                        node_did: {{ _eq: "{node_did}" }},
-                        lifecycle_state: {{ _eq: "{pending}" }}
-                    }},
-                    limit: 1
-                ) {{{fields}
-                    lifecycle_state
-                    interrupt_requested_at
-                    valid_until
-                }}
-            }}"#,
-            doc_id = escaped_doc_id,
-            node_did = escaped_node_did,
-            fields = AGENT_REQUEST_FIELDS,
-            pending = RequestLifecycleState::Pending.as_str()
-        );
-
-        let resp = crate::store::graphql::graphql_with_transaction_retry(
-            &self.node,
-            &query,
-            "watcher query",
-        )
-        .await?;
-
-        let (rows, malformed) = parse_active_runtime_rows(resp.data.as_ref())?;
-        for row in malformed {
-            self.terminalize_malformed_pending_request(&row).await;
-        }
-        let Some(row) = rows.into_iter().next() else {
-            return Ok(None);
-        };
-        let request = match AgentRequest::try_from(row.clone()) {
-            Ok(request) => {
-                if !self.row_is_claimable(&row, &request).await? {
-                    return Ok(None);
-                }
-                request
-            }
-            Err(error) => {
-                self.terminalize_incoherent_pending_request(&row, &error)
-                    .await;
-                return Ok(None);
-            }
-        };
-        Ok(Some(request))
+        Ok(self
+            .pending_requests()
+            .await?
+            .into_iter()
+            .find(|request| request.doc_id == doc_id))
     }
 
-    pub(super) async fn pending_requests(&self) -> anyhow::Result<Vec<AgentRequest>> {
+    pub(crate) async fn pending_requests(&self) -> anyhow::Result<Vec<AgentRequest>> {
         let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
         let node_did = crate::store::graphql::escape_graphql_string(&self.node_did);
-        let query = format!(
-            r#"{{
+        let mut rows = Vec::new();
+        let mut positions = rapidhash::RapidHashMap::default();
+        let mut seen = RapidHashSet::default();
+        let mut failure = None;
+        for identity in &self.agents {
+            let actor = identity::Did::new(identity.did())?;
+            let access = crate::ConfigAccess::local_managed_agent(
+                self.node.clone(),
+                actor.clone(),
+                identity.as_ref(),
+            )?;
+            if let Err(error) =
+                crate::request::lifecycle::recover_delegated_client_request_relationships_with_access(
+                    &access,
+                    &self.node_did,
+                    &actor,
+                )
+                .await
+            {
+                tracing::warn!(agent_did = %actor, %error, "delegated request relationship recovery failed");
+            }
+            let actor_name = actor.as_str().to_owned();
+            let agent_filter = format!(
+                "agent_did: {{ _eq: \"{}\" }},",
+                crate::store::graphql::escape_graphql_string(actor.as_str())
+            );
+            let query = format!(
+                r#"{{
                 AgentRequest(
                     filter: {{
                         node_did: {{ _eq: "{node_did}" }},
+                        {agent_filter}
                         lifecycle_state: {{ _in: {active_runtime_states} }}
                     }},
                     order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
@@ -114,36 +109,116 @@ impl DefraWatcher {
                     valid_until
                 }}
             }}"#,
-            node_did = node_did,
-            active_runtime_states = active_runtime_states,
-            fields = AGENT_REQUEST_FIELDS,
-        );
+                node_did = node_did,
+                active_runtime_states = active_runtime_states,
+                fields = AGENT_REQUEST_FIELDS,
+            );
 
-        let resp = crate::store::graphql::graphql_with_transaction_retry(
-            &self.node,
-            &query,
-            "watcher pending-request query",
-        )
-        .await?;
-
-        let (mut rows, malformed) = parse_active_runtime_rows(resp.data.as_ref())?;
-        for row in malformed {
-            self.terminalize_malformed_pending_request(&row).await;
-        }
-        for row in &rows {
-            if is_pending(row) {
-                if let Err(error) = AgentRequest::try_from(row.clone()) {
-                    self.terminalize_incoherent_pending_request(row, &error)
-                        .await;
+            let response = match access.execute(&query).await {
+                Ok(response) => response,
+                Err(source) => {
+                    let error = WatcherScanError::Query {
+                        actor: actor_name,
+                        source,
+                    };
+                    tracing::warn!(%error, "agent request scan failed");
+                    failure.get_or_insert(error);
+                    continue;
+                }
+            };
+            let (mut observed, malformed) = match parse_active_runtime_rows(response.get("data")) {
+                Ok(rows) => rows,
+                Err(error) => {
+                    let error = WatcherScanError::Rows {
+                        actor: actor_name,
+                        reason: format!("{error:#}"),
+                    };
+                    tracing::warn!(%error, "agent request scan failed");
+                    failure.get_or_insert(error);
+                    continue;
+                }
+            };
+            for row in malformed {
+                self.terminalize_malformed_pending_request(&row).await;
+            }
+            for row in &observed {
+                if is_pending(row) {
+                    if let Err(error) = AgentRequest::try_from(row.clone()) {
+                        self.terminalize_incoherent_pending_request(row, &error)
+                            .await;
+                    }
                 }
             }
+            let doc_ids = observed
+                .iter()
+                .filter_map(|row| row.doc_id.clone())
+                .collect::<Vec<_>>();
+            let order = crate::store::config_client::ConfigAccess::transact_local_readonly(
+                &self.node,
+                Some(actor.clone()),
+                "watcher.request_arrival_positions",
+                |txn| {
+                    let doc_ids = &doc_ids;
+                    Box::pin(async move {
+                        crate::triggers::engine::durable::request_arrival_positions(txn, doc_ids)
+                            .await
+                    })
+                },
+            )
+            .await;
+            let order = match order {
+                Ok(order) => order,
+                Err(error) => {
+                    let error = WatcherScanError::Arrival {
+                        actor: actor_name,
+                        reason: format!("{error:#}"),
+                    };
+                    tracing::warn!(%error, "agent request scan failed");
+                    failure.get_or_insert(error);
+                    continue;
+                }
+            };
+            positions.extend(order);
+            observed.retain(|row| {
+                row.agent_did.as_deref() == Some(actor.as_str())
+                    && row
+                        .doc_id
+                        .as_ref()
+                        .is_some_and(|doc| seen.insert(doc.clone()))
+            });
+            rows.extend(observed);
         }
+        rows.sort_by(|a, b| {
+            (a.created_at.as_deref(), &a.request_id).cmp(&(b.created_at.as_deref(), &b.request_id))
+        });
+        rows.sort_by_key(|row| {
+            row.doc_id
+                .as_ref()
+                .and_then(|id| positions.get(id).copied())
+        });
+        let requests = prioritize_aged_background_wakes(
+            claimable_pending_rows_from_rows(rows),
+            chrono::Utc::now(),
+        )
+        .into_iter()
+        .map(AgentRequest::try_from)
+        .collect::<anyhow::Result<Vec<_>>>()?;
+        if requests.is_empty() {
+            if let Some(error) = failure {
+                return Err(error.into());
+            }
+        }
+        Ok(requests)
+    }
 
-        self.order_by_native_arrival(&mut rows).await?;
-        prioritize_aged_background_wakes(claimable_pending_rows_from_rows(rows), chrono::Utc::now())
-            .into_iter()
-            .map(AgentRequest::try_from)
-            .collect()
+    fn managed_agent_for_rejection(
+        &self,
+        did: &str,
+    ) -> Option<&dyn crate::store::identity::NodeIdentity> {
+        self.agents
+            .iter()
+            .find(|identity| identity.did() == did)
+            .map(|identity| identity.as_ref())
     }
 
     async fn terminalize_incoherent_pending_request(
@@ -151,32 +226,47 @@ impl DefraWatcher {
         row: &AgentRequestRow,
         error: &anyhow::Error,
     ) {
-        let failure_reason =
-            format!("request rejected at ingest: incoherent durable lineage ({error})");
-        if let Err(persist_error) =
-            crate::request::admission::terminalize_pending_request_rejection(
-                &self.node,
-                row.doc_id.as_deref().unwrap_or_default(),
-                &self.node_did,
-                &failure_reason,
-                "terminalize_incoherent_pending_request",
-            )
-            .await
-        {
-            tracing::error!(
+        let Some(agent_did) = row.agent_did.as_deref().filter(|did| !did.is_empty()) else {
+            tracing::warn!(
                 doc_id = row.doc_id.as_deref().unwrap_or_default(),
-                request_id = %row.request_id,
-                error = %persist_error,
-                "failed to terminalize incoherent AgentRequest",
+                "incoherent AgentRequest has no selected agent; leaving it pending"
             );
             return;
+        };
+        let Some(identity) = self.managed_agent_for_rejection(agent_did) else {
+            tracing::warn!(
+                agent_did,
+                "incoherent request Agent signing capability unavailable; leaving it pending"
+            );
+            return;
+        };
+        let failure_reason =
+            format!("request rejected at ingest: incoherent durable lineage ({error})");
+        match crate::request::admission::terminalize_pending_request_rejection(
+            &self.node,
+            row.doc_id.as_deref().unwrap_or_default(),
+            &self.node_did,
+            agent_did,
+            identity,
+            &failure_reason,
+            "terminalize_incoherent_pending_request",
+        )
+        .await
+        {
+            Err(persist_error) => tracing::error!(
+                doc_id = row.doc_id.as_deref().unwrap_or_default(),
+                request_id = %row.request_id,
+                error = %gents_protocol::error_chain::ErrorChain(&persist_error),
+                "failed to terminalize incoherent AgentRequest",
+            ),
+            Ok(crate::request::admission::PendingRejectionOutcome::NotMatched) => {}
+            Ok(crate::request::admission::PendingRejectionOutcome::Terminalized) => tracing::warn!(
+                doc_id = row.doc_id.as_deref().unwrap_or_default(),
+                request_id = %row.request_id,
+                %error,
+                "terminalized incoherent AgentRequest at watcher ingest",
+            ),
         }
-        tracing::warn!(
-            doc_id = row.doc_id.as_deref().unwrap_or_default(),
-            request_id = %row.request_id,
-            %error,
-            "terminalized incoherent AgentRequest at watcher ingest",
-        );
     }
 
     async fn terminalize_malformed_pending_request(&self, row: &MalformedPendingRow) {
@@ -186,127 +276,33 @@ impl DefraWatcher {
         {
             return;
         }
+        let Some(agent_did) = row.agent_did.as_deref().filter(|did| !did.is_empty()) else {
+            tracing::warn!(doc_id = %row.doc_id,
+                "malformed AgentRequest has no selected agent; leaving it pending");
+            return;
+        };
+        let Some(identity) = self.managed_agent_for_rejection(agent_did) else {
+            tracing::warn!(
+                agent_did,
+                "malformed request Agent signing capability unavailable; leaving it pending"
+            );
+            return;
+        };
         let reason = "request rejected at ingest: malformed durable AgentRequest row";
         if let Err(error) = crate::request::admission::terminalize_pending_request_rejection(
             &self.node,
             &row.doc_id,
             &self.node_did,
+            agent_did,
+            identity,
             reason,
             "terminalize_malformed_pending_request",
         )
         .await
         {
-            tracing::error!(doc_id = %row.doc_id, error = %error,
+            tracing::error!(doc_id = %row.doc_id, error = %gents_protocol::error_chain::ErrorChain(&error),
                 "failed to terminalize malformed AgentRequest");
         }
-    }
-
-    /// Candidate delivery must use the same native arrival order as the claim
-    /// owner; timestamp ties otherwise hide the only claimable session head.
-    /// Pre-journal rows retain their legacy order ahead of journaled requests.
-    async fn order_by_native_arrival(&self, rows: &mut [AgentRequestRow]) -> anyhow::Result<()> {
-        let doc_ids = rows
-            .iter()
-            .filter_map(|row| row.doc_id.clone())
-            .collect::<Vec<_>>();
-        let order = crate::store::config_client::ConfigAccess::transact_local_readonly(
-            &self.node,
-            None,
-            "watcher.request_arrival_order",
-            |txn| {
-                let doc_ids = &doc_ids;
-                Box::pin(async move {
-                    crate::triggers::engine::durable::request_arrival_order(txn, doc_ids).await
-                })
-            },
-        )
-        .await?;
-        let positions = order
-            .iter()
-            .enumerate()
-            .map(|(index, doc_id)| (doc_id.as_str(), index))
-            .collect::<rapidhash::RapidHashMap<_, _>>();
-        rows.sort_by_key(|row| {
-            row.doc_id
-                .as_deref()
-                .and_then(|id| positions.get(id).copied())
-        });
-        Ok(())
-    }
-
-    async fn row_is_claimable(
-        &self,
-        row: &AgentRequestRow,
-        request: &AgentRequest,
-    ) -> anyhow::Result<bool> {
-        if !is_pending(row) {
-            return Ok(false);
-        }
-        match preclaim_signal(row) {
-            PreclaimSignal::Terminal => return Ok(true),
-            PreclaimSignal::Malformed => {
-                tracing::warn!(
-                    doc_id = row.doc_id.as_deref().unwrap_or_default(),
-                    request_id = %row.request_id,
-                    "watcher refusing to claim AgentRequest with malformed valid_until"
-                );
-                return Ok(false);
-            }
-            PreclaimSignal::None => {}
-        }
-
-        if !replays_pending_request(request.purpose) {
-            return Ok(false);
-        }
-        if request.purpose.is_auxiliary() {
-            return Ok(true);
-        }
-
-        let session_id = crate::store::graphql::escape_graphql_string(&request.session_id);
-        let owner = crate::store::graphql::escape_graphql_string(&request.node_did);
-        let row_doc_id = request.doc_id.as_str();
-        let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
-        let query = format!(
-            r#"{{
-                AgentRequest(
-                    filter: {{
-                        session_id: {{ _eq: "{session_id}" }},
-                        node_did: {{ _eq: "{owner}" }},
-                        purpose: {{ _eq: "normal" }},
-                        lifecycle_state: {{ _in: {active_runtime_states} }}
-                    }},
-                    order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
-                ) {{
-                    _docID
-                    request_id
-                    lifecycle_state
-                    created_at
-                }}
-            }}"#,
-            session_id = session_id,
-            active_runtime_states = active_runtime_states,
-        );
-        let resp = crate::store::graphql::graphql_with_transaction_retry(
-            &self.node,
-            &query,
-            "watcher session queue query",
-        )
-        .await?;
-
-        let mut rows: Vec<AgentRequestRow> = crate::store::graphql::rows(&resp, "AgentRequest")?;
-        self.order_by_native_arrival(&mut rows).await?;
-
-        let active_blocker = rows.iter().any(|candidate| {
-            candidate.doc_id.as_deref() != Some(row_doc_id) && !is_pending(candidate)
-        });
-        if active_blocker {
-            return Ok(false);
-        }
-
-        Ok(rows
-            .iter()
-            .find(|candidate| is_pending(candidate))
-            .is_some_and(|candidate| candidate.doc_id.as_deref() == Some(row_doc_id)))
     }
 }
 
@@ -323,14 +319,15 @@ struct MalformedPendingRow {
     doc_id: String,
     node_did: String,
     lifecycle_state: Option<String>,
+    agent_did: Option<String>,
 }
 
 fn parse_active_runtime_rows(
     data: Option<&serde_json::Value>,
 ) -> anyhow::Result<(Vec<AgentRequestRow>, Vec<MalformedPendingRow>)> {
-    let Some(value) = data.and_then(|data| data.get("AgentRequest")) else {
-        return Ok((Vec::new(), Vec::new()));
-    };
+    let value = data
+        .and_then(|data| data.get("AgentRequest"))
+        .ok_or_else(|| anyhow::anyhow!("request watcher query omitted AgentRequest rows"))?;
     let values = value
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("AgentRequest query result is not an array"))?;
@@ -346,6 +343,7 @@ fn parse_active_runtime_rows(
                         doc_id: doc_id.to_string(),
                         node_did: node_did.to_string(),
                         lifecycle_state: string("lifecycle_state").map(str::to_string),
+                        agent_did: string("agent_did").map(str::to_string),
                     });
                 } else {
                     tracing::warn!(%error, "unattributable malformed AgentRequest row quarantined");
@@ -477,7 +475,7 @@ mod tests {
             "request_id": request_id,
             "purpose": "normal",
             "node_did": "did:agent:1",
-            "agent_id": "default",
+            "agent_did": "default",
             "session_id": session_id,
             "content": "work",
             "input": input,

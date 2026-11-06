@@ -16,9 +16,9 @@ export function useWorkerAgents(
     useShallow((state) => {
       const seen = new Map<string, string>();
       for (const w of select(state)) {
-        const key = `${w.nodeDid}\u0000${w.agentId ?? ""}`;
+        const key = `${w.nodeDid}\u0000${w.agentDid ?? ""}`;
         if (!seen.has(key))
-          seen.set(key, agentName(w.agentId, nodeOf(state, w.nodeDid)));
+          seen.set(key, agentName(w.agentDid, nodeOf(state, w.nodeDid)));
       }
       return [...seen.values()];
     }),

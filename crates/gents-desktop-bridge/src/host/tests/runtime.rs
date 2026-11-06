@@ -160,7 +160,7 @@ async fn private_snapshot_keeps_the_current_requesters_questions_without_config_
         ("closed", requester, "did:paired", "acted"),
     ].map(|(id, requester, node, status)| serde_json::from_value(json!({
         "_docID":id,"item_key":id,"requester_did":requester,"node_did":node,"status":status,"kind":"ask","action":"start_request","title":"Choose work",
-        "source_kind":"agent","source_id":"request","session_id":"chat","request_id":"request","target_node_did":node,"target_agent_id":"agent","created_at":"2026-10-27T00:00:00Z",
+        "source_kind":"agent","source_id":"request","session_id":"chat","request_id":"request","target_node_did":node,"target_agent_did":"agent","created_at":"2026-10-27T00:00:00Z",
         "payload":json!({"version":3,"prompt":"What should happen next?","options":[],"allow_free_text":true}).to_string()
     })).unwrap()).to_vec();
     core.store()

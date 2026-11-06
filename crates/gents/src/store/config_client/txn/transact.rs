@@ -50,6 +50,8 @@ pub(crate) enum TransactionOutcome<T> {
 #[derive(Debug, Clone, Copy)]
 pub(super) enum TransactionMode {
     ConflictRetry,
+    SignedConflictRebuild,
+    SingleAttempt,
     Idempotent(IdempotentTransactionRetry),
     #[cfg(test)]
     ObserveConflict,
@@ -58,7 +60,10 @@ pub(super) enum TransactionMode {
 impl TransactionMode {
     const fn max_attempts(self) -> u32 {
         match self {
-            Self::ConflictRetry => retry::TRANSACT_CONFLICT_MAX_RETRIES + 1,
+            Self::ConflictRetry | Self::SignedConflictRebuild => {
+                retry::TRANSACT_CONFLICT_MAX_RETRIES + 1
+            }
+            Self::SingleAttempt => 1,
             Self::Idempotent(policy) => policy.max_attempts(),
             #[cfg(test)]
             Self::ObserveConflict => 1,
@@ -68,7 +73,9 @@ impl TransactionMode {
     const fn retry_owner(self) -> RetryOwner {
         match self {
             Self::Idempotent(_) => RetryOwner::GentsIdempotentTransaction,
-            Self::ConflictRetry => RetryOwner::GentsTransaction,
+            Self::ConflictRetry | Self::SignedConflictRebuild | Self::SingleAttempt => {
+                RetryOwner::GentsTransaction
+            }
             #[cfg(test)]
             Self::ObserveConflict => RetryOwner::GentsTransaction,
         }
@@ -97,7 +104,10 @@ impl TransactionMode {
         match self {
             #[cfg(test)]
             Self::ObserveConflict => true,
-            Self::ConflictRetry | Self::Idempotent(_) => false,
+            Self::ConflictRetry
+            | Self::SignedConflictRebuild
+            | Self::SingleAttempt
+            | Self::Idempotent(_) => false,
         }
     }
 }
@@ -107,6 +117,15 @@ struct TransactionAttemptFailure<E> {
     conflict_source: Option<ConflictSource>,
     rollback: RollbackStatus,
     retry_generic: bool,
+    confirmed_abort: bool,
+}
+
+pub(crate) fn client_signed_write_may_retry(
+    dispatched: bool,
+    confirmed_abort: bool,
+    replay_authorized: bool,
+) -> bool {
+    !dispatched || (confirmed_abort && replay_authorized)
 }
 
 enum FailureDisposition {
@@ -234,9 +253,20 @@ where
             let attempt_result: Result<(), TransactionAttemptFailure<E>> = match callback_result {
                 Ok(value) => {
                     let affected_documents = txn.affected_documents();
+                    if let Err(error) = txn.observe_before_commit().await {
+                        let _ = txn.rollback_inner().await;
+                        return Err(E::from(error));
+                    }
                     match txn.commit_inner().await {
                         Ok(()) => {
                             txn.disarm_rollback();
+                            if let Err(error) = txn.observe_committed().await {
+                                return Err(E::from(
+                                    ConfigClientError::ClientAgentPublicationUnconfirmed(Box::new(
+                                        error,
+                                    )),
+                                ));
+                            }
                             telemetry.record(AttemptReport {
                                 outcome: WriteOutcome::Committed,
                                 conflict_source: ConflictSource::None,
@@ -244,6 +274,7 @@ where
                                 affected_documents: Some(affected_documents),
                                 rollback: RollbackStatus::NotNeeded,
                             });
+                            txn.complete_relationship_grants().await.map_err(E::from)?;
                             return Ok(TransactionOutcome::Committed(value));
                         }
                         Err(CommitFailure {
@@ -272,6 +303,18 @@ where
                                     RollbackStatus::Succeeded
                                 )
                             );
+                            if let Err(journal_error) = txn
+                                .observe_commit_failed(
+                                    definitely_not_committed || discarded_before_commit,
+                                )
+                                .await
+                            {
+                                return Err(E::from(
+                                    ConfigClientError::ClientAgentPublicationUnconfirmed(Box::new(
+                                        journal_error,
+                                    )),
+                                ));
+                            }
                             if let (false, false, Some(unconfirmed)) = (
                                 definitely_not_committed,
                                 discarded_before_commit,
@@ -279,12 +322,27 @@ where
                             ) {
                                 unconfirmed.store(true, Ordering::Release);
                             }
+                            if !definitely_not_committed
+                                && !discarded_before_commit
+                                && txn.has_relationship_grants()
+                            {
+                                telemetry.record(AttemptReport {
+                                    outcome: WriteOutcome::Failed,
+                                    conflict_source: ConflictSource::None,
+                                    backoff: None,
+                                    affected_documents: Some(affected_documents),
+                                    rollback,
+                                });
+                                return Err(E::from(txn.unconfirmed_relationships(error)));
+                            }
                             Err(TransactionAttemptFailure {
                                 retry_generic: mode.retries_generic_errors()
                                     && !crate::store::graphql::is_storage_full(&error),
                                 conflict_source: retry::classified_transaction_conflict(&error),
                                 error: E::from(error),
                                 rollback,
+                                confirmed_abort: definitely_not_committed
+                                    || discarded_before_commit,
                             })
                         }
                     }
@@ -301,6 +359,7 @@ where
                         error,
                         rollback,
                         retry_generic,
+                        confirmed_abort: matches!(rollback, RollbackStatus::Succeeded),
                     })
                 }
             };
@@ -313,6 +372,7 @@ where
                 conflict_source,
                 rollback,
                 retry_generic,
+                confirmed_abort,
             } = failure;
             if txn.embedded_poisoned() {
                 telemetry.record(AttemptReport {
@@ -329,6 +389,13 @@ where
                 && txn.contends_with_request_siblings.load(Ordering::Relaxed);
             if sibling_contention {
                 max_attempts = max_attempts.max(retry::REQUEST_SIBLING_MAX_ATTEMPTS);
+            }
+            if !client_signed_write_may_retry(
+                txn.client_signed_write_dispatched.load(Ordering::Acquire),
+                confirmed_abort && conflict_source.is_some(),
+                matches!(mode, TransactionMode::SignedConflictRebuild),
+            ) {
+                max_attempts = attempt;
             }
             match failure_disposition(mode, conflict_source, retry_generic, attempt, max_attempts) {
                 FailureDisposition::Observe => {

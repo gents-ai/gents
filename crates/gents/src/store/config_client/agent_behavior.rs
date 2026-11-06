@@ -22,7 +22,7 @@ pub async fn write_agent_document(access: &ConfigAccess, behavior: &Agent) -> Re
                     txn,
                     Collection::Agent,
                     &behavior.node_did,
-                    &behavior.agent_id,
+                    &behavior.agent_did,
                 )
                 .await?
                 .map(|(doc_id, _)| doc_id)
@@ -36,9 +36,9 @@ pub async fn write_agent_document(access: &ConfigAccess, behavior: &Agent) -> Re
 async fn load_agent_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> Result<Option<Agent>> {
-    super::read_desired_state_document_in_txn(txn, Collection::Agent, node_did, agent_id)
+    super::read_desired_state_document_in_txn(txn, Collection::Agent, node_did, agent_did)
         .await?
         .map(serde_json::from_value)
         .transpose()
@@ -60,6 +60,7 @@ mod tests {
         crate::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(node.clone());
         for owner in ["did:key:owner", "did:key:other"] {
+            crate::test_support::bootstrap_signed_test_node(&access, owner).await;
             let backend = json!({"node_did":owner,"backend_id":"local","name":"Local",
                 "provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1",
                 "auth":{"kind":"unauthenticated"}});
@@ -93,12 +94,13 @@ mod tests {
             write_inference_profile_document(&access, &profile).await?;
         }
         let mut behavior: Agent = serde_json::from_value(json!({
-            "node_did":"did:key:owner","agent_id":"same","inference_profile_id":"inference",
+            "node_did":"did:key:owner","agent_did":"did:key:agent", "creation_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","inference_profile_id":"inference",
             "context_id":"context","description":"old","tags":["old"]
         }))?;
         let original_id = write_agent_document(&access, &behavior).await?;
         let mut foreign = behavior.clone();
         foreign.node_did = "did:key:other".to_owned();
+        foreign.agent_did = "did:key:other-agent".to_owned();
         let foreign_id = write_agent_document(&access, &foreign).await?;
         assert_ne!(original_id, foreign_id);
         behavior.context_id = None;
@@ -110,12 +112,12 @@ mod tests {
                 let behavior = &behavior;
                 let foreign = &foreign;
                 Box::pin(async move {
-                    let actual = load_agent_in_txn(txn, &behavior.node_did, &behavior.agent_id)
+                    let actual = load_agent_in_txn(txn, &behavior.node_did, &behavior.agent_did)
                         .await?
                         .unwrap();
                     assert_eq!(actual, *behavior);
                     let actual_foreign =
-                        load_agent_in_txn(txn, &foreign.node_did, &foreign.agent_id)
+                        load_agent_in_txn(txn, &foreign.node_did, &foreign.agent_did)
                             .await?
                             .unwrap();
                     assert_eq!(actual_foreign, *foreign);
@@ -131,7 +133,7 @@ mod tests {
                 let behavior = &behavior;
                 Box::pin(async move {
                     assert_eq!(
-                        load_agent_in_txn(txn, &behavior.node_did, &behavior.agent_id)
+                        load_agent_in_txn(txn, &behavior.node_did, &behavior.agent_did)
                             .await?
                             .as_ref(),
                         Some(behavior)

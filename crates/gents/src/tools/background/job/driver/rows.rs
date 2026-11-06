@@ -33,31 +33,45 @@ pub(in crate::tools::background::job) async fn load_lifecycle(
     access: &ConfigAccess,
     row_doc_id: &str,
 ) -> Result<ToolCallLifecycle> {
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ session_id node_did requester_did request_doc_id }} }}"#,
-            escape_graphql_string(row_doc_id)
-        ))
-        .await?;
-    let stored: StoredRow = serde_json::from_value(
-        response
-            .pointer("/data/AgentToolCall/0")
-            .cloned()
-            .with_context(|| format!("job row {row_doc_id} does not exist"))?,
-    )
-    .with_context(|| format!("decoding job row {row_doc_id}"))?;
+    let actor = access
+        .actor_did()
+        .context("job step requires its selected agent DID")?;
     let ConfigAccess::Local(node) = access else {
         anyhow::bail!("a job step needs a local node");
     };
-    ToolCallLifecycle::load_by_doc_id(
-        node.node().clone(),
-        row_doc_id,
-        &stored.node_did,
-        &stored.session_id,
-        stored.requester_did.as_deref(),
-    )
-    .await?
-    .with_context(|| format!("job row {row_doc_id} does not exist"))
+    let node = node.node().clone();
+    access.transact_readonly("plugin_job.load_lifecycle", |txn| {
+        let node = node.clone();
+        let actor = &actor;
+        Box::pin(async move {
+            let response = txn
+                .execute(&format!(
+                    r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ session_id node_did requester_did request_doc_id }} }}"#,
+                    escape_graphql_string(row_doc_id)
+                ))
+                .await?;
+            let stored: StoredRow = serde_json::from_value(
+                response
+                    .pointer("/data/AgentToolCall/0")
+                    .cloned()
+                    .with_context(|| format!("job row {row_doc_id} does not exist"))?,
+            )
+            .with_context(|| format!("decoding job row {row_doc_id}"))?;
+            let mut lifecycle = ToolCallLifecycle::load_by_doc_id_in_txn(
+                txn,
+                node,
+                row_doc_id,
+                &stored.node_did,
+                &stored.session_id,
+                stored.requester_did.as_deref(),
+            )
+            .await?
+            .with_context(|| format!("job row {row_doc_id} does not exist"))?;
+            anyhow::ensure!(lifecycle.actor().as_str() == actor, "job row belongs to another agent");
+            lifecycle.bind_agent_signer(txn.managed_agent_signer())?;
+            Ok::<_, anyhow::Error>(lifecycle)
+        })
+    }).await
 }
 
 #[derive(Deserialize)]
@@ -192,12 +206,16 @@ pub(in crate::tools::background::job) async fn store_running_progress(
     admission: &crate::tools::call::lifecycle::admission_fixture::PublishedAdmission,
 ) {
     use super::super::records::{write_progress_in_txn, HostProgressFacts};
-    use crate::store::config_client::ConfigAccess;
     use gents_protocol::job::{JobBudget, JobProgress, JobState};
     let doc_id = admission.tool.doc_id().unwrap().to_owned();
-    ConfigAccess::transact_local_write(&admission.node, None, "test.driver.progress", |txn| {
-        let doc_id = doc_id.clone();
-        Box::pin(async move {
+    let access = admission
+        .tool
+        .access()
+        .expect("admission tool carries its agent-scoped access");
+    access
+        .transact_write("test.driver.progress", |txn| {
+            let doc_id = doc_id.clone();
+            Box::pin(async move {
             let guest = JobProgress {
                 title: "audit".to_owned(),
                 state: JobState::Running,

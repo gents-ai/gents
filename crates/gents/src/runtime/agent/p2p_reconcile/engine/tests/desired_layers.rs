@@ -101,118 +101,6 @@ fn data_plane_only_desired_is_replicator_only() {
 }
 
 #[test]
-fn protocol_collection_in_app_data_plane_is_rejected_without_stalling_control_pairing() {
-    let signed_endpoint = EnrollmentEndpointEntry {
-        peer_id: "peer-app".to_string(),
-        node_did: "did:key:app".to_string(),
-        address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-app".to_string(),
-        desired_id: "peer-app".to_string(),
-        request_digest: "digest".to_string(),
-        authorization_sequence: 1,
-        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
-    };
-    let data_plane = data_plane_desired_from_pairing_row(
-        PairingStateRow {
-            collections: Some(vec![
-                "ChangeProposed".to_string(),
-                "AgentRequest".to_string(),
-            ]),
-            replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
-            template: Some("app-collections".to_string()),
-            ..Default::default()
-        },
-        &signed_endpoint,
-        "did:key:self",
-    )
-    .expect("invalid app layer is a soft rejection");
-    assert!(data_plane.is_none());
-
-    let control = PairingDesired {
-        replicator_addresses: set(&[signed_endpoint.address.as_str()]),
-        replicator_collections: set(&["Network"]),
-        template_ids: set(&["enrollment-base"]),
-        ..Default::default()
-    };
-    assert_eq!(
-        merge_desired(Some(control.clone()), data_plane),
-        Some(control),
-        "a rejected app layer must not stall or weaken the control route"
-    );
-}
-
-#[test]
-fn data_plane_agent_target_caller_uses_signed_peer_for_addressed_requests() {
-    let signed_endpoint = EnrollmentEndpointEntry {
-        peer_id: "peer-b".to_string(),
-        node_did: "did:key:host".to_string(),
-        address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
-        desired_id: "peer-b".to_string(),
-        request_digest: "digest".to_string(),
-        authorization_sequence: 1,
-        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
-    };
-    let desired = data_plane_desired_from_pairing_row(
-        PairingStateRow {
-            node_did: Some("did:key:coord".to_string()),
-            collections: None,
-            replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
-            template: Some("agent-target-caller".to_string()),
-            ..Default::default()
-        },
-        &signed_endpoint,
-        "did:key:coord",
-    )
-    .expect("data-plane coordinator desired")
-    .expect("some data-plane layer");
-
-    assert_eq!(desired.replicator_collections, set(&["AgentRequest"]));
-    assert_eq!(
-        desired
-            .replicator_filter
-            .get("AgentRequest")
-            .and_then(single_string_eq),
-        Some(("node_did", "did:key:host"))
-    );
-}
-
-#[test]
-fn data_plane_agent_target_host_scopes_return_projection_to_signed_requester() {
-    let signed_endpoint = EnrollmentEndpointEntry {
-        peer_id: "peer-a".to_string(),
-        node_did: "did:key:coord".to_string(),
-        address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-a".to_string(),
-        desired_id: "peer-a".to_string(),
-        request_digest: "digest".to_string(),
-        authorization_sequence: 1,
-        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
-    };
-    let desired = data_plane_desired_from_pairing_row(
-        PairingStateRow {
-            node_did: Some("did:key:host".to_string()),
-            collections: None,
-            replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
-            template: Some("agent-target-host".to_string()),
-            ..Default::default()
-        },
-        &signed_endpoint,
-        "did:key:host",
-    )
-    .expect("data-plane host desired")
-    .expect("some data-plane layer");
-
-    assert!(
-        !desired.replicator_filter.is_empty(),
-        "the host projection must keep requester-scoped filters through the signed-endpoint merge"
-    );
-    for predicate in desired.replicator_filter.values() {
-        assert_eq!(
-            single_string_eq(predicate),
-            Some(("requester_did", "did:key:coord"))
-        );
-    }
-}
-
-#[test]
 fn data_plane_desired_rejects_foreign_node_did_scope() {
     let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-b".to_string(),
@@ -228,7 +116,7 @@ fn data_plane_desired_rejects_foreign_node_did_scope() {
             node_did: Some("did:key:someone-else".to_string()),
             collections: None,
             replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
-            template: Some("conversation".to_string()),
+            template: Some("machine".to_string()),
             ..Default::default()
         },
         &signed_endpoint,
@@ -240,7 +128,7 @@ fn data_plane_desired_rejects_foreign_node_did_scope() {
 }
 
 #[test]
-fn data_plane_desired_machine_scopes_session_set_and_owned_directory() {
+fn data_plane_desired_machine_scopes_owned_directory() {
     let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-b".to_string(),
         node_did: "did:key:peer-b".to_string(),
@@ -264,30 +152,17 @@ fn data_plane_desired_machine_scopes_session_set_and_owned_directory() {
     .expect("data-plane desired")
     .expect("some data-plane layer");
 
-    assert!(desired
-        .replicator_collections
-        .contains(crate::runtime::agent::p2p_reconcile::templates::NODE_DIRECTORY_COLLECTION));
-    for col in [
-        "AgentRequest",
-        "AgentOutputSegment",
-        "AgentMessage",
-        "AgentToolCall",
-        "AgentSession",
-        "CompactionEntry",
-    ] {
-        assert_eq!(
-            desired
-                .replicator_filter
-                .get(col)
-                .and_then(single_string_eq),
-            Some(("requester_did", "did:key:peer-b")),
-            "conversation collection {col} must be requester-scoped exactly like `conversation`"
-        );
-    }
+    let directory = crate::runtime::agent::p2p_reconcile::templates::NODE_DIRECTORY_COLLECTION;
+    assert_eq!(desired.replicator_collections, set(&[directory]));
+    assert_eq!(
+        desired.replicator_filter.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![directory],
+        "the machine template scopes only the owned directory"
+    );
     assert_eq!(
         desired
             .replicator_filter
-            .get(crate::runtime::agent::p2p_reconcile::templates::NODE_DIRECTORY_COLLECTION)
+            .get(directory)
             .and_then(single_string_eq),
         Some(("source_did", "did:key:self"))
     );

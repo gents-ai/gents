@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_loop::provider_audit::{
     AuxiliaryObserve, AuxiliaryOutputError, AuxiliaryOutputEvent, AuxiliaryOutputObservation,
     AuxiliaryOutputSink,
@@ -28,6 +28,7 @@ impl DefraStreamWriter {
             generation,
             profile,
             self.batch_interval,
+            self.agent_signer.clone(),
         )
     }
 }
@@ -49,12 +50,11 @@ pub(crate) fn sink(
     generation: String,
     profile: gents_loop::provider_input::ProviderInputProfile,
     batch_interval: Duration,
+    agent_signer: Option<crate::store::identity::ManagedAgentSigner>,
 ) -> AuxiliaryOutputSink {
-    let writer = Arc::new(DefraStreamWriter::new(
-        node,
-        &request.node_did,
-        batch_interval,
-    ));
+    let mut writer = DefraStreamWriter::new(node, &request.agent_did, batch_interval);
+    writer.agent_signer = agent_signer;
+    let writer = Arc::new(writer);
     sink_with_writer(writer, request, generation, profile)
 }
 

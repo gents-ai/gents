@@ -4,7 +4,7 @@ use crate::inference::llm::message::Message;
 use crate::inference::llm::rig_compat::{ProviderClient, ProviderModel};
 use crate::inference::llm::tool::ToolDyn;
 use anyhow::{anyhow, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_loop::loop_stream::TaggedMessage;
 use gents_loop::output_obligation::OutputObligationCheck;
 
@@ -27,24 +27,35 @@ pub struct OneshotRunResult {
     pub response_text: String,
 }
 
-pub async fn run_openai_oneshot(
+pub async fn run_openai_oneshot_admitted(
     node: Arc<EmbeddedNode>,
     agent: &ResolvedAgent,
     prompt: &str,
+    admission: &crate::store::local::backend_protection::BackendAdmission,
 ) -> Result<OneshotRunResult> {
-    run_openai_oneshot_with_tools(node, agent, Vec::new(), prompt).await
+    run_openai_oneshot_with_tools_admitted(node, agent, Vec::new(), prompt, admission).await
 }
 
-pub async fn run_openai_oneshot_with_tools(
+pub async fn run_openai_oneshot_with_tools_admitted(
     node: Arc<EmbeddedNode>,
     agent: &ResolvedAgent,
     extra_tools: Vec<Box<dyn ToolDyn>>,
     prompt: &str,
+    admission: &crate::store::local::backend_protection::BackendAdmission,
 ) -> Result<OneshotRunResult> {
+    admission.validate(&node).await?;
     crate::store::schema::migration::ensure_all_runtime_migrations(node.clone()).await?;
 
-    let api_key = agent.completion_client_api_key()?;
-    let tool_runtime = ToolRuntimeContext::oneshot_with_node_did(node.clone(), agent.node_did());
+    let api_key = if matches!(
+        &agent.backend_auth,
+        crate::documents::BackendAuth::Credential { .. }
+    ) {
+        "no-key".to_owned()
+    } else {
+        agent.completion_client_api_key()?
+    };
+    let tool_runtime =
+        ToolRuntimeContext::oneshot_with_node_did(node.clone(), agent.node_did()).for_agent(agent);
     let tool_surface = agent
         .tools
         .resolve(&node, agent.node_did(), &Default::default())
@@ -197,13 +208,14 @@ where
 {
     let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
         node.clone(),
-        &agent.agent_id,
+        &agent.agent_did,
         agent.node_identity().clone(),
         prompt,
         agent.deadline_duration.as_secs(),
         ExecutionOrigin::Interactive,
         agent.backend_id.as_deref().unwrap_or_default(),
         TriggerLineage::default(),
+        Some(agent.agent_identity.clone()),
     )
     .await?;
     lifecycle.set_execution_lease_duration(agent.stream_liveness_timeout);
@@ -215,8 +227,11 @@ where
         "new one-shot request was not claimed"
     );
     let request = lifecycle.request().clone();
-    let stream_writer =
-        DefraStreamWriter::new(node.clone(), agent.node_did(), std::time::Duration::ZERO);
+    let stream_writer = DefraStreamWriter::new_managed(
+        node.clone(),
+        agent.agent_identity.as_ref(),
+        std::time::Duration::ZERO,
+    )?;
     match lifecycle.begin_owned_execution(&stream_writer).await {
         Ok(()) => {}
         Err(error) => {
@@ -263,21 +278,17 @@ where
         .clone()
         .map(|gate| Arc::new(gate) as Arc<dyn OutputObligationCheck>);
     let capture_scope = crate::inference::rendered_request::scope_from_factory(
-        crate::inference::rendered_request::RenderedRequestContext {
-            request_doc_id: request.doc_id.clone(),
-            request_commit_cid,
-            request_id: request.request_id.clone(),
-            node_did: agent.node_did().to_string(),
-            requester_did: String::new(),
-            agent_id: agent.agent_id.clone(),
-            session_id: request.session_id.clone(),
-            model_name: agent.model_name.clone(),
+        crate::inference::rendered_request::context_for_claimed_request(
+            &request,
+            &request_commit_cid,
+            agent.model_name.clone(),
             provider_family,
-        },
+        ),
         Some(
-            &crate::inference::rendered_request::defra_rendered_request_capture_factory(
+            &crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 node.clone(),
-            ),
+                agent.agent_identity.as_ref(),
+            )?,
         ),
     );
 
@@ -288,14 +299,16 @@ where
         }
     };
 
-    let hook = match DefraSessionHook::resume_with_identity_policy(
+    let hook = match DefraSessionHook::resume_with_actor_policy(
         node.clone(),
         &request.session_id,
         agent.node_did(),
         request.requester_did.as_deref(),
+        ::identity::Did::new(request.agent_did.clone())?,
         FailurePolicy::default(),
     )
     .await
+    .and_then(|hook| hook.with_managed_identity(agent.agent_identity.as_ref()))
     {
         Ok(hook) => hook
             .with_output_obligation_gate(output_obligation_gate.clone())
@@ -371,7 +384,7 @@ where
     let scoped_inference = crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
         request.requester_did.clone(),
         Some(request.node_did.clone()),
-        Some(request.agent_id.clone()),
+        Some(request.agent_did.clone()),
         Some(request.request_id.clone()),
         crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
             deadline,
@@ -438,7 +451,22 @@ where
                 lifecycle_result,
                 Ok(TerminalizeResult::Won | TerminalizeResult::AlreadySame)
             ) {
-                RequestLifecycle::recover_all(&node, agent.node_did()).await?;
+                RequestLifecycle::recover_all_with_identities(
+                    &node,
+                    agent.node_did(),
+                    std::slice::from_ref(&agent.agent_identity),
+                )
+                .await?;
+                crate::triggers::engine::durable::recover_outcomes_with_access(
+                    &crate::ConfigAccess::local_managed_agent(
+                        node.clone(),
+                        identity::Did::new(&request.agent_did)?,
+                        agent.agent_identity.as_ref(),
+                    )?,
+                    agent.node_did(),
+                    &request.agent_did,
+                )
+                .await?;
             }
             let close_result = if matches!(lifecycle_result, Ok(TerminalizeResult::Won)) {
                 hook.close().await

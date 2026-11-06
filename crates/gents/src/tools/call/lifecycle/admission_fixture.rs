@@ -1,6 +1,6 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::request::streaming::DefraStreamWriter;
@@ -73,17 +73,21 @@ pub(crate) async fn write_fixture_job_pin(
         r#"mutation($job_pin: JSON) {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ job_pin: $job_pin }}) {{ _docID }} }}"#,
         crate::store::graphql::escape_graphql_string(tool_doc_id),
     );
+    let access = crate::ConfigAccess::local(node.clone());
+    write_fixture_job_pin_with_access(&access, &mutation).await
+}
+
+async fn write_fixture_job_pin_with_access(
+    access: &crate::ConfigAccess,
+    mutation: &str,
+) -> anyhow::Result<()> {
     let variables = serde_json::json!({ "job_pin": fixture_job_pin() });
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "test.admission_fixture.job_pin",
-        |txn| {
-            let (mutation, variables) = (&mutation, &variables);
+    access
+        .transact_write("test.admission_fixture.job_pin", |txn| {
+            let variables = &variables;
             Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
-        },
-    )
-    .await?;
+        })
+        .await?;
     Ok(())
 }
 
@@ -102,7 +106,8 @@ pub(crate) async fn publish_accepted_on_claimed_request(
     await_mode: AwaitMode,
     start_running: bool,
 ) -> anyhow::Result<ToolCallLifecycle> {
-    let writer = DefraStreamWriter::new(node.clone(), node_did, Duration::from_millis(1));
+    let writer =
+        DefraStreamWriter::new_for_lifecycle(node.clone(), request, Duration::from_millis(1))?;
     if turn == 0 {
         request.begin_owned_execution(&writer).await?;
     } else {
@@ -163,32 +168,80 @@ pub struct PublishedAdmission {
     pub path: PathBuf,
     pub tool: ToolCallLifecycle,
     pub node_did: String,
+    pub runtime: Arc<dyn NodeIdentity>,
+    pub client: crate::ConfigAccess,
+    pub requester_identity: Arc<dyn NodeIdentity>,
 }
 
-pub(crate) async fn complete_child(
+pub(crate) async fn complete_child_managed(
     node: &Arc<EmbeddedNode>,
     child_id: &str,
     node_did: &str,
     text: &str,
+    identity: &dyn NodeIdentity,
+) {
+    complete_child_managed_inner(node, child_id, node_did, text, identity, None).await;
+}
+
+pub(crate) async fn complete_child_managed_verified(
+    node: &Arc<EmbeddedNode>,
+    child_id: &str,
+    node_did: &str,
+    text: &str,
+    identity: &dyn NodeIdentity,
+    runtime: Arc<dyn NodeIdentity>,
+) {
+    complete_child_managed_inner(node, child_id, node_did, text, identity, Some(runtime)).await;
+}
+
+async fn complete_child_managed_inner(
+    node: &Arc<EmbeddedNode>,
+    child_id: &str,
+    node_did: &str,
+    text: &str,
+    identity: &dyn NodeIdentity,
+    runtime: Option<Arc<dyn NodeIdentity>>,
 ) {
     let child_id_escaped = crate::store::graphql::escape_graphql_string(child_id);
-    let response = node.execute(&format!(
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(identity.did()).unwrap(),
+        identity,
+    )
+    .unwrap();
+    let response = access.execute(&format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{child_id_escaped}" }} }}) {{ {} }} }}"#,
         crate::request::watcher::AGENT_REQUEST_FIELDS,
-    )).await;
+    )).await.unwrap();
     let row: gents_protocol::row::AgentRequestRow =
-        crate::store::graphql::first_row(&response, "AgentRequest")
-            .unwrap()
-            .unwrap();
-    let mut request = RequestLifecycle::new_with_node_did(
-        node.clone(),
-        "general",
-        node_did,
-        row.try_into().unwrap(),
-        60,
-    );
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+    let selected_agent = row
+        .agent_did
+        .clone()
+        .expect("fixture request selects an agent");
+    let request = row.try_into().unwrap();
+    let (request, admission) = if let Some(runtime) = runtime {
+        let (_owner, authority) =
+            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+        let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+            node.clone(),
+            runtime,
+            authority,
+        );
+        verifier
+            .verify_fresh_for_claim_with_identity(&request, identity)
+            .await
+            .expect("verify the child request and its native claim admission")
+    } else {
+        (request, None)
+    };
+    let mut request =
+        RequestLifecycle::new_with_node_did(node.clone(), &selected_agent, node_did, request, 60);
+    request.bind_managed_agent(identity).unwrap();
+    request.set_client_claim_admission(admission);
     assert_eq!(request.claim().await.unwrap(), ClaimOutcome::Claimed);
-    let writer = DefraStreamWriter::new(node.clone(), node_did, Duration::ZERO);
+    let writer =
+        DefraStreamWriter::new_for_lifecycle(node.clone(), &request, Duration::ZERO).unwrap();
     request.begin_owned_execution(&writer).await.unwrap();
     writer
         .start_provider_attempt(
@@ -224,19 +277,15 @@ pub(crate) async fn complete_child(
     assert_eq!(terminal, crate::request::lifecycle::TerminalizeResult::Won);
 }
 
-pub(crate) async fn ensure_fixture_session(
-    node: &EmbeddedNode,
+async fn ensure_managed_fixture_session(
+    node: &Arc<EmbeddedNode>,
     session_id: &str,
-    node_did: &str,
+    root: &dyn NodeIdentity,
     requester_did: Option<&str>,
     created_at: &str,
-) {
+) -> Arc<dyn NodeIdentity> {
     let session = crate::store::graphql::escape_graphql_string(session_id);
-    let response = node
-        .execute(&format!(
-            r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{session}" }} }}, limit: 2) {{ _docID node_did requester_did }} }}"#
-        ))
-        .await;
+    let response = node.execute(&format!(r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{session}" }} }}, limit: 2) {{ _docID node_did requester_did agent_did }} }}"#)).await;
     assert!(!response.has_errors(), "{:#?}", response.errors);
     let rows = response.data.unwrap()["AgentSession"]
         .as_array()
@@ -244,53 +293,47 @@ pub(crate) async fn ensure_fixture_session(
         .clone();
     assert!(rows.len() <= 1, "fixture session identity must be unique");
     if let Some(row) = rows.first() {
-        assert_eq!(row["node_did"].as_str(), Some(node_did));
-        assert_eq!(row["requester_did"].as_str(), requester_did);
-        return;
+        assert_eq!(row["node_did"].as_str(), Some(root.did()));
+        let did = row["agent_did"].as_str().unwrap();
+        let agent = crate::load_agent(node, did)
+            .await
+            .unwrap()
+            .expect("fixture Agent binding");
+        let binding = gents_protocol::agent_identity::AgentIdentityBinding {
+            agent_did: agent.agent_did,
+            creation_nonce: agent.creation_nonce,
+        };
+        return crate::store::identity::resolve_agent_identity(root, &binding).unwrap();
     }
-    let agent = crate::store::graphql::escape_graphql_string(node_did);
+    let binding = crate::store::identity::provision_agent_identity(root).unwrap();
+    crate::test_support::install_test_agent_binding(
+        node,
+        root.did(),
+        "admission fixture",
+        &binding,
+    )
+    .await;
+    let agent = crate::store::identity::resolve_agent_identity(root, &binding).unwrap();
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let agent_did = crate::store::graphql::escape_graphql_string(agent.did());
+    let node_did = crate::store::graphql::escape_graphql_string(root.did());
+    let requester_did = if requester_did == Some(root.did()) {
+        Some(agent.did())
+    } else {
+        requester_did
+    };
     let requester = requester_did.map_or_else(
         || "null".to_owned(),
         |did| format!("\"{}\"", crate::store::graphql::escape_graphql_string(did)),
     );
     let created = crate::store::graphql::escape_graphql_string(created_at);
-    let response = node.execute(&format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", node_did: "{agent}", requester_did: {requester}, agent_id: "general", created_at: "{created}" }}) {{ _docID }} }}"#)).await;
-    assert!(!response.has_errors(), "{:#?}", response.errors);
-}
-
-pub async fn claimed_request(
-    node: &Arc<EmbeddedNode>,
-    request_id: &str,
-    session_id: &str,
-    node_did: &str,
-) -> RequestLifecycle {
-    let now = chrono::Utc::now().to_rfc3339();
-    ensure_fixture_session(node, session_id, node_did, None, &now).await;
-    let now = crate::store::graphql::escape_graphql_string(&now);
-    let request_id = crate::store::graphql::escape_graphql_string(request_id);
-    let session_id = crate::store::graphql::escape_graphql_string(session_id);
-    let node_did = crate::store::graphql::escape_graphql_string(node_did);
-    let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "spawn", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#)).await;
-    assert!(!created.has_errors(), "{:#?}", created.errors);
-    let row = node
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
-        ))
-        .await;
-    let row: gents_protocol::row::AgentRequestRow =
-        crate::store::graphql::first_row(&row, "AgentRequest")
-            .unwrap()
-            .unwrap();
-    let mut lifecycle = RequestLifecycle::new_with_node_did(
-        node.clone(),
-        "general",
-        &node_did,
-        row.try_into().unwrap(),
-        60,
-    );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    lifecycle
+    access.write("fixture.create_managed_session", &format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", node_did: "{node_did}", requester_did: {requester}, agent_did: "{agent_did}", created_at: "{created}" }}) {{ _docID }} }}"#)).await.expect("create managed fixture session");
+    agent
 }
 
 pub(crate) async fn claimed_signed_request(
@@ -335,7 +378,7 @@ pub(crate) async fn claimed_signed_request_with_trigger_correlation(
         request_id,
         identity.did(),
         identity.did(),
-        "general",
+        identity.did(),
         session_id,
         "spawn",
         "interactive",
@@ -355,94 +398,79 @@ pub(crate) async fn claimed_signed_request_create(
     identity: &dyn NodeIdentity,
     mut create: gents_protocol::request_admission::AgentRequestCreate,
 ) -> RequestLifecycle {
-    ensure_fixture_session(
+    let agent_identity = ensure_managed_fixture_session(
         node,
         &create.session_id,
-        &create.node_did,
+        identity,
         Some(&create.requester_did),
         &create.created_at,
     )
     .await;
-    crate::sign_agent_request_create(identity, &mut create)
-        .await
-        .expect("sign canonical admission fixture request");
-    let created = node.execute(&create.graphql_mutation().unwrap()).await;
-    assert!(!created.has_errors(), "{:#?}", created.errors);
+    create.agent_did = agent_identity.did().to_owned();
+    if create.admission.kind
+        == gents_protocol::request_admission::AgentRequestAdmissionKind::LocalSelf
+    {
+        create.requester_did = create.agent_did.clone();
+        create.admission =
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                &create.agent_did,
+            );
+        crate::sign_agent_request_create(agent_identity.as_ref(), &mut create)
+            .await
+            .expect("sign fixture request as selected agent");
+    } else {
+        crate::sign_agent_request_create(identity, &mut create)
+            .await
+            .expect("sign canonical admission fixture request");
+    }
+    let local_self = create.admission.kind
+        == gents_protocol::request_admission::AgentRequestAdmissionKind::LocalSelf;
+    let actor_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(create.agent_did.as_str()).unwrap(),
+        agent_identity.as_ref(),
+    )
+    .unwrap();
+    if local_self {
+        actor_access
+            .write(
+                "fixture.create_request",
+                &create.graphql_mutation().unwrap(),
+            )
+            .await
+            .expect("create agent-owned local request");
+    } else {
+        let created = node.execute(&create.graphql_mutation().unwrap()).await;
+        assert!(!created.has_errors(), "{:#?}", created.errors);
+    }
     let request_id = crate::store::graphql::escape_graphql_string(&create.request_id);
-    let row = node
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
-        ))
-        .await;
-    let row: gents_protocol::row::AgentRequestRow =
-        crate::store::graphql::first_row(&row, "AgentRequest")
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
+        crate::request::watcher::AGENT_REQUEST_FIELDS,
+    );
+    let row: gents_protocol::row::AgentRequestRow = if local_self {
+        let result = actor_access.execute(&query).await.unwrap();
+        serde_json::from_value(result["data"]["AgentRequest"][0].clone()).unwrap()
+    } else {
+        let result = node.execute(&query).await;
+        crate::store::graphql::first_row(&result, "AgentRequest")
             .unwrap()
-            .unwrap();
+            .unwrap()
+    };
+    let selected_agent = row
+        .agent_did
+        .clone()
+        .expect("fixture request selects an agent");
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
-        "general",
+        &selected_agent,
         identity.did(),
         row.try_into().unwrap(),
         60,
     );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     lifecycle
-}
-
-async fn claimed_paired_client_request(
-    node: &Arc<EmbeddedNode>,
-    request_id: &str,
-    session_id: &str,
-    agent: &dyn NodeIdentity,
-    path: &std::path::Path,
-) -> RequestLifecycle {
-    let client = crate::KeyIdentity::load_or_create(path.join("paired-client.key"), None)
-        .expect("paired client identity");
-    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    ensure_fixture_session(node, session_id, agent.did(), Some(client.did()), &now).await;
-    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-        gents_protocol::request_admission::RequestPurpose::Normal,
-        request_id,
-        agent.did(),
-        client.did(),
-        "general",
-        session_id,
-        "spawn",
-        "interactive",
-        now,
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::enrollment(
-            client.did(),
-            "enrollment",
-            "digest",
-            agent.did(),
-            1,
-            "2099-01-01T00:00:00Z",
-        ),
-    );
-    crate::sign_agent_request_create(&client, &mut create)
-        .await
-        .expect("sign paired client request");
-    let created = node.execute(&create.graphql_mutation().unwrap()).await;
-    assert!(!created.has_errors(), "{:#?}", created.errors);
-    let request_id = crate::store::graphql::escape_graphql_string(request_id);
-    let row = node
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
-        ))
-        .await;
-    let row: gents_protocol::row::AgentRequestRow =
-        crate::store::graphql::first_row(&row, "AgentRequest")
-            .unwrap()
-            .unwrap();
-    let mut lifecycle = RequestLifecycle::new_with_node_did(
-        node.clone(),
-        "general",
-        agent.did(),
-        row.try_into().unwrap(),
-        60,
-    );
+        .bind_managed_agent(agent_identity.as_ref())
+        .unwrap();
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     lifecycle
 }
@@ -460,52 +488,123 @@ pub async fn published_admission_with_owner(
     let name = options.name;
     let path =
         std::env::temp_dir().join(format!("admission-fixture-{name}-{}", uuid::Uuid::new_v4()));
-    let physical_identity = crate::KeyIdentity::load_or_create(path.join("test-agent.key"), None)?;
-    let mut builder = EmbeddedNode::builder()
-        .data_path(&path)
-        .with_node_identity_did(physical_identity.did());
-    if options.p2p {
-        builder = builder.with_p2p(test_p2p_config());
-    }
-    let node = Arc::new(builder.build().await?);
-    crate::store::schema::ensure_runtime_schemas(&node).await?;
-    let identity = options.real_identity.then_some(physical_identity);
-    let node_did = identity.as_ref().map_or_else(
-        || "did:test:test".to_owned(),
-        |identity| identity.did().to_owned(),
-    );
-    let mut request = match identity.as_ref() {
-        Some(identity) if options.paired_client => {
-            claimed_paired_client_request(
-                &node,
-                &format!("request-{name}"),
-                &format!("session-{name}"),
-                identity,
-                &path,
-            )
-            .await
-        }
-        Some(identity) => {
-            claimed_signed_request(
-                &node,
-                &format!("request-{name}"),
-                &format!("session-{name}"),
-                identity,
-                options.request_created_at.as_deref(),
-            )
-            .await
-        }
-        None => {
-            claimed_request(
-                &node,
-                &format!("request-{name}"),
-                &format!("session-{name}"),
-                &node_did,
-            )
-            .await
-        }
+    let p2p: Option<crate::eval::runner::embedded::home::P2PConfigForPath> = if options.p2p {
+        Some(Arc::new(|_| test_p2p_config()))
+    } else {
+        None
     };
-    let writer = DefraStreamWriter::new(node.clone(), &node_did, Duration::from_millis(1));
+    let home =
+        crate::eval::runner::embedded::EmbeddedHome::create_retained_with_p2p(&path, p2p).await?;
+    let db = crate::support::test_db_from_home(home);
+    let (db, user, owner, binding) = crate::test_support::signed_test_node_from_db(db, &name).await;
+    let node = db.node.clone();
+    let runtime = db.node_identity.clone();
+    let node_did = runtime.did().to_owned();
+    let paired = if options.paired_client {
+        let paired_name = format!("{name}-paired-client");
+        Some(
+            tokio::task::spawn_blocking(move || {
+                crate::support::fixtures::test_identity(&paired_name)
+            })
+            .await?,
+        )
+    } else {
+        None
+    };
+    if let Some(paired) = &paired {
+        use crate::store::config_client::NodePermission;
+        let admin = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(&node_did)?);
+        let actor = identity::Did::new(paired.did())?;
+        for permission in [
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::DacRelationAdd,
+            NodePermission::CollectionGet,
+        ] {
+            admin.grant_node_permission(&actor, permission).await?;
+        }
+        let response = owner.execute("{ Agent { _docID agent_did } }").await?;
+        let agent_doc = response["data"]["Agent"]
+            .as_array()
+            .and_then(|rows| {
+                rows.iter()
+                    .find(|row| row["agent_did"] == binding.agent_did)
+            })
+            .and_then(|row| row["_docID"].as_str())
+            .ok_or_else(|| anyhow::anyhow!("fixture Agent not visible to User"))?;
+        owner
+            .add_actor_relationship("Agent", agent_doc, "session_writer", &actor)
+            .await?;
+    }
+    let requester: &dyn NodeIdentity = paired.as_ref().map_or(&user, |identity| identity);
+    let client = if paired.is_some() {
+        db.client_access(requester)
+    } else {
+        owner
+    };
+    let agent = crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding)?;
+    let agent_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did())?,
+        agent.as_ref(),
+    )?;
+    let created_at = options
+        .request_created_at
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    let create = crate::request::lifecycle::build_signed_client_request(
+        &client,
+        crate::request::lifecycle::RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            crate::request::lifecycle::RequestIdentity {
+                request_id: format!("request-{name}"),
+                node_did: node_did.clone(),
+                requester_did: Some(requester.did().to_owned()),
+                agent_did: binding.agent_did.clone(),
+                session_id: format!("session-{name}"),
+                content: "spawn".into(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at,
+            },
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(requester.did()),
+        ),
+        crate::request::lifecycle::RequestSigner::Identity(requester),
+    )
+    .await?;
+    crate::request::lifecycle::submit_client_request(&client, &create).await?;
+    let requester_identity: Arc<dyn NodeIdentity> = Arc::new(paired.unwrap_or(user));
+    let request_id = crate::store::graphql::escape_graphql_string(&create.request_id);
+    let response = agent_access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
+        ))
+        .await?;
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone())?;
+    let request = row.try_into()?;
+    let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        runtime.clone(),
+        authority,
+    );
+    let (request, admission) = verifier
+        .verify_fresh_for_claim_with_identity(&request, agent.as_ref())
+        .await?;
+    anyhow::ensure!(
+        admission.is_some(),
+        "fixture client request lacks native claim admission"
+    );
+    let mut request =
+        RequestLifecycle::new_with_node_did(node.clone(), agent.did(), &node_did, request, 60);
+    request.bind_managed_agent(agent.as_ref())?;
+    request.set_client_claim_admission(admission);
+    anyhow::ensure!(
+        request.claim_with_identity().await? == ClaimOutcome::Claimed,
+        "fixture client request was not claimed"
+    );
+    let writer =
+        DefraStreamWriter::new_for_lifecycle(node.clone(), &request, Duration::from_millis(1))?;
     request.begin_owned_execution(&writer).await?;
     writer
         .start_provider_attempt(
@@ -522,7 +621,7 @@ pub async fn published_admission_with_owner(
     let (native_id, arguments) = if crate::tools::native::is_session_message_tool(&tool_name) {
         (
             "bridge-native-tool",
-            serde_json::json!({"agent": "general", "prompt": "work"}),
+            serde_json::json!({"agent": request.request().agent_did, "prompt": "work"}),
         )
     } else {
         ("spawn-native-tool", serde_json::json!({"command": "work"}))
@@ -562,9 +661,14 @@ pub async fn published_admission_with_owner(
     }
     if options.job_pin {
         let doc_id = tool.doc_id().expect("published tool row").to_owned();
-        write_fixture_job_pin(&node, &doc_id).await?;
-        tool = ToolCallLifecycle::load_by_doc_id(
+        let mutation = format!(
+            r#"mutation($job_pin: JSON) {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ job_pin: $job_pin }}) {{ _docID }} }}"#,
+            crate::store::graphql::escape_graphql_string(&doc_id),
+        );
+        write_fixture_job_pin_with_access(&tool.access()?, &mutation).await?;
+        let mut loaded = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            identity::Did::new(agent.did())?,
             &doc_id,
             &node_did,
             &format!("session-{name}"),
@@ -572,6 +676,8 @@ pub async fn published_admission_with_owner(
         )
         .await?
         .expect("pinned tool row");
+        loaded.inherit_signer(&tool)?;
+        tool = loaded;
     }
     Ok((
         PublishedAdmission {
@@ -579,27 +685,94 @@ pub async fn published_admission_with_owner(
             path,
             tool,
             node_did,
+            runtime,
+            client,
+            requester_identity,
         },
         request,
     ))
 }
 
+pub(crate) async fn pending_client_fixture_request(
+    node: &Arc<EmbeddedNode>,
+    client: &crate::ConfigAccess,
+    runtime: Arc<dyn NodeIdentity>,
+    requester: &dyn NodeIdentity,
+    agent: &dyn NodeIdentity,
+    mut create: gents_protocol::request_admission::AgentRequestCreate,
+) -> anyhow::Result<RequestLifecycle> {
+    anyhow::ensure!(client.actor_did().as_deref() == Some(requester.did()));
+    anyhow::ensure!(create.requester_did == requester.did() && create.agent_did == agent.did());
+    create.session_doc_id =
+        Some(crate::request::lifecycle::reserve_goal_session(client, &create).await?);
+    let did = crate::store::graphql::escape_graphql_string(agent.did());
+    let response = client
+        .execute(&format!(
+            r#"{{ Agent(filter: {{ agent_did: {{ _eq: "{did}" }} }}) {{ _docID }} }}"#
+        ))
+        .await?;
+    let [row] = response["data"]["Agent"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("missing Agent rows"))?
+        .as_slice()
+    else {
+        anyhow::bail!("client must see exactly one selected Agent");
+    };
+    create.agent_doc_id = Some(
+        row["_docID"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Agent has no ID"))?
+            .to_owned(),
+    );
+    crate::sign_agent_request_create(requester, &mut create).await?;
+    crate::request::lifecycle::submit_client_request(client, &create).await?;
+    let agent_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did())?,
+        agent,
+    )?;
+    let request_id = crate::store::graphql::escape_graphql_string(&create.request_id);
+    let response = agent_access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
+            crate::request::watcher::AGENT_REQUEST_FIELDS
+        ))
+        .await?;
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone())?;
+    let request = row.try_into()?;
+    let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        runtime.clone(),
+        authority,
+    );
+    let (request, admission) = verifier
+        .verify_fresh_for_claim_with_identity(&request, agent)
+        .await?;
+    anyhow::ensure!(
+        admission.is_some(),
+        "fixture client request lacks native claim admission"
+    );
+    let mut lifecycle =
+        RequestLifecycle::new_with_node_did(node.clone(), agent.did(), runtime.did(), request, 60);
+    lifecycle.bind_managed_agent(agent)?;
+    lifecycle.set_client_claim_admission(admission);
+    Ok(lifecycle)
+}
+
 pub(crate) fn test_p2p_config() -> defra_node::P2PConfig {
     defra_node::P2PConfig {
-        port: 0,
+        port: Some(0),
         bind_addr: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
         relay_mode: p2p::iroh::IrohRelayModeConfig::Disabled,
         discovery: p2p::iroh::IrohDiscoveryConfig::Disabled,
         allowlist: p2p::iroh::IrohAllowlistConfig::AcceptAll,
         max_concurrent_multipath_paths: None,
         secret_key_path: None,
+        peer_key: defra_node::PeerKeySource::File,
         load_persisted_collections: false,
-        max_concurrent_dag_fetches: p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES,
-        max_concurrent_push_tasks: p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS,
-        rate_limit_burst: p2p::sync::DEFAULT_RATE_LIMIT_BURST,
-        rate_limit_rate: p2p::sync::DEFAULT_RATE_LIMIT_RATE,
-        max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-        max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
+        sync: defra_node::SyncTuning::default(),
         rebroadcast_on_merge: false,
     }
 }
@@ -643,7 +816,7 @@ pub(crate) async fn materialize_session_message(
     let caller = request.request();
     let cause = crate::request::lifecycle::SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
-        caller_agent_id: caller.agent_id.clone(),
+        caller_agent_did: caller.agent_did.clone(),
         caller_session_id: caller.session_id.clone(),
         caller_requester_did: caller.requester_did.clone(),
         caller_request_id: caller.request_id.clone(),
@@ -658,9 +831,12 @@ pub(crate) async fn materialize_session_message(
     };
     let target = crate::request::lifecycle::SessionMessageTarget {
         node_did: target_node_did.to_owned(),
-        agent_id: "general".to_owned(),
+        agent_did: caller.agent_did.clone(),
         session_id: uuid::Uuid::new_v4().to_string(),
     };
+    let signer = tool.access()?.managed_agent_signer().ok_or_else(|| {
+        anyhow::anyhow!("fixture session message requires a managed Agent signer")
+    })?;
     let mut plan = crate::session::message::plan(
         node,
         &cause,
@@ -671,10 +847,11 @@ pub(crate) async fn materialize_session_message(
         },
         None,
         false,
+        &signer,
     )
     .await?
     .map_err(anyhow::Error::msg)?;
-    plan.sign_agent_creation(&cause.caller_node_did, &caller.input)
+    plan.sign_agent_creation(&cause.caller_node_did, &caller.input, &signer)
         .await?;
     crate::session::message::commit(node, &cause, tool, plan, false)
         .await
@@ -742,21 +919,52 @@ mod lifecycle_tests {
     use super::*;
     use crate::tools::call::lifecycle::{CancelCause, FailureClass};
 
-    async fn row(node: &EmbeddedNode, session_id: &str) -> serde_json::Value {
+    /// Reads the admitted row through the owning Agent's access; ACP hides it from the node.
+    async fn row(access: &crate::ConfigAccess, session_id: &str) -> serde_json::Value {
         let session = crate::store::graphql::escape_graphql_string(session_id);
-        let response = node
+        let response = access
             .execute(&format!(r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ request_id request_doc_id lifecycle_state tool_failure_class cancel_cause deadline_at await_mode }} }}"#))
-            .await;
-        assert!(!response.has_errors(), "{:#?}", response.errors);
-        let data = response.data.unwrap();
-        let rows = data["AgentToolCall"].as_array().unwrap();
+            .await
+            .unwrap();
+        let rows = response["data"]["AgentToolCall"].as_array().unwrap();
         assert_eq!(rows.len(), 1, "exactly one admitted physical tool row");
         rows.first().cloned().expect("one admitted tool call")
     }
 
     async fn teardown(node: Arc<EmbeddedNode>, path: PathBuf) {
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn signed_admission_keeps_user_node_and_agent_distinct() {
+        let (fixture, request) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: "signed-fixture-identities".to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let actor = fixture.tool.access().unwrap().actor_did().unwrap();
+        let requester = request.request().requester_did.as_deref().unwrap();
+        assert_ne!(requester, fixture.node_did);
+        assert_ne!(requester, actor);
+        assert_ne!(actor, fixture.node_did);
+        assert_eq!(request.request().agent_did, actor);
+        assert!(crate::request::binding::load_agent_request_with_access(
+            &fixture.tool.access().unwrap(),
+            &request.request().request_id,
+        )
+        .await
+        .unwrap()
+        .is_some());
+        assert!(crate::request::binding::load_agent_request(
+            &fixture.node,
+            &request.request().request_id,
+        )
+        .await
+        .unwrap()
+        .is_none());
+        teardown(fixture.node, fixture.path).await;
     }
 
     #[tokio::test]
@@ -775,9 +983,10 @@ mod lifecycle_tests {
             mut tool,
             ..
         } = admission;
+        let access = tool.access().unwrap();
         let request_doc_id = tool.request_doc_id().unwrap().to_owned();
         tool.start_running().await.unwrap();
-        let running = row(&node, "session-native-complete").await;
+        let running = row(&access, "session-native-complete").await;
         assert_eq!(running["lifecycle_state"], "running");
         assert_eq!(running["request_doc_id"], request_doc_id);
         assert!(running["deadline_at"]
@@ -785,7 +994,7 @@ mod lifecycle_tests {
             .is_some_and(|value| !value.is_empty()));
         tool.complete("ok").await.unwrap();
         assert_eq!(
-            row(&node, "session-native-complete").await["lifecycle_state"],
+            row(&access, "session-native-complete").await["lifecycle_state"],
             "completed"
         );
         teardown(node, path).await;
@@ -794,10 +1003,11 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn admitted_native_lifecycle_persists_failure_class() {
         let (node, path, mut tool) = published_spawn_parent("native-fail").await;
+        let access = tool.access().unwrap();
         tool.fail("error", FailureClass::ToolReturnedError)
             .await
             .unwrap();
-        let row = row(&node, "session-native-fail").await;
+        let row = row(&access, "session-native-fail").await;
         assert_eq!(row["lifecycle_state"], "failed");
         assert_eq!(row["tool_failure_class"], "toolReturnedError");
         teardown(node, path).await;
@@ -815,10 +1025,11 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn admitted_native_rejects_duplicate_dispatch_without_duplicate_row() {
         let (node, path, mut tool) = published_spawn_parent("native-duplicate").await;
+        let access = tool.access().unwrap();
         let error = tool.start_running().await.unwrap_err();
         assert!(format!("{error:#}").contains("cannot re-dispatch"));
         assert_eq!(
-            row(&node, "session-native-duplicate").await["lifecycle_state"],
+            row(&access, "session-native-duplicate").await["lifecycle_state"],
             "running"
         );
         teardown(node, path).await;
@@ -827,6 +1038,7 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn admitted_native_load_preserves_state_deadline_and_terminal_updates() {
         let (node, path, tool) = published_spawn_parent("native-load").await;
+        let access = tool.access().unwrap();
         let expected_deadline = tool.deadline_at;
         let mut loaded =
             ToolCallLifecycle::load(node.clone(), "session-native-load", "spawn-native-tool")
@@ -834,7 +1046,7 @@ mod lifecycle_tests {
                 .unwrap()
                 .expect("admitted tool loads");
         loaded.timeout().await.unwrap();
-        let row = row(&node, "session-native-load").await;
+        let row = row(&access, "session-native-load").await;
         assert_eq!(row["lifecycle_state"], "timedOut");
         assert_eq!(row["cancel_cause"], "deadline");
         let observed = chrono::DateTime::parse_from_rfc3339(row["deadline_at"].as_str().unwrap())
@@ -847,6 +1059,7 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn admitted_native_load_returns_persisted_failure() {
         let (node, path, mut tool) = published_spawn_parent("native-load-failure").await;
+        let access = tool.access().unwrap();
         tool.fail("oops", FailureClass::Transport).await.unwrap();
         drop(tool);
         let loaded = ToolCallLifecycle::load(
@@ -858,7 +1071,7 @@ mod lifecycle_tests {
         .unwrap()
         .expect("terminal admitted tool loads");
         drop(loaded);
-        let row = row(&node, "session-native-load-failure").await;
+        let row = row(&access, "session-native-load-failure").await;
         assert_eq!(row["lifecycle_state"], "failed");
         assert_eq!(row["tool_failure_class"], "transport");
         teardown(node, path).await;
@@ -867,16 +1080,18 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn admitted_native_cancel_during_run_and_after_load_persist_causes() {
         let (node, path, mut tool) = published_spawn_parent("native-cancel").await;
+        let access = tool.access().unwrap();
         tool.cancel_during_run(CancelCause::UserCancelled)
             .await
             .unwrap();
-        let persisted = row(&node, "session-native-cancel").await;
+        let persisted = row(&access, "session-native-cancel").await;
         assert_eq!(persisted["lifecycle_state"], "cancelled");
         assert_eq!(persisted["cancel_cause"], "userCancelled");
         teardown(node, path).await;
 
         let (node, path, tool) = published_spawn_parent("native-cancel-load").await;
-        assert!(row(&node, "session-native-cancel-load").await["cancel_cause"].is_null());
+        let access = tool.access().unwrap();
+        assert!(row(&access, "session-native-cancel-load").await["cancel_cause"].is_null());
         drop(tool);
         let mut loaded = ToolCallLifecycle::load(
             node.clone(),
@@ -891,7 +1106,7 @@ mod lifecycle_tests {
             .await
             .unwrap();
         assert_eq!(
-            row(&node, "session-native-cancel-load").await["cancel_cause"],
+            row(&access, "session-native-cancel-load").await["cancel_cause"],
             "interrupted"
         );
         teardown(node, path).await;
@@ -900,10 +1115,11 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn admitted_pending_native_cancel_persists_cause() {
         let (node, path, mut tool) = pending_spawn_parent("native-pending-cancel").await;
+        let access = tool.access().unwrap();
         tool.cancel_before_dispatch(CancelCause::Interrupted)
             .await
             .unwrap();
-        let row = row(&node, "session-native-pending-cancel").await;
+        let row = row(&access, "session-native-pending-cancel").await;
         assert_eq!(row["lifecycle_state"], "cancelled");
         assert_eq!(row["cancel_cause"], "interrupted");
         teardown(node, path).await;
@@ -911,7 +1127,20 @@ mod lifecycle_tests {
 
     #[tokio::test]
     async fn timeout_adopts_terminal_written_by_terminal_parent_sweep() {
-        let (node, path, mut tool) = published_spawn_parent("timeout-cas").await;
+        let admission = published_admission(PublishedAdmissionOptions {
+            name: "timeout-cas".to_owned(),
+            real_identity: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let node = admission.node;
+        let path = admission.path;
+        let node_did = admission.node_did;
+        let mut tool = admission.tool;
+        let tool_access = tool.access().unwrap();
+        let signer = tool_access.managed_agent_signer().unwrap();
+        let identities: Vec<Arc<dyn NodeIdentity>> = vec![Arc::new(signer)];
         let request = crate::store::graphql::escape_graphql_string("request-timeout-cas");
         let response = node
             .execute(&format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{request}" }} }}, input: {{ lifecycle_state: "interrupted" }}) {{ _docID }} }}"#))
@@ -919,12 +1148,12 @@ mod lifecycle_tests {
         assert!(!response.has_errors(), "{:#?}", response.errors);
 
         let report =
-            ToolCallLifecycle::reconcile_terminal_parent_owned_tools(&node, "did:test:test")
+            ToolCallLifecycle::reconcile_terminal_parent_owned_tools(&node, &node_did, &identities)
                 .await
                 .unwrap();
         assert_eq!(report.tool_calls_terminalized, 1);
         assert!(!tool.timeout().await.unwrap());
-        let row = row(&node, "session-timeout-cas").await;
+        let row = row(&tool_access, "session-timeout-cas").await;
         assert_eq!(row["lifecycle_state"], "cancelled");
         assert_eq!(row["cancel_cause"], "interrupted");
         assert!(row["tool_failure_class"].is_null());

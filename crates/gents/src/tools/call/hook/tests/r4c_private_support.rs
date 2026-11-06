@@ -1,63 +1,100 @@
 use super::*;
 
-pub(super) async fn bind_accepted_request(
+pub(super) async fn setup_private_hook(
     db: &crate::support::TestDb,
-    hook: &DefraSessionHook,
-    agent_id: &str,
     request_id: &str,
     session_id: &str,
-    deadline_at: chrono::DateTime<chrono::Utc>,
-) {
-    let did = db.node_identity.did();
-    assert_eq!(hook.node_did, did, "hook and signed request owner differ");
-    crate::session::ensure_session_with_agent_id_and_requester_did(
+    registry: BackgroundToolRegistry,
+) -> DefraSessionHook {
+    let node_did = db.node_identity.did();
+    let binding = crate::test_support::ensure_test_default_agent(&db.node, node_did).await;
+    setup_private_hook_for_agent(
         &db.node,
+        node_did,
+        &binding.agent_did,
+        request_id,
         session_id,
-        did,
-        agent_id,
-        Some(did),
+        registry,
     )
     .await
-    .expect("ensure canonical R4C parent session");
+}
+
+pub(super) async fn setup_private_hook_for_agent(
+    node: &Arc<defra_node::Node>,
+    node_did: &str,
+    agent_did: &str,
+    request_id: &str,
+    session_id: &str,
+    registry: BackgroundToolRegistry,
+) -> DefraSessionHook {
+    let actor = identity::Did::new(agent_did).expect("fixture agent DID");
+    let access = crate::ConfigAccess::local_as(node.clone(), actor.clone());
+    let session = crate::store::graphql::escape_graphql_string(session_id);
+    let escaped_node = crate::store::graphql::escape_graphql_string(node_did);
+    let agent = crate::store::graphql::escape_graphql_string(agent_did);
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    access.write("r4c.create_session", &format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", node_did: "{escaped_node}", requester_did: "{agent}", agent_did: "{agent}", created_at: "{now}" }}) {{ _docID }} }}"#)).await.expect("create R4C agent-owned session");
+
+    let hook = DefraSessionHook::resume_with_actor_policy(
+        node.clone(),
+        session_id,
+        node_did,
+        Some(agent_did),
+        actor,
+        FailurePolicy::default(),
+    )
+    .await
+    .expect("resume R4C agent-owned session")
+    .with_background_tool_registry(registry);
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
-        did,
-        did,
-        agent_id,
+        node_did,
+        agent_did,
+        agent_did,
         session_id,
         "R4C accepted control fixture",
         "interactive",
         now,
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(did),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent_did),
     );
-    crate::sign_agent_request_create(db.node_identity.as_ref(), &mut create)
+    crate::sign_agent_request_create_as_registered_target(&mut create)
         .await
-        .expect("sign canonical R4C parent request");
-    let created = db.node.execute(&create.graphql_mutation().unwrap()).await;
-    assert!(
-        !created.has_errors(),
-        "create canonical R4C parent request: {:?}",
-        created.errors
+        .expect("sign R4C request as selected agent");
+    let created = access
+        .write("r4c.create_request", &create.graphql_mutation().unwrap())
+        .await
+        .expect("create R4C request as selected agent");
+    let request_doc_id = crate::store::graphql::created_doc_id(&created, "AgentRequest")
+        .unwrap_or_else(|error| panic!("R4C request document ID: {error}; response: {created}"));
+    let ids = [request_doc_id.clone()];
+    let owners = access
+        .transact_readonly("r4c.request_owner", |txn| {
+            let ids = ids.clone();
+            Box::pin(async move { txn.document_owners("AgentRequest", &ids).await })
+        })
+        .await
+        .expect("observe R4C request owner as selected agent");
+    assert_eq!(owners.len(), 1);
+    assert_eq!(
+        owners[0].owner.as_ref().map(identity::Did::as_str),
+        Some(agent_did),
+        "the selected agent must own its request"
     );
-    let request_doc_id =
-        crate::store::graphql::single_mutation_document(&created, "create_AgentRequest")
-            .unwrap()
-            .unwrap()["_docID"]
-            .as_str()
-            .unwrap()
-            .to_owned();
     let request_doc = crate::store::graphql::escape_graphql_string(&request_doc_id);
-    let loaded = db.node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc}" }} }}, limit: 1) {{ {} }} }}"#, crate::request::watcher::AGENT_REQUEST_FIELDS)).await;
+    let loaded = access.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc}" }} }}, limit: 1) {{ {} }} }}"#, crate::request::watcher::AGENT_REQUEST_FIELDS)).await.expect("load R4C request as selected agent");
+    let rows = loaded["data"]["AgentRequest"]
+        .as_array()
+        .expect("R4C request query returned rows");
+    let [row] = rows.as_slice() else {
+        panic!("selected agent must see exactly one R4C request: {loaded}");
+    };
     let row: gents_protocol::row::AgentRequestRow =
-        crate::store::graphql::first_row(&loaded, "AgentRequest")
-            .unwrap()
-            .expect("created R4C request row");
+        serde_json::from_value(row.clone()).expect("canonical R4C request row");
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
-        db.node.clone(),
-        agent_id,
-        did,
+        node.clone(),
+        agent_did,
+        node_did,
         row.try_into().expect("canonical R4C request"),
         60,
     );
@@ -66,23 +103,28 @@ pub(super) async fn bind_accepted_request(
         crate::request::lifecycle::ClaimOutcome::Claimed
     );
     let writer = crate::request::streaming::DefraStreamWriter::new(
-        db.node.clone(),
-        did,
+        node.clone(),
+        agent_did,
         std::time::Duration::ZERO,
     );
     lifecycle.begin_owned_execution(&writer).await.unwrap();
-    hook.set_active_request_lineage(Some(request_id.to_owned()), Some(did.to_owned()))
-        .await
-        .expect("bind accepted R4C request lineage");
-    hook.set_request_deadline_at(Some(deadline_at)).await;
+    hook.set_active_request_binding(
+        Some(request_id.to_owned()),
+        Some(request_doc_id),
+        Some(agent_did.to_owned()),
+    )
+    .await;
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
+        .await;
     hook_execution_fixtures().lock().await.insert(
-        hook_execution_fixture_key(hook, request_id),
+        hook_execution_fixture_key(&hook, request_id),
         HookExecutionFixture {
             lifecycle,
             writer,
             turn: 0,
         },
     );
+    hook
 }
 
 pub(super) async fn accepted_call(
@@ -112,38 +154,31 @@ pub(super) async fn assert_accepted_control_rows(
     let session_id = hook.session_id().await.expect("accepted control session");
     let session = crate::store::graphql::escape_graphql_string(&session_id);
     let name = crate::store::graphql::escape_graphql_string(tool_name);
-    let response = hook.node.execute(&format!(r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }}, tool_name: {{ _eq: "{name}" }} }}) {{ _docID request_doc_id message_sequence lifecycle_state }} }}"#)).await;
-    assert!(
-        !response.has_errors(),
-        "accepted control row query: {:?}",
-        response.errors
+    let requester = hook
+        .active_requester_did()
+        .await
+        .expect("R4C selected agent");
+    let access = crate::ConfigAccess::local_as(
+        hook.node.clone(),
+        identity::Did::new(requester.as_str()).unwrap(),
     );
-    let rows = response.data.as_ref().unwrap()["AgentToolCall"]
-        .as_array()
-        .unwrap();
+    let response = access.execute(&format!(r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }}, tool_name: {{ _eq: "{name}" }} }}) {{ _docID request_doc_id message_sequence lifecycle_state }} }}"#)).await.expect("accepted control row query");
+    let rows = response["data"]["AgentToolCall"].as_array().unwrap();
     assert_eq!(rows.len(), expected, "exact accepted {tool_name} row count");
     for row in rows {
         let tool_doc_id = row["_docID"].as_str().unwrap();
         let request_doc_id = row["request_doc_id"].as_str().unwrap();
         let sequence = row["message_sequence"].as_u64().unwrap();
         let request_doc = crate::store::graphql::escape_graphql_string(request_doc_id);
-        let headers = hook.node.execute(&format!(r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session}" }}, request_doc_id: {{ _eq: "{request_doc}" }}, sequence: {{ _eq: {sequence} }} }}) {{ _docID }} }}"#)).await;
-        assert!(
-            !headers.has_errors(),
-            "accepted control header query: {:?}",
-            headers.errors
-        );
-        let header_rows = headers.data.as_ref().unwrap()["AgentMessage"]
-            .as_array()
-            .unwrap();
+        let headers = access.execute(&format!(r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session}" }}, request_doc_id: {{ _eq: "{request_doc}" }}, sequence: {{ _eq: {sequence} }} }}) {{ _docID }} }}"#)).await.expect("accepted control header query");
+        let header_rows = headers["data"]["AgentMessage"].as_array().unwrap();
         assert_eq!(header_rows.len(), 1, "one exact accepted assistant header");
         let header_doc_id = header_rows[0]["_docID"].as_str().unwrap();
-        let requester = hook.active_requester_did().await;
-        let (header, _) = crate::session::load_canonical_message_from_node(
-            hook.node.as_ref(),
+        let (header, _) = crate::session::load_canonical_message(
+            &access,
             header_doc_id,
             &hook.node_did,
-            requester.as_deref(),
+            Some(&requester),
         )
         .await
         .expect("load canonical accepted control header");

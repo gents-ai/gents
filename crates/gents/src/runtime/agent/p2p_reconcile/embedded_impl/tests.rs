@@ -50,6 +50,19 @@ use gents_protocol::enrollment::{
 };
 use gents_protocol::network_token::NetworkRecord;
 
+#[test]
+fn native_unauthorized_error_keeps_its_pairing_class() {
+    let error = map_p2p_error(
+        "sync_branchable_collection",
+        P2PError::Unauthorized("denied".into()),
+    );
+    assert!(matches!(error, RemoteP2pAdminError::RemoteUnauthorized));
+    assert_eq!(
+        super::super::classify_remote_admin_error(&error),
+        super::super::PairingErrorClass::RemoteUnauthorized
+    );
+}
+
 #[tokio::test]
 async fn explicit_file_image_push_keeps_unselected_images_and_collection_interest_local() {
     let keys = tempfile::tempdir().unwrap();
@@ -322,7 +335,47 @@ async fn explicit_file_image_push_keeps_unselected_images_and_collection_interes
         .await
         .unwrap()
         .is_empty());
-    sender.shutdown().await;
-    receiver.shutdown().await;
-    outsider.shutdown().await;
+    sender.shutdown().await.expect("node shutdown");
+    receiver.shutdown().await.expect("node shutdown");
+    outsider.shutdown().await.expect("node shutdown");
+}
+
+#[tokio::test]
+async fn protocol_allowlist_rejects_local_data_before_transport() {
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let admin = EmbeddedRemoteP2pAdmin::new(node);
+    for contract in crate::lean_vocab_test::lean_identity_contracts() {
+        for name in gents_protocol::schemas::ALL_COLLECTION_NAMES
+            .iter()
+            .copied()
+            .chain(["PackPrivateData"])
+        {
+            let allowed = contract
+                .replicated_protocol_collections
+                .iter()
+                .any(|collection| collection == name);
+            assert_eq!(
+                admin
+                    .require_protocol_collections(&[name.to_owned()])
+                    .is_ok(),
+                allowed,
+                "{name}"
+            );
+            if allowed {
+                continue;
+            }
+            for result in [
+                admin.add_p2p_collections(&[name.to_owned()]).await,
+                admin
+                    .add_replicator(&[], &[name.to_owned()], &PairingFilters::new())
+                    .await,
+                admin.sync_documents(name, &[], None).await,
+                admin.sync_branchable_collection(name, None).await,
+            ] {
+                assert!(
+                    matches!(result, Err(RemoteP2pAdminError::RuntimeLocalCollection(collection)) if collection == name)
+                );
+            }
+        }
+    }
 }

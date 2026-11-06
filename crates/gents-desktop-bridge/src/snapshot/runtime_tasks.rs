@@ -159,7 +159,7 @@ pub(crate) fn session_summaries(
             let mut openings = session_requests.iter().copied().filter(|candidate| {
                 opening_doc.is_some()
                     && candidate.doc_id.as_deref() == opening_doc
-                    && candidate.agent_id.as_deref() == Some(session.agent_id.as_str())
+                    && candidate.agent_did.as_deref() == Some(session.agent_did.as_str())
             });
             let opening = openings.next().filter(|_| openings.next().is_none());
             let trigger_owner = opening
@@ -208,7 +208,7 @@ pub(crate) fn session_summaries(
                     .and_then(|value| value.reply_preview.as_deref())
                     .map(session_reply_preview),
                 status: lifecycle.map(|state| state.as_str().to_owned()),
-                agent_id: Some(session.agent_id.clone()),
+                agent_did: Some(session.agent_did.clone()),
                 latest_request_id: request
                     .map(|request| request.request_id.clone())
                     .or_else(|| indexed.map(|indexed| indexed.request_id.clone())),
@@ -277,7 +277,7 @@ pub(super) fn task_run_histories(
             session.session_id.as_str(),
             session.requester_did.as_deref(),
             opening,
-            session.agent_id.as_str(),
+            session.agent_did.as_str(),
         );
         openings
             .entry(key)
@@ -294,7 +294,7 @@ pub(super) fn task_run_histories(
         if let (Some(session), Some(doc), Some(agent)) = (
             request.session_id.as_deref(),
             request.doc_id.as_deref(),
-            request.agent_id.as_deref(),
+            request.agent_did.as_deref(),
         ) {
             let key = (session, request.requester_did.as_deref(), doc, agent);
             if openings.contains_key(&key) {
@@ -316,7 +316,7 @@ pub(super) fn task_run_histories(
         if let (Some(session), Some(doc), Some(agent)) = (
             request.session_id.as_deref(),
             request.doc_id.as_deref(),
-            request.agent_id.as_deref(),
+            request.agent_did.as_deref(),
         ) {
             let key = (session, request.requester_did.as_deref(), doc, agent);
             if opening_request_counts.get(&key) == Some(&1) {
@@ -350,7 +350,7 @@ pub(super) fn task_run_histories(
                     node_did: node_did.to_owned(),
                     requester_did: request.requester_did.clone(),
                     session_id: normalize_optional(request.session_id.as_deref()),
-                    agent_id: request.agent_id.clone(),
+                    agent_did: request.agent_did.clone(),
                     lifecycle_state: request.lifecycle_state,
                     execution_origin: normalize_optional(request.execution_origin.as_deref()),
                     caused_by_trigger_id: normalize_optional(
@@ -438,14 +438,14 @@ type StarterEvidence = (gents::session::origin::SessionScope, String, String);
 
 fn starter_evidence(
     scope: gents::session::origin::SessionScope,
-    agent_id: &str,
+    agent_did: &str,
     provenance: Option<&gents_protocol::session::SessionProvenance>,
 ) -> Option<StarterEvidence> {
     let provenance = provenance?;
     provenance.creation_receipt.as_ref()?.starter.as_ref()?;
     Some((
         scope,
-        agent_id.to_owned(),
+        agent_did.to_owned(),
         serde_json::to_string(provenance).ok()?,
     ))
 }
@@ -478,7 +478,7 @@ pub(super) async fn resolve_summary_starters<'a, R>(
         };
         let Some(evidence) = starter_evidence(
             scope,
-            summary.agent_id.as_deref().unwrap_or_default(),
+            summary.agent_did.as_deref().unwrap_or_default(),
             summary.provenance.as_ref(),
         ) else {
             summary.started_by = None;
@@ -510,7 +510,7 @@ pub(super) async fn resolve_summary_starters<'a, R>(
                 for row in observed {
                     if let Some(evidence) = starter_evidence(
                         gents::session::origin::SessionScope::from(&row.session),
-                        &row.session.agent_id,
+                        &row.session.agent_did,
                         row.session.provenance.as_ref(),
                     ) {
                         known.insert(evidence, row.starter);

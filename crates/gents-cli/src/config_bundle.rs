@@ -38,22 +38,33 @@ async fn read_owned_config_bundle(
                 let mut has_documents = false;
                 for collection in Collection::ALL {
                     let name = collection.graphql_type();
-                    let (fields, _) = config_projection(collection, None)?;
-                    let response = txn
-                        .execute(&format!(
-                            "{{{name}(filter:{{node_did:{{_eq:\"{}\"}}}}) {{{}}}}}",
-                            escape_graphql_string(&owner),
-                            fields.join(" ")
-                        ))
-                        .await?;
-                    let rows = response
-                        .get("data")
-                        .and_then(|data| data.get(name))
-                        .and_then(Value::as_array)
-                        .with_context(|| format!("configuration query returned no {name} rows"))?;
+                    let rows = if collection == Collection::InferenceBackend {
+                        gents::store::config_client::list_inference_backends_in_txn(txn, &owner)
+                            .await?
+                            .into_iter()
+                            .map(serde_json::to_value)
+                            .collect::<std::result::Result<Vec<_>, _>>()?
+                    } else {
+                        let (fields, _) = config_projection(collection, None)?;
+                        let response = txn
+                            .execute(&format!(
+                                "{{{name}(filter:{{node_did:{{_eq:\"{}\"}}}}) {{{}}}}}",
+                                escape_graphql_string(&owner),
+                                fields.join(" ")
+                            ))
+                            .await?;
+                        response
+                            .get("data")
+                            .and_then(|data| data.get(name))
+                            .and_then(Value::as_array)
+                            .with_context(|| {
+                                format!("configuration query returned no {name} rows")
+                            })?
+                            .clone()
+                    };
                     let mut normalized = Vec::with_capacity(rows.len());
                     let mut identities = BTreeSet::new();
-                    for row in rows {
+                    for row in &rows {
                         let (_, document) = config_projection(collection, Some(row))?;
                         let document = document.context("canonical config projection missing")?;
                         anyhow::ensure!(

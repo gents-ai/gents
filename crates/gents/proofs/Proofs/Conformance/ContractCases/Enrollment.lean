@@ -8,6 +8,7 @@ open Enrollment
 
 private def requestAdmissionKindName : AgentRequestAdmissionKind → String
   | .enrollment => "enrollment"
+  | .client => "client"
   | .localSelf => "local-self"
   | .runtimeInternal => "runtime-internal"
   | .peer => "peer"
@@ -46,7 +47,7 @@ private def requestAdmissionCase (name : String)
   , triggerConfigDocumentBindingCurrent := observation.triggerConfigDocumentBindingCurrent
   , sourceDocumentBindingCurrent := observation.sourceDocumentBindingCurrent
   , targetPolicyAllows := observation.targetPolicyAllows
-  , peerAuthorityAllows := observation.peerAuthorityAllows
+  , nativeCreateAuthorized := observation.nativeCreateAuthorized
   , hopWithinBound := observation.hopWithinBound
   , expectedAdmitted := projectAgentRequestAdmission observation
   , expectedDisposition := requestAdmissionDispositionName
@@ -74,11 +75,44 @@ private def requestAdmissionBase (kind : AgentRequestAdmissionKind) :
   , triggerConfigDocumentBindingCurrent := false
   , sourceDocumentBindingCurrent := false
   , targetPolicyAllows := false
-  , peerAuthorityAllows := false
+  , nativeCreateAuthorized := false
   , hopWithinBound := true }
 
+private def clientRequestAdmission : AgentRequestAdmissionObservation :=
+  { requestAdmissionBase .client with
+      requesterMatchesTarget := false
+      signerMatchesTarget := false
+      signerMatchesIssuer := false
+      requesterMatchesSessionScope := true
+      currentApproval := false
+      exactGeneration := false
+      authorizationFresh := false }
+
+example : projectAgentRequestAdmission clientRequestAdmission = true := by native_decide
+
 def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
-  [ requestAdmissionCase "valid-current-enrollment" (requestAdmissionBase .enrollment)
+  [ requestAdmissionCase "client-without-enrollment" clientRequestAdmission
+  , requestAdmissionCase "client-in-agent-owned-session" { clientRequestAdmission with signerMatchesRequester := false }
+  , requestAdmissionCase "client-missing-atomically-created-session" { clientRequestAdmission with requesterMatchesSessionScope := false }
+  , requestAdmissionCase "client-changed-session-provenance" { clientRequestAdmission with requesterMatchesSessionScope := false }
+  , requestAdmissionCase "client-forged-signature" { clientRequestAdmission with signatureValid := false }
+  , requestAdmissionCase "client-mixed-branch-fields" { clientRequestAdmission with branchFieldsExact := false }
+  , requestAdmissionCase "client-tampered-payload" { clientRequestAdmission with signedFieldsMatch := false }
+  , requestAdmissionCase "client-hop-exceeds-bound" { clientRequestAdmission with hopWithinBound := false }
+  , requestAdmissionCase "valid-current-enrollment" (requestAdmissionBase .enrollment)
+  , requestAdmissionCase "same-node-agent-source-bound"
+      { requestAdmissionBase .localSelf with
+          requesterMatchesTarget := false
+          sourceBindingCurrent := true }
+  , requestAdmissionCase "same-node-agent-source-unbound"
+      { requestAdmissionBase .localSelf with
+          requesterMatchesTarget := false
+          sourceBindingCurrent := false }
+  , requestAdmissionCase "same-node-agent-source-wrong-signer"
+      { requestAdmissionBase .localSelf with
+          requesterMatchesTarget := false
+          sourceBindingCurrent := true
+          signerMatchesRequester := false }
   , requestAdmissionCase "revoked-enrollment"
       { requestAdmissionBase .enrollment with currentApproval := false }
   , requestAdmissionCase "expired-enrollment"
@@ -90,6 +124,8 @@ def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
   , requestAdmissionCase "valid-signed-local-self" (requestAdmissionBase .localSelf)
   , requestAdmissionCase "forged-local-self"
       { requestAdmissionBase .localSelf with signerMatchesRequester := false }
+  , requestAdmissionCase "local-self-absent-requester"
+      { requestAdmissionBase .localSelf with signerMatchesRequester := false, requesterMatchesTarget := false }
   , requestAdmissionCase "valid-runtime-local-control"
       { requestAdmissionBase .runtimeInternal with
           runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
@@ -119,20 +155,20 @@ def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
           targetPolicyAllows := true, requesterMatchesSessionScope := false }
   , requestAdmissionCase "valid-peer"
       { requestAdmissionBase .peer with
-          requesterMatchesTarget := false, peerAuthorityAllows := true }
+          requesterMatchesTarget := false, nativeCreateAuthorized := true }
   , requestAdmissionCase "peer-authority-denied"
       { requestAdmissionBase .peer with
-          requesterMatchesTarget := false, peerAuthorityAllows := false }
+          requesterMatchesTarget := false, nativeCreateAuthorized := false }
   , requestAdmissionCase "peer-same-node-is-not-peer"
       { requestAdmissionBase .peer with
-          requesterMatchesTarget := true, peerAuthorityAllows := true }
+          requesterMatchesTarget := true, nativeCreateAuthorized := true }
   , requestAdmissionCase "peer-forged-signer"
       { requestAdmissionBase .peer with
           signerMatchesRequester := false, requesterMatchesTarget := false
-          peerAuthorityAllows := true }
+          nativeCreateAuthorized := true }
   , requestAdmissionCase "peer-hop-exceeds-bound"
       { requestAdmissionBase .peer with
-          requesterMatchesTarget := false, peerAuthorityAllows := true
+          requesterMatchesTarget := false, nativeCreateAuthorized := true
           hopWithinBound := false }
   , requestAdmissionCase "local-self-hop-exceeds-bound"
       { requestAdmissionBase .localSelf with hopWithinBound := false }
@@ -208,28 +244,28 @@ def titleParentLink : AuxiliaryParentLink :=
 
 def titleParentEvidence : AuxiliaryParentEvidence :=
   { link := titleParentLink, nodeDid := "a"
-  , sessionId := "s", agentId := "b"
+  , sessionId := "s", agentDid := "b"
   , logicalBindingCurrent := true, physicalBindingCurrent := true }
 
 def titleRequest : AgentRequestSemantics :=
   { requestId := "t", purpose := .titleAudit
-  , targetNode := "a", requesterDid := "a"
-  , agentId := "b", sessionId := "s"
+  , targetNode := "a", requesterDid := "b"
+  , agentDid := "b", sessionId := "s"
   , content := "Generate a title", input := {}, createdAt := "2026-09-24T00:00:00Z"
   , triggerConfigDocumentId := "", retryFields := [], triggerFields := []
   , parentFields := auxiliaryParentFields titleParentLink, workspace := {} }
 
 def titleAdmissionUnsigned : AgentRequestAdmission :=
-  { kind := .runtimeInternal, signerDid := "a"
+  { kind := .runtimeInternal, signerDid := "b"
   , enrollmentRequestId := "", enrollmentRequestDigest := emptyDigest
   , enrollmentAdminDid := "", enrollmentAuthorizationSequence := 0
   , enrollmentAuthorizationExpiresAt := ""
-  , issuerDid := "a", sourceRequestId := titleParentLink.requestId
+  , issuerDid := "b", sourceRequestId := titleParentLink.requestId
   , runtimeSourceKind := .localControl
   , signedFields := [], signatureValid := true }
 
 def titleEvidence : RuntimeInternalEvidence :=
-  { sourceKind := .localControl, issuerDid := "a"
+  { sourceKind := .localControl, issuerDid := "b"
   , sourceRequestId := titleParentLink.requestId
   , targetNode := "a", targetRuntimeAttestationValid := true
   , sourceBindingCurrent := true, triggerConfigDocumentBindingCurrent := false
@@ -258,10 +294,10 @@ private def titleRequestAdmissionCase (name : String) (request : AgentRequestSem
   , runtimeEvidence := evidence, sessionAgent
   , expectedAdmitted := decide (agentRequestAdmissible ({} : Enrollment.State)
       request admission none none false evidence branchFieldsExact pendingDeadlineAbsent
-      ⟨false, CausalHop.defaultMaxRequestHop⟩)
+      { nativeCreateAuthorized := false, maxRequestHop := CausalHop.defaultMaxRequestHop })
   , expectedClaimable := decide (agentRequestClaimable ({} : Enrollment.State)
       request admission none none false evidence branchFieldsExact pendingDeadlineAbsent
-      ⟨false, CausalHop.defaultMaxRequestHop⟩ sessionAgent []
+      { nativeCreateAuthorized := false, maxRequestHop := CausalHop.defaultMaxRequestHop } sessionAgent []
       (fun _ => false) (fun _ => false))
   , expectedDisposition := auxiliaryPendingDisposition observationAvailable ({} : Enrollment.State)
       request admission evidence sessionAgent branchFieldsExact pendingDeadlineAbsent

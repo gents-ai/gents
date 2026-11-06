@@ -10,7 +10,7 @@ describe("durable goal transcript card", () => {
     const session: DesktopSessionSnapshot = {
       sessionId: "session-goal",
       nodeDid: "did:test:goal-node",
-      agentId: "default",
+      agentDid: "default",
       title: "goal session",
       previewText: "",
       status: "active",
@@ -55,7 +55,7 @@ describe("durable goal transcript card", () => {
     const session: DesktopSessionSnapshot = {
       sessionId: "session-goal-partial",
       nodeDid: "did:test:goal-node",
-      agentId: "default",
+      agentDid: "default",
       title: "goal session",
       previewText: "",
       status: "active",

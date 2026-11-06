@@ -2,7 +2,6 @@ use super::contract_tests::{persist_command, receipt};
 use super::*;
 use crate::goal::operator_resume::support::{execute, Fixture, SESSION};
 use crate::runtime::agent::p2p_reconcile::session_goal_control::process_command_at;
-use crate::store::config_client::ConfigAccess;
 use gents_protocol::goal_control::{GoalRevision, SESSION_GOAL_CONTROL_VERSION};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -70,18 +69,9 @@ struct Driver {
 impl Driver {
     async fn new(initial: &Value) -> Self {
         let fixture = Fixture::new_with_parent_state(&initial["goal"]["execution"], false).await;
-        execute(&fixture.node, &format!(r#"mutation {{ update_Goal(docID: "{}", input: {{ objective: "{}" }}) {{ _docID }} }}"#,
+        execute(&fixture.agent_access(), &format!(r#"mutation {{ update_Goal(docID: "{}", input: {{ objective: "{}" }}) {{ _docID }} }}"#,
             escape_graphql_string(&fixture.goal.doc_id), escape_graphql_string(initial["goal"]["objective"].as_str().unwrap()))).await;
-        crate::session::ensure_session_with_agent_id_and_requester_did(
-            &fixture.node,
-            SESSION,
-            fixture.identity.did(),
-            "contract-behavior",
-            Some(fixture.identity.did()),
-        )
-        .await
-        .unwrap();
-        let access = ConfigAccess::local(fixture.node.clone());
+        let access = fixture.user_access();
         let session = access
             .transact_readonly("test.goal_receipt_session", |txn| {
                 Box::pin(async {
@@ -96,15 +86,7 @@ impl Driver {
             .await
             .unwrap()
             .unwrap();
-        let current = crate::store::graphql::newest_document_composite_commit(
-            &fixture.node,
-            &fixture.goal.doc_id,
-            "test.goal_receipt_revision",
-        )
-        .await
-        .unwrap()
-        .unwrap()
-        .cid;
+        let current = fixture.goal_commit(&fixture.goal.doc_id).await.cid;
         Self {
             fixture,
             session_doc_id: session.doc_id,
@@ -126,9 +108,16 @@ impl Driver {
         let mut command = SessionGoalControl {
             version: SESSION_GOAL_CONTROL_VERSION,
             command_id: format!("receipt-command-{}", model.id),
-            requester_did: self.fixture.identity.did().into(),
+            requester_did: self.fixture.user.did().into(),
             requester_peer_id: None,
             node_did: self.fixture.identity.did().into(),
+            agent_did: self.fixture.parent.agent_did.clone(),
+            agent_doc_id: super::agent_document_for_test(
+                &self.fixture.user_access(),
+                self.fixture.identity.did(),
+                &self.fixture.parent.agent_did,
+            )
+            .await,
             session_id: SESSION.into(),
             session_doc_id: Some(self.session_doc_id.clone()),
             issued_at: stamp(model.issued_at).to_rfc3339(),
@@ -139,11 +128,12 @@ impl Driver {
             }),
             operation: model.operation.clone(),
             initial_request: None,
+            native_evidence: None,
             signature: Vec::new(),
         };
         command.signature = self
             .fixture
-            .identity
+            .user
             .sign(&command.signing_payload().unwrap())
             .await
             .unwrap();
@@ -160,7 +150,7 @@ impl Driver {
             );
             return (doc.clone(), command);
         }
-        let access = ConfigAccess::local(self.fixture.node.clone());
+        let access = self.fixture.user_access();
         let doc_id = persist_command(&access, &command).await;
         self.commands
             .insert(model.id, (model.digest, doc_id.clone(), command.clone()));
@@ -182,20 +172,26 @@ impl Driver {
         }
         assert_eq!(facts["control"]["unfinished_request"], true);
         let (doc_id, command) = self.command(command).await;
-        let access = ConfigAccess::local(self.fixture.node.clone());
+        let access = self.fixture.user_access();
         let previous = receipt(&access, &doc_id).await;
         let identity: Arc<dyn NodeIdentity> = self.fixture.identity.clone();
         assert_eq!(
-            process_command_at(&self.fixture.node, &identity, &doc_id, stamp(now))
-                .await
-                .unwrap(),
+            process_command_at(
+                &self.fixture.node,
+                &identity,
+                &doc_id,
+                &::identity::Did::new(&command.agent_did).unwrap(),
+                stamp(now)
+            )
+            .await
+            .unwrap(),
             None
         );
         let result = receipt(&access, &doc_id).await.unwrap();
         result.validate_for(&command).unwrap();
         assert!(identity
             .verify(
-                identity.did(),
+                &result.agent_did,
                 &result.signing_payload().unwrap(),
                 &result.signature
             )
@@ -204,15 +200,11 @@ impl Driver {
         if let Some(previous) = previous {
             assert_eq!(result, previous, "recorded receipts are read-only");
         }
-        let current = crate::store::graphql::newest_document_composite_commit(
-            &self.fixture.node,
-            &self.fixture.goal.doc_id,
-            "test.goal_receipt_after",
-        )
-        .await
-        .unwrap()
-        .unwrap()
-        .cid;
+        let current = self
+            .fixture
+            .goal_commit(&self.fixture.goal.doc_id)
+            .await
+            .cid;
         self.revisions.insert(next.to_owned(), current);
     }
 
@@ -222,9 +214,9 @@ impl Driver {
             .values()
             .map(|(_, id, _)| id.clone())
             .collect::<Vec<_>>();
-        ConfigAccess::local(self.fixture.node.clone()).transact_write("test.erase_goal_receipts", |txn| Box::pin(async {
+        self.fixture.agent_access().transact_write("test.erase_goal_receipts", |txn| Box::pin(async {
             for id in &ids {
-                txn.execute(&format!(r#"mutation {{ update_AgentSessionGoalControl(docID: "{}", input: {{ receipt_json: null }}) {{ _docID }} }}"#,
+                txn.execute(&format!(r#"mutation {{ delete_AgentSessionGoalReceipt(filter: {{ command_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
                     escape_graphql_string(id))).await?;
             }
             Ok::<_, anyhow::Error>(())
@@ -237,10 +229,7 @@ impl Driver {
             expected["goal"]["execution"],
             "{name}: execution"
         );
-        let goal = load_canonical_goal(&self.fixture.node, self.fixture.identity.did(), SESSION)
-            .await
-            .unwrap()
-            .unwrap();
+        let goal = self.fixture.current_goal().await;
         assert_eq!(
             goal.objective,
             expected["goal"]["objective"].as_str().unwrap(),
@@ -250,21 +239,13 @@ impl Driver {
             goal.doc_id, self.fixture.goal.doc_id,
             "{name}: goal identity"
         );
-        let current = crate::store::graphql::newest_document_composite_commit(
-            &self.fixture.node,
-            &goal.doc_id,
-            "test.goal_receipt_observe",
-        )
-        .await
-        .unwrap()
-        .unwrap()
-        .cid;
+        let current = self.fixture.goal_commit(&goal.doc_id).await.cid;
         assert_eq!(
             current,
             self.revisions[expected["goal"]["revision"]["composite"].as_str().unwrap()],
             "{name}: goal revision"
         );
-        let access = ConfigAccess::local(self.fixture.node.clone());
+        let access = self.fixture.agent_access();
         let documents = access
             .execute("{ Goal { _docID } AgentRequest { _docID } }")
             .await
@@ -327,13 +308,13 @@ async fn generated_goal_receipt_traces_preserve_results_and_reject_erased_stale_
             }
         }
         driver.assert_state(&case.before, &case.name).await;
-        let access = ConfigAccess::local(driver.fixture.node.clone());
-        let query = "{ AgentSessionGoalControl { _docID intent_json receipt_json } }";
+        let access = driver.fixture.user_access();
+        let query = "{ AgentSessionGoalControl { _docID intent_json } AgentSessionGoalReceipt { _docID receipt_json } }";
         let before = access.execute(query).await.unwrap();
         let command = driver.prepared_command(&case.command).await;
         let recovered = crate::goal::recover_session_goal_control(
             &access,
-            driver.fixture.identity.as_ref(),
+            driver.fixture.user.as_ref(),
             &command,
         )
         .await
@@ -368,6 +349,117 @@ async fn generated_goal_receipt_traces_preserve_results_and_reject_erased_stale_
             )
             .await;
         driver.assert_state(&case.expected, &case.name).await;
-        driver.fixture.node.shutdown().await;
+        driver.fixture.node.shutdown().await.expect("node shutdown");
+    }
+}
+
+#[tokio::test]
+async fn modeled_publication_retries_pending_receipt_relationships() {
+    let snapshot = gents_lean_contract::load_contract_snapshot::<Value>().unwrap();
+    let seed: Case =
+        serde_json::from_value(snapshot["goal_client_receipt_cases"][0].clone()).unwrap();
+    for trace in snapshot["identity_publication_cases"].as_array().unwrap() {
+        let mut driver = Driver::new(&seed.initial).await;
+        let (command_doc, command) = driver.command(&seed.command).await;
+        let node = &driver.fixture.node;
+        let actor = ::identity::Did::new(&command.agent_did).unwrap();
+        let agent_access = driver.fixture.agent_access();
+        let user_access = driver.fixture.user_access();
+        let signer = driver.fixture.agent.clone();
+        let mut result = gents_protocol::goal_control::SessionGoalControlReceipt {
+            version: SESSION_GOAL_CONTROL_VERSION,
+            command_id: command.command_id.clone(),
+            command_digest: command.computed_digest().unwrap(),
+            requester_did: command.requester_did.clone(),
+            node_did: command.node_did.clone(),
+            agent_did: command.agent_did.clone(),
+            session_id: command.session_id.clone(),
+            outcome: GoalControlOutcome::Rejected {
+                reason: "fixture".into(),
+            },
+            processed_at: stamp(seed.now).to_rfc3339(),
+            signature: Vec::new(),
+        };
+        result.signature = signer
+            .sign(&result.signing_payload().unwrap())
+            .await
+            .unwrap();
+        let written = agent_access.transact_write("test.goal_pending_receipt", |txn| {
+            let command_doc = &command_doc;
+            let command = &command;
+            let result = &result;
+            Box::pin(async move {
+                txn.execute_with_variables(
+                    "mutation($input: AgentSessionGoalReceiptMutationInputArg!) { create_AgentSessionGoalReceipt(input: $input) { _docID } }",
+                    &serde_json::json!({"input": {"command_doc_id": command_doc, "command_id": command.command_id,
+                        "receipt_json": serde_json::to_string(result)?, "relationships_pending": true}}),
+                ).await
+            })
+        }).await.unwrap();
+        let receipt_doc =
+            crate::store::graphql::created_doc_id(&written, "AgentSessionGoalReceipt").unwrap();
+        let query = format!(
+            r#"{{ AgentSessionGoalReceipt(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ relationships_pending }} }}"#,
+            escape_graphql_string(&receipt_doc)
+        );
+        assert_eq!(
+            agent_access.execute(&query).await.unwrap()["data"]["AgentSessionGoalReceipt"][0]
+                ["relationships_pending"],
+            trace["initial"]["pending"]
+        );
+        assert!(
+            user_access.execute(&query).await.unwrap()["data"]["AgentSessionGoalReceipt"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        for step in trace["steps"].as_array().unwrap() {
+            if step["parent_ok"] == true && step["reader_ok"] != true {
+                agent_access
+                    .add_resource_relationship(
+                        "AgentSessionGoalReceipt",
+                        &receipt_doc,
+                        "parent",
+                        "goal_controls",
+                        &command_doc,
+                    )
+                    .await
+                    .unwrap();
+            }
+            if step["parent_ok"] == true && step["reader_ok"] == true {
+                let identity: Arc<dyn NodeIdentity> = driver.fixture.identity.clone();
+                process_command_at(node, &identity, &command_doc, &actor, stamp(seed.now))
+                    .await
+                    .unwrap();
+            }
+            if step["revoke_parent"] == true {
+                agent_access
+                    .delete_resource_relationship(
+                        "AgentSessionGoalReceipt",
+                        &receipt_doc,
+                        "parent",
+                        "goal_controls",
+                        &command_doc,
+                    )
+                    .await
+                    .unwrap();
+            }
+            let agent_rows = agent_access.execute(&query).await.unwrap();
+            assert_eq!(
+                agent_rows["data"]["AgentSessionGoalReceipt"][0]["relationships_pending"],
+                step["after"]["pending"],
+                "{}",
+                trace["name"]
+            );
+            let visible = !user_access.execute(&query).await.unwrap()["data"]
+                ["AgentSessionGoalReceipt"]
+                .as_array()
+                .unwrap()
+                .is_empty();
+            let expected =
+                step["after"]["parent_granted"] == true || step["after"]["reader_granted"] == true;
+            assert_eq!(visible, expected, "{}", trace["name"]);
+        }
+        node.shutdown().await.expect("node shutdown");
     }
 }

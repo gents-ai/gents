@@ -11,7 +11,7 @@ struct ToolCallRow {
     cancel_cause: Option<String>,
 }
 
-async fn wait_for_running_tool(node: &gents::defra_node::EmbeddedNode, session_id: &str) -> String {
+async fn wait_for_running_tool(node: &gents::defra_node::Node, session_id: &str) -> String {
     let session_id = gents::store::graphql::escape_graphql_string(session_id);
     for _ in 0..100 {
         let response = node
@@ -44,6 +44,7 @@ struct MessageRow {
 struct CrashWorkerReady {
     data_path: std::path::PathBuf,
     node_did: String,
+    agent_binding: gents_protocol::agent_identity::AgentIdentityBinding,
     session_id: String,
     tool_call_id: String,
 }
@@ -57,13 +58,14 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
         .unwrap();
     let db = test_db_in(data_dir).await;
     let node_did = db.node_identity.did().to_string();
-    let agent_id = "r6-background-recovery";
+    let (agent_identity, agent_binding) = crate::support::managed_agent_with_binding(&db).await;
+    let agent_did = agent_identity.did();
     let session_id = "r6-recovery-session";
     let spec = AcceptedTurnSpec {
         backend_id: "r6-recovery-backend",
         model: "test-model",
-        parent_agent_id: agent_id,
-        configured_agent_ids: &[agent_id],
+        parent_agent_did: agent_did,
+        configured_agent_dids: &[agent_did],
         request_id: "r6-recovery-parent",
         session_id,
         prompt: "start recovery background process",
@@ -84,10 +86,10 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
     configure_agent_tools(
         &db.node,
         &node_did,
-        agent_id,
+        agent_did,
         None,
         gents::documents::Tools {
-            tools_id: format!("{agent_id}:tools"),
+            tools_id: format!("{agent_did}:tools"),
             node_did: node_did.clone(),
             host: Some(gents::documents::HostTools {
                 bash: Some(gents::documents::BashTools {
@@ -142,6 +144,7 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
     let ready = CrashWorkerReady {
         data_path: db.data_path().to_path_buf(),
         node_did,
+        agent_binding,
         session_id: session_id.to_string(),
         tool_call_id,
     };
@@ -151,7 +154,7 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
     std::future::pending::<()>().await;
 }
 
-async fn load_tool_call(node: &gents::defra_node::EmbeddedNode, tool_call_id: &str) -> ToolCallRow {
+async fn load_tool_call(node: &gents::defra_node::Node, tool_call_id: &str) -> ToolCallRow {
     let tool_call_id = gents::store::graphql::escape_graphql_string(tool_call_id);
     let query = format!(
         r#"{{
@@ -164,10 +167,7 @@ async fn load_tool_call(node: &gents::defra_node::EmbeddedNode, tool_call_id: &s
     first_row(&node.execute(&query).await, "AgentToolCall")
 }
 
-async fn load_messages(
-    node: &gents::defra_node::EmbeddedNode,
-    session_id: &str,
-) -> Vec<MessageRow> {
+async fn load_messages(node: &gents::defra_node::Node, session_id: &str) -> Vec<MessageRow> {
     let session_id = gents::store::graphql::escape_graphql_string(session_id);
     let query = format!(
         r#"{{
@@ -224,10 +224,7 @@ async fn load_messages(
     messages
 }
 
-async fn load_wakes(
-    node: &gents::defra_node::EmbeddedNode,
-    session_id: &str,
-) -> Vec<serde_json::Value> {
+async fn load_wakes(node: &gents::defra_node::Node, session_id: &str) -> Vec<serde_json::Value> {
     let session_id = gents::store::graphql::escape_graphql_string(session_id);
     let query = format!(
         r#"{{
@@ -310,8 +307,11 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
         ready.node_did,
         "persisted crash-worker key must retain the exact node principal"
     );
+    let agent_identity =
+        gents::store::identity::resolve_agent_identity(&reopened_identity, &ready.agent_binding)
+            .expect("reload crashed worker's managed Agent identity");
     let node = std::sync::Arc::new(
-        gents::defra_node::EmbeddedNode::builder()
+        gents::defra_node::Node::builder()
             .data_path(&ready.data_path)
             .with_node_identity_did(&ready.node_did)
             .build()
@@ -340,6 +340,7 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
     let report = gents::tools::call::lifecycle::ToolCallLifecycle::recover_all_with_executions(
         &node,
         &ready.node_did,
+        std::slice::from_ref(&agent_identity),
         &executions,
     )
     .await

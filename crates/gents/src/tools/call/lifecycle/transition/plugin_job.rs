@@ -2,7 +2,7 @@ use gents_protocol::job::{JobPauseReason, JobState};
 
 use super::super::delivery::{TerminalFields, TerminalJobProgress};
 use super::*;
-use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
+use crate::store::config_client::{ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::tools::background::job::records::{read_progress, read_step_state, HostProgressFacts};
 
 /// A plugin job terminal written in a caller's transaction, applied to the
@@ -51,23 +51,23 @@ impl ToolCallLifecycle {
         reason: Option<&str>,
         progress: Option<(JobState, Option<JobPauseReason>, Option<String>)>,
     ) -> Result<bool> {
-        let terminal = ConfigAccess::transact_local_idempotent(
-            &self.node,
-            None,
-            IdempotentTransactionRetry::Standard,
-            "tool_call.settle_plugin_job",
-            |txn| {
-                Box::pin(self.settle_plugin_job_row_in_txn(
-                    txn,
-                    state,
-                    output,
-                    reason,
-                    progress.clone(),
-                    false,
-                ))
-            },
-        )
-        .await?;
+        let terminal = self
+            .access()?
+            .transact_idempotent(
+                IdempotentTransactionRetry::Standard,
+                "tool_call.settle_plugin_job",
+                |txn| {
+                    Box::pin(self.settle_plugin_job_row_in_txn(
+                        txn,
+                        state,
+                        output,
+                        reason,
+                        progress.clone(),
+                        false,
+                    ))
+                },
+            )
+            .await?;
         self.finish_plugin_job_row(terminal).await
     }
 
@@ -188,6 +188,7 @@ impl ToolCallLifecycle {
             };
             crate::tools::background::completion::append_background_tool_completion(
                 &self.node,
+                &self.access()?,
                 &self.session_id,
                 &calling_request_id,
                 &doc_id,

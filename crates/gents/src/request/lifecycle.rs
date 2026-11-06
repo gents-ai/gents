@@ -1,7 +1,19 @@
+mod client;
+#[cfg(test)]
+pub(crate) use client::stage_request_relationships_in_txn;
+pub(crate) use client::{
+    bind_client_targets_in_txn, complete_client_request_relationships,
+    ensure_request_session_in_txn, recover_delegated_client_request_relationships_with_access,
+    stage_client_request_in_txn, stage_pending_child_request_in_txn, stage_runtime_request_in_txn,
+};
+pub use client::{
+    build_signed_client_request, build_signed_client_request_in_txn, reconcile_client_request,
+    reconcile_client_retry, reserve_goal_session, submit_client_request, ClientSubmissionError,
+};
 use std::sync::Arc;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use crate::request::watcher::AgentRequest;
@@ -16,6 +28,8 @@ mod execution_renewal;
 #[cfg(test)]
 pub(crate) use execution_renewal::renew_once_at as renew_execution_lease_once_at;
 #[cfg(test)]
+pub(crate) use execution_renewal::renew_once_at_with_access as renew_execution_lease_once_at_with_access;
+#[cfg(test)]
 pub(crate) use execution_renewal::renew_with_recheck_at;
 #[cfg(test)]
 pub(crate) use execution_renewal::{renew_in_transaction, RenewalAttemptOutcome};
@@ -24,9 +38,11 @@ pub(crate) use terminal_binding::is_exact_invocation_reply;
 mod terminal_tools;
 pub use crate::triggers::engine::durable::request_arrival_order;
 #[cfg(test)]
-pub(crate) use execution_lease::revoke_execution_preserving_output_at;
+pub(crate) use execution_lease::revoke_execution_preserving_output_at_with_access;
 #[cfg(test)]
 pub(crate) use execution_lease::terminalize_owned_at;
+#[cfg(test)]
+pub(crate) use execution_lease::terminalize_owned_at_with_access;
 pub(crate) use execution_lease::{ExecutionOwnershipLost, RequestExecutionLease};
 pub use execution_lease::{RequestTerminalOutcome, TerminalizeResult};
 pub(crate) use gents_loop::execution_policy;
@@ -42,8 +58,8 @@ pub(crate) mod queue;
 mod recovery;
 #[cfg(test)]
 pub(crate) use recovery::{
-    recover_expired_generation_with_facts, RecoveryResult, RecoverySelectionChoice,
-    RecoverySelectionRejected,
+    recover_expired_generation_with_access_for_test, recover_expired_generation_with_facts,
+    RecoveryResult, RecoverySelectionChoice, RecoverySelectionRejected,
 };
 mod task_title;
 #[cfg(test)]
@@ -59,18 +75,19 @@ pub use materialize::{
     build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
     build_signed_request, next_request_hop, request_hop_within_bound, task_fire_key,
     write_task_delivery, write_task_delivery_local, EnqueuedAgentRequest, ParentLink,
-    RequestHopCause, RequestIdentity, RequestSigner, RequestSpec, RetryLink, TaskDeliveryAdmission,
+    RequestHopCapObservation, RequestHopCause, RequestIdentity, RequestSigner, RequestSpec,
+    RetryLink, TaskDeliveryAdmission,
 };
 pub(crate) use materialize::{
     build_session_message_request,
-    write_pending_agent_request_with_lineage_workspace_and_conversation_title,
-    write_trigger_delivery, SessionMessageCause, SessionMessageTarget,
+    write_pending_agent_request_with_lineage_workspace_and_conversation_title, SessionMessageCause,
+    SessionMessageTarget,
 };
 pub use queue::enqueue_local_steering_request;
 pub use queue::validate_position as validate_queue_position;
 pub use queue::{
-    pending_steer_edit, submit_pending_user_edit, submit_pending_user_steer, PendingMessageEdit,
-    PendingQueueEdit, PendingQueueReceipt,
+    pending_steer_edit, publish_edit_command, submit_pending_user_edit, submit_pending_user_steer,
+    PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt,
 };
 pub use queue::{
     pending_user_queue, pending_user_queue_projection, PendingQueueEntry, PendingQueueProjection,
@@ -322,17 +339,19 @@ pub enum ClaimOutcome {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ClaimAdmissionError {
+    #[error("request authorization denied")]
+    AuthorizationDenied,
     #[error("mailbox reply {item_id} rejected: {reason}")]
     MailboxReplyRejected { item_id: String, reason: String },
     #[error("session {session_id} requester scope mismatch: {reason}")]
     SessionScopeMismatch { session_id: String, reason: String },
     #[error(
-        "session {session_id} is pinned to agent {existing_agent_id} and cannot switch to {requested_agent_id}"
+        "session {session_id} is pinned to agent {existing_agent_did} and cannot switch to {requested_agent_did}"
     )]
     SessionAgentMismatch {
         session_id: String,
-        existing_agent_id: String,
-        requested_agent_id: String,
+        existing_agent_did: String,
+        requested_agent_did: String,
     },
 }
 
@@ -522,7 +541,8 @@ impl TriggerExecutionContext {
 
 pub struct RequestLifecycle {
     node: Arc<EmbeddedNode>,
-    agent_id: String,
+    agent_did: String,
+    agent_signer: Option<crate::store::identity::ManagedAgentSigner>,
     execution_origin: ExecutionOrigin,
     backend_id: String,
     failure_reason: Option<String>,
@@ -537,12 +557,58 @@ pub struct RequestLifecycle {
     execution_lease: Option<RequestExecutionLease>,
     execution_lease_duration_secs: u64,
     renewal_task: Option<execution_renewal::RenewalTask>,
+    client_claim_admission: Option<crate::request::admission::ClientClaimAdmission>,
+    steering_admission: Option<(
+        crate::request::admission::AgentRequestAdmissionVerifier,
+        Arc<dyn crate::store::identity::NodeIdentity>,
+    )>,
     fold_admitted: Vec<String>,
     folded_selection: Vec<queue::FoldedInput>,
     natural_finish_allowed: bool,
 }
 
 impl RequestLifecycle {
+    #[cfg(test)]
+    pub(crate) fn managed_agent_signer(
+        &self,
+    ) -> Option<crate::store::identity::ManagedAgentSigner> {
+        self.agent_signer.clone()
+    }
+    pub fn bind_managed_agent(
+        &mut self,
+        identity: &dyn crate::store::identity::NodeIdentity,
+    ) -> Result<()> {
+        let signer = identity
+            .managed_agent_signer()
+            .ok_or(crate::store::config_client::ConfigClientError::ManagedAgentSignerRequired)?;
+        anyhow::ensure!(
+            self.agent_did == identity.did() && self.agent_did == signer.did(),
+            "request actor differs from managed Agent signer"
+        );
+        crate::ConfigAccess::local_managed_agent(
+            self.node.clone(),
+            ::identity::Did::new(&self.agent_did)?,
+            identity,
+        )?;
+        self.agent_signer = Some(signer);
+        Ok(())
+    }
+
+    pub(crate) fn access(&self) -> Result<crate::ConfigAccess> {
+        let actor = self.actor_did()?;
+        match &self.agent_signer {
+            Some(signer) => Ok(crate::ConfigAccess::local_with_agent_signer(
+                self.node.clone(),
+                actor,
+                signer.clone(),
+            )?),
+            None => Ok(crate::ConfigAccess::local_as(self.node.clone(), actor)),
+        }
+    }
+    pub(crate) fn actor_did(&self) -> Result<identity::Did> {
+        identity::Did::new(self.agent_did.clone()).map_err(Into::into)
+    }
+
     pub(crate) fn allow_natural_finish(&mut self, allowed: bool) {
         self.natural_finish_allowed = allowed;
     }
@@ -551,6 +617,35 @@ impl RequestLifecycle {
     }
     pub(crate) fn natural_finish_completed(&self) -> bool {
         self.natural_finish_allowed && self.state == LocalLifecycleState::Completed
+    }
+
+    pub(crate) fn set_client_claim_admission(
+        &mut self,
+        admission: Option<crate::request::admission::ClientClaimAdmission>,
+    ) {
+        assert_eq!(self.state, LocalLifecycleState::Pending);
+        self.client_claim_admission = admission;
+    }
+
+    pub(crate) fn set_steering_admission(
+        &mut self,
+        verifier: crate::request::admission::AgentRequestAdmissionVerifier,
+        agent: Arc<dyn crate::store::identity::NodeIdentity>,
+    ) {
+        assert_eq!(self.state, LocalLifecycleState::Pending);
+        assert_eq!(self.agent_did, agent.did());
+        self.steering_admission = Some((verifier, agent));
+    }
+
+    pub(crate) fn steering_admission(
+        &self,
+    ) -> Option<(
+        &crate::request::admission::AgentRequestAdmissionVerifier,
+        &dyn crate::store::identity::NodeIdentity,
+    )> {
+        self.steering_admission
+            .as_ref()
+            .map(|(verifier, agent)| (verifier, agent.as_ref()))
     }
 
     /// Pending requests whose signed admission the caller verified for this
@@ -675,40 +770,6 @@ mod tests {
         assert_lean_contract_vocabulary_matches, assert_state_machine_contract_is_complete,
         lean_state_machine_contract, LeanContractVocabulary,
     };
-    use sha2::{Digest, Sha512};
-
-    struct MaterializationTestIdentity;
-
-    #[async_trait::async_trait]
-    impl crate::store::identity::NodeIdentity for MaterializationTestIdentity {
-        fn did(&self) -> &str {
-            "did:test:test"
-        }
-
-        async fn sign(
-            &self,
-            payload: &[u8],
-        ) -> Result<Vec<u8>, crate::store::identity::IdentityError> {
-            Ok(Sha512::digest(payload).to_vec())
-        }
-
-        async fn verify(
-            &self,
-            did: &str,
-            payload: &[u8],
-            signature: &[u8],
-        ) -> Result<bool, crate::store::identity::IdentityError> {
-            Ok(did == self.did() && signature == Sha512::digest(payload).as_slice())
-        }
-
-        fn service_account(&self) -> Option<&crate::store::identity::ServiceAccount> {
-            None
-        }
-    }
-
-    fn materialization_identity() -> Arc<dyn crate::store::identity::NodeIdentity> {
-        Arc::new(MaterializationTestIdentity)
-    }
 
     #[test]
     fn rust_request_lifecycle_state_vocabulary_matches_lean_model() {
@@ -885,20 +946,36 @@ mod tests {
 
     #[tokio::test]
     async fn error_response_terminalizes_an_existing_streaming_response() {
+        use crate::store::identity::NodeIdentity as _;
         let tempdir = tempfile::tempdir().unwrap();
+        let root = Arc::new(
+            crate::store::identity::KeyIdentity::load_or_create(
+                tempdir.path().join("node.key"),
+                None,
+            )
+            .unwrap(),
+        );
         let node = Arc::new(
             crate::test_support::node_builder()
                 .data_path(tempdir.path())
+                .with_node_identity_did(root.did())
                 .build()
                 .await
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        crate::test_support::install_test_agent(&node, "did:test:test", "default").await;
+        let root_did = escape_graphql_string(root.did());
+        crate::ConfigAccess::local(node.clone()).write("test.lifecycle.node", &format!(r#"mutation {{ create_Node(input: {{node_did: "{root_did}", display_name: "fixture", enabled: true}}) {{ _docID }} }}"#)).await.unwrap();
+        let binding = crate::store::identity::provision_agent_identity(root.as_ref()).unwrap();
+        crate::test_support::install_test_agent_binding(&node, root.did(), "default", &binding)
+            .await;
+        let agent =
+            crate::store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
         let mut lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
             node.clone(),
-            "default",
-            materialization_identity(),
+            agent.did(),
+            root.clone(),
+            agent.clone(),
             "hello",
             60,
             ExecutionOrigin::Interactive,
@@ -907,11 +984,12 @@ mod tests {
         )
         .await
         .unwrap();
-        let writer = crate::request::streaming::DefraStreamWriter::new(
+        let writer = crate::request::streaming::DefraStreamWriter::new_managed(
             node.clone(),
-            "did:test:test",
+            agent.as_ref(),
             std::time::Duration::ZERO,
-        );
+        )
+        .unwrap();
         lifecycle.begin_owned_execution(&writer).await.unwrap();
         let request_doc_id = lifecycle.request().doc_id.clone();
         lifecycle

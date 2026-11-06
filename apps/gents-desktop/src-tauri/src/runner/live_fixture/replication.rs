@@ -1,19 +1,19 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use gents_desktop_core::client::{
-    subscribed_collection_names, ClientCore, DesktopPaths, PeerRecord,
-};
+use defra_p2p_adapter::P2POperations;
+use gents_desktop_core::client::{ClientCore, DesktopPaths, PeerRecord};
 
 use super::agent::LiveAgentDocs;
 
-pub(super) async fn wait_for_connectable_iroh_addr(
-    core: &ClientCore,
+pub(super) async fn wait_for_runtime_iroh_addr(
+    p2p: &Arc<dyn P2POperations>,
     label: &str,
 ) -> Result<String> {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        let addrs = core.p2p().listen_addresses().await?;
+        let addrs = p2p.listen_addresses().await?;
         if let Some(addr) = addrs
             .iter()
             .find(|addr| addr.contains("/p2p/") || addr.starts_with("endpoint"))
@@ -27,15 +27,14 @@ pub(super) async fn wait_for_connectable_iroh_addr(
     }
 }
 
-pub(super) async fn configure_live_replicators(
+pub(super) async fn connect_runtime_peer(
     desktop_core: &ClientCore,
-    remote_core: &ClientCore,
+    runtime_p2p: &Arc<dyn P2POperations>,
     label: &str,
 ) -> Result<()> {
-    let desktop_addr = wait_for_connectable_iroh_addr(desktop_core, "desktop").await?;
-    let remote_addr = wait_for_connectable_iroh_addr(remote_core, label).await?;
-    let desktop_peer_id = desktop_core.local_peer_id().to_string();
-    let remote_peer_id = remote_core.local_peer_id().to_string();
+    let desktop_addr = wait_for_runtime_iroh_addr(desktop_core.p2p(), "desktop").await?;
+    let remote_addr = wait_for_runtime_iroh_addr(runtime_p2p, label).await?;
+    let remote_peer_id = runtime_p2p.local_peer_id().await?;
 
     connect_peer_with_retry(
         desktop_core,
@@ -44,27 +43,7 @@ pub(super) async fn configure_live_replicators(
         &format!("desktop -> {label}"),
     )
     .await?;
-    connect_peer_with_retry(
-        remote_core,
-        &desktop_addr,
-        &desktop_peer_id,
-        &format!("{label} -> desktop"),
-    )
-    .await?;
-    set_replicator_with_retry(
-        remote_core,
-        &desktop_addr,
-        &format!("{label} -> desktop replicator"),
-        subscribed_collection_names(),
-    )
-    .await?;
-    set_replicator_with_retry(
-        desktop_core,
-        &remote_addr,
-        &format!("desktop -> {label} replicator"),
-        subscribed_collection_names(),
-    )
-    .await?;
+    runtime_p2p.connect_peer(&desktop_addr).await?;
     Ok(())
 }
 
@@ -152,36 +131,6 @@ pub(super) async fn wait_for_ready_peer_status(
     }
 }
 
-async fn set_replicator_with_retry(
-    core: &ClientCore,
-    addr: &str,
-    label: &str,
-    collections: Vec<&'static str>,
-) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        match core
-            .p2p()
-            .add_replicator(
-                collections.iter().map(|name| (*name).to_owned()).collect(),
-                Some(addr),
-                Default::default(),
-                Vec::new(),
-                None,
-            )
-            .await
-        {
-            Ok(()) => return Ok(()),
-            Err(error) => {
-                if Instant::now() >= deadline {
-                    anyhow::bail!("timed out configuring {label}: {error}");
-                }
-                tokio::time::sleep(Duration::from_millis(250)).await;
-            }
-        }
-    }
-}
-
 pub(super) fn write_peer_directory_records(
     paths: &DesktopPaths,
     records: &[PeerRecord],
@@ -202,17 +151,17 @@ pub(super) async fn wait_for_live_documents(
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
-        desktop_core.refresh_store().await?;
+        desktop_core.refresh_node(node_did).await?;
         let snapshot = desktop_core.store().snapshot();
         let has_node = snapshot.nodes.iter().any(|row| row.node_did == node_did);
         let has_agent = snapshot
             .agents
             .iter()
-            .any(|row| row.agent_id == docs.agent_id);
+            .any(|row| row.agent_did == docs.agent_did);
         let has_target_agent = snapshot
             .agents
             .iter()
-            .any(|row| row.agent_id == docs.target_agent_id);
+            .any(|row| row.agent_did == docs.target_agent_did);
         let has_tools = snapshot
             .tools
             .iter()
@@ -242,7 +191,7 @@ pub(super) async fn wait_for_live_documents(
         }
 
         if Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for live documents to replicate to desktop");
+            anyhow::bail!("timed out waiting for live documents from runtime");
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

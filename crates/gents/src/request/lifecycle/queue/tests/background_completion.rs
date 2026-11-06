@@ -31,8 +31,8 @@ async fn background_wakes_and_goal_continuations_keep_the_project_directory() {
         )
         .await
         .unwrap();
-    let wake = crate::request::binding::load_agent_request_by_doc_id(
-        &db.node,
+    let wake = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &db.agent_access,
         &enqueued.request.unwrap().doc_id,
     )
     .await
@@ -41,7 +41,7 @@ async fn background_wakes_and_goal_continuations_keep_the_project_directory() {
     assert_eq!(wake.input.cwd.as_deref(), Some(cwd.as_str()));
     let goal = prepare_goal_continuation(
         &wake,
-        TEST_AGENT_ID.into(),
+        db.agent_did().into(),
         "goal",
         "continue",
         1,
@@ -73,7 +73,7 @@ async fn desktop_owned_session(
         "desktop-parent",
         db.node_did(),
         desktop.did(),
-        TEST_AGENT_ID,
+        db.agent_did(),
         session_id,
         "run work",
         "interactive",
@@ -98,12 +98,12 @@ async fn desktop_owned_session(
         .unwrap();
     let writer = crate::request::streaming::DefraStreamWriter::new(
         db.node.clone(),
-        db.node_did(),
+        db.agent_did(),
         std::time::Duration::ZERO,
     );
     let mut parent_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
-        TEST_AGENT_ID,
+        db.agent_did(),
         db.node_did(),
         parent.clone(),
         60,
@@ -126,11 +126,11 @@ async fn desktop_owned_session(
         )
         .await
         .unwrap();
-    session::ensure_session_with_agent_id_and_requester_did(
+    session::ensure_session_with_agent_did_and_requester_did(
         &db.node,
         session_id,
         db.node_did(),
-        TEST_AGENT_ID,
+        db.agent_did(),
         Some(desktop.did()),
     )
     .await
@@ -153,7 +153,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         let mutation = if source == QueueSource::Goal {
             let mut continuation = prepare_goal_continuation(
                 &parent,
-                TEST_AGENT_ID.into(),
+                db.agent_did().into(),
                 "goal",
                 "continue",
                 1,
@@ -162,7 +162,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
                 parent.request_hop,
             )
             .unwrap();
-            crate::sign_agent_request_create(db.identity.as_ref(), &mut continuation)
+            crate::sign_agent_request_create(db.agent_identity.as_ref(), &mut continuation)
                 .await
                 .unwrap();
             continuation.graphql_mutation().unwrap()
@@ -170,7 +170,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             session_request_create_mutation(
                 &parent,
                 SessionRequestFields {
-                    agent_id: TEST_AGENT_ID,
+                    agent_did: db.agent_did(),
                     content: "continue",
                     execution_origin: ExecutionOrigin::Scheduled,
                     input: RequestInput {
@@ -201,7 +201,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         assert_eq!(request.requester_did.as_deref(), Some(desktop.did()));
         let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
             db.node.clone(),
-            TEST_AGENT_ID,
+            db.agent_did(),
             db.node_did(),
             request.clone(),
             60,
@@ -232,7 +232,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         let next = session_request_create_mutation(
             &request,
             SessionRequestFields {
-                agent_id: TEST_AGENT_ID,
+                agent_did: db.agent_did(),
                 content: "second-hop",
                 execution_origin: ExecutionOrigin::Scheduled,
                 input: wake_queue_input(hints(QueueSource::Steering, QueuePolicy::Append)),
@@ -251,7 +251,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             .unwrap();
         let mut second_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
             db.node.clone(),
-            TEST_AGENT_ID,
+            db.agent_did(),
             db.node_did(),
             second,
             60,
@@ -282,7 +282,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         let forged = session_request_create_mutation(
             &request,
             SessionRequestFields {
-                agent_id: TEST_AGENT_ID,
+                agent_did: db.agent_did(),
                 content: "signed-original",
                 execution_origin: ExecutionOrigin::Scheduled,
                 input: wake_queue_input(hints(QueueSource::Steering, QueuePolicy::Append)),
@@ -301,13 +301,13 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             .unwrap()
             .unwrap();
         let error = admission_verifier(&db)
-            .verify_fresh(&forged, TEST_AGENT_ID)
+            .verify_fresh(&forged, db.agent_did())
             .await
             .unwrap_err();
         assert!(error.is_denied(), "{error:#}");
         let mut forged_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
             db.node.clone(),
-            TEST_AGENT_ID,
+            db.agent_did(),
             db.node_did(),
             forged,
             60,
@@ -344,7 +344,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             .unwrap();
         let mut followup_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
             db.node.clone(),
-            TEST_AGENT_ID,
+            db.agent_did(),
             db.node_did(),
             followup,
             60,
@@ -368,7 +368,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         let bad = session_request_create_mutation(
             &foreign_parent,
             SessionRequestFields {
-                agent_id: TEST_AGENT_ID,
+                agent_did: db.agent_did(),
                 content: "bad",
                 execution_origin: ExecutionOrigin::Scheduled,
                 input: wake_queue_input(hints(QueueSource::Steering, QueuePolicy::Append)),
@@ -381,11 +381,11 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         .unwrap();
         let response = db.node.execute(&bad).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        session::ensure_session_with_agent_id_and_requester_did(
+        session::ensure_session_with_agent_did_and_requester_did(
             &db.node,
             "other-session",
             db.node_did(),
-            TEST_AGENT_ID,
+            db.agent_did(),
             Some(desktop.did()),
         )
         .await
@@ -395,7 +395,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             .unwrap()
             .unwrap();
         let error = admission_verifier(&db)
-            .verify_fresh(&bad, TEST_AGENT_ID)
+            .verify_fresh(&bad, db.agent_did())
             .await
             .unwrap_err();
         assert!(error.is_denied(), "{error:#}");
@@ -440,12 +440,12 @@ async fn a_returned_result_is_admitted_into_a_paired_client_session() {
     assert_eq!(wake.requester_did.as_deref(), Some(desktop.did()));
     assert_eq!(wake.request_hop, parent.request_hop);
     let verified = admission_verifier(&db)
-        .verify_fresh(&wake, TEST_AGENT_ID)
+        .verify_fresh(&wake, db.agent_did())
         .await
         .unwrap();
     let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
-        TEST_AGENT_ID,
+        db.agent_did(),
         db.node_did(),
         verified.clone(),
         60,
@@ -486,13 +486,13 @@ async fn root_parent(db: &TestDb, session_id: &str) -> AgentRequest {
         .unwrap();
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         db.node.clone(),
-        TEST_AGENT_ID,
+        db.agent_did(),
         db.node_did(),
         request,
         60,
     );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
+    let writer = DefraStreamWriter::new(db.node.clone(), db.agent_did(), Duration::ZERO);
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     lifecycle
         .terminalize_owned(
@@ -531,7 +531,7 @@ fn wake_agent_request(
         request_id: request_id.to_string(),
         node_did: parent.node_did.clone(),
         requester_did: Some(parent.node_did.clone()),
-        agent_id: parent.agent_id.clone(),
+        agent_did: parent.agent_did.clone(),
         session_id: parent.session_id.clone(),
         content: "review notifications".to_string(),
         max_total_tokens: None,
@@ -568,29 +568,44 @@ fn wake_agent_request(
 #[tokio::test]
 async fn notification_is_atomically_bound_to_coalesced_wake() {
     let db = test_db("atomic-background-notification").await;
-    let parent = root_parent(&db, "atomic-background-session").await;
-    let first = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "first notification",
-        "background-completion-notification:first:tool",
-        "review notifications",
-        background_hints(&parent),
-        None,
-    )
-    .await
-    .unwrap();
-    let second = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "second notification",
-        "background-completion-notification:second:tool",
-        "review notifications",
-        background_hints(&parent),
-        None,
-    )
-    .await
-    .unwrap();
+    let mut fixture = canonical_background_fixture(&db, "atomic-background-session").await;
+    let parent = fixture.parent.clone();
+    let first_tool = fixture
+        .prepare_notification("first notification")
+        .await
+        .unwrap();
+    let second_tool = fixture
+        .prepare_notification("second notification")
+        .await
+        .unwrap();
+    let selection = fixture.writer.terminal_output(&parent.doc_id).await;
+    fixture
+        .lifecycle
+        .terminalize_owned(RequestTerminalOutcome::Completed, selection, None)
+        .await
+        .unwrap();
+    let first = fixture
+        .publish_prepared_notification(
+            "first notification",
+            "background-completion-notification:first:tool",
+            "review notifications",
+            background_hints(&parent),
+            None,
+            &first_tool,
+        )
+        .await
+        .unwrap();
+    let second = fixture
+        .publish_prepared_notification(
+            "second notification",
+            "background-completion-notification:second:tool",
+            "review notifications",
+            background_hints(&parent),
+            None,
+            &second_tool,
+        )
+        .await
+        .unwrap();
     assert!(first.created_request);
     assert!(!second.created_request);
     assert_eq!(
@@ -607,13 +622,8 @@ async fn notification_is_atomically_bound_to_coalesced_wake() {
         }}"#,
         escape_graphql_string(&first.request.as_ref().expect("non-Goal wake").doc_id)
     );
-    let wake_response = db.node.execute(&wake_query).await;
-    assert!(
-        !wake_response.has_errors(),
-        "wake query: {:?}",
-        wake_response.errors
-    );
-    let wake = &wake_response.data.as_ref().unwrap()["AgentRequest"][0];
+    let wake_response = db.agent_access.execute(&wake_query).await.unwrap();
+    let wake = &wake_response["data"]["AgentRequest"][0];
     assert_eq!(
         wake["caused_by_parent_request_id"].as_str(),
         Some(parent.request_id.as_str())
@@ -626,21 +636,14 @@ async fn notification_is_atomically_bound_to_coalesced_wake() {
     let query = format!(
         r#"{{
             AgentMessage(
-                filter: {{ session_id: {{ _eq: "{}" }} }},
+                filter: {{ session_id: {{ _eq: "{}" }}, message_key: {{ _like: "background-completion-notification:%:tool" }} }},
                 order: {{ sequence: ASC }}
             ) {{ request_doc_id }}
         }}"#,
         escape_graphql_string(&parent.session_id)
     );
-    let response = db.node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "message query: {:?}",
-        response.errors
-    );
-    let rows = response.data.as_ref().unwrap()["AgentMessage"]
-        .as_array()
-        .unwrap();
+    let response = db.agent_access.execute(&query).await.unwrap();
+    let rows = response["data"]["AgentMessage"].as_array().unwrap();
     assert_eq!(rows.len(), 2);
     for row in rows {
         assert_eq!(
@@ -659,30 +662,43 @@ async fn notification_is_atomically_bound_to_coalesced_wake() {
 #[tokio::test]
 async fn duplicate_notification_key_recovers_its_original_wake_binding() {
     let db = test_db("atomic-background-idempotent-notification").await;
-    let parent = root_parent(&db, "atomic-background-idempotent-notification-session").await;
+    let mut fixture =
+        canonical_background_fixture(&db, "atomic-background-idempotent-notification-session")
+            .await;
+    let parent = fixture.parent.clone();
     let message_key = "background-completion-notification:idempotent:tool";
-    let first = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "idempotent notification",
-        message_key,
-        "review notifications",
-        background_hints(&parent),
-        None,
-    )
-    .await
-    .unwrap();
-    let retry = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "idempotent notification",
-        message_key,
-        "review notifications",
-        background_hints(&parent),
-        None,
-    )
-    .await
-    .unwrap();
+    let tool = fixture
+        .prepare_notification("idempotent notification")
+        .await
+        .unwrap();
+    let selection = fixture.writer.terminal_output(&parent.doc_id).await;
+    fixture
+        .lifecycle
+        .terminalize_owned(RequestTerminalOutcome::Completed, selection, None)
+        .await
+        .unwrap();
+    let first = fixture
+        .publish_prepared_notification(
+            "idempotent notification",
+            message_key,
+            "review notifications",
+            background_hints(&parent),
+            None,
+            &tool,
+        )
+        .await
+        .unwrap();
+    let retry = fixture
+        .publish_prepared_notification(
+            "idempotent notification",
+            message_key,
+            "review notifications",
+            background_hints(&parent),
+            None,
+            &tool,
+        )
+        .await
+        .unwrap();
 
     assert_eq!(
         retry.request.as_ref().expect("non-Goal wake").doc_id,
@@ -699,17 +715,17 @@ async fn duplicate_notification_key_recovers_its_original_wake_binding() {
     assert_eq!(retry.message_sequence, first.message_sequence);
     assert!(!retry.created_request);
 
-    let conflict = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "changed notification",
-        message_key,
-        "review notifications",
-        background_hints(&parent),
-        None,
-    )
-    .await
-    .unwrap_err();
+    let conflict = fixture
+        .publish_prepared_notification(
+            "changed notification",
+            message_key,
+            "review notifications",
+            background_hints(&parent),
+            None,
+            &tool,
+        )
+        .await
+        .unwrap_err();
     assert!(
         conflict
             .to_string()
@@ -721,22 +737,39 @@ async fn duplicate_notification_key_recovers_its_original_wake_binding() {
 #[tokio::test]
 async fn many_concurrent_notifications_publish_one_wake_identity() {
     let db = test_db("atomic-background-many-race").await;
-    let parent = root_parent(&db, "atomic-background-many-race-session").await;
-    let enqueued = futures::future::join_all((0..16).map(|index| {
-        let node = db.node.clone();
-        let parent = parent.clone();
+    let mut fixture =
+        canonical_background_fixture(&db, "atomic-background-many-race-session").await;
+    let parent = fixture.parent.clone();
+    let mut tools = Vec::new();
+    for index in 0..16 {
+        tools.push(
+            fixture
+                .prepare_notification(&format!("concurrent notification {index}"))
+                .await
+                .unwrap(),
+        );
+    }
+    let selection = fixture.writer.terminal_output(&parent.doc_id).await;
+    fixture
+        .lifecycle
+        .terminalize_owned(RequestTerminalOutcome::Completed, selection, None)
+        .await
+        .unwrap();
+    let enqueued = futures::future::join_all(tools.iter().enumerate().map(|(index, tool)| {
+        let fixture = &fixture;
+        let parent = &parent;
         async move {
-            persist_background_completion_with_message(
-                &node,
-                &parent,
-                &format!("concurrent notification {index}"),
-                &format!("background-completion-notification:many-race-{index}:tool"),
-                "review notifications",
-                background_hints(&parent),
-                None,
-            )
-            .await
-            .unwrap()
+            fixture
+                .publish_prepared_notification(
+                    &format!("concurrent notification {index}"),
+                    &format!("background-completion-notification:many-race-{index}:tool"),
+                    "review notifications",
+                    background_hints(parent),
+                    None,
+                    tool,
+                )
+                .await
+                .unwrap()
         }
     }))
     .await;
@@ -758,58 +791,75 @@ async fn many_concurrent_notifications_publish_one_wake_identity() {
 async fn restart_before_claim_preserves_pending_input_until_the_wake_completes() {
     let db = test_db("background-restart-before-claim").await;
     let node = db.node.clone();
-    let parent = root_parent(&db, "background-restart-before-claim-session").await;
-    let hints = background_hints(&parent);
-    let enqueued = persist_background_completion_with_message(
-        &node,
-        &parent,
-        "restart-safe notification",
-        "background-completion-notification:restart-before-claim:tool",
-        "review notifications",
-        hints.clone(),
-        None,
-    )
-    .await
-    .unwrap();
-
-    let recovery = crate::RequestLifecycle::recover_all(&node, db.node_did())
+    let mut fixture =
+        canonical_background_fixture(&db, "background-restart-before-claim-session").await;
+    let parent = fixture.parent.clone();
+    let tool = fixture
+        .prepare_notification("restart-safe notification")
         .await
         .unwrap();
-    assert_eq!(recovery.background_wakes_redriven, 0);
-    let before = crate::load_background_completion_diagnostics(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+    let selection = fixture.writer.terminal_output(&parent.doc_id).await;
+    fixture
+        .lifecycle
+        .terminalize_owned(RequestTerminalOutcome::Completed, selection, None)
+        .await
+        .unwrap();
+    let enqueued = fixture
+        .publish_prepared_notification(
+            "restart-safe notification",
+            "background-completion-notification:restart-before-claim:tool",
+            "review notifications",
+            background_hints(&parent),
+            None,
+            &tool,
+        )
+        .await
+        .unwrap();
+
+    let recovery = crate::RequestLifecycle::recover_all_with_identities(
+        &node,
         db.node_did(),
+        std::slice::from_ref(&db.agent_identity),
     )
     .await
     .unwrap();
+    assert_eq!(recovery.background_wakes_redriven, 0);
+    let before = crate::load_background_completion_diagnostics(&db.agent_access, db.node_did())
+        .await
+        .unwrap();
     assert_eq!(before.pending_notifications, 1);
     assert_eq!(before.acknowledged_notifications, 0);
     assert_eq!(before.epochs[0].state, "pending");
 
-    let request = wake_agent_request(
-        &parent,
+    let request = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &db.agent_access,
         &enqueued.request.as_ref().expect("non-Goal wake").doc_id,
-        &enqueued.request.as_ref().expect("non-Goal wake").request_id,
-        &hints,
-    );
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        TEST_AGENT_ID,
+        db.agent_did(),
         db.node_did(),
         request,
         60,
         ExecutionOrigin::Scheduled,
         "backend-test",
     );
+    lifecycle
+        .bind_managed_agent(db.agent_identity.as_ref())
+        .unwrap();
     assert_eq!(
         lifecycle.claim_with_identity().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed
     );
-    let writer = crate::request::streaming::DefraStreamWriter::new(
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
-        db.node_did(),
+        db.agent_identity.as_ref(),
         std::time::Duration::ZERO,
-    );
+    )
+    .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     lifecycle
         .terminalize_owned(
@@ -820,12 +870,9 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
         .await
         .unwrap();
 
-    let after = crate::load_background_completion_diagnostics(
-        &crate::store::config_client::ConfigAccess::local(node),
-        db.node_did(),
-    )
-    .await
-    .unwrap();
+    let after = crate::load_background_completion_diagnostics(&db.agent_access, db.node_did())
+        .await
+        .unwrap();
     assert_eq!(after.pending_notifications, 0);
     assert_eq!(after.acknowledged_notifications, 1);
     assert_eq!(after.epochs[0].state, "acknowledged");
@@ -835,43 +882,60 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
 async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
     let db = test_db("background-response-repair-ack").await;
     let node = db.node.clone();
-    let parent = root_parent(&db, "background-response-repair-ack-session").await;
-    let hints = background_hints(&parent);
-    let enqueued = persist_background_completion_with_message(
-        &node,
-        &parent,
-        "response-persisted notification",
-        "background-completion-notification:response-persisted:tool",
-        "review notifications",
-        hints.clone(),
-        None,
+    let mut fixture =
+        canonical_background_fixture(&db, "background-response-repair-ack-session").await;
+    let parent = fixture.parent.clone();
+    let tool = fixture
+        .prepare_notification("response-persisted notification")
+        .await
+        .unwrap();
+    let selection = fixture.writer.terminal_output(&parent.doc_id).await;
+    fixture
+        .lifecycle
+        .terminalize_owned(RequestTerminalOutcome::Completed, selection, None)
+        .await
+        .unwrap();
+    let enqueued = fixture
+        .publish_prepared_notification(
+            "response-persisted notification",
+            "background-completion-notification:response-persisted:tool",
+            "review notifications",
+            background_hints(&parent),
+            None,
+            &tool,
+        )
+        .await
+        .unwrap();
+
+    let request = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &db.agent_access,
+        &enqueued.request.as_ref().expect("non-Goal wake").doc_id,
     )
     .await
+    .unwrap()
     .unwrap();
-    let request = wake_agent_request(
-        &parent,
-        &enqueued.request.as_ref().expect("non-Goal wake").doc_id,
-        &enqueued.request.as_ref().expect("non-Goal wake").request_id,
-        &hints,
-    );
     let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        TEST_AGENT_ID,
+        db.agent_did(),
         db.node_did(),
         request,
         60,
         ExecutionOrigin::Scheduled,
         "backend-test",
     );
+    lifecycle
+        .bind_managed_agent(db.agent_identity.as_ref())
+        .unwrap();
     assert_eq!(
         lifecycle.claim_with_identity().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed
     );
-    let writer = crate::request::streaming::DefraStreamWriter::new(
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
-        db.node_did(),
+        db.agent_identity.as_ref(),
         std::time::Duration::ZERO,
-    );
+    )
+    .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     writer
         .start_provider_attempt(
@@ -893,12 +957,10 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         )
         .await
         .unwrap();
-    let unpublished_terminal = crate::load_background_completion_diagnostics(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
-        db.node_did(),
-    )
-    .await
-    .unwrap();
+    let unpublished_terminal =
+        crate::load_background_completion_diagnostics(&db.agent_access, db.node_did())
+            .await
+            .unwrap();
     assert_eq!(unpublished_terminal.pending_notifications, 1);
     assert_eq!(unpublished_terminal.acknowledged_notifications, 0);
     lifecycle
@@ -912,14 +974,13 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         .await
         .unwrap();
 
-    let terminal = node
+    let terminal = db.agent_access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state terminal_output }} }}"#,
             escape_graphql_string(&lifecycle.request().doc_id),
         ))
-        .await;
-    assert!(!terminal.has_errors(), "{:?}", terminal.errors);
-    let terminal_row = &terminal.data.as_ref().unwrap()["AgentRequest"][0];
+        .await.unwrap();
+    let terminal_row = &terminal["data"]["AgentRequest"][0];
     assert_eq!(terminal_row["lifecycle_state"], "completed");
     assert_eq!(
         terminal_row["terminal_output"],
@@ -929,30 +990,32 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         .unwrap()
     );
 
-    let first_repair = crate::RequestLifecycle::repair_terminal_requests(&node, db.node_did())
-        .await
-        .unwrap();
-    assert_eq!(first_repair.repaired, 0);
-    let first = crate::load_background_completion_diagnostics(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+    let first_repair = crate::RequestLifecycle::repair_terminal_requests_with_identities(
+        &node,
         db.node_did(),
+        std::slice::from_ref(&db.agent_identity),
     )
     .await
     .unwrap();
+    assert_eq!(first_repair.repaired, 0);
+    let first = crate::load_background_completion_diagnostics(&db.agent_access, db.node_did())
+        .await
+        .unwrap();
     assert_eq!(first.pending_notifications, 0);
     assert_eq!(first.acknowledged_notifications, 1);
     assert_eq!(first.epochs[0].state, "acknowledged");
 
-    let second_repair = crate::RequestLifecycle::repair_terminal_requests(&node, db.node_did())
-        .await
-        .unwrap();
-    assert_eq!(second_repair.repaired, 0);
-    let second = crate::load_background_completion_diagnostics(
-        &crate::store::config_client::ConfigAccess::local(node),
+    let second_repair = crate::RequestLifecycle::repair_terminal_requests_with_identities(
+        &node,
         db.node_did(),
+        std::slice::from_ref(&db.agent_identity),
     )
     .await
     .unwrap();
+    assert_eq!(second_repair.repaired, 0);
+    let second = crate::load_background_completion_diagnostics(&db.agent_access, db.node_did())
+        .await
+        .unwrap();
     assert_eq!(
         second, first,
         "acknowledgement projection must be restart-idempotent"
@@ -962,32 +1025,41 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
 #[tokio::test]
 async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     use crate::request::watcher::{DefraWatcher, Watcher};
-    use crate::tools::call::lifecycle::admission_fixture::complete_child;
+    use crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified;
     let (selected, successor_child) = crate::tools::call::lifecycle::completion_owner_conformance::selected_background_wake_with_successor(true).await;
     let admission = selected.admission;
     let node = admission.node.clone();
     let did = admission.node_did.clone();
+    let agent_signer = admission
+        .tool
+        .access()
+        .unwrap()
+        .managed_agent_signer()
+        .unwrap();
     let first_request = selected.wake;
+    let agent_did = first_request.agent_did.clone();
     let first_id = first_request.request_id.clone();
     let session_id = first_request.session_id.clone();
     let mut first_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        TEST_AGENT_ID,
+        &agent_did,
         &did,
         first_request,
         60,
         ExecutionOrigin::Scheduled,
         "backend-test",
     );
+    first_lifecycle.bind_managed_agent(&agent_signer).unwrap();
     assert_eq!(
         first_lifecycle.claim_with_identity().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed
     );
-    let writer = crate::request::streaming::DefraStreamWriter::new(
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
-        &did,
+        &agent_signer,
         std::time::Duration::ZERO,
-    );
+    )
+    .unwrap();
     first_lifecycle
         .begin_owned_execution(&writer)
         .await
@@ -1000,17 +1072,23 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         )
         .await
         .unwrap();
-    complete_child(
+    complete_child_managed_verified(
         &node,
         &successor_child.unwrap(),
         &did,
         "second notification",
+        &agent_signer,
+        admission.runtime.clone(),
     )
     .await;
     assert_eq!(
-        crate::tools::background::completion::settle_running_session_message_rows(&node, &did)
-            .await
-            .unwrap(),
+        crate::tools::background::completion::settle_running_session_message_rows_with_access(
+            &node,
+            &admission.tool.access().unwrap(),
+            &did
+        )
+        .await
+        .unwrap(),
         1
     );
     first_lifecycle
@@ -1045,12 +1123,26 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         retry_keys[1].rsplit_once(':').unwrap().0,
         "unrelated transcript writes must not advance the queue-local generation"
     );
-    let mut watcher = DefraWatcher::new(node.clone(), &did).expect("request watcher");
+    let agent = crate::load_agent(&node, &agent_did)
+        .await
+        .unwrap()
+        .expect("fixture Agent binding");
+    let agent_identity = crate::store::identity::resolve_agent_identity(
+        admission.runtime.as_ref(),
+        &gents_protocol::agent_identity::AgentIdentityBinding {
+            agent_did: agent.agent_did,
+            creation_nonce: agent.creation_nonce,
+        },
+    )
+    .unwrap();
+    let mut watcher = DefraWatcher::for_agents(node.clone(), &did, vec![agent_identity])
+        .expect("request watcher");
     let second_request = watcher.next_request().await.unwrap().unwrap();
     assert_ne!(second_request.request_id, first_id);
+    assert_eq!(second_request.agent_did, agent_did);
     let mut second_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        TEST_AGENT_ID,
+        &agent_did,
         &did,
         second_request,
         60,
@@ -1094,7 +1186,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     drop(watcher);
     drop(first_lifecycle);
     drop(second_lifecycle);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -1245,20 +1337,37 @@ async fn append_sequence_excludes_foreign_session_messages_and_reservations() {
 #[tokio::test]
 async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
     let db = test_db("wake-hop-raise").await;
-    let parent = root_parent(&db, "wake-hop-raise-session").await;
-    let native = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "native process done",
-        "background-completion-notification:native:tool",
-        "review notifications",
-        background_hints(&parent),
-        None,
-    )
-    .await
-    .unwrap();
+    let mut fixture = canonical_background_fixture(&db, "wake-hop-raise-session").await;
+    let parent = fixture.parent.clone();
+    let native_tool = fixture
+        .prepare_notification("native process done")
+        .await
+        .unwrap();
+    let raised_tool = fixture.prepare_notification("agent result").await.unwrap();
+    let later_tool = fixture
+        .prepare_notification("another native process done")
+        .await
+        .unwrap();
+    let selection = fixture.writer.terminal_output(&parent.doc_id).await;
+    fixture
+        .lifecycle
+        .terminalize_owned(RequestTerminalOutcome::Completed, selection, None)
+        .await
+        .unwrap();
+    let native = fixture
+        .publish_prepared_notification(
+            "native process done",
+            "background-completion-notification:native:tool",
+            "review notifications",
+            background_hints(&parent),
+            None,
+            &native_tool,
+        )
+        .await
+        .unwrap();
     let native_wake = native.request.expect("native wake").doc_id;
-    let raised = persist_background_completion_with_message_waking(
+    let raised = persist_background_completion_with_message_canonical_with_access(
+        &db.agent_access,
         &db.node,
         &parent,
         "agent result",
@@ -1266,6 +1375,7 @@ async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
         "review notifications",
         background_hints(&parent),
         None,
+        &raised_tool,
         crate::request::lifecycle::RequestHopCause::CrossSession { cause_hop: 1 },
     )
     .await
@@ -1273,32 +1383,28 @@ async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
     assert!(raised.created_request);
     let raised_wake = raised.request.expect("raised wake").doc_id;
     assert_ne!(raised_wake, native_wake);
-    let later = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "another native process done",
-        "background-completion-notification:native-2:tool",
-        "review notifications",
-        background_hints(&parent),
-        None,
-    )
-    .await
-    .unwrap();
+    let later = fixture
+        .publish_prepared_notification(
+            "another native process done",
+            "background-completion-notification:native-2:tool",
+            "review notifications",
+            background_hints(&parent),
+            None,
+            &later_tool,
+        )
+        .await
+        .unwrap();
     assert!(!later.created_request);
     assert_eq!(later.request.expect("joined wake").doc_id, raised_wake);
 
     let response = db
-        .node
+        .agent_access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }}, execution_origin: {{ _eq: "scheduled" }} }}) {{ _docID lifecycle_state request_hop superseded_by_request_doc_id }} }}"#,
             escape_graphql_string(&parent.session_id)
         ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let rows = response.data.unwrap()["AgentRequest"]
-        .as_array()
-        .unwrap()
-        .clone();
+        .await.unwrap();
+    let rows = response["data"]["AgentRequest"].as_array().unwrap().clone();
     let pending = rows
         .iter()
         .filter(|row| row["lifecycle_state"] == "pending")
@@ -1317,32 +1423,40 @@ async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
 #[tokio::test]
 async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() {
     let db = test_db("wake-hop-refusal").await;
-    crate::documents::upsert_node(
-        &db.node,
-        db.node_did(),
-        None,
-        Some(TEST_AGENT_ID),
-        true,
-        Some(8),
-    )
-    .await
-    .unwrap();
-    let parent = root_parent(&db, "wake-hop-refusal-session").await;
+    db.user_access.write("test.max_request_hop", &format!(
+        r#"mutation {{ update_Node(filter: {{ node_did: {{ _eq: "{}" }} }}, input: {{ max_request_hop: 8 }}) {{ _docID }} }}"#,
+        escape_graphql_string(db.node_did()),
+    )).await.unwrap();
+    let mut fixture = canonical_background_fixture(&db, "wake-hop-refusal-session").await;
+    let parent = fixture.parent.clone();
+    let native_tool = fixture.prepare_notification("sleep done").await.unwrap();
+    let returned_tool = fixture.prepare_notification("B result").await.unwrap();
+    let refused_tool = fixture.prepare_notification("C message").await.unwrap();
+    let later_tool = fixture
+        .prepare_notification("another B result")
+        .await
+        .unwrap();
+    let selection = fixture.writer.terminal_output(&parent.doc_id).await;
+    fixture
+        .lifecycle
+        .terminalize_owned(RequestTerminalOutcome::Completed, selection, None)
+        .await
+        .unwrap();
     let bound = 8;
     let hop_of = |doc_id: String| {
-        let node = db.node.clone();
+        let access = db.agent_access.clone();
         async move {
-            let response = node
+            let response = access
                 .execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ request_hop lifecycle_state }} }}"#,
                     escape_graphql_string(&doc_id)
                 ))
-                .await;
-            assert!(!response.has_errors(), "{:?}", response.errors);
-            response.data.unwrap()["AgentRequest"][0].clone()
+                .await.unwrap();
+            response["data"]["AgentRequest"][0].clone()
         }
     };
-    let native = persist_background_completion_with_message_waking(
+    let native = persist_background_completion_with_message_canonical_with_access(
+        &db.agent_access,
         &db.node,
         &parent,
         "sleep done",
@@ -1350,12 +1464,14 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         "review notifications",
         background_hints(&parent),
         None,
+        &native_tool,
         crate::request::lifecycle::RequestHopCause::Continuation,
     )
     .await
     .unwrap();
     let native_wake = native.request.expect("native wake").doc_id;
-    let returned = persist_background_completion_with_message_waking(
+    let returned = persist_background_completion_with_message_canonical_with_access(
+        &db.agent_access,
         &db.node,
         &parent,
         "B result",
@@ -1363,6 +1479,7 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         "review notifications",
         background_hints(&parent),
         None,
+        &returned_tool,
         crate::request::lifecycle::RequestHopCause::Return,
     )
     .await
@@ -1370,7 +1487,8 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
     assert!(!returned.created_request);
     assert_eq!(returned.request.expect("joined wake").doc_id, native_wake);
     assert_eq!(hop_of(native_wake.clone()).await["request_hop"], 0);
-    let refused = persist_background_completion_with_message_waking(
+    let refused = persist_background_completion_with_message_canonical_with_access(
+        &db.agent_access,
         &db.node,
         &parent,
         "C message",
@@ -1378,6 +1496,7 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         "review notifications",
         background_hints(&parent),
         None,
+        &refused_tool,
         crate::request::lifecycle::RequestHopCause::CrossSession { cause_hop: bound },
     )
     .await
@@ -1390,15 +1509,14 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         bound + 1
     ));
     assert_eq!(hop_of(native_wake).await["lifecycle_state"], "superseded");
-    let response = db
-        .node
-        .execute(&format!(
+    db.agent_access
+        .write("test.refuse_wake", &format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "dead" }}) {{ _docID }} }}"#,
             escape_graphql_string(&refused_wake)
         ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let later = persist_background_completion_with_message_waking(
+        .await.unwrap();
+    let later = persist_background_completion_with_message_canonical_with_access(
+        &db.agent_access,
         &db.node,
         &parent,
         "another B result",
@@ -1406,6 +1524,7 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         "review notifications",
         background_hints(&parent),
         None,
+        &later_tool,
         crate::request::lifecycle::RequestHopCause::Return,
     )
     .await

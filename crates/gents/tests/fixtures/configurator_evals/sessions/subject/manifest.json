@@ -21,7 +21,8 @@
       "name": "engineer",
       "description": "Runs the Engineer.",
       "agents": [
-        "engineer"
+        "engineer",
+        "partner"
       ]
     }
   ]

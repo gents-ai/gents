@@ -33,31 +33,8 @@ theorem fromDefraDB_toDefraDB (s : WorkspaceState) :
   cases s <;> rfl
 
 instance : HasTerminal WorkspaceState where
-  isTerminal s := s = .provisionFailed ∨ s = .cleaned
-  isTerminal_dec s :=
-    match s with
-    | .provisionFailed => isTrue (Or.inl rfl)
-    | .cleaned => isTrue (Or.inr rfl)
-    | .provisioning => isFalse (by
-        intro h
-        cases h with
-        | inl h => cases h
-        | inr h => cases h)
-    | .ready => isFalse (by
-        intro h
-        cases h with
-        | inl h => cases h
-        | inr h => cases h)
-    | .sealed => isFalse (by
-        intro h
-        cases h with
-        | inl h => cases h
-        | inr h => cases h)
-    | .cleaning => isFalse (by
-        intro h
-        cases h with
-        | inl h => cases h
-        | inr h => cases h)
+  isTerminal s := s = .cleaned
+  isTerminal_dec s := inferInstance
 
 def bindable : WorkspaceState → Prop
   | .ready | .sealed => True
@@ -151,6 +128,10 @@ inductive WorkspacePathCapability where
   | unrestrictedCompatibility
   deriving DecidableEq, Repr
 
+/-- Workspace document effects caused by a request (binding, seal, integration and
+release) use that request's selected Agent DID. Explicit cleanup carries its caller
+actor. Shared operational discovery is a runtime responsibility; it does not replace
+the originating actor for mutations or retry a denied agent write as the runtime. -/
 structure IsolatedWorkspace where
   workspaceId : String
   workUnitId : String

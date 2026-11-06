@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::OutputSource;
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::collections::BTreeMap;
@@ -9,7 +9,7 @@ use super::super::canonical_rows::{request_output_segments_query, AGENT_OUTPUT_S
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 
 #[derive(Clone, Copy)]
-pub(super) enum ReadAccess<'a, 'txn> {
+pub(in crate::session) enum ReadAccess<'a, 'txn> {
     Node(&'a EmbeddedNode),
     Txn(&'a ConfigApplyTxn<'txn>),
     Config(&'a ConfigAccess),
@@ -204,6 +204,14 @@ impl ReadAccess<'_, '_> {
             response.errors
         );
         Ok(crate::store::graphql::into_data_envelope(response.data))
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::inference::rendered_request::CaptureBaseReader for ReadAccess<'_, '_> {
+    async fn execute_capture_query(&self, query: &str) -> Result<serde_json::Value> {
+        self.query(query, "read rendered-request capture dependency")
+            .await
     }
 }
 

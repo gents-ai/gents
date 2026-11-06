@@ -141,8 +141,8 @@ def sessionRecoveryCaseJson (witness : SessionRecoveryCase) : String :=
     ++ "\"post_latest_id\":" ++ toString witness.postLatestId ++ ","
     ++ "\"pre_session_id\":" ++ toString witness.preSessionId ++ ","
     ++ "\"post_session_id\":" ++ toString witness.postSessionId ++ ","
-    ++ "\"pre_agent_id\":" ++ toString witness.preAgentId ++ ","
-    ++ "\"post_agent_id\":" ++ toString witness.postAgentId ++ ","
+    ++ "\"pre_agent_did\":" ++ toString witness.preAgentDid ++ ","
+    ++ "\"post_agent_did\":" ++ toString witness.postAgentDid ++ ","
     ++ "\"pre_request_count\":" ++ toString witness.preRequestCount ++ ","
     ++ "\"post_request_count\":" ++ toString witness.postRequestCount ++ ","
     ++ "\"pre_retry_count\":" ++ toString witness.preRetryCount ++ ","
@@ -304,13 +304,13 @@ def startupReadinessCases : List StartupReadinessCase :=
 def startupReadinessCasesJson : String :=
   jsonArray (startupReadinessCases.map startupReadinessCaseJson)
 
-def snapshotDemotionCaseJson (name : String) (unavailable : Finset AgentId)
-    (demotions : List AgentId) : String :=
+def snapshotDemotionCaseJson (name : String) (unavailable : Finset AgentDid)
+    (demotions : List AgentDid) : String :=
   let pre : ResolvedSnapshot :=
     { defaultAgent := 1, runnable := {1, 2}, unavailable := unavailable,
       dependenciesSatisfied := {1, 2} }
   let post := demotions.foldl ResolvedSnapshot.demote pre
-  let ids := fun (values : Finset AgentId) => jsonArray ((values.sort (· ≤ ·)).map toString)
+  let ids := fun (values : Finset AgentDid) => jsonArray ((values.sort (· ≤ ·)).map toString)
   "{\"witness\":" ++ jsonString name ++
     ",\"default_agent\":" ++ toString pre.defaultAgent ++
     ",\"runnable\":" ++ ids pre.runnable ++

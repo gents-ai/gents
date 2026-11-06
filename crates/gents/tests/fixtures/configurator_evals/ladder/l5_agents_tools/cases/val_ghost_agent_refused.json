@@ -54,7 +54,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",
@@ -107,7 +107,7 @@
             "node_did",
             "name",
             "target_node_did",
-            "agent_id"
+            "agent_did"
           ]
         }
       ]

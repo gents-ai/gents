@@ -305,7 +305,7 @@ mod tests {
     async fn a_job_step_keeps_its_stored_state_across_rounds() {
         let dir = tempfile::tempdir().unwrap();
         let node = Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
+            crate::defra_node::Node::builder()
                 .data_path(dir.path())
                 .build()
                 .await
@@ -320,7 +320,7 @@ mod tests {
                 requester_did: None,
             },
             StampContext::JobStep {
-                node_did: "did:n".into(),
+                caller_did: "did:n".into(),
                 session_id: "s".into(),
                 request_doc_id: "r".into(),
                 tool_call_doc_id: "t".into(),
@@ -372,6 +372,6 @@ mod tests {
             *seen.lock().unwrap(),
             [json!({"n": 1}), json!({"n": 1}), json!({"n": 2})]
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }

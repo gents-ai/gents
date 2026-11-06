@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use gents_desktop_core::client::{
-    ClientCore, SubmissionIntent, SubmissionReference, SubmittedRequest,
+    ClientCore, SubmissionError, SubmissionIntent, SubmissionReference, SubmittedRequest,
 };
 
 use crate::types::{
@@ -44,7 +44,7 @@ fn receipt(intent: &SubmissionIntent, reference: SubmissionReference) -> ChatSub
         node_did: reference.request.node_did,
         request_id: reference.request.request_id,
         session_id: reference.request.session_id,
-        agent_id: reference.request.agent_id,
+        agent_did: reference.request.agent_did,
         envelope_hash: intent.envelope_hash.clone(),
         signed_payload_hash: reference.signed_payload_hash,
     }
@@ -53,7 +53,7 @@ fn receipt(intent: &SubmissionIntent, reference: SubmissionReference) -> ChatSub
 pub(super) async fn sent(
     core: &ClientCore,
     intent: &SubmissionIntent,
-    submitted: Result<SubmittedRequest>,
+    submitted: std::result::Result<SubmittedRequest, SubmissionError>,
 ) -> Result<ChatSendResult> {
     let mut result = super::chat_resolve::sent(submitted)?;
     let reference = core
@@ -64,7 +64,7 @@ pub(super) async fn sent(
         reference.request.request_id == result.request_id
             && reference.request.session_id == result.session_id
             && reference.request.node_did == result.node_did
-            && reference.request.agent_id == result.agent_id,
+            && reference.request.agent_did == result.agent_did,
         "caller submission reply crossed its retained scope"
     );
     result.submission_receipt = Some(receipt(intent, reference));
@@ -95,7 +95,9 @@ pub async fn recover_chat_submission(
                 core,
                 &intent,
                 recovered.and_then(|result| {
-                    result.context("retained submission reply omitted its result")
+                    result
+                        .context("retained submission reply omitted its result")
+                        .map_err(SubmissionError::from)
                 }),
             )
             .await?,
@@ -118,7 +120,7 @@ pub async fn acknowledge_chat_submission(
             node_did: receipt.node_did,
             request_id: receipt.request_id,
             session_id: receipt.session_id,
-            agent_id: receipt.agent_id,
+            agent_did: receipt.agent_did,
         },
         signed_payload_hash: receipt.signed_payload_hash,
     };

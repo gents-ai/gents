@@ -69,6 +69,8 @@ pub(super) struct LinkSpec {
     pub(super) target_capture: String,
     pub(super) target_key: String,
     #[serde(default)]
+    pub(super) exact: bool,
+    #[serde(default)]
     pub(super) category: Option<String>,
     #[serde(default)]
     pub(super) expect: Vec<Expectation>,
@@ -98,7 +100,7 @@ pub(super) struct Agents {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct AgentSpec {
-    pub(super) agent_id: String,
+    pub(super) agent_did: String,
     #[serde(default)]
     pub(super) source_match: Option<Expectation>,
     #[serde(default)]

@@ -24,6 +24,13 @@ pub struct ProviderHttpClient {
 }
 
 impl ProviderHttpClient {
+    /// Credentials are scoped to their configured provider destination.
+    pub(crate) fn credential_client() -> Result<ReqwestClient, reqwest_provider::Error> {
+        ReqwestClient::builder()
+            .redirect(reqwest_provider::redirect::Policy::none())
+            .build()
+    }
+
     pub fn new(inner: ReqwestClient) -> Self {
         Self { inner, usage: None }
     }

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -12,6 +12,18 @@ pub struct SessionStopReceipt {
 
 pub async fn stop_session(
     node: &Arc<EmbeddedNode>,
+    caller_agent_did: &str,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<SessionStopReceipt> {
+    let access = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(caller_agent_did)?);
+    stop_session_with_access(node, &access, node_did, session_id, requester_did).await
+}
+
+pub async fn stop_session_with_access(
+    node: &Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -27,12 +39,8 @@ pub async fn stop_session(
     let node_did = node_did.to_owned();
     let session_id = session_id.to_owned();
     let requester_did = requester_did.map(str::to_owned);
-    let actor = ::identity::Did::new(node_did.clone())?;
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        Some(actor),
-        "session.stop",
-        move |txn| {
+    access
+        .transact_write("session.stop", move |txn| {
             let node_did = node_did.clone();
             let session_id = session_id.clone();
             let requester_did = requester_did.clone();
@@ -97,9 +105,8 @@ pub async fn stop_session(
                     drained_request_ids,
                 })
             })
-        },
-    )
-    .await
+        })
+        .await
 }
 
 /// Resume uses the target node runtime's existing execution registry and job driver as quiescence
@@ -107,6 +114,29 @@ pub async fn stop_session(
 /// node operating convention while process and job ownership is checked with the session latch.
 pub async fn resume_session(
     node: &Arc<EmbeddedNode>,
+    caller_agent_did: &str,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    background_executions: crate::tools::call::hook::BackgroundExecutionRegistry,
+    job_driver: Arc<crate::tools::background::job::driver::JobDriver>,
+) -> Result<()> {
+    let access = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(caller_agent_did)?);
+    resume_session_with_access(
+        node,
+        &access,
+        node_did,
+        session_id,
+        requester_did,
+        background_executions,
+        job_driver,
+    )
+    .await
+}
+
+pub async fn resume_session_with_access(
+    node: &Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -124,14 +154,23 @@ pub async fn resume_session(
     let node_did = node_did.to_owned();
     let session_id = session_id.to_owned();
     let requester_did = requester_did.map(str::to_owned);
-    let identity =
-        Arc::new(crate::store::identity::RegisteredIdentity::from_registered_did(&node_did, None)?);
-    let actor = ::identity::Did::new(node_did.clone())?;
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        Some(actor),
-        "session.resume",
-        move |txn| {
+    let identity: Arc<dyn crate::store::identity::NodeIdentity> = match access
+        .managed_agent_signer()
+    {
+        Some(signer) => Arc::new(signer),
+        None => {
+            let actor = access
+                .actor_did()
+                .context("session resume actor unavailable")?;
+            anyhow::ensure!(
+                node.node_identity_did() == Some(actor.as_str()),
+                "session resume requires a managed Agent signer"
+            );
+            Arc::new(crate::store::identity::RegisteredIdentity::from_registered_did(actor, None)?)
+        }
+    };
+    access
+        .transact_write("session.resume", move |txn| {
             let identity = identity.clone();
             let node_did = node_did.clone();
             let session_id = session_id.clone();
@@ -182,9 +221,8 @@ pub async fn resume_session(
                 )
                 .await
             })
-        },
-    )
-    .await
+        })
+        .await
 }
 
 async fn ensure_session_executions_settled_in_txn(

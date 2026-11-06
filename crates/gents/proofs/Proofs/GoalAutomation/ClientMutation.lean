@@ -24,9 +24,53 @@ structure Receipt where
   outcome : Outcome
   deriving DecidableEq, Repr
 
+/-- The agent that processes a command signs its receipt. A Node signature or
+another agent's signature is not evidence of this selected agent's work. -/
+def receiptSignerAccepted (selected signer : Nat) (signatureValid : Bool) : Bool :=
+  selected == signer && signatureValid
+
+theorem foreign_receipt_signer_is_rejected (selected signer : Nat)
+    (different : selected ≠ signer) : receiptSignerAccepted selected signer true = false := by
+  simp [receiptSignerAccepted, different]
+
+/-- The selected agent creates the receipt under its own native ACP ownership.
+The requester receives an explicit reader relationship in that same transaction,
+so a later session or invoke revocation does not hide the result of its own
+command. The command author cannot create a competing receipt for the command,
+or alter or delete the agent's receipt; native creation binds the authenticated
+creator to the selected Agent, and the receipt policy reserves mutation to its
+owner. The full signed digest binds the immutable receipt to its command. -/
+structure OwnedReceipt where
+  agent : Nat
+  author : Nat
+  commandId : Nat
+  digest : Nat
+  deriving DecidableEq, Repr
+
+def receiptCanCreate (selected actor : Nat) : Bool := selected == actor
+def receiptCanRead (receipt : OwnedReceipt) (actor : Nat) : Bool :=
+  actor == receipt.agent || actor == receipt.author
+def receiptCanMutate (receipt : OwnedReceipt) (actor : Nat) : Bool :=
+  actor == receipt.agent
+def receiptMatches (receipt : OwnedReceipt) (commandId digest : Nat) : Bool :=
+  receipt.commandId == commandId && receipt.digest == digest
+
+theorem requester_cannot_erase_receipt (receipt : OwnedReceipt)
+    (different : receipt.author ≠ receipt.agent) :
+    receiptCanMutate receipt receipt.author = false := by
+  simp [receiptCanMutate, different]
+
+theorem revoked_requester_reads_own_receipt (receipt : OwnedReceipt) :
+    receiptCanRead receipt receipt.author = true := by
+  simp [receiptCanRead]
+
+theorem receipt_binds_command (receipt : OwnedReceipt) :
+    receiptMatches receipt receipt.commandId receipt.digest = true := by
+  simp [receiptMatches]
+
 structure State where
   goal : ClientControl.Snapshot
-  /-- Only receipts whose runtime signature and exact command digest verified. -/
+  /-- Only receipts whose selected-agent signature and exact command digest verified. -/
   receipts : List Receipt
   deriving DecidableEq, Repr
 

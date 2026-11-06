@@ -54,8 +54,8 @@ impl Tool for DiscoverToolsTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let services = crate::tools::mcp::registry::configured_mcp_services(
-            &self.ctx.node,
+        let services = crate::tools::mcp::registry::configured_mcp_services_on(
+            &crate::ConfigAccess::local_as(self.ctx.node.clone(), self.ctx.actor.clone()),
             &self.ctx.node_did,
         )
         .await?
@@ -77,6 +77,7 @@ impl Tool for DiscoverToolsTool {
         let query = args.query.as_deref().unwrap_or_default().to_lowercase();
         let results = futures::future::join_all(services.iter().map(|service| async {
             let sid = &service.service_id;
+            let route = super::shared::lookup_service(&self.ctx, sid).await.ok()?;
             let health = self.ctx.health.get(sid).await;
             let unreachable = matches!(
                 health.as_ref().map(|h| h.status),
@@ -85,14 +86,7 @@ impl Tool for DiscoverToolsTool {
             let catalog = if unreachable {
                 None
             } else {
-                match super::shared::resolve_service(
-                    service,
-                    &self.ctx.local_hostname,
-                    self.ctx.local_subnet.as_deref(),
-                ) {
-                    Ok(route) => self.ctx.list_tools(sid, &route).await.ok(),
-                    Err(_) => None,
-                }
+                self.ctx.list_tools(sid, &route).await.ok()
             };
             let names = catalog
                 .map(|catalog| {
@@ -109,11 +103,14 @@ impl Tool for DiscoverToolsTool {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            (health, unreachable, names)
+            Some((health, unreachable, names))
         }))
         .await;
         let mut output = String::new();
-        for (service, (health, unreachable, names)) in services.iter().zip(results) {
+        for (service, result) in services.iter().zip(results) {
+            let Some((health, unreachable, names)) = result else {
+                continue;
+            };
             let sid = &service.service_id;
             let name = service.display_name.as_deref().unwrap_or(sid);
             let description = service.description.as_deref().unwrap_or_default();
@@ -162,43 +159,14 @@ mod tests {
 
     #[tokio::test]
     async fn discover_filters_out_disallowed_registry_services() {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let mutation = r#"mutation {
-            upsert_ToolServiceRegistry(
-                filter: { service_id: { _eq: "observability-mcp" } },
-                add: {
-                    service_id: "observability-mcp",
-                    node_did: "did:key:z-test-agent",
-                    display_name: "Observability",
-                    description: "Metrics and logs",
-                    hostname: "localhost",
-                    tailscale_ip: "",
-                    lan_ip: "",
-                    mcp_port: 1,
-                    mcp_path: "/mcp",
-                    enabled: true
-                },
-                update: { enabled: true }
-            ) { _docID }
-        }"#;
-        let response = node.execute(mutation).await;
-        assert!(
-            !response.has_errors(),
-            "registry insert failed: {:?}",
-            response.errors
-        );
-
-        let tool = DiscoverToolsTool::new(MetaToolContext {
-            node,
-            mcp_pool: McpPool::new(),
-            health: ServiceHealthMap::new(),
-            local_hostname: "studio-1".to_string(),
-            local_subnet: None,
-            node_did: "did:key:z-test-agent".to_string(),
-            allowed_mcp_service_ids: vec!["x-data".to_string()],
-            remote_tools: super::super::tests::remote_selection(&["x-data"], &["search_posts"]),
-        });
+        let (node, _runtime) = super::super::tests::test_node().await;
+        super::super::tests::seed_registry_service(&node, "observability-mcp", "localhost", 1)
+            .await;
+        let mut context = test_context(node, McpPool::new(), ServiceHealthMap::new());
+        context.allowed_mcp_service_ids = vec!["x-data".to_string()];
+        context.remote_tools =
+            super::super::tests::remote_selection(&["x-data"], &["search_posts"]);
+        let tool = DiscoverToolsTool::new(context);
 
         let output = tool
             .call(DiscoverToolsArgs { query: None })
@@ -221,41 +189,7 @@ mod tests {
     use crate::lean_vocab_test::lean_tool_preflight_cases;
     use crate::tools::mcp::health::{HealthStatus, ServiceHealth};
 
-    async fn seed_registry_service(
-        node: &defra_node::EmbeddedNode,
-        service_id: &str,
-        hostname: &str,
-        port: u16,
-    ) {
-        let service_id = crate::store::graphql::escape_graphql_string(service_id);
-        let hostname = crate::store::graphql::escape_graphql_string(hostname);
-        let mutation = format!(
-            r#"mutation {{
-            upsert_ToolServiceRegistry(
-                filter: {{ service_id: {{ _eq: "{service_id}" }} }},
-                add: {{
-                    service_id: "{service_id}",
-                    node_did: "did:key:z-test-agent",
-                    display_name: "{service_id}",
-                    description: "test service {service_id}",
-                    hostname: "{hostname}",
-                    tailscale_ip: "",
-                    lan_ip: "",
-                    mcp_port: {port},
-                    mcp_path: "/mcp",
-                    enabled: true
-                }},
-                update: {{ enabled: true }}
-            ) {{ _docID }}
-        }}"#
-        );
-        let response = node.execute(&mutation).await;
-        assert!(
-            !response.has_errors(),
-            "registry insert failed: {:?}",
-            response.errors
-        );
-    }
+    use super::super::tests::seed_registry_service;
 
     fn stub_tool(name: &str) -> McpTool {
         let schema = serde_json::json!({ "type": "object", "properties": {} })
@@ -266,17 +200,20 @@ mod tests {
     }
 
     fn test_context(
-        node: Arc<defra_node::EmbeddedNode>,
+        node: Arc<defra_node::Node>,
         mcp_pool: McpPool,
         health: ServiceHealthMap,
     ) -> MetaToolContext {
+        let node_did = node.node_identity_did().unwrap().to_owned();
         MetaToolContext {
+            configuration: crate::inference::resolved::ResolvedConfiguration::Static,
+            actor: identity::Did::new(&node_did).unwrap(),
             node,
             mcp_pool,
             health,
             local_hostname: "studio-1".to_string(),
             local_subnet: None,
-            node_did: "did:key:z-test-agent".to_string(),
+            node_did,
             allowed_mcp_service_ids: vec![
                 "x-data".to_string(),
                 "hf-data".to_string(),
@@ -291,8 +228,7 @@ mod tests {
 
     #[tokio::test]
     async fn discover_stays_bounded_when_a_service_endpoint_blackholes() {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let (node, _runtime) = super::super::tests::test_node().await;
         seed_registry_service(&node, "x-data", "elsewhere", 9198).await;
         seed_registry_service(&node, "hf-data", "strangenas", 9200).await;
 
@@ -337,8 +273,7 @@ mod tests {
 
     #[tokio::test]
     async fn discover_contact_decisions_match_lean_preflight_health_gate() {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let (node, _runtime) = super::super::tests::test_node().await;
         seed_registry_service(&node, "x-data", "elsewhere", 9198).await;
 
         for case in lean_tool_preflight_cases()
@@ -398,8 +333,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn discover_fans_out_to_services_concurrently() {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let (node, _runtime) = super::super::tests::test_node().await;
         seed_registry_service(&node, "x-data", "elsewhere", 9198).await;
         seed_registry_service(&node, "web-research-mcp", "studio-2", 9213).await;
 

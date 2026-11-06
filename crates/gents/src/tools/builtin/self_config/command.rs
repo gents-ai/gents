@@ -136,7 +136,7 @@ impl ConfigCommandParams {
                     "agent create/clone allocates the ID from options.display-name; omit target_id. The receipt returns the new agent, Context and Tools IDs; use resource update for later changes"
                 ),
                 ["tools", ..] => bail!(
-                    "target_id is not accepted by tools; omit it and select the owning agent with options.agent, e.g. {{\"argv\":[\"tools\",\"get\"],\"options\":{{\"agent\":\"AGENT_ID\"}}}}"
+                    "target_id is not accepted by tools; omit it and select the owning agent with options.agent, e.g. {{\"argv\":[\"tools\",\"get\"],\"options\":{{\"agent\":\"AGENT_DID\"}}}}"
                 ),
                 _ => bail!(
                     "target_id is not accepted by {:?}; see the command's --help for its parameters",
@@ -295,7 +295,7 @@ impl Tool for ConfigCommandTool {
             name: Self::NAME.to_owned(),
             description: r#"Read and change Gents configuration through a native API, not a shell. Collection definitions and migrations use the separate schema tool.
 Call {"argv":[RESOURCE,VERB],"target_id"?:ID,"set"?:{field:value},"clear"?:[field],"options"?:{name:value}}. Documents share list, get, create, update, delete. Writes validate and commit immediately. ["validate"] audits saved configuration; fix reported errors before reporting completion. Preview writes nothing.
-Agent IDs are "<DID>:<slug>"; the slug alone works. ["help"] lists granted resources; ["help",RESOURCE] explains fields and exceptions."#.to_owned(),
+Agent IDs are DIDs; copy the exact agent_did from a creation receipt or ["agent","list"]. ["help"] lists granted resources; ["help",RESOURCE] explains fields and exceptions."#.to_owned(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -430,14 +430,14 @@ impl ConfigCommandTool {
             "batch" => self.batch(argv).await,
             "help" => self.help(argv.get(1).map(String::as_str), Vec::new()),
             "get" => {
-                let (agent_id, rest) = extract_agent_target(&argv[1..])?;
+                let (agent_did, rest) = extract_agent_target(&argv[1..])?;
                 if !rest.is_empty() {
                     return Err(CommandGuidance {
                         message: "Put the resource before the verb: use agent get to inspect an agent.".into(),
                         next_call: json!({"argv":["agent","get"],"target_id":rest[0]}),
                     }.into());
                 }
-                let core = self.target_core(agent_id.as_deref(), "get").await?;
+                let core = self.target_core(agent_did.as_deref()).await?;
                 let value = core
                     .read_effective_config(&self.categories, self.no_lockout, self.preview)
                     .await?;

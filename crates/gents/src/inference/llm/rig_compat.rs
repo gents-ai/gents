@@ -51,6 +51,7 @@ pub(crate) struct AdmittedCompletionClient<C> {
     connection: std::sync::Arc<str>,
     profile_id: Option<String>,
     separate_reasoning: bool,
+    agent_signer: Option<crate::store::identity::ManagedAgentSigner>,
 }
 
 impl<C> CompletionClient for AdmittedCompletionClient<C>
@@ -67,6 +68,7 @@ pub(crate) fn admitted_model<C>(
     model_name: &str,
     profile_id: Option<&str>,
     separate_reasoning: bool,
+    agent_signer: Option<crate::store::identity::ManagedAgentSigner>,
 ) -> AdmittedCompletionModel<C::CompletionModel>
 where
     C: ProviderClient,
@@ -77,6 +79,7 @@ where
         connection: connection.into(),
         profile_id: profile_id.map(str::to_owned),
         separate_reasoning,
+        agent_signer,
     }
     .completion_model(model_name)
 }
@@ -99,6 +102,7 @@ where
         admitted.model_name = Some(model);
         admitted.profile_id = client.profile_id.clone();
         admitted.separate_reasoning = client.separate_reasoning;
+        admitted.agent_signer = client.agent_signer.clone();
         admitted
     }
 

@@ -8,14 +8,16 @@ use gents::tools::background::job::job::{
     JobChildState, JobReadError, JobSpawn, JobState, JobStepOutput, JobView,
 };
 use gents::tools::background::job::view::{load_job_view, JobKey};
-use gents::{ConfigAccess, DocumentRuntimeOptions, ToolCeiling};
+use gents::{DocumentRuntimeOptions, ToolCeiling};
 use serde_json::{json, Value};
 
 use crate::plugin_job_support::{
     effects, guest_pin, install_job_fixture, job_call, job_settings, result, spawn, wait_job,
-    JobHarness, PlanEntry, CHILD, MODEL, PARENT,
+    JobHarness, PlanEntry, MODEL,
 };
-use crate::support::accepted_turn::{boot_accepted_turn_with_backend_capacity, AcceptedTurnSpec};
+use crate::support::accepted_turn::{
+    boot_managed_accepted_turn_with_backend_capacity, AcceptedTurnSpec,
+};
 use crate::support::streaming_backend::{StreamChunk, StreamPlan, StreamResponse, StreamScript};
 use crate::support::{test_db, TestDb};
 
@@ -68,15 +70,16 @@ async fn boot(
     capacity: usize,
 ) -> (JobHarness, tempfile::TempDir) {
     let plugin_home = tempfile::tempdir().expect("plugin home");
-    install_job_fixture(&db, plugin_home.path(), job_settings()).await;
+    let actors = install_job_fixture(&db, plugin_home.path(), job_settings()).await;
     let cwd = cwd.to_string_lossy().into_owned();
-    let runtime = boot_accepted_turn_with_backend_capacity(
+    let runtime = boot_managed_accepted_turn_with_backend_capacity(
         &db,
+        &actors.fixture,
         AcceptedTurnSpec {
             backend_id: "plugin-job-backend",
             model: MODEL,
-            parent_agent_id: PARENT,
-            configured_agent_ids: &[PARENT, CHILD],
+            parent_agent_did: &actors.fixture.binding.agent_did,
+            configured_agent_dids: &[&actors.fixture.binding.agent_did, &actors.child_did],
             request_id: &format!("{session_id}-parent"),
             session_id,
             prompt: &format!("{session_id} start"),
@@ -96,6 +99,7 @@ async fn boot(
     .await;
     let harness = JobHarness {
         db,
+        actors,
         plugin_home: plugin_home.path().to_path_buf(),
         runtime,
         session_id: session_id.into(),
@@ -105,7 +109,7 @@ async fn boot(
 
 /// The child requests the job row caused.
 async fn child_requests(h: &JobHarness, row_doc_id: &str) -> usize {
-    let response = ConfigAccess::local(h.db.node.clone())
+    let response = h.actors.fixture.access.clone()
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ caused_by_parent_tool_call_doc_id: {{ _eq: "{}" }} }}) {{ node_did }} }}"#,
             gents::store::graphql::escape_graphql_string(row_doc_id),
@@ -120,7 +124,7 @@ async fn child_requests(h: &JobHarness, row_doc_id: &str) -> usize {
 
 /// The row a refused call left, once it failed.
 async fn failed_row(h: &JobHarness, tool_call_id: &str) -> Option<String> {
-    let response = ConfigAccess::local(h.db.node.clone())
+    let response = h.actors.fixture.access.clone()
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }}, tool_call_id: {{ _eq: "{}" }} }}) {{ _docID lifecycle_state }} }}"#,
             gents::store::graphql::escape_graphql_string(&h.session_id),
@@ -134,10 +138,9 @@ async fn failed_row(h: &JobHarness, tool_call_id: &str) -> Option<String> {
 
 /// The `code` of the call's canonical terminal output.
 async fn terminal_code(h: &JobHarness, tool_call_id: &str) -> Option<String> {
-    let did = h.db.node_identity.did();
-    let history = gents::load_history(h.db.node.as_ref(), &h.session_id, did, Some(did))
-        .await
-        .expect("load the canonical history");
+    let history =
+        crate::support::fixtures::held_fixture_history(&h.db, &h.actors.fixture, &h.session_id)
+            .await;
     history.iter().find_map(|message| match message {
         Message::User { content } => content.iter().find_map(|content| match content {
             UserContent::ToolResult(result)
@@ -167,7 +170,7 @@ enum Settled {
 }
 
 async fn settle(h: &JobHarness, tool_call_id: &str, refusal: &str) -> Settled {
-    let access = ConfigAccess::local(h.db.node.clone());
+    let access = h.actors.fixture.access.clone();
     let key = || JobKey::Address {
         session_id: h.session_id.clone(),
         tool_call_id: tool_call_id.into(),
@@ -349,7 +352,7 @@ async fn child_cwd_outside_the_operator_root_is_refused_by_the_child_admission()
         Duration::from_secs(60),
     )
     .await;
-    let response = ConfigAccess::local(h.db.node.clone())
+    let response = h.actors.fixture.access.clone()
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ caused_by_parent_tool_call_doc_id: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason }} }}"#,
             gents::store::graphql::escape_graphql_string(&view.row_doc_id),

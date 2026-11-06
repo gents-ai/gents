@@ -1,10 +1,11 @@
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
@@ -13,7 +14,40 @@ use crate::documents::{
     TRIGGER_CURSOR_BATCH_SIZE,
 };
 use crate::runtime::snapshot::ActiveRuntimeSnapshot;
+use crate::store::config_client::{ConfigAccess, ConfigClientError};
 use crate::triggers::engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
+
+async fn schedule_visibility(
+    node: &Arc<EmbeddedNode>,
+    runtime_did: &str,
+    doc_ids: &[String],
+) -> Result<Vec<bool>, ConfigClientError> {
+    if node.node_identity_did() != Some(runtime_did) {
+        return Err(ConfigClientError::TransactionActorMismatch);
+    }
+    if doc_ids.iter().any(String::is_empty) {
+        return Err(ConfigClientError::InvalidOwnerObservation);
+    }
+    let actor =
+        identity::Did::new(runtime_did).map_err(ConfigClientError::RelationshipTargetIdentity)?;
+    ConfigAccess::local_as(node.clone(), actor)
+        .transact_readonly("schedule.cached_visibility", |txn| {
+            let doc_ids = doc_ids.to_vec();
+            Box::pin(async move {
+                let observations = txn.document_owners("Schedule", &doc_ids).await?;
+                if observations.len() != doc_ids.len()
+                    || observations
+                        .iter()
+                        .zip(&doc_ids)
+                        .any(|(row, id)| row.doc_id != *id)
+                {
+                    return Err(ConfigClientError::InvalidOwnerObservation);
+                }
+                Ok(observations.into_iter().map(|row| row.visible).collect())
+            })
+        })
+        .await
+}
 
 pub(crate) struct ScheduleSource {
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
@@ -63,11 +97,38 @@ impl TriggerSource for ScheduleSource {
                     .iter()
                     .filter_map(|(trigger_id, resolved)| {
                         snapshot
-                            .agent(&resolved.task.agent_id)
+                            .agent(&resolved.task.agent_did)
                             .map(|behavior| (trigger_id, resolved, behavior.node_did()))
                     })
                     .collect::<Vec<_>>();
                 for schedule_chunk in schedules.chunks(TRIGGER_CURSOR_BATCH_SIZE) {
+                    let mut groups: BTreeMap<&str, Vec<(usize, String)>> = BTreeMap::new();
+                    for (index, &(_, resolved, node_did)) in schedule_chunk.iter().enumerate() {
+                        groups
+                            .entry(node_did)
+                            .or_default()
+                            .push((index, resolved.schedule_doc_id.clone()));
+                    }
+                    let mut visible = vec![false; schedule_chunk.len()];
+                    for (node_did, group) in groups {
+                        let ids = group.iter().map(|(_, id)| id.clone()).collect::<Vec<_>>();
+                        match schedule_visibility(&self.node, node_did, &ids).await {
+                            Ok(allowed) => {
+                                for ((index, _), allowed) in group.into_iter().zip(allowed) {
+                                    visible[index] = allowed;
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, "failed to observe cached Schedule visibility")
+                            }
+                        }
+                    }
+                    let schedule_chunk = schedule_chunk
+                        .iter()
+                        .copied()
+                        .zip(visible)
+                        .filter_map(|(schedule, visible)| visible.then_some(schedule))
+                        .collect::<Vec<_>>();
                     let cursor_scopes = schedule_chunk
                         .iter()
                         .map(|&(trigger_id, _, node_did)| {
@@ -197,6 +258,7 @@ impl TriggerSource for ScheduleSource {
                                 &[trigger_id, &next_run_at],
                             ),
                             pre_materialized_request_id: None,
+                            event_source_generation: None,
                             on_result: Box::new(move |result| {
                                 let updates = match &result {
                                     FireResult::Fired { request_id } => {
@@ -264,3 +326,6 @@ impl TriggerSource for ScheduleSource {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;

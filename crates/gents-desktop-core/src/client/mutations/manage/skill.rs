@@ -1,6 +1,6 @@
 use anyhow::Result;
 #[cfg(test)]
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::documents::SkillDocument;
 use gents::store::collection::Collection;
 #[cfg(test)]

@@ -416,7 +416,7 @@ mod tests {
                 "{name}"
             );
             drop(request_owner);
-            node.shutdown().await;
+            node.shutdown().await.expect("shut down test node");
             let _ = std::fs::remove_dir_all(path);
         }
     }

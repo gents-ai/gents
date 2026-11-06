@@ -23,17 +23,18 @@ function deployment(overrides: Partial<DeploymentView> = {}): DeploymentView {
   return {
     nodeDid: "did:test:agent",
     dialSucceeded: true,
+    runtimeConnection: "connected",
     chatSafe: true,
     source: "enrolled",
     lastError: null,
     runtime: null,
     node: {
       nodeDid: "did:test:agent",
-      defaultAgentId: "default",
+      defaultAgentDid: "default",
     },
     agents: [
       {
-        agentId: "default",
+        agentDid: "default",
         displayName: "Default",
         enabled: true,
         isDefault: true,
@@ -44,7 +45,7 @@ function deployment(overrides: Partial<DeploymentView> = {}): DeploymentView {
       activeGeneration: 1,
       routerGeneration: 1,
       updatedAt: "2026-09-02T00:00:00Z",
-      agents: [{ state: "ready", agentId: "default" }],
+      agents: [{ state: "ready", agentDid: "default" }],
     },
     ...overrides,
   } as DeploymentView;
@@ -153,114 +154,23 @@ describe("session loading projection", () => {
     expect(status).toMatchObject({ layer: "localDatabase", phase: "loading" });
   });
 
-  it("attributes signed hydration progress to session sync using covered counts", () => {
-    expect(
-      project({
-        session: session({
-          hydration: {
-            sessionId: "session-1",
-            nodeDid: "did:test:agent",
-            phase: "serving",
-            mergedCount: 124,
-            coveredCount: 47,
-            servedCount: 47,
-          },
-        }),
-      }),
-    ).toMatchObject({
-      layer: "sessionSync",
-      phase: "loading",
-      detail: "Fetching session history · 47 of 47",
-    });
-  });
-
-  it("presents a session this client cannot read without a retry", () => {
-    expect(
-      project({
-        session: session({
-          hydration: {
-            sessionId: "session-1",
-            nodeDid: "did:test:agent",
-            phase: "unreadable",
-            mergedCount: 0,
-            coveredCount: 0,
-            servedCount: null,
-            detail:
-              "Started by the agent itself and owned by its node, so this client cannot read it.",
-          },
-        }),
-      }),
-    ).toEqual({
-      layer: "sessionSync",
-      phase: "blocked",
-      title: "Not readable from this client",
-      detail:
-        "Started by the agent itself and owned by its node, so this client cannot read it.",
-      action: null,
-    });
-  });
-
-  it("shows the signed refusal reason on a retryable sync failure", () => {
-    expect(
-      project({
-        session: session({
-          hydration: {
-            sessionId: "session-1",
-            nodeDid: "did:test:agent",
-            phase: "failed",
-            mergedCount: 0,
-            coveredCount: 0,
-            servedCount: null,
-            detail: "peer pairing does not match requester and agent",
-          },
-        }),
-      }),
-    ).toMatchObject({
-      phase: "failed",
-      detail:
-        "The node refused the session history: peer pairing does not match requester and agent.",
-      action: "retryHydration",
-    });
-  });
-
-  it("waits for automatic P2P recovery during approved session hydration", () => {
-    expect(
-      project({
-        operationalState: projectDeploymentOperationalState(
-          deployment({ dialSucceeded: false }),
-        ),
-        session: session({
-          hydration: {
-            sessionId: "session-1",
-            nodeDid: "did:test:agent",
-            phase: "requested",
-            mergedCount: 0,
-            coveredCount: 0,
-            servedCount: null,
-          },
-        }),
-      }),
-    ).toMatchObject({ layer: "p2p", phase: "loading", action: null });
-  });
-
-  it("waits for automatic route preparation without requiring reconnect", () => {
+  it("does not block a connected runtime while pairing is preparing", () => {
     expect(
       project({
         operationalState: projectDeploymentOperationalState(
           deployment({ source: "local-standard", chatSafe: false }),
         ),
       }),
-    ).toMatchObject({ layer: "p2p", phase: "loading", action: null });
+    ).toBeNull();
   });
 
-  it("does not require reconnect while an approved session snapshot arrives", () => {
-    expect(project({ session: null })).toMatchObject({
-      layer: "sessionSync",
-      action: null,
-    });
-    expect(project({ session: null, operationalState: null })).toMatchObject({
-      action: "retryLocal",
-    });
+  it("treats an absent or hidden session as an empty result", () => {
+    expect(
+      project({
+        session: null,
+        sessionLoad: { ...loaded, found: false },
+      }),
+    ).toBeNull();
   });
 
   it("does not block a new enrolled chat solely because its readiness observation is old", () => {
@@ -301,7 +211,7 @@ describe("session loading projection", () => {
             agents: [
               {
                 state: "unavailable",
-                agentId: "default",
+                agentDid: "default",
                 reason: "backend_not_configured",
               },
             ],
@@ -329,7 +239,7 @@ describe("session loading projection", () => {
               agents: [
                 {
                   state: "unavailable",
-                  agentId: "default",
+                  agentDid: "default",
                   reason: "agent_disabled",
                 },
               ],

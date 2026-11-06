@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use chrono::{DateTime, SecondsFormat, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
@@ -157,7 +157,7 @@ pub(crate) struct SourceSchemaCache {
 }
 
 async fn enrich_native_outcome_provenance(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     collection: &str,
     source: &mut serde_json::Value,
     owner: &str,
@@ -177,15 +177,16 @@ async fn enrich_native_outcome_provenance(
         "WorkspaceReceipt" => {
             let workspace_id = required_source_string(source, "workspace_id")?;
             let expected_work_unit = required_source_string(source, "work_unit_id")?;
-            let workspace = crate::tools::workspace::overlay::load_isolated_workspace_record(
-                node,
-                &workspace_id,
-                owner,
-            )
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!("WorkspaceReceipt has no node-scoped IsolatedWorkspace")
-            })?;
+            let workspace =
+                crate::tools::workspace::overlay::load_isolated_workspace_record_with_access(
+                    access,
+                    &workspace_id,
+                    owner,
+                )
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("WorkspaceReceipt has no node-scoped IsolatedWorkspace")
+                })?;
             anyhow::ensure!(
                 workspace.workspace_id == workspace_id,
                 "workspace identity changed during lookup"
@@ -208,9 +209,12 @@ async fn enrich_native_outcome_provenance(
         _ => anyhow::bail!("unsupported native provenance source {collection}"),
     };
 
-    let invocation = crate::triggers::callback::load_invocation(node, &invocation_id, owner)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("native source has no node-scoped CallbackInvocation"))?;
+    let invocation =
+        crate::triggers::callback::load_invocation_with_access(access, &invocation_id, owner)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!("native source has no node-scoped CallbackInvocation")
+            })?;
     anyhow::ensure!(
         invocation.invocation_id == invocation_id && invocation.owner_node_did == owner,
         "CallbackInvocation identity changed during lookup"
@@ -653,13 +657,15 @@ impl EventSource {
             .filter(|trigger| trigger.source_collection == collection)
             .map(|trigger| trigger.trigger_id.clone())
             .collect::<RapidHashSet<_>>();
-        let mut correlation_probes: BTreeMap<(Option<String>, String), Vec<String>> =
+        let mut correlation_probes: BTreeMap<(String, Option<String>, String), Vec<String>> =
             BTreeMap::new();
+        let mut actors = std::collections::BTreeSet::new();
         for trigger in snapshot
             .active_event_triggers()
             .values()
             .filter(|trigger| trigger.source_collection == collection)
         {
+            actors.insert(trigger.task.agent_did.clone());
             let Some(field) = trigger
                 .correlation_field
                 .as_deref()
@@ -669,21 +675,49 @@ impl EventSource {
                 continue;
             };
             correlation_probes
-                .entry((trigger.filter.clone(), field.to_string()))
+                .entry((
+                    trigger.task.agent_did.clone(),
+                    trigger.filter.clone(),
+                    field.to_string(),
+                ))
                 .or_default()
                 .push(trigger.trigger_id.clone());
         }
-        for (_, field) in correlation_probes.keys() {
+        for (_, _, field) in correlation_probes.keys() {
             crate::store::graphql::validate_graphql_name(field)?;
         }
-        let ids = tokio::select! {
-            biased;
-            _ = self.cancel.cancelled() => anyhow::bail!("event source seeding cancelled"),
-            ids = super::event_delivery::source_scan::load_doc_ids(&self.node, collection) => ids?,
-        };
-        let mut doc_ids: RapidHashSet<String> = ids.into_iter().collect();
+        let mut doc_ids = RapidHashSet::new();
         let mut deferred_by_doc: RapidHashMap<String, RapidHashSet<String>> = RapidHashMap::new();
-        for ((filter, field), correlated_trigger_ids) in correlation_probes {
+        for actor in actors {
+            let rows = tokio::select! {
+                biased;
+                _ = self.cancel.cancelled() => anyhow::bail!("event source seeding cancelled"),
+                rows = super::event_delivery::source_scan::load_source_rows(&self.node, collection,
+                    (collection == "CallbackResult").then_some("parent_linked"), None, &actor) => rows?,
+            };
+            for row in rows {
+                let id = row["_docID"]
+                    .as_str()
+                    .context("event source seed lacks document ID")?;
+                if collection == "CallbackResult" && row["parent_linked"].as_bool() != Some(true) {
+                    let pending = snapshot
+                        .active_event_triggers()
+                        .values()
+                        .filter(|trigger| {
+                            trigger.source_collection == collection
+                                && trigger.task.agent_did == actor
+                        })
+                        .map(|trigger| trigger.trigger_id.clone());
+                    deferred_by_doc
+                        .entry(id.to_owned())
+                        .or_default()
+                        .extend(pending);
+                } else {
+                    doc_ids.insert(id.to_owned());
+                }
+            }
+        }
+        for ((actor, filter, field), correlated_trigger_ids) in correlation_probes {
             let filter = filter
                 .as_deref()
                 .map(str::trim)
@@ -693,7 +727,7 @@ impl EventSource {
             let rows = tokio::select! {
                 biased;
                 _ = self.cancel.cancelled() => anyhow::bail!("event source correlation seeding cancelled"),
-                rows = super::event_delivery::source_scan::load_source_rows(&self.node, collection, Some(&field), Some(filter)) => rows?,
+                rows = super::event_delivery::source_scan::load_source_rows(&self.node, collection, Some(&field), Some(filter), &actor) => rows?,
             };
             for row in rows {
                 let correlation = row
@@ -909,6 +943,7 @@ impl EventSource {
             &trigger.source_collection,
             source_doc_id,
             trigger.filter.as_deref(),
+            Some(identity::Did::new(&trigger.task.agent_did)?),
         )
         .await?
         .is_some())
@@ -918,8 +953,9 @@ impl EventSource {
         &self,
         collection: &str,
         source_doc_id: &str,
+        agent_did: &str,
     ) -> anyhow::Result<serde_json::Value> {
-        self.read_source_doc(collection, source_doc_id)
+        self.read_source_doc(collection, source_doc_id, agent_did)
             .await?
             .with_context(|| format!("source doc {source_doc_id} not found in {collection}"))
     }
@@ -929,6 +965,7 @@ impl EventSource {
         &self,
         collection: &str,
         source_doc_id: &str,
+        agent_did: &str,
     ) -> anyhow::Result<Option<serde_json::Value>> {
         // `fields_for` validates this binding before the query is built, so
         // it is the one gate for both sites.
@@ -948,10 +985,14 @@ impl EventSource {
             id = crate::store::graphql::escape_graphql_string(source_doc_id),
             projection = projection,
         );
-        let response = crate::store::graphql::graphql_with_transaction_retry(
+        let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
-            &query,
-            "fetch source doc",
+            Some(identity::Did::new(agent_did)?),
+            "event.fetch_source_doc",
+            |txn| {
+                let query = &query;
+                Box::pin(async move { txn.execute_local_response(query).await })
+            },
         )
         .await?;
         let Some(rows) = response
@@ -975,7 +1016,7 @@ impl EventSource {
         doc: &serde_json::Value,
     ) -> anyhow::Result<Option<String>> {
         let fields = snapshot
-            .tool_surface(&trigger.task.agent_id)
+            .tool_surface(&trigger.task.agent_did)
             .map(|surface| surface.source_fill_fields())
             .unwrap_or_default();
         let mut source_fields = std::collections::BTreeMap::new();
@@ -1013,7 +1054,7 @@ impl EventSource {
         trigger: &'a crate::runtime::snapshot::ResolvedEventTrigger,
     ) -> anyhow::Result<Delivery<'a>> {
         let agent = snapshot
-            .agent(&trigger.task.agent_id)
+            .agent(&trigger.task.agent_did)
             .ok_or_else(|| anyhow::anyhow!("group trigger agent is unavailable"))?;
         Ok(Delivery::Trigger {
             node_did: agent.node_did(),
@@ -1131,9 +1172,22 @@ impl EventSource {
         #[cfg(test)]
         self.group_membership_queries
             .fetch_add(1, Ordering::Relaxed);
+        let agent = snapshot.agent(&trigger.task.agent_did)?;
+        let access = match crate::ConfigAccess::local_managed_agent(
+            self.node.clone(),
+            identity::Did::new(&trigger.task.agent_did).ok()?,
+            agent.agent_identity.as_ref(),
+        ) {
+            Ok(access) => access,
+            Err(error) => {
+                tracing::warn!(%error, "event group signer unavailable");
+                return None;
+            }
+        };
         let (docs, complete, state_doc_id) = match event_delivery::evaluate_group(
             &self.node,
             &self.source_schema_cache,
+            &access,
             delivery,
             correlation,
         )
@@ -1226,6 +1280,9 @@ impl EventSource {
                 &[&delivery.group_key(correlation)],
             ),
             pre_materialized_request_id: None,
+            event_source_generation: Some(event_delivery::resolved_event_admission_generation(
+                trigger,
+            )),
             on_result: Box::new(move |result| {
                 if matches!(
                     result,
@@ -1251,6 +1308,7 @@ impl EventSource {
 
     async fn marked_group_correlations(
         &self,
+        access: &crate::ConfigAccess,
         snapshot: &ActiveRuntimeSnapshot,
         trigger: &crate::runtime::snapshot::ResolvedEventTrigger,
         correlations: &[String],
@@ -1259,7 +1317,7 @@ impl EventSource {
             return RapidHashSet::new();
         }
         let Some(node_did) = snapshot
-            .agent(&trigger.task.agent_id)
+            .agent(&trigger.task.agent_did)
             .map(|agent| agent.node_did())
         else {
             return RapidHashSet::new();
@@ -1299,13 +1357,7 @@ impl EventSource {
             trigger_id = crate::store::graphql::escape_graphql_string(&trigger.trigger_id),
             limit = GROUP_RECOVERY_PAGE_SIZE,
         );
-        let response = match crate::store::graphql::graphql_with_transaction_retry(
-            &self.node,
-            &query,
-            "event-trigger batched marker prune",
-        )
-        .await
-        {
+        let response = match access.execute(&query).await {
             Ok(response) => response,
             Err(error) => {
                 tracing::warn!(
@@ -1317,8 +1369,7 @@ impl EventSource {
             }
         };
         response
-            .data
-            .as_ref()
+            .get("data")
             .and_then(|data| data.get("AgentRequest"))
             .and_then(serde_json::Value::as_array)
             .into_iter()
@@ -1336,6 +1387,7 @@ impl EventSource {
 
     async fn quiesced_group_correlations(
         &self,
+        access: &crate::ConfigAccess,
         delivery: Delivery<'_>,
         correlations: &[String],
     ) -> RapidHashSet<String> {
@@ -1364,13 +1416,7 @@ impl EventSource {
             owner = crate::store::graphql::escape_graphql_string(delivery.owner()),
             limit = GROUP_RECOVERY_PAGE_SIZE,
         );
-        let response = match crate::store::graphql::graphql_with_transaction_retry(
-            &self.node,
-            &query,
-            "event-trigger durable quiescence prune",
-        )
-        .await
-        {
+        let response = match access.execute(&query).await {
             Ok(response) => response,
             Err(error) => {
                 tracing::warn!(
@@ -1382,8 +1428,7 @@ impl EventSource {
             }
         };
         response
-            .data
-            .as_ref()
+            .get("data")
             .and_then(|data| data.get("EventGroupState"))
             .and_then(serde_json::Value::as_array)
             .into_iter()
@@ -1416,8 +1461,28 @@ impl EventSource {
                 return (Vec::new(), None, true);
             }
         };
+        let Some(agent) = snapshot.agent(&trigger.task.agent_did) else {
+            tracing::warn!(trigger_id = %trigger.trigger_id, "event group Agent unavailable");
+            return (Vec::new(), cursor.map(str::to_owned), false);
+        };
+        let access = match identity::Did::new(&trigger.task.agent_did)
+            .map_err(anyhow::Error::from)
+            .and_then(|actor| {
+                crate::ConfigAccess::local_managed_agent(
+                    self.node.clone(),
+                    actor,
+                    agent.agent_identity.as_ref(),
+                )
+                .map_err(anyhow::Error::from)
+            }) {
+            Ok(access) => access,
+            Err(error) => {
+                tracing::warn!(%error, "event group Agent signer unavailable");
+                return (Vec::new(), cursor.map(str::to_owned), false);
+            }
+        };
         let (correlations, next_cursor, complete) =
-            match event_delivery::group_correlation_page(&self.node, delivery, cursor).await {
+            match event_delivery::group_correlation_page(&access, delivery, cursor).await {
                 Ok(page) => page,
                 Err(error) => {
                     tracing::warn!(%error,"event group recovery page failed");
@@ -1429,10 +1494,10 @@ impl EventSource {
             .filter(|value| seen_correlations.insert(value.clone()))
             .collect::<Vec<_>>();
         let marked = self
-            .marked_group_correlations(snapshot, trigger, &correlations)
+            .marked_group_correlations(&access, snapshot, trigger, &correlations)
             .await;
         let quiesced = self
-            .quiesced_group_correlations(delivery, &correlations)
+            .quiesced_group_correlations(&access, delivery, &correlations)
             .await;
         let mut intents = Vec::new();
         for correlation in correlations
@@ -1711,6 +1776,33 @@ impl EventSource {
             {
                 continue;
             }
+            match event_delivery::callback_result_ready(
+                &self.node,
+                collection_name,
+                source_doc_id,
+                &trigger.task.agent_did,
+            )
+            .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    build.correlation_pending = true;
+                    build.deferred.push((
+                        trigger.trigger_id.clone(),
+                        "callback parent link".to_owned(),
+                    ));
+                    continue;
+                }
+                Err(error) => {
+                    tracing::warn!(trigger_id = %trigger.trigger_id, %error, "callback result readiness unavailable");
+                    build.correlation_pending = true;
+                    build.deferred.push((
+                        trigger.trigger_id.clone(),
+                        "callback parent link".to_owned(),
+                    ));
+                    continue;
+                }
+            }
             match self.probe_filter(source_doc_id, &trigger).await {
                 Ok(true) => {}
                 Ok(false) => {
@@ -1737,7 +1829,11 @@ impl EventSource {
             }
 
             let doc_vars = match self
-                .fetch_source_doc(&trigger.source_collection, source_doc_id)
+                .fetch_source_doc(
+                    &trigger.source_collection,
+                    source_doc_id,
+                    &trigger.task.agent_did,
+                )
                 .await
             {
                 Ok(value) => Some(value),
@@ -1761,16 +1857,36 @@ impl EventSource {
                     "CallbackResult" | "WorkspaceReceipt"
                 )
             {
-                let Some(owner) = snapshot
-                    .agent(&trigger.task.agent_id)
-                    .map(|agent| agent.node_did())
-                else {
+                let Some(agent) = snapshot.agent(&trigger.task.agent_did) else {
                     build.correlation_pending = true;
                     build.deferred.push((
                         trigger.trigger_id.clone(),
                         "native outcome provenance".to_owned(),
                     ));
                     continue;
+                };
+                let owner = agent.node_did();
+                let access = identity::Did::new(&trigger.task.agent_did)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|actor| {
+                        crate::ConfigAccess::local_managed_agent(
+                            self.node.clone(),
+                            actor,
+                            agent.agent_identity.as_ref(),
+                        )
+                        .map_err(anyhow::Error::from)
+                    });
+                let access = match access {
+                    Ok(access) => access,
+                    Err(error) => {
+                        build.correlation_pending = true;
+                        build.deferred.push((
+                            trigger.trigger_id.clone(),
+                            "native outcome provenance".to_owned(),
+                        ));
+                        tracing::warn!(trigger_id = %trigger.trigger_id, %error, "event source selected Agent access is unavailable");
+                        continue;
+                    }
                 };
                 let Some(doc) = doc_vars.as_mut() else {
                     build.correlation_pending = true;
@@ -1781,7 +1897,7 @@ impl EventSource {
                     continue;
                 };
                 if let Err(error) = enrich_native_outcome_provenance(
-                    &self.node,
+                    &access,
                     &trigger.source_collection,
                     doc,
                     owner,
@@ -1902,6 +2018,9 @@ impl EventSource {
                     &[&trigger.trigger_id, source_doc_id],
                 ),
                 pre_materialized_request_id: None,
+                event_source_generation: Some(event_delivery::resolved_event_admission_generation(
+                    &trigger,
+                )),
                 on_result: Box::new(move |result| {
                     EventSource::spawn_runtime_field_write(
                         node_for_callback,

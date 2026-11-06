@@ -4,7 +4,7 @@ abbrev SessionId := Nat
 
 abbrev RequestId := Nat
 
-abbrev AgentId := Nat
+abbrev AgentDid := Nat
 
 class HasTerminal (α : Type) where
   isTerminal : α → Prop

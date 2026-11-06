@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::session::{AgentSession, SessionArchiveOutcome, SessionArchiveReceipt};
 use std::sync::Arc;
 
@@ -83,11 +83,13 @@ pub async fn set_session_archived_on(
     let now = chrono::Utc::now().to_rfc3339();
     match access {
         ConfigAccess::Local(local) => {
-            ConfigAccess::transact_local_write(
-                local.node(),
-                Some(::identity::Did::new(actor.did())?),
-                "session.archive",
-                |txn| {
+            let selected = ConfigAccess::local_with_optional_agent_signer(
+                Arc::clone(local.node()),
+                ::identity::Did::new(actor.did())?,
+                actor.managed_agent_signer(),
+            )?;
+            selected
+                .transact_write("session.archive", |txn| {
                     Box::pin(apply_in_txn(
                         txn,
                         node_did,
@@ -96,9 +98,8 @@ pub async fn set_session_archived_on(
                         archived,
                         &now,
                     ))
-                },
-            )
-            .await
+                })
+                .await
         }
         ConfigAccess::Graphql(_) => {
             access
@@ -142,20 +143,22 @@ async fn apply_in_txn(
     let (decision, session) = apply_transition(row.session, expected_revision, archived, now);
     let outcome = match decision {
         Decision::Applied => {
-            let archived_at = session
-                .archived_at
-                .as_ref()
-                .map(|value| format!("\"{}\"", escape_graphql_string(value)))
-                .unwrap_or_else(|| "null".into());
-            let response = txn
-                .execute(&format!(
-                    r#"mutation {{ update_AgentSession(
-            filter: {{ _docID: {{ _eq: "{}" }}, {filter} }},
-            input: {{ archived_at: {archived_at}, archive_revision: {} }}
+            let mutation = format!(
+                r#"mutation($input: AgentSessionMutationInputArg!) {{ update_AgentSession(
+            filter: {{ _docID: {{ _eq: "{}" }}, {filter} }}, input: $input
         ) {{ _docID }} }}"#,
-                    escape_graphql_string(&row.doc_id),
-                    session.archive_revision
-                ))
+                escape_graphql_string(&row.doc_id)
+            );
+            let input = serde_json::json!({"input": {
+                "archived_at": session.archived_at,
+                "archive_revision": session.archive_revision,
+            }});
+            let response = txn
+                .execute_client_signed_update(
+                    &mutation,
+                    &input,
+                    gents_protocol::schemas::AGENT_SESSION,
+                )
                 .await?;
             let documents =
                 crate::store::graphql::mutation_documents(&response, "update_AgentSession")?

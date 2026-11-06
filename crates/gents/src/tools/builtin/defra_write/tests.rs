@@ -1,12 +1,63 @@
 use std::sync::Arc;
 
 use crate::inference::llm::tool::Tool;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde_json::json;
 
 use super::BoundedWriteTool;
 use crate::documents::{WriteToolDecl, WriteToolField, WriteToolFieldFill};
 use crate::store::config_client::ConfigAccess;
+
+#[test]
+fn write_confirmation_matches_modeled_result() {
+    let model = crate::lean_vocab_test::lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .unwrap();
+    assert_eq!(model.configuration_datastore_write_cases.len(), 4);
+    for name in ["committed", "unconfirmed"] {
+        let case = model
+            .configuration_datastore_write_cases
+            .iter()
+            .find(|case| case["name"] == name)
+            .unwrap();
+        let rows = if case["response_confirmed"] == true {
+            json!([{ "_docID":"document" }])
+        } else {
+            json!([])
+        };
+        let response = json!({"data":{"add_ActionRequest":rows}});
+        assert_eq!(
+            crate::store::graphql::created_doc_id(&response, "ActionRequest").is_ok(),
+            case["expected"].as_bool().unwrap(),
+            "{case}"
+        );
+        let mailbox = json!({"data":{"create_MailboxItem":if case["response_confirmed"] == true {
+            json!([{ "_docID":"mailbox" }])
+        } else { json!([]) }}});
+        assert_eq!(
+            crate::store::graphql::created_doc_id(&mailbox, "MailboxItem").is_ok(),
+            case["expected"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
+    for rows in [
+        json!([{"_docID":""}]),
+        json!([{"_docID":"a"},{"_docID":"b"}]),
+    ] {
+        assert!(crate::store::graphql::created_doc_id(
+            &json!({"data":{"add_ActionRequest":rows}}),
+            "ActionRequest"
+        )
+        .is_err());
+    }
+    for response in [
+        json!({"data":{"add_ActionRequest":[{"_docID":"a"}]},"errors":[{"message":"failed"}]}),
+        json!({"data":{"add_ActionRequest":[{"_docID":"a"}],"create_ActionRequest":[{"_docID":"a"}]}}),
+    ] {
+        assert!(crate::store::graphql::created_doc_id(&response, "ActionRequest").is_err());
+    }
+}
 
 #[test]
 fn native_input_admission_matches_lean() {
@@ -114,6 +165,27 @@ async fn rejects_a_persisted_protected_collection_at_execution() {
     .await
     .unwrap_err();
     assert!(format!("{err:#}").contains("protected"), "{err:#}");
+}
+
+#[tokio::test]
+async fn rejects_client_publication_mutations() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let mut protected = decl();
+    protected.collection = crate::lean_vocab_test::lean_contract_snapshot()
+        .client_publication_protected_collection
+        .clone();
+    let tool = BoundedWriteTool::new(ConfigAccess::local(node), protected);
+    assert!(!tool.is_well_formed());
+    let error = Tool::call(
+        &tool,
+        serde_json::from_value(json!({
+            "drift_sig":"abc", "summary":"stale", "status":"open"
+        }))
+        .unwrap(),
+    )
+    .await
+    .expect_err("client publication data is not agent-writable");
+    assert!(format!("{error:#}").contains("protected"));
 }
 
 #[tokio::test]
@@ -588,7 +660,7 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
             "parser: {case}"
         );
     }
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     for (index, case) in fields.iter().enumerate() {
         let schema = case["schema"].as_str().unwrap();
         let admitted = case["accepted"].as_bool().unwrap();
@@ -620,7 +692,13 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
             }],
             output_obligation: None,
         };
-        let tool = BoundedWriteTool::new(ConfigAccess::local(node.clone()), declaration);
+        let tool = BoundedWriteTool::new(
+            ConfigAccess::local_as(
+                node.clone(),
+                identity::Did::new(node.node_identity_did().unwrap()).unwrap(),
+            ),
+            declaration,
+        );
         let input = if admitted {
             &case["witness"]
         } else {

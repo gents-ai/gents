@@ -95,6 +95,7 @@ impl BackendAuthenticationView {
         let (kind, variable, account_ref) = match &backend.auth {
             BackendAuth::Unauthenticated => ("unauthenticated", None, None),
             BackendAuth::ApiKey { .. } => ("api_key", None, None),
+            BackendAuth::Credential { .. } => ("credential", None, None),
             BackendAuth::Environment { variable } => ("environment", Some(variable.clone()), None),
             BackendAuth::NodeOAuth { account_ref } => ("node_oauth", None, account_ref.clone()),
             BackendAuth::NodeOAuthPool { .. } => ("node_oauth_pool", None, None),
@@ -140,6 +141,30 @@ mod authentication_tests {
             auth: backend.auth,
         };
         assert!(!format!("{command:?}").contains("private-authentication-fixture"));
+    }
+
+    #[test]
+    fn authentication_metadata_reports_an_opaque_stored_credential() {
+        let backend: gents::InferenceBackend = serde_json::from_value(serde_json::json!({
+            "node_did":"did:test:backend", "backend_id":"backend", "name":"Backend",
+            "provider_kind":"ClaudeBedrock", "endpoint":"https://example.test",
+            "auth":{"kind":"credential", "id":"private-reference-fixture", "version":"private-version-fixture"}
+        }))
+        .unwrap();
+        let revision = gents_desktop_core::client::ConfigEditorRevision {
+            document_id: "physical".into(),
+            composite_cid: "revision".into(),
+        };
+        let view = BackendAuthenticationView::from_backend(revision, &backend);
+        let serialized = serde_json::to_value(&view).unwrap();
+        assert_eq!(serialized["authKind"], "credential");
+        assert!(serialized["environmentVariable"].is_null());
+        assert!(serialized["accountRef"].is_null());
+        assert!(serialized["allowOverage"].is_null());
+        assert!(serialized["oauthProvider"].is_null());
+        let serialized = serde_json::to_string(&view).unwrap();
+        assert!(!serialized.contains("private-reference-fixture"));
+        assert!(!serialized.contains("private-version-fixture"));
     }
 
     #[test]

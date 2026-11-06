@@ -20,9 +20,20 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let session = case.session_id.to_string();
-    let owner = "did:test:drain-owner";
-    let foreign_owner = "did:test:foreign-owner";
-    let requester = "did:test:foreign-requester";
+    use crate::store::identity::NodeIdentity as _;
+    let root = crate::triggers::callback::test_root_identity();
+    let derived_did = |nonce: char| {
+        crate::store::identity::derive_agent_identity(&root, &nonce.to_string().repeat(64))
+            .unwrap()
+            .did()
+            .to_owned()
+    };
+    let owner_did = root.did().to_owned();
+    let foreign_owner_did = derived_did('d');
+    let requester_did = derived_did('e');
+    let owner = owner_did.as_str();
+    let foreign_owner = foreign_owner_did.as_str();
+    let requester = requester_did.as_str();
     async fn create(
         node: &Arc<EmbeddedNode>,
         id: &str,
@@ -33,7 +44,7 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
     ) -> String {
         let input=source.map(|source|json!({"queue":{"source":source,"policy":if source=="background_completion" {"coalesce"} else {"append"},"key":if source=="background_completion" {Some(format!("background_completion:{session}"))}else{None}}}));
         let value = json!({"request_id":id,"purpose":"normal","node_did":owner,"requester_did":requester,"session_id":session,
-            "agent_id":"configured","lifecycle_state":"pending","execution_origin":if source.is_some(){"scheduled"}else{"interactive"},"input":input,"created_at":"2026-09-01T00:00:00Z"});
+            "agent_did":"configured","lifecycle_state":"pending","execution_origin":if source.is_some(){"scheduled"}else{"interactive"},"input":input,"created_at":"2026-09-01T00:00:00Z"});
         crate::store::config_client::ConfigAccess::transact_local_write(
             node, None, "test.interrupt.scope_fixture", |txn| { let value = value.clone(); Box::pin(async move {
                 let response = txn.execute_with_variables(
@@ -126,5 +137,5 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
         first,
         "repeat interrupt preserves latch timestamp"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

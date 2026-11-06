@@ -1,8 +1,11 @@
 use super::*;
 use crate::session::origin::SessionScope;
-use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+#[cfg(test)]
+use crate::store::config_client::ConfigAccess;
+use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::required_rows;
 
+#[cfg(test)]
 pub(super) async fn load_hydration_selection(
     node: &Arc<EmbeddedNode>,
     request: &HydrationRequest,
@@ -16,6 +19,7 @@ pub(super) async fn load_hydration_selection(
 /// All origin, segment and effect dependencies use the caller's same read
 /// snapshot. Inventory enumeration must additionally establish bounded complete
 /// membership and current projection owners before certifying coverage.
+#[cfg(test)]
 pub(super) async fn load_hydration_selection_in_txn(
     txn: &ConfigApplyTxn<'_>,
     request: &HydrationRequest,
@@ -92,11 +96,19 @@ pub(super) async fn load_canonical_selection_in_txn(
     }
     root_header_ids.sort();
     root_header_ids.dedup();
-    load_origin_headers(txn, &mut root_headers, &scope.node_did, requester).await?;
     let mut output_segments = required_rows::<serde_json::Value>(&response, "AgentOutputSegment")?
         .iter()
         .map(decode_output_segment_row)
         .collect::<Result<Vec<_>>>()?;
+    let copied = copied_fork_headers(&root_headers, &output_segments);
+    load_origin_headers(
+        txn,
+        &mut root_headers,
+        &copied,
+        &scope.node_did,
+        requester,
+    )
+    .await?;
     load_referenced_segments(
         txn,
         &root_headers,
@@ -132,6 +144,7 @@ pub(super) async fn load_canonical_selection_in_txn(
     load_referenced_bases(
         txn,
         &root_headers,
+        &copied,
         &output_segments,
         &mut bases,
         &mut effects,
@@ -214,27 +227,66 @@ pub(super) async fn load_canonical_selection_in_txn(
             session_id: row.session_id.clone(),
         });
     }
-    let authorized_reference_closure = documents
-        .iter()
-        .filter(|document| document.session_id != scope.session_id)
-        .map(|document| SessionHydrationDocumentKey {
-            collection: document.collection,
-            doc_id: document.doc_id.clone(),
-        })
-        .collect();
-
     Ok(HydrationSelection {
         documents,
-        authorized_reference_closure,
         publications: canonical.publications,
         headers: root_headers,
         output_segments,
     })
 }
 
+/// Fork headers that resolve from copies in their own session, and those
+/// copies; neither needs anything from the source session.
+#[derive(Default)]
+struct CopiedForks {
+    headers: BTreeSet<String>,
+    segments: BTreeSet<String>,
+}
+
+fn copied_fork_headers(
+    headers: &[crate::session::canonical_rows::TranscriptMessageRow],
+    segments: &[crate::session::canonical_rows::OutputSegmentRow],
+) -> CopiedForks {
+    let observed = segments
+        .iter()
+        .map(|row| gents_protocol::output::reconstruction::ObservedSegment {
+            doc_id: &row.doc_id,
+            segment: &row.segment,
+        })
+        .collect::<Vec<_>>();
+    let mut copied = CopiedForks::default();
+    for header in headers {
+        if gents_protocol::output::reconstruction::fork_copy_observations(
+            &header.message,
+            &observed,
+        )
+        .is_none()
+        {
+            continue;
+        }
+        copied.headers.insert(header.doc_id.clone());
+        for reference in header.message.payload_references() {
+            copied.segments.extend(
+                segments
+                    .iter()
+                    .filter(|row| {
+                        gents_protocol::output::reconstruction::is_fork_copy_for(
+                            &header.message,
+                            &row.segment,
+                            &reference.close_doc_id,
+                        )
+                    })
+                    .map(|row| row.doc_id.clone()),
+            );
+        }
+    }
+    copied
+}
+
 async fn load_origin_headers(
     txn: &ConfigApplyTxn<'_>,
     headers: &mut Vec<crate::session::canonical_rows::TranscriptMessageRow>,
+    copied: &CopiedForks,
     node_did: &str,
     requester_did: &str,
 ) -> Result<()> {
@@ -248,7 +300,11 @@ async fn load_origin_headers(
             .find_map(|row| match &row.message.publication {
                 gents_protocol::output::MessagePublication::Fork {
                     origin_message_doc_id,
-                } if !loaded.contains(origin_message_doc_id) => Some(origin_message_doc_id.clone()),
+                } if !loaded.contains(origin_message_doc_id)
+                    && !copied.headers.contains(&row.doc_id) =>
+                {
+                    Some(origin_message_doc_id.clone())
+                }
                 _ => None,
             });
         let Some(doc_id) = next else {
@@ -330,6 +386,7 @@ async fn load_request_segments(
 async fn load_referenced_bases(
     txn: &ConfigApplyTxn<'_>,
     headers: &[crate::session::canonical_rows::TranscriptMessageRow],
+    copied: &CopiedForks,
     segments: &[crate::session::canonical_rows::OutputSegmentRow],
     bases: &mut Vec<ScopedDocument>,
     effects: &mut Vec<ToolEffectRow>,
@@ -339,7 +396,10 @@ async fn load_referenced_bases(
     use gents_protocol::output::{MessageBlock, MessagePublication, OutputSource};
     use gents_protocol::session_hydration::SessionHydrationCollection;
     let mut wanted = BTreeSet::new();
-    for row in headers {
+    for row in headers
+        .iter()
+        .filter(|row| !copied.headers.contains(&row.doc_id))
+    {
         if let Some(id) = &row.message.request_doc_id {
             wanted.insert((SessionHydrationCollection::AgentRequest, id.clone()));
         }
@@ -364,7 +424,10 @@ async fn load_referenced_bases(
             }
         }
     }
-    for row in segments {
+    for row in segments
+        .iter()
+        .filter(|row| !copied.segments.contains(&row.doc_id))
+    {
         if let OutputSource::ToolCall { tool_call_doc_id } = &row.segment.source {
             wanted.insert((
                 SessionHydrationCollection::AgentToolCall,

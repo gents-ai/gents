@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 pub(crate) struct Source {
     did: String,
+    pub(crate) agent_did: String,
+    default_agent_did: String,
     session_readable: bool,
     observation: Arc<Mutex<Value>>,
     pub(crate) queries: Arc<Mutex<Vec<String>>>,
@@ -24,17 +26,17 @@ async fn endpoint(State(source): State<Source>, body: Bytes) -> Json<Value> {
     };
     source.queries.lock().unwrap().push(query.to_owned());
     let data = if query.contains("AgentSession") {
-        json!({"AgentSession":if source.session_readable {json!([{
+        json!({"AgentSession":if source.session_readable && query.contains("\"chat\"") {json!([{
             "_docID":"session-document", "session_id":"chat", "node_did":source.did,
-            "requester_did":source.did, "agent_id":"engineer", "created_at":"2026-10-21T00:00:00Z"
+            "requester_did":source.agent_did, "agent_did":source.agent_did, "created_at":"2026-10-21T00:00:00Z"
         }])} else {json!([])}})
     } else if query.contains("GoalObservation") {
         json!({"GoalObservation":source.observation.lock().unwrap().clone()})
     } else if query.contains("AgentRequest(") {
         json!({"AgentRequest":source.requests.lock().unwrap().clone()})
     } else if query.contains("Node(") {
-        json!({"Node":[{"node_did":source.did, "default_agent_id":"engineer", "enabled":true}],
-            "Agent":[{"agent_id":"engineer", "node_did":source.did, "enabled":true}]})
+        json!({"Node":[{"node_did":source.did, "default_agent_did":source.default_agent_did, "enabled":true}],
+            "Agent":[{"agent_did":source.agent_did, "node_did":source.did, "enabled":true}]})
     } else {
         panic!("unexpected source query: {query}")
     };
@@ -63,12 +65,16 @@ pub(crate) async fn fixture(
 )> {
     let dir = tempfile::tempdir()?;
     let identity = gents::KeyIdentity::load_or_create(dir.path().join("source.key"), None)?;
+    let binding = gents::store::identity::provision_agent_identity(&identity)?;
+    let agent_identity =
+        gents::store::identity::RegisteredIdentity::from_registered_did(&binding.agent_did, None)?;
     let mut observation = SessionGoalObservation {
         version: SESSION_GOAL_CONTROL_VERSION,
         node_did: identity.did().into(),
+        agent_did: binding.agent_did.clone(),
         session_id: "chat".into(),
         session_doc_id: "session-document".into(),
-        requester_did: Some(identity.did().into()),
+        requester_did: Some(binding.agent_did.clone()),
         observed_at: "2026-10-21T00:00:00Z".into(),
         goal: observed.map(|reference| {
             let goal: gents::goal::GoalDocument = serde_json::from_value(json!({
@@ -90,7 +96,7 @@ pub(crate) async fn fixture(
     if fault == Some("foreign-session") {
         observation.session_doc_id = "foreign-session-document".into();
     }
-    observation.signature = identity.sign(&observation.signing_payload()?).await?;
+    observation.signature = agent_identity.sign(&observation.signing_payload()?).await?;
     if fault == Some("tampered-root") {
         observation
             .goal
@@ -107,6 +113,12 @@ pub(crate) async fn fixture(
     };
     let source = Source {
         did: identity.did().into(),
+        default_agent_did: if fault == Some("different-default-agent") {
+            gents::store::identity::provision_agent_identity(&identity)?.agent_did
+        } else {
+            binding.agent_did.clone()
+        },
+        agent_did: binding.agent_did,
         session_readable: readable,
         observation: Arc::new(Mutex::new(rows)),
         queries: Arc::new(Mutex::new(vec![])),
@@ -118,12 +130,10 @@ pub(crate) async fn fixture(
     let server = tokio::spawn(async move {
         axum::serve(listener, router).await.unwrap();
     });
-    Ok((
-        identity,
-        GraphqlEndpoint::anonymous(format!("http://{address}/api/v0/graphql")),
-        source,
-        server,
-    ))
+    let graphql =
+        GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), identity.did())
+            .with_client_signing_capability(identity.client_signing_capability()?)?;
+    Ok((identity, graphql, source, server))
 }
 
 pub(crate) fn authored_input() -> RequestInput {
@@ -157,7 +167,7 @@ async fn generated_cli_preparation_captures_goal_before_signing() -> Result<()> 
             identity.did(),
             "hello",
             Some("chat"),
-            Some("engineer"),
+            Some(&source.agent_did),
             Some("fixed-request".into()),
             RequestSubmitOptions {
                 input: Some(input),
@@ -192,7 +202,7 @@ async fn generated_cli_preparation_captures_goal_before_signing() -> Result<()> 
                         .lock()
                         .unwrap()
                         .iter()
-                        .any(|q| q.contains("AgentSession") || q.contains("GoalObservation")),
+                        .any(|q| q.contains("GoalObservation")),
                     "{case}"
                 );
             }
@@ -212,14 +222,14 @@ async fn cli_preparation_rejects_tampered_and_foreign_goal_observations() -> Res
         .unwrap();
     assert_eq!(modeled["expected"]["kind"], "pending");
     for fault in ["tampered-root", "foreign-session"] {
-        let (identity, graphql, _, server) =
+        let (identity, graphql, source, server) =
             fixture(true, true, reference(&modeled["observed"]), Some(fault)).await?;
         let actual = prepare_agent_request(
             &graphql,
             identity.did(),
             "hello",
             Some("chat"),
-            Some("engineer"),
+            Some(&source.agent_did),
             None,
             RequestSubmitOptions {
                 input: Some(authored_input()),
@@ -254,7 +264,7 @@ async fn cli_fresh_session_does_not_capture_an_unrelated_goal() -> Result<()> {
         identity.did(),
         "hello",
         None,
-        Some("engineer"),
+        Some(&source.agent_did),
         None,
         RequestSubmitOptions {
             input: Some(input.clone()),
@@ -271,7 +281,7 @@ async fn cli_fresh_session_does_not_capture_an_unrelated_goal() -> Result<()> {
         .lock()
         .unwrap()
         .iter()
-        .any(|q| q.contains("AgentSession") || q.contains("GoalObservation")));
+        .any(|q| q.contains("GoalObservation")));
     assert!(
         identity
             .verify(
@@ -302,7 +312,7 @@ async fn cli_retry_keeps_captured_absence_after_a_new_goal() -> Result<()> {
         identity.did(),
         "retry",
         Some("chat"),
-        Some("engineer"),
+        Some(&source.agent_did),
         None,
         RequestSubmitOptions {
             input: Some(input.clone()),
@@ -320,7 +330,7 @@ async fn cli_retry_keeps_captured_absence_after_a_new_goal() -> Result<()> {
         .lock()
         .unwrap()
         .iter()
-        .any(|q| q.contains("AgentSession") || q.contains("GoalObservation")));
+        .any(|q| q.contains("GoalObservation")));
     assert!(
         identity
             .verify(
@@ -330,5 +340,76 @@ async fn cli_retry_keeps_captured_absence_after_a_new_goal() -> Result<()> {
             )
             .await?
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn client_request_signs_as_user_and_retains_agent_owned_session_scope() -> Result<()> {
+    let snapshot: Value = gents_lean_contract::load_contract_snapshot()?;
+    let modeled = snapshot["agent_request_admission_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "client-in-agent-owned-session")
+        .unwrap();
+    assert_eq!(modeled["expected_admitted"], true);
+    let (runtime, endpoint, source, server) = fixture(true, true, None, None).await?;
+    let directory = tempfile::tempdir()?;
+    let user = gents::KeyIdentity::load_or_create(directory.path().join("user.key"), None)?;
+    let endpoint = GraphqlEndpoint::as_principal(endpoint.url(), user.did())
+        .with_client_signing_capability(user.client_signing_capability()?)?;
+    let create = prepare_agent_request_with_input(
+        &endpoint,
+        runtime.did(),
+        "continue",
+        Some("chat"),
+        Some(&source.agent_did),
+        None,
+        RequestSubmitOptions::default(),
+    )
+    .await?
+    .create;
+    server.abort();
+    assert_eq!(create.requester_did, source.agent_did);
+    assert_eq!(create.admission.signer_did, user.did());
+    assert_eq!(
+        create.admission.kind,
+        gents_protocol::request_admission::AgentRequestAdmissionKind::Client
+    );
+    assert!(
+        user.verify(
+            user.did(),
+            &create.signing_payload(),
+            &create.admission.signature
+        )
+        .await?
+    );
+    assert!(
+        !user
+            .verify(
+                runtime.did(),
+                &create.signing_payload(),
+                &create.admission.signature
+            )
+            .await?
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn request_selection_preserves_existing_session_agent_after_default_changes() -> Result<()> {
+    let (identity, endpoint, source, server) =
+        fixture(true, false, None, Some("different-default-agent")).await?;
+    let selected = resolve_request_agent_did(&endpoint, identity.did(), Some("chat"), None).await?;
+    assert_eq!(selected, source.agent_did);
+    assert!(resolve_request_agent_did(
+        &endpoint,
+        identity.did(),
+        Some("chat"),
+        Some(&source.default_agent_did)
+    )
+    .await
+    .is_err());
+    server.abort();
     Ok(())
 }

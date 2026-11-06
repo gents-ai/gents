@@ -15,8 +15,9 @@ const PAGE_SIZE: usize = 32;
 
 #[derive(Deserialize)]
 struct ControlRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
     intent_json: String,
-    receipt_json: Option<String>,
 }
 
 struct Candidate<'a> {
@@ -26,7 +27,7 @@ struct Candidate<'a> {
 }
 
 /// The projected requests are lookup hints. Attribution requires their canonical
-/// signed input, the runtime's applied receipts, and each Goal's physical root.
+/// signed input, the selected agent's applied receipts, and each Goal's physical root.
 /// These facts survive completion and deletion independently of current Goal
 /// state. Pages batch observation reads rather than add a round trip per row.
 pub async fn load_applied_opening_goal_ids(
@@ -161,7 +162,7 @@ pub async fn load_applied_opening_goal_provenance(
             let request = candidate.request;
             let node = escape_graphql_string(request.node_did.as_deref().unwrap_or_default());
             let session = escape_graphql_string(request.session_id.as_deref().unwrap_or_default());
-            let requester = request.requester_did.as_deref().map(|did| {
+            let requester = request.admission_signer_did.as_deref().map(|did| {
                 format!("\"{}\"", escape_graphql_string(did))
             }).unwrap_or_else(|| "null".into());
             let goal = escape_graphql_string(candidate.goal_id);
@@ -169,7 +170,9 @@ pub async fn load_applied_opening_goal_provenance(
             let doc = escape_graphql_string(request.doc_id.as_deref().unwrap_or_default());
             format!(r#"
                 goal_{i}: Goal(filter: {{node_did: {{_eq: "{node}"}}, session_id: {{_eq: "{session}"}}, goal_id: {{_eq: "{goal}"}}, assignment_root_request_doc_id: {{_eq: "{doc}"}}}}, showDeleted: true, limit: 1) {{assignment_root_request_doc_id}}
-                control_{i}: AgentSessionGoalControl(filter: {{command_id: {{_eq: "{command}"}}, node_did: {{_eq: "{node}"}}, session_id: {{_eq: "{session}"}}, requester_did: {{_eq: {requester}}}}}, limit: 2) {{intent_json receipt_json}}
+                session_{i}: AgentSession(filter: {{node_did: {{_eq: "{node}"}}, session_id: {{_eq: "{session}"}}}}, limit: 2) {{_docID requester_did agent_did}}
+                control_{i}: AgentSessionGoalControl(filter: {{command_id: {{_eq: "{command}"}}, node_did: {{_eq: "{node}"}}, session_id: {{_eq: "{session}"}}, requester_did: {{_eq: {requester}}}}}, limit: 2) {{_docID intent_json}}
+                receipt_{i}: AgentSessionGoalReceipt(filter: {{command_id: {{_eq: "{command}"}}}}, limit: 2) {{command_doc_id receipt_json}}
             "#)
         }).collect::<Vec<_>>().join("\n");
         let data = access.execute_read(&format!("{{ {selections} }}")).await?;
@@ -188,7 +191,27 @@ pub async fn load_applied_opening_goal_provenance(
             let [control] = controls.as_slice() else {
                 continue;
             };
-            if applied(candidate, control)? {
+            let receipts = data["data"][format!("receipt_{i}")]
+                .as_array()
+                .context("opening provenance omitted receipt rows")?;
+            let [receipt] = receipts.as_slice() else {
+                continue;
+            };
+            if receipt["command_doc_id"].as_str() != Some(control.doc_id.as_str()) {
+                continue;
+            }
+            let sessions = data["data"][format!("session_{i}")]
+                .as_array()
+                .context("opening provenance omitted session rows")?;
+            let [session] = sessions.as_slice() else {
+                continue;
+            };
+            if applied(
+                candidate,
+                control,
+                receipt["receipt_json"].as_str(),
+                session,
+            )? {
                 for hint in page.iter().filter(|hint| {
                     hint.doc_id() == candidate.request.doc_id.as_deref()
                         && hint.matches(candidate.request)
@@ -222,14 +245,17 @@ pub async fn load_applied_opening_goal_id(
     Ok(observed.doc_id.as_ref().and_then(|doc| roots.remove(doc)))
 }
 
-fn applied(candidate: &Candidate<'_>, control: &ControlRow) -> Result<bool> {
+fn applied(
+    candidate: &Candidate<'_>,
+    control: &ControlRow,
+    receipt_json: Option<&str>,
+    session: &serde_json::Value,
+) -> Result<bool> {
     let Ok(command) = serde_json::from_str::<SessionGoalControl>(&control.intent_json) else {
         return Ok(false);
     };
-    let Some(receipt) = control
-        .receipt_json
-        .as_deref()
-        .and_then(|raw| serde_json::from_str::<SessionGoalControlReceipt>(raw).ok())
+    let Some(receipt) =
+        receipt_json.and_then(|raw| serde_json::from_str::<SessionGoalControlReceipt>(raw).ok())
     else {
         return Ok(false);
     };
@@ -241,12 +267,17 @@ fn applied(candidate: &Candidate<'_>, control: &ControlRow) -> Result<bool> {
         || command.command_id != candidate.command_id
         || Some(command.node_did.as_str()) != request.node_did.as_deref()
         || Some(command.session_id.as_str()) != request.session_id.as_deref()
-        || Some(command.requester_did.as_str()) != request.requester_did.as_deref()
+        || session["_docID"].as_str() != command.session_doc_id.as_deref()
+        || session["requester_did"].as_str() != request.requester_did.as_deref()
+        || session["agent_did"].as_str() != Some(command.agent_did.as_str())
         || !matches!(command.operation, GoalOperation::Create { .. })
         || initial.request_id != request.request_id
         || initial.node_did != command.node_did
+        || initial.agent_did != command.agent_did
+        || Some(command.agent_did.as_str()) != request.agent_did.as_deref()
         || initial.session_id != command.session_id
-        || initial.requester_did != command.requester_did
+        || Some(initial.requester_did.as_str()) != request.requester_did.as_deref()
+        || initial.admission.signer_did != command.requester_did
         || Some(&initial.input) != request.input.as_ref()
         || request.admission_signature.as_deref()
             != Some(
@@ -268,7 +299,7 @@ fn applied(candidate: &Candidate<'_>, control: &ControlRow) -> Result<bool> {
         .unwrap_or(false)
         || receipt.validate_for(&command).is_err()
         || !verify_did_signature(
-            &command.node_did,
+            &command.agent_did,
             &receipt.signing_payload()?,
             &receipt.signature,
         )

@@ -1,14 +1,57 @@
 pub(super) async fn log_recovery(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     node_did: &str,
-    default_agent_id: &str,
+    default_agent_did: &str,
+    identities: &[std::sync::Arc<dyn crate::store::identity::NodeIdentity>],
     executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
 ) {
     // The inference-call sweep is parent-gated and must run after request repair.
-    let outcome = crate::runtime::startup_recovery::run_startup_recovery_with_executions(
-        node, node_did, executions,
-    )
-    .await;
+    let outcome =
+        crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
+            node, node_did, identities, executions,
+        )
+        .await;
+    for identity in identities {
+        let agent_did = identity.did();
+        let resolved = (|| {
+            let actor = identity::Did::new(agent_did)?;
+            let access = crate::ConfigAccess::local_managed_agent(
+                node.clone(),
+                actor.clone(),
+                identity.as_ref(),
+            )?;
+            Ok::<_, anyhow::Error>((actor, access))
+        })();
+        let (actor, access) = match resolved {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                tracing::warn!(%agent_did, %error, "agent recovery signing capability unavailable");
+                continue;
+            }
+        };
+        if let Err(error) =
+            crate::session::child_ownership::recover_agent_session_child_relationships_with_access(
+                &access, node_did, &actor,
+            )
+            .await
+        {
+            tracing::warn!(%agent_did, %error, "session child relationship recovery failed");
+        }
+        if let Err(error) = crate::session::recover_agent_session_relationships_with_access(
+            &access, node_did, &actor,
+        )
+        .await
+        {
+            tracing::warn!(%agent_did, %error, "session relationship recovery failed");
+        }
+        if let Err(error) = crate::triggers::engine::durable::recover_outcomes_with_access(
+            &access, node_did, agent_did,
+        )
+        .await
+        {
+            tracing::warn!(%agent_did, %error, "agent trigger outcome recovery failed");
+        }
+    }
     let mut recovered_any = false;
 
     match outcome.tool_calls {
@@ -102,7 +145,7 @@ pub(super) async fn log_recovery(
     if !recovered_any {
         tracing::debug!(
             node_did = %node_did,
-            default_agent_id = %default_agent_id,
+            default_agent_did = %default_agent_did,
             "startup recovery found no stuck documents"
         );
     }

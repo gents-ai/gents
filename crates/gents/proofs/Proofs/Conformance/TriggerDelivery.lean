@@ -6,6 +6,13 @@ namespace Conformance.TriggerDelivery
 
 open Triggers.Durable Conformance.Contracts
 
+def callbackVisibilityCases : List String := do
+  let visible ← [false, true]
+  let linked ← [false, true]
+  pure <| "{\"visible\":" ++ toString visible ++ ",\"linked\":" ++ toString linked ++
+    ",\"ready\":" ++ toString (EventDelivery.Durable.callbackResultReady visible linked) ++
+    ",\"after\":" ++ toString (EventDelivery.Durable.callbackResultCursor 4 5 visible linked) ++ "}"
+
 def object (fields : List (String × String)) : String :=
   "{" ++ String.intercalate "," (fields.map fun (k, v) => jsonString k ++ ":" ++ v) ++ "}"
 
@@ -475,6 +482,7 @@ def casesJson : String := object [
   ("retained_outcomes", jsonArray retainedOutcomeCases),
   ("cursors", jsonArray cursorCases),
   ("callback_cursors", jsonArray callbackCursorCases),
+  ("callback_visibility", jsonArray callbackVisibilityCases),
   ("identities", jsonArray identityCases), ("sessions", jsonArray sessionCases),
   ("delivery_options", jsonArray deliveryOptionCases),
   ("latest_admissions", jsonArray latestAdmissionCases),

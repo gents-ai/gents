@@ -25,16 +25,13 @@ use super::to_health_view;
 static STARTERS: std::sync::LazyLock<super::runtime_tasks::StarterCache> =
     std::sync::LazyLock::new(Default::default);
 
-/// Where lineage for `node_did` is read. The desktop's node holds a session's
-/// requests only once that session has been opened, so the runtime it
-/// operates is read when there is one.
 pub(crate) fn node_reads(
     core: &ClientCore,
     node_did: &str,
-) -> gents::store::config_client::ConfigAccess {
+) -> anyhow::Result<gents::store::config_client::ConfigAccess> {
     core.operator_observation_graphql(node_did)
         .map(gents::store::config_client::ConfigAccess::Graphql)
-        .unwrap_or_else(|| gents::store::config_client::ConfigAccess::local(core.node_arc()))
+        .ok_or_else(|| anyhow::anyhow!("Runtime {node_did} has no authenticated GraphQL endpoint"))
 }
 
 pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot {
@@ -51,7 +48,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         .cloned()
         .map(|status| (status.peer_id.clone(), status))
         .collect();
-    let requester_did = core.node_identity().did().to_string();
 
     let mut deployments = sync_state
         .directory
@@ -63,11 +59,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             let mailbox_items = store
                 .mailbox_items
                 .iter()
-                .filter(|row| {
-                    row.node_did == peer.node_did
-                        && row.requester_did == requester_did
-                        && row.status == "open"
-                })
+                .filter(|row| row.node_did == peer.node_did && row.status == "open")
                 .map(MailboxItemView::from)
                 .collect::<Vec<_>>();
             let inference =
@@ -75,8 +67,8 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             let node = inference.node;
             let node_config = node_row.cloned();
             let agent_configs = inference.agent_configs;
-            let default_agent_id = store
-                .default_agent_id_for_node(&peer.node_did)
+            let default_agent_did = store
+                .default_agent_did_for_node(&peer.node_did)
                 .map(str::to_owned);
             let runtime = store.latest_runtime(&peer.node_did).map(|row| RuntimeView {
                 reconcile_phase: normalize_optional(row.reconcile_phase.as_deref()),
@@ -88,9 +80,9 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             });
 
             let agents = inference.agents;
-            let agent_ids = agents
+            let agent_dids = agents
                 .iter()
-                .map(|agent| agent.agent_id.as_str())
+                .map(|agent| agent.agent_did.as_str())
                 .collect::<Vec<_>>();
             let inference_backends = inference.inference_backends;
             let inference_profiles = inference.inference_profiles;
@@ -188,7 +180,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 .filter(|(index, row)| {
                     source_matches_node(&store.task_source_node_dids, *index, &peer.node_did, false)
                         && row.node_did == peer.node_did
-                        && agent_ids.contains(&row.agent_id.as_str())
+                        && agent_dids.contains(&row.agent_did.as_str())
                 })
                 .collect::<Vec<_>>();
             let mut schedules = store
@@ -272,27 +264,11 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 &tasks,
                 &triggers,
             );
-            let node_scope = core.transcript_node_scope(&peer.node_did);
-            let operator = core.operator_observation_graphql(&peer.node_did).is_some();
-            let sender = core.requester_did(&peer);
             for summary in &mut sessions {
-                let row = store.sessions.iter().find(|row| {
-                    row.session_id == summary.session_id && row.node_did == summary.node_did
-                });
-                summary.unreadable_reason = row
-                    .and_then(|row| {
-                        gents_desktop_core::client::session_unreadable_reason(
-                            row,
-                            node_scope.as_deref(),
-                            operator,
-                        )
-                    })
+                summary.unreadable_reason = core
+                    .session_unreadable_reason(&summary.node_did)
                     .map(str::to_owned);
-                summary.unsendable_reason = row
-                    .and_then(|row| {
-                        gents_desktop_core::client::session_unsendable_reason(row, &sender)
-                    })
-                    .map(str::to_owned);
+                summary.unsendable_reason = summary.unreadable_reason.clone();
             }
 
             let operator_root = peer
@@ -314,12 +290,17 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 operator_root.as_deref(),
             );
 
+            let runtime_connection = core
+                .store()
+                .runtime_connection(&peer.node_did)
+                .map(|status| status.as_str().to_owned());
             let chat_safe = peer.is_chat_ready_at(Utc::now());
+            let pairing_ready = Some(peer.pairing_ready);
             let node_readiness = project_node_readiness(
                 store.node_readiness(&peer.node_did),
                 &peer.node_did,
-                agents.iter().map(|agent| agent.agent_id.as_str()),
-                default_agent_id.as_deref(),
+                agents.iter().map(|agent| agent.agent_did.as_str()),
+                default_agent_did.as_deref(),
             );
 
             DeploymentView {
@@ -330,7 +311,9 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 source: peer.source,
                 graphql: peer.graphql,
                 dial_succeeded: status.is_some_and(|status| status.dial_succeeded),
+                runtime_connection,
                 chat_safe,
+                pairing_ready,
                 routes: status
                     .map(|status| {
                         status
@@ -396,13 +379,14 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         .collect::<Vec<_>>();
 
     for deployment in &mut deployments {
-        let access = node_reads(core, &deployment.node_did);
-        super::runtime_tasks::resolve_summary_starters(
-            &access,
-            &STARTERS,
-            deployment.sessions.iter_mut(),
-        )
-        .await;
+        if let Ok(access) = node_reads(core, &deployment.node_did) {
+            super::runtime_tasks::resolve_summary_starters(
+                &access,
+                &STARTERS,
+                deployment.sessions.iter_mut(),
+            )
+            .await;
+        }
         super::runtime_tasks::apply_originating_tasks(
             &mut deployment.sessions,
             &deployment.tasks,
@@ -457,7 +441,7 @@ fn project_task_view(
         task_id: task.task_id.clone(),
         name: normalize_optional(task.display_name.as_deref()),
         description: normalize_optional(task.description.as_deref()),
-        agent_id: Some(task.agent_id.clone()),
+        agent_did: Some(task.agent_did.clone()),
         prompt_template: Some(task.prompt_template.clone()),
         goal_objective_template: normalize_optional(task.goal_objective_template.as_deref()),
         goal_token_budget: task.goal_token_budget,
@@ -476,7 +460,7 @@ mod task_view_tests {
 
     #[test]
     fn canonical_task_hooks_and_tags_survive_projection() {
-        let task : gents :: documents :: Task = serde_json :: from_value (serde_json :: json ! ({ "node_did" : "did:test:owner" , "task_id" : "release" , "display_name" : "Release" , "agent_id" : "operator" , "prompt_template" : "Ship it" , "emit_outcome" : true , "output_schema_ref" : "schemas/release-result.json" , "hooks" : [{ "hook_id" : "prepare" , "phase" : "before" , "command" : ["sh" , "-c" , "./prepare.sh"] , "timeout_secs" : 45 } , { "hook_id" : "cleanup" , "phase" : "finally" , "command" : ["./cleanup"] }] , "tags" : ["release" , "operator"] })) . expect ("canonical task") ;
+        let task : gents :: documents :: Task = serde_json :: from_value (serde_json :: json ! ({ "node_did" : "did:test:owner" , "task_id" : "release" , "display_name" : "Release" , "agent_did" : "operator" , "prompt_template" : "Ship it" , "emit_outcome" : true , "output_schema_ref" : "schemas/release-result.json" , "hooks" : [{ "hook_id" : "prepare" , "phase" : "before" , "command" : ["sh" , "-c" , "./prepare.sh"] , "timeout_secs" : 45 } , { "hook_id" : "cleanup" , "phase" : "finally" , "command" : ["./cleanup"] }] , "tags" : ["release" , "operator"] })) . expect ("canonical task") ;
         let view = project_task_view(
             &task,
             TaskRecentRunsView {
@@ -505,14 +489,14 @@ mod task_view_tests {
 pub(crate) fn project_node_readiness<'a>(
     row: Option<&NodeReadinessRow>,
     expected_node_did: &str,
-    configured_agent_ids: impl IntoIterator<Item = &'a str>,
-    configured_default_agent_id: Option<&str>,
+    configured_agent_dids: impl IntoIterator<Item = &'a str>,
+    configured_default_agent_did: Option<&str>,
 ) -> NodeReadinessView {
     let projection = gents_protocol::row::project_node_readiness(
         row,
         expected_node_did,
-        configured_agent_ids,
-        configured_default_agent_id,
+        configured_agent_dids,
+        configured_default_agent_did,
     );
     NodeReadinessView {
         source: match projection.unknown_reason {
@@ -527,16 +511,16 @@ pub(crate) fn project_node_readiness<'a>(
         agents: projection
             .agents
             .into_iter()
-            .map(|(agent_id, state)| match state {
-                ProjectedAgentReadiness::Ready => AgentReadinessStatusView::Ready { agent_id },
+            .map(|(agent_did, state)| match state {
+                ProjectedAgentReadiness::Ready => AgentReadinessStatusView::Ready { agent_did },
                 ProjectedAgentReadiness::Unavailable(reason) => {
                     AgentReadinessStatusView::Unavailable {
-                        agent_id,
+                        agent_did,
                         reason: reason.into(),
                     }
                 }
                 ProjectedAgentReadiness::Unknown(reason) => AgentReadinessStatusView::Unknown {
-                    agent_id,
+                    agent_did,
                     reason: reason.into(),
                 },
             })
@@ -621,7 +605,7 @@ fn resolve_agent_environments(
             });
             let matching_sessions = sessions
                 .iter()
-                .filter(|session| session.agent_id.as_deref() == Some(agent.agent_id.as_str()))
+                .filter(|session| session.agent_did.as_deref() == Some(agent.agent_did.as_str()))
                 .collect::<Vec<_>>();
             let skill_names = context
                 .into_iter()
@@ -639,7 +623,7 @@ fn resolve_agent_environments(
                 .collect();
             let host = selected_tools.and_then(|tools| tools.host.as_ref());
             AgentEnvironmentView {
-                agent_id: agent.agent_id.clone(),
+                agent_did: agent.agent_did.clone(),
                 display_name: agent.display_name.clone(),
                 enabled: agent.enabled,
                 is_default: agent.is_default,
@@ -655,7 +639,7 @@ fn resolve_agent_environments(
                         .filter(|root| !root.is_empty())
                         .map(std::path::Path::new);
                     gents::tools::surface::resolve_effective_tool_root(
-                        &agent.agent_id,
+                        &agent.agent_did,
                         stored_root,
                         operator_root,
                     )
@@ -766,7 +750,8 @@ mod agent_environment_tests {
 
     fn agent() -> AgentView {
         AgentView {
-            agent_id: "default".into(),
+            creation_nonce: "a".repeat(64),
+            agent_did: "default".into(),
             node_did: "did:test:owner".into(),
             display_name: "Amy".into(),
             description: None,
@@ -807,7 +792,7 @@ mod agent_environment_tests {
 
     fn session(
         session_id: &str,
-        agent_id: Option<&str>,
+        agent_did: Option<&str>,
         turn_state: Option<&str>,
     ) -> SessionSummary {
         SessionSummary {
@@ -825,7 +810,7 @@ mod agent_environment_tests {
             preview_text: None,
             reply_preview: None,
             status: None,
-            agent_id: agent_id.map(str::to_string),
+            agent_did: agent_did.map(str::to_string),
             latest_request_id: None,
             task_id: None,
             task_name: None,

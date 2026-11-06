@@ -4,7 +4,7 @@ use super::*;
 async fn prompt_resolves_end_turn_after_terminalization() {
     let (_tempdir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;
-    let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did));
+    let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did, &node).await);
     let engine = test_engine(node.clone());
     let (_buffer, sender) = buffer_sender();
 
@@ -66,7 +66,7 @@ async fn prompt_resolves_end_turn_after_terminalization() {
 async fn goal_prompt_atomically_submits_scoped_goal_and_signed_request() {
     let (_dir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;
-    let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did));
+    let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did, &node).await);
     let mut prompt = parse_prompt_request(
         &json!({
             "sessionId":"goal-submit-session",
@@ -122,9 +122,13 @@ async fn goal_prompt_atomically_submits_scoped_goal_and_signed_request() {
             .objective,
         "Explain the architecture"
     );
-    gents::goal::delete_goals_for_session(&node, &node_did, &prompt.session_id)
-        .await
-        .unwrap();
+    gents::goal::delete_goals_for_session_from_access(
+        &manager.client_access(),
+        &node_did,
+        &prompt.session_id,
+    )
+    .await
+    .unwrap();
     let next_receipt = manager
         .submit_request(&prompt, "new-incarnation")
         .await
@@ -139,7 +143,7 @@ async fn live_turn_streams_tool_agent_and_message_updates_once_each() {
     let graphql = spawn_mock_graphql(node.clone()).await;
     let manager = Arc::new(TurnManager::new(
         node.clone(),
-        test_config(graphql, &node_did),
+        test_config(graphql, &node_did, &node).await,
     ));
     let engine = test_engine(node.clone());
     let (buffer, sender) = buffer_sender();
@@ -271,7 +275,7 @@ async fn live_turn_streams_tool_agent_and_message_updates_once_each() {
 async fn identical_text_distinct_rows_both_stream() {
     let (_tempdir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;
-    let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did));
+    let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did, &node).await);
     let engine = test_engine(node.clone());
     let (buffer, sender) = buffer_sender();
 

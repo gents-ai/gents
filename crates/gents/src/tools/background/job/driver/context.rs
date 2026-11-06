@@ -1,16 +1,14 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gents_protocol::job::{JobPin, JobStepInput, JobStepOutput};
-use serde_json::Value;
 
 use super::super::admit::{HostFacts, StepContext};
 use super::super::origin::engine_guard;
 use super::super::settings::effective_ceiling;
 use super::JobRuntime;
-use crate::plugin::store::{parse_coordinate, read_record, InstalledPlugin};
+use crate::plugin::store::{parse_coordinate, read_published_record, InstalledPlugin};
 use crate::store::config_client::ConfigApplyTxn;
-use crate::store::graphql::escape_graphql_string;
 use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::lifecycle::ToolCallLifecycle;
 use crate::tools::surface::EndpointScope;
@@ -55,7 +53,7 @@ pub(in crate::tools::background::job) async fn step_context_for(
     let (_, tools, targets) = crate::request::admission::load_request_context_in_txn(
         txn,
         &caller.node_did,
-        &caller.agent_id,
+        &caller.agent_did,
     )
     .await?;
     let settings = tools
@@ -65,13 +63,22 @@ pub(in crate::tools::background::job) async fn step_context_for(
         .flatten()
         .find(|plugin| plugin.plugin == facts.plugin_ref)
         .and_then(|plugin| plugin.job);
-    let installed = parse_coordinate(&facts.plugin_ref)
-        .ok()
-        .and_then(|(namespace, name)| read_record(&runtime.home, namespace, name).ok());
+    let observed = match parse_coordinate(&facts.plugin_ref) {
+        Ok((namespace, name)) => match read_published_record(&runtime.home, namespace, name) {
+            Ok(record) => Some(record),
+            Err(error) if error.is_busy() => return Err(error.into()),
+            Err(_) => None,
+        },
+        Err(_) => None,
+    };
+    let (installed, _guard) = match observed {
+        Some((record, guard)) => (Some(record), Some(guard)),
+        None => (None, None),
+    };
     let policy = settings.as_ref().map(|settings| &settings.policy);
     let cwd = Path::new(&facts.cwd);
     let key = |target: &crate::documents::AgentTargetDocument| {
-        (target.target_node_did.clone(), target.agent_id.clone())
+        (target.target_node_did.clone(), target.agent_did.clone())
     };
     let job_ids = settings
         .as_ref()
@@ -131,7 +138,10 @@ pub(in crate::tools::background::job) async fn step_context_for(
         engine_provenance_operator: installed
             .as_ref()
             .is_some_and(|plugin| engine_guard(&runtime.home, plugin).is_ok()),
-        max_hop: max_request_hop_in_txn(txn, &caller.node_did).await?,
+        max_hop: crate::request::lifecycle::RequestHopCapObservation::of(
+            txn.runtime_max_request_hop(&caller.node_did).await?,
+        )
+        .bound(),
         target_hops,
         target_ids: targets
             .iter()
@@ -154,27 +164,4 @@ pub(in crate::tools::background::job) async fn step_context_for(
         resume_facts: facts,
     };
     Ok((ctx, installed))
-}
-
-/// The target node's optional `max_request_hop`, read through `txn`.
-async fn max_request_hop_in_txn(txn: &ConfigApplyTxn<'_>, node_did: &str) -> Result<Option<u32>> {
-    let response = txn
-        .execute(&format!(
-            r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 2) {{ max_request_hop }} }}"#,
-            escape_graphql_string(node_did)
-        ))
-        .await?;
-    let rows = response
-        .pointer("/data/Node")
-        .and_then(Value::as_array)
-        .context("Node hop-cap query returned no row array")?;
-    anyhow::ensure!(rows.len() <= 1, "multiple Node rows matched a DID");
-    match rows.first().map(|row| &row["max_request_hop"]) {
-        None | Some(Value::Null) => Ok(None),
-        Some(hop) => hop
-            .as_u64()
-            .and_then(|hop| u32::try_from(hop).ok())
-            .map(Some)
-            .context("Node.max_request_hop must be a nonnegative u32"),
-    }
 }

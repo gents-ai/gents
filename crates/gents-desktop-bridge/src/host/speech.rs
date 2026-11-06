@@ -83,15 +83,17 @@ impl SpeechClient {
         node_did: &str,
         service_id: &str,
     ) -> Result<Vec<crate::types::ToolServiceToolView>> {
-        let route = route(core, node_did, service_id).await?;
         let result = self
             .transport()?
-            .request(Request {
-                service: service_id.to_owned(),
-                endpoint: route.endpoint,
-                actor: core.node_identity().did().to_owned(),
-                send_node_did: route.send_node_did,
-                operation: Operation::List,
+            .request_prepared(async {
+                let route = route(core, node_did, service_id).await?;
+                Ok(Request {
+                    service: service_id.to_owned(),
+                    endpoint: route.endpoint,
+                    actor: core.node_identity().did().to_owned(),
+                    send_node_did: route.send_node_did,
+                    operation: Operation::List,
+                })
             })
             .await?;
         match result {
@@ -174,18 +176,20 @@ impl SpeechClient {
             !tool.tool_name.trim().is_empty() && tool.tool_name.len() <= 256,
             "Choose a configured speech tool."
         );
-        let route = route(core, &tool.node_did, &tool.service_id).await?;
         let result = self
             .transport()?
-            .request(Request {
-                service: tool.service_id.clone(),
-                endpoint: route.endpoint,
-                actor: core.node_identity().did().to_owned(),
-                send_node_did: route.send_node_did,
-                operation: Operation::Call {
-                    tool: tool.tool_name.clone(),
-                    arguments,
-                },
+            .request_prepared(async {
+                let route = route(core, &tool.node_did, &tool.service_id).await?;
+                Ok(Request {
+                    service: tool.service_id.clone(),
+                    endpoint: route.endpoint,
+                    actor: core.node_identity().did().to_owned(),
+                    send_node_did: route.send_node_did,
+                    operation: Operation::Call {
+                        tool: tool.tool_name.clone(),
+                        arguments,
+                    },
+                })
             })
             .await?;
         match result {

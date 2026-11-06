@@ -144,15 +144,15 @@ fn nested_json(row: &Value, field: &str) -> Result<Value> {
     })
 }
 
-fn explained_tool_names(explanation: &Value, agent_id: &str) -> Result<Vec<String>> {
+fn explained_tool_names(explanation: &Value, agent_did: &str) -> Result<Vec<String>> {
     explanation["agents"]
         .as_array()
         .context("explanation has no agents")?
         .iter()
-        .find(|agent| agent["agent_id"] == agent_id)
+        .find(|agent| agent["agent_did"] == agent_did)
         .and_then(|agent| agent.pointer("/surface/tool_names"))
         .and_then(Value::as_array)
-        .with_context(|| format!("{agent_id} has no explained surface: {explanation}"))
+        .with_context(|| format!("{agent_did} has no explained surface: {explanation}"))
         .map(|names| {
             names
                 .iter()
@@ -183,12 +183,12 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
         ],
     )?;
     let owner = node_did_from_init(&init)?;
-    let agent_id = gents::default_agent_id_for_node(&owner);
+    let agent_did = agent_did_from_init(&init)?;
     let tools_path = tempdir.path().join("tools.json");
     write_json_file(
         &tools_path,
         &json!({
-            "tools_id": format!("{agent_id}-tools"),
+            "tools_id": format!("{agent_did}-tools"),
             "node_did": owner,
             "host": {"files": {"mode": "ReadWrite"}, "cli": [{"name": "echo"}]}
         }),
@@ -240,7 +240,7 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
         "{live}"
     );
     assert_eq!(live["host_tool_ceiling"]["live"], true, "{live}");
-    let live_tools = explained_tool_names(&live, &agent_id)?;
+    let live_tools = explained_tool_names(&live, &agent_did)?;
     assert!(live_tools.iter().any(|name| name == "read_file"), "{live}");
     assert!(live_tools.iter().any(|name| name == "echo"), "{live}");
     assert!(
@@ -299,7 +299,7 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
     );
     assert_eq!(offline["ceiling_source"], "init_json", "{offline}");
     assert_eq!(offline["host_tool_ceiling"]["live"], false, "{offline}");
-    let offline_tools = explained_tool_names(&offline, &agent_id)?;
+    let offline_tools = explained_tool_names(&offline, &agent_did)?;
     assert!(
         offline_tools.iter().any(|name| name == "write_file"),
         "{offline}"

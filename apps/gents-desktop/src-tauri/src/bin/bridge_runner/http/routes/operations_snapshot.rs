@@ -1,7 +1,6 @@
-use std::sync::Arc;
-
 use anyhow::{anyhow, Result};
 use chrono::Utc;
+use gents::store::config_client::ConfigAccess;
 use gents_desktop_bridge::snapshot::operations_snapshot::{
     project_backgrounded_tools, stuck_diagnostics_from_tool_calls, ToolCallRow,
 };
@@ -9,10 +8,9 @@ use gents_desktop_bridge::types::{
     DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest, NativeExecutorStatusView,
     RuntimeLivenessView,
 };
-use gents_desktop_core::client::ClientCore;
 
 pub(super) async fn operations_snapshot_response(
-    core: Arc<ClientCore>,
+    access: &ConfigAccess,
     request: DesktopOperationsSnapshotRequest,
 ) -> Result<DesktopOperationsSnapshot> {
     let native_executors = gents::tools::exec::status::active_native_executors()
@@ -26,7 +24,7 @@ pub(super) async fn operations_snapshot_response(
             age_ms: executor.age_ms,
         })
         .collect();
-    let tool_call_rows = fetch_background_tool_calls(&core)
+    let tool_call_rows = fetch_background_tool_calls(access)
         .await
         .map_err(|error| anyhow!("failed to query AgentToolCall: {error}"))?;
     let liveness = RuntimeLivenessView {
@@ -49,7 +47,7 @@ pub(super) async fn operations_snapshot_response(
     })
 }
 
-async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolCallRow>, String> {
+async fn fetch_background_tool_calls(access: &ConfigAccess) -> Result<Vec<ToolCallRow>, String> {
     let query = r#"
         query {
             AgentToolCall(
@@ -71,16 +69,12 @@ async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolC
         }
     "#;
 
-    let response = gents::store::graphql::graphql_with_transaction_retry(
-        core.node(),
-        query,
-        "AgentToolCall query",
-    )
-    .await
-    .map_err(|error| format!("{error:#}"))?;
-
+    let response = access
+        .execute(query)
+        .await
+        .map_err(|error| format!("{error:#}"))?;
     let data = response
-        .data
+        .get("data")
         .ok_or_else(|| "AgentToolCall query returned no data".to_string())?;
     let rows = data
         .get("AgentToolCall")

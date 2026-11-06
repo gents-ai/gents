@@ -61,7 +61,7 @@ function session(overrides: Partial<DesktopSessionSnapshot>): DesktopSessionSnap
   return {
     sessionId: "session-1",
     nodeDid: "did:test:node",
-    agentId: "agent-default",
+    agentDid: "agent-default",
     title: "Session",
     previewText: null,
     status: "processing",
@@ -290,7 +290,7 @@ describe("activity status", () => {
   });
 });
 
-describe("a folded group with a failure in it", () => {
+describe("a group with a failure in it", () => {
   const command = (key: string, failed: boolean): RenderedToolCallView => ({
     ...tool({
       kind: "command",
@@ -317,17 +317,39 @@ describe("a folded group with a failure in it", () => {
   const header = () =>
     screen.getByRole("button", { name: /ran 2 commands/i, expanded: undefined });
 
-  it("names the failure on the header and stays folded", () => {
-    render(
-      panel(
-        session({ timelineItems: [group([command("a", false), command("b", true)])] }),
-        false,
+  it("opens the failed step by default and honors later group collapse", () => {
+    const failed = {
+      ...tool(
+        {
+          kind: "generic",
+          summary: null,
+          input: '{"argv":["run"]}',
+          output:
+            '{"code":"plugin_job_policy_denied","message":"The job policy refused this call.","next":"Ask the operator for the required capability."}',
+        },
+        "error",
       ),
+      itemKey: "plugin",
+      toolName: "plugin_tool",
+    };
+    render(
+      panel(session({ timelineItems: [group([command("a", false), failed])] }), false),
     );
-    const button = header();
-    expect(button).toHaveTextContent("Ran 2 commands, 1 failed");
-    expect(button).toHaveAttribute("aria-expanded", "false");
+    const button = screen.getByRole("button", { name: /1 failed/i });
+    expect(button).toHaveAttribute("aria-expanded", "true");
     expect(button).toHaveAttribute("data-failed", "true");
+    const step = document.querySelector('[data-step-key="plugin"]');
+    if (!(step instanceof HTMLElement)) throw new Error("plugin step is missing");
+    expect(step).toHaveAttribute("data-open");
+    expect(within(step).getByText(/The job policy refused this call/)).toBeVisible();
+    expect(
+      within(step).getByText(/Ask the operator for the required capability/),
+    ).toBeVisible();
+    fireEvent.click(within(step).getByRole("button", { name: "Hide detail" }));
+    expect(step).not.toHaveAttribute("data-open");
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(button);
+    expect(button).toHaveAttribute("aria-expanded", "false");
   });
 
   it("stays folded when every call worked", () => {

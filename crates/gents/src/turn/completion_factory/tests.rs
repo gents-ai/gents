@@ -16,7 +16,7 @@ fn request() -> AgentRequest {
         request_id: "request-123".to_string(),
         node_did: String::new(),
         requester_did: None,
-        agent_id: "agent-test".to_owned(),
+        agent_did: "agent-test".to_owned(),
         session_id: "session-456".to_string(),
         content: String::new(),
         max_total_tokens: None,
@@ -519,17 +519,31 @@ fn agent_with_retry(completion_retry: CompletionRetryProfileFields) -> ResolvedA
         )
         .unwrap(),
     );
+    let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+    agent_with_binding(identity, &binding, completion_retry)
+}
+
+fn agent_with_binding(
+    identity: Arc<dyn NodeIdentity>,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    completion_retry: CompletionRetryProfileFields,
+) -> ResolvedAgent {
     let node = Arc::new(RuntimeNode {
         node_did: identity.did().to_string(),
         identity,
-        default_agent_id: "general".to_string(),
+        default_agent_did: binding.agent_did.clone(),
         display_name: None,
         enabled: true,
     });
 
+    let agent_identity =
+        crate::store::identity::resolve_agent_identity(node.identity.as_ref(), binding).unwrap();
+    let agent_did = binding.agent_did.clone();
     ResolvedAgent {
+        configuration: crate::inference::resolved::ResolvedConfiguration::Static,
         profile_id: None,
-        agent_id: "general".to_string(),
+        agent_did,
+        agent_identity,
         node,
         backend_id: Some("backend-general".to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
@@ -687,44 +701,79 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
         "all nullable restart witnesses must be exercised"
     );
     for case in cases {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(&node).await.unwrap();
-        let agent = agent_with_retry(CompletionRetryProfileFields::default());
-        crate::test_support::install_test_agent(&node, agent.node_did(), &agent.agent_id).await;
-        let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-            gents_protocol::request_admission::RequestPurpose::Normal,
-            "req-budget",
-            agent.node_did(),
-            agent.node_did(),
-            &agent.agent_id,
-            "session-budget",
-            "Resume the request",
-            "interactive",
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                agent.node_did(),
-            ),
+        let (db, user, owner, binding) =
+            crate::test_support::signed_test_node("completion-budget-rehydration").await;
+        let node = db.node.clone();
+        let agent = agent_with_binding(
+            db.node_identity.clone(),
+            &binding,
+            CompletionRetryProfileFields::default(),
         );
-        crate::sign_agent_request_create(agent.node.identity.as_ref(), &mut create)
+        let access = crate::store::config_client::ConfigAccess::local_managed_agent(
+            node.clone(),
+            identity::Did::new(&agent.agent_did).unwrap(),
+            agent.agent_identity.as_ref(),
+        )
+        .unwrap();
+        let create = crate::request::lifecycle::build_signed_client_request(
+            &owner,
+            crate::request::lifecycle::RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                crate::request::lifecycle::RequestIdentity {
+                    request_id: "req-budget".into(),
+                    node_did: agent.node_did().into(),
+                    requester_did: Some(user.did().into()),
+                    agent_did: agent.agent_did.clone(),
+                    session_id: "session-budget".into(),
+                    content: "Resume the request".into(),
+                    execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                    created_at: chrono::Utc::now()
+                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                },
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+            ),
+            crate::request::lifecycle::RequestSigner::Identity(&user),
+        )
+        .await
+        .unwrap();
+        let session_doc_id = create.session_doc_id.clone().unwrap();
+        crate::request::lifecycle::submit_client_request(&owner, &create)
             .await
             .unwrap();
-        let response = crate::store::config_client::ConfigAccess::local(node.clone())
-            .write("test.budget_parent", &create.graphql_mutation().unwrap())
+        let response = access
+            .execute(&format!(
+                "{{ AgentRequest {{ {} }} }}",
+                crate::SIGNED_REQUEST_FIELDS
+            ))
             .await
             .unwrap();
-        let doc_id = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
-        let parent = crate::request::admission::load_request_for_admission_test(&node, &doc_id)
+        let row: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+        let parent = row.try_into().unwrap();
+        let (_authority_owner, authority) =
+            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+        let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+            node.clone(),
+            db.node_identity.clone(),
+            authority,
+        );
+        let (parent, admission) = verifier
+            .verify_fresh_for_claim(&parent, &agent.agent_did)
             .await
             .unwrap();
         let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            &agent.agent_id,
+            &agent.agent_did,
             agent.node_did(),
             parent,
             120,
             crate::request::lifecycle::ExecutionOrigin::Interactive,
             agent.backend_id.clone().unwrap(),
         );
+        lifecycle
+            .bind_managed_agent(agent.agent_identity.as_ref())
+            .unwrap();
+        lifecycle.set_client_claim_admission(admission);
         lifecycle.set_configured_max_total_tokens(case.pinned_limit.filter(|limit| *limit != 0));
         assert_eq!(
             lifecycle.claim_with_identity().await.unwrap(),
@@ -733,17 +782,23 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
         let mut request = lifecycle.request().clone();
         if case.pinned_limit == Some(0) {
             let doc_id = escape_graphql_string(&request.doc_id);
-            crate::store::config_client::ConfigAccess::local(node.clone())
+            access
                 .write(
                     "test.observed_zero_budget",
                     &format!("mutation {{ update_AgentRequest(docID: \"{doc_id}\", input: {{ max_total_tokens: 0 }}) {{ _docID }} }}"),
                 )
                 .await
                 .unwrap();
-            request =
-                crate::request::admission::load_request_for_admission_test(&node, &request.doc_id)
-                    .await
-                    .unwrap();
+            let response = access
+                .execute(&format!(
+                    "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc_id}\" }} }}) {{ {} }} }}",
+                    crate::SIGNED_REQUEST_FIELDS
+                ))
+                .await
+                .unwrap();
+            let row: gents_protocol::row::AgentRequestRow =
+                serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+            request = row.try_into().unwrap();
         }
         let did = escape_graphql_string(agent.node_did());
         for (index, row) in case.rows.iter().enumerate() {
@@ -765,7 +820,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
                     request_doc_id: "{doc_id}"
                     call_seq: {index}
                     backend_id: "backend-rehydrate"
-                    agent_id: "agent-rehydrate"
+                    agent_did: "{agent_did}"
                     node_did: "{did}"
                     call_kind: "{call_kind}"
                     attempt: 1
@@ -777,14 +832,32 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
                     controller_generation: 1
                     backend_config_fingerprint: "fp"
                 }}) {{ _docID }}
-            }}"#
+            }}"#,
+                agent_did = escape_graphql_string(&agent.agent_did),
             );
-            crate::store::config_client::ConfigAccess::local(node.clone())
-                .write("test.budget_call", &seed)
+            access
+                .transact_write("test.budget_call", |txn| {
+                    let seed = &seed;
+                    let session_doc_id = &session_doc_id;
+                    Box::pin(async move {
+                        let response = txn.execute(seed).await?;
+                        let doc_id =
+                            crate::store::graphql::created_doc_id(&response, "InferenceCall")?;
+                        txn.add_resource_relationship(
+                            "InferenceCall",
+                            &doc_id,
+                            "parent",
+                            "sessions",
+                            session_doc_id,
+                        )
+                        .await?;
+                        Ok::<_, anyhow::Error>(())
+                    })
+                })
                 .await
                 .unwrap_or_else(|error| panic!("{}: {error}", case.name));
         }
-        let budget = aggregate_token_budget_for_request(&node, &request)
+        let budget = aggregate_token_budget_for_request(&access, &request)
             .await
             .unwrap_or_else(|error| panic!("{}: rehydrate: {error}", case.name));
         match (&case.ledger, budget) {
@@ -801,7 +874,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
                 actual.is_some()
             ),
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }
 
@@ -864,7 +937,7 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
         request_id: "req-1".to_string(),
         node_did: "did:key:agent".to_string(),
         requester_did: String::new(),
-        agent_id: "general".to_string(),
+        agent_did: "general".to_string(),
         session_id: "session-1".to_string(),
         model_name: "model".to_string(),
         provider_family: None,
@@ -1167,13 +1240,81 @@ fn only_a_usable_newest_call_anchors_the_session() {
 
 #[tokio::test]
 async fn session_calibration_seeds_from_durable_inference_calls() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let agent = agent_with_retry(CompletionRetryProfileFields::default());
+    let (db, user, owner, binding) =
+        crate::test_support::signed_test_node("completion-session-calibration").await;
+    let node = db.node.clone();
+    let agent = agent_with_binding(
+        db.node_identity.clone(),
+        &binding,
+        CompletionRetryProfileFields::default(),
+    );
+    let access = crate::store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(&agent.agent_did).unwrap(),
+        agent.agent_identity.as_ref(),
+    )
+    .unwrap();
+    let other_binding = crate::store::identity::provision_agent_identity_authorized(
+        &node,
+        db.node_identity.as_ref(),
+        &identity::Did::new(user.did()).unwrap(),
+    )
+    .await
+    .unwrap();
+    crate::test_support::install_test_agent_binding_with_access(
+        db.node_identity.did(),
+        "Other calibration agent",
+        &other_binding,
+        &owner,
+    )
+    .await;
+    let other =
+        crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &other_binding)
+            .unwrap();
+    let other_access = crate::store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(other.did()).unwrap(),
+        other.as_ref(),
+    )
+    .unwrap();
     let did = agent.node_did().to_string();
     let session = "session-calibration";
+    let mut sessions = Vec::new();
+    for session_id in [session, "other-session"] {
+        let create = crate::request::lifecycle::build_signed_client_request(
+            &owner,
+            crate::request::lifecycle::RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                crate::request::lifecycle::RequestIdentity {
+                    request_id: format!("seed-{session_id}"),
+                    node_did: did.clone(),
+                    requester_did: Some(user.did().into()),
+                    agent_did: agent.agent_did.clone(),
+                    session_id: session_id.into(),
+                    content: "calibration".into(),
+                    execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                    created_at: chrono::Utc::now()
+                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                },
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+            ),
+            crate::request::lifecycle::RequestSigner::Identity(&user),
+        )
+        .await
+        .unwrap();
+        sessions.push(create.session_doc_id.unwrap());
+    }
+    owner
+        .add_actor_relationship(
+            "AgentSession",
+            &sessions[0],
+            "reader",
+            &identity::Did::new(other.did()).unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(
-        context_calibration_for_session(&node, &agent, &did, session)
+        context_calibration_for_session(&access, &agent, &did, session)
             .await
             .ratio_basis_points(),
         crate::turn::provider_input::budget::UNIT_INPUT_RATIO_BASIS_POINTS,
@@ -1184,8 +1325,8 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
         agent.openai_wire_api,
     )
     .estimator_name();
-    let own = agent.agent_id.as_str();
-    for (index, (agent_id, session_id, queued_at, prompt, cached, ratio)) in [
+    let own = agent.agent_did.as_str();
+    for (index, (agent_did, session_id, queued_at, prompt, cached, ratio)) in [
         (own, session, "2026-10-28T10:00:00Z", 15_000, 0, None),
         (own, session, "2026-10-28T11:00:00Z", 12_500, 0, None),
         (
@@ -1206,7 +1347,7 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
         ),
         (own, session, "2026-10-28T13:00:00Z", 2, 100_000, None),
         (
-            "other-agent",
+            other.did(),
             session,
             "2026-10-28T14:00:00Z",
             30_000,
@@ -1218,6 +1359,8 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
     .enumerate()
     {
         let accounting = escape_graphql_string(&calibration_accounting(estimator, 10_000, ratio));
+        let escaped_agent_did = escape_graphql_string(agent_did);
+        let escaped_session_id = escape_graphql_string(session_id);
         let seed = format!(
             r#"mutation {{
             create_InferenceCall(input: {{
@@ -1225,11 +1368,11 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
                 runtime_instance_id: "runtime-calibration"
                 request_id: "req-calibration"
                 request_doc_id: "doc-calibration-{index}"
-                session_id: "{session_id}"
+                session_id: "{escaped_session_id}"
                 model_name: "{model}"
                 call_seq: {index}
                 backend_id: "backend-calibration"
-                agent_id: "{agent_id}"
+                agent_did: "{escaped_agent_did}"
                 node_did: "{did}"
                 call_kind: "inference"
                 attempt: 1
@@ -1249,13 +1392,38 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
             model = escape_graphql_string(&agent.model_name),
             did = escape_graphql_string(&did),
         );
-        crate::store::config_client::ConfigAccess::local(node.clone())
-            .write("test.calibration_call", &seed)
+        let writer = if agent_did == other.did() {
+            &other_access
+        } else {
+            &access
+        };
+        let session_doc_id = if session_id == session {
+            &sessions[0]
+        } else {
+            &sessions[1]
+        };
+        writer
+            .transact_write("test.calibration_call", |txn| {
+                let seed = &seed;
+                Box::pin(async move {
+                    let response = txn.execute(seed).await?;
+                    let doc_id = crate::store::graphql::created_doc_id(&response, "InferenceCall")?;
+                    txn.add_resource_relationship(
+                        "InferenceCall",
+                        &doc_id,
+                        "parent",
+                        "sessions",
+                        session_doc_id,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
             .await
             .unwrap();
     }
     assert_eq!(
-        context_calibration_for_session(&node, &agent, &did, session)
+        context_calibration_for_session(&access, &agent, &did, session)
             .await
             .ratio_basis_points(),
         15_000,
@@ -1263,7 +1431,7 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
          another agent's or an older build's"
     );
     assert_eq!(
-        context_calibration_for_session(&node, &agent, &did, session)
+        context_calibration_for_session(&access, &agent, &did, session)
             .await
             .anchor(),
         Some(crate::turn::provider_input::budget::ContextAnchor {
@@ -1273,8 +1441,8 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
         }),
         "its provider count anchors the next request; another agent's newer call does not"
     );
-    let first = context_calibration_for_session(&node, &agent, &did, session).await;
-    let second = context_calibration_for_session(&node, &agent, &did, session).await;
+    let first = context_calibration_for_session(&access, &agent, &did, session).await;
+    let second = context_calibration_for_session(&access, &agent, &did, session).await;
     first.observe(40_000, 10_000);
     first.invalidate_anchor();
     assert_eq!(
@@ -1282,7 +1450,7 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
         (15_000, true),
         "each request seeds its own calibration; one request's observations never reach another's"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[test]

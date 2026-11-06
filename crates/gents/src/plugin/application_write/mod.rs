@@ -220,44 +220,27 @@ impl WriteTool {
             filter,
             input,
         };
-        match &self.access {
-            ConfigAccess::Local(local) => {
-                let node = local.node();
-                if preview {
-                    ConfigAccess::transact_local_readonly(
-                        node,
-                        self.actor.clone(),
-                        "application_write",
-                        |txn| Box::pin(self.in_transaction(txn, args, plan.clone())),
-                    )
-                    .await
-                } else {
-                    ConfigAccess::transact_local_write(
-                        node,
-                        self.actor.clone(),
-                        "application_write",
-                        |txn| Box::pin(self.in_transaction(txn, args, plan.clone())),
-                    )
-                    .await
-                }
-            }
-            ConfigAccess::Graphql(_) => {
-                if preview {
-                    self.access
-                        .transact_readonly("application_write", |txn| {
-                            Box::pin(self.in_transaction(txn, args, plan.clone()))
-                        })
-                        .await
-                } else {
-                    self.access
-                        .transact_write("application_write", |txn| {
-                            Box::pin(self.in_transaction(txn, args, plan.clone()))
-                        })
-                        .await
-                }
-            }
+        if let Some(actor) = &self.actor {
+            ensure!(
+                self.access.actor_did().as_deref() == Some(actor.as_str()),
+                "application write actor mismatch"
+            );
+        }
+        if preview {
+            self.access
+                .transact_readonly("application_write", |txn| {
+                    Box::pin(self.in_transaction(txn, args, plan.clone()))
+                })
+                .await
+        } else {
+            self.access
+                .transact_write("application_write", |txn| {
+                    Box::pin(self.in_transaction(txn, args, plan.clone()))
+                })
+                .await
         }
     }
+
     async fn in_transaction(
         &self,
         txn: &ConfigApplyTxn<'_>,

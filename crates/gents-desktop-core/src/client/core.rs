@@ -23,7 +23,7 @@ use std::sync::RwLock as StdRwLock;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
 use gents::store::config_client::ConfigAccess;
 use gents::P2pSyncStatusSnapshot;
@@ -573,25 +573,23 @@ impl ClientCore {
         let scoped = self.selected_node_did();
         let captured = self.store.capture_read();
         let records = self.sync_state.records();
-        let snapshot = match scoped.as_deref() {
+        let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+            self.node_identity.private_key_bytes(),
+        )?;
+        let (snapshot, denied) = match scoped.as_deref() {
             Some(did) => {
-                load_node_scoped_snapshot_with_peer_records(
-                    self.node.as_ref(),
-                    did,
-                    &records,
-                    self.node_identity.did(),
-                    self.options.operator_identity_interaction,
-                )
-                .await?
+                match load_node_scoped_snapshot_with_peer_records(did, &records, &capability).await
+                {
+                    Ok(snapshot) => (snapshot, Vec::new()),
+                    Err(error) => {
+                        self.observe_refresh_failure(did, &error);
+                        return Err(error);
+                    }
+                }
             }
             None => {
-                load_full_snapshot_with_peer_records(
-                    self.node.as_ref(),
-                    &records,
-                    self.node_identity.did(),
-                    self.options.operator_identity_interaction,
-                )
-                .await?
+                let snapshots = load_full_snapshot_with_peer_records(&records, &capability).await;
+                (snapshots.store, snapshots.denied)
             }
         };
         let rows = snapshot.row_count();
@@ -600,6 +598,9 @@ impl ClientCore {
                 .replace_reloaded_snapshot_at_read(&captured, scoped.as_deref(), snapshot);
         if !published {
             self.store.request_resync(scoped.as_deref());
+        }
+        for node_did in &denied {
+            self.store.invalidate_node_after_denied_read(node_did);
         }
         let version = self.store.projection_revision().store_version;
         tracing::debug!(
@@ -620,21 +621,19 @@ impl ClientCore {
         }
         let captured = self.store.capture_read();
         let records = self.sync_state.records();
-        let snapshot = match load_node_scoped_snapshot_with_peer_records(
-            self.node.as_ref(),
-            node_did,
-            &records,
-            self.node_identity.did(),
-            self.options.operator_identity_interaction,
-        )
-        .await
-        {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                self.store.request_resync(Some(node_did));
-                return Err(error);
-            }
-        };
+        let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+            self.node_identity.private_key_bytes(),
+        )?;
+        let snapshot =
+            match load_node_scoped_snapshot_with_peer_records(node_did, &records, &capability)
+                .await
+            {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    self.observe_refresh_failure(node_did, &error);
+                    return Err(error);
+                }
+            };
         let rows = snapshot.row_count();
         let published =
             self.store
@@ -653,6 +652,16 @@ impl ClientCore {
             "desktop refreshed agent projection from local replica"
         );
         Ok(Some(version))
+    }
+
+    /// The observer owns runtime connection state: a refusal clears the
+    /// node's rows and asks it to confirm with its own authenticated read.
+    fn observe_refresh_failure(&self, node_did: &str, error: &anyhow::Error) {
+        if gents::store::config_client::TransactionFailure::permission_denied(error) {
+            self.store.invalidate_node_after_denied_read(node_did);
+        } else {
+            self.store.request_resync(Some(node_did));
+        }
     }
 
     pub async fn observer_metrics(
@@ -714,14 +723,29 @@ impl ClientCore {
             pause.node_shutdown_started.notify_one();
             pause.allow_node_shutdown.notified().await;
         }
-        self.node.shutdown().await;
+        let node_shutdown = self.node.shutdown().await;
         #[cfg(test)]
         if let Some(pause) = self.shutdown_test_pause.lock().await.clone() {
             pause.node_shutdown_returned.notify_one();
             pause.allow_access_release.notified().await;
         }
         self.store_access.lock().await.take();
+        node_shutdown.context("shutting down embedded node")?;
         tracing::info!("client core shutdown: complete");
+        Ok(())
+    }
+}
+
+impl ClientCore {
+    pub fn session_unreadable_reason(&self, node_did: &str) -> Option<&'static str> {
+        self.operator_observation_graphql(node_did)
+            .is_none()
+            .then_some("Connect to the runtime to read this session.")
+    }
+
+    pub async fn reload_session(&self, session_id: &str, node_did: &str) -> Result<()> {
+        self.refresh_local_request(node_did, session_id, None, None, &[])
+            .await?;
         Ok(())
     }
 }

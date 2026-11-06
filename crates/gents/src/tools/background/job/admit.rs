@@ -31,7 +31,7 @@ pub struct RootCall {
     pub agent_budget: Option<u32>,
 }
 
-/// Lean `Child`: the retry key, the `(node_did, agent_id)` target and the
+/// Lean `Child`: the retry key, the `(node_did, agent_did)` target and the
 /// slot attempt's message count.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StepChild {
@@ -97,7 +97,7 @@ pub struct StepContext {
     pub max_hop: Option<u32>,
     pub target_hops: Vec<((String, String), u32)>,
     /// The host's resolution of the AgentTarget ids the caller can see to
-    /// Lean's `(target_node_did, agent_id)` targets; the protocol, ceilings and
+    /// Lean's `(target_node_did, agent_did)` targets; the protocol, ceilings and
     /// `dynamic_targets` name targets by these ids.
     pub target_ids: Vec<(String, (String, String))>,
     pub live_background: u32,
@@ -159,8 +159,45 @@ impl Refusal {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdmitRefusal {
     pub refusal: Refusal,
+    pub detail: Option<PolicyDenialDetail>,
     closed_row: Box<StepRow>,
     kills: Vec<String>,
+}
+
+/// Public configuration reasons determined at the admission decision point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyDenialDetail {
+    DynamicCheck,
+    TargetUnavailable,
+}
+
+impl PolicyDenialDetail {
+    pub(super) fn guidance(self) -> (&'static str, &'static str) {
+        match self {
+            Self::DynamicCheck => (
+                "job.policy.dynamic is check: scripts cannot start or message child agents.",
+                "Next: use an installed job, or inspect job.policy.dynamic and dynamic_targets with config {\"argv\":[\"tools\",\"edit\",\"--help\"]}; change them only with the required Tools authority.",
+            ),
+            Self::TargetUnavailable => (
+                "The requested job target is unavailable in this caller's configured target scope.",
+                "Next: inspect this agent's Tools agents.target_ids and the job's agent_targets; select an available target or update an authorized Tools document. For the fields, call config with {\"argv\":[\"tools\",\"edit\",\"--help\"]}.",
+            ),
+        }
+    }
+}
+
+struct AdmissionFailure {
+    refusal: Refusal,
+    detail: Option<PolicyDenialDetail>,
+}
+
+impl From<Refusal> for AdmissionFailure {
+    fn from(refusal: Refusal) -> Self {
+        Self {
+            refusal,
+            detail: None,
+        }
+    }
 }
 
 impl AdmitRefusal {
@@ -259,14 +296,16 @@ pub fn admit_step(
     job: &StepRow,
     out: &JobStepOutput,
 ) -> Result<StepRow, AdmitRefusal> {
-    admit(ctx, job, out).map_err(|refusal| match refusal {
+    admit(ctx, job, out).map_err(|failure| match failure.refusal {
         Refusal::Terminal => AdmitRefusal {
-            refusal,
+            refusal: failure.refusal,
+            detail: failure.detail,
             closed_row: Box::new(job.clone()),
             kills: Vec::new(),
         },
         _ => AdmitRefusal {
-            refusal,
+            refusal: failure.refusal,
+            detail: failure.detail,
             closed_row: Box::new(StepRow {
                 state: JobState::Failed,
                 ..job.clone()
@@ -278,46 +317,54 @@ pub fn admit_step(
     })
 }
 
-fn admit(ctx: &StepContext, job: &StepRow, out: &JobStepOutput) -> Result<StepRow, Refusal> {
+fn admit(
+    ctx: &StepContext,
+    job: &StepRow,
+    out: &JobStepOutput,
+) -> Result<StepRow, AdmissionFailure> {
     if job.state != JobState::Running {
-        return Err(Refusal::Terminal);
+        return Err(Refusal::Terminal.into());
     }
     if pin_mismatch(ctx, job, out) {
-        return Err(Refusal::PinMismatch);
+        return Err(Refusal::PinMismatch.into());
     }
     if !ctx.available || !ctx.engine_provenance_operator {
-        return Err(Refusal::NotAvailable);
+        return Err(Refusal::NotAvailable.into());
     }
     if engine_changed(ctx, job, out) {
-        return Err(Refusal::EngineChanged);
+        return Err(Refusal::EngineChanged.into());
     }
     if out_resume(out).is_some() && !resume_placed(job, out) {
-        return Err(Refusal::PolicyDenied);
+        return Err(Refusal::PolicyDenied.into());
     }
     if !resume_admitted(ctx, out) {
-        return Err(resume_refusal(ctx, out));
+        return Err(resume_refusal(ctx, out).into());
     }
     let Some(pin) = step_pin(ctx, job, out) else {
         if ctx.policy.dynamic == DynamicMode::Off
             && call_origin(job.call.script.as_deref()) == JobOrigin::Dynamic
         {
-            return Err(Refusal::DynamicCodeDisabled);
+            return Err(Refusal::DynamicCodeDisabled.into());
         }
-        return admit_non_job(ctx, job, out);
+        return admit_non_job(ctx, job, out).map_err(Into::into);
     };
     let row = step_row(ctx, job, out);
     if dynamic_mode_refusal(&ctx.policy, pin.origin, &row, out).is_some() {
-        return Err(Refusal::PolicyDenied);
+        return Err(AdmissionFailure {
+            refusal: Refusal::PolicyDenied,
+            detail: (ctx.policy.dynamic == DynamicMode::Check)
+                .then_some(PolicyDenialDetail::DynamicCheck),
+        });
     }
     if job.pin.is_none() {
         if ctx.live == empty_ceiling() {
-            return Err(Refusal::NotAvailable);
+            return Err(Refusal::NotAvailable.into());
         }
         if ctx.live_background as usize >= MAX_BACKGROUNDED_TOOLS_PER_PARENT {
-            return Err(Refusal::BackgroundBudgetExceeded);
+            return Err(Refusal::BackgroundBudgetExceeded.into());
         }
         if ctx.started_by_job {
-            return Err(Refusal::DepthExceeded);
+            return Err(Refusal::DepthExceeded.into());
         }
     }
     admit_job_output(
@@ -780,28 +827,35 @@ fn admit_effects(
     pin: &JobPin,
     job: &StepRow,
     effects: &JobEffects,
-) -> Result<StepRow, Refusal> {
+) -> Result<StepRow, AdmissionFailure> {
     let mut fresh = Vec::new();
     for spawn in fresh_of(job, &effects.spawn) {
-        let target = resolve_target(ctx, &spawn.target).ok_or(Refusal::PolicyDenied)?;
+        let target = resolve_target(ctx, &spawn.target).ok_or(AdmissionFailure {
+            refusal: Refusal::PolicyDenied,
+            detail: Some(PolicyDenialDetail::TargetUnavailable),
+        })?;
         if let Some(refusal) = spawn_refusal(ctx, pin, job, spawn, target) {
-            return Err(refusal);
+            return Err(AdmissionFailure {
+                refusal,
+                detail: (!effective_targets_permit(ctx, pin, target))
+                    .then_some(PolicyDenialDetail::TargetUnavailable),
+            });
         }
         fresh.push((spawn, target));
     }
     let eff = meet(&ctx.live, &pin.ceiling_at_pin);
     if !fresh.is_empty() && !panel_admitted(pin, &eff, job, fresh.len()) {
-        return Err(Refusal::PolicyDenied);
+        return Err(Refusal::PolicyDenied.into());
     }
     if !messages_admitted(ctx, pin, eff.max_messages_per_slot, job, &effects.message) {
-        return Err(Refusal::PolicyDenied);
+        return Err(Refusal::PolicyDenied.into());
     }
     if !interrupts_admitted(&add_spawns(job.clone(), &fresh), &effects.interrupt) {
-        return Err(Refusal::PolicyDenied);
+        return Err(Refusal::PolicyDenied.into());
     }
     let admitted = add_spawns(add_messages(job, &effects.message), &fresh);
     if !effects.message.is_empty() && live_count(&admitted) > eff.max_live as usize {
-        return Err(Refusal::PolicyDenied);
+        return Err(Refusal::PolicyDenied.into());
     }
     if is_stalled(
         live_count(job) as u32,
@@ -815,7 +869,7 @@ fn admit_effects(
             },
         ),
     ) {
-        return Err(Refusal::Stalled);
+        return Err(Refusal::Stalled.into());
     }
     Ok(StepRow {
         observed_terminal: terminal_count(&admitted) as u32,
@@ -847,12 +901,14 @@ fn admit_job_output(
     pin: &JobPin,
     job: &StepRow,
     out: &JobStepOutput,
-) -> Result<StepRow, Refusal> {
+) -> Result<StepRow, AdmissionFailure> {
     match out {
         JobStepOutput::Effects { effects } => admit_effects(ctx, pin, job, effects),
-        JobStepOutput::Result { control, .. } => end_row(job, JobState::Completed, control),
-        JobStepOutput::Fail { .. } => end_row(job, JobState::Failed, &[]),
-        JobStepOutput::Suspend { .. } => end_row(job, JobState::Completed, &[]),
+        JobStepOutput::Result { control, .. } => {
+            end_row(job, JobState::Completed, control).map_err(Into::into)
+        }
+        JobStepOutput::Fail { .. } => end_row(job, JobState::Failed, &[]).map_err(Into::into),
+        JobStepOutput::Suspend { .. } => end_row(job, JobState::Completed, &[]).map_err(Into::into),
     }
 }
 
@@ -997,6 +1053,7 @@ mod tests {
             target: (String, String),
             expected_resolved: Option<(String, String)>,
             expected_permitted: bool,
+            expected_guest_targets: Vec<String>,
         }
         #[derive(serde::Deserialize)]
         struct Contracts {
@@ -1005,6 +1062,15 @@ mod tests {
         let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
         assert!(!contracts.plugin_target_resolution_cases.is_empty());
         for case in contracts.plugin_target_resolution_cases {
+            let available: Vec<_> = case
+                .bindings
+                .iter()
+                .map(|binding| binding.wire.clone())
+                .collect();
+            assert_eq!(
+                super::super::input::guest_target_ids(&case.ids, &available),
+                case.expected_guest_targets
+            );
             let mut context = base_context();
             context.target_ids = case
                 .bindings
@@ -1737,6 +1803,18 @@ mod tests {
         ctx.max_hop = Some(3);
         assert_eq!(code(&ctx, &job, &out), Some("plugin_job_depth_exceeded"));
         ctx.max_hop = Some(4);
+        assert!(admit_step(&ctx, &job, &out).is_ok());
+    }
+
+    #[test]
+    fn unavailable_hop_cap_refuses_every_spawn() {
+        use crate::request::lifecycle::RequestHopCapObservation;
+        let job = running_row(Vec::new());
+        let out = effects(vec![spawn("s1", 0, "a")], &[]);
+        let mut ctx = base_context();
+        ctx.max_hop = RequestHopCapObservation::Unavailable.bound();
+        assert_eq!(code(&ctx, &job, &out), Some("plugin_job_depth_exceeded"));
+        ctx.max_hop = RequestHopCapObservation::Visible(None).bound();
         assert!(admit_step(&ctx, &job, &out).is_ok());
     }
 

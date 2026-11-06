@@ -4,6 +4,37 @@ use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+async fn oneshot_fixture(
+    name: &str,
+) -> (
+    crate::support::TestDb,
+    crate::KeyIdentity,
+    crate::ConfigAccess,
+    crate::ConfigAccess,
+    gents_protocol::agent_identity::AgentIdentityBinding,
+) {
+    use crate::store::config_client::NodePermission;
+    let (db, user, user_access, binding) = crate::test_support::signed_test_node(name).await;
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let admin =
+        crate::ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
+    let did = identity::Did::new(agent.did()).unwrap();
+    for permission in [
+        NodePermission::CollectionGet,
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::DocumentDelete,
+        NodePermission::DacRelationAdd,
+        NodePermission::DacRelationDelete,
+    ] {
+        admin.grant_node_permission(&did, permission).await.unwrap();
+    }
+    let agent_access =
+        crate::ConfigAccess::local_managed_agent(db.node.clone(), did, agent.as_ref()).unwrap();
+    (db, user, user_access, agent_access, binding)
+}
+
 async fn capture_scripted_request(
     request: CompletionRequest,
 ) -> Result<serde_json::Value, CompletionError> {
@@ -92,28 +123,17 @@ impl CompletionModel for PartialThenEmptyProvider {
 
 #[tokio::test]
 async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
-    let dir = tempfile::tempdir().unwrap();
-    let identity =
-        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("identity.key"), None)
-            .unwrap();
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .with_node_identity_did(crate::store::identity::NodeIdentity::did(&identity))
-            .data_path(dir.path())
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (db, _user, _user_access, agent_access, binding) = oneshot_fixture("oneshot-lease").await;
+    let node = db.node.clone();
     let mut behavior = crate::runtime::agent::PendingAgent::new("oneshot-lease")
-        .build_with_identity_for_test(identity);
-    crate::test_support::install_test_agent(&node, behavior.node_did(), &behavior.agent_id).await;
+        .with_identity_binding_for_test(binding)
+        .build_with_identity_arc_for_test(db.node_identity.clone());
     behavior.model_name = "scripted".to_owned();
     behavior.stream_liveness_timeout = Duration::from_secs(1);
     behavior.deadline_duration = Duration::from_secs(60);
     let prompt = LayeredPromptBuilder::for_agent(
         &behavior.system_prompt,
-        &behavior.agent_id,
+        &behavior.agent_did,
         &[],
         false,
         &[],
@@ -129,11 +149,8 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         let mut initial = None;
         loop {
             tokio::time::sleep(Duration::from_millis(100)).await;
-            let snapshot = node.execute("{ AgentRequest { lifecycle_state execution_generation execution_lease_expires_at } }").await;
-            assert!(!snapshot.has_errors(), "{:?}", snapshot.errors);
-            let rows = snapshot.data.as_ref().unwrap()["AgentRequest"]
-                .as_array()
-                .unwrap();
+            let snapshot = agent_access.execute("{ AgentRequest { lifecycle_state execution_generation execution_lease_expires_at } }").await.unwrap();
+            let rows = snapshot["data"]["AgentRequest"].as_array().unwrap();
             let Some(row) = rows.first() else { continue };
             if row["lifecycle_state"] != "processing" {
                 continue;
@@ -182,22 +199,31 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         observations.load(Ordering::SeqCst) > 0,
         "provider must send traffic after semantic progress stops; one-shot returned {result:?}"
     );
-    let result = node
+    let result = agent_access
         .execute(
             r#"{
         AgentRequest { _docID requester_did session_id lifecycle_state terminal_output }
-        RenderedRequest { _docID }
+        RenderedRequest { _docID requester_did session_id agent_did }
     }"#,
         )
-        .await;
-    assert!(!result.has_errors(), "{:?}", result.errors);
-    let data = result.data.as_ref().unwrap();
+        .await
+        .unwrap();
+    let data = &result["data"];
     assert_eq!(
         data["RenderedRequest"].as_array().unwrap().len(),
         1,
         "the fake provider request must be durably captured before streaming"
     );
     assert_eq!(data["AgentRequest"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        data["RenderedRequest"][0]["requester_did"],
+        data["AgentRequest"][0]["requester_did"]
+    );
+    assert_eq!(
+        data["RenderedRequest"][0]["session_id"],
+        data["AgentRequest"][0]["session_id"]
+    );
+    assert_eq!(data["RenderedRequest"][0]["agent_did"], behavior.agent_did);
     assert_eq!(data["AgentRequest"][0]["lifecycle_state"], "failed");
     use gents_protocol::output::TerminalOutput;
     let request = &data["AgentRequest"][0];
@@ -208,8 +234,8 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         panic!("durable text partial must be the request's exact terminal selection")
     };
     let requester_did = request["requester_did"].as_str();
-    let (header, native) = crate::session::load_canonical_message_from_node(
-        &node,
+    let (header, native) = crate::session::load_canonical_message(
+        &agent_access,
         &message_doc_id,
         behavior.node_did(),
         requester_did,
@@ -228,18 +254,22 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
     assert!(gents_protocol::transcript::present_message(&native)
         .body_markdown
         .contains("durable one-shot partial"));
-    let repeated = RequestLifecycle::recover_all(&node, behavior.node_did())
-        .await
-        .unwrap();
+    let repeated = RequestLifecycle::recover_all_with_identities(
+        &node,
+        behavior.node_did(),
+        &[behavior.agent_identity.clone()],
+    )
+    .await
+    .unwrap();
     assert_eq!(repeated.requests_recovered, 0);
     assert_eq!(repeated.responses_recovered, 0);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[derive(Clone)]
 struct OutputObligationProvider {
     calls: Arc<AtomicUsize>,
-    node: Arc<EmbeddedNode>,
+    access: crate::ConfigAccess,
 }
 
 #[allow(refining_impl_trait)]
@@ -277,11 +307,11 @@ impl CompletionModel for OutputObligationProvider {
                     .to_string()
                     .contains("configured output obligation is unmet"));
                 let state = self
-                    .node
+                    .access
                     .execute("{ AgentRequest { lifecycle_state } OneshotOutput { message } }")
-                    .await;
-                assert!(!state.has_errors(), "{:?}", state.errors);
-                let state = state.data.unwrap();
+                    .await
+                    .unwrap();
+                let state = state["data"].clone();
                 assert_eq!(state["AgentRequest"][0]["lifecycle_state"], "processing");
                 assert!(state["OneshotOutput"].as_array().unwrap().is_empty());
                 vec![
@@ -310,62 +340,86 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
     use crate::documents::{
         WriteToolDecl, WriteToolField, WriteToolOutputObligation, WriteToolOutputObligationScope,
     };
-    use crate::tools::surface::{
-        AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling, ToolRuntimeContext,
-    };
+    use crate::tools::surface::{AgentToolSurfaceConfig, ToolCeiling, ToolRuntimeContext};
 
     for request_scoped in [true, false] {
         let dir = tempfile::tempdir().unwrap();
-        let identity = crate::store::identity::KeyIdentity::load_or_create(
-            dir.path().join("identity.key"),
-            None,
-        )
-        .unwrap();
-        let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
-                .with_node_identity_did(crate::store::identity::NodeIdentity::did(&identity))
-                .data_path(dir.path())
-                .build()
-                .await
-                .unwrap(),
-        );
-        crate::ensure_runtime_schemas(&node).await.unwrap();
+        let (db, _user, user_access, agent_access, binding) =
+            oneshot_fixture("oneshot-output").await;
+        let node = db.node.clone();
         node.add_collection("type OneshotOutput { message: String }")
             .await
             .unwrap();
         let mut behavior = crate::runtime::agent::PendingAgent::new("oneshot-output")
-            .build_with_identity_for_test(identity);
-        crate::test_support::install_test_agent(&node, behavior.node_did(), &behavior.agent_id)
-            .await;
+            .with_identity_binding_for_test(binding)
+            .build_with_identity_arc_for_test(db.node_identity.clone());
         behavior.model_name = "scripted".into();
         behavior.stream_liveness_timeout = Duration::from_secs(60);
         behavior.deadline_duration = Duration::from_secs(120);
-        let selection = ResolvedToolSelection {
-            write_tools: vec![WriteToolDecl {
-                notification: None,
-                tool_name: "write_oneshot_result".into(),
-                collection: "OneshotOutput".into(),
-                description: "Persist the required one-shot output.".into(),
-                fields: vec![WriteToolField {
-                    name: "message".into(),
-                    required: true,
-                    fill: None,
-                }],
-                output_obligation: Some(WriteToolOutputObligation {
-                    scope: if request_scoped {
-                        WriteToolOutputObligationScope::Request
-                    } else {
-                        WriteToolOutputObligationScope::Trigger
-                    },
-                    minimum_writes: 1,
-                    expected_count_field: None,
-                }),
+        let declaration = WriteToolDecl {
+            notification: None,
+            tool_name: "write_oneshot_result".into(),
+            collection: "OneshotOutput".into(),
+            description: "Persist the required one-shot output.".into(),
+            fields: vec![WriteToolField {
+                name: "message".into(),
+                required: true,
+                fill: None,
             }],
-            ..Default::default()
+            output_obligation: Some(WriteToolOutputObligation {
+                scope: if request_scoped {
+                    WriteToolOutputObligationScope::Request
+                } else {
+                    WriteToolOutputObligationScope::Trigger
+                },
+                minimum_writes: 1,
+                expected_count_field: None,
+            }),
         };
-        behavior.tools = AgentToolSurfaceConfig::from_selection(
-            &behavior.agent_id,
-            selection,
+        let tool_doc: crate::documents::Tools = serde_json::from_value(serde_json::json!({
+            "node_did":behavior.node_did(), "tools_id":format!("{}:tools", behavior.agent_did),
+            "datastore":{"datastore_tool_surface_ids":["oneshot-surface"]},
+        }))
+        .unwrap();
+        let surface_doc: crate::documents::DatastoreToolSurfaceDocument =
+            serde_json::from_value(serde_json::json!({
+                "node_did":behavior.node_did(), "surface_id":"oneshot-surface",
+                "entries":[crate::documents::SurfaceToolDecl::Create(declaration)],
+            }))
+            .unwrap();
+        let documents = [
+            (
+                crate::Collection::Tools,
+                serde_json::to_value(&tool_doc).unwrap(),
+            ),
+            (
+                crate::Collection::DatastoreToolSurface,
+                serde_json::to_value(&surface_doc).unwrap(),
+            ),
+        ]
+        .into_iter()
+        .map(
+            |(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            },
+        )
+        .collect();
+        let plan = crate::store::config_client::DesiredStateApplyPlan::new(documents).unwrap();
+        user_access
+            .transact_write("test.oneshot.select_surface", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                })
+            })
+            .await
+            .unwrap();
+        behavior.tools = AgentToolSurfaceConfig::from_tools_document_with_surfaces(
+            &behavior.agent_did,
+            &tool_doc,
+            &[surface_doc],
             &ToolCeiling::readwrite(dir.path()),
             Vec::new(),
         )
@@ -381,7 +435,8 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
             1,
             "configured writer contract must survive surface resolution"
         );
-        let runtime = ToolRuntimeContext::oneshot_with_node_did(node.clone(), behavior.node_did());
+        let runtime = ToolRuntimeContext::oneshot_with_node_did(node.clone(), behavior.node_did())
+            .for_agent(&behavior);
         let tools = Arc::new(surface.build_tools(&runtime).await.unwrap());
         let prompt = LayeredPromptBuilder::new(&behavior, &surface, &[]);
         let mut config = loop_config(
@@ -399,7 +454,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
             &prompt,
             OutputObligationProvider {
                 calls: calls.clone(),
-                node: node.clone(),
+                access: agent_access.clone(),
             },
             "finish this request",
             tools,
@@ -422,14 +477,13 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
                 "premature final"
             }
         );
-        let persisted = node.execute(r#"{
+        let persisted = agent_access.execute(r#"{
             AgentRequest { _docID lifecycle_state }
             OneshotOutput { message }
             AgentToolCall(filter: { tool_name: { _eq: "write_oneshot_result" } }) { lifecycle_state request_doc_id }
             RenderedRequest { _docID }
-        }"#).await;
-        assert!(!persisted.has_errors(), "{:?}", persisted.errors);
-        let data = persisted.data.unwrap();
+        }"#).await.unwrap();
+        let data = &persisted["data"];
         assert_eq!(data["AgentRequest"].as_array().unwrap().len(), 1);
         assert_eq!(data["AgentRequest"][0]["lifecycle_state"], "completed");
         assert_eq!(
@@ -452,7 +506,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
                 data["AgentRequest"][0]["_docID"]
             );
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }
 
@@ -510,22 +564,11 @@ impl CompletionModel for OneshotBashProvider {
 
 #[tokio::test]
 async fn oneshot_bash_uses_owned_request_context() {
-    let dir = tempfile::tempdir().unwrap();
-    let identity =
-        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None)
-            .unwrap();
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .with_node_identity_did(crate::store::identity::NodeIdentity::did(&identity))
-            .data_path(dir.path().join("db"))
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (db, _user, _user_access, agent_access, binding) = oneshot_fixture("oneshot-bash").await;
+    let node = db.node.clone();
     let mut agent = crate::runtime::agent::PendingAgent::new("oneshot-bash")
-        .build_with_identity_for_test(identity);
-    crate::test_support::install_test_agent(&node, agent.node_did(), &agent.agent_id).await;
+        .with_identity_binding_for_test(binding)
+        .build_with_identity_arc_for_test(db.node_identity.clone());
     agent.model_name = "scripted".into();
     agent.stream_liveness_timeout = Duration::from_secs(60);
     agent.deadline_duration = Duration::from_secs(120);
@@ -543,7 +586,7 @@ async fn oneshot_bash_uses_owned_request_context() {
     );
     let prompt = LayeredPromptBuilder::for_agent(
         &agent.system_prompt,
-        &agent.agent_id,
+        &agent.agent_did,
         &["bash"],
         false,
         &[],
@@ -574,13 +617,13 @@ async fn oneshot_bash_uses_owned_request_context() {
     .unwrap();
     assert_eq!(result.response_text, "done");
     assert_eq!(calls.load(Ordering::SeqCst), 2);
-    let rows = node
+    let rows = agent_access
         .execute("{ AgentToolCall(filter: { tool_name: { _eq: \"bash\" } }) { lifecycle_state } }")
-        .await;
-    assert!(!rows.has_errors(), "{:?}", rows.errors);
+        .await
+        .unwrap();
     assert_eq!(
-        rows.data.unwrap()["AgentToolCall"][0]["lifecycle_state"],
+        rows["data"]["AgentToolCall"][0]["lifecycle_state"],
         "completed"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

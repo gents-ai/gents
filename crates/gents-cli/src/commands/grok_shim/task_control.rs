@@ -1,6 +1,6 @@
 //! Stock task-button control, delegated to the runtime's process owner.
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::{
     store::graphql::escape_graphql_string, tools::call::hook::BackgroundExecutionRegistry,
 };
@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-use crate::caused_sessions::{load_caused_sessions, SessionScope};
+use crate::caused_sessions::{load_caused_sessions_as, SessionScope};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,9 +31,12 @@ pub(super) async fn kill(
     node: Arc<EmbeddedNode>,
     executions: &BackgroundExecutionRegistry,
     principal: &str,
+    agent_did: &str,
     sessions: &[String],
     request: KillTaskRequest,
 ) -> Result<Value> {
+    let actor = identity::Did::new(agent_did)?;
+    let access = gents::ConfigAccess::local_as(node.clone(), actor);
     let parent_addressed = sessions.contains(&request.session_id);
     let roots = if parent_addressed {
         std::slice::from_ref(&request.session_id)
@@ -58,7 +61,7 @@ pub(super) async fn kill(
             requester_did: Some(principal.to_owned()),
         })
         .collect::<Vec<_>>();
-    for caused in load_caused_sessions(&node, &scopes).await? {
+    for caused in load_caused_sessions_as(&access, &scopes).await? {
         if !parent_addressed && caused.scope.session_id != request.session_id {
             continue;
         }
@@ -72,12 +75,10 @@ pub(super) async fn kill(
     // not cancel whichever appears first.
     let mut matches = Vec::new();
     for candidate in candidates {
-        let response = gents::store::graphql::graphql_with_transaction_retry(&node, &format!(r#"{{ AgentToolCall(filter: {{session_id: {{_eq: "{}"}}, tool_call_id: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
-            escape_graphql_string(&candidate.0), escape_graphql_string(&request.task_id)), "Grok task owner lookup").await?;
+        let response = access.execute(&format!(r#"{{ AgentToolCall(filter: {{session_id: {{_eq: "{}"}}, tool_call_id: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
+            escape_graphql_string(&candidate.0), escape_graphql_string(&request.task_id))).await?;
         let rows = response
-            .data
-            .as_ref()
-            .and_then(|v| v.get("AgentToolCall"))
+            .pointer("/data/AgentToolCall")
             .and_then(Value::as_array)
             .context("missing task owner rows")?;
         if rows.len() > 1 {
@@ -97,6 +98,7 @@ pub(super) async fn kill(
         match gents::tools::call::control::cancel_session_background_process(
             node,
             executions,
+            agent_did,
             &agent,
             requester.as_deref(),
             &owner_session,
@@ -104,6 +106,7 @@ pub(super) async fn kill(
         )
         .await?
         {
+            Outcome::Queued { .. } => "kill_pending",
             Outcome::Cancelled { .. } => "killed",
             Outcome::Lost => "lost",
             Outcome::Unverified => "kill_unverified",

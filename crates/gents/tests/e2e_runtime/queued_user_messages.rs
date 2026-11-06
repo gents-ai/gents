@@ -3,36 +3,21 @@ use std::time::Duration;
 
 use gents::NodeIdentity;
 
-use crate::mailbox_tool_turn::{configure_engineer_mailbox, request_state};
-use crate::support::accepted_turn::{
-    boot_prepared_accepted_turn, prepare_accepted_turn, AcceptedTurnSpec,
+use crate::support::accepted_turn::boot_prepared_accepted_turn;
+use crate::support::signed_mailbox::{
+    prepare_signed_mailbox_turn, request_state_on, wait_for_request_terminal_on, SignedMailboxTurn,
 };
-use crate::support::live_inference::wait_for_request_terminal;
 use crate::support::streaming_backend::{StreamChunk, StreamResponse};
 use crate::support::test_db;
 
-const AGENT: &str = "mailbox-turn-engineer";
-
 async fn queue_user_message(
-    db: &crate::support::TestDb,
-    did: &str,
+    turn: &SignedMailboxTurn,
     session_id: &str,
     request_id: &str,
     content: &str,
     active: &str,
 ) {
-    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-        gents_protocol::request_admission::RequestPurpose::Normal,
-        request_id,
-        did,
-        did,
-        AGENT,
-        session_id,
-        content,
-        "interactive",
-        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(did),
-    );
+    let mut create = turn.request(request_id, session_id, content);
     create.input.queue = Some(gents_protocol::request_input::RequestQueue {
         delivery: Default::default(),
         position: None,
@@ -43,44 +28,33 @@ async fn queue_user_message(
         interrupted_request_id: None,
         background_completion_wake_version: None,
     });
-    gents::sign_agent_request_create_as_registered_target(&mut create)
-        .await
-        .unwrap();
-    let created = db.node.execute(&create.graphql_mutation().unwrap()).await;
-    assert!(!created.has_errors(), "{:?}", created.errors);
+    turn.submit(create).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn messages_queued_behind_a_busy_turn_are_answered_by_one_inference() {
     let db = test_db("queued-user-messages").await;
-    let did = db.node_identity.did().to_string();
     let session_id = "queued-user-messages-session";
     let asking = "queued-user-messages-active";
     let prompt = "queued-user-messages-prompt";
-    let prepared = prepare_accepted_turn(
+    let (prepared, turn) = prepare_signed_mailbox_turn(
         &db,
-        AcceptedTurnSpec {
-            backend_id: "queued-user-messages-backend",
-            model: "queued-user-messages-model",
-            parent_agent_id: AGENT,
-            configured_agent_ids: &[AGENT],
-            request_id: asking,
-            session_id,
-            prompt,
-            accepted_chunks: vec![StreamChunk::tool_call(
-                "queued-user-messages-call",
-                gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
-                serde_json::json!({"title": "Status", "body": "working"}).to_string(),
-            )],
-            child_plans: Vec::new(),
-            valid_until: None,
-            request_hop: None,
-            request_setup: None,
-        },
+        "queued-user-messages-backend",
+        "queued-user-messages-model",
+        asking,
+        session_id,
+        prompt,
+        vec![StreamChunk::tool_call(
+            "queued-user-messages-call",
+            gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
+            serde_json::json!({"title":"Status", "summary":"working"}).to_string(),
+        )],
+        Vec::new(),
+        None,
     )
-    .await;
+    .await
+    .unwrap();
     prepared.backend.enable_dynamic_followups(prompt);
-    configure_engineer_mailbox(&db, &did).await;
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
@@ -101,20 +75,15 @@ async fn messages_queued_behind_a_busy_turn_are_answered_by_one_inference() {
 
     let first = "queued-user-messages-first";
     let second = "queued-user-messages-second";
-    queue_user_message(&db, &did, session_id, first, "how are we looking", asking).await;
-    queue_user_message(
-        &db,
-        &did,
-        session_id,
-        second,
-        "we should move faster",
-        asking,
-    )
-    .await;
+    queue_user_message(&turn, session_id, first, "how are we looking", asking).await;
+    queue_user_message(&turn, session_id, second, "we should move faster", asking).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
     for request in [first, second] {
         assert_eq!(
-            request_state(db.node.as_ref(), request).await.as_deref(),
+            request_state_on(&turn.client, request)
+                .await
+                .unwrap()
+                .as_deref(),
             Some("pending")
         );
     }
@@ -123,23 +92,24 @@ async fn messages_queued_behind_a_busy_turn_are_answered_by_one_inference() {
     runtime
         .backend
         .enqueue_response(prompt, StreamResponse::completes(prompt, ["active done"]));
-    let active_final =
-        wait_for_request_terminal(db.node.as_ref(), asking, Duration::from_secs(60)).await;
-    let first_final =
-        wait_for_request_terminal(db.node.as_ref(), first, Duration::from_secs(60)).await;
+    let active_final = wait_for_request_terminal_on(&turn.client, asking, Duration::from_secs(60))
+        .await
+        .unwrap();
+    let first_final = wait_for_request_terminal_on(&turn.client, first, Duration::from_secs(60))
+        .await
+        .unwrap();
     assert_eq!(active_final, "completed");
     assert_eq!(first_final, "completed");
     assert_eq!(
-        request_state(db.node.as_ref(), second).await.as_deref(),
+        request_state_on(&turn.client, second)
+            .await
+            .unwrap()
+            .as_deref(),
         Some("superseded")
     );
-    let superseded = db
-        .node
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{second}" }} }}) {{ superseded_by_request admission_signature }} }}"#
-        ))
-        .await;
-    let superseded = &superseded.data.unwrap()["AgentRequest"][0];
+    let escaped = gents::store::graphql::escape_graphql_string(second);
+    let superseded = turn.client.execute(&format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{superseded_by_request admission_signature}}}}"#)).await.unwrap();
+    let superseded = &superseded["data"]["AgentRequest"][0];
     assert_eq!(superseded["superseded_by_request"], first);
     assert!(superseded["admission_signature"]
         .as_str()

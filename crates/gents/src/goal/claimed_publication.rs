@@ -7,26 +7,26 @@ use crate::request::lifecycle::queue::{
     goal_continuation_agent, goal_continuation_identity, prepare_goal_continuation,
 };
 use crate::store::config_client::ConfigApplyTxn;
-use crate::store::identity::{NodeIdentity, RegisteredIdentity};
+use crate::store::identity::NodeIdentity;
 use gents_protocol::row::AgentRequestRow;
 
-pub(crate) async fn publish_claimed_continuation(
+pub(crate) async fn publish_claimed_continuation_with_identity(
     node: &std::sync::Arc<EmbeddedNode>,
+    identity: &dyn NodeIdentity,
     observed: &GoalDocument,
     parent_request_id: &str,
     content: &str,
     wrapup: bool,
 ) -> Result<Option<GoalResumeReceipt>> {
-    let identity = RegisteredIdentity::from_registered_did(&observed.node_did, None)?;
-    let identity = &identity;
     let stopped = std::sync::Mutex::new(None);
     let stopped_ref = &stopped;
-    // Preserve the automatic queue writer's node actor; target identity signs
-    let receipt = crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "goal.publish_claimed_continuation",
-        move |txn| {
+    let access = crate::ConfigAccess::local_with_optional_agent_signer(
+        node.clone(),
+        identity::Did::new(identity.did())?,
+        identity.managed_agent_signer(),
+    )?;
+    let receipt = access
+        .transact_write("goal.publish_claimed_continuation", move |txn| {
             Box::pin(async move {
                 stage_claimed_continuation(
                     txn,
@@ -39,9 +39,8 @@ pub(crate) async fn publish_claimed_continuation(
                 )
                 .await
             })
-        },
-    )
-    .await?;
+        })
+        .await?;
     if let Some(reason) = stopped
         .into_inner()
         .unwrap_or_else(|poison| poison.into_inner())
@@ -52,17 +51,14 @@ pub(crate) async fn publish_claimed_continuation(
     Ok(receipt)
 }
 
-pub(crate) async fn stop_claimed_continuation_for_unavailable_agent(
-    node: &std::sync::Arc<EmbeddedNode>,
+pub(crate) async fn stop_claimed_continuation_for_unavailable_agent_from_access(
+    access: &crate::ConfigAccess,
     observed: &GoalDocument,
     parent_request_id: &str,
     reason: &str,
 ) -> Result<bool> {
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "goal.stop_unavailable_claimed_continuation",
-        |txn| {
+    access
+        .transact_write("goal.stop_unavailable_claimed_continuation", |txn| {
             Box::pin(async move {
                 let Some(goal) =
                     load_canonical_goal_in_txn(txn, &observed.node_did, &observed.session_id)
@@ -130,9 +126,8 @@ pub(crate) async fn stop_claimed_continuation_for_unavailable_agent(
                 .await?
                 .is_some())
             })
-        },
-    )
-    .await
+        })
+        .await
 }
 
 type StoppedReason = std::sync::Mutex<Option<String>>;
@@ -148,8 +143,8 @@ async fn stage_claimed_continuation(
 ) -> Result<Option<GoalResumeReceipt>> {
     *stopped.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
     anyhow::ensure!(
-        identity.did() == observed.node_did,
-        "claimed publication requires the goal owner's signing identity"
+        txn.actor_did() == Some(identity.did()),
+        "claimed publication transaction must act as its signing agent"
     );
     let Some(goal) =
         load_canonical_goal_in_txn(txn, &observed.node_did, &observed.session_id).await?
@@ -185,6 +180,30 @@ async fn stage_claimed_continuation(
     );
     let parent_row = parents[0];
     let parent = crate::request::watcher::AgentRequest::try_from(parent_row.clone())?;
+    anyhow::ensure!(
+        identity.did() == parent.agent_did,
+        "claimed publication requires the selected agent's signing identity"
+    );
+    let session = crate::session::load_agent_session_row_in_txn(
+        txn,
+        &goal.node_did,
+        &goal.session_id,
+        parent.requester_did.as_deref(),
+    )
+    .await?
+    .context("claimed publication session is unavailable")?;
+    anyhow::ensure!(
+        session.session.agent_did == identity.did(),
+        "claimed publication requires the session's selected agent"
+    );
+    let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+        txn,
+        crate::Collection::Agent,
+        &goal.node_did,
+        identity.did(),
+    )
+    .await?
+    .context("claimed publication Agent is unavailable")?;
     let behavior = goal_continuation_agent(txn, &parent).await?;
     let sequence = observed.continuation_sequence();
     let now = Utc::now();
@@ -222,6 +241,8 @@ async fn stage_claimed_continuation(
         &created_at,
         session_hop,
     )?;
+    create.session_doc_id = Some(session.doc_id.clone());
+    create.agent_doc_id = Some(agent_doc.clone());
     create.input.goal_assignment = Some(continuation_assignment(
         &goal,
         &parent,
@@ -234,7 +255,7 @@ async fn stage_claimed_continuation(
             child,
             &goal.node_did,
             parent_request_id,
-            parent.requester_did.as_deref().unwrap_or(&goal.node_did),
+            parent.requester_did.as_deref().unwrap_or(&parent.agent_did),
         )?;
         let actual: GoalBackedRequestFingerprint =
             serde_json::from_value(serde_json::to_value(child)?)?;
@@ -325,23 +346,18 @@ async fn stage_claimed_continuation(
     {
         return Ok(None);
     }
-    let response = txn
-        .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
-        .await?;
-    let child = response
-        .pointer("/data/create_AgentRequest")
-        .or_else(|| response.pointer("/data/add_AgentRequest"))
-        .context("claimed child create omitted result")?;
-    let child_doc = child
-        .get("_docID")
-        .or_else(|| child.get(0).and_then(|row| row.get("_docID")))
-        .and_then(serde_json::Value::as_str)
-        .context("claimed child create omitted document ID")?;
+    let child_doc = crate::request::lifecycle::stage_runtime_request_in_txn(
+        txn,
+        &create,
+        &session.doc_id,
+        &agent_doc,
+    )
+    .await?;
     if goal.assignment_root_request_doc_id.is_none() {
         bind_goal_first_request_in_txn(
             txn,
             &goal,
-            child_doc,
+            &child_doc,
             create.input.goal_assignment.as_ref(),
         )
         .await?;
@@ -350,7 +366,7 @@ async fn stage_claimed_continuation(
         goal_status: goal.parsed_status().context("goal has an unknown status")?,
         goal_id: goal.goal_id,
         request_id: create.request_id,
-        doc_id: child_doc.to_owned(),
+        doc_id: child_doc,
         created: true,
     }))
 }

@@ -32,10 +32,15 @@ impl crate::client::ClientCore {
             let Some(graphql) = record.graphql.as_deref() else {
                 return Ok(None);
             };
+            let capability =
+                gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                    self.node_identity().private_key_bytes(),
+                )?;
             gents::store::config_client::GraphqlEndpoint::as_principal(
                 graphql,
                 self.node_identity().did(),
             )
+            .with_client_signing_capability(capability)?
         } else {
             return Ok(None);
         };
@@ -71,6 +76,16 @@ impl crate::client::ClientCore {
             })?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
+        }
+        if matches!(
+            response.status(),
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        ) {
+            return Err(crate::error::BridgeError::new(
+                crate::error::BridgeErrorCode::PermissionDenied,
+                "Access was denied. Check this client's permissions with the runtime owner.",
+            )
+            .into());
         }
         anyhow::ensure!(
             response.status().is_success(),

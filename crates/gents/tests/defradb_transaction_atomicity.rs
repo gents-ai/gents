@@ -8,7 +8,7 @@
 //! a partial pair is not.
 
 use anyhow::{bail, Context, Result};
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents::store::graphql::escape_graphql_string;
 use serde_json::Value;

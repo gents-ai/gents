@@ -150,7 +150,7 @@ mod tests {
     use std::sync::Arc;
 
     use anyhow::Result;
-    use defra_node::EmbeddedNode;
+    use defra_node::Node as EmbeddedNode;
     use serde_json::json;
 
     use super::*;
@@ -216,7 +216,7 @@ mod tests {
     ) -> Result<DesiredStateManifest> {
         manifest(
             json!([receipt_source("reviewed", source_extra)]),
-            json ! ([{ "node_did" : OWNER , "task_id" : "review" , "agent_id" : "beh" , "prompt_template" : "Review attempt {{ doc.attempt }} for {{ doc.workspace_id }}" , "emit_outcome" : emit_outcome , }]),
+            json ! ([{ "node_did" : OWNER , "task_id" : "review" , "agent_did" : "beh" , "prompt_template" : "Review attempt {{ doc.attempt }} for {{ doc.workspace_id }}" , "emit_outcome" : emit_outcome , }]),
             json ! ([{ "node_did" : OWNER , "trigger_id" : "on-review" , "task_id" : "review" , "source" : { "kind" : "event" , "event_source_id" : "reviewed" } , }]),
         )
     }
@@ -284,7 +284,7 @@ mod tests {
         let access = probe_access(&tempdir).await?;
         let manifest = manifest(
             json!([source("broken", json ! ({ "correlation_field" : "batch" }),)]),
-            json ! ([{ "node_did" : OWNER , "task_id" : "summarize" , "agent_id" : "beh" , "prompt_template" : "Summarize {{ doc.x" , }]),
+            json ! ([{ "node_did" : OWNER , "task_id" : "summarize" , "agent_did" : "beh" , "prompt_template" : "Summarize {{ doc.x" , }]),
             json ! ([{ "node_did" : OWNER , "trigger_id" : "on-broken" , "task_id" : "summarize" , "source" : { "kind" : "event" , "event_source_id" : "broken" } , }]),
         )?;
         let errors = validate_manifest_against_live(&manifest, &access).await?;
@@ -301,7 +301,7 @@ mod tests {
             json!([{
                 "node_did": OWNER,
                 "task_id": "summarize",
-                "agent_id": "beh",
+                "agent_did": "beh",
                 "prompt_template": "Summarize {{ doc.nope }}"
             }]),
             json!([{
@@ -330,7 +330,7 @@ mod tests {
             json!([{
                 "node_did": OWNER,
                 "task_id": "summarize",
-                "agent_id": "beh",
+                "agent_did": "beh",
                 "prompt_template": "Summarize"
             }]),
             json!([{

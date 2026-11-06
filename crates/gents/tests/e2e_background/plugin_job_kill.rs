@@ -15,9 +15,7 @@ use gents::tools::background::status::ProcessControlScope;
 use gents::tools::call::control::{
     cancel_background_tool_call, cancel_session_background_process, CancelBackgroundToolCallOutcome,
 };
-use gents::{
-    BackgroundExecutionRegistry, ConfigAccess, DocumentRuntimeOptions, Gents, NodeIdentity,
-};
+use gents::{BackgroundExecutionRegistry, DocumentRuntimeOptions, Gents, NodeIdentity};
 use serde_json::{json, Value};
 
 use crate::plugin_job_support::{
@@ -25,12 +23,12 @@ use crate::plugin_job_support::{
     wait_job, JobHarness, PlanEntry, CHILD, MODEL, PARENT, PLUGIN,
 };
 use crate::support::accepted_turn::{
-    boot_accepted_turn_with_backend_capacity, boot_prepared_accepted_turn,
-    enqueue_local_accepted_request, prepare_accepted_turn, AcceptedTurnSpec,
+    boot_managed_accepted_turn_with_backend_capacity, boot_prepared_accepted_turn,
+    enqueue_managed_accepted_request, prepare_managed_accepted_turn, AcceptedTurnSpec,
 };
 use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity};
 use crate::support::fixtures::{
-    agent_target, bind_agent_backend, configure_agent_tools, configure_child_agent,
+    agent_target, bind_managed_agent_backend, configure_agent_tools_as,
 };
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::p2p_waits::wait_for_connected_peer;
@@ -102,7 +100,7 @@ async fn boot_wide_job(
     accepted_chunks: Vec<StreamChunk>,
     child_plans: Vec<StreamPlan>,
 ) -> JobHarness {
-    install_job_fixture(&db, &plugin_home, job_settings()).await;
+    let actors = install_job_fixture(&db, &plugin_home, job_settings()).await;
     let cwd = db.data_path().join("job_cwd");
     std::fs::create_dir_all(&cwd).expect("create the job working folder");
     let cwd = cwd
@@ -110,13 +108,14 @@ async fn boot_wide_job(
         .expect("resolve the job working folder")
         .to_string_lossy()
         .into_owned();
-    let runtime = boot_accepted_turn_with_backend_capacity(
+    let runtime = boot_managed_accepted_turn_with_backend_capacity(
         &db,
+        &actors.fixture,
         AcceptedTurnSpec {
             backend_id: "plugin-job-backend",
             model: MODEL,
-            parent_agent_id: PARENT,
-            configured_agent_ids: &[PARENT, CHILD],
+            parent_agent_did: &actors.fixture.binding.agent_did,
+            configured_agent_dids: &[&actors.fixture.binding.agent_did, &actors.child_did],
             request_id: &format!("{session_id}-parent"),
             session_id,
             prompt: &format!("{session_id} start"),
@@ -135,6 +134,7 @@ async fn boot_wide_job(
     .await;
     JobHarness {
         db,
+        actors,
         plugin_home,
         runtime,
         session_id: session_id.into(),
@@ -185,7 +185,10 @@ async fn live_job(name: &str) -> LiveJob {
 }
 
 async fn execute(h: &JobHarness, query: String) -> Value {
-    ConfigAccess::local(h.db.node.clone())
+    h.actors
+        .fixture
+        .access
+        .clone()
         .execute(&query)
         .await
         .expect("read the store")
@@ -246,8 +249,8 @@ async fn completion_notifications(h: &JobHarness, tool_call_id: &str) -> usize {
         .as_array()
         .expect("message headers")
     {
-        let (_, message) = gents::session::load_canonical_message_from_node(
-            h.db.node.as_ref(),
+        let (_, message) = gents::session::load_canonical_message(
+            &h.actors.fixture.access,
             header["_docID"].as_str().expect("message doc id"),
             header["node_did"].as_str().expect("message node"),
             header["requester_did"].as_str(),
@@ -321,7 +324,7 @@ fn parent_scope(h: &JobHarness) -> ProcessControlScope {
         request_id: format!("{}-parent", h.session_id),
         session_id: h.session_id.clone(),
         node_did: did.clone(),
-        requester_did: Some(did),
+        requester_did: Some(h.actors.fixture.user.did().to_string()),
     }
 }
 
@@ -332,6 +335,7 @@ async fn operator_cancel_client_cancel_and_non_job_stop_each_end_the_row_cancell
     let outcome = cancel_background_tool_call(
         job.h.db.node.clone(),
         &BackgroundExecutionRegistry::default(),
+        job.h.actors.fixture.agent.did(),
         &job.session_id,
         TOOL_CALL,
     )
@@ -350,8 +354,9 @@ async fn operator_cancel_client_cancel_and_non_job_stop_each_end_the_row_cancell
     let outcome = cancel_session_background_process(
         job.h.db.node.clone(),
         &BackgroundExecutionRegistry::default(),
+        job.h.actors.fixture.agent.did(),
         &did,
-        Some(&did),
+        Some(job.h.actors.fixture.user.did()),
         &job.session_id,
         TOOL_CALL,
     )
@@ -388,9 +393,9 @@ async fn operator_cancel_client_cancel_and_non_job_stop_each_end_the_row_cancell
         STOP_PROMPT,
         StreamResponse::completes(STOP_PROMPT, ["stop sent"]),
     );
-    enqueue_local_accepted_request(
+    enqueue_managed_accepted_request(
         &job.h.db,
-        PARENT,
+        &job.h.actors.fixture,
         "stop-request",
         &job.session_id,
         STOP_PROMPT,
@@ -402,7 +407,7 @@ async fn operator_cancel_client_cancel_and_non_job_stop_each_end_the_row_cancell
     // The control owner itself reports both killed children.
     let job = live_job("plugin-job-kill-owner").await;
     let outcome = control(
-        &ConfigAccess::local(job.h.db.node.clone()),
+        &job.h.agent_access(),
         &parent_scope(&job.h),
         TOOL_CALL,
         JobControlKind::Stop,
@@ -419,7 +424,7 @@ async fn operator_cancel_client_cancel_and_non_job_stop_each_end_the_row_cancell
         "{outcome:?}"
     );
     let replay = control(
-        &ConfigAccess::local(job.h.db.node.clone()),
+        &job.h.agent_access(),
         &parent_scope(&job.h),
         TOOL_CALL,
         JobControlKind::Stop,
@@ -455,41 +460,44 @@ async fn paired_job(name: &str) -> (JobHarness, BootedAgent, TestDb, tempfile::T
     let did_b = identity_b.did().to_string();
     let plugin_home = tempfile::tempdir().expect("plugin home");
 
-    // Node B hosts the peer child's agent behind a held backend.
-    gents::ensure_node(&db_b.node, &did_b)
-        .await
-        .expect("create node B's node document");
-    configure_child_agent(
-        &db_b.node,
+    let peer = crate::support::managed_agent_fixture(&db_b).await;
+    configure_agent_tools_as(
+        &peer.access,
         &did_b,
-        PEER_CHILD,
-        &format!("{PEER_CHILD}:tools"),
+        &peer.binding.agent_did,
+        None,
+        Tools {
+            tools_id: format!("{PEER_CHILD}:tools"),
+            node_did: did_b.clone(),
+            agents: Some(AgentTools {
+                target_ids: Vec::new(),
+                enabled: Some(false),
+            }),
+            ..Default::default()
+        },
         Vec::new(),
-        false,
     )
     .await;
     let backend_b = MockStreamingBackend::start_with_plans(MODEL, vec![held_child(&prompt_b)])
         .expect("start node B's backend");
-    bind_agent_backend(
-        &db_b.node,
-        &did_b,
-        PEER_CHILD,
+    bind_managed_agent_backend(
+        &db_b,
+        &peer,
         "plugin-job-peer-backend",
         backend_b.endpoint(),
         MODEL,
     )
     .await;
 
-    // Node A lists both targets for the job and for its parent agent.
     let settings = PluginJobSettings {
         agent_targets: vec![CHILD.into(), PEER_CHILD.into()],
         ..job_settings()
     };
-    install_job_fixture(&db_a, plugin_home.path(), settings.clone()).await;
-    configure_agent_tools(
-        &db_a.node,
+    let actors = install_job_fixture(&db_a, plugin_home.path(), settings.clone()).await;
+    configure_agent_tools_as(
+        &actors.fixture.access,
         &did_a,
-        PARENT,
+        &actors.fixture.binding.agent_did,
         None,
         Tools {
             tools_id: format!("{PARENT}:tools"),
@@ -513,13 +521,18 @@ async fn paired_job(name: &str) -> (JobHarness, BootedAgent, TestDb, tempfile::T
         vec![
             (
                 gents::Collection::AgentTarget,
-                serde_json::to_value(agent_target(&did_a, CHILD, &did_a, CHILD))
-                    .expect("serialize the local target"),
+                serde_json::to_value(agent_target(&did_a, CHILD, &did_a, &actors.child_did))
+                    .unwrap(),
             ),
             (
                 gents::Collection::AgentTarget,
-                serde_json::to_value(agent_target(&did_a, PEER_CHILD, &did_b, PEER_CHILD))
-                    .expect("serialize the peer target"),
+                serde_json::to_value(agent_target(
+                    &did_a,
+                    PEER_CHILD,
+                    &did_b,
+                    &peer.binding.agent_did,
+                ))
+                .unwrap(),
             ),
         ],
     )
@@ -568,13 +581,14 @@ async fn paired_job(name: &str) -> (JobHarness, BootedAgent, TestDb, tempfile::T
         .expect("resolve the job working folder")
         .to_string_lossy()
         .into_owned();
-    let prepared = prepare_accepted_turn(
+    let prepared = prepare_managed_accepted_turn(
         &db_a,
+        &actors.fixture,
         AcceptedTurnSpec {
             backend_id: "plugin-job-backend",
             model: MODEL,
-            parent_agent_id: PARENT,
-            configured_agent_ids: &[PARENT, CHILD],
+            parent_agent_did: &actors.fixture.binding.agent_did,
+            configured_agent_dids: &[&actors.fixture.binding.agent_did, &actors.child_did],
             request_id: &format!("{session_id}-parent"),
             session_id: &session_id,
             prompt: &format!("{session_id} start"),
@@ -604,6 +618,7 @@ async fn paired_job(name: &str) -> (JobHarness, BootedAgent, TestDb, tempfile::T
     wait_for_connected_peer(db_b.node.as_ref()).await;
     let h = JobHarness {
         db: db_a,
+        actors,
         plugin_home: plugin_home.path().to_path_buf(),
         runtime,
         session_id,
@@ -637,7 +652,7 @@ async fn stop_paired_job(name: &str, peer_reachable: bool) {
     }
 
     let outcome = control(
-        &ConfigAccess::local(h.db.node.clone()),
+        &h.agent_access(),
         &parent_scope(&h),
         TOOL_CALL,
         JobControlKind::Stop,

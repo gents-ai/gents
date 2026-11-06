@@ -56,8 +56,8 @@ impl AgentConnection {
             None
         };
         let profile = profile.map(|name| match name {
-            "default" => self.inputs.agent_id.as_str(),
-            built_in if grok_built_in_agent_profile(built_in) => self.inputs.agent_id.as_str(),
+            "default" => self.inputs.agent_did.as_str(),
+            built_in if grok_built_in_agent_profile(built_in) => self.inputs.agent_did.as_str(),
             name => name,
         });
         let mut binding = self.binding.lock().await;
@@ -73,11 +73,11 @@ impl AgentConnection {
             }
             return Ok(Some(self.bootstrap.clone()));
         }
-        let agent = profile.unwrap_or(&self.inputs.agent_id).to_owned();
+        let agent = profile.unwrap_or(&self.inputs.agent_did).to_owned();
         let escaped = gents::store::graphql::escape_graphql_string(&agent);
         let owner = gents::store::graphql::escape_graphql_string(&self.inputs.node_did);
         let response = gents::store::graphql::graphql_with_transaction_retry(&self.inputs.node, &format!(
-            "{{Agent(filter:{{agent_id:{{_eq:\"{escaped}\"}},node_did:{{_eq:\"{owner}\"}}}},limit:2){{node_did enabled}}}}"
+            "{{Agent(filter:{{agent_did:{{_eq:\"{escaped}\"}},node_did:{{_eq:\"{owner}\"}}}},limit:2){{node_did enabled}}}}"
         ), "select Grok agent").await?;
         let rows = response
             .data
@@ -90,7 +90,7 @@ impl AgentConnection {
                 && rows[0]["enabled"].as_bool() == Some(true),
             "unknown, disabled, or unauthorized Gents agent: {agent}"
         );
-        let service = if agent == self.inputs.agent_id {
+        let service = if agent == self.inputs.agent_did {
             self.bootstrap.clone()
         } else {
             let mut inputs = self.inputs.clone();
@@ -100,7 +100,7 @@ impl AgentConnection {
                 &agent,
             )
             .await?;
-            inputs.agent_id = agent.clone();
+            inputs.agent_did = agent.clone();
             inputs.service(self.client_id, &self.registration)
         };
         binding.selected = Some((agent, service.clone()));
@@ -119,6 +119,9 @@ impl AcpDelegate for AgentConnection {
                 Ok(request) => request,
                 Err(_) => return self.bootstrap.handle_acp(payload, outbound).await,
             };
+            if super::acp::requires_client_identity(&request.method) {
+                return self.bootstrap.handle_acp(payload, outbound).await;
+            }
             match self.route(&request).await {
                 Ok(Some(service)) => service.handle_acp(payload, outbound).await,
                 route => {

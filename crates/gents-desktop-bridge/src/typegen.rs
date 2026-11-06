@@ -71,6 +71,9 @@ fn normalize_generated_types(dir: &Path) -> Result<(), String> {
                     && (trimmed.contains(" from \"./") || trimmed.contains(" from \"../"))
                     && trimmed.ends_with("\";")
                     && !trimmed.ends_with(".js\";")
+                    && trimmed.rsplit_once(" from \"").is_some_and(|(_, module)| {
+                        module.starts_with("./") || module.starts_with("../")
+                    })
                 {
                     format!("{}.js\";", trimmed.trim_end_matches("\";"))
                 } else {
@@ -259,6 +262,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ConfigComponentsPatchRequest,
         ConfigComponentPatch,
         AgentSaveRequest,
+        gents_protocol::agent_identity::AgentIdentityBinding,
         SkillDeleteRequest,
         TaskDeleteRequest,
         ScheduleDeleteRequest,
@@ -325,7 +329,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ChatSubmissionRecovery,
         ChatSubmissionQuery,
         ClientUpdateEvent,
-        SessionHydrationView,
         SyncHealthView,
         PairingCollectionStatusView,
         DesktopOperationsSnapshot,
@@ -372,6 +375,9 @@ fn export_all(dir: &Path) -> Result<(), String> {
         crate::tauri_commands::packs::PackInstallRequest,
         crate::tauri_commands::ux_plugins::PluginCallRequest,
         crate::tauri_commands::ux_plugins::UxDataCallRequest,
+        crate::tauri_commands::ux_plugins::UxDataCallKind,
+        crate::tauri_commands::ux_plugins::UxDataCallResult,
+        crate::tauri_commands::ux_plugins::UxDataWatchEvent,
         crate::tauri_commands::ux_plugins::UxDataSurfacesRequest,
         crate::tauri_commands::packs::PluginBindRequest,
         crate::tauri_commands::packs::PackWireRequest,
@@ -490,6 +496,22 @@ fn list_ts_files(dir: &Path) -> Result<Vec<String>, String> {
 fn ts_rs_exports_tagged_enum_and_camel_case_structs() {
     let tmp = tempfile::tempdir().expect("tempdir");
     export_all(tmp.path()).expect("export");
+    let commands =
+        std::fs::read_to_string(tmp.path().join("DesktopCommands.ts")).expect("DesktopCommands.ts");
+    assert!(
+        commands.contains("import type { Channel } from \"@tauri-apps/api/core\";")
+            && !commands.contains("@tauri-apps/api/core.js")
+            && commands.contains("channel: Channel<UxDataWatchEvent>"),
+        "the watch command must carry its typed Tauri event channel: {commands}"
+    );
+    let watch_event = std::fs::read_to_string(tmp.path().join("UxDataWatchEvent.ts"))
+        .expect("UxDataWatchEvent.ts");
+    assert!(
+        watch_event.contains("\"snapshot\"")
+            && watch_event.contains("UxDataCallResult")
+            && watch_event.contains("\"error\""),
+        "the watch channel must expose its snapshot and error events: {watch_event}"
+    );
     let goal = std::fs::read_to_string(tmp.path().join("GoalControlAction.ts"))
         .expect("GoalControlAction.ts");
     assert!(
@@ -621,6 +643,22 @@ fn bigint_normalization_only_rewrites_typescript_identifier_tokens() {
     assert_eq!(
         replace_typescript_identifier(source, "bigint", "number"),
         "type Wire = number | Array<number>; type bigintCounter = string;\n"
+    );
+}
+
+#[test]
+fn generated_imports_keep_package_specifiers_and_suffix_relative_modules() {
+    let dir = tempfile::tempdir().expect("generated directory");
+    let path = dir.path().join("Example.ts");
+    std::fs::write(
+        &path,
+        "import type { Channel } from \"@tauri-apps/api/core\";\nimport type { A } from \"./A\";\nimport type { B } from \"../B\";\nimport type { C } from \"./C.js\";\n",
+    )
+    .unwrap();
+    normalize_generated_types(dir.path()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "import type { Channel } from \"@tauri-apps/api/core\";\nimport type { A } from \"./A.js\";\nimport type { B } from \"../B.js\";\nimport type { C } from \"./C.js\";\n"
     );
 }
 

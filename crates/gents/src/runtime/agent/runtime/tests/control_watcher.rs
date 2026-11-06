@@ -100,7 +100,7 @@ async fn run_test_control_watcher(inputs: ControlWatcherInputs) -> Result<()> {
 }
 
 fn test_tool_runtime(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     resolve_context: &crate::runtime::agent::DocumentResolveContext,
 ) -> crate::tools::surface::ToolRuntimeContext {
@@ -116,26 +116,26 @@ fn test_tool_runtime(
     .with_plugins(resolve_context.plugins.clone())
 }
 
-async fn update_node_enabled(node: &defra_node::EmbeddedNode, node_did: &str, enabled: bool) {
+async fn update_node_enabled(access: &crate::ConfigAccess, node_did: &str, enabled: bool) {
     let escaped_node_did = escape_graphql_string(node_did);
-    let mutation = format!(
-        r#"mutation {{
-            update_Node(
-                filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
-                input: {{ enabled: {enabled} }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "update_Node failed: {:?}",
-        response.errors
-    );
+    let response = access
+        .execute(&format!(
+            r#"{{ Node(filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }}) {{ _docID }} }}"#
+        ))
+        .await
+        .unwrap();
+    let rows = response["data"]["Node"].as_array().unwrap();
+    let [row] = rows.as_slice() else {
+        panic!("fixture Node must be unique")
+    };
+    let doc = escape_graphql_string(row["_docID"].as_str().unwrap());
+    access.write("test.node.enabled", &format!(
+        r#"mutation {{ update_Node(docID: "{doc}", input: {{ enabled: {enabled} }}) {{ _docID }} }}"#
+    )).await.unwrap();
 }
 
 async fn write_documents(
-    node: &Arc<defra_node::EmbeddedNode>,
+    access: &crate::ConfigAccess,
     operation: &'static str,
     documents: Vec<(crate::Collection, serde_json::Value)>,
 ) {
@@ -150,33 +150,36 @@ async fn write_documents(
         )
         .collect();
     let plan = crate::store::config_client::DesiredStateApplyPlan::new(documents).unwrap();
-    crate::store::config_client::ConfigAccess::transact_local_write(node, None, operation, |txn| {
-        let plan = &plan;
-        Box::pin(
-            async move { crate::store::config_client::apply_desired_state_plan(txn, plan).await },
-        )
-    })
-    .await
-    .unwrap();
+    access
+        .transact_write(operation, |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
 async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     crate::test_support::enable_scoped_event_capture();
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("control-watcher"));
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture(
+        "control-watcher",
         "backend-control",
         "http://127.0.0.1:8111/v1",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let user_access = fixture.user_access.clone();
+    let agent_access = fixture.agent_config_access().await;
+    assert_ne!(fixture.user.did(), identity.did());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -189,7 +192,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         .expect("document-backed agent");
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.node_did().to_string());
     runtime_status
-        .initialize_startup(agent.default_agent_id())
+        .initialize_startup(agent.default_agent_did())
         .await
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -204,8 +207,8 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     let subscription = subscribe_control_changes(&node).unwrap();
     let context = serde_json::json!({
         "node_did": agent.node_did(),
-        "context_id": format!("{}:context", agent.default_agent_id()),
-        "tools_id": format!("{}:tools", agent.default_agent_id()),
+        "context_id": format!("{}:context", agent.default_agent_did()),
+        "tools_id": format!("{}:tools", agent.default_agent_did()),
         "system_prompt": "updated prompt"
     });
     let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
@@ -216,23 +219,20 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         },
     ])
     .unwrap();
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "test.context.update",
-        |txn| {
+    user_access
+        .transact_write("test.context.update", |txn| {
             let plan = &plan;
             Box::pin(async move {
                 crate::store::config_client::apply_desired_state_plan(txn, plan).await
             })
-        },
-    )
-    .await
-    .unwrap();
+        })
+        .await
+        .unwrap();
 
     let watcher_task = tokio::spawn(
         run_test_control_watcher(ControlWatcherInputs {
             node: node.clone(),
+            backend_admission: agent.backend_admission.clone(),
             subscription,
             node_did: agent.node_did().to_string(),
             tool_runtime: test_tool_runtime(&node, agent.node_did(), &resolve_context),
@@ -252,7 +252,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     assert_eq!(
         snapshot
             .agents
-            .get(agent.default_agent_id())
+            .get(agent.default_agent_did())
             .expect("default agent in snapshot")
             .system_prompt,
         "updated prompt"
@@ -287,20 +287,26 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
 
     let context_id = crate::store::graphql::escape_graphql_string(&format!(
         "{}:context",
-        agent.default_agent_id()
+        agent.default_agent_did()
     ));
+    let observed = user_access
+        .execute(&format!(
+            r#"{{ AgentContext(filter: {{context_id: {{_eq: "{context_id}"}}}}) {{_docID}} }}"#
+        ))
+        .await
+        .unwrap();
+    let rows = observed["data"]["AgentContext"].as_array().unwrap();
+    let [row] = rows.as_slice() else {
+        panic!("fixture context must be unique")
+    };
+    let doc = escape_graphql_string(row["_docID"].as_str().unwrap());
     let mutation = format!(
-        r#"mutation {{ update_AgentContext(
-        filter: {{context_id: {{_eq: "{context_id}"}}}},
-        input: {{display_name: "Retagged context"}}) {{context_id}} }}"#
+        r#"mutation {{ update_AgentContext(docID: "{doc}", input: {{display_name: "Retagged context"}}) {{_docID}} }}"#
     );
-    crate::store::config_client::ConfigAccess::write_local(
-        &node,
-        "test.context.metadata",
-        &mutation,
-    )
-    .await
-    .unwrap();
+    agent_access
+        .write("test.context.metadata", &mutation)
+        .await
+        .unwrap();
     let repeated = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
         .await
         .expect("metadata write must reach reconcile owner")
@@ -321,20 +327,21 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
 
 #[tokio::test]
 async fn control_watcher_reconciles_a_local_write_without_the_replication_debounce() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("control-watcher-local"));
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture(
+        "control-watcher-local",
         "backend-control",
         "http://127.0.0.1:8111/v1",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let agent_access = fixture.agent_config_access().await;
+    assert_ne!(fixture.user.did(), identity.did());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -347,7 +354,7 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
         .expect("document-backed agent");
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.node_did().to_string());
     runtime_status
-        .initialize_startup(agent.default_agent_id())
+        .initialize_startup(agent.default_agent_did())
         .await
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -356,6 +363,7 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
     let watcher_task = tokio::spawn(run_control_watcher_with_timing(
         ControlWatcherInputs {
             node: node.clone(),
+            backend_admission: agent.backend_admission.clone(),
             subscription,
             node_did: agent.node_did().to_string(),
             tool_runtime: test_tool_runtime(&node, agent.node_did(), &resolve_context),
@@ -372,14 +380,14 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
     ));
 
     write_documents(
-        &node,
+        &agent_access,
         "test.context.local",
         vec![(
             crate::Collection::AgentContext,
             serde_json::json!({
                 "node_did": agent.node_did(),
-                "context_id": format!("{}:context", agent.default_agent_id()),
-                "tools_id": format!("{}:tools", agent.default_agent_id()),
+                "context_id": format!("{}:context", agent.default_agent_did()),
+                "tools_id": format!("{}:tools", agent.default_agent_did()),
                 "system_prompt": "operator prompt"
             }),
         )],
@@ -393,7 +401,7 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
     assert_eq!(
         snapshot
             .agents
-            .get(agent.default_agent_id())
+            .get(agent.default_agent_did())
             .expect("default agent in snapshot")
             .system_prompt,
         "operator prompt"
@@ -406,20 +414,20 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
 #[tokio::test]
 async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
     crate::test_support::enable_scoped_event_capture();
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("control-watcher-health"));
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture(
+        "control-watcher-health",
         "backend-measured",
         "http://127.0.0.1:8113/v1",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    assert_ne!(fixture.user.did(), identity.did());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -431,10 +439,10 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
         .cloned()
         .expect("document-backed agent");
     let backend_health = agent.backend_health();
-    let agent_id = agent.default_agent_id().to_string();
+    let agent_did = agent.default_agent_did().to_string();
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.node_did().to_string());
     runtime_status
-        .initialize_startup(agent.default_agent_id())
+        .initialize_startup(agent.default_agent_did())
         .await
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -447,6 +455,7 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
     let watcher_task = tokio::spawn(
         run_test_control_watcher(ControlWatcherInputs {
             node: node.clone(),
+            backend_admission: agent.backend_admission.clone(),
             subscription: subscribe_control_changes(&node).unwrap(),
             node_did: agent.node_did().to_string(),
             tool_runtime: test_tool_runtime(&node, agent.node_did(), &resolve_context),
@@ -480,12 +489,12 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
         "a measured-health transition debounces before it resolves"
     );
     assert!(
-        !snapshot.agents.contains_key(&agent_id),
+        !snapshot.agents.contains_key(&agent_did),
         "agent on a measured-unhealthy backend must leave the active set"
     );
     let reason = snapshot
         .unavailable_agents
-        .get(&agent_id)
+        .get(&agent_did)
         .expect("unavailable reason for demoted agent");
     assert_eq!(
         reason.public_reason,
@@ -516,7 +525,7 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
         "recovery debounces before it resolves"
     );
     assert!(
-        snapshot.agents.contains_key(&agent_id),
+        snapshot.agents.contains_key(&agent_did),
         "agent must return to the active set after recovery"
     );
     assert!(
@@ -534,20 +543,21 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
 #[tokio::test]
 async fn control_watcher_recovers_after_resolve_error() {
     crate::test_support::enable_scoped_event_capture();
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("control-watcher-recover"));
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture(
+        "control-watcher-recover",
         "backend-control-recover",
         "http://127.0.0.1:8112/v1",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let user_access = fixture.user_access.clone();
+    assert_ne!(fixture.user.did(), identity.did());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -560,7 +570,7 @@ async fn control_watcher_recovers_after_resolve_error() {
         .expect("document-backed agent");
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.node_did().to_string());
     runtime_status
-        .initialize_startup(agent.default_agent_id())
+        .initialize_startup(agent.default_agent_did())
         .await
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -572,6 +582,7 @@ async fn control_watcher_recovers_after_resolve_error() {
     let watcher_task = tokio::spawn(
         run_test_control_watcher(ControlWatcherInputs {
             node: node.clone(),
+            backend_admission: agent.backend_admission.clone(),
             subscription: subscribe_control_changes(&node).unwrap(),
             node_did: agent.node_did().to_string(),
             tool_runtime: test_tool_runtime(&node, agent.node_did(), &resolve_context),
@@ -585,7 +596,7 @@ async fn control_watcher_recovers_after_resolve_error() {
     );
 
     tokio::task::yield_now().await;
-    update_node_enabled(node.as_ref(), agent.node_did(), false).await;
+    update_node_enabled(&user_access, agent.node_did(), false).await;
 
     let failed_status =
         wait_for_runtime_reconcile_phase(node.as_ref(), agent.node_did(), "idle").await;
@@ -598,13 +609,13 @@ async fn control_watcher_recovers_after_resolve_error() {
         "a transient resolution failure must retry during the settle window"
     );
 
-    update_node_enabled(node.as_ref(), agent.node_did(), true).await;
+    update_node_enabled(&user_access, agent.node_did(), true).await;
 
     let snapshot = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
         .await
         .expect("a re-enabled Node must reach the reconcile owner")
         .expect("recovered snapshot");
-    assert_eq!(snapshot.default_agent_id, agent.default_agent_id());
+    assert_eq!(snapshot.default_agent_did, agent.default_agent_did());
 
     let _ = shutdown_tx.send(true);
     watcher_task.await.unwrap().unwrap();
@@ -612,20 +623,21 @@ async fn control_watcher_recovers_after_resolve_error() {
 
 #[tokio::test]
 async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("control-watcher-tools"));
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture(
+        "control-watcher-tools",
         "backend-control-tools",
         "http://127.0.0.1:8113/v1",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let user_access = fixture.user_access.clone();
+    assert_ne!(fixture.user.did(), identity.did());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::readonly(),
             ..Default::default()
         },
@@ -638,7 +650,7 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
         .expect("document-backed agent");
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.node_did().to_string());
     runtime_status
-        .initialize_startup(agent.default_agent_id())
+        .initialize_startup(agent.default_agent_did())
         .await
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -646,6 +658,7 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
 
     let watcher_task = tokio::spawn(run_test_control_watcher(ControlWatcherInputs {
         node: node.clone(),
+        backend_admission: agent.backend_admission.clone(),
         subscription: subscribe_control_changes(&node).unwrap(),
         node_did: agent.node_did().to_string(),
         tool_runtime: test_tool_runtime(&node, agent.node_did(), &resolve_context),
@@ -659,18 +672,15 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     tokio::task::yield_now().await;
 
     let tools: Tools = serde_json::from_value(serde_json::json!({
-        "tools_id": format!("{}:tools", agent.default_agent_id()),
+        "tools_id": format!("{}:tools", agent.default_agent_did()),
         "node_did": agent.node_did(),
         "display_name": "Read tools",
         "host": {"files": {"mode": "ReadOnly"}}
     }))
     .unwrap();
-    crate::store::config_client::write_tools_document(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
-        &tools,
-    )
-    .await
-    .unwrap();
+    crate::store::config_client::write_tools_document(&user_access, &tools)
+        .await
+        .unwrap();
 
     tokio::task::yield_now().await;
     tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.debounce + Duration::from_millis(10)).await;
@@ -679,7 +689,7 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     let snapshot = proposal_rx.recv().await.expect("reconciled snapshot");
     let tool_surface = snapshot
         .tool_surfaces
-        .get(agent.default_agent_id())
+        .get(agent.default_agent_did())
         .expect("default agent tool surface");
     let tool_names = tool_surface.tool_names();
     assert!(tool_names.contains(&"read_file".to_string()));
@@ -692,20 +702,21 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
 
 #[tokio::test]
 async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("control-watcher-settle"));
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture(
+        "control-watcher-settle",
         "backend-settle",
         "http://127.0.0.1:8114/v1",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let user_access = fixture.user_access.clone();
+    assert_ne!(fixture.user.did(), identity.did());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -713,7 +724,7 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
     .await
     .unwrap();
     let node_did = agent.node_did().to_string();
-    let selected_agent_id = agent.default_agent_id().to_string();
+    let selected_agent_did = agent.default_agent_did().to_string();
 
     let backend = crate::inference::backends::registry::lookup_backend(
         node.as_ref(),
@@ -738,16 +749,24 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
             models,
         }
     };
-    crate::inference::backends::registry::record_model_catalog(
-        &node,
-        &backend,
-        catalog(
-            "2026-01-01T00:00:00Z",
-            vec![advertised("default"), advertised("retired-model")],
-        ),
-    )
-    .await
-    .unwrap();
+    let runtime_access = crate::ConfigAccess::local_as(node.clone(), node_did.parse().unwrap());
+    let first_catalog = catalog(
+        "2026-01-01T00:00:00Z",
+        vec![advertised("default"), advertised("retired-model")],
+    );
+    runtime_access
+        .transact_write("test.catalog.initial", |txn| {
+            let catalog = first_catalog.clone();
+            let backend = &backend;
+            Box::pin(async move {
+                crate::inference::backends::registry::record_model_catalog_in_txn(
+                    txn, backend, catalog,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
 
     let resolve_context = agent
         .document_runtime_context()
@@ -755,17 +774,24 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
         .expect("document-backed agent");
     let runtime_status = RuntimeStatusHandle::new(node.clone(), node_did.clone());
     runtime_status
-        .initialize_startup(&selected_agent_id)
+        .initialize_startup(&selected_agent_did)
         .await
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
 
     let subscription = subscribe_control_changes(&node).unwrap();
-    let spare_agent_id = format!("{selected_agent_id}:spare");
-    let spare_profile_id = format!("{spare_agent_id}:inference");
-    write_documents(
+    let spare = crate::store::identity::provision_agent_identity_authorized(
         &node,
+        fixture.db.node_identity.as_ref(),
+        &fixture.user.did().parse().unwrap(),
+    )
+    .await
+    .unwrap();
+    let spare_agent_did = spare.agent_did.clone();
+    let spare_profile_id = format!("{spare_agent_did}:inference");
+    write_documents(
+        &user_access,
         "test.settle.spare",
         vec![
             (
@@ -781,23 +807,32 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
                 crate::Collection::Agent,
                 serde_json::json!({
                     "node_did": node_did,
-                    "agent_id": spare_agent_id,
+                    "agent_did": spare_agent_did,
+                    "creation_nonce": spare.creation_nonce,
                     "inference_profile_id": spare_profile_id
                 }),
             ),
         ],
     )
     .await;
-    crate::inference::backends::registry::record_model_catalog(
-        &node,
-        &backend,
-        catalog("2026-01-02T00:00:00Z", vec![advertised("default")]),
-    )
-    .await
-    .unwrap();
+    let final_catalog = catalog("2026-01-02T00:00:00Z", vec![advertised("default")]);
+    runtime_access
+        .transact_write("test.catalog.final", |txn| {
+            let catalog = final_catalog.clone();
+            let backend = &backend;
+            Box::pin(async move {
+                crate::inference::backends::registry::record_model_catalog_in_txn(
+                    txn, backend, catalog,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
 
     let watcher_task = tokio::spawn(run_test_control_watcher(ControlWatcherInputs {
         node: node.clone(),
+        backend_admission: agent.backend_admission.clone(),
         subscription,
         node_did: node_did.clone(),
         tool_runtime: test_tool_runtime(&node, &node_did, &resolve_context),
@@ -812,12 +847,12 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
         .await
         .expect("a permanently invalid unselected agent must not hold reconciliation")
         .expect("reconciled snapshot");
-    assert!(snapshot.agents.contains_key(&selected_agent_id));
-    assert!(!snapshot.agents.contains_key(&spare_agent_id));
+    assert!(snapshot.agents.contains_key(&selected_agent_did));
+    assert!(!snapshot.agents.contains_key(&spare_agent_did));
     assert_eq!(
         snapshot
             .unavailable_agents
-            .get(&spare_agent_id)
+            .get(&spare_agent_did)
             .expect("unavailable reason for the invalid agent")
             .public_reason,
         AgentReadinessUnavailableReason::InferenceProfileInvalid
@@ -837,11 +872,14 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
 }
 
 async fn record_plugin_install(
-    node: &Arc<defra_node::EmbeddedNode>,
+    access: &crate::store::config_client::ConfigAccess,
+    node_binding: &crate::store::config_client::ConfigurationNodeBinding,
     node_did: &str,
     plugin_home: &std::path::Path,
 ) {
     let identity = crate::pack::PackIdentity {
+        installation_doc_id: None,
+        agent_bindings: Default::default(),
         coordinate: "fixture/list_files".to_owned(),
         version: "0.1.0".to_owned(),
         digest: "sha256:pack-digest".to_owned(),
@@ -852,19 +890,25 @@ async fn record_plugin_install(
         dependencies: Vec::new(),
         explicit: true,
     };
-    crate::pack::record_plugin_store_change(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+    crate::pack::record_plugin_store_change_as_with_node_binding(
+        access,
         node_did,
+        access
+            .actor_did()
+            .map(identity::Did::new)
+            .transpose()
+            .unwrap(),
         plugin_home,
         &identity.coordinate,
         Some(&identity),
+        Some(node_binding),
     )
     .await
     .unwrap();
 }
 
 async fn write_tools_naming_plugin(
-    node: &Arc<defra_node::EmbeddedNode>,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     tools_id: &str,
 ) {
@@ -874,12 +918,9 @@ async fn write_tools_naming_plugin(
         "integrations": {"plugins": [{"plugin": "fixture/list_files"}]},
     }))
     .unwrap();
-    crate::store::config_client::write_tools_document(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
-        &tools,
-    )
-    .await
-    .unwrap();
+    crate::store::config_client::write_tools_document(access, &tools)
+        .await
+        .unwrap();
 }
 
 fn installed_record() -> crate::plugin::store::InstalledPlugin {
@@ -902,16 +943,15 @@ fn installed_record() -> crate::plugin::store::InstalledPlugin {
 
 #[tokio::test]
 async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_installs() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("control-watcher-plugin-install"));
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = plugin_runtime_fixture(
+        "control-watcher-plugin-install",
         "backend-plugin-install",
         "http://127.0.0.1:8115/v1",
     )
-    .await;
+    .await
+    .unwrap();
+    let node = fixture.node.clone();
+    let identity = fixture.runtime.clone();
     let plugin_home = tempfile::tempdir().unwrap();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
@@ -925,17 +965,18 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
     .await
     .unwrap();
     let node_did = agent.node_did().to_string();
-    let agent_id = agent.default_agent_id().to_string();
+    let agent_did = agent.default_agent_did().to_string();
     let resolve_context = agent
         .document_runtime_context()
         .cloned()
         .expect("document-backed agent");
     let runtime_status = RuntimeStatusHandle::new(node.clone(), node_did.clone());
-    runtime_status.initialize_startup(&agent_id).await.unwrap();
+    runtime_status.initialize_startup(&agent_did).await.unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(8);
     let watcher_task = tokio::spawn(run_test_control_watcher(ControlWatcherInputs {
         node: node.clone(),
+        backend_admission: agent.backend_admission.clone(),
         subscription: subscribe_control_changes(&node).unwrap(),
         node_did: node_did.clone(),
         tool_runtime: test_tool_runtime(&node, &node_did, &resolve_context),
@@ -947,19 +988,30 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
     }));
     tokio::task::yield_now().await;
 
-    write_tools_naming_plugin(&node, &node_did, &format!("{agent_id}:tools")).await;
+    write_tools_naming_plugin(
+        &fixture.user_access,
+        &node_did,
+        &format!("{agent_did}:tools"),
+    )
+    .await;
     let absent = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
         .await
         .expect("the Tools write naming a missing plugin must reach the reconcile owner")
         .expect("proposal channel");
     assert_eq!(
-        absent.unavailable_agents[&agent_id].public_reason,
+        absent.unavailable_agents[&agent_did].public_reason,
         AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
         "while the plugin is missing the agent's tools cannot build"
     );
 
     crate::plugin::store::write_record(plugin_home.path(), &installed_record()).unwrap();
-    record_plugin_install(&node, &node_did, plugin_home.path()).await;
+    record_plugin_install(
+        &fixture.agent_access,
+        &fixture.node_binding,
+        &node_did,
+        plugin_home.path(),
+    )
+    .await;
     let installed = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
         .await
         .expect("a pack install must wake the reconcile owner")
@@ -970,7 +1022,13 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
         "the installed plugin identity must change the resolved fingerprint"
     );
 
-    record_plugin_install(&node, &node_did, plugin_home.path()).await;
+    record_plugin_install(
+        &fixture.agent_access,
+        &fixture.node_binding,
+        &node_did,
+        plugin_home.path(),
+    )
+    .await;
     let reinstalled = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
         .await
         .expect("the reinstall observation must reach the reconcile owner")
@@ -992,16 +1050,15 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
 
 #[tokio::test]
 async fn control_watcher_keeps_an_agent_whose_tools_fail_to_build_demoted() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("control-watcher-unbuildable-tools"));
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = plugin_runtime_fixture(
+        "control-watcher-unbuildable-tools",
         "backend-unbuildable-tools",
         "http://127.0.0.1:8116/v1",
     )
-    .await;
+    .await
+    .unwrap();
+    let node = fixture.node.clone();
+    let identity = fixture.runtime.clone();
     let plugin_home = tempfile::tempdir().unwrap();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
@@ -1015,21 +1072,27 @@ async fn control_watcher_keeps_an_agent_whose_tools_fail_to_build_demoted() {
     .await
     .unwrap();
     let node_did = agent.node_did().to_string();
-    let agent_id = agent.default_agent_id().to_string();
+    let agent_did = agent.default_agent_did().to_string();
     // As at startup: the Tools document already names a plugin that is not
     // installed, so the agent's tool surface resolves but cannot build.
-    write_tools_naming_plugin(&node, &node_did, &format!("{agent_id}:tools")).await;
+    write_tools_naming_plugin(
+        &fixture.user_access,
+        &node_did,
+        &format!("{agent_did}:tools"),
+    )
+    .await;
     let resolve_context = agent
         .document_runtime_context()
         .cloned()
         .expect("document-backed agent");
     let runtime_status = RuntimeStatusHandle::new(node.clone(), node_did.clone());
-    runtime_status.initialize_startup(&agent_id).await.unwrap();
+    runtime_status.initialize_startup(&agent_did).await.unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(8);
     let (health_tx, health_rx) = mpsc::channel::<()>(1);
     let watcher_task = tokio::spawn(run_test_control_watcher(ControlWatcherInputs {
         node: node.clone(),
+        backend_admission: agent.backend_admission.clone(),
         subscription: subscribe_control_changes(&node).unwrap(),
         node_did: node_did.clone(),
         tool_runtime: test_tool_runtime(&node, &node_did, &resolve_context),
@@ -1047,11 +1110,11 @@ async fn control_watcher_keeps_an_agent_whose_tools_fail_to_build_demoted() {
         .expect("the health event must reach the reconcile owner")
         .expect("proposal channel");
     assert!(
-        !proposal.agents.contains_key(&agent_id),
+        !proposal.agents.contains_key(&agent_did),
         "an agent whose tools fail to build must not come back runnable"
     );
     assert_eq!(
-        proposal.unavailable_agents[&agent_id].public_reason,
+        proposal.unavailable_agents[&agent_did].public_reason,
         AgentReadinessUnavailableReason::ToolSurfaceUnavailable
     );
 

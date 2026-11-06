@@ -24,26 +24,31 @@ impl crate::runtime::agent::reconcile::SlotFailurePolicy for StartupSlotFailureP
         self.budget.max(1)
     }
 
-    fn on_build_failure(&self, agent_id: &str, failure_number: u32, error: &str) {
+    fn on_build_failure(&self, agent_did: &str, failure_number: u32, error: &str) {
         if let Some(observer) = &self.observer {
-            observer.on_build_failure(agent_id, failure_number, self.build_failure_budget(), error);
+            observer.on_build_failure(
+                agent_did,
+                failure_number,
+                self.build_failure_budget(),
+                error,
+            );
         }
     }
 
-    async fn on_slot_created(&self, agent_id: &str, generation: u64) -> Result<()> {
+    async fn on_slot_created(&self, agent_did: &str, generation: u64) -> Result<()> {
         self.runtime_status
             .readiness()
-            .register_slot(agent_id, generation)
+            .register_slot(agent_did, generation)
             .await
             .with_context(|| {
-                format!("register agent readiness slot {agent_id} generation {generation}")
+                format!("register agent readiness slot {agent_did} generation {generation}")
             })?;
-        self.barrier.register_agent(agent_id, generation).await;
+        self.barrier.register_agent(agent_did, generation).await;
         Ok(())
     }
 
-    async fn try_demote(&self, agent_id: &str, generation: u64, error: &str) -> Result<bool> {
-        if !self.barrier.is_pending(agent_id, generation).await {
+    async fn try_demote(&self, agent_did: &str, generation: u64, error: &str) -> Result<bool> {
+        if !self.barrier.is_pending(agent_did, generation).await {
             return Ok(false);
         }
         let reason = format!(
@@ -53,7 +58,7 @@ impl crate::runtime::agent::reconcile::SlotFailurePolicy for StartupSlotFailureP
         let applied = match self
             .runtime_status
             .readiness()
-            .demote_slot(agent_id, generation, reason)
+            .demote_slot(agent_did, generation, reason)
             .await
         {
             Ok(applied) => applied,
@@ -73,9 +78,9 @@ impl crate::runtime::agent::reconcile::SlotFailurePolicy for StartupSlotFailureP
         if !applied {
             return Ok(false);
         }
-        self.barrier.mark_agent_demoted(agent_id, generation).await;
+        self.barrier.mark_agent_demoted(agent_did, generation).await;
         tracing::error!(
-            agent_id = %agent_id,
+            agent_did = %agent_did,
             budget = self.build_failure_budget(),
             error = %error,
             "agent demoted: its completion client failed to build repeatedly; \
@@ -86,17 +91,17 @@ impl crate::runtime::agent::reconcile::SlotFailurePolicy for StartupSlotFailureP
         Ok(true)
     }
 
-    async fn on_slot_retired(&self, agent_id: &str, generation: u64, recreated: bool) {
+    async fn on_slot_retired(&self, agent_did: &str, generation: u64, recreated: bool) {
         if let Err(error) = self
             .runtime_status
             .readiness()
-            .retire_slot(agent_id, generation)
+            .retire_slot(agent_did, generation)
             .await
         {
-            tracing::error!(agent_id, generation, error = %error, "failed to retire agent_config readiness slot");
+            tracing::error!(agent_did, generation, error = %error, "failed to retire agent_config readiness slot");
         }
         self.barrier
-            .mark_agent_superseded(agent_id, generation)
+            .mark_agent_superseded(agent_did, generation)
             .await;
         let _ = recreated;
     }

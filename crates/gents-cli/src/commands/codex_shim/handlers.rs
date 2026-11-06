@@ -36,6 +36,15 @@ pub(super) async fn handle_request(
         }
     };
 
+    if requires_client_identity(&codex_request) {
+        return send_error(
+            outbound,
+            request_id,
+            JSONRPC_INTERNAL_ERROR,
+            "This operation requires an authenticated client DID; the Codex shim transport does not provide one".to_owned(),
+        ).await;
+    }
+
     let result = match codex_request {
         codex::ClientRequest::Initialize { .. }
         | codex::ClientRequest::GetAccount { .. }
@@ -125,4 +134,62 @@ pub(super) async fn handle_request(
     }
 
     Ok(())
+}
+
+/// The Codex transport authenticates an optional shared token, not a DID.
+/// A runtime-signed database request cannot represent the connected user.
+fn requires_client_identity(request: &codex::ClientRequest) -> bool {
+    matches!(
+        request,
+        codex::ClientRequest::GetAccount { .. }
+            | codex::ClientRequest::GetAccountRateLimits { .. }
+            | codex::ClientRequest::ModelList { .. }
+            | codex::ClientRequest::ConfigRead { .. }
+            | codex::ClientRequest::SkillsList { .. }
+            | codex::ClientRequest::ConfigBatchWrite { .. }
+            | codex::ClientRequest::ConfigValueWrite { .. }
+            | codex::ClientRequest::ExternalAgentConfigImport { .. }
+            | codex::ClientRequest::SkillsConfigWrite { .. }
+            | codex::ClientRequest::ThreadStart { .. }
+            | codex::ClientRequest::ThreadResume { .. }
+            | codex::ClientRequest::ThreadList { .. }
+            | codex::ClientRequest::ThreadFork { .. }
+            | codex::ClientRequest::ThreadSearch { .. }
+            | codex::ClientRequest::ThreadLoadedList { .. }
+            | codex::ClientRequest::ThreadRead { .. }
+            | codex::ClientRequest::ThreadTurnsList { .. }
+            | codex::ClientRequest::ThreadTurnsItemsList { .. }
+            | codex::ClientRequest::ThreadUnsubscribe { .. }
+            | codex::ClientRequest::ThreadArchive { .. }
+            | codex::ClientRequest::ThreadUnarchive { .. }
+            | codex::ClientRequest::ThreadSetName { .. }
+            | codex::ClientRequest::ThreadMemoryModeSet { .. }
+            | codex::ClientRequest::ThreadSettingsUpdate { .. }
+            | codex::ClientRequest::ThreadMetadataUpdate { .. }
+            | codex::ClientRequest::ThreadGoalSet { .. }
+            | codex::ClientRequest::ThreadGoalGet { .. }
+            | codex::ClientRequest::ThreadGoalClear { .. }
+            | codex::ClientRequest::GetConversationSummary { .. }
+            | codex::ClientRequest::TurnStart { .. }
+            | codex::ClientRequest::TurnSteer { .. }
+            | codex::ClientRequest::TurnInterrupt { .. }
+            | codex::ClientRequest::ThreadBackgroundTerminalsClean { .. }
+            | codex::ClientRequest::CommandExecTerminate { .. }
+            | codex::ClientRequest::ProcessKill { .. }
+    )
+}
+
+#[cfg(test)]
+#[test]
+fn connected_client_operations_do_not_use_runtime_authority() {
+    let start: codex::ClientRequest = serde_json::from_value(serde_json::json!({
+        "id": 1, "method": "thread/start", "params": {}
+    }))
+    .unwrap();
+    let initialize: codex::ClientRequest = serde_json::from_value(serde_json::json!({
+        "id": 2, "method": "initialize", "params": {"clientInfo": {"name": "test", "version": "1"}}
+    }))
+    .unwrap();
+    assert!(requires_client_identity(&start));
+    assert!(!requires_client_identity(&initialize));
 }

@@ -8,9 +8,10 @@ pub async fn set_goal(
     status: Option<GoalStatus>,
     token_budget: Option<Option<i64>>,
 ) -> Result<GoalDocument> {
-    crate::store::config_client::ConfigAccess::transact_local_write(
+    let actor = crate::session::load_session_agent_did(node, node_did, session_id).await?;
+    let goal = crate::store::config_client::ConfigAccess::transact_local_write(
         node,
-        None,
+        Some(actor.clone()),
         "goal.set",
         move |txn| {
             Box::pin(async move {
@@ -27,7 +28,14 @@ pub async fn set_goal(
             })
         },
     )
-    .await
+    .await?;
+    super::creation::finish_goal_relationships(
+        &crate::ConfigAccess::local_as(node.clone(), actor),
+        node_did,
+        session_id,
+    )
+    .await?;
+    Ok(goal)
 }
 
 pub async fn set_goal_from_access(
@@ -39,7 +47,7 @@ pub async fn set_goal_from_access(
     token_budget: Option<Option<i64>>,
     auto_resume: Option<bool>,
 ) -> Result<GoalDocument> {
-    access
+    let goal = access
         .transact_write("goal.set_from_access", move |txn| {
             Box::pin(async move {
                 set_goal_in_txn(
@@ -54,7 +62,9 @@ pub async fn set_goal_from_access(
                 .await
             })
         })
-        .await
+        .await?;
+    super::creation::finish_goal_relationships(access, node_did, session_id).await?;
+    Ok(goal)
 }
 
 /// An operator reset preference belongs to the observed Goal, including when
@@ -135,10 +145,6 @@ pub(super) async fn set_goal_in_txn(
     if budget.is_some_and(|value| value <= 0) {
         bail!("goal token budget must be positive");
     }
-    let auto_resume_field = auto_resume
-        .map(|on| format!("auto_resume_at_reset: {on},"))
-        .unwrap_or_default();
-
     let now = Utc::now();
     let now_string = now.to_rfc3339();
     if let Some(existing) = existing {
@@ -151,46 +157,36 @@ pub(super) async fn set_goal_in_txn(
         );
         let post = apply_operator_status_transition(pre, status)?;
         let active_time = existing.current_active_time_seconds(now);
-        let active_started_at = if post.status.accrues_active_time() {
-            now_string.clone()
-        } else {
-            String::new()
-        };
-        let budget_field = optional_int_graphql_field("token_budget", budget);
-        let active_started_field = optional_string_graphql_field(
-            "active_started_at",
-            (!active_started_at.is_empty()).then_some(active_started_at.as_str()),
-        );
+        let mut input = serde_json::json!({
+            "objective": objective,
+            "status": post.status.as_str(),
+            "token_budget": budget,
+            "tokens_used": existing.tokens_used.unwrap_or_default().max(0),
+            "active_time_seconds": active_time,
+            "active_started_at": post.status.accrues_active_time().then_some(now_string.as_str()),
+            "consecutive_blocked_audits": post.blocked_audits,
+            "wrapup_requested": post.wrapup_requested,
+            "wrapup_completed": post.wrapup_completed,
+            "updated_at": now_string,
+        });
+        if let Some(enabled) = auto_resume {
+            input["auto_resume_at_reset"] = enabled.into();
+        }
         let doc_id = escape_graphql_string(&existing.doc_id);
         let escaped_node_did = escape_graphql_string(node_did);
-        let objective = escape_graphql_string(&objective);
-        let status = post.status.as_str();
-        let now = escape_graphql_string(&now_string);
-        let mutation = format!(
-            r#"mutation {{
-                update_Goal(
-                    filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{escaped_node_did}" }} }},
-                    input: {{
-                        objective: "{objective}",
-                        status: "{status}",
-                        {budget_field}
-                        tokens_used: {tokens_used},
-                        active_time_seconds: {active_time},
-                        {active_started_field}
-                        consecutive_blocked_audits: {blocked_audits},
-                        wrapup_requested: {wrapup_requested},
-                        wrapup_completed: {wrapup_completed},
-                        {auto_resume_field}
-                        updated_at: "{now}"
-                    }}
-                ) {{ _docID }}
-            }}"#,
-            tokens_used = existing.tokens_used.unwrap_or_default().max(0),
-            blocked_audits = post.blocked_audits,
-            wrapup_requested = post.wrapup_requested,
-            wrapup_completed = post.wrapup_completed,
+        let response = txn.execute_client_signed_update(
+            &format!(r#"mutation($input: GoalMutationInputArg!) {{
+                update_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{escaped_node_did}" }} }}, input: $input) {{ _docID }}
+            }}"#),
+            &serde_json::json!({"input": input}),
+            gents_protocol::schemas::GOAL,
+        ).await?;
+        anyhow::ensure!(
+            response["data"]["update_Goal"]
+                .as_array()
+                .is_some_and(|rows| rows.len() == 1 && rows[0]["_docID"] == existing.doc_id),
+            "Goal update did not retain its physical identity"
         );
-        txn.execute(&mutation).await?;
         let updated = load_canonical_goal_in_txn(txn, node_did, session_id)
             .await?
             .context("updated Goal row disappeared")?;
@@ -219,115 +215,95 @@ pub(super) async fn set_goal_in_txn(
         wrapup_completed: status == GoalStatus::Complete,
     };
     let goal_id = deterministic_goal_id(node_did, session_id);
-    let escaped_goal_id = escape_graphql_string(&goal_id);
-    let escaped_node_did = escape_graphql_string(node_did);
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_objective = escape_graphql_string(&objective);
-    let escaped_now = escape_graphql_string(&now_string);
-    let budget_field = optional_int_graphql_field("token_budget", budget);
+    let session = crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+        .await?
+        .context("goal creation requires a visible physical session")?;
+    let creator = txn
+        .actor_did()
+        .context("goal creation requires an authenticated actor")?;
     let baseline = session_token_usage_in_txn(txn, node_did, session_id).await?;
-    let active_started_field = optional_string_graphql_field(
-        "active_started_at",
-        status.accrues_active_time().then_some(now_string.as_str()),
-    );
-    let mutation = format!(
-        r#"mutation {{
-            create_Goal(input: {{
-                goal_id: "{escaped_goal_id}",
-                session_id: "{escaped_session_id}",
-                node_did: "{escaped_node_did}",
-                objective: "{escaped_objective}",
-                status: "{status}",
-                {budget_field}
-                tokens_used: 0,
-                token_usage_baseline: {baseline},
-                active_time_seconds: 0,
-                {active_started_field}
-                consecutive_blocked_audits: {blocked_audits},
-                continuation_sequence: 0,
-                wrapup_requested: {wrapup_requested},
-                wrapup_completed: {wrapup_completed},
-                infrastructure_retry_count: 0,
-                {auto_resume_field}
-                created_at: "{escaped_now}",
-                updated_at: "{escaped_now}"
-            }}) {{ _docID }}
-        }}"#,
-        status = status.as_str(),
-        blocked_audits = initial_state.blocked_audits,
-        wrapup_requested = initial_state.wrapup_requested,
-        wrapup_completed = initial_state.wrapup_completed,
-    );
-    txn.execute(&mutation).await?;
+    super::creation::create_goal_child_in_txn(
+        txn,
+        "Goal",
+        serde_json::json!({
+            "goal_id": goal_id,
+            "session_id": session_id,
+            "session_doc_id": session.doc_id,
+            "agent_did": session.session.agent_did,
+            "creator_did": creator,
+            "parent_linked": true,
+            "requester_did": session.session.requester_did,
+            "node_did": node_did,
+            "objective": objective,
+            "status": status.as_str(),
+            "token_budget": budget,
+            "tokens_used": 0,
+            "token_usage_baseline": baseline,
+            "active_time_seconds": 0,
+            "active_started_at": status.accrues_active_time().then_some(now_string.as_str()),
+            "consecutive_blocked_audits": initial_state.blocked_audits,
+            "continuation_sequence": 0,
+            "wrapup_requested": initial_state.wrapup_requested,
+            "wrapup_completed": initial_state.wrapup_completed,
+            "infrastructure_retry_count": 0,
+            "auto_resume_at_reset": auto_resume,
+            "created_at": now_string,
+            "updated_at": now_string,
+        }),
+        &session.doc_id,
+        &session.session.agent_did,
+    )
+    .await?;
     let created = load_canonical_goal_in_txn(txn, node_did, session_id)
         .await?
         .context("created Goal row not found")?;
     Ok(created)
 }
 
-pub async fn delete_goal(node: &std::sync::Arc<EmbeddedNode>, goal: &GoalDocument) -> Result<bool> {
-    let doc_id = escape_graphql_string(&goal.doc_id);
-    let node_did = escape_graphql_string(&goal.node_did);
-    let mutation = format!(
-        r#"mutation {{
-            delete_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }} }}) {{ _docID }}
-        }}"#
-    );
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "goal.delete",
-        &mutation,
-    )
-    .await?;
-    Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("delete_Goal"))
-        .is_some_and(mutation_returned_rows))
+/// Delete the exact Goal through the caller's held native authority.
+pub async fn delete_goal_from_access(
+    access: &crate::ConfigAccess,
+    goal: &GoalDocument,
+) -> Result<bool> {
+    access.transact_write("goal.delete", |txn| {
+        Box::pin(async move {
+            let doc = escape_graphql_string(&goal.doc_id);
+            let owner = escape_graphql_string(&goal.node_did);
+            let session = escape_graphql_string(&goal.session_id);
+            let response = txn.execute(&format!(r#"{{ Goal(filter: {{_docID: {{_eq: "{doc}"}}, node_did: {{_eq: "{owner}"}}, session_id: {{_eq: "{session}"}}}}, limit: 2) {{_docID}} }}"#)).await?;
+            let rows = response["data"]["Goal"].as_array().context("Goal delete read omitted rows")?;
+            anyhow::ensure!(rows.len() <= 1, "Goal delete target is ambiguous");
+            if rows.is_empty() { return Ok::<_, anyhow::Error>(false); }
+            txn.delete_configuration_document("Goal", &goal.doc_id).await?;
+            Ok(true)
+        })
+    }).await
 }
 
-pub async fn delete_goals_for_session(
-    node: &std::sync::Arc<EmbeddedNode>,
+/// Delete only visible Goal and claim documents through the caller's held authority.
+pub async fn delete_goals_for_session_from_access(
+    access: &crate::ConfigAccess,
     node_did: &str,
     session_id: &str,
 ) -> Result<usize> {
-    let node_did = escape_graphql_string(node_did);
-    let session_id = escape_graphql_string(session_id);
-    let node_did = &node_did;
-    let session_id = &session_id;
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "goal.delete_for_session",
-        move |txn| {
-            Box::pin(async move {
-                let response = txn
-                    .execute(&format!(
-                        r#"mutation {{
-            delete_Goal(filter: {{
-                node_did: {{ _eq: "{node_did}" }},
-                session_id: {{ _eq: "{session_id}" }}
-            }}) {{ _docID }}
-        }}"#
-                    ))
-                    .await?;
-                txn.execute(&format!(
-                    r#"mutation {{
-                delete_GoalCreationClaim(filter: {{
-                    node_did: {{ _eq: "{node_did}" }},
-                    session_id: {{ _eq: "{session_id}" }}
-                }}) {{ _docID }}
-            }}"#
-                ))
-                .await?;
-                Ok::<_, anyhow::Error>(
-                    response
-                        .pointer("/data/delete_Goal")
-                        .map(mutation_row_count)
-                        .unwrap_or_default(),
-                )
-            })
-        },
-    )
-    .await
+    access.transact_write("goal.delete_for_session", |txn| {
+        Box::pin(async move {
+            let owner = escape_graphql_string(node_did);
+            let session = escape_graphql_string(session_id);
+            let response = txn.execute(&format!(r#"{{
+                Goal(filter: {{node_did: {{_eq: "{owner}"}}, session_id: {{_eq: "{session}"}}}}) {{_docID}}
+                GoalCreationClaim(filter: {{node_did: {{_eq: "{owner}"}}, session_id: {{_eq: "{session}"}}}}) {{_docID}}
+            }}"#)).await?;
+            let mut goals = 0;
+            for collection in ["Goal", "GoalCreationClaim"] {
+                let rows = response["data"][collection].as_array().context("Goal delete read omitted rows")?;
+                for row in rows {
+                    let doc = row["_docID"].as_str().context("Goal delete target has no physical ID")?;
+                    txn.delete_configuration_document(collection, doc).await?;
+                    if collection == "Goal" { goals += 1; }
+                }
+            }
+            Ok::<_, anyhow::Error>(goals)
+        })
+    }).await
 }

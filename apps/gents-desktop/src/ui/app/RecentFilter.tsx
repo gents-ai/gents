@@ -46,9 +46,9 @@ export function RecentFilter({ sessions }: { sessions: SessionSummary[] }) {
     sessions,
     nodeDids,
     value.agents,
-    (id) => sessions.filter((c) => c.agentId === id).length,
+    (id) => sessions.filter((c) => c.agentDid === id).length,
   );
-  const agentIds = agents.map((a) => a.id);
+  const agentDids = agents.map((a) => a.id);
   const toggle = <K extends keyof SessionFilter>(
     axis: K,
     all: readonly string[],
@@ -83,9 +83,9 @@ export function RecentFilter({ sessions }: { sessions: SessionSummary[] }) {
               options={agents.map(({ id, name }) => ({
                 value: id,
                 label: name,
-                count: sessions.filter((c) => c.agentId === id).length,
+                count: sessions.filter((c) => c.agentDid === id).length,
                 checked: isShown(value.agents, id),
-                onToggle: () => toggle("agents", agentIds, id),
+                onToggle: () => toggle("agents", agentDids, id),
               }))}
             />
           )}

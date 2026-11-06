@@ -1,3 +1,5 @@
+import type { SessionSummary } from "@source-inc/gents-desktop-client";
+
 export function findAgentDeploymentControl(label: string): HTMLButtonElement | null {
   const expected = normalized(label);
   const expectedChatLabel = normalized(`Open ${label} chat`);
@@ -91,4 +93,21 @@ export function isSessionTurnSettled(
 
 function normalized(value: string) {
   return value.trim().toLocaleLowerCase();
+}
+export function completedReconnectSession(
+  sessions: SessionSummary[],
+  existingSessions: ReadonlySet<string>,
+  agentDid: string,
+  clientDid: string,
+): SessionSummary | null {
+  const matches = sessions.filter(
+    (session) =>
+      !existingSessions.has(session.sessionId) &&
+      session.agentDid === agentDid &&
+      session.requesterDid === clientDid &&
+      session.latestRequestId &&
+      session.turnState === "completed",
+  );
+  if (matches.length > 1) throw new Error("Ambiguous reconnect inference sessions");
+  return matches[0] ?? null;
 }

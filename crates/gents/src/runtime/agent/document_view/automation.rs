@@ -40,8 +40,8 @@ pub(super) fn resolve_automation(
             unavailable_triggers.insert(trigger_id.clone());
             continue;
         }
-        let agent_id = task.agent_id.as_str();
-        let Some(behavior_record) = view.agents.get(agent_id) else {
+        let agent_did = task.agent_did.as_str();
+        let Some(behavior_record) = view.agents.get(agent_did) else {
             unavailable_triggers.insert(trigger_id.clone());
             continue;
         };
@@ -49,7 +49,7 @@ pub(super) fn resolve_automation(
             unavailable_triggers.insert(trigger_id.clone());
             continue;
         }
-        if unavailable_agents.contains_key(agent_id) {
+        if unavailable_agents.contains_key(agent_did) {
             unavailable_triggers.insert(trigger_id.clone());
             continue;
         }
@@ -119,12 +119,12 @@ pub(super) fn resolve_automation(
     }
 }
 
-fn resolved_task_from(task: &crate::documents::Task) -> ResolvedTask {
+pub(crate) fn resolved_task_from(task: &crate::documents::Task) -> ResolvedTask {
     ResolvedTask {
         emit_outcome: task.emit_outcome,
         task_id: task.task_id.clone(),
         name: task.display_name.clone(),
-        agent_id: task.agent_id.clone(),
+        agent_did: task.agent_did.clone(),
         prompt_template: task.prompt_template.clone(),
         goal_objective_template: task.goal_objective_template.clone(),
         goal_token_budget: task.goal_token_budget,
@@ -146,18 +146,18 @@ fn resolve_tasks(
             continue;
         }
 
-        if task.agent_id.trim().is_empty() {
+        if task.agent_did.trim().is_empty() {
             continue;
         }
 
-        let behavior_record = match view.agents.get(&task.agent_id) {
+        let behavior_record = match view.agents.get(&task.agent_did) {
             Some(record) => record,
             None => continue,
         };
         if !behavior_record.value.enabled {
             continue;
         }
-        if unavailable_agents.contains_key(&task.agent_id) {
+        if unavailable_agents.contains_key(&task.agent_did) {
             continue;
         }
 
@@ -216,6 +216,7 @@ fn resolve_schedule_trigger(
         ResolvedSchedule {
             session_id_template: None,
             trigger_doc_id: trigger_doc_id.to_string(),
+            schedule_doc_id: schedule_record.doc_id.clone(),
             schedule_id: schedule.schedule_id.clone(),
             task_id: task.task_id.clone(),
             task,
@@ -247,6 +248,10 @@ fn resolve_event_trigger(
         return;
     };
     let source = &source_record.value;
+    let Some(task_record) = view.tasks.get(&task.task_id) else {
+        unavailable_event_triggers.insert(trigger_id.to_string());
+        return;
+    };
 
     let source_collection = source.source_collection.clone();
     let event_kind = source
@@ -284,11 +289,14 @@ fn resolve_event_trigger(
         return;
     }
     let (expected_count, expected_count_field, group_timeout_secs, group_min_count) =
-        group_projection(source);
+        source.group_projection();
 
     active_event_triggers.insert(
         trigger_id.to_string(),
         ResolvedEventTrigger {
+            event_source_id: event_source_id.to_owned(),
+            event_source_doc_id: source_record.doc_id.clone(),
+            task_doc_id: task_record.doc_id.clone(),
             session_id_template: None,
             trigger_doc_id: trigger_doc_id.to_string(),
             trigger_id: trigger_id.to_string(),
@@ -311,40 +319,6 @@ fn resolve_event_trigger(
                 .map(|authority| authority.as_str().to_string()),
         },
     );
-}
-
-fn group_projection(
-    source: &crate::documents::EventSource,
-) -> (Option<usize>, Option<String>, Option<u64>, usize) {
-    let Some(group) = source.group.as_ref() else {
-        return (None, None, None, 1);
-    };
-    let expected_count = match group.expected_count {
-        Some(crate::documents::EventGroupCount::Fixed(count)) => usize::try_from(count).ok(),
-        Some(crate::documents::EventGroupCount::SourceField { .. }) => None,
-        None => None,
-    };
-    let expected_count_field = match &group.expected_count {
-        Some(crate::documents::EventGroupCount::Fixed(_)) => None,
-        Some(crate::documents::EventGroupCount::SourceField { source_field }) => {
-            Some(source_field.clone())
-        }
-        None => None,
-    };
-    let group_timeout_secs = group
-        .timeout_secs
-        .and_then(|value| u64::try_from(value).ok())
-        .filter(|value| *value > 0);
-    let group_min_count = group
-        .min_count
-        .and_then(|value| usize::try_from(value).ok())
-        .unwrap_or(1);
-    (
-        expected_count,
-        expected_count_field,
-        group_timeout_secs,
-        group_min_count,
-    )
 }
 
 fn task_template_references_group(template: &str) -> bool {

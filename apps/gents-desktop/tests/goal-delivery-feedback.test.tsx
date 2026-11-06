@@ -31,7 +31,7 @@ function fixture() {
     sessionId: "original-session",
     sessionDocId: null,
     expected: null,
-    agentId: "default",
+    agentDid: "default",
     action: { kind: "create", objective: "Original objective", tokenBudget: null },
     cwd: "/original",
   };

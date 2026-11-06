@@ -7,7 +7,10 @@ use gents_protocol::enrollment::{AuthorizationLease, AuthorizationLeaseState};
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::cli::args::P2pPairingsListArgs;
+use crate::cli::args::{
+    P2pAccessArgs, P2pPairingsListArgs, P2pPairingsReaderArgs, PairingObservationArg,
+    PairingReadReasonArg,
+};
 use crate::cli::output_format::OutputFormat;
 use crate::{graphql_rows, print_json, resolve_config_access};
 
@@ -19,6 +22,8 @@ struct PeerPairingDesiredRow {
     transport_peer_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     node_did: Option<String>,
+    #[serde(skip)]
+    actor_did: Option<String>,
     collections: Vec<String>,
     replicator_addresses: Vec<String>,
     profiles: Vec<String>,
@@ -65,8 +70,53 @@ impl LeaseView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct PeerPairingAppliedRow {
     peer_id: String,
+    node_did: Option<String>,
     collections: Vec<String>,
     replicator_addresses: Vec<String>,
+}
+
+pub(super) async fn pairing_reader_targets(args: P2pAccessArgs) -> Result<()> {
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
+    let response = access
+        .execute(
+            r#"{ PeerPairingDesired {_docID peer_id node_did actor_did}
+        PeerPairingApplied {_docID peer_id node_did} }"#,
+        )
+        .await?;
+    let desired = response
+        .pointer("/data/PeerPairingDesired")
+        .and_then(Value::as_array)
+        .context("pairing response omitted desired observations")?;
+    let applied = response
+        .pointer("/data/PeerPairingApplied")
+        .and_then(Value::as_array)
+        .context("pairing response omitted applied observations")?;
+    print_json(&json!({"desired": desired, "applied": applied}))
+}
+
+pub(super) async fn pairing_reader(args: P2pPairingsReaderArgs, grant: bool) -> Result<()> {
+    use gents::store::config_client::{PairingObservation, PairingReadReason};
+
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
+    let observation = match args.observation {
+        PairingObservationArg::Desired => PairingObservation::Desired,
+        PairingObservationArg::Applied => PairingObservation::Applied,
+    };
+    let reason = match args.reason {
+        PairingReadReasonArg::RouteAdmission => PairingReadReason::RouteAdmission,
+        PairingReadReasonArg::ToolView => PairingReadReason::ToolView,
+    };
+    let agent = identity::Did::new(args.agent_did.clone())?;
+    access
+        .set_pairing_reader(observation, &args.doc_id, reason, &agent, grant)
+        .await?;
+    print_json(&json!({
+        "collection": observation.collection(),
+        "doc_id": args.doc_id,
+        "agent_did": args.agent_did,
+        "reason": reason.as_str(),
+        "granted": grant,
+    }))
 }
 
 pub(super) async fn p2p_pairings_list(args: P2pPairingsListArgs) -> Result<()> {
@@ -111,6 +161,7 @@ fn pairings_list_query() -> &'static str {
         PeerPairingDesired {
             peer_id
             node_did
+            actor_did
             collections
             replicator_addresses
             profiles
@@ -128,6 +179,7 @@ fn applied_list_query() -> &'static str {
         PeerPairingApplied {
             _docID
             peer_id
+            node_did
             collections
             replicator_addresses
         }
@@ -162,6 +214,7 @@ fn parse_pairing_rows(rows: Vec<Value>, now: DateTime<Utc>) -> Vec<PeerPairingDe
                 peer_id,
                 transport_peer_ids,
                 node_did: optional_string(&row, "node_did"),
+                actor_did: optional_string(&row, "actor_did"),
                 collections: string_list(&row, "collections"),
                 replicator_addresses,
                 profiles: string_list(&row, "profiles"),
@@ -198,6 +251,10 @@ fn parse_applied_rows(rows: Vec<Value>) -> Vec<PeerPairingAppliedRow> {
                 doc_id,
                 PeerPairingAppliedRow {
                     peer_id,
+                    node_did: row
+                        .get("node_did")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
                     collections: string_list(&row, "collections"),
                     replicator_addresses: string_list(&row, "replicator_addresses"),
                 },
@@ -207,7 +264,9 @@ fn parse_applied_rows(rows: Vec<Value>) -> Vec<PeerPairingAppliedRow> {
     rows.sort_by(|left, right| left.0.cmp(&right.0));
     let mut canonical = BTreeMap::new();
     for (_, row) in rows {
-        canonical.entry(row.peer_id.clone()).or_insert(row);
+        canonical
+            .entry((row.node_did.clone(), row.peer_id.clone()))
+            .or_insert(row);
     }
     canonical.into_values().collect()
 }
@@ -255,7 +314,7 @@ fn annotate_pairing_health(
         .iter()
         .map(|row| {
             (
-                row.peer_id.as_str(),
+                (row.node_did.as_deref(), row.peer_id.as_str()),
                 (
                     row.collections.iter().cloned().collect::<BTreeSet<_>>(),
                     row.replicator_addresses
@@ -276,7 +335,7 @@ fn annotate_pairing_health(
             .any(|peer_id| connected_set.contains(peer_id))
             || (row.transport_peer_ids.is_empty() && connected_set.contains(&row.peer_id));
         let (applied_collections, applied_replicators) = applied_by_peer
-            .get(row.peer_id.as_str())
+            .get(&(row.actor_did.as_deref(), row.peer_id.as_str()))
             .cloned()
             .unwrap_or_default();
         row.replicating = !row.replicator_addresses.is_empty()
@@ -459,9 +518,24 @@ mod tests {
         assert_eq!(rows[0].replicator_addresses, ["fresh"]);
     }
 
+    #[test]
+    fn pairing_health_matches_applied_source_partition() {
+        let mut desired = desired_row("peer-a", "client", &[], &["/ip4/1/tcp/4001"]);
+        desired.node_did = Some("remote".into());
+        desired.actor_did = Some("local".into());
+        let rows = parse_applied_rows(vec![
+            json!({"_docID":"a", "node_did":"foreign", "peer_id":"peer-a", "replicator_addresses":["/ip4/1/tcp/4001"]}),
+            json!({"_docID":"b", "node_did":"local", "peer_id":"peer-a", "replicator_addresses":["/ip4/2/tcp/4001"]}),
+        ]);
+        assert_eq!(rows.len(), 2);
+        let result = annotate_pairing_health(vec![desired], &rows, &[]);
+        assert!(!result[0].replicating);
+    }
+
     fn applied(peer_id: &str, collections: &[&str], addresses: &[&str]) -> PeerPairingAppliedRow {
         PeerPairingAppliedRow {
             peer_id: peer_id.to_string(),
+            node_did: None,
             collections: collections.iter().map(|c| c.to_string()).collect(),
             replicator_addresses: addresses.iter().map(|a| a.to_string()).collect(),
         }
@@ -484,6 +558,7 @@ mod tests {
                 })
                 .collect(),
             node_did: None,
+            actor_did: None,
             collections: collections.iter().map(|c| c.to_string()).collect(),
             replicator_addresses: addresses.iter().map(|a| a.to_string()).collect(),
             profiles: Vec::new(),

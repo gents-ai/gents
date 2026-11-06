@@ -26,8 +26,10 @@ inductive Operation where
   deriving DecidableEq, Repr
 
 structure Facts where
-  /-- Verified by the existing session ownership, author signature, current
-  enrollment and applied-route owners. Never supplied as a wire grant. -/
+  /-- The signed requester, command owner, physical session and selected agent
+  are bound, and native ACP authorizes the requester in the effect transaction.
+  A denial is distinct from a transaction conflict or unavailable storage and
+  cannot be replaced by the selected agent's own access. -/
   authorized : Bool
   /-- The existing whole-session idle owner still observes unfinished work. -/
   unfinishedRequest : Bool

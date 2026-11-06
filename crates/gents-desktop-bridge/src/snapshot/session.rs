@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use gents::session::canonical_rows::TranscriptMessageRow;
-use gents::store::config_client::ConfigAccess;
+use gents::store::config_client::{ConfigAccess, TransactionFailure};
 use gents::tools::background::job::view::{load_job_view, JobKey};
 use gents_desktop_core::client::{
     CanonicalTranscriptDependencies, ClientCore, ClientStore, SessionTranscriptQueryPage,
@@ -20,7 +20,7 @@ use super::super::types::{
     DerivedCancelCauseView, DesktopSessionSnapshot, GoalView, MessageReconstructionView,
     MessageView, PendingTurnView, QuestionReplyView, ReconstructionState, RenderedTimelineItem,
     RequestOriginView, RequestOutcomeView, RetryEligibilityView, SessionCompactionView,
-    SessionContextView, SessionHydrationView, SessionLiveDeltaView, SessionLiveTextPatchView,
+    SessionContextView, SessionLiveDeltaView, SessionLiveTextPatchView,
     SessionProjectionRevisionView, SessionTimelinePageView, ToolCallView,
 };
 use super::timeline::build_rendered_timeline;
@@ -278,12 +278,12 @@ pub async fn build_session_snapshot_for_node(
         None,
         None,
         None,
-        None,
         true,
         true,
         None,
     )
     .await
+    .expect("test session snapshot read")
 }
 
 #[expect(
@@ -300,43 +300,11 @@ pub async fn build_session_snapshot_for_node_with_transcript(
     canonical_dependencies: Option<&CanonicalTranscriptDependencies>,
     context_store: Option<&ClientStore>,
     prompt_ownership: Option<&gents_desktop_core::client::RequestPromptOwnership>,
-    hydration_observation: Option<(
-        gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
-        Option<String>,
-    )>,
     context_totals_exact: bool,
     include_live_tail: bool,
     request_projection: Option<&[AgentRequestRow]>,
-) -> Option<DesktopSessionSnapshot> {
+) -> anyhow::Result<Option<DesktopSessionSnapshot>> {
     let (store, projection_revision) = core.store().snapshot_with_revision();
-    let unreadable = node_did.and_then(|node_did| {
-        core.session_unreadable_reason(session_id, node_did)
-            .map(|reason| super::unreadable_hydration_view(session_id, node_did, reason))
-    });
-    let hydration = match node_did {
-        Some(_) if unreadable.is_some() => unreadable,
-        Some(node_did) if core.session_read_through_operator(session_id, node_did) => None,
-        Some(node_did) => match super::scoped_hydration_observation_view(
-            hydration_observation,
-            session_id,
-            node_did,
-        ) {
-            Some(view) => Some(view),
-            None => match core.session_hydration_status(session_id, node_did).await {
-                Ok((progress, detail)) => Some(super::to_hydration_view(&progress, detail)),
-                Err(error) => {
-                    tracing::warn!(
-                        error = %error,
-                        session_id,
-                        node_did,
-                        "loading session-keyed hydration progress failed"
-                    );
-                    None
-                }
-            },
-        },
-        None => None,
-    };
     let observed_queue_ids = pending_queue_doc_ids(
         request_projection.unwrap_or(&store.requests),
         node_did,
@@ -345,10 +313,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
     let mut arrival_order = None;
     let pending_queue = match node_did {
         Some(node_did)
-            if include_live_tail
-                && core
-                    .session_unreadable_reason(session_id, node_did)
-                    .is_none() =>
+            if include_live_tail && core.session_unreadable_reason(node_did).is_none() =>
         {
             match core
                 .pending_user_queue_projection(node_did, session_id, &observed_queue_ids)
@@ -378,6 +343,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
                             .collect(),
                     )
                 }
+                Err(error) if error.permission_denied() => return Err(error),
                 Err(error) => {
                     tracing::warn!(session_id, node_did, error = %error, "pending queue unavailable");
                     None
@@ -399,6 +365,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
                 .await
             {
                 Ok(context) => context,
+                Err(error) if error.permission_denied() => return Err(error),
                 Err(error) => {
                     tracing::warn!(
                         target: "gents_desktop::chat",
@@ -428,20 +395,6 @@ pub async fn build_session_snapshot_for_node_with_transcript(
         preferred_request_id,
         request_projection,
     );
-    if snapshot.is_none() {
-        snapshot = hydration
-            .as_ref()
-            .filter(|hydration| hydration.phase != "idle")
-            .map(|hydration| {
-                build_hydration_only_session_snapshot(
-                    store.as_ref(),
-                    session_id,
-                    node_did.expect("hydration progress is keyed by a node DID"),
-                    hydration.clone(),
-                    context_totals_exact,
-                )
-            });
-    }
     if let Some(snapshot) = snapshot.as_mut() {
         goal_provenance::attach(
             access,
@@ -452,8 +405,8 @@ pub async fn build_session_snapshot_for_node_with_transcript(
             canonical_dependencies,
             snapshot,
         )
-        .await;
-        fill_job_outcomes(core, snapshot).await;
+        .await?;
+        fill_job_outcomes(access, snapshot).await?;
         if let Some(context) = loaded_context {
             attach_last_request_context(
                 snapshot,
@@ -474,7 +427,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
                     .transcript_messages,
                 &mut snapshot.timeline_items,
             )
-            .await;
+            .await?;
             if let Some(compactions) = history.compactions {
                 snapshot.context.session_compaction_count =
                     Some(i64::try_from(compactions.len()).unwrap_or(i64::MAX));
@@ -486,13 +439,12 @@ pub async fn build_session_snapshot_for_node_with_transcript(
             store_version: projection_revision.store_version,
             provenance_version: projection_revision.provenance_version,
         });
-        snapshot.hydration = hydration;
         snapshot.pending_queue = pending_queue;
         if let Some(arrivals) = arrival_order {
             order_queued_turns(snapshot, &arrivals);
         }
     }
-    snapshot
+    Ok(snapshot)
 }
 
 /// What a read's context history found: the session's compactions, oldest
@@ -513,7 +465,7 @@ pub(crate) async fn attach_context_history_rows(
     requester_did: Option<&str>,
     messages: &[TranscriptMessageRow],
     items: &mut Vec<RenderedTimelineItem>,
-) -> ContextHistory {
+) -> anyhow::Result<ContextHistory> {
     let page_sequences = messages
         .iter()
         .map(|row| i64::from(row.message.sequence))
@@ -527,6 +479,7 @@ pub(crate) async fn attach_context_history_rows(
     .await
     {
         Ok(entries) => Some(entries),
+        Err(error) if error.permission_denied() => return Err(error),
         Err(error) => {
             tracing::warn!(
                 target: "gents_desktop::chat",
@@ -543,6 +496,7 @@ pub(crate) async fn attach_context_history_rows(
             .await
         {
             Ok(reductions) => Some(reductions),
+            Err(error) if error.permission_denied() => return Err(error),
             Err(error) => {
                 tracing::warn!(
                     target: "gents_desktop::chat",
@@ -555,7 +509,7 @@ pub(crate) async fn attach_context_history_rows(
             }
         };
     let starts = match &compactions {
-        Some(entries) => request_context::load_compaction_request_starts(
+        Some(entries) => match request_context::load_compaction_request_starts(
             access,
             node_did,
             session_id,
@@ -563,16 +517,20 @@ pub(crate) async fn attach_context_history_rows(
             entries,
         )
         .await
-        .unwrap_or_else(|error| {
-            tracing::warn!(
-                target: "gents_desktop::chat",
-                session_id,
-                node_did,
-                error = %error,
-                "loading where session compactions ran failed"
-            );
-            RapidHashMap::new()
-        }),
+        {
+            Ok(starts) => starts,
+            Err(error) if error.permission_denied() => return Err(error),
+            Err(error) => {
+                tracing::warn!(
+                    target: "gents_desktop::chat",
+                    session_id,
+                    node_did,
+                    error = %error,
+                    "loading where session compactions ran failed"
+                );
+                RapidHashMap::new()
+            }
+        },
         None => RapidHashMap::new(),
     };
     let mut markers = compactions
@@ -584,7 +542,7 @@ pub(crate) async fn attach_context_history_rows(
                 .flat_map(|reductions| reduction_compaction_markers(reductions, &page_sequences)),
         )
         .collect::<Vec<_>>();
-    fill_marker_summaries(access, session_id, node_did, requester_did, &mut markers).await;
+    fill_marker_summaries(access, session_id, node_did, requester_did, &mut markers).await?;
     attach_compaction_markers(items, markers);
     let compactions = compactions
         .map(|entries| session_compaction_views(&entries, &starts, reductions.as_deref()));
@@ -612,6 +570,7 @@ pub(crate) async fn attach_context_history_rows(
             );
             true
         }
+        Err(error) if error.permission_denied() => return Err(error),
         Err(error) => {
             tracing::warn!(
                 target: "gents_desktop::chat",
@@ -623,10 +582,10 @@ pub(crate) async fn attach_context_history_rows(
             false
         }
     };
-    ContextHistory {
+    Ok(ContextHistory {
         compactions,
         reductions_loaded,
-    }
+    })
 }
 
 /// The session's compactions of both kinds, oldest first. Without the
@@ -828,7 +787,10 @@ fn attach_context_reduction_timeline_events(
 /// The sync builder holds no `ConfigAccess`, so a failed or timed-out job
 /// row's outcome (`load_job_view`) and every job row's next calls are filled
 /// here, once per tool call, on both the flat rows and the rendered groups.
-async fn fill_job_outcomes(core: &ClientCore, snapshot: &mut DesktopSessionSnapshot) {
+async fn fill_job_outcomes(
+    access: &ConfigAccess,
+    snapshot: &mut DesktopSessionSnapshot,
+) -> anyhow::Result<()> {
     let ended =
         |state: Option<JobState>| matches!(state, Some(JobState::Failed | JobState::TimedOut));
     let mut call_ids = snapshot
@@ -849,18 +811,24 @@ async fn fill_job_outcomes(core: &ClientCore, snapshot: &mut DesktopSessionSnaps
     }
     call_ids.sort();
     call_ids.dedup();
-    let access = ConfigAccess::local(core.node_arc());
     let mut outcomes = RapidHashMap::new();
     for tool_call_id in call_ids {
         let key = JobKey::Address {
             session_id: snapshot.session_id.clone(),
             tool_call_id: tool_call_id.clone(),
         };
-        match load_job_view(&access, None, key).await {
+        match load_job_view(access, None, key).await {
             Ok(view) => {
                 if let Some(outcome) = view.outcome {
                     outcomes.insert(tool_call_id, outcome);
                 }
+            }
+            Err(gents_protocol::job::JobReadError::PermissionDenied) => {
+                return Err(crate::error::BridgeError::new(
+                    crate::error::BridgeErrorCode::PermissionDenied,
+                    "Access was denied. Check this client's permissions with the runtime owner.",
+                )
+                .into());
             }
             Err(error) => tracing::warn!(
                 session_id = %snapshot.session_id,
@@ -897,6 +865,7 @@ async fn fill_job_outcomes(core: &ClientCore, snapshot: &mut DesktopSessionSnaps
             }
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -963,7 +932,7 @@ async fn fill_marker_summaries(
     node_did: &str,
     requester_did: Option<&str>,
     markers: &mut [(i64, RenderedTimelineItem)],
-) {
+) -> anyhow::Result<()> {
     let keys = |prefix: &str| {
         markers
             .iter()
@@ -987,6 +956,7 @@ async fn fill_marker_summaries(
     .await
     {
         Ok(summaries) => summaries,
+        Err(error) if error.permission_denied() => return Err(error),
         Err(error) => {
             tracing::warn!(
                 target: "gents_desktop::chat",
@@ -995,7 +965,7 @@ async fn fill_marker_summaries(
                 error = %error,
                 "loading compaction summaries failed"
             );
-            return;
+            return Ok(());
         }
     };
     let kept =
@@ -1025,6 +995,7 @@ async fn fill_marker_summaries(
             *summary = kept(text);
         }
     }
+    Ok(())
 }
 
 /// Compactions are drawn after the message they cover through; two after the
@@ -1106,86 +1077,6 @@ pub(super) fn order_queued_turns(snapshot: &mut DesktopSessionSnapshot, arrivals
         .collect();
 }
 
-fn build_hydration_only_session_snapshot(
-    store: &ClientStore,
-    session_id: &str,
-    node_did: &str,
-    hydration: SessionHydrationView,
-    context_totals_exact: bool,
-) -> DesktopSessionSnapshot {
-    DesktopSessionSnapshot {
-        live_cursor: None,
-        session_id: session_id.to_string(),
-        node_did: Some(node_did.to_string()),
-        agent_id: None,
-        title: None,
-        preview_text: None,
-        status: None,
-        goal: None,
-        turn_state: None,
-        inference_activity: None,
-        latest_request_id: None,
-        retry_eligibility: project_retry_eligibility(None),
-        latest_request_outcome: None,
-        pending_turn: None,
-        queued_turns: Vec::new(),
-        pending_queue: None,
-        folded_inputs: Vec::new(),
-        context: build_session_context_from_stores(
-            store,
-            store,
-            Some(node_did),
-            None,
-            session_id,
-            context_totals_exact,
-        ),
-        timeline_items: Vec::new(),
-        hydration: Some(hydration),
-        timeline_page: None,
-        projection_revision: None,
-        read_through_operator: None,
-        messages: Vec::new(),
-        tool_calls: Vec::new(),
-    }
-}
-
-#[cfg(test)]
-mod hydration_only_tests {
-    use super::*;
-
-    #[test]
-    fn preserves_exact_requester_and_reports_no_unobserved_history() {
-        let snapshot = build_hydration_only_session_snapshot(
-            &ClientStore::default(),
-            "session-1",
-            "did:test:requester",
-            SessionHydrationView {
-                session_id: "session-1".to_string(),
-                node_did: "did:test:requester".to_string(),
-                phase: "requested".to_string(),
-                merged_count: 0,
-                covered_count: 0,
-                served_count: None,
-                detail: None,
-            },
-            true,
-        );
-
-        assert_eq!(snapshot.session_id, "session-1");
-        assert_eq!(snapshot.node_did.as_deref(), Some("did:test:requester"));
-        assert_eq!(
-            snapshot.hydration.as_ref().map(|view| view.phase.as_str()),
-            Some("requested")
-        );
-        assert!(snapshot.timeline_items.is_empty());
-        assert_eq!(snapshot.context.durable_message_count, 0);
-        assert_eq!(
-            snapshot.retry_eligibility.denial_reason.as_deref(),
-            Some("requestNotObserved")
-        );
-    }
-}
-
 #[cfg(test)]
 #[path = "session/tests/job_rows.rs"]
 mod job_rows_tests;
@@ -1208,7 +1099,7 @@ mod paging_coverage_tests {
                 session_id: "session".into(),
                 node_did: "node".into(),
                 requester_did: None,
-                agent_id: "agent".into(),
+                agent_did: "agent".into(),
                 created_at: "2026-10-21T00:00:00Z".into(),
                 closed_at: None,
                 archived_at: None,

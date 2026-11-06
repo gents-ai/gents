@@ -2,7 +2,7 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::tool_service_health::{ToolServiceHealthProjection, ToolServiceHealthState};
 
 use crate::tools::native::{
@@ -25,7 +25,7 @@ pub(super) fn downgrade_file_tools(
     }
 
     tracing::warn!(
-        agent_id = %agent_name,
+        agent_did = %agent_name,
         requested = ?requested,
         ceiling = ?ceiling,
         "downgrading file tool mode to fit tool ceiling"
@@ -39,7 +39,7 @@ pub(super) fn downgrade_bash(agent_name: &str, requested: BashMode, ceiling: Bas
     }
 
     tracing::warn!(
-        agent_id = %agent_name,
+        agent_did = %agent_name,
         requested = ?requested,
         ceiling = ?ceiling,
         "downgrading bash mode to fit tool ceiling"
@@ -158,7 +158,7 @@ pub(super) fn build_host_tools(
                 builder = builder.cli_tool(tool)
             }
             None => tracing::warn!(
-                agent_id = %agent_name,
+                agent_did = %agent_name,
                 cli_tool = %tool_name,
                 "dropping CLI tool not present in tool ceiling"
             ),
@@ -301,7 +301,7 @@ pub fn resolve_effective_tool_root(
                     match operator_narrowed {
                         Some(_) => {
                             tracing::warn!(
-                                agent_id = %agent_name,
+                                agent_did = %agent_name,
                                 selection_root = %selection_root.display(),
                                 operator_root = %ceiling_root.display(),
                                 "clamping file tool root to the narrowed operator tool root"
@@ -345,7 +345,7 @@ pub(super) fn dedupe_agent_targets(
     for target in values {
         if target.name.trim().is_empty()
             || target.target_node_did.trim().is_empty()
-            || target.agent_id.trim().is_empty()
+            || target.agent_did.trim().is_empty()
         {
             continue;
         }
@@ -373,11 +373,16 @@ pub(super) fn dedupe_strings(values: Vec<String>) -> Vec<String> {
 }
 
 pub(super) async fn enabled_mcp_service_ids(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
 ) -> Result<Vec<String>> {
+    anyhow::ensure!(
+        node.node_identity_did() == Some(node_did),
+        "MCP availability requires the local runtime identity"
+    );
+    let access = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(node_did)?);
     Ok(
-        crate::tools::mcp::registry::configured_mcp_services(node, node_did)
+        crate::tools::mcp::registry::configured_mcp_services_on(&access, node_did)
             .await?
             .into_iter()
             .filter(|service| service.enabled)
@@ -390,14 +395,21 @@ pub(crate) async fn measured_available_mcp_service_ids(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
 ) -> Result<Vec<String>> {
-    let services = crate::tools::mcp::registry::configured_mcp_services(node, node_did).await?;
+    anyhow::ensure!(
+        node.node_identity_did() == Some(node_did),
+        "MCP availability requires the local runtime identity"
+    );
+    let actor = identity::Did::new(node_did)?;
+    let access = crate::ConfigAccess::local_as(node.clone(), actor.clone());
+    let services =
+        crate::tools::mcp::registry::configured_mcp_services_on(&access, node_did).await?;
     if services.is_empty() {
         return Ok(Vec::new());
     }
     let query = mcp_health_query(node_did);
     let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
-        None,
+        Some(actor),
         "tools.measured_availability",
         |txn| {
             let query = query.clone();

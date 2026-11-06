@@ -2,20 +2,13 @@ use super::*;
 
 const ARGS: &str = r#"{"file_path":"/tmp/transcript-contract.txt"}"#;
 
-async fn fixture(
-    name: &str,
-) -> (
-    Arc<defra_node::EmbeddedNode>,
-    DefraSessionHook,
-    String,
-    String,
-) {
+async fn fixture(name: &str) -> (Arc<defra_node::Node>, DefraSessionHook, String, String) {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let hook =
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let session = hook.session_id().await.unwrap();
-    crate::session::create_session_with_agent_id(&node, &session, "did:test:general", "general")
+    crate::session::create_session_with_agent_did(&node, &session, "did:test:general", "general")
         .await
         .unwrap();
     let request = format!("native-transcript-{name}");
@@ -105,7 +98,7 @@ async fn complete(hook: &DefraSessionHook, call_id: usize, provider_id: &str, pa
     ));
 }
 
-async fn history(node: &defra_node::EmbeddedNode, session: &str) -> Vec<Message> {
+async fn history(node: &defra_node::Node, session: &str) -> Vec<Message> {
     crate::session::load_history(node, session, "did:test:general", None)
         .await
         .unwrap()
@@ -124,7 +117,7 @@ fn results(messages: &[Message]) -> Vec<&str> {
         .collect()
 }
 
-async fn completed(name: &str) -> (Arc<defra_node::EmbeddedNode>, DefraSessionHook, String) {
+async fn completed(name: &str) -> (Arc<defra_node::Node>, DefraSessionHook, String) {
     let case = crate::lean_vocab_test::lean_transcript_case(name);
     let (node, hook, session, request) = fixture(name).await;
     publish_claimed_authored_input(

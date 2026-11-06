@@ -40,8 +40,8 @@ pub(crate) async fn load_runtime_status_output(
                 let unavailable = summary
                     .unavailable_agents
                     .iter()
-                    .map(|(agent_id, reason)| {
-                        (agent_id.clone(), reason.public_message().to_string())
+                    .map(|(agent_did, reason)| {
+                        (agent_did.clone(), reason.public_message().to_string())
                     })
                     .collect::<BTreeMap<_, _>>();
                 let status = if unavailable.is_empty() {
@@ -165,10 +165,10 @@ pub(crate) async fn load_runtime_status_output(
                     .unwrap_or(Value::Null),
             ),
             (
-                "default_agent_id",
+                "default_agent_did",
                 lifecycle
                     .as_ref()
-                    .map(|snapshot| json!(snapshot.default_agent_id))
+                    .map(|snapshot| json!(snapshot.default_agent_did))
                     .unwrap_or(Value::Null),
             ),
         ] {

@@ -1,5 +1,15 @@
 #[path = "cli_enrollment/contract.rs"]
 mod contract;
+#[path = "cli_enrollment/household.rs"]
+mod household;
+#[path = "cli_enrollment/live_delegation.rs"]
+mod live_delegation;
+#[path = "cli_enrollment/live_goal.rs"]
+mod live_goal;
+#[path = "cli_enrollment/live_plugin_denial.rs"]
+mod live_plugin_denial;
+#[path = "cli_enrollment/live_two_agent.rs"]
+mod live_two_agent;
 mod support;
 use support::*;
 
@@ -9,7 +19,6 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
-use gents::default_agent_id_for_node;
 use gents::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_desktop_core::client::canonical_output::{
     project_canonical_message, CanonicalMessageProjection,
@@ -30,13 +39,117 @@ fn enrollment_e2e_lock() -> &'static Mutex<()> {
     ENROLLMENT_E2E_LOCK.get_or_init(|| Mutex::new(()))
 }
 
+async fn grant_configured_workspace_root_readers(
+    access: &gents::ConfigAccess,
+    graphql: &str,
+    init: &Value,
+    owner_home: &std::path::Path,
+    bindings: &[&gents_protocol::agent_identity::AgentIdentityBinding],
+) -> Result<()> {
+    let node_did = node_did_from_init(init)?;
+    let authored_root = init["tool_root"]
+        .as_str()
+        .context("init has no configured host root")?;
+    let root =
+        gents::tools::surface::resolve_configured_tool_root(std::path::Path::new(authored_root))?;
+    let root = root.to_str().context("configured host root is not UTF-8")?;
+    let bootstrap_user = gents_desktop_core::client::PrincipalIdentity::load_existing(
+        &DesktopPaths::from_root(owner_home.join("cli")),
+    )?;
+    anyhow::ensure!(
+        bootstrap_user.did() != node_did,
+        "workspace root creator must be a distinct User"
+    );
+    let owner_access = gents::ConfigAccess::Graphql(
+        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, bootstrap_user.did())
+            .with_client_signing_capability(gents::NodeIdentity::client_signing_capability(
+            &bootstrap_user,
+        )?)?,
+    );
+    let query = format!(
+        "{{ WorkspaceRoot(filter: {{node_did: {{_eq: \"{}\"}}, root_path: {{_eq: \"{}\"}}}}) {{_docID node_did root_path enabled}} }}",
+        escape_graphql_string(&node_did), escape_graphql_string(root),
+    );
+    let roots = owner_access
+        .execute(&query)
+        .await
+        .context("reading configured WorkspaceRoot as the bootstrap User")?;
+    let rows = roots["data"]["WorkspaceRoot"]
+        .as_array()
+        .context("User cannot observe configured WorkspaceRoot")?;
+    let [row] = rows.as_slice() else {
+        bail!("configured WorkspaceRoot is unavailable or ambiguous: {roots}")
+    };
+    anyhow::ensure!(
+        row["enabled"] == true,
+        "configured WorkspaceRoot is disabled"
+    );
+    let doc = row["_docID"]
+        .as_str()
+        .context("WorkspaceRoot has no physical ID")?
+        .to_owned();
+    let owners = owner_access
+        .transact_readonly("test.live_workspace_root_owner", |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                txn.document_owners("WorkspaceRoot", std::slice::from_ref(doc))
+                    .await
+                    .map_err(anyhow::Error::from)
+            })
+        })
+        .await
+        .context("reading native WorkspaceRoot ownership as the bootstrap User")?;
+    anyhow::ensure!(
+        owners.len() == 1
+            && owners[0].owner.as_ref().map(|did| did.as_str()) == Some(bootstrap_user.did()),
+        "WorkspaceRoot was not authored by the bootstrap User"
+    );
+    let runtime = identity_from_init(init)?;
+    for binding in bindings {
+        gents::tools::surface::grant_workspace_root_reader(access, root, &binding.agent_did)
+            .await
+            .with_context(|| {
+                format!(
+                    "granting configured WorkspaceRoot reader to Agent {} as the enrolled User",
+                    binding.agent_did
+                )
+            })?;
+        let agent = gents::store::identity::resolve_agent_identity(&runtime, binding)?;
+        let reader = gents::ConfigAccess::Graphql(
+            gents::store::config_client::GraphqlEndpoint::as_principal(graphql, &binding.agent_did)
+                .with_client_signing_capability(agent.client_signing_capability()?)?,
+        );
+        let visible = reader.execute(&query).await.with_context(|| {
+            format!(
+                "reading configured WorkspaceRoot as Agent {}",
+                binding.agent_did
+            )
+        })?;
+        let rows = visible["data"]["WorkspaceRoot"]
+            .as_array()
+            .context("selected Agent cannot read WorkspaceRoot")?;
+        anyhow::ensure!(
+            rows.len() == 1 && rows[0]["_docID"] == doc,
+            "root reader grant did not select the expected document: {visible}"
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> Result<()> {
+async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node() -> Result<()> {
     let _guard = enrollment_e2e_lock().lock().await;
 
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("agent-home");
     let desktop_home = tempdir.path().join("desktop-home");
+    let owner_home = tempdir.path().join("bootstrap-owner");
+    let owner_env = [(
+        "GENTS_DESKTOP_HOME",
+        owner_home
+            .to_str()
+            .context("bootstrap owner path is not UTF-8")?,
+    )];
     fs::create_dir_all(&home_dir)?;
     let home_arg = home_dir
         .to_str()
@@ -51,9 +164,12 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
         Uuid::new_v4().simple()
     );
 
-    let init = run_init_json(
+    let init = run_cli_json_with_env(
         &home_dir,
         &[
+            "init",
+            "--store-key-custody",
+            "file",
             "--home",
             home_arg,
             "--node-name",
@@ -67,12 +183,22 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
             "--inference-url",
             &model_endpoint,
         ],
+        &owner_env,
     )?;
+    let bootstrap_user = gents_desktop_core::client::PrincipalIdentity::load_existing(
+        &DesktopPaths::from_root(owner_home.join("cli")),
+    )
+    .context("loading held bootstrap CLI User")?;
     let node_did = node_did_from_init(&init)?;
-    let default_agent_id = default_agent_id_for_node(&node_did);
+    assert_ne!(
+        bootstrap_user.did(),
+        node_did,
+        "bootstrap User and runtime must hold distinct identities"
+    );
+    let default_agent_did = agent_did_from_init(&init)?;
 
     let (mut serve, _readiness) =
-        spawn_server_with_ready_json(&home_dir, port, &["--home", home_arg], &[])?;
+        spawn_server_with_ready_json(&home_dir, port, &["--home", home_arg], &owner_env)?;
     wait_for_port(port, &mut serve)?;
 
     serve
@@ -132,7 +258,49 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
             let requests = gents_server::server_host::pending_managed_enrollments(&home_dir, &graphql)
                 .await
                 .context("listing managed pending enrollments")?;
-            assert!(requests.iter().any(|item| item.request_id == pending.request_id));
+            let client_did = core.node_identity().did();
+            assert_ne!(client_did, node_did);
+            assert_ne!(client_did, bootstrap_user.did());
+            let matching = requests.iter().filter(|item| item.request_id == pending.request_id).collect::<Vec<_>>();
+            let [request] = matching.as_slice() else {
+                bail!("expected exactly one pending request for the fresh desktop: {requests:?}");
+            };
+            assert_eq!(request.owner_node_did, node_did);
+            assert_eq!(request.candidate_did, client_did);
+            let owner_endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+                &graphql, bootstrap_user.did(),
+            ).with_client_signing_capability(gents::NodeIdentity::client_signing_capability(&bootstrap_user)?)?;
+            let owner_access = gents::ConfigAccess::Graphql(owner_endpoint);
+            let nodes = owner_access.execute(&format!(
+                r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
+                escape_graphql_string(&node_did),
+            )).await?;
+            let [node] = nodes["data"]["Node"].as_array().context("bootstrap User cannot observe Node")?.as_slice() else {
+                bail!("bootstrap User must observe exactly the initialized Node: {nodes}");
+            };
+            let node_doc = node["_docID"].as_str().context("Node has no physical identity")?.to_owned();
+            let owners = owner_access.transact_readonly("test.enrollment.bootstrap_owner", |txn| {
+                let node_doc = &node_doc;
+                Box::pin(async move { txn.document_owners("Node", std::slice::from_ref(node_doc)).await.map_err(anyhow::Error::from) })
+            }).await?;
+            anyhow::ensure!(owners.len() == 1 && owners[0].owner.as_ref().map(|did| did.as_str()) == Some(bootstrap_user.did()),
+                "the bootstrap CLI User must be the native Node owner");
+            let grant_home = home_dir.clone();
+            let grant_owner = owner_home.clone();
+            let grant_request = pending.request_id.clone();
+            let granted = tokio::task::spawn_blocking(move || {
+                let home = grant_home.to_str().context("runtime home is not UTF-8")?;
+                let owner = grant_owner.to_str().context("bootstrap owner home is not UTF-8")?;
+                run_cli_json_with_env(&grant_home,
+                    &["p2p", "enrollment", "grant", &grant_request, "--home", home],
+                    &[("GENTS_DESKTOP_HOME", owner)],
+                )
+            }).await.context("joining enrollment grant")?
+                .context("granting the fresh desktop User access through the bootstrap User")?;
+            assert_eq!(granted["request_id"], pending.request_id);
+            assert_eq!(granted["node_did"], node_did);
+            assert_eq!(granted["candidate_did"], client_did);
+            assert_eq!(granted["node_administrator_granted"], true);
             let outcome = gents_server::server_host::decide_managed_enrollment(
                 &home_dir,
                 &graphql,
@@ -177,24 +345,38 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
             wait_for_client_node_readiness(&core, &node_did).await?;
 
             let session_id = Uuid::new_v4().to_string();
-            core.submit_request(
+            let submitted = core.submit_request(
                 &session_id,
                 &node_did,
                 &prompt,
-                Some(&default_agent_id),
+                Some(&default_agent_did),
             )
             .await
             .context("submitting chat request from the enrolled desktop")?;
-
-            let (request_id, runtime_session, _) =
-                wait_for_runtime_agent_request(&graphql, core.node(), &node_did, &prompt).await?;
-            let runtime_reply = wait_for_complete_agent_response(
-                &graphql,
+            assert_eq!(submitted.node_did, node_did);
+            assert_eq!(submitted.session_id, session_id);
+            assert_eq!(submitted.agent_did.as_deref(), Some(default_agent_did.as_str()));
+            let request_id = submitted.request_id;
+            let access = core.operator_access(&node_did)?;
+            let runtime_reply = wait_for_complete_agent_response_with_access(
+                &access,
                 &request_id,
-                &runtime_session,
+                &session_id,
                 Duration::from_secs(240),
             )
             .await?;
+            let observed = access.execute(&format!(
+                r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{_docID node_did requester_did agent_did session_id content admission_kind admission_signer_did}} }}"#,
+                escape_graphql_string(&request_id),
+            )).await?;
+            let [request] = observed["data"]["AgentRequest"].as_array().context("desktop User cannot observe its request")?.as_slice() else {
+                bail!("desktop User must observe one physical request: {observed}");
+            };
+            anyhow::ensure!(request["node_did"] == node_did && request["requester_did"] == client_did
+                && request["agent_did"] == default_agent_did && request["session_id"] == session_id
+                && request["content"] == prompt && request["admission_kind"] == "client"
+                && request["admission_signer_did"] == client_did && request["_docID"].as_str().is_some(),
+                "desktop request lost its signed Node, User, Agent or session provenance: {request}");
             wait_for_client_complete_response(
                 &core,
                 &session_id,
@@ -337,7 +519,7 @@ async fn wait_for_runtime_enrollment_request(graphql: &str, request_id: &str) ->
 
 async fn wait_for_runtime_agent_request(
     graphql: &str,
-    client_node: &gents::defra_node::EmbeddedNode,
+    client_node: &gents::defra_node::Node,
     node_did: &str,
     content: &str,
 ) -> Result<(String, String, String)> {
@@ -354,7 +536,7 @@ async fn wait_for_runtime_agent_request(
                     ) {{
                         request_id
                         session_id
-                        agent_id
+                        agent_did
                         content
                     }}
                 }}"#,
@@ -378,7 +560,7 @@ async fn wait_for_runtime_agent_request(
                             .and_then(Value::as_str)
                             .unwrap_or_default()
                             .to_string(),
-                        row.get("agent_id")
+                        row.get("agent_did")
                             .and_then(Value::as_str)
                             .unwrap_or_default()
                             .to_string(),
@@ -417,12 +599,21 @@ async fn wait_for_complete_agent_response(
     session: &str,
     timeout: Duration,
 ) -> Result<RuntimeTerminalReply> {
+    let access = gents::ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
+    wait_for_complete_agent_response_with_access(&access, request_id, session, timeout).await
+}
+
+async fn wait_for_complete_agent_response_with_access(
+    access: &gents::ConfigAccess,
+    request_id: &str,
+    session: &str,
+    timeout: Duration,
+) -> Result<RuntimeTerminalReply> {
     let deadline = Instant::now() + timeout;
     let mut empty_terminal_since = None::<Instant>;
     loop {
-        let response = graphql_query(
-            graphql,
-            &format!(
+        let response = access
+            .execute(&format!(
                 r#"{{
                     AgentRequest(
                         filter: {{
@@ -438,9 +629,8 @@ async fn wait_for_complete_agent_response(
                 }}"#,
                 escape_graphql_string(request_id),
                 escape_graphql_string(session),
-            ),
-        )
-        .await?;
+            ))
+            .await?;
         if let Ok(row) = first_graphql_row(&response, "AgentRequest") {
             let request: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone())
                 .context("decoding canonical AgentRequest row")?;
@@ -466,13 +656,7 @@ async fn wait_for_complete_agent_response(
                 );
             }
             if request.is_terminal() {
-                let output = gents::session::observe_request_output(
-                    &gents::ConfigAccess::Graphql(crate::support::graphql::served_endpoint(
-                        graphql,
-                    )),
-                    &request,
-                )
-                .await?;
+                let output = gents::session::observe_request_output(access, &request).await?;
                 let visible = match &output {
                     gents::session::CanonicalRequestOutput::TerminalMessage {
                         header,
@@ -572,10 +756,8 @@ async fn wait_for_client_complete_response(
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        core.ensure_session_hydration_started(session_id, node_did)
-            .await?;
-        let page = gents_desktop_core::client::load_session_transcript_page(
-            core.node(),
+        let page = gents_desktop_core::client::load_session_transcript_page_on(
+            &core.operator_access(node_did)?,
             session_id,
             Some(node_did),
             Some(core.node_identity().did()),
@@ -681,7 +863,7 @@ async fn wait_for_client_node_readiness(core: &ClientCore, node_did: &str) -> Re
         }
         if Instant::now() >= deadline {
             bail!(
-                "timed out waiting for gossiped Agent/NodeReadiness; agents={} readiness={}",
+                "timed out waiting for authenticated Agent/NodeReadiness observation; agents={} readiness={}",
                 snapshot.agents.len(),
                 snapshot.node_readiness.len()
             );
@@ -696,7 +878,7 @@ async fn wait_for_client_node_readiness(core: &ClientCore, node_did: &str) -> Re
             Ok(Err(_)) => bail!("app projection channel closed"),
             Err(_) => {
                 bail!(
-                    "timed out waiting for gossiped Agent/NodeReadiness; agents={} readiness={}",
+                    "timed out waiting for authenticated Agent/NodeReadiness observation; agents={} readiness={}",
                     snapshot.agents.len(),
                     snapshot.node_readiness.len()
                 );
@@ -706,7 +888,7 @@ async fn wait_for_client_node_readiness(core: &ClientCore, node_did: &str) -> Re
 }
 
 async fn query_collection_dids(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     collection: &str,
 ) -> Result<Vec<String>> {
     let response = node

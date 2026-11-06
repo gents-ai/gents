@@ -8,8 +8,8 @@
 use anyhow::Result;
 
 use super::super::super::mutations::{
-    reconcile_unretained_submission, resolve_unresolved_submission, SubmissionOutcomeUnknown,
-    SubmittedRequest,
+    reconcile_unretained_submission, resolve_unresolved_submission, SubmissionAttemptError,
+    SubmissionError, SubmittedRequest,
 };
 use super::super::super::mutations::{
     submission_delivery, submission_journal, SubmissionIntent, SubmissionReference,
@@ -73,7 +73,7 @@ impl ClientCore {
     pub async fn recover_caller_submission(
         &self,
         intent: &SubmissionIntent,
-    ) -> Result<Option<SubmittedRequest>> {
+    ) -> std::result::Result<Option<SubmittedRequest>, SubmissionError> {
         self.ensure_caller_submission_actor(intent)?;
         let Some(record) = submission_journal::caller::recover(&self.node, intent).await? else {
             return Ok(None);
@@ -86,15 +86,12 @@ impl ClientCore {
                     if super::ensure_peer_chat_ready_at(&intent.node_did, Some(&peer), now)
                         .is_ok() =>
                 {
-                    Some(
-                        self.options
-                            .operator_identity_interaction
-                            .endpoint(&peer)
-                            .map(gents::store::config_client::ConfigAccess::Graphql)
-                            .unwrap_or_else(|| {
-                                gents::store::config_client::ConfigAccess::local(self.node_arc())
-                            }),
-                    )
+                    let capability =
+                        gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                            self.node_identity.private_key_bytes(),
+                        )
+                        .map_err(anyhow::Error::from)?;
+                    crate::local_runtime::operator_endpoint(&peer, &capability).map(gents::store::config_client::ConfigAccess::Graphql)
                 }
                 _ => None,
             }
@@ -133,9 +130,12 @@ impl ClientCore {
         request_id: &str,
         attachments: &[gents_protocol::request_input::RequestAttachment],
     ) -> Result<()> {
-        let retained =
-            super::super::super::mutations::submission_journal::load(&self.node, request_id)
-                .await?;
+        let retained = super::super::super::mutations::submission_journal::load(
+            &self.node,
+            self.node_identity.did(),
+            request_id,
+        )
+        .await?;
         if let Some(pending) = retained {
             anyhow::ensure!(
                 pending.node_did == node_did && pending.session_id == session_id,
@@ -167,9 +167,13 @@ impl ClientCore {
     /// Map a submit failure, keeping the signed payload of an unknown-outcome
     /// send for identical replay. An unknown outcome is not recorded as a
     /// mutation failure: the request may have been delivered.
-    pub(super) fn submit_failure(&self, error: anyhow::Error) -> anyhow::Error {
-        if !error.is::<SubmissionOutcomeUnknown>() {
-            return self.record_mutation_error("submit request", error);
+    pub(super) fn submit_failure(&self, error: SubmissionError) -> SubmissionError {
+        match &error {
+            SubmissionError::Cleanup(_) => {
+                self.record_mutation_error_message("submission cleanup", &error)
+            }
+            SubmissionError::Unknown(_) => {}
+            _ => self.record_mutation_error_message("submit request", &error),
         }
         error
     }
@@ -187,41 +191,60 @@ impl ClientCore {
         session_id: &str,
         request_id: &str,
         content: &str,
-    ) -> Result<Option<SubmittedRequest>> {
-        let retained =
-            super::super::super::mutations::submission_journal::load(&self.node, request_id)
-                .await?;
+    ) -> std::result::Result<Option<SubmittedRequest>, SubmissionError> {
+        let retained = super::super::super::mutations::submission_journal::load(
+            &self.node,
+            self.node_identity.did(),
+            request_id,
+        )
+        .await?;
         let resolved = match retained {
             Some(pending) => {
-                anyhow::ensure!(
-                    pending.node_did == node_did && pending.session_id == session_id,
-                    "unresolved submission {request_id} belongs to another session"
-                );
+                if pending.node_did != node_did || pending.session_id != session_id {
+                    return Err(anyhow::anyhow!(
+                        "unresolved submission {request_id} belongs to another session"
+                    )
+                    .into());
+                }
                 // Mailbox answers carry no composer content; they are keyed by
                 // their mailbox item instead.
-                anyhow::ensure!(
-                    pending.accepts_composer_content(content),
-                    "unresolved submission {request_id} is a different message"
-                );
-                let access = self.session_queue_access(&pending.node_did);
+                if !pending.accepts_composer_content(content) {
+                    return Err(anyhow::anyhow!(
+                        "unresolved submission {request_id} is a different message"
+                    )
+                    .into());
+                }
+                let access = self.session_queue_access(&pending.node_did)?;
                 match resolve_unresolved_submission(&access, &pending).await {
                     Ok(receipt) => {
-                        super::super::super::mutations::submission_journal::forget(
-                            &self.node, request_id,
+                        let cleanup = super::super::super::mutations::submission_journal::forget(
+                            &self.node,
+                            self.node_identity.did(),
+                            request_id,
                         )
                         .await;
-                        Some(receipt)
+                        Some(super::super::super::mutations::report_submission_cleanup(
+                            &pending,
+                            Ok(receipt),
+                            cleanup,
+                        )?)
                     }
-                    Err(error) if error.is::<SubmissionOutcomeUnknown>() => return Err(error),
+                    Err(SubmissionAttemptError::Unknown(error)) => return Err(error.into()),
                     // The receipt proved absence and the owner definitely
                     // rejected the identical replay, so it holds nothing with
                     // this identity.
-                    Err(_) => {
-                        super::super::super::mutations::submission_journal::forget(
-                            &self.node, request_id,
+                    Err(SubmissionAttemptError::Rejected(error)) => {
+                        let cleanup = super::super::super::mutations::submission_journal::forget(
+                            &self.node,
+                            self.node_identity.did(),
+                            request_id,
                         )
                         .await;
-                        None
+                        return Err(super::super::super::mutations::report_submission_rejection(
+                            &pending,
+                            error.into(),
+                            cleanup,
+                        ));
                     }
                 }
             }
@@ -235,12 +258,12 @@ impl ClientCore {
                     request_id: request_id.to_string(),
                     session_id: session_id.to_string(),
                     node_did: node_did.to_string(),
-                    agent_id: None,
+                    agent_did: None,
                 })
             }
             None => Some(
                 reconcile_unretained_submission(
-                    &self.session_queue_access(node_did),
+                    &self.session_queue_access(node_did)?,
                     node_did,
                     session_id,
                     request_id,

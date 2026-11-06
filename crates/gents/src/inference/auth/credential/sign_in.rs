@@ -60,7 +60,7 @@ pub async fn store_sign_in(
         credential.provider
     );
     access
-        .transact_write("oauth_credential.sign_in", |txn| {
+        .transact_signed_conflict_rebuild("oauth_credential.sign_in", |txn| {
             let credential = credential.clone();
             let label = label.clone();
             Box::pin(async move { store_sign_in_in_txn(txn, credential, label).await })
@@ -148,17 +148,7 @@ async fn store_sign_in_in_txn(
             .doc_id
             .clone()
             .context("stored OAuthCredential has no _docID")?;
-        let fields = oauth_credential_input_fields(&credential);
-        let mutation = format!(
-            r#"mutation {{
-                update_OAuthCredential(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{
-                    {}
-                }}) {{ _docID }}
-            }}"#,
-            crate::store::graphql::escape_graphql_string(&doc_id),
-            render_oauth_input(&fields, &set_once),
-        );
-        txn.execute(&mutation).await?;
+        super::rows::update_credential_in_txn(txn, &credential, &doc_id, &set_once).await?;
         sync_account_backend(txn, &credential, Some(&old_label)).await?;
         return Ok(SignIn {
             doc_id,
@@ -190,19 +180,7 @@ async fn store_sign_in_in_txn(
         None if rows.is_empty() => None,
         None => Some(next_free_label(&rows, &credential.provider)),
     };
-    let fields = oauth_credential_input_fields(&credential);
-    let mutation = format!(
-        r#"mutation {{
-            create_OAuthCredential(input: {{
-                credential_id: "{}",
-                {}
-            }}) {{ _docID }}
-        }}"#,
-        crate::store::graphql::escape_graphql_string(&credential.credential_id),
-        render_oauth_input(&fields, &[]),
-    );
-    let response = txn.execute(&mutation).await?;
-    let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")?;
+    let doc_id = super::rows::create_credential_in_txn(txn, &credential).await?;
     credential.doc_id = Some(doc_id.clone());
     sync_account_backend(txn, &credential, None).await?;
     let profiles = if rows.is_empty() {

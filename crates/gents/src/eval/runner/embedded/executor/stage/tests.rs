@@ -2,26 +2,35 @@ use super::*;
 use crate::eval::runner::embedded::executor::close;
 use crate::eval::runner::embedded::executor::install::{install, install_schema};
 use crate::eval::runner::embedded::executor::tests::{
-    assert_failure_class, frozen_binding, materialized_digest, seed_request_with_state,
-    write_slot_pack,
+    assert_failure_class, bind_test_evaluator, configured_trial, frozen_binding,
+    materialized_digest, seed_request_with_state, write_slot_pack,
 };
 use crate::eval::runner::embedded::executor::EventSourcesReady;
 use crate::eval::runner::embedded::home::boot_runtime;
-use crate::eval::runner::embedded::observe::{
-    classify_request_outcome, request_evidence_from_query_data,
-};
+use crate::eval::runner::embedded::observe::classify_request_outcome;
 use crate::eval::runner::executor::{CaptureResult, FixtureDocument};
 use crate::request::lifecycle::{
-    build_signed_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
+    build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
 };
-use crate::store::graphql::graphql_with_transaction_retry;
 use crate::{ConfigAccess, DocumentRuntimeOptions};
 use serde_json::json;
 use std::sync::Arc;
 
 #[tokio::test]
 async fn a_cancelled_seed_stage_is_runtime_before_any_request_exists() {
-    let home = EmbeddedHome::create_temp("seed-cancel").await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let pack_dir = dir.path().join("pack");
+    write_slot_pack(&pack_dir, "gents:inference-slot:primary");
+    let mut spec = TrialSpec {
+        pack_digest: materialized_digest(&pack_dir),
+        pack_dir,
+        ..TrialSpec::empty_for_tests("t1")
+    };
+    spec.fixtures
+        .seed_schemas
+        .push("type NoSuchItem { label: String }".to_owned());
+    let mut home = EmbeddedHome::create_temp("seed-cancel").await.unwrap();
+    bind_test_evaluator(&mut spec, &mut home);
     let cancel = CancellationToken::new();
     let stage = StageSpec {
         stage_id: "fire".into(),
@@ -29,6 +38,9 @@ async fn a_cancelled_seed_stage_is_runtime_before_any_request_exists() {
         seed: Some(FixtureDocument {
             collection: "NoSuchItem".into(),
             document: json!({}),
+            session_readers: Vec::new(),
+            session_agent_owned: false,
+            expired_client_request: false,
         }),
         deadline_secs: None,
         settle: false,
@@ -50,13 +62,17 @@ async fn a_cancelled_seed_stage_is_runtime_before_any_request_exists() {
     let observed = tokio::time::timeout(
         Duration::from_secs(5),
         submit_and_observe(
-            &TrialSpec::empty_for_tests("t1"),
-            &cancel,
-            &home,
-            &exited_runtime(),
-            &locator,
+            &spec,
+            &StageEnv {
+                agent_did: "did:test:unselected",
+                cancel: &cancel,
+                home: &home,
+                runtime: &exited_runtime(),
+                locator: &locator,
+                workspace: Path::new("."),
+                ready: &never_ready,
+            },
             &stage,
-            &never_ready,
         ),
     )
     .await
@@ -66,6 +82,7 @@ async fn a_cancelled_seed_stage_is_runtime_before_any_request_exists() {
         (None, Some(OutcomeKind::Runtime))
     );
     assert_eq!(observed.terminal_state, None);
+    close(home).await;
 }
 
 #[tokio::test]
@@ -92,56 +109,55 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
         write_slot_pack(&pack_dir, "gents:inference-slot:primary");
         let mut inference = frozen_binding(json!("frozen-profile"));
         inference.backend["endpoint"] = json!(backend.endpoint());
-        let spec = TrialSpec {
+        let mut spec = TrialSpec {
             pack_digest: materialized_digest(&pack_dir),
             pack_dir,
-            agent_id: "subject".into(),
+            agent_slot: "subject".into(),
             inference,
             ..TrialSpec::empty_for_tests("scheduled-teardown")
         };
-        let home = EmbeddedHome::create_temp("scheduled-teardown")
+        let mut home = EmbeddedHome::create_temp("scheduled-teardown")
             .await
             .unwrap();
-        install(&spec, &home, &dir.path().join("workspace"))
-            .await
-            .unwrap();
-        let (runtime, _agent) = boot_runtime(
+        bind_test_evaluator(&mut spec, &mut home);
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let agent_did = Box::pin(install(&spec, &home, &workspace)).await.unwrap();
+        let (runtime, _agent) = Box::pin(boot_runtime(
             &home,
             home.identity.clone(),
             DocumentRuntimeOptions::default(),
-        )
+        ))
         .await
         .unwrap();
         let request_id = uuid::Uuid::new_v4().to_string();
-        let request = build_signed_request(
+        let client = home.client_access(&spec.evaluator_did).unwrap();
+        let request = build_signed_client_request(
+            &client,
             RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 RequestIdentity {
                     request_id: request_id.clone(),
                     node_did: home.did().into(),
-                    requester_did: None,
-                    agent_id: "subject".into(),
+                    requester_did: Some(spec.evaluator_did.clone()),
+                    agent_did: agent_did.clone(),
                     session_id: uuid::Uuid::new_v4().to_string(),
                     content: marker.into(),
                     execution_origin: ExecutionOrigin::Scheduled,
                     created_at: chrono::Utc::now()
                         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 },
-                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                    home.did(),
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::client(
+                    &spec.evaluator_did,
                 ),
             ),
-            RequestSigner::RegisteredTarget,
+            RequestSigner::Identity(home.evaluator(&spec.evaluator_did).unwrap()),
         )
         .await
         .unwrap();
-        ConfigAccess::write_local(
-            &home.node,
-            "test.eval_scheduled_shutdown",
-            &request.graphql_mutation().unwrap(),
-        )
-        .await
-        .unwrap();
+        crate::request::lifecycle::submit_client_request(&client, &request)
+            .await
+            .unwrap();
         tokio::time::timeout(Duration::from_secs(30), async {
             while backend.observed_chunks(marker) == 0 {
                 tokio::time::sleep(Duration::from_millis(20)).await;
@@ -149,14 +165,9 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
         })
         .await
         .expect("scheduled inference must reach its paused provider stream");
-        let before = graphql_with_transaction_retry(
-            &home.node,
-            &crate::eval::runner::embedded::observe::evidence_query(&request_id),
-            "test.eval_scheduled_inference",
-        )
-        .await
-        .unwrap();
-        let before = request_evidence_from_query_data(before.data.as_ref().unwrap());
+        let before = collect_request_evidence_with_access(&client, &request_id)
+            .await
+            .unwrap();
         assert!(before
             .inference_calls
             .iter()
@@ -167,7 +178,7 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
             cancel.cancel();
             let (terminal, stopped) = tokio::time::timeout(
                 Duration::from_secs(30),
-                observe_stage_terminal(&home.node, &cancel, &runtime, &request_id, None),
+                observe_stage_terminal(&home.node, &client, &cancel, &runtime, &request_id, None),
             )
             .await
             .expect("stage cancellation must settle active inference");
@@ -182,14 +193,14 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
             .await
             .expect("trial shutdown must settle active inference")
             .unwrap();
-        let state = poll_request(&home.node, &request_id)
+        let state = poll_request_with_access(&client, &request_id)
             .await
             .unwrap()
             .unwrap();
         let terminal_state =
             RequestLifecycleState::parse(state.lifecycle_state.as_deref().unwrap()).unwrap();
         assert!(terminal_state.is_terminal());
-        let evidence = collect_request_evidence(&home.node, &request_id)
+        let evidence = collect_request_evidence_with_access(&client, &request_id)
             .await
             .unwrap();
         assert!(!evidence.inference_calls.is_empty());
@@ -213,12 +224,9 @@ async fn a_stage_that_could_not_be_submitted_still_runs_its_captures() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
-    let home = EmbeddedHome::create_temp("submit-failure").await.unwrap();
-    seed_request(&home, "seeded").await;
-
-    let spec = TrialSpec::empty_for_tests("t1");
+    let (home, spec, agent_did) = configured_trial(dir.path(), "submit-failure").await;
     let locator = TrialLocator {
-        trial_node_did: "did:key:zUnregistered".to_string(),
+        trial_node_did: home.did().to_string(),
         session_id: "s-1".to_string(),
         home_hint: None,
     };
@@ -235,7 +243,7 @@ async fn a_stage_that_could_not_be_submitted_still_runs_its_captures() {
                 name: "requests".to_string(),
                 collection: "AgentRequest".to_string(),
                 filter: json!({"request_id": {"_eq": "seeded"}}),
-                fields: vec!["agent_id".to_string()],
+                fields: vec!["agent_did".to_string()],
             },
             Capture::Documents {
                 name: "unreadable".to_string(),
@@ -246,10 +254,21 @@ async fn a_stage_that_could_not_be_submitted_still_runs_its_captures() {
         ],
     };
 
+    super::super::submit::submit_stage(
+        &home,
+        &spec.evaluator_did,
+        &locator,
+        &agent_did,
+        &stage,
+        "seeded",
+    )
+    .await
+    .unwrap();
     let runtime = exited_runtime();
     let evidence = run_stage(
         &spec,
         &StageEnv {
+            agent_did: "did:test:unselected",
             cancel: &CancellationToken::new(),
             home: &home,
             runtime: &runtime,
@@ -272,13 +291,13 @@ async fn a_stage_that_could_not_be_submitted_still_runs_its_captures() {
         panic!("expected a document capture, got {:?}", evidence.captures);
     };
     assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0]["agent_id"], "seeded-agent");
+    assert_eq!(rows[0]["agent_did"], agent_did);
     assert!(
         !evidence.captures.contains_key("unreadable"),
         "{:?}",
         evidence.captures
     );
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -286,7 +305,7 @@ async fn a_runtime_that_exits_mid_stage_fails_the_stage_as_runtime_at_once() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
-    let home = EmbeddedHome::create_temp("runtime-exit").await.unwrap();
+    let (home, spec, agent_did) = configured_trial(dir.path(), "runtime-exit").await;
     let locator = TrialLocator {
         trial_node_did: home.did().to_string(),
         session_id: "s-1".to_string(),
@@ -307,11 +326,9 @@ async fn a_runtime_that_exits_mid_stage_fails_the_stage_as_runtime_at_once() {
     let evidence = tokio::time::timeout(
         Duration::from_secs(30),
         run_stage(
-            &TrialSpec {
-                agent_id: "subject".to_string(),
-                ..TrialSpec::empty_for_tests("t1")
-            },
+            &spec,
             &StageEnv {
+                agent_did: &agent_did,
                 cancel: &CancellationToken::new(),
                 home: &home,
                 runtime: &runtime,
@@ -328,7 +345,7 @@ async fn a_runtime_that_exits_mid_stage_fails_the_stage_as_runtime_at_once() {
     assert!(evidence.request_id.is_some(), "the stage was submitted");
     assert_eq!(evidence.failure_kind, Some(OutcomeKind::Runtime));
     assert_eq!(evidence.provider_reason, None);
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -347,7 +364,7 @@ async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
     let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     config["tasks"] = json!([{
         "task_id": "seed-task",
-        "agent_id": "subject",
+        "agent_did": "gents:agent-slot:subject",
         "prompt_template": "{{ doc.payload.required }}"
     }]);
     config["event_sources"] = json!([{
@@ -360,16 +377,20 @@ async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
         "source": {"kind": "event", "event_source_id": "seed-source"}
     }]);
     std::fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
-    let spec = TrialSpec {
+    let mut spec = TrialSpec {
         pack_digest: materialized_digest(&pack_dir),
         pack_dir,
-        agent_id: "subject".into(),
+        agent_slot: "subject".into(),
         inference,
         ..TrialSpec::empty_for_tests("seed-template-failure")
     };
-    let home = EmbeddedHome::create_temp("seed-template-failure")
+    spec.fixtures
+        .seed_schemas
+        .push("type EvalSeed { payload: JSON }".to_owned());
+    let mut home = EmbeddedHome::create_temp("seed-template-failure")
         .await
         .unwrap();
+    bind_test_evaluator(&mut spec, &mut home);
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     install_schema(
@@ -378,7 +399,7 @@ async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
     )
     .await
     .unwrap();
-    install(&spec, &home, &workspace).await.unwrap();
+    let agent_did = install(&spec, &home, &workspace).await.unwrap();
     let (event_sources_ready, ready) = watch::channel(None);
     let options = DocumentRuntimeOptions {
         runtime_snapshot_observer: Some(Arc::new(EventSourcesReady(event_sources_ready))),
@@ -403,6 +424,9 @@ async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
         seed: Some(FixtureDocument {
             collection: "EvalSeed".into(),
             document: json!({"payload": {}}),
+            session_readers: Vec::new(),
+            session_agent_owned: false,
+            expired_client_request: false,
         }),
         deadline_secs: None,
         settle: false,
@@ -424,6 +448,7 @@ async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
         run_stage(
             &spec,
             &StageEnv {
+                agent_did: &agent_did,
                 cancel: &CancellationToken::new(),
                 home: &home,
                 runtime: &runtime,
@@ -444,7 +469,7 @@ async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
             )
         })
         .unwrap();
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("shutdown node");
 
     let evidence = result.expect("the failed trigger must end the seed wait promptly");
     assert_failure_class(
@@ -485,6 +510,7 @@ async fn a_request_that_settled_before_its_runtime_exited_keeps_its_outcome() {
     tokio::time::pause();
     let (observed, stopped) = observe_stage_terminal(
         &home.node,
+        &crate::ConfigAccess::local(home.node.clone()),
         &CancellationToken::new(),
         &runtime,
         request_id,
@@ -507,7 +533,7 @@ async fn a_request_that_settled_before_its_runtime_exited_keeps_its_outcome() {
         stage_failure_kind(Some(&observed), true, stopped, &evidence),
         None
     );
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("shutdown node");
 }
 
 fn exited_runtime() -> RunningRuntime {

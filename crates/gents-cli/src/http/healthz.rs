@@ -231,9 +231,9 @@ mod tests {
                 process_state: NodeReadinessProcessState::Ready,
                 active_generation: 1,
                 router_generation: 1,
-                default_agent_id: "default".to_string(),
+                default_agent_did: "default".to_string(),
                 agents: vec![AgentReadinessEntry {
-                    agent_id: "default".to_string(),
+                    agent_did: "default".to_string(),
                     state: AgentReadinessState::Ready,
                     reason: None,
                 }],
@@ -332,9 +332,9 @@ mod tests {
                 process_state: NodeReadinessProcessState::Ready,
                 active_generation: 1,
                 router_generation: 1,
-                default_agent_id: "default".to_string(),
+                default_agent_did: "default".to_string(),
                 agents: vec![AgentReadinessEntry {
-                    agent_id: "default".to_string(),
+                    agent_did: "default".to_string(),
                     state: AgentReadinessState::Unavailable,
                     reason: Some(
                         gents_protocol::row::AgentReadinessUnavailableReason::BackendTemporarilyUnavailable,
@@ -496,8 +496,8 @@ mod tests {
     #[test]
     fn healthz_reports_a_pending_shim_as_degraded() {
         let state = state_with_shim(crate::shared::CodexShimHealth::Pending {
-            bound_agent_id: "default".to_string(),
-            reason: "no Agent document with that agent_id exists".to_string(),
+            bound_agent_did: "default".to_string(),
+            reason: "no Agent document with that agent_did exists".to_string(),
         });
         let payload = render_healthz_payload_at(&state, Some(&healthy_data()), None, observed_at());
 
@@ -524,7 +524,7 @@ mod tests {
             websocket: "ws://127.0.0.1:9292/".to_string(),
             auth_required: true,
             bound_node_did: "did:key:agent".to_string(),
-            bound_agent_id: "did:key:agent:default".to_string(),
+            bound_agent_did: "did:key:agent:default".to_string(),
         });
         let payload = render_healthz_payload_at(&state, Some(&healthy_data()), None, observed_at());
 

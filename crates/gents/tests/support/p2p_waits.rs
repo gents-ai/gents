@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 
 /// iroh may also advertise a NAT-PMP mapping from the LAN router first
 /// (`<router ip>:<port>`), which a local dial through that router times out on.

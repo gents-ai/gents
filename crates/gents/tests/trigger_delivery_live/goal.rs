@@ -117,7 +117,7 @@ async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Re
     ] {
         let id = format!("delivery-goal-{kind}");
         documents.extend([
-            (Collection::Task, json!({"task_id":id,"agent_id":"delivery-lead", "emit_outcome":emit,
+            (Collection::Task, json!({"task_id":id,"agent_did":"delivery-lead", "emit_outcome":emit,
                 "goal_objective_template":objective,"prompt_template":prompt})),
             (Collection::EventSource, json!({"event_source_id":id,"source_collection":"DeliveryGoalWork",
                 "event_kind":"created","filter":format!("{{kind:{{_eq:\"{kind}\"}}}}")})),

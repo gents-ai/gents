@@ -3,14 +3,12 @@ use crate::store::identity::NodeIdentity;
 use super::support::*;
 use super::*;
 
-use std::sync::Arc;
-
 const READINESS_DEADLOCK_GUARD: Duration = Duration::from_secs(30);
 
 async fn wait_for_agent_state(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     state: AgentReadinessState,
     reason: Option<AgentReadinessUnavailableReason>,
 ) -> NodeReadinessSnapshot {
@@ -18,13 +16,13 @@ async fn wait_for_agent_state(
     loop {
         let readiness = fetch_node_readiness(node, node_did).await;
         if readiness.agents.iter().any(|entry| {
-            entry.agent_id == agent_id && entry.state == state && entry.reason == reason
+            entry.agent_did == agent_did && entry.state == state && entry.reason == reason
         }) {
             return readiness;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for {agent_id} to reach {state:?}/{reason:?}; last readiness: {readiness:?}"
+            "timed out waiting for {agent_did} to reach {state:?}/{reason:?}; last readiness: {readiness:?}"
         );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
@@ -58,17 +56,16 @@ fn install_fixture_plugin(plugin_home: &std::path::Path) -> crate::pack::PackIde
 
 #[tokio::test]
 async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("plugin-readmission"));
     let endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = plugin_runtime_fixture(
+        "plugin-readmission",
         "backend-plugin-readmit",
         endpoint.endpoint(),
     )
-    .await;
+    .await
+    .unwrap();
+    let node = fixture.node.clone();
+    let identity = fixture.runtime.clone();
     let plugin_home = tempfile::tempdir().unwrap();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
@@ -87,27 +84,24 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
     .await
     .unwrap();
     let node_did = identity.did().to_string();
-    let agent_id = agent.default_agent_id().to_string();
+    let agent_did = agent.default_agent_did().to_string();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let run = tokio::spawn(agent.run(shutdown_rx));
     wait_for_runtime_process_state(node.as_ref(), &node_did, "ready").await;
 
     let tools: Tools = serde_json::from_value(serde_json::json!({
-        "tools_id": format!("{agent_id}:tools"),
+        "tools_id": format!("{agent_did}:tools"),
         "node_did": node_did,
         "integrations": {"plugins": [{"plugin": "fixture/list_files"}]},
     }))
     .unwrap();
-    crate::store::config_client::write_tools_document(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
-        &tools,
-    )
-    .await
-    .unwrap();
+    crate::store::config_client::write_tools_document(&fixture.user_access, &tools)
+        .await
+        .unwrap();
     let demoted = wait_for_agent_state(
         node.as_ref(),
         &node_did,
-        &agent_id,
+        &agent_did,
         AgentReadinessState::Unavailable,
         Some(AgentReadinessUnavailableReason::ToolSurfaceUnavailable),
     )
@@ -119,12 +113,19 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
     );
 
     let pack = install_fixture_plugin(plugin_home.path());
-    crate::pack::record_plugin_store_change(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+    crate::pack::record_plugin_store_change_as_with_node_binding(
+        &fixture.agent_access,
         &node_did,
+        fixture
+            .agent_access
+            .actor_did()
+            .map(identity::Did::new)
+            .transpose()
+            .unwrap(),
         plugin_home.path(),
         &pack.coordinate,
         Some(&pack),
+        Some(&fixture.node_binding),
     )
     .await
     .unwrap();
@@ -132,7 +133,7 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
     let readmitted = wait_for_agent_state(
         node.as_ref(),
         &node_did,
-        &agent_id,
+        &agent_did,
         AgentReadinessState::Ready,
         None,
     )
@@ -143,19 +144,26 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
     );
 
     crate::plugin::store::remove_record(plugin_home.path(), "fixture", "list_files").unwrap();
-    crate::pack::record_plugin_store_change(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+    crate::pack::record_plugin_store_change_as_with_node_binding(
+        &fixture.agent_access,
         &node_did,
+        fixture
+            .agent_access
+            .actor_did()
+            .map(identity::Did::new)
+            .transpose()
+            .unwrap(),
         plugin_home.path(),
         &pack.coordinate,
         None,
+        Some(&fixture.node_binding),
     )
     .await
     .unwrap();
     let removed = wait_for_agent_state(
         node.as_ref(),
         &node_did,
-        &agent_id,
+        &agent_did,
         AgentReadinessState::Unavailable,
         Some(AgentReadinessUnavailableReason::ToolSurfaceUnavailable),
     )
@@ -164,19 +172,26 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
     assert!(removed.active_generation > readmitted.active_generation);
 
     let pack = install_fixture_plugin(plugin_home.path());
-    crate::pack::record_plugin_store_change(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+    crate::pack::record_plugin_store_change_as_with_node_binding(
+        &fixture.agent_access,
         &node_did,
+        fixture
+            .agent_access
+            .actor_did()
+            .map(identity::Did::new)
+            .transpose()
+            .unwrap(),
         plugin_home.path(),
         &pack.coordinate,
         Some(&pack),
+        Some(&fixture.node_binding),
     )
     .await
     .unwrap();
     let restored = wait_for_agent_state(
         node.as_ref(),
         &node_did,
-        &agent_id,
+        &agent_did,
         AgentReadinessState::Ready,
         None,
     )

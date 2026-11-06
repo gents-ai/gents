@@ -80,7 +80,7 @@ pub fn missing_tool_refs<'a>(skill: &'a Skill, ceiling: &SkillToolCeiling) -> Ve
         .collect()
 }
 
-fn skill_label(skill: &Skill) -> &str {
+pub(crate) fn skill_label(skill: &Skill) -> &str {
     if let Some(display_name) = skill
         .display_name
         .as_deref()
@@ -326,78 +326,6 @@ fn is_reserved_client_slash_command(command: &str) -> bool {
             | "title"
             | "vim"
     )
-}
-
-#[derive(Debug)]
-pub struct LoadSkillError(pub String);
-
-impl std::fmt::Display for LoadSkillError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for LoadSkillError {}
-
-#[derive(Debug, serde::Deserialize)]
-pub struct LoadSkillArgs {
-    pub name: String,
-}
-
-#[derive(Clone)]
-pub struct LoadSkillTool {
-    skills: Vec<Skill>,
-    ceiling: SkillToolCeiling,
-}
-
-impl LoadSkillTool {
-    pub fn new(skills: Vec<Skill>, ceiling: SkillToolCeiling) -> Self {
-        Self { skills, ceiling }
-    }
-}
-
-impl crate::inference::llm::tool::Tool for LoadSkillTool {
-    const NAME: &'static str = "load_skill";
-    type Error = LoadSkillError;
-    type Args = LoadSkillArgs;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> crate::inference::llm::tool::ToolDefinition {
-        crate::inference::llm::tool::ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Load a skill's full instructions by name (or skill_id), then follow \
-                them for the task. Choose a skill from the Skills catalog in your system prompt."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "The skill name or skill_id from the Skills catalog."
-                    }
-                },
-                "required": ["name"]
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        match find_skill(&self.skills, &args.name) {
-            Some(skill) => Ok(render_activated_skill(skill, &self.ceiling)),
-            None => {
-                let available = self
-                    .skills
-                    .iter()
-                    .map(skill_label)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                Ok(format!(
-                    "No skill named {:?}. Available skills: {available}.",
-                    args.name.trim()
-                ))
-            }
-        }
-    }
 }
 
 #[cfg(test)]

@@ -46,28 +46,84 @@ impl BackgroundCompletionClaimSnapshot {
     }
 }
 
+async fn reject_pending_admission_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    request: &AgentRequest,
+    reason: &str,
+    terminalized_at: &str,
+) -> Result<bool> {
+    let doc = escape_graphql_string(&request.doc_id);
+    let node = escape_graphql_string(&request.node_did);
+    let reason_gql = escape_graphql_string(reason);
+    let time_gql = escape_graphql_string(terminalized_at);
+    let mutation = format!(
+        r#"mutation($terminal_output: JSON) {{
+        update_AgentRequest(docID: "{doc}", filter: {{ _docID: {{ _eq: "{doc}" }},
+            node_did: {{ _eq: "{node}" }}, lifecycle_state: {{ _eq: "{pending}" }} }},
+            input: {{ lifecycle_state: "{failed}", failure_reason: "{reason_gql}",
+                terminalized_at: "{time_gql}", terminal_redrive_attempts: 0,
+                terminal_output: $terminal_output }}) {{ _docID request_id workspace_id workspace_owner_node_did }}
+    }}"#,
+        pending = RequestLifecycleState::Pending.as_str(),
+        failed = RequestLifecycleState::Failed.as_str()
+    );
+    let response = txn
+        .execute_with_variables(
+            &mutation,
+            &serde_json::json!({
+                "terminal_output": gents_protocol::output::TerminalOutput::NoMessage
+            }),
+        )
+        .await?;
+    let updated = response
+        .get("data")
+        .and_then(|data| data.get("update_AgentRequest"))
+        .is_some_and(response_has_documents);
+    if updated {
+        if let Some(rows) = response["data"]["update_AgentRequest"].as_array() {
+            for row in rows {
+                crate::tools::workspace::release_terminal_writer_binding(txn, row).await?;
+            }
+        }
+        crate::triggers::engine::durable::publish_request_outcome(
+            txn,
+            &request.node_did,
+            &request.request_id,
+            RequestLifecycleState::Failed,
+            reason,
+            terminalized_at,
+        )
+        .await?;
+        super::materialize::project_refused_request_session_in_txn(txn, request, terminalized_at)
+            .await?;
+    }
+    Ok(updated)
+}
+
 async fn claim_request_with_projection<F>(
-    node: &std::sync::Arc<EmbeddedNode>,
-    session_id: &str,
+    access: &crate::ConfigAccess,
     capture_background_snapshot: bool,
     request: &AgentRequest,
     claimed_at: &str,
     fold_admitted: &[String],
+    client_claim_admission: Option<&crate::request::admission::ClientClaimAdmission>,
     build_mutation: F,
 ) -> Result<
-    Option<(
-        defra_node::QueryResponse,
-        BackgroundCompletionClaimSnapshot,
-        Vec<super::queue::FoldedInput>,
-    )>,
+    Option<
+        std::result::Result<
+            (
+                defra_node::QueryResponse,
+                BackgroundCompletionClaimSnapshot,
+                Vec<super::queue::FoldedInput>,
+            ),
+            (),
+        >,
+    >,
 >
 where
     F: Fn(&str) -> String + Sync,
 {
-    anyhow::ensure!(
-        session_id == request.session_id,
-        "claim snapshot session differs from request"
-    );
+    let session_id = request.session_id.as_str();
     let scope = crate::session::session_scope_filter(
         &request.node_did,
         session_id,
@@ -92,12 +148,32 @@ where
     );
     let snapshot_query = &snapshot_query;
     let build_mutation = &build_mutation;
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
+    access.transact_write(
         "lifecycle.claim_request",
         move |txn| {
             Box::pin(async move {
+                let claim_identity = txn.execute(&format!(
+                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ admission_kind }} }}"#,
+                    escape_graphql_string(&request.doc_id),
+                )).await?;
+                let rows = claim_identity["data"]["AgentRequest"].as_array()
+                    .context("claim admission identity query omitted rows")?;
+                if rows.len() != 1 { return Ok(None); }
+                let client = rows[0]["admission_kind"].as_str() == Some("client");
+                match client_claim_admission {
+                    Some(admission) => match admission.authorize_in_txn(txn, request).await? {
+                        crate::request::admission::ClientClaimAuthorization::Allowed => {}
+                        crate::request::admission::ClientClaimAuthorization::Unavailable => return Ok(None),
+                        crate::request::admission::ClientClaimAuthorization::Denied => {
+                            let rejected = reject_pending_admission_in_txn(
+                                txn, request, "request authorization denied", claimed_at,
+                            ).await?;
+                            return Ok(rejected.then_some(Err(())));
+                        }
+                    },
+                    None if client => return Ok(None),
+                    None => {}
+                }
                 if crate::session::session_stopped_in_txn(
                     txn,
                     &request.node_did,
@@ -116,10 +192,17 @@ where
                     .await?;
                     return Ok(None);
                 }
-                if !crate::goal::fence_goal_continuation_claim_in_txn(txn, request, claimed_at)
-                    .await?
-                {
-                    return Ok(None);
+                match crate::goal::fence_goal_continuation_claim_in_txn(
+                    txn, request, claimed_at, client && request.input.goal_continuation.is_some(),
+                ).await? {
+                    crate::goal::GoalClaimFence::Allowed => {}
+                    crate::goal::GoalClaimFence::Retired => return Ok(None),
+                    crate::goal::GoalClaimFence::Rejected => {
+                        let rejected = reject_pending_admission_in_txn(
+                            txn, request, "request authorization denied", claimed_at,
+                        ).await?;
+                        return Ok(rejected.then_some(Err(())));
+                    }
                 }
                 if request.purpose == gents_protocol::request_admission::RequestPurpose::Normal
                     && !super::query::claim_queue_allows(txn, request).await?
@@ -154,7 +237,7 @@ where
                             "background retry does not name its physical failed wake");
                         crate::request::admission::verify_runtime_local_control_receipt(current,
                             &request.node_did, &parent.request_id,
-                            request.requester_did.as_deref().unwrap_or(&request.node_did))?;
+                            request.requester_did.as_deref().unwrap_or(&request.agent_did))?;
                         let receipt = txn.execute(&format!(r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{background_completion_input_through_sequence background_completion_notification_keys_json}}}}"#,
                             escape_graphql_string(parent_doc))).await?;
                         let receipt = receipt.pointer("/data/AgentRequest/0").context("failed wake receipt disappeared")?;
@@ -218,7 +301,7 @@ where
                     )
                     .await?;
                 }
-                Ok::<_, anyhow::Error>(Some((claimed, snapshot, folded_selection)))
+                Ok::<_, anyhow::Error>(Some(Ok((claimed, snapshot, folded_selection))))
             })
         },
     )
@@ -232,7 +315,8 @@ fn parse_rfc3339_utc(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 }
 
 async fn fetch_interrupt_and_ttl(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
     doc_id: &str,
 ) -> Result<(Option<String>, Option<String>)> {
     let escaped_doc_id = escape_graphql_string(doc_id);
@@ -248,15 +332,18 @@ async fn fetch_interrupt_and_ttl(
             }}
         }}"#
     );
-    let resp = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "fetch_interrupt_and_ttl",
-    )
-    .await?;
-    let row: gents_protocol::row::AgentRequestRow =
-        crate::store::graphql::first_row(&resp, "AgentRequest")?
-            .ok_or_else(|| anyhow::anyhow!("AgentRequest {doc_id} not found"))?;
+    let response = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor)
+        .execute(&query)
+        .await?;
+    let rows = response
+        .pointer("/data/AgentRequest")
+        .and_then(serde_json::Value::as_array)
+        .context("interrupt and TTL query omitted AgentRequest rows")?;
+    let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(
+        rows.first()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("AgentRequest {doc_id} not found"))?,
+    )?;
     let interrupt = row
         .interrupt_requested_at
         .as_deref()
@@ -290,7 +377,7 @@ impl RequestLifecycle {
     {
         self.ensure_state(&[LocalLifecycleState::Pending], "claim")?;
         let (interrupt_requested_at, valid_until) =
-            fetch_interrupt_and_ttl(&self.node, &self.request.doc_id).await?;
+            fetch_interrupt_and_ttl(&self.node, self.actor_did()?, &self.request.doc_id).await?;
         if let Some(interrupt_at) = interrupt_requested_at {
             self.transition_pending_to_interrupted(&interrupt_at)
                 .await?;
@@ -337,8 +424,8 @@ impl RequestLifecycle {
         self.ensure_state(&[LocalLifecycleState::Claimed], "begin_owned_execution")?;
         let generation = self.execution_generation()?.to_owned();
         let request_doc_id = self.request.doc_id.clone();
-        Self::begin_owned_execution_durable_with_clock(
-            &self.node,
+        Self::begin_owned_execution_with_access(
+            &self.access()?,
             &request_doc_id,
             &generation,
             chrono::Utc::now,
@@ -351,8 +438,36 @@ impl RequestLifecycle {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) async fn begin_owned_execution_durable_with_clock<F>(
         node: &Arc<EmbeddedNode>,
+        actor: identity::Did,
+        request_doc_id: &str,
+        generation: &str,
+        now: F,
+    ) -> Result<()>
+    where
+        F: Fn() -> chrono::DateTime<chrono::Utc> + Sync,
+    {
+        let access = crate::ConfigAccess::local_as(node.clone(), actor);
+        Self::begin_owned_execution_with_access(&access, request_doc_id, generation, now).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn begin_owned_execution_at_with_access<F>(
+        access: &crate::ConfigAccess,
+        request_doc_id: &str,
+        generation: &str,
+        now: F,
+    ) -> Result<()>
+    where
+        F: Fn() -> chrono::DateTime<chrono::Utc> + Sync,
+    {
+        Self::begin_owned_execution_with_access(access, request_doc_id, generation, now).await
+    }
+
+    async fn begin_owned_execution_with_access<F>(
+        access: &crate::ConfigAccess,
         request_doc_id: &str,
         generation: &str,
         now: F,
@@ -363,9 +478,7 @@ impl RequestLifecycle {
         let generation = generation.to_owned();
         let request_doc_id = request_doc_id.to_owned();
         let now = &now;
-        crate::store::config_client::ConfigAccess::transact_local_idempotent(
-            node,
-            None,
+        access.transact_idempotent(
             crate::store::config_client::IdempotentTransactionRetry::Standard,
             "lifecycle.begin_owned_execution",
             move |txn| {
@@ -437,42 +550,42 @@ impl RequestLifecycle {
             interrupted = RequestLifecycleState::Interrupted.as_str()
         );
         let request = &self.request;
-        let resp = crate::store::config_client::ConfigAccess::transact_local_idempotent(
-            &self.node,
-            None,
-            crate::store::config_client::IdempotentTransactionRetry::Standard,
-            "interrupt_before_claim",
-            |txn| {
-                let mutation = &mutation;
-                let terminalized_at = &terminalized_at;
-                Box::pin(async move {
-                    let response = txn.execute_local_response(mutation).await?;
-                    if let Some(rows) = response
-                        .data
-                        .as_ref()
-                        .and_then(|data| data.get("update_AgentRequest"))
-                        .and_then(serde_json::Value::as_array)
-                        .filter(|rows| !rows.is_empty())
-                    {
-                        for row in rows {
-                            crate::tools::workspace::release_terminal_writer_binding(txn, row)
-                                .await?;
+        let resp = self
+            .access()?
+            .transact_idempotent(
+                crate::store::config_client::IdempotentTransactionRetry::Standard,
+                "interrupt_before_claim",
+                |txn| {
+                    let mutation = &mutation;
+                    let terminalized_at = &terminalized_at;
+                    Box::pin(async move {
+                        let response = txn.execute_local_response(mutation).await?;
+                        if let Some(rows) = response
+                            .data
+                            .as_ref()
+                            .and_then(|data| data.get("update_AgentRequest"))
+                            .and_then(serde_json::Value::as_array)
+                            .filter(|rows| !rows.is_empty())
+                        {
+                            for row in rows {
+                                crate::tools::workspace::release_terminal_writer_binding(txn, row)
+                                    .await?;
+                            }
+                            crate::triggers::engine::durable::publish_request_outcome(
+                                txn,
+                                &request.node_did,
+                                &request.request_id,
+                                RequestLifecycleState::Interrupted,
+                                "interrupted before claim",
+                                terminalized_at,
+                            )
+                            .await?;
                         }
-                        crate::triggers::engine::durable::publish_request_outcome(
-                            txn,
-                            &request.node_did,
-                            &request.request_id,
-                            RequestLifecycleState::Interrupted,
-                            "interrupted before claim",
-                            terminalized_at,
-                        )
-                        .await?;
-                    }
-                    Ok::<_, anyhow::Error>(response)
-                })
-            },
-        )
-        .await?;
+                        Ok::<_, anyhow::Error>(response)
+                    })
+                },
+            )
+            .await?;
         if !resp
             .data
             .as_ref()
@@ -523,42 +636,42 @@ impl RequestLifecycle {
             dead = RequestLifecycleState::Dead.as_str()
         );
         let request = &self.request;
-        let resp = crate::store::config_client::ConfigAccess::transact_local_idempotent(
-            &self.node,
-            None,
-            crate::store::config_client::IdempotentTransactionRetry::Standard,
-            "expire_stale",
-            |txn| {
-                let mutation = &mutation;
-                let terminalized_at = &terminalized_at;
-                Box::pin(async move {
-                    let response = txn.execute_local_response(mutation).await?;
-                    if let Some(rows) = response
-                        .data
-                        .as_ref()
-                        .and_then(|data| data.get("update_AgentRequest"))
-                        .and_then(serde_json::Value::as_array)
-                        .filter(|rows| !rows.is_empty())
-                    {
-                        for row in rows {
-                            crate::tools::workspace::release_terminal_writer_binding(txn, row)
-                                .await?;
+        let resp = self
+            .access()?
+            .transact_idempotent(
+                crate::store::config_client::IdempotentTransactionRetry::Standard,
+                "expire_stale",
+                |txn| {
+                    let mutation = &mutation;
+                    let terminalized_at = &terminalized_at;
+                    Box::pin(async move {
+                        let response = txn.execute_local_response(mutation).await?;
+                        if let Some(rows) = response
+                            .data
+                            .as_ref()
+                            .and_then(|data| data.get("update_AgentRequest"))
+                            .and_then(serde_json::Value::as_array)
+                            .filter(|rows| !rows.is_empty())
+                        {
+                            for row in rows {
+                                crate::tools::workspace::release_terminal_writer_binding(txn, row)
+                                    .await?;
+                            }
+                            crate::triggers::engine::durable::publish_request_outcome(
+                                txn,
+                                &request.node_did,
+                                &request.request_id,
+                                RequestLifecycleState::Dead,
+                                "Stale",
+                                terminalized_at,
+                            )
+                            .await?;
                         }
-                        crate::triggers::engine::durable::publish_request_outcome(
-                            txn,
-                            &request.node_did,
-                            &request.request_id,
-                            RequestLifecycleState::Dead,
-                            "Stale",
-                            terminalized_at,
-                        )
-                        .await?;
-                    }
-                    Ok::<_, anyhow::Error>(response)
-                })
-            },
-        )
-        .await?;
+                        Ok::<_, anyhow::Error>(response)
+                    })
+                },
+            )
+            .await?;
         if !resp
             .data
             .as_ref()
@@ -588,83 +701,24 @@ impl RequestLifecycle {
 
     pub async fn reject_admission(&mut self, reason: &str) -> Result<()> {
         self.ensure_state(&[LocalLifecycleState::Pending], "reject_admission")?;
-        let request_doc_id = escape_graphql_string(&self.request.doc_id);
-        let node_did = escape_graphql_string(&self.request.node_did);
-        let reason_text = reason.to_string();
-        let reason = escape_graphql_string(&reason_text);
-        let terminalized_at_value = chrono::Utc::now().to_rfc3339();
-        let terminalized_at = escape_graphql_string(&terminalized_at_value);
-        let request_mutation = format!(
-            r#"mutation($terminal_output: JSON) {{
-                update_AgentRequest(
-                    docID: "{request_doc_id}", filter: {{
-                        _docID: {{ _eq: "{request_doc_id}" }},
-                        node_did: {{ _eq: "{node_did}" }},
-                        lifecycle_state: {{ _eq: "{pending}" }}
-                    }},
-                    input: {{
-                        lifecycle_state: "{failed}",
-                        failure_reason: "{reason}",
-                        terminalized_at: "{terminalized_at}",
-                        terminal_redrive_attempts: 0,
-                        terminal_output: $terminal_output
-                    }}
-                ) {{ _docID request_id workspace_id workspace_owner_node_did }}
-            }}"#,
-            pending = RequestLifecycleState::Pending.as_str(),
-            failed = RequestLifecycleState::Failed.as_str()
-        );
-        let request_mutation = &request_mutation;
+        let reason_text = reason.to_owned();
+        let terminalized_at = chrono::Utc::now().to_rfc3339();
         let request = &self.request;
-        let outcome_reason = reason_text.as_str();
-        let outcome_time = terminalized_at_value.as_str();
-        let updated = crate::store::config_client::ConfigAccess::transact_local_idempotent(
-            &self.node,
-            None,
-            crate::store::config_client::IdempotentTransactionRetry::Standard,
-            "lifecycle.reject_admission",
-            move |txn| {
-                Box::pin(async move {
-                    let response = txn
-                        .execute_with_variables(
-                            request_mutation,
-                            &serde_json::json!({
-                                "terminal_output": gents_protocol::output::TerminalOutput::NoMessage
-                            }),
-                        )
-                        .await?;
-                    let updated = response
-                        .get("data")
-                        .and_then(|data| data.get("update_AgentRequest"))
-                        .is_some_and(response_has_documents);
-                    if updated {
-                        if let Some(rows) = response["data"]["update_AgentRequest"].as_array() {
-                            for row in rows {
-                                crate::tools::workspace::release_terminal_writer_binding(txn, row)
-                                    .await?;
-                            }
-                        }
-                        crate::triggers::engine::durable::publish_request_outcome(
-                            txn,
-                            &request.node_did,
-                            &request.request_id,
-                            RequestLifecycleState::Failed,
-                            outcome_reason,
-                            outcome_time,
-                        )
-                        .await?;
-                        super::materialize::project_refused_request_session_in_txn(
-                            txn,
-                            request,
-                            outcome_time,
-                        )
-                        .await?;
-                    }
-                    Ok::<_, anyhow::Error>(updated)
-                })
-            },
-        )
-        .await?;
+        let updated = self
+            .access()?
+            .transact_idempotent(
+                crate::store::config_client::IdempotentTransactionRetry::Standard,
+                "lifecycle.reject_admission",
+                |txn| {
+                    Box::pin(reject_pending_admission_in_txn(
+                        txn,
+                        request,
+                        reason,
+                        &terminalized_at,
+                    ))
+                },
+            )
+            .await?;
 
         if !updated {
             let request_view = self.request_view().await?;
@@ -710,9 +764,12 @@ impl RequestLifecycle {
         self.folded_selection = receipt.folded_selection;
         self.execution_lease = Some(RequestExecutionLease::new(
             receipt.execution_generation.clone(),
+            self.actor_did()?,
         ));
         self.renewal_task = Some(super::execution_renewal::RenewalTask::start(
             self.node.clone(),
+            self.actor_did()?,
+            self.agent_signer.clone(),
             self.request.doc_id.clone(),
             receipt.execution_generation,
             receipt.lease_ms,
@@ -823,19 +880,21 @@ impl RequestLifecycle {
         let is_background_completion = self.request.purpose
             == gents_protocol::request_admission::RequestPurpose::Normal
             && crate::request::lifecycle::is_background_completion_request(&self.request.input);
-        let Some((resp, snapshot, folded_selection)) = claim_request_with_projection(
-            &self.node,
-            &self.request.session_id,
+        let Some(claim_result) = claim_request_with_projection(
+            &self.access()?,
             is_background_completion,
             &self.request,
             &claimed_at,
             &self.fold_admitted,
+            self.client_claim_admission.as_ref(),
             &build_mutation,
         )
         .await?
         else {
             return Ok(None);
         };
+        let (resp, snapshot, folded_selection) =
+            claim_result.map_err(|()| ClaimAdmissionError::AuthorizationDenied)?;
         let background_completion_input_through_sequence = snapshot.through_sequence;
 
         // The mutation response is the only response that can carry the exact
@@ -893,7 +952,9 @@ mod tests {
     use super::*;
 
     const TEST_NODE_DID: &str = "did:test:claim-order-test";
-    const TEST_AGENT_ID: &str = "general";
+    fn test_agent_did() -> String {
+        crate::triggers::callback::test_agent_did()
+    }
     const TEST_BACKEND_ID: &str = "backend-order";
 
     async fn test_node() -> Arc<EmbeddedNode> {
@@ -963,18 +1024,19 @@ mod tests {
         for interrupted in [true, false] {
             let fixture = Fixture::new().await;
             let doc_id = escape_graphql_string(&fixture.request.doc_id);
-            crate::store::config_client::ConfigAccess::write_local(
-                &fixture.node,
-                "test.pending_workspace_terminal_lost_cas",
-                &format!(
-                    r#"mutation {{ update_AgentRequest(
+            fixture
+                .access
+                .write(
+                    "test.pending_workspace_terminal_lost_cas",
+                    &format!(
+                        r#"mutation {{ update_AgentRequest(
                     filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
                     input: {{ lifecycle_state: "claimed" }}
                 ) {{ _docID }} }}"#
-                ),
-            )
-            .await
-            .unwrap();
+                    ),
+                )
+                .await
+                .unwrap();
             let before = fixture.observe().await;
             let mut lifecycle = fixture.lifecycle();
             let result = if interrupted {
@@ -1029,13 +1091,14 @@ mod tests {
             gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(input).unwrap())
                 .unwrap();
         let escaped_execution_origin = escape_graphql_string(execution_origin);
+        let escaped_agent_did = escape_graphql_string(&test_agent_did());
         let mutation = format!(
             r#"mutation {{
                 create_AgentRequest(input: {{
                     request_id: "{escaped_request_id}",
                     purpose: "normal",
                     node_did: "{escaped_owner}",
-                    agent_id: "{TEST_AGENT_ID}",
+                    agent_did: "{escaped_agent_did}",
                     session_id: "{escaped_session_id}",
                     retry_parent_request: "",
                     retry_root_request: "{escaped_request_id}",
@@ -1103,7 +1166,7 @@ mod tests {
         let doc_id = request.doc_id.clone();
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            TEST_AGENT_ID,
+            &test_agent_did(),
             TEST_NODE_DID,
             request,
             60,
@@ -1143,6 +1206,12 @@ mod tests {
         );
         RequestLifecycle::begin_owned_execution_durable_with_clock(
             &node,
+            identity::Did::new(
+                node.node_identity_did()
+                    .expect("fixture node identity")
+                    .to_owned(),
+            )
+            .unwrap(),
             &doc_id,
             "lean-generation-7",
             || now,
@@ -1151,6 +1220,12 @@ mod tests {
         .unwrap();
         RequestLifecycle::begin_owned_execution_durable_with_clock(
             &node,
+            identity::Did::new(
+                node.node_identity_did()
+                    .expect("fixture node identity")
+                    .to_owned(),
+            )
+            .unwrap(),
             &doc_id,
             "lean-generation-7",
             || now + chrono::Duration::seconds(1),
@@ -1164,6 +1239,12 @@ mod tests {
         assert!(
             RequestLifecycle::begin_owned_execution_durable_with_clock(
                 &node,
+                identity::Did::new(
+                    node.node_identity_did()
+                        .expect("fixture node identity")
+                        .to_owned()
+                )
+                .unwrap(),
                 &doc_id,
                 "lean-generation-7",
                 || now + chrono::Duration::seconds(6),
@@ -1410,7 +1491,7 @@ mod tests {
         }).await.unwrap();
                 let mut first_lifecycle = RequestLifecycle::new_with_execution_binding(
                     node.clone(),
-                    TEST_AGENT_ID,
+                    &test_agent_did(),
                     TEST_NODE_DID,
                     first,
                     60,
@@ -1419,7 +1500,7 @@ mod tests {
                 );
                 let mut second_lifecycle = RequestLifecycle::new_with_execution_binding(
                     node.clone(),
-                    TEST_AGENT_ID,
+                    &test_agent_did(),
                     TEST_NODE_DID,
                     second,
                     60,
@@ -1510,13 +1591,18 @@ mod tests {
                     if stopped { 100 } else { 0 }
                 );
                 assert_eq!(
-                    crate::goal::refresh_goal_usage(&node, &assigned)
-                        .await
-                        .unwrap(),
+                    crate::goal::refresh_goal_usage(
+                        &node,
+                        &identity::Did::new(test_agent_did()).unwrap(),
+                        &assigned
+                    )
+                    .await
+                    .unwrap(),
                     if stopped { 0 } else { 100 }
                 );
                 assert!(!crate::goal::update_goal_fields_if_status(
                     &node,
+                    &identity::Did::new(test_agent_did()).unwrap(),
                     &original,
                     crate::goal::GoalStatus::Active,
                     "objective: \"stale controller\""
@@ -1577,7 +1663,7 @@ mod tests {
         let second_doc_id = second.doc_id.clone();
         let mut first_lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            TEST_AGENT_ID,
+            &test_agent_did(),
             TEST_NODE_DID,
             first,
             60,
@@ -1586,7 +1672,7 @@ mod tests {
         );
         let mut second_lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            TEST_AGENT_ID,
+            &test_agent_did(),
             TEST_NODE_DID,
             second,
             60,
@@ -1664,7 +1750,7 @@ mod tests {
 
         let mut first_lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            TEST_AGENT_ID,
+            &test_agent_did(),
             TEST_NODE_DID,
             first,
             60,
@@ -1673,7 +1759,7 @@ mod tests {
         );
         let mut second_lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            TEST_AGENT_ID,
+            &test_agent_did(),
             TEST_NODE_DID,
             second,
             60,
@@ -1728,11 +1814,11 @@ mod tests {
         };
         use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestQueue};
         let access = crate::ConfigAccess::local(node.clone());
-        crate::session::ensure_session_with_agent_id_and_requester_did(
+        crate::session::ensure_session_with_agent_did_and_requester_did(
             node,
             session,
             identity.did(),
-            TEST_AGENT_ID,
+            &test_agent_did(),
             Some(identity.did()),
         )
         .await
@@ -1742,7 +1828,7 @@ mod tests {
             "snapshot-parent",
             identity.did(),
             identity.did(),
-            TEST_AGENT_ID,
+            &test_agent_did(),
             session,
             "Prior work",
             "interactive",
@@ -1766,7 +1852,7 @@ mod tests {
             "snapshot-wake",
             identity.did(),
             identity.did(),
-            TEST_AGENT_ID,
+            &test_agent_did(),
             session,
             "Review background results",
             "scheduled",
@@ -1849,7 +1935,7 @@ mod tests {
         let request_doc_id = request.doc_id.clone();
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            TEST_AGENT_ID,
+            &test_agent_did(),
             identity.did(),
             request,
             60,
@@ -1945,7 +2031,10 @@ mod tests {
             None,
         )
         .await;
-        let access = crate::store::config_client::ConfigAccess::local(node.clone());
+        let access = crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(identity.did().to_owned()).unwrap(),
+        );
         let response = access
             .execute(&format!(
                 "{{ AgentMessage(filter: {{ message_key: {{ _eq: \"{}\" }} }}) {{ {} }} }}",
@@ -1971,9 +2060,10 @@ mod tests {
                 Box::pin(async move {
                     txn.execute_with_variables(
                         crate::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
-                        &crate::session::canonical_rows::transcript_message_create_variables(
-                            &imported,
-                        )?,
+                        &crate::session::canonical_rows::fork_message_bound_variables(
+                            txn, &imported,
+                        )
+                        .await?,
                     )
                     .await
                     .map_err(anyhow::Error::from)
@@ -1984,7 +2074,7 @@ mod tests {
         let doc_id = request.doc_id.clone();
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            TEST_AGENT_ID,
+            &test_agent_did(),
             identity.did(),
             request,
             60,
@@ -2021,7 +2111,7 @@ mod tests {
             Some(2)
         );
         drop(lifecycle);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
     #[tokio::test]
     async fn claim_pins_configured_budget_and_reclaim_preserves_unlimited_or_zero() {
@@ -2043,7 +2133,7 @@ mod tests {
             request.max_total_tokens = Some(999);
             let mut first = RequestLifecycle::new_with_execution_binding(
                 node.clone(),
-                TEST_AGENT_ID,
+                &test_agent_did(),
                 TEST_NODE_DID,
                 request,
                 3600,
@@ -2078,7 +2168,7 @@ mod tests {
             resumed_request.max_total_tokens = expected;
             let mut resumed = RequestLifecycle::new_with_execution_binding(
                 node.clone(),
-                TEST_AGENT_ID,
+                &test_agent_did(),
                 TEST_NODE_DID,
                 resumed_request,
                 3600,

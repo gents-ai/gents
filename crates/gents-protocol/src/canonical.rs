@@ -24,6 +24,12 @@ pub enum CanonicalError {
 
 type Result<T, E = CanonicalError> = std::result::Result<T, E>;
 
+/// These namespaces were minted by the retired graph publisher and are not
+/// authored identifiers; persisted documents carrying them remain inert.
+pub fn is_retired_reserved_id(id: &str) -> bool {
+    id.starts_with("graph-trigger-") || id.starts_with("pkg-")
+}
+
 pub fn require_identifier(name: &str, value: &str) -> Result<()> {
     if value.is_empty() {
         return Err(CanonicalError::Empty {

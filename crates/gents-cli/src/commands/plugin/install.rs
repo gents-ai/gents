@@ -25,20 +25,67 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         "{namespace}/{name} carries no plugins; install the whole pack with gents pack install"
     );
     let notification_scope = crate::commands::pack::plugin_notification_scope(&home).await?;
+    if let Some((gents::ConfigAccess::Graphql(endpoint), owner)) = &notification_scope {
+        use futures_util::StreamExt;
+        let source = crate::commands::pack::PackSource::received(pack.archive);
+        let dependencies =
+            futures_util::stream::iter(source.manifest().metadata.dependencies.iter())
+                .map(|coordinate| {
+                    crate::commands::pack::resolve_pack_source(
+                        coordinate,
+                        args.registry.as_deref(),
+                        &home,
+                    )
+                })
+                .buffered(4)
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>>>()?;
+        let pack_args = crate::cli::PackInstallArgs {
+            package: args.name.clone(),
+            inference_slots: Vec::new(),
+            preview: false,
+            scope: crate::cli::ScopeArgs {
+                home: Some(home.clone()),
+                graphql: None,
+                node_did: None,
+            },
+            output: crate::cli::output_format::OutputFormat::Json,
+            force_rebind_concrete_did: false,
+            registry: args.registry.clone(),
+            drift: Default::default(),
+            grant_authority: args.grant_authority,
+            wire: Vec::new(),
+            expect_digest: None,
+            explicit: true,
+        };
+        let result = crate::http::pack_install_client::install_remote(
+            endpoint,
+            owner,
+            &source,
+            &dependencies,
+            &pack_args,
+            true,
+        )
+        .await?;
+        return crate::print_json(&result);
+    }
     let notify_scope = notification_scope.clone();
     let notify_home = home.clone();
     let result = gents::pack::plugin_lifecycle::install_plugin(
         &home,
         &pack.archive,
         args.grant_authority,
-        move |identity| async move {
+        move |identity, changes| async move {
             if let Some((access, owner)) = notify_scope {
-                gents::pack::record_plugin_store_change(
+                gents::pack::record_staged_plugin_store_change(
                     &access,
                     &owner,
                     &notify_home,
                     &identity.coordinate,
                     Some(&identity),
+                    &changes,
                 )
                 .await
             } else {
@@ -49,7 +96,9 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
     .await;
     if let Some((access, _)) = &notification_scope {
         if let Some(node) = access.local_node() {
-            node.shutdown().await;
+            if let Err(error) = node.shutdown().await {
+                tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+            }
         }
     }
     let (record, installed) = result?;
@@ -150,7 +199,12 @@ mod tests {
                 .await
                 .unwrap();
             let records = access.execute("{ PackInstallation { coordinate } }").await;
-            access.local_node().unwrap().shutdown().await;
+            access
+                .local_node()
+                .unwrap()
+                .shutdown()
+                .await
+                .expect("node shutdown");
             records.unwrap()["data"]["PackInstallation"].clone()
         };
 

@@ -20,14 +20,14 @@ import { createChatActions } from "../src/hooks/chatActions";
 
 const initialDeployment = {
   nodeDid: "agent",
-  node: { nodeDid: "agent", defaultAgentId: "coding" },
+  node: { nodeDid: "agent", defaultAgentDid: "coding" },
   agents: [
-    { agentId: "coding", enabled: true, isDefault: true },
-    { agentId: "setup", enabled: true, isDefault: false },
+    { agentDid: "coding", enabled: true, isDefault: true },
+    { agentDid: "setup", enabled: true, isDefault: false },
   ],
   sessions: [
-    { sessionId: "first-setup", agentId: "setup" },
-    { sessionId: "first-coding", agentId: "coding" },
+    { sessionId: "first-setup", agentDid: "setup" },
+    { sessionId: "first-coding", agentDid: "coding" },
   ],
   mailboxItems: [],
 } as unknown as DeploymentView;
@@ -41,7 +41,7 @@ function useHarness(
     shellStores({
       selection: {
         nodeDid: initialNode,
-        agentId: "setup",
+        agentDid: "setup",
         sessionId: initialSession,
       },
     }),
@@ -74,7 +74,7 @@ function useHarness(
   return {
     nodeDid: current.nodeDid,
     selected: current.sessionId,
-    agentId: current.agentId,
+    agentDid: current.agentDid,
     store,
     actions,
     route,
@@ -108,18 +108,18 @@ describe("explicit session selection", () => {
     const reply = {
       itemId: "item-1",
       nodeDid: "agent",
-      agentId: "setup",
+      agentDid: "setup",
       sessionId: null,
     };
     act(() =>
       result.current.store.setState({ mailboxRoute: reply, composingFor: "agent" }),
     );
     rerender({ deployment: null });
-    expect(result.current.agentId).toBe("setup");
+    expect(result.current.agentDid).toBe("setup");
     expect(result.current.store.getState().mailboxRoute).toEqual(reply);
 
     rerender({ deployment: initialDeployment });
-    expect(result.current.agentId).toBe("setup");
+    expect(result.current.agentDid).toBe("setup");
     expect(result.current.store.getState().mailboxRoute).toEqual(reply);
   });
 
@@ -128,19 +128,19 @@ describe("explicit session selection", () => {
       ...initialDeployment,
       agents: initialDeployment.agents.map((agent) => ({
         ...agent,
-        isDefault: agent.agentId === "setup",
+        isDefault: agent.agentDid === "setup",
       })),
     };
     const { result } = renderHook(() => useHarness(deployment, "first-setup"));
     act(() => result.current.actions.startNewSession());
-    expect(result.current.agentId).toBe("coding");
+    expect(result.current.agentDid).toBe("coding");
     expect(result.current.selected).toBeNull();
   });
 
   it("uses the canonical enabled fallback and clears selection when none exists", () => {
     const deployment = {
       ...initialDeployment,
-      node: { ...initialDeployment.node, defaultAgentId: null },
+      node: { ...initialDeployment.node, defaultAgentDid: null },
       agents: [
         { ...initialDeployment.agents[0], isDefault: false, enabled: false },
         { ...initialDeployment.agents[1], isDefault: false },
@@ -150,15 +150,15 @@ describe("explicit session selection", () => {
       initialProps: { value: deployment },
     });
     act(() => result.current.actions.startNewSession());
-    expect(result.current.agentId).toBe("setup");
+    expect(result.current.agentDid).toBe("setup");
     rerender({ value: { ...deployment, agents: [] } });
     act(() => result.current.actions.startNewSession());
-    expect(result.current.agentId).toBeNull();
+    expect(result.current.agentDid).toBeNull();
   });
   it("resets session selection on explicit node navigation, not observation", () => {
     const store = createSelectionStore({
       nodeDid: "agent",
-      agentId: "setup",
+      agentDid: "setup",
       sessionId: "first-setup",
     });
     const stores = { ...shellStores(), selection: store };
@@ -193,7 +193,7 @@ describe("explicit session selection", () => {
     act(() => result.current.actions.startNewSession());
     expect(result.current.selected).toBeNull();
     act(() => result.current.route.selectAgent("setup"));
-    expect(result.current.agentId).toBe("setup");
+    expect(result.current.agentDid).toBe("setup");
     expect(result.current.selected).toBeNull();
     rerender({
       deployment: { ...initialDeployment, sessions: [...initialDeployment.sessions] },
@@ -205,7 +205,7 @@ describe("explicit session selection", () => {
     expect(result.current.sendChatMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: expect.any(String),
-        agentId: "setup",
+        agentDid: "setup",
         content: "new Setup chat",
       }),
     );

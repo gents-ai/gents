@@ -13,9 +13,9 @@ use tokio_util::sync::CancellationToken;
 
 use self::doubles::CancellingProposer;
 use self::fixtures::{
-    base_executor, behavior, budgets, context, definition, fail, policy, repeating_proposer,
-    script, tools, BASELINE_PROMPT, CANDIDATE_PROMPT, DEFINITION, FEEDBACK_DEFINITION,
-    SMALL_DEFINITION, TRIALS_PER_CASE, VALIDATION_CASES,
+    base_executor, budgets, context, definition, fail, policy, repeating_proposer, script, tools,
+    BASELINE_PROMPT, CANDIDATE_PROMPT, DEFINITION, FEEDBACK_DEFINITION, SMALL_DEFINITION,
+    TRIALS_PER_CASE, VALIDATION_CASES,
 };
 use self::journal::runs_started;
 use crate::documents::EvalSplit;
@@ -24,7 +24,7 @@ use crate::eval::optimization::driver::{run_job, JobOutcome, JobRequest};
 use crate::eval::optimization::job::{load_job, Budgets, JobState, JournalEntry};
 use crate::eval::optimization::proposer::Proposer;
 use crate::eval::optimization::target::JobTarget;
-use crate::eval::runner::freeze::tests::{Launching, OWNER};
+use crate::eval::runner::freeze::tests::Launching;
 use crate::eval::runner::{Capture, RunOptions, ScriptedExecutor, TrialExecutor};
 use crate::store::config_client::ConfigAccess;
 use crate::Collection;
@@ -33,6 +33,7 @@ pub(crate) struct Harness {
     launching: Launching,
     jobs_dir: PathBuf,
     pack: PathBuf,
+    binding: gents_protocol::agent_identity::AgentIdentityBinding,
 }
 
 impl Harness {
@@ -42,11 +43,18 @@ impl Harness {
             .install(vec![
                 (
                     Collection::EvalDefinition,
-                    definition(DEFINITION, "captured_rows_count", &VALIDATION_CASES, 1),
+                    definition(
+                        launching.owner(),
+                        DEFINITION,
+                        "captured_rows_count",
+                        &VALIDATION_CASES,
+                        1,
+                    ),
                 ),
                 (
                     Collection::EvalDefinition,
                     definition(
+                        launching.owner(),
                         SMALL_DEFINITION,
                         "captured_rows_count",
                         &VALIDATION_CASES[..5],
@@ -55,14 +63,58 @@ impl Harness {
                 ),
                 (
                     Collection::EvalDefinition,
-                    definition(FEEDBACK_DEFINITION, "feedback_check", &VALIDATION_CASES, 1),
+                    definition(
+                        launching.owner(),
+                        FEEDBACK_DEFINITION,
+                        "feedback_check",
+                        &VALIDATION_CASES,
+                        1,
+                    ),
                 ),
-                tools(),
-                context(BASELINE_PROMPT),
-                behavior("Monitor"),
+                tools(launching.owner()),
+                context(launching.owner(), BASELINE_PROMPT),
             ])
             .await;
         let pack = launching.pack("subject", "Off");
+        let binding = launching.provision_agent();
+        let authored = crate::eval::runner::freeze::pack::load_pack(
+            &crate::eval::runner::CellSource::Directory(pack.clone()),
+            launching.owner(),
+        )
+        .unwrap();
+        let mut config = authored.config;
+        let mut agent = authored.authored.agent("monitor").unwrap().clone();
+        let fields = agent.as_object_mut().unwrap();
+        fields.remove("agent_slot");
+        fields.insert("agent_did".into(), json!(binding.agent_did));
+        fields.insert("creation_nonce".into(), json!(binding.creation_nonce));
+        fields.insert("node_did".into(), json!(launching.owner()));
+        config.agents.push(serde_json::from_value(agent).unwrap());
+        let agent_bindings =
+            std::collections::BTreeMap::from([("monitor".into(), binding.clone())]);
+        let bound = crate::pack::BoundPackConfig {
+            installation_doc_id: None,
+            config,
+            agent_bindings: agent_bindings.clone(),
+        };
+        let inference_bindings =
+            std::collections::BTreeMap::from([("primary".into(), "local".into())]);
+        let config = bound
+            .bind_inference(&authored.manifest, &inference_bindings)
+            .unwrap();
+        let mut identity =
+            crate::pack::PackIdentity::new(&authored.manifest, authored.digest, Vec::new());
+        identity.agent_bindings = agent_bindings;
+        let owner_access = launching.owner_access().unwrap();
+        crate::pack::install_pack_documents(
+            &owner_access,
+            launching.owner(),
+            &identity,
+            &config,
+            crate::pack::DriftPolicy::Overwrite,
+        )
+        .await
+        .unwrap();
         let jobs_dir = launching
             .runs_dir()
             .parent()
@@ -72,15 +124,48 @@ impl Harness {
             launching,
             jobs_dir,
             pack,
+            binding,
         }
+    }
+
+    pub(crate) fn owner(&self) -> &str {
+        self.launching.owner()
+    }
+
+    pub(crate) fn evaluator_did(&self) -> String {
+        self.launching.evaluator_did()
     }
 
     pub(crate) fn access(&self) -> &ConfigAccess {
         &self.launching.access
     }
 
-    pub(crate) async fn install(&self, documents: Vec<(Collection, Value)>) {
-        self.launching.install(documents).await;
+    pub(crate) async fn install(&self, mut documents: Vec<(Collection, Value)>) {
+        for (collection, value) in &mut documents {
+            if *collection == Collection::Agent {
+                let fields = value.as_object_mut().unwrap();
+                assert_eq!(fields.remove("agent_slot"), Some(json!("monitor")));
+                fields.insert("agent_did".into(), json!(self.binding.agent_did));
+                fields.insert("creation_nonce".into(), json!(self.binding.creation_nonce));
+            }
+            if value.get("agent_did").and_then(Value::as_str) == Some("gents:agent-slot:monitor") {
+                value["agent_did"] = json!(self.binding.agent_did);
+            }
+        }
+        // Agent and other source-projected documents are refused for the
+        // evaluator's client access, so the Node owner writes them.
+        let owner_access = self.launching.owner_access().unwrap();
+        self.launching.install_as(&owner_access, documents).await;
+    }
+
+    pub(crate) async fn grant_node_permissions(
+        &self,
+        actor: &str,
+        permissions: &[crate::store::config_client::NodePermission],
+    ) -> anyhow::Result<()> {
+        self.launching
+            .grant_node_permissions(actor, permissions)
+            .await
     }
 
     pub(crate) async fn delete(&self, collection: Collection, id: &str) {
@@ -95,9 +180,9 @@ impl Harness {
     ) -> JobRequest {
         JobRequest {
             job_id: job_id.into(),
-            owner: OWNER.into(),
+            owner: self.launching.owner().into(),
             evaluator_did: self.launching.evaluator_did(),
-            agent_id: "monitor".into(),
+            agent_slot: "monitor".into(),
             target: JobTarget::Context,
             definition_id: definition_id.into(),
             inference_profile_id: "local".into(),
@@ -121,6 +206,39 @@ impl Harness {
                 trial_budget: None,
             },
         }
+    }
+}
+
+#[tokio::test]
+async fn fixture_installs_bound_pack_documents_with_authored_origin() {
+    let harness = Harness::new().await;
+    let response = harness
+        .access()
+        .execute(
+            "{ Agent { agent_did tags } AgentContext { context_id tags } Tools { tools_id tags } }",
+        )
+        .await
+        .unwrap();
+    for (collection, field, expected) in [
+        ("Agent", "agent_did", harness.binding.agent_did.as_str()),
+        ("AgentContext", "context_id", "monitor-context"),
+        ("Tools", "tools_id", "monitor-tools"),
+    ] {
+        let rows = response["data"][collection].as_array().unwrap();
+        let matching = rows
+            .iter()
+            .filter(|row| row[field] == expected)
+            .collect::<Vec<_>>();
+        let [row] = matching.as_slice() else {
+            panic!("fixture {collection} must be unique")
+        };
+        let tags = row["tags"]
+            .as_array()
+            .expect("pack origin tags must be present");
+        assert!(
+            tags.iter().any(|tag| tag == "gents:pack:monitor_fixture"),
+            "{collection} lost its pack origin"
+        );
     }
 }
 
@@ -172,7 +290,7 @@ pub(crate) async fn settle(
 }
 
 pub(crate) async fn journal(harness: &Harness, job_id: &str) -> Vec<JournalEntry> {
-    load_job(harness.access(), OWNER, job_id)
+    load_job(harness.access(), harness.owner(), job_id)
         .await
         .unwrap()
         .unwrap_or_else(|| panic!("no job {job_id}"))
@@ -231,8 +349,8 @@ async fn task_harness() -> (Harness, PathBuf) {
                 Collection::Task,
                 json!({
                     "task_id": "plan",
-                    "node_did": OWNER,
-                    "agent_id": "monitor",
+                    "node_did": harness.owner(),
+                    "agent_did": "gents:agent-slot:monitor",
                     "prompt_template": FIXTURE_TEMPLATE,
                 }),
             ),
@@ -240,7 +358,7 @@ async fn task_harness() -> (Harness, PathBuf) {
                 Collection::EventSource,
                 json!({
                     "event_source_id": "plan-source",
-                    "node_did": OWNER,
+                    "node_did": harness.owner(),
                     "source_collection": "PlanItem",
                 }),
             ),
@@ -248,7 +366,7 @@ async fn task_harness() -> (Harness, PathBuf) {
                 Collection::Trigger,
                 json!({
                     "trigger_id": "plan-trigger",
-                    "node_did": OWNER,
+                    "node_did": harness.owner(),
                     "task_id": "plan",
                     "source": {"kind": "event", "event_source_id": "plan-source"},
                 }),
@@ -261,7 +379,13 @@ async fn task_harness() -> (Harness, PathBuf) {
 }
 
 async fn install_task_definition(harness: &Harness, seeded_splits: &[&str]) {
-    let mut value = definition(DEFINITION, "captured_rows_count", &VALIDATION_CASES, 1);
+    let mut value = definition(
+        harness.owner(),
+        DEFINITION,
+        "captured_rows_count",
+        &VALIDATION_CASES,
+        1,
+    );
     for case in value["cases"].as_array_mut().unwrap() {
         if seeded_splits.contains(&case["split"].as_str().unwrap()) {
             let stage = &mut case["stages"][0];
@@ -329,7 +453,7 @@ async fn an_unexercised_task_target_is_refused_before_any_job_or_trial_is_create
         );
         assert!(executor.calls.lock().unwrap().is_empty());
         assert!(proposer.calls.lock().unwrap().is_empty());
-        assert!(load_job(harness.access(), OWNER, &request.job_id)
+        assert!(load_job(harness.access(), harness.owner(), &request.job_id)
             .await
             .unwrap()
             .is_none());
@@ -359,7 +483,13 @@ async fn exact_seed_failures_reject_candidates_before_validation() {
             continue;
         }
         let (harness, pack) = task_harness().await;
-        let mut value = definition(DEFINITION, "captured_rows_count", &VALIDATION_CASES, 1);
+        let mut value = definition(
+            harness.owner(),
+            DEFINITION,
+            "captured_rows_count",
+            &VALIDATION_CASES,
+            1,
+        );
         for case in value["cases"].as_array_mut().unwrap() {
             let stage = &mut case["stages"][0];
             stage["prompt"] = json!("");

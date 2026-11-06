@@ -33,6 +33,7 @@ pub mod store;
 
 #[cfg(test)]
 pub(crate) mod test_support {
+    pub(crate) mod acp_policies;
     pub(crate) mod read_observation;
 
     /// A test's `#[tokio::test]` runtime is its entry point; constructors take
@@ -52,7 +53,7 @@ pub(crate) mod test_support {
         let directory = tempfile::tempdir().unwrap();
         let identity =
             crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
-        defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did())
+        defra_node::Node::builder().with_node_identity_did(identity.did())
     }
 
     const CAPTURED_EVENT_TARGETS: &[&str] = &[
@@ -152,39 +153,262 @@ pub(crate) mod test_support {
         }
     }
 
-    pub(crate) async fn install_test_agent(
-        node: &std::sync::Arc<defra_node::EmbeddedNode>,
-        owner: &str,
-        agent_id: &str,
+    pub(crate) fn agent_did(node: &defra_node::Node) -> String {
+        let root = crate::store::identity::RegisteredIdentity::from_registered_did(
+            node.node_identity_did()
+                .expect("fixture node has an identity"),
+            None,
+        )
+        .unwrap();
+        crate::store::identity::provision_agent_identity(&root)
+            .unwrap()
+            .agent_did
+    }
+
+    pub(crate) async fn bootstrap_signed_test_node(
+        access: &crate::store::config_client::ConfigAccess,
+        node_did: &str,
     ) {
-        use crate::store::config_client::{
-            ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-        };
+        use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+
+        let node_input = serde_json::json!({"node_did": node_did});
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: crate::Collection::Node,
+            add: node_input.clone(),
+            update: node_input,
+        }])
+        .unwrap();
+        access
+            .transact_write("test.signed_node", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                })
+            })
+            .await
+            .unwrap();
+    }
+
+    pub(crate) async fn signed_test_node(
+        name: &str,
+    ) -> (
+        crate::support::TestDb,
+        crate::KeyIdentity,
+        crate::store::config_client::ConfigAccess,
+        gents_protocol::agent_identity::AgentIdentityBinding,
+    ) {
+        let db = crate::support::test_db(name).await;
+        signed_test_node_from_db(db, name).await
+    }
+
+    pub(crate) async fn signed_test_node_without_agent(
+        name: &str,
+    ) -> (
+        crate::support::TestDb,
+        crate::KeyIdentity,
+        crate::store::config_client::ConfigAccess,
+    ) {
+        let db = crate::support::test_db(name).await;
+        signed_test_node_without_agent_from_db(db, name).await
+    }
+
+    pub(crate) async fn signed_test_node_without_agent_from_db(
+        db: crate::support::TestDb,
+        name: &str,
+    ) -> (
+        crate::support::TestDb,
+        crate::KeyIdentity,
+        crate::store::config_client::ConfigAccess,
+    ) {
+        use crate::store::config_client::ConfigAccess;
+        use crate::store::identity::{GrantSet, NodeIdentity};
+
+        let fixture_name = name.to_owned();
+        let user = tokio::task::spawn_blocking(move || {
+            crate::support::fixtures::test_identity(&fixture_name)
+        })
+        .await
+        .unwrap();
+        let runtime = db.node_identity.as_ref();
+        assert_ne!(runtime.did(), user.did());
+        let admin =
+            ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did()).unwrap());
+        let user_did = identity::Did::new(user.did()).unwrap();
+        GrantSet::OperatorUser
+            .grant(&admin, &user_did)
+            .await
+            .unwrap();
+        let access = db.client_access(&user);
+        bootstrap_signed_test_node(&access, runtime.did()).await;
+        (db, user, access)
+    }
+
+    pub(crate) async fn signed_test_node_from_db(
+        db: crate::support::TestDb,
+        name: &str,
+    ) -> (
+        crate::support::TestDb,
+        crate::KeyIdentity,
+        crate::store::config_client::ConfigAccess,
+        gents_protocol::agent_identity::AgentIdentityBinding,
+    ) {
+        use crate::store::identity::NodeIdentity;
+
+        let (db, user, access) = signed_test_node_without_agent_from_db(db, name).await;
+        let runtime = db.node_identity.as_ref();
+        let user_did = identity::Did::new(user.did()).unwrap();
+        let binding = crate::store::identity::provision_agent_identity_authorized(
+            &db.node, runtime, &user_did,
+        )
+        .await
+        .unwrap();
+        install_test_agent_binding_with_access(
+            runtime.did(),
+            "Default fixture agent",
+            &binding,
+            &access,
+        )
+        .await;
+        set_test_default_agent_as(&access, runtime.did(), &binding.agent_did).await;
+        (db, user, access, binding)
+    }
+
+    pub(crate) async fn set_test_default_agent_as(
+        access: &crate::store::config_client::ConfigAccess,
+        runtime_did: &str,
+        agent_did: &str,
+    ) {
+        access
+            .transact_write("test.set_default_agent", |txn| {
+                Box::pin(async move {
+                    let (_, mut node) =
+                        crate::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            crate::Collection::Node,
+                            runtime_did,
+                            runtime_did,
+                        )
+                        .await?
+                        .expect("fixture user must own one Node for its runtime");
+                    node["default_agent_did"] = serde_json::json!(agent_did);
+                    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+                        crate::store::config_client::DesiredStateApplyDocument {
+                            collection: crate::Collection::Node,
+                            add: node.clone(),
+                            update: node,
+                        },
+                    ])?;
+                    crate::store::config_client::apply_desired_state_plan(txn, &plan).await
+                })
+            })
+            .await
+            .unwrap();
+    }
+
+    pub(crate) async fn ensure_test_default_agent(
+        node: &std::sync::Arc<defra_node::Node>,
+        owner: &str,
+    ) -> gents_protocol::agent_identity::AgentIdentityBinding {
+        let principal = crate::ensure_node(node, owner).await.unwrap();
+        if let Some(did) = principal.default_agent_did {
+            let agent = crate::load_agent(node, &did)
+                .await
+                .unwrap()
+                .expect("fixture default agent exists");
+            return gents_protocol::agent_identity::AgentIdentityBinding {
+                agent_did: agent.agent_did,
+                creation_nonce: agent.creation_nonce,
+            };
+        }
+        let binding = install_test_agent(node, owner, "Default fixture agent").await;
+        crate::upsert_node(node, owner, None, Some(&binding.agent_did), true, None)
+            .await
+            .unwrap();
+        binding
+    }
+
+    pub(crate) async fn install_test_agent(
+        node: &std::sync::Arc<defra_node::Node>,
+        owner: &str,
+        display_name: &str,
+    ) -> gents_protocol::agent_identity::AgentIdentityBinding {
+        let root = crate::store::identity::RegisteredIdentity::from_registered_did(
+            node.node_identity_did()
+                .expect("fixture node has an identity"),
+            None,
+        )
+        .unwrap();
+        let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
+        install_test_agent_binding(node, owner, display_name, &binding).await;
+        binding
+    }
+
+    pub(crate) async fn install_test_agent_binding(
+        node: &std::sync::Arc<defra_node::Node>,
+        owner: &str,
+        display_name: &str,
+        binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    ) {
+        crate::ensure_node(node, owner).await.unwrap();
+        let actor = node
+            .node_identity_did()
+            .expect("fixture node has an identity");
+        let access = crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(actor).unwrap(),
+        );
+        install_test_agent_binding_with_access(owner, display_name, binding, &access).await;
+    }
+
+    pub(crate) fn test_agent_documents(
+        owner: &str,
+        display_name: &str,
+        binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    ) -> Vec<(crate::Collection, serde_json::Value)> {
         use crate::Collection;
         use serde_json::json;
-        crate::ensure_node(node, owner).await.unwrap();
-        let context = format!("{agent_id}:context");
-        let tools = format!("{agent_id}:tools");
-        let profile = format!("{agent_id}:inference");
-        let backend = format!("{agent_id}:backend");
-        let documents = [
-            (Collection::Agent, json!({"node_did":owner,"agent_id":agent_id,"context_id":context,"inference_profile_id":profile})),
+        let agent_did = &binding.agent_did;
+        let context = format!("{agent_did}:context");
+        let tools = format!("{agent_did}:tools");
+        let profile = format!("{agent_did}:inference");
+        let backend = format!("{agent_did}:backend");
+        vec![
+            (Collection::Agent, json!({"node_did":owner,"agent_did":agent_did,"creation_nonce":binding.creation_nonce,"display_name":display_name,"context_id":context,"inference_profile_id":profile})),
             (Collection::AgentContext, json!({"node_did":owner,"context_id":context,"tools_id":tools})),
             (Collection::Tools, json!({"node_did":owner,"tools_id":tools})),
             (Collection::InferenceProfile, json!({"node_did":owner,"profile_id":profile,"backend_id":backend,"model_name":"test-model"})),
             (Collection::InferenceBackend, json!({"node_did":owner,"backend_id":backend,"name":"Test inference","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
-        ].into_iter().map(|(collection,value)| DesiredStateApplyDocument {collection,add:value.clone(),update:value}).collect();
-        let plan = DesiredStateApplyPlan::new(documents).unwrap();
-        ConfigAccess::transact_local_write(node, None, "test.install_agent", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+        ]
+    }
+
+    pub(crate) async fn install_test_agent_binding_with_access(
+        owner: &str,
+        display_name: &str,
+        binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+        access: &crate::store::config_client::ConfigAccess,
+    ) {
+        use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        let documents = test_agent_documents(owner, display_name, binding)
+            .into_iter()
+            .map(|(collection, value)| DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
             })
-        })
-        .await
-        .unwrap();
-        crate::inference::backends::registry::set_backend_probe_status(
-            node, owner, &backend, "healthy",
+            .collect();
+        let plan = DesiredStateApplyPlan::new(documents).unwrap();
+        access
+            .transact_write("test.install_agent", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                })
+            })
+            .await
+            .unwrap();
+        let backend = format!("{}:backend", binding.agent_did);
+        crate::inference::backends::registry::set_backend_probe_status_as(
+            access, owner, &backend, "healthy",
         )
         .await
         .unwrap();
@@ -285,14 +509,14 @@ pub use documents::template::{
 #[cfg(test)]
 pub(crate) use documents::upsert_node;
 pub use documents::{
-    default_agent_id_for_node, default_inference_profile_id_for_agent,
-    default_inference_profile_id_for_node, deserialize_dual_shape, ensure_node,
-    is_reserved_builtin_tool_name, list_agents, list_datastore_tool_surfaces,
-    list_inference_profile_records, load_agent, load_inference_profile, load_node,
-    merge_datastore_tool_surfaces, upsert_agent, upsert_inference_profile, Agent as AgentDocument,
-    AgentTargetDocument, ConfigReferences, DatastoreToolSurfaceDocument, InferenceProfile,
-    MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl, Tools, WriteToolDecl, WriteToolField,
-    WriteToolFieldFill, WriteToolOutputObligation, WriteToolOutputObligationScope,
+    default_inference_profile_id_for_agent, default_inference_profile_id_for_node,
+    deserialize_dual_shape, ensure_node, is_reserved_builtin_tool_name, list_agents,
+    list_datastore_tool_surfaces, list_inference_profile_records, load_agent,
+    load_inference_profile, load_node, merge_datastore_tool_surfaces, upsert_agent,
+    upsert_inference_profile, Agent as AgentDocument, AgentTargetDocument, ConfigReferences,
+    DatastoreToolSurfaceDocument, InferenceProfile, MergedSurfaceTools, QueryToolDecl,
+    SurfaceToolDecl, Tools, WriteToolDecl, WriteToolField, WriteToolFieldFill,
+    WriteToolOutputObligation, WriteToolOutputObligationScope,
 };
 pub use gents_protocol::client_protocol;
 pub use inference::admission::call_state_holds_backend_slot;
@@ -350,9 +574,10 @@ pub use request::lifecycle::{
     build_signed_request, enqueue_local_steering_request, next_request_hop,
     request_hop_within_bound, task_session_title, write_manual_agent_request,
     write_manual_agent_request_with_conversation_title, BackgroundWakeRedriveReport,
-    EnqueuedAgentRequest, ParentLink, RecoveryReport, RequestHopCause, RequestIdentity,
-    RequestLifecycle, RequestSigner, RequestSpec, RetryLink, TerminalRedriveReport,
-    TerminalRepairReport, TERMINAL_REDRIVE_BATCH_LIMIT, TERMINAL_REDRIVE_CAP,
+    EnqueuedAgentRequest, ParentLink, RecoveryReport, RequestHopCapObservation, RequestHopCause,
+    RequestIdentity, RequestLifecycle, RequestSigner, RequestSpec, RetryLink,
+    TerminalRedriveReport, TerminalRepairReport, TERMINAL_REDRIVE_BATCH_LIMIT,
+    TERMINAL_REDRIVE_CAP,
 };
 pub use request::streaming::{DefraStreamWriter, StreamWriter, MAX_LIVE_REASONING_BYTES};
 pub use request::watcher::{AgentRequest, DefraWatcher, Watcher};
@@ -360,7 +585,9 @@ pub use runtime::agent::{
     AgentBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
     ProcessLifecycleState, RuntimeSnapshotObserver,
 };
-pub use runtime::oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};
+pub use runtime::oneshot::{
+    run_openai_oneshot_admitted, run_openai_oneshot_with_tools_admitted, OneshotRunResult,
+};
 pub use runtime::p2p::observability::{
     JsonP2pSyncStatusAdapter, P2pInboundClassSnapshot, P2pPeerBacklogSnapshot,
     P2pPeerFetchSnapshot, P2pPeerSummarySnapshot, P2pPendingPeerOccupancySnapshot,
@@ -368,8 +595,8 @@ pub use runtime::p2p::observability::{
     P2pSyncStatusAdapter, P2pSyncStatusSnapshot,
 };
 pub use runtime::periodic_recovery::{
-    periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps, PeriodicRecoverySweepMetadata,
-    PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,
+    periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps_with_identities,
+    PeriodicRecoverySweepMetadata, PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,
 };
 pub use runtime::snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, DispatcherMap, EventTriggerFireMode,
@@ -385,8 +612,6 @@ pub use store::identity::{
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
     KeyIdentity, NodeIdentity, RegisteredIdentity, RuntimeNode, ServiceAccount,
 };
-#[cfg(feature = "agent-memory")]
-pub use store::schema::NODE_MEMORY_SCHEMA;
 pub use store::schema::{
     ensure_runtime_schemas, AGENT_MESSAGE_SCHEMA, AGENT_OUTPUT_SEGMENT_SCHEMA,
     AGENT_REQUEST_SCHEMA, AGENT_SCHEMA, AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA,
@@ -408,8 +633,9 @@ pub use tools::call::hook::{
 };
 pub use tools::exec::status::{active_native_executors, NativeExecutorStatus};
 pub use tools::mcp::health::{
-    run_health_check_cycle, spawn_health_checker, HealthCheckerOptions, HealthPersistenceContext,
-    HealthStatus, MCPServiceHealthSnapshot, McpHealthCheckService, ServiceHealth, ServiceHealthMap,
+    run_health_check_cycle, run_health_check_cycle_for_actor, spawn_health_checker,
+    HealthCheckerOptions, HealthPersistenceContext, HealthStatus, MCPServiceHealthSnapshot,
+    McpHealthCheckService, ServiceHealth, ServiceHealthMap,
 };
 pub use tools::mcp::meta::build_meta_tools;
 pub use tools::mcp::pool::McpPool;
@@ -436,9 +662,13 @@ pub use turn::prompt::{LayeredPromptBuilder, PromptBuilder};
 #[doc(hidden)]
 pub mod __test_internals {
     pub use crate::request::lifecycle::activate_workspace_bound_request;
+    pub use crate::request::lifecycle::materialize::activate_workspace_bound_request_with_identity;
     pub use crate::request::lifecycle::materialize::supersede_trigger_requests_in_txn;
     pub use crate::request::lifecycle::materialize::EnqueuedAgentRequest;
-    pub use crate::request::lifecycle::queue::{reconcile_coalesced_pending_request, QueueSource};
+    pub use crate::request::lifecycle::queue::{
+        reconcile_coalesced_pending_request, reconcile_coalesced_pending_request_for_with_access,
+        QueueSource,
+    };
     pub use crate::runtime::agent::principal_assembly::AgentBuildError;
     pub use crate::store::config_client::TXN_TRACING_TARGET;
 }

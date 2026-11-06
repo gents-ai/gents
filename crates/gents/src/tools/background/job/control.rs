@@ -12,7 +12,8 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 
 use super::admit::{
-    resume_pin, resume_valid, root_call_of, HostFacts, Refusal, RootCall, StepChild, StepRow,
+    resume_pin, resume_valid, root_call_of, HostFacts, PolicyDenialDetail, Refusal, RootCall,
+    StepChild, StepRow,
 };
 use super::driver::{read_step_row_in_txn, settle_plugin_job_in_txn, Settlement};
 use super::input::chain_of;
@@ -29,6 +30,7 @@ pub enum KillCause {
     Pause,
     Deadline,
     FailClosed(Refusal),
+    FailClosedWithDetail(Refusal, PolicyDenialDetail),
 }
 
 impl KillCause {
@@ -39,7 +41,7 @@ impl KillCause {
             Self::Stop => JobState::Cancelled,
             Self::Pause => JobState::Completed,
             Self::Deadline => JobState::TimedOut,
-            Self::FailClosed(_) => JobState::Failed,
+            Self::FailClosed(_) | Self::FailClosedWithDetail(_, _) => JobState::Failed,
         }
     }
 
@@ -49,6 +51,9 @@ impl KillCause {
             Self::Pause => Settlement::Control(JobControlKind::Pause),
             Self::Deadline => Settlement::Refused(Refusal::TimedOut),
             Self::FailClosed(refusal) => Settlement::Refused(refusal),
+            Self::FailClosedWithDetail(refusal, detail) => {
+                Settlement::RefusedWithDetail(refusal, detail)
+            }
         }
     }
 }
@@ -262,6 +267,14 @@ pub(super) async fn kill_as(
     cause: KillCause,
     settlement: Settlement,
 ) -> Result<KillOutcome> {
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(lifecycle.actor().as_str()),
+        "job kill actor mismatch"
+    );
+    let signer = access
+        .managed_agent_signer()
+        .context("job kill requires a managed Agent signer")?;
+    lifecycle.bind_agent_signer(Some(signer))?;
     let lifecycle_ref: &ToolCallLifecycle = lifecycle;
     let (outcome, terminal) = access
         .transact_write("plugin_job.kill", |txn| {
@@ -380,13 +393,19 @@ pub async fn control(
             message: "job control is local-only in v1; stop or pause the job from its session (`workflow stop|pause <handle>`), the desktop, Grok or Codex".into(),
         });
     };
-    let lifecycle = ToolCallLifecycle::load(node.node().clone(), &scope.session_id, tool_call_id)
-        .await
-        .map_err(unavailable)?
-        .ok_or(JobReadError::NotYetObservable)?;
+    let actor = access
+        .actor_did()
+        .and_then(|did| identity::Did::new(&did).ok())
+        .ok_or(JobReadError::NotAuthorized)?;
+    let lifecycle =
+        ToolCallLifecycle::load_as(node.node().clone(), actor, &scope.session_id, tool_call_id)
+            .await
+            .map_err(unavailable)?
+            .ok_or(JobReadError::NotYetObservable)?;
     control_lifecycle(access, scope, lifecycle, action).await
 }
 
+#[cfg(test)]
 pub fn operator_control_authorized(
     executing: &str,
     requested: &str,
@@ -394,52 +413,6 @@ pub fn operator_control_authorized(
     actor: Option<&str>,
 ) -> bool {
     actor == Some(executing) && requested == executing && owner == executing
-}
-
-/// `actor` must be the DID authenticated by DefraDB at the transport boundary.
-pub async fn operator_control(
-    access: &ConfigAccess,
-    actor: Option<&str>,
-    request: &gents_protocol::job::OperatorJobControlRequest,
-) -> Result<JobControlOutcome, JobReadError> {
-    let executing_node_did = access
-        .local_node()
-        .and_then(|node| node.node_identity_did())
-        .ok_or(JobReadError::NotAuthorized)?;
-    if !operator_control_authorized(
-        executing_node_did,
-        &request.node_did,
-        executing_node_did,
-        actor,
-    ) {
-        return Err(JobReadError::NotAuthorized);
-    }
-    let view = super::view::load_job_view(
-        access,
-        None,
-        super::view::JobKey::RowDocId(request.tool_call_doc_id.clone()),
-    )
-    .await?;
-    if !operator_control_authorized(
-        executing_node_did,
-        &request.node_did,
-        &view.scope.node_did,
-        actor,
-    ) {
-        return Err(JobReadError::NotAuthorized);
-    }
-    control_by_doc_id(
-        access,
-        &ProcessControlScope {
-            request_id: String::new(),
-            session_id: view.scope.session_id,
-            node_did: view.scope.node_did,
-            requester_did: view.scope.requester_did,
-        },
-        &request.tool_call_doc_id,
-        request.action,
-    )
-    .await
 }
 
 pub async fn control_by_doc_id(
@@ -456,8 +429,13 @@ pub async fn control_by_doc_id(
             "job control requires the local runtime"
         )));
     };
-    let lifecycle = ToolCallLifecycle::load_by_doc_id(
+    let actor = access
+        .actor_did()
+        .and_then(|did| identity::Did::new(&did).ok())
+        .ok_or(JobReadError::NotAuthorized)?;
+    let lifecycle = ToolCallLifecycle::load_by_doc_id_as(
         node.node().clone(),
+        actor,
         tool_call_doc_id,
         &scope.node_did,
         &scope.session_id,
@@ -469,7 +447,7 @@ pub async fn control_by_doc_id(
     control_lifecycle(access, scope, lifecycle, action).await
 }
 
-async fn control_lifecycle(
+pub(crate) async fn control_lifecycle(
     access: &ConfigAccess,
     scope: &ProcessControlScope,
     mut lifecycle: ToolCallLifecycle,
@@ -488,6 +466,15 @@ async fn control_lifecycle(
     if lifecycle.kind() != ToolRowKind::PluginJob {
         return Err(JobReadError::NotAJob);
     }
+    if access.actor_did().as_deref() != Some(lifecycle.actor().as_str()) {
+        return Err(JobReadError::NotAuthorized);
+    }
+    let signer = access
+        .managed_agent_signer()
+        .ok_or(JobReadError::NotAuthorized)?;
+    lifecycle
+        .bind_agent_signer(Some(signer))
+        .map_err(unavailable)?;
     let cause = match action {
         JobControlKind::Stop => KillCause::Stop,
         JobControlKind::Pause => KillCause::Pause,
@@ -694,6 +681,7 @@ mod tests {
     };
     use crate::tools::call::lifecycle::AwaitMode;
     use serde_json::{json, Value};
+    use std::sync::Arc;
 
     const ROOT: &str = "root";
 
@@ -753,7 +741,7 @@ mod tests {
         let doc_id = admission.tool.doc_id().unwrap().to_owned();
         let mut pin = crate::tools::call::lifecycle::admission_fixture::fixture_job_pin();
         pin.chain_root_doc_id = doc_id.clone();
-        ConfigAccess::transact_local_write(&admission.node, None, "test.control.physical_pin", |txn| {
+        admission.tool.access().unwrap().transact_write("test.control.physical_pin", |txn| {
             let doc_id = doc_id.clone();
             let pin = pin.clone();
             Box::pin(async move {
@@ -769,12 +757,16 @@ mod tests {
     }
 
     async fn finish(admission: PublishedAdmission) {
-        admission.node.shutdown().await;
+        admission
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
         let _ = std::fs::remove_dir_all(admission.path);
     }
 
     fn access(admission: &PublishedAdmission) -> ConfigAccess {
-        ConfigAccess::local(admission.node.clone())
+        admission.tool.access().expect("admission tool carries its agent-scoped access")
     }
 
     /// The request a job child `slot` caused, owned by `node_did`.
@@ -790,13 +782,13 @@ mod tests {
             "node_did": node_did,
             "requester_did": null,
             "session_id": crate::tools::background::job::keys::job_session_id(admission.tool.doc_id().unwrap(), slot, 1),
-            "agent_id": "general",
+            "agent_did": "general",
             "lifecycle_state": state,
             "retry_key": job_spawn_key(admission.tool.doc_id().unwrap(), slot, 1),
             "created_at": "2026-01-01T00:00:00Z",
             "caused_by_parent_tool_call_doc_id": admission.tool.doc_id().unwrap(),
         });
-        ConfigAccess::transact_local_write(&admission.node, None, "test.control.caused", |txn| {
+        admission.tool.access().unwrap().transact_write("test.control.caused", |txn| {
             let value = &value;
             Box::pin(async move {
                 let response = txn
@@ -1028,9 +1020,18 @@ mod tests {
         assert!(interrupted(&admission, admission.tool.request_doc_id().unwrap()).await);
         // The owner that reacts to a parent request for background rows must
         // leave the job running and its child alone.
+        let signer: Arc<dyn crate::store::identity::NodeIdentity> = Arc::new(
+            admission
+                .tool
+                .access()
+                .unwrap()
+                .managed_agent_signer()
+                .unwrap(),
+        );
         let report = ToolCallLifecycle::reconcile_orphaned_background_tools(
             &admission.node,
             &node_did,
+            &[signer],
             &crate::BackgroundExecutionRegistry::default(),
         )
         .await
@@ -1189,7 +1190,7 @@ mod tests {
             verdict: PluginExecutionVerdict::Success,
         };
         let doc_id = admission.tool.doc_id().unwrap().to_owned();
-        ConfigAccess::transact_local_write(&admission.node, None, "test.control.step", |txn| {
+        admission.tool.access().unwrap().transact_write("test.control.step", |txn| {
             let (doc_id, evidence) = (doc_id.clone(), evidence.clone());
             Box::pin(async move {
                 crate::tools::background::job::records::write_step_state_in_txn(
@@ -1368,7 +1369,7 @@ mod tests {
         .await;
         assert_eq!(refused, Err(Refusal::PolicyDenied));
         assert!(plain_resume(&job, &prior).await.is_ok());
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1386,7 +1387,7 @@ mod tests {
         .await;
         assert_eq!(refused, Err(Refusal::PolicyDenied));
         assert!(plain_resume(&job, &prior).await.is_ok());
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1411,7 +1412,7 @@ mod tests {
         );
         let done = finished(&mut job, "call-3", None, None, JobState::Completed).await;
         assert!(plain_resume(&job, &done).await.is_ok());
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1429,7 +1430,7 @@ mod tests {
         .await;
         assert_eq!(refused, Err(Refusal::PolicyDenied));
         assert!(plain_resume(&job, &prior).await.is_ok());
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1461,7 +1462,7 @@ mod tests {
         )
         .await;
         assert!(admitted.is_ok());
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1501,7 +1502,7 @@ mod tests {
         )
         .await;
         assert_eq!(refused, Err(Refusal::PolicyDenied));
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1526,7 +1527,7 @@ mod tests {
         assert_eq!(validated.pin.replayed_from.as_deref(), Some(prior.as_str()));
         assert_eq!(validated.replayed_from.as_deref(), Some(prior.as_str()));
         assert_eq!(validated.echo.kind, JobControlEchoKind::EngineCurrent);
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1539,7 +1540,7 @@ mod tests {
         );
         assert!(validate_budget(&job, &prior, 4).await.is_ok());
         assert!(validate_budget(&job, &prior, 5).await.is_ok());
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
     }
 
     async fn validate_budget(
@@ -1581,7 +1582,7 @@ mod tests {
             ["run".to_owned(), "call-1".to_owned()]
         );
         assert_eq!(validated.echo, resume_echo(&resume_block(&prior)));
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
     }
 
     fn pinned(row_pin: JobPin) -> StepRow {
@@ -1740,6 +1741,6 @@ mod tests {
         assert!(!head);
         assert_eq!(resumed_by, Some(format!("{}:call-3", caller().session_id)));
         assert!(target(&job, PLUGIN, &newest).await.0 .1);
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
     }
 }

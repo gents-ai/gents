@@ -12,7 +12,6 @@ use crate::documents::EvalSplit;
 use crate::eval::checks::CheckRegistry;
 use crate::eval::optimization::driver::{baseline_dir, spend_so_far, JobRequest};
 use crate::eval::optimization::job::{JobState, JournalEntry};
-use crate::eval::runner::freeze::tests::OWNER;
 use crate::eval::runner::ScriptedExecutor;
 use crate::Collection;
 
@@ -52,7 +51,9 @@ async fn a_pack_that_is_not_the_live_configuration_is_refused_at_freeze() {
     );
     assert!(!baseline_dir(&request.jobs_dir, &request.job_id).exists());
 
-    harness.install(vec![behavior("Monitor, renamed")]).await;
+    harness
+        .install(vec![behavior(harness.owner(), "Monitor, renamed")])
+        .await;
     let request = harness.request("other-behavior", DEFINITION, budgets(1_000));
     let error =
         crate::eval::optimization::driver::freeze_job(harness.access(), &request, &policy())
@@ -60,12 +61,15 @@ async fn a_pack_that_is_not_the_live_configuration_is_refused_at_freeze() {
             .unwrap_err();
     let reason = refusal(error);
     assert!(
-        reason.contains("Agent \"monitor\"") && reason.contains("display_name"),
+        reason.contains(&format!("Agent {:?}", harness.binding.agent_did))
+            && reason.contains("display_name"),
         "{reason}"
     );
     assert!(!baseline_dir(&request.jobs_dir, &request.job_id).exists());
 
-    harness.install(vec![behavior("Monitor")]).await;
+    harness
+        .install(vec![behavior(harness.owner(), "Monitor")])
+        .await;
     let request = harness.request("equivalent", DEFINITION, budgets(1_000));
     crate::eval::optimization::driver::freeze_job(harness.access(), &request, &policy())
         .await
@@ -93,7 +97,9 @@ async fn a_baseline_edited_after_the_freeze_fails_the_job_before_any_further_spe
     let request = harness.request("drifted", DEFINITION, budgets(1_000));
     let (before, spent) = stopped_after_round_one_train(&harness, &request, &executor).await;
 
-    harness.install(vec![behavior("Monitor, renamed")]).await;
+    harness
+        .install(vec![behavior(harness.owner(), "Monitor, renamed")])
+        .await;
     let outcome = settle(
         &harness,
         &request,
@@ -118,7 +124,13 @@ async fn a_definition_edited_after_the_freeze_fails_the_job_as_definition_change
     harness
         .install(vec![(
             Collection::EvalDefinition,
-            definition(DEFINITION, "captured_rows_count", &VALIDATION_CASES, 2),
+            definition(
+                harness.owner(),
+                DEFINITION,
+                "captured_rows_count",
+                &VALIDATION_CASES,
+                2,
+            ),
         )])
         .await;
     let outcome = settle(
@@ -150,7 +162,7 @@ async fn stopped_after_round_one_train(
         "{journal:#?}"
     );
     assert!(runs_started(&journal, EvalSplit::Validation).is_empty());
-    let spent = spend_so_far(harness.access(), OWNER, &journal)
+    let spent = spend_so_far(harness.access(), harness.owner(), &journal)
         .await
         .unwrap()
         .case_trials;
@@ -174,7 +186,7 @@ async fn assert_nothing_after_drift(
     expected.push(JournalEntry::Finalized { state: failed });
     assert_eq!(after, expected);
     assert_eq!(
-        spend_so_far(harness.access(), OWNER, &after)
+        spend_so_far(harness.access(), harness.owner(), &after)
             .await
             .unwrap()
             .case_trials,
@@ -210,25 +222,36 @@ async fn a_definition_deleted_after_the_freeze_fails_the_job_as_definition_chang
 async fn a_definition_that_no_longer_validates_fails_the_job_as_definition_changed() {
     let harness = Harness::new().await;
     let request = frozen_job(&harness, "definition-invalid").await;
+    let owner = harness.owner();
     harness
         .access()
         .transact_write("matrix.invalidate_definition", |txn| {
             Box::pin(async move {
-                txn.execute(&format!(
-                    r#"mutation {{ update_EvalDefinition(filter: {{ definition_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }} }}, input: {{ comparability_version: 0 }}) {{ _docID }} }}"#,
-                    crate::store::graphql::escape_graphql_string(DEFINITION),
-                    crate::store::graphql::escape_graphql_string(OWNER),
-                ))
-                .await
-                .map(|_| ())
+                let (doc_id, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                    txn, Collection::EvalDefinition, owner, DEFINITION,
+                ).await?.expect("installed definition");
+                txn.execute_client_signed_update(
+                    &format!(
+                        r#"mutation($input: EvalDefinitionMutationInputArg!) {{ update_EvalDefinition(filter: {{ _docID: {{ _eq: "{}" }}, definition_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }} }}, input: $input) {{ _docID }} }}"#,
+                        crate::store::graphql::escape_graphql_string(&doc_id),
+                        crate::store::graphql::escape_graphql_string(DEFINITION),
+                        crate::store::graphql::escape_graphql_string(owner),
+                    ),
+                    &serde_json::json!({"input": {"comparability_version": 0}}),
+                    gents_protocol::schemas::EVAL_DEFINITION,
+                ).await?;
+                Ok::<(), anyhow::Error>(())
             })
         })
         .await
         .unwrap();
-    let error =
-        crate::eval::optimization::driver::load_definition(harness.access(), OWNER, DEFINITION)
-            .await
-            .unwrap_err();
+    let error = crate::eval::optimization::driver::load_definition(
+        harness.access(),
+        harness.owner(),
+        DEFINITION,
+    )
+    .await
+    .unwrap_err();
     assert!(
         crate::eval::runner::freeze_refused(&error).is_some(),
         "{error:#}"

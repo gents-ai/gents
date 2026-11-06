@@ -1,5 +1,5 @@
 use super::ToolDispatchRejection;
-use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
+use crate::store::config_client::{ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::store::graphql::escape_graphql_string;
 use crate::tools::call::lifecycle::{ToolCallLifecycle, ToolCallState};
 use anyhow::{Context, Result};
@@ -52,17 +52,17 @@ impl ToolCallLifecycle {
         fixture_now: Option<DateTime<Utc>>,
     ) -> Result<()> {
         let start = self.dispatch_start()?;
-        let started_at = ConfigAccess::transact_local_idempotent(
-            &self.node,
-            None,
-            IdempotentTransactionRetry::Standard,
-            "tool_call.start_running_canonical",
-            move |txn| {
-                let start = start.clone();
-                Box::pin(async move { start_running_in_txn(txn, &start, fixture_now).await })
-            },
-        )
-        .await?;
+        let started_at = self
+            .access()?
+            .transact_idempotent(
+                IdempotentTransactionRetry::Standard,
+                "tool_call.start_running_canonical",
+                move |txn| {
+                    let start = start.clone();
+                    Box::pin(async move { start_running_in_txn(txn, &start, fixture_now).await })
+                },
+            )
+            .await?;
         let started_at = started_at
             .context("accepted tool lifecycle binding was altered or is no longer pending")?;
         self.mark_started(started_at);

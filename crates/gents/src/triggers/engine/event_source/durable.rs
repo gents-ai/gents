@@ -5,6 +5,7 @@ use gents_protocol::event_delivery::EventConsumer;
 
 pub(super) struct PendingCheckpoint {
     arrival: CheckpointArrival,
+    access: ConfigAccess,
     result: tokio::sync::oneshot::Receiver<super::super::FireResult>,
 }
 
@@ -44,10 +45,19 @@ impl EventSource {
         if parked.is_empty() {
             return;
         }
-        let Ok(current) = self.read_source_doc(collection, doc_id).await else {
-            return;
-        };
         for trigger_id in parked {
+            let agent = self
+                .snapshot_rx
+                .borrow()
+                .active_event_triggers()
+                .get(&trigger_id)
+                .map(|trigger| trigger.task.agent_did.clone());
+            let Some(agent) = agent else {
+                continue;
+            };
+            let Ok(current) = self.read_source_doc(collection, doc_id, &agent).await else {
+                continue;
+            };
             self.release_if_changed(&trigger_id, current.as_ref());
         }
     }
@@ -88,7 +98,16 @@ impl EventSource {
             })
             .collect::<Vec<_>>();
         for (trigger_id, collection, doc_id) in refused {
-            let Ok(current) = self.read_source_doc(&collection, &doc_id).await else {
+            let agent = self
+                .snapshot_rx
+                .borrow()
+                .active_event_triggers()
+                .get(&trigger_id)
+                .map(|trigger| trigger.task.agent_did.clone());
+            let Some(agent) = agent else {
+                continue;
+            };
+            let Ok(current) = self.read_source_doc(&collection, &doc_id, &agent).await else {
                 continue;
             };
             self.release_if_changed(&trigger_id, current.as_ref());
@@ -106,6 +125,7 @@ impl EventSource {
     pub(super) async fn finish_durable_checkpoint(&mut self) {
         let Some(PendingCheckpoint {
             arrival: pending,
+            access,
             result,
         }) = self.durable_checkpoint.take()
         else {
@@ -129,11 +149,8 @@ impl EventSource {
             Ok(super::super::FireResult::Fired { .. } | super::super::FireResult::Duplicate { .. })
         ) || matches!(&result, Ok(super::super::FireResult::Skipped { reason }) if reason == super::super::SERIAL_BUSY);
         if acknowledged {
-            let advanced = ConfigAccess::transact_local_write(
-                &self.node,
-                None,
-                "trigger.advance_arrival",
-                |txn| {
+            let advanced = access
+                .transact_write("trigger.advance_arrival", |txn| {
                     Box::pin(async {
                         crate::store::config_client::event_source_cursor::checkpoint_prefix(
                             txn,
@@ -148,9 +165,8 @@ impl EventSource {
                         )
                         .await
                     })
-                },
-            )
-            .await;
+                })
+                .await;
             self.durable_ready = advanced.as_ref().copied().unwrap_or(false);
             match advanced {
                 Ok(true) => {
@@ -280,14 +296,19 @@ impl EventSource {
         trigger: &crate::runtime::snapshot::ResolvedEventTrigger,
     ) -> anyhow::Result<Option<FireIntent>> {
         let owner = Self::delivery(snapshot, trigger)?.owner().to_owned();
+        let selected = snapshot
+            .agent(&trigger.task.agent_did)
+            .context("selected event Task agent is unavailable")?;
+        let access = ConfigAccess::local_managed_agent(
+            self.node.clone(),
+            identity::Did::new(&trigger.task.agent_did)?,
+            selected.agent_identity.as_ref(),
+        )?;
         let consumer = EventConsumer::Trigger {
             trigger_id: trigger.trigger_id.clone(),
         };
-        let record = ConfigAccess::transact_local_readonly(
-            &self.node,
-            None,
-            "trigger.read_arrival_cursor",
-            |txn| {
+        let record = access
+            .transact_readonly("trigger.read_arrival_cursor", |txn| {
                 Box::pin(async {
                     crate::store::config_client::event_source_cursor::load_for_source(
                         txn,
@@ -297,16 +318,12 @@ impl EventSource {
                     )
                     .await
                 })
-            },
-        )
-        .await?;
+            })
+            .await?;
         let record = match record {
             Some(record) => record,
-            None => ConfigAccess::transact_local_write(
-                &self.node,
-                None,
-                "trigger.seed_arrival_cursor",
-                |txn| {
+            None => access
+                .transact_write("trigger.seed_arrival_cursor", |txn| {
                     Box::pin(async {
                         crate::store::config_client::event_source_cursor::load_or_seed_for_source(
                             txn,
@@ -316,15 +333,13 @@ impl EventSource {
                         )
                         .await
                     })
-                },
-            )
-            .await?,
+                })
+                .await?,
         };
-        let response = crate::store::graphql::graphql_with_transaction_retry(&self.node, &format!(
+        let response = access.execute(&format!(
             "{{ _documentArrivals(collection: \"{}\", after: \"{}\", limit: 128) {{ head next entries {{ cursor docID }} }} }}",
-            escape_graphql_string(&record.cursor.source_collection), escape_graphql_string(&record.cursor.after)), "trigger.read_arrivals").await?;
-        let data = response.data.context("arrival query omitted data")?;
-        let page = &data["_documentArrivals"];
+            escape_graphql_string(&record.cursor.source_collection), escape_graphql_string(&record.cursor.after))).await?;
+        let page = &response["data"]["_documentArrivals"];
         let entries = page["entries"]
             .as_array()
             .context("arrival query omitted entries")?;
@@ -333,8 +348,19 @@ impl EventSource {
                 .as_str()
                 .context("arrival lacks document ID")?;
             let position = entry["cursor"].as_str().context("arrival lacks cursor")?;
+            if !event_delivery::callback_result_ready(
+                &self.node,
+                &trigger.source_collection,
+                doc_id,
+                &trigger.task.agent_did,
+            )
+            .await?
+            {
+                anyhow::bail!("callback result is not yet visible and linked");
+            }
             if !self.probe_filter(doc_id, trigger).await? {
-                self.advance_arrival(&owner, trigger, position).await?;
+                self.advance_arrival(&access, &owner, trigger, position)
+                    .await?;
                 continue;
             }
             let mut build = self
@@ -367,6 +393,7 @@ impl EventSource {
                 observe(result);
             });
             self.durable_checkpoint = Some(PendingCheckpoint {
+                access,
                 arrival: CheckpointArrival {
                     owner,
                     trigger_id: trigger.trigger_id.clone(),
@@ -384,31 +411,33 @@ impl EventSource {
             .as_str()
             .context("arrival query omitted next cursor")?;
         if next != record.cursor.after {
-            self.advance_arrival(&owner, trigger, next).await?;
+            self.advance_arrival(&access, &owner, trigger, next).await?;
         }
         Ok(None)
     }
 
     async fn advance_arrival(
         &self,
+        access: &ConfigAccess,
         owner: &str,
         trigger: &crate::runtime::snapshot::ResolvedEventTrigger,
         position: &str,
     ) -> anyhow::Result<()> {
-        ConfigAccess::transact_local_write(&self.node, None, "trigger.exclude_arrival", |txn| {
-            Box::pin(async {
-                crate::store::config_client::event_source_cursor::exclude_arrival(
-                    txn,
-                    owner,
-                    &EventConsumer::Trigger {
-                        trigger_id: trigger.trigger_id.clone(),
-                    },
-                    &trigger.source_collection,
-                    position,
-                )
-                .await
+        access
+            .transact_write("trigger.exclude_arrival", |txn| {
+                Box::pin(async {
+                    crate::store::config_client::event_source_cursor::exclude_arrival(
+                        txn,
+                        owner,
+                        &EventConsumer::Trigger {
+                            trigger_id: trigger.trigger_id.clone(),
+                        },
+                        &trigger.source_collection,
+                        position,
+                    )
+                    .await
+                })
             })
-        })
-        .await
+            .await
     }
 }

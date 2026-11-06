@@ -2,13 +2,11 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 
 use crate::documents::OutputObligationDecision;
-use crate::store::graphql::{
-    canonical_positive_count, escape_graphql_string, graphql_with_transaction_retry,
-};
+use crate::store::graphql::{canonical_positive_count, escape_graphql_string};
 
 use gents_loop::output_obligation::OutputObligationCheck;
 pub(crate) use gents_loop::output_obligation::UnmetOutputObligation;
@@ -35,7 +33,7 @@ fn active_for_request(
 
 #[derive(Clone)]
 pub(crate) struct OutputObligationGate {
-    node: Arc<EmbeddedNode>,
+    access: crate::ConfigAccess,
     request_doc_ids: Vec<String>,
     obligations: Vec<ActiveOutputObligation>,
 }
@@ -60,11 +58,12 @@ impl OutputObligationGate {
     #[cfg(test)]
     pub(crate) fn new(
         node: Arc<EmbeddedNode>,
+        actor: identity::Did,
         request_doc_id: impl Into<String>,
         obligations: Vec<ActiveOutputObligation>,
     ) -> Self {
         Self {
-            node,
+            access: crate::ConfigAccess::local_as(node, actor),
             request_doc_ids: vec![request_doc_id.into()],
             obligations,
         }
@@ -78,6 +77,7 @@ impl OutputObligationGate {
         if configured.is_empty() {
             return Ok(None);
         }
+        let access = crate::ConfigAccess::local_as(node, identity::Did::new(&request.agent_did)?);
         let mut request_doc_ids = vec![request.doc_id.clone()];
         let mut triggered = request.has_automated_trigger_lineage();
         if request.caused_by_trigger_kind.as_deref() == Some(crate::goal::GOAL_TRIGGER_KIND) {
@@ -88,16 +88,10 @@ impl OutputObligationGate {
                 escape_graphql_string(&request.session_id),
                 crate::request::admission::SIGNED_REQUEST_FIELDS,
             );
-            let response = graphql_with_transaction_retry(
-                &node,
-                &query,
-                "loading output obligation request ancestry",
-            )
-            .await?;
+            let response = access.execute(&query).await?;
             let rows: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(
                 response
-                    .data
-                    .as_ref()
+                    .get("data")
                     .and_then(|data| data.get("AgentRequest"))
                     .cloned()
                     .context("output obligation ancestry query omitted requests")?,
@@ -114,7 +108,7 @@ impl OutputObligationGate {
         }
         let obligations = active_for_request(configured, triggered);
         Ok((!obligations.is_empty()).then_some(Self {
-            node,
+            access,
             request_doc_ids,
             obligations,
         }))
@@ -144,18 +138,14 @@ impl OutputObligationGate {
             }}"#,
             gents_protocol::graphql::graphql_string_list_literal(&self.request_doc_ids),
         );
-        let response =
-            graphql_with_transaction_retry(&self.node, &query, "loading completed output writes")
-                .await?;
+        let response = self.access.execute(&query).await?;
         let rows: Vec<CompletedWriteIdentity> = serde_json::from_value(
             response
-                .data
-                .as_ref()
+                .get("data")
                 .and_then(|data| data.get("AgentToolCall"))
                 .cloned()
                 .context("completed output query omitted AgentToolCall rows")?,
         )?;
-        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
         let mut requests = RapidHashMap::new();
         let mut writes = RapidHashMap::<String, Vec<CompletedWriteRow>>::new();
         let mut scoped_rows = RapidHashMap::<(String, String, Option<String>), Vec<_>>::new();
@@ -172,8 +162,8 @@ impl OutputObligationGate {
                 "completed output write lacks exact request membership"
             );
             if !requests.contains_key(&row.request_doc_id) {
-                let request = crate::request::binding::load_agent_request_by_doc_id(
-                    &self.node,
+                let request = crate::request::binding::load_agent_request_by_doc_id_with_access(
+                    &self.access,
                     &row.request_doc_id,
                 )
                 .await?
@@ -204,7 +194,7 @@ impl OutputObligationGate {
                 .into_iter()
                 .collect::<Vec<_>>();
             let calls = crate::observe::run_timeline_fetch::load_accepted_tool_calls(
-                &access,
+                &self.access,
                 &node_did,
                 &session_id,
                 requester_did.as_deref(),

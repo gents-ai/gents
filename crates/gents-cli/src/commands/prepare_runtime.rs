@@ -223,7 +223,8 @@ async fn prepare_inner(
                 let identity = load_runtime_identity(&home, &config).await?;
                 credentials_checked = true;
                 let authorization =
-                    GraphqlEndpoint::as_principal(endpoint.to_string(), identity.did());
+                    GraphqlEndpoint::as_principal(endpoint.to_string(), identity.did())
+                        .with_client_signing_capability(identity.client_signing_capability()?)?;
                 if requested_root.is_some() {
                     let status = super::status::fetch_local_operator_status(&authorization, CONTROL_TIMEOUT)
                         .await

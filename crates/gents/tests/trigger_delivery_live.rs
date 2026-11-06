@@ -141,12 +141,12 @@ fn string<'a>(row: &'a Value, field: &str) -> Result<&'a str> {
 
 async fn configure(
     access: &ConfigAccess,
-    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<gents::defra_node::Node>,
     owner: &str,
     endpoints: &[String; 2],
 ) -> Result<()> {
     let mut principal = gents::ensure_node(node, owner).await?;
-    principal.default_agent_id = Some("delivery-lead".into());
+    principal.default_agent_did = Some("delivery-lead".into());
     let mut documents = vec![
         (Collection::Node, serde_json::to_value(principal)?),
         (
@@ -172,11 +172,11 @@ async fn configure(
                 "execution_id":"delivery-execution"
             })),
             (Collection::Agent, json!({
-                "agent_id":format!("delivery-worker-{lane}"),
+                "agent_did":format!("delivery-worker-{lane}"),
                 "inference_profile_id":format!("delivery-profile-{lane}"), "enabled":true
             })),
             (Collection::Task, json!({
-                "task_id":format!("delivery-worker-{lane}"), "agent_id":format!("delivery-worker-{lane}"),
+                "task_id":format!("delivery-worker-{lane}"), "agent_did":format!("delivery-worker-{lane}"),
                 "emit_outcome":true,
                 "prompt_template":"Reply exactly WORK {{ doc.handoff_id }}. Do not call tools."
             })),
@@ -192,13 +192,13 @@ async fn configure(
         ]);
     }
     documents.extend([
-        (Collection::Agent, json!({"agent_id":"delivery-lead", "inference_profile_id":"delivery-profile-0", "enabled":true})),
+        (Collection::Agent, json!({"agent_did":"delivery-lead", "inference_profile_id":"delivery-profile-0", "enabled":true})),
         (Collection::Task, json!({
-            "task_id":"delivery-start", "agent_id":"delivery-lead", "emit_outcome":false,
+            "task_id":"delivery-start", "agent_did":"delivery-lead", "emit_outcome":false,
             "prompt_template":"Reply exactly READY {{ session.session_id }} {{ doc.handoff_id }}. Do not call tools."
         })),
         (Collection::Task, json!({
-            "task_id":"delivery-inbox", "agent_id":"delivery-lead", "emit_outcome":false,
+            "task_id":"delivery-inbox", "agent_did":"delivery-lead", "emit_outcome":false,
             "prompt_template":"Reply exactly ACK {{ session.session_id }} {{ doc.source_handoff_id }}. Do not call tools."
         })),
         (Collection::EventSource, json!({"event_source_id":"delivery-start", "source_collection":"DeliveryRunStart", "event_kind":"created"})),
@@ -314,7 +314,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
         let requests = rows(
             &access,
             "AgentRequest",
-            "request_id session_id agent_id content lifecycle_state failure_reason",
+            "request_id session_id agent_did content lifecycle_state failure_reason",
             &owner,
         )
         .await?;
@@ -418,7 +418,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
     )
     .await?;
     for request in &requests {
-        let expected_backend = if request["agent_id"] == "delivery-worker-1" {
+        let expected_backend = if request["agent_did"] == "delivery-worker-1" {
             "delivery-backend-1"
         } else {
             "delivery-backend-0"
@@ -438,7 +438,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
         ensure!(
             requests
                 .iter()
-                .filter(|row| row["agent_id"] == behavior)
+                .filter(|row| row["agent_did"] == behavior)
                 .count()
                 == 32,
             "workstation {lane} did not execute 32 assignments"
@@ -461,7 +461,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
         let inboxes = requests
             .iter()
             .filter(|row| {
-                row["agent_id"] == "delivery-lead"
+                row["agent_did"] == "delivery-lead"
                     && row["content"]
                         .as_str()
                         .is_some_and(|text| text.contains(handoff))

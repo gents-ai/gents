@@ -1,10 +1,38 @@
 use super::*;
 
-async fn materializer_with_node() -> (Arc<defra_node::EmbeddedNode>, ProductionMaterializer) {
+async fn signed_materializer_agent(
+    name: &str,
+) -> (
+    crate::support::TestDb,
+    crate::KeyIdentity,
+    crate::ConfigAccess,
+    Arc<ResolvedAgent>,
+) {
+    let (db, user, access, binding) = crate::test_support::signed_test_node(name).await;
+    let template = tokio::task::spawn_blocking(|| integration_test_agent("materializer-template"))
+        .await
+        .expect("build test agent template");
+    let identity =
+        crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+            .expect("derive the fixture's held Agent from its runtime key");
+    let mut agent = (*template).clone();
+    agent.agent_did = binding.agent_did.clone();
+    agent.agent_identity = identity;
+    agent.node = Arc::new(crate::store::identity::RuntimeNode {
+        node_did: db.node_identity.did().to_owned(),
+        identity: db.node_identity.clone(),
+        default_agent_did: binding.agent_did,
+        display_name: None,
+        enabled: true,
+    });
+    (db, user, access, Arc::new(agent))
+}
+
+async fn materializer_with_node() -> (Arc<defra_node::Node>, ProductionMaterializer) {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot =
-        snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
+        snapshot_with_agent_and_schedules(spy_test_agent(), RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     (node, materializer)
@@ -13,10 +41,10 @@ async fn materializer_with_node() -> (Arc<defra_node::EmbeddedNode>, ProductionM
 #[tokio::test]
 async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
     let snapshot =
-        snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
+        snapshot_with_agent_and_schedules(spy_test_agent(), RapidHashMap::new());
     let owner = snapshot.local_did.clone();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(&owner)
             .build()
             .await
@@ -52,6 +80,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         },
         target_existing: false,
         replace_prior: false,
+        event_source_generation: None,
     };
     let mut task = resolved_task("work");
     task.task_id = prepared.receipt.task_id.clone();
@@ -101,7 +130,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
                     txn,
                     &request.session_id,
                     &request.node_did,
-                    &request.agent_id,
+                    &request.agent_did,
                     request.requester_did.as_deref(),
                     None,
                     crate::request::lifecycle::materialize::created_session_provenance(&request),
@@ -122,12 +151,16 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         session_id: "caller".into(),
         ..scope.clone()
     };
-    assert!(
-        crate::session::message::interrupt_refusal(&node, &caller, &scope)
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(crate::session::message::interrupt_refusal(
+        &node,
+        node.node_identity_did()
+            .expect("fixture has a registered signing principal"),
+        &caller,
+        &scope
+    )
+    .await
+    .unwrap()
+    .is_none());
     let mut caller_request = request.clone();
     caller_request.session_id = caller.session_id.clone();
     let tools = crate::tools::surface::AgentToolConfig {
@@ -136,7 +169,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
             target_id: "worker".into(),
             node_did: owner.clone(),
             target_node_did: owner.clone(),
-            agent_id: request.agent_id.clone(),
+            agent_did: request.agent_did.clone(),
             name: "worker".into(),
             description: None,
             tags: Vec::new(),
@@ -170,12 +203,16 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         node_did: "did:other".into(),
         ..caller
     };
-    assert!(
-        crate::session::message::interrupt_refusal(&node, &foreign, &scope)
-            .await
-            .unwrap()
-            .is_some()
-    );
+    assert!(crate::session::message::interrupt_refusal(
+        &node,
+        node.node_identity_did()
+            .expect("fixture has a registered signing principal"),
+        &foreign,
+        &scope
+    )
+    .await
+    .unwrap()
+    .is_some());
     access.write("test.ambiguous_fire", &format!(
         r#"mutation {{create_TriggerFire(input: {{fire_key: "duplicate-fire", owner_did: "{}", request_id: "{}", session_id: "{}", trigger_id: "authority-trigger", task_id: "authority-task"}}) {{_docID}}}}"#,
         escape_graphql_string(&owner), escape_graphql_string(&request.request_id), escape_graphql_string(&scope.session_id)
@@ -242,7 +279,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
                     txn,
                     &request.session_id,
                     &request.node_did,
-                    &request.agent_id,
+                    &request.agent_did,
                     Some("did:wrong:requester"),
                     None,
                     crate::request::lifecycle::materialize::created_session_provenance(&request),
@@ -343,7 +380,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
                         txn,
                         &session,
                         &node_did,
-                        "general",
+                        spy_test_agent().agent_did.as_str(),
                         requester.as_deref(),
                         None,
                         Some(gents_protocol::session::SessionProvenance {
@@ -374,15 +411,23 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
             "{test_session}"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let behavior = integration_test_agent("general");
+    let (db, _user, _client_access, behavior) =
+        signed_materializer_agent("goal-task-atomic-idempotent").await;
     let node_did = behavior.node_did().to_string();
+    let agent_did = behavior.agent_did.clone();
+    let agent_identity = behavior.agent_identity.clone();
+    let node = db.node.clone();
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent_did.parse().unwrap(),
+        agent_identity.as_ref(),
+    )
+    .unwrap();
     let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
@@ -390,7 +435,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         emit_outcome: false,
         task_id: "task-goal-release".to_string(),
         name: Some("release task".to_string()),
-        agent_id: "general".to_string(),
+        agent_did: agent_did.clone(),
         prompt_template: "implement release".to_string(),
         goal_objective_template: Some("ship release".to_string()),
         goal_token_budget: Some(4_096),
@@ -419,7 +464,14 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         .expect_err("an invalid declaration must roll back before publication");
     assert!(invalid.to_string().contains("non-empty"), "{invalid:#}");
     assert!(
-        crate::goal::load_canonical_goal(node.as_ref(), &node_did, &identity.session_id)
+        access
+            .transact_readonly("test.no_invalid_task_goal", |txn| {
+                Box::pin(crate::goal::load_canonical_goal_in_txn(
+                    txn,
+                    &node_did,
+                    &identity.session_id,
+                ))
+            })
             .await
             .unwrap()
             .is_none(),
@@ -447,9 +499,8 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
                     .await
             },
             || async {
-                crate::store::config_client::ConfigAccess::local(node.clone())
-                    .execute(
-                        "{ Goal {_docID assignment_root_request_doc_id} GoalCreationClaim {_docID} AgentRequest {_docID input} }",
+                access.execute(
+                        "{ AgentSession {_docID} Goal {_docID parent_linked assignment_root_request_doc_id} GoalCreationClaim {_docID parent_linked} AgentRequest {_docID input} }",
                     )
                     .await
                     .unwrap()
@@ -479,6 +530,52 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         .expect("exact fire retry");
     assert_eq!(first, identity.request_id);
     assert_eq!(retry, identity.request_id);
+    let rows = access.execute("{ AgentSession { _docID agent_did } Goal { _docID session_doc_id agent_did creator_did parent_linked assignment_root_request_doc_id } GoalCreationClaim { _docID session_doc_id agent_did creator_did parent_linked } AgentRequest { _docID } }").await.unwrap();
+    let session = &rows["data"]["AgentSession"][0];
+    let request = &rows["data"]["AgentRequest"][0];
+    assert_eq!(session["agent_did"], agent_did);
+    let goal_links = tokio::task::spawn_blocking(|| {
+        crate::lean_vocab_test::lean_contract_snapshot()
+            .goal_link_cases
+            .clone()
+    })
+    .await
+    .unwrap();
+    for collection in ["Goal", "GoalCreationClaim"] {
+        let modeled_link = goal_links
+            .iter()
+            .find(|case| {
+                case.collection == collection
+                    && case.actor == "agent"
+                    && case.mode == "fresh"
+                    && case.commit
+            })
+            .unwrap();
+        let row = &rows["data"][collection][0];
+        assert_eq!(row["session_doc_id"], session["_docID"]);
+        assert_eq!(row["agent_did"], agent_did);
+        assert_eq!(row["creator_did"], agent_did);
+        assert_eq!(row["parent_linked"], modeled_link.initial.linked);
+        let doc = row["_docID"].as_str().unwrap().to_owned();
+        let owners = access
+            .transact_readonly("test.task_goal_owner", |txn| {
+                let doc = &doc;
+                Box::pin(async move {
+                    txn.document_owners(collection, std::slice::from_ref(doc))
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            owners[0].owner.as_ref().map(|owner| owner.as_str()),
+            Some(agent_did.as_str())
+        );
+    }
+    assert_eq!(
+        rows["data"]["Goal"][0]["assignment_root_request_doc_id"],
+        request["_docID"]
+    );
     assert_eq!(
         materializer
             .recover_goal_task_fire(&task, fire_key)
@@ -487,7 +584,14 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         Some(identity.request_id.clone())
     );
 
-    let goal = crate::goal::load_canonical_goal(node.as_ref(), &node_did, &identity.session_id)
+    let goal = access
+        .transact_readonly("test.task_goal", |txn| {
+            Box::pin(crate::goal::load_canonical_goal_in_txn(
+                txn,
+                &node_did,
+                &identity.session_id,
+            ))
+        })
         .await
         .unwrap()
         .expect("Goal must commit with its first request");
@@ -513,23 +617,12 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
             &identity.session_id,
         )),
     );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "query failed: {:?}",
-        response.errors
-    );
-    let requests = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(serde_json::Value::as_array)
+    let response = access.execute(&query).await.expect("query as task Agent");
+    let requests = response["data"]["AgentRequest"]
+        .as_array()
         .expect("AgentRequest rows");
-    let claims = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("GoalCreationClaim"))
-        .and_then(serde_json::Value::as_array)
+    let claims = response["data"]["GoalCreationClaim"]
+        .as_array()
         .expect("GoalCreationClaim rows");
     assert_eq!(requests.len(), 1, "retry must not duplicate requests");
     assert_eq!(claims.len(), 1, "retry must not duplicate creation claims");
@@ -579,12 +672,16 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         Some("automated-trigger")
     );
 
-    assert_eq!(
-        crate::goal::delete_goals_for_session(&node, &node_did, &identity.session_id)
-            .await
-            .expect("clear Goal and creation claim before source checkpoint"),
-        1
-    );
+    let escaped_session = escape_graphql_string(&identity.session_id);
+    let cleared = access.transact_write("test.clear_task_goal", |txn| {
+        let escaped_session = &escaped_session;
+        Box::pin(async move {
+            let response = txn.execute(&format!(r#"mutation {{ delete_Goal(filter: {{session_id: {{_eq: "{escaped_session}"}}}}) {{_docID}} }}"#)).await?;
+            txn.execute(&format!(r#"mutation {{ delete_GoalCreationClaim(filter: {{session_id: {{_eq: "{escaped_session}"}}}}) {{_docID}} }}"#)).await?;
+            Ok::<_, anyhow::Error>(response["data"]["delete_Goal"].as_array().map_or(0, Vec::len))
+        })
+    }).await.expect("clear Goal and creation claim as their Agent owner");
+    assert_eq!(cleared, 1);
     assert_eq!(
         materializer
             .recover_goal_task_fire(&task, fire_key)
@@ -593,52 +690,147 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         Some(identity.request_id),
         "clearing terminal controller state must not replay the Task fire"
     );
+
+    let modeled = tokio::task::spawn_blocking(|| {
+        crate::lean_vocab_test::lean_task_goal_publication_cases()
+            .iter()
+            .find(|case| case.name == "positive_budget_uses_atomic_goal_publication")
+            .unwrap()
+            .clone()
+    })
+    .await
+    .unwrap();
+    assert_eq!(modeled.expected_mode, "atomic_goal_backed");
+    let scheduled = ResolvedTask {
+        emit_outcome: false,
+        task_id: modeled.task_id.clone(),
+        name: Some("scheduled Goal".into()),
+        agent_did: agent_did.clone(),
+        prompt_template: "scheduled work".into(),
+        goal_objective_template: modeled.goal_objective.clone(),
+        goal_token_budget: modeled
+            .goal_token_budget
+            .map(|budget| i64::try_from(budget).unwrap()),
+        output_schema_ref: None,
+        hooks: Vec::new(),
+    };
+    let scheduled_identity =
+        crate::goal::task_goal_fire_identity(&node_did, &scheduled.task_id, &modeled.fire_key);
+    let request_id = materializer
+        .materialize(
+            &scheduled,
+            Some("schedule-goal"),
+            TriggerKind::Schedule,
+            Some("schedule-goal-doc"),
+            None,
+            None,
+            None,
+            "scheduled work",
+            modeled.goal_objective.as_deref(),
+            &modeled.fire_key,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(request_id, scheduled_identity.request_id);
+    let session = escape_graphql_string(&scheduled_identity.session_id);
+    let rows = access.execute(&format!(r#"{{
+        AgentSession(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID agent_did }}
+        AgentRequest(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID lifecycle_state }}
+        Goal(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID session_doc_id creator_did parent_linked assignment_root_request_doc_id }}
+        GoalCreationClaim(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID session_doc_id creator_did parent_linked }}
+    }}"#)).await.unwrap();
+    let sessions = rows["data"]["AgentSession"].as_array().unwrap();
+    let requests = rows["data"]["AgentRequest"].as_array().unwrap();
+    let goals = rows["data"]["Goal"].as_array().unwrap();
+    let claims = rows["data"]["GoalCreationClaim"].as_array().unwrap();
+    assert_eq!(!requests.is_empty(), modeled.expected_runnable_request);
+    assert_eq!(!goals.is_empty(), modeled.expected_durable_goal);
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(goals.len(), 1);
+    assert_eq!(claims.len(), 1);
+    assert_eq!(sessions[0]["agent_did"], agent_did);
+    assert_eq!(requests[0]["lifecycle_state"], "pending");
+    for (collection, child) in [("Goal", &goals[0]), ("GoalCreationClaim", &claims[0])] {
+        let modeled_link = goal_links
+            .iter()
+            .find(|case| {
+                case.collection == collection
+                    && case.actor == "agent"
+                    && case.mode == "fresh"
+                    && case.commit
+            })
+            .unwrap();
+        assert_eq!(child["session_doc_id"], sessions[0]["_docID"]);
+        assert_eq!(child["creator_did"], agent_did);
+        assert_eq!(child["parent_linked"], modeled_link.initial.linked);
+    }
+    assert_eq!(
+        goals[0]["assignment_root_request_doc_id"],
+        requests[0]["_docID"]
+    );
 }
 
 #[tokio::test]
 async fn durable_goal_task_replay_retains_its_admitted_assignment() {
-    let snapshot =
-        snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
+    let (db, _user, _client_access, behavior) =
+        signed_materializer_agent("goal-task-retained-assignment").await;
+    let agent_did = behavior.agent_did.clone();
+    let agent_identity = behavior.agent_identity.clone();
+    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let owner = snapshot.local_did.clone();
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .with_node_identity_did(&owner)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node = db.node.clone();
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let session = "replaced-task-goal-session";
-    crate::session::ensure_session_with_agent_id_and_requester_did(
-        &node,
-        session,
-        &owner,
-        "general",
-        Some(&owner),
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent_did.parse().unwrap(),
+        agent_identity.as_ref(),
     )
-    .await
     .unwrap();
-    let initial = crate::goal::deterministic_goal_id(&owner, session);
-    let selected = crate::goal::replacement_goal_identity(&owner, session, "first-replacement");
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     access
-        .write(
-            "test.replay_current_goal",
-            &format!(
-                r#"mutation {{create_Goal(input: {{
-        node_did: "{}", session_id: "{}", goal_id: "{}", creation_key: "{}",
-        objective: "Finish the task", status: "active", created_at: "2030-01-01T00:00:00Z"
-    }}) {{_docID}}}}"#,
-                escape_graphql_string(&owner),
-                escape_graphql_string(session),
-                escape_graphql_string(&selected.goal_id),
-                escape_graphql_string(&selected.creation_key)
-            ),
-        )
+        .transact_write("test.replay_session", |txn| {
+            Box::pin(crate::session::ensure_session_in_txn(
+                txn,
+                session,
+                &owner,
+                &agent_did,
+                Some(&agent_did),
+                None,
+                None,
+                "2030-01-01T00:00:00Z",
+            ))
+        })
         .await
         .unwrap();
+    let initial = crate::goal::deterministic_goal_id(&owner, session);
+    let selected = crate::goal::replacement_goal_identity(&owner, session, "first-replacement");
+    access.transact_write("test.replay_current_goal", |txn| {
+        let selected = &selected;
+        let agent_did = &agent_did;
+        let owner = &owner;
+        Box::pin(async move {
+            let existing = crate::session::load_agent_session_owner_in_txn(txn, owner, session)
+                .await?.expect("existing task session");
+            let input = serde_json::json!({
+                "node_did": owner, "session_id": session, "session_doc_id": existing.doc_id,
+                "agent_did": agent_did, "requester_did": agent_did, "creator_did": agent_did,
+                "parent_linked": true, "goal_id": selected.goal_id, "creation_key": selected.creation_key,
+                "objective": "Finish the task", "status": "active", "created_at": "2030-01-01T00:00:00Z",
+            });
+            let created = txn.execute_with_variables(
+                "mutation($input: GoalMutationInputArg!) {create_Goal(input: $input) {_docID}}",
+                &serde_json::json!({"input": input}),
+            ).await?;
+            let doc = crate::store::graphql::created_doc_id(&created, "Goal")?;
+            txn.add_resource_relationship("Goal", &doc, "parent", "sessions", &existing.doc_id).await?;
+            txn.add_actor_relationship("Goal", &doc, "working_agent", &identity::Did::new(agent_did)?).await?;
+            Ok::<_, anyhow::Error>(())
+        })
+    }).await.unwrap();
     let identity = gents_protocol::trigger_delivery::FireIdentity {
         owner_did: owner.clone(),
         trigger_id: "replay-goal-trigger".into(),
@@ -666,9 +858,11 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
         },
         target_existing: true,
         replace_prior: false,
+        event_source_generation: None,
     };
     let mut task = resolved_task("Finish the task");
     task.task_id = prepared.receipt.task_id.clone();
+    task.agent_did = agent_did.clone();
     task.goal_objective_template = prepared.receipt.goal_objective.clone();
     let publish = || {
         materializer.materialize(
@@ -695,7 +889,7 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
     let existing_scope = crate::session::origin::SessionScope {
         node_did: owner.clone(),
         session_id: session.to_owned(),
-        requester_did: Some(owner.clone()),
+        requester_did: Some(agent_did.clone()),
     };
     assert!(
         !crate::session::origin::task_triggered_opening(&access, &existing_scope)
@@ -726,7 +920,12 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
         admitted["data"]["AgentRequest"][0]["input"]["goal_assignment"]["root_request_doc_id"]
             .is_null()
     );
-    let goal = crate::goal::load_canonical_goal(&node, &owner, session)
+    let goal = access
+        .transact_readonly("test.replay_goal", |txn| {
+            Box::pin(crate::goal::load_canonical_goal_in_txn(
+                txn, &owner, session,
+            ))
+        })
         .await
         .unwrap()
         .unwrap();
@@ -752,35 +951,44 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
     );
     assert_eq!(access.execute(&query).await.unwrap(), admitted);
     assert_eq!(
-        crate::goal::load_canonical_goal(&node, &owner, session)
+        access
+            .transact_readonly("test.replay_later_goal", |txn| {
+                Box::pin(crate::goal::load_canonical_goal_in_txn(
+                    txn, &owner, session,
+                ))
+            })
             .await
             .unwrap()
             .unwrap()
             .goal_id,
         replacement.goal_id
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn goal_task_identity_and_recovery_are_scoped_by_node_did() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let first_behavior = integration_test_agent("general");
+    let (first_db, _first_user, _first_client_access, first_behavior) =
+        signed_materializer_agent("goal-task-first-node").await;
     let first_did = first_behavior.node_did().to_string();
+    let first_agent = first_behavior.agent_did.clone();
+    let first_node = first_db.node.clone();
     let first_snapshot = snapshot_with_agent_and_schedules(first_behavior, RapidHashMap::new());
     let (_first_tx, first_rx) = watch::channel(first_snapshot);
-    let first_materializer = ProductionMaterializer::new(node.clone(), first_rx);
-    let second_behavior = integration_test_agent("general");
+    let first_materializer = ProductionMaterializer::new(first_node.clone(), first_rx);
+    let (second_db, _second_user, _second_client_access, second_behavior) =
+        signed_materializer_agent("goal-task-second-node").await;
     let second_did = second_behavior.node_did().to_string();
+    let second_agent = second_behavior.agent_did.clone();
+    let second_node = second_db.node.clone();
     let second_snapshot = snapshot_with_agent_and_schedules(second_behavior, RapidHashMap::new());
     let (_second_tx, second_rx) = watch::channel(second_snapshot);
-    let second_materializer = ProductionMaterializer::new(node, second_rx);
+    let second_materializer = ProductionMaterializer::new(second_node.clone(), second_rx);
     let task = ResolvedTask {
         emit_outcome: false,
         task_id: "shared-task-id".to_string(),
         name: None,
-        agent_id: "general".to_string(),
+        agent_did: first_agent,
         prompt_template: "shared prompt".to_string(),
         goal_objective_template: Some("shared objective".to_string()),
         goal_token_budget: None,
@@ -806,9 +1014,11 @@ async fn goal_task_identity_and_recovery_are_scoped_by_node_did() {
         )
         .await
         .expect("first DID materialization");
+    let mut second_task = task.clone();
+    second_task.agent_did = second_agent;
     let second_request = second_materializer
         .materialize(
-            &task,
+            &second_task,
             Some("shared-trigger"),
             TriggerKind::Schedule,
             Some("shared-trigger-doc"),
@@ -835,19 +1045,29 @@ async fn goal_task_identity_and_recovery_are_scoped_by_node_did() {
     );
     assert_eq!(
         second_materializer
-            .recover_goal_task_fire(&task, fire_key)
+            .recover_goal_task_fire(&second_task, fire_key)
             .await
             .expect("second DID recovery"),
         Some(second_request)
     );
+    first_node.shutdown().await.unwrap();
+    second_node.shutdown().await.unwrap();
 }
 
 #[tokio::test]
 async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let behavior = integration_test_agent("general");
+    let (db, _user, _client_access, behavior) =
+        signed_materializer_agent("goal-task-foreign-collision").await;
     let node_did = behavior.node_did().to_string();
+    let agent_did = behavior.agent_did.clone();
+    let agent_identity = behavior.agent_identity.clone();
+    let node = db.node.clone();
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent_did.parse().unwrap(),
+        agent_identity.as_ref(),
+    )
+    .unwrap();
     let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
@@ -855,7 +1075,7 @@ async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id(
         emit_outcome: false,
         task_id: "foreign-collision-task".to_string(),
         name: None,
-        agent_id: "general".to_string(),
+        agent_did: agent_did.clone(),
         prompt_template: "prompt".to_string(),
         goal_objective_template: Some("objective".to_string()),
         goal_token_budget: None,
@@ -864,29 +1084,30 @@ async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id(
     };
     let fire_key = "foreign-collision-fire";
     let identity = crate::goal::task_goal_fire_identity(&node_did, &task.task_id, fire_key);
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{}",
-                purpose: "normal",
-                node_did: "did:key:foreign-task-owner",
-                agent_id: "general",
-                session_id: "{}",
-                retry_key: "{}",
-                content: "foreign collision",
-                lifecycle_state: "pending"
-            }}) {{ _docID }}
-        }}"#,
-        escape_graphql_string(&identity.request_id),
-        escape_graphql_string(&identity.session_id),
-        escape_graphql_string(&identity.retry_key),
+    let foreign = integration_test_agent("foreign");
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        &identity.request_id,
+        foreign.node_did(),
+        &agent_did,
+        &agent_did,
+        &identity.session_id,
+        "foreign collision",
+        "interactive",
+        "2026-11-04T00:00:00Z",
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent_did),
     );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "seed collision: {:?}",
-        response.errors
-    );
+    create.retry_key = Some(identity.retry_key);
+    crate::sign_agent_request_create(agent_identity.as_ref(), &mut create)
+        .await
+        .unwrap();
+    access
+        .write(
+            "test.foreign_goal_task_collision",
+            &create.graphql_mutation().unwrap(),
+        )
+        .await
+        .expect("seed visible foreign-scope collision as selected Agent");
 
     let error = materializer
         .recover_goal_task_fire(&task, fire_key)
@@ -896,10 +1117,11 @@ async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id(
         error.to_string().contains("identity conflicts"),
         "{error:#}"
     );
+    node.shutdown().await.unwrap();
 }
 
 async fn create_request(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     request_id: &str,
     node_did: &str,
     lifecycle_state: &str,
@@ -909,6 +1131,7 @@ async fn create_request(
 ) {
     let request_id = escape_graphql_string(request_id);
     let node_did = escape_graphql_string(node_did);
+    let agent_did = escape_graphql_string(&spy_test_agent().agent_did);
     let lifecycle_state = escape_graphql_string(lifecycle_state);
     let trigger_id = escape_graphql_string(trigger_id);
     let correlation = escape_graphql_string(correlation);
@@ -919,7 +1142,7 @@ async fn create_request(
                 request_id: "{request_id}",
                 purpose: "normal",
                 node_did: "{node_did}",
-                agent_id: "general",
+                agent_did: "{agent_did}",
                 session_id: "{request_id}",
                 content: "production marker test",
                 lifecycle_state: "{lifecycle_state}",
@@ -945,6 +1168,214 @@ async fn create_request(
         "creating AgentRequest {request_id} failed: {:?}",
         response.errors
     );
+}
+
+#[tokio::test]
+async fn group_marker_is_read_by_selected_held_agent_without_node_visibility() {
+    use crate::store::identity::NodeIdentity;
+    let (db, user, client_access, agent) = signed_materializer_agent("group-marker-agent").await;
+    let binding = crate::store::identity::provision_agent_identity_authorized(
+        &db.node,
+        db.node_identity.as_ref(),
+        &identity::Did::new(user.did()).unwrap(),
+    )
+    .await
+    .unwrap();
+    let owner = db.node_identity.did().to_owned();
+    crate::test_support::install_test_agent_binding_with_access(
+        &owner,
+        "other group Agent",
+        &binding,
+        &client_access,
+    )
+    .await;
+    let mut sibling = (*agent).clone();
+    sibling.agent_did = binding.agent_did.clone();
+    sibling.agent_identity =
+        crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+            .unwrap();
+    let sibling = Arc::new(sibling);
+    let mut task = resolved_task("work");
+    task.agent_did = agent.agent_did.clone();
+    let mut sibling_task = task.clone();
+    sibling_task.agent_did = sibling.agent_did.clone();
+    let trigger_id = "group-trigger";
+    let other_trigger = "other-trigger";
+    let triggers = RapidHashMap::from_iter([
+        (
+            trigger_id.to_owned(),
+            resolved_event_trigger_with_concurrency(
+                trigger_id,
+                task.clone(),
+                ConcurrencyMode::Parallel,
+            ),
+        ),
+        (
+            other_trigger.to_owned(),
+            resolved_event_trigger_with_concurrency(
+                other_trigger,
+                sibling_task.clone(),
+                ConcurrencyMode::Parallel,
+            ),
+        ),
+    ]);
+    let snapshot = Arc::new(
+        ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+            agent.agent_did.clone(),
+            vec![agent.clone(), sibling.clone()],
+            RapidHashMap::new(),
+            RapidHashMap::new(),
+            RapidHashMap::new(),
+        )
+        .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+            event_triggers: triggers,
+            ..Default::default()
+        })
+        .with_node(agent.node.clone())
+        .with_local_did(agent.node_did().to_owned())
+        .activate(1, RapidHashMap::new()),
+    );
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(db.node.clone(), rx);
+    let key = super::super::durable_fire_key("event-group", &["generation-one"]);
+    let next = super::super::durable_fire_key("event-group", &["generation-two"]);
+    let request_id = materializer
+        .materialize(
+            &task,
+            Some(trigger_id),
+            TriggerKind::Event,
+            Some("trigger-doc"),
+            Some("source-doc"),
+            Some("correlation"),
+            None,
+            "work",
+            None,
+            &key,
+            None,
+            None,
+        )
+        .await
+        .expect("publish selected Agent's group request");
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{_docID}} }}"#,
+        escape_graphql_string(&request_id),
+    );
+    let access = crate::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.agent_did.parse().unwrap(),
+        agent.agent_identity.as_ref(),
+    )
+    .unwrap();
+    let own = access.execute(&query).await.unwrap();
+    assert_eq!(own["data"]["AgentRequest"].as_array().unwrap().len(), 1);
+    let node_view = crate::ConfigAccess::local(db.node.clone())
+        .execute(&query)
+        .await
+        .unwrap();
+    assert!(node_view["data"]["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(materializer
+        .has_materialized_group_request(agent.node_did(), trigger_id, &key)
+        .await
+        .unwrap());
+    assert!(!materializer
+        .has_materialized_group_request(agent.node_did(), trigger_id, &next)
+        .await
+        .unwrap());
+    assert!(!materializer
+        .has_materialized_group_request(agent.node_did(), other_trigger, &key)
+        .await
+        .unwrap());
+    let mut grouped_source = resolved_event_trigger_with_concurrency(
+        trigger_id,
+        task.clone(),
+        ConcurrencyMode::Parallel,
+    );
+    grouped_source.source_collection = "AgentRequest".into();
+    grouped_source.correlation_field = Some("caused_by_correlation".into());
+    grouped_source.expected_count = Some(1);
+    grouped_source.fire_mode = crate::runtime::snapshot::EventTriggerFireMode::PerGroup;
+    let delivery = crate::triggers::engine::event_delivery::Delivery::Trigger {
+        node_did: agent.node_did(),
+        trigger: &grouped_source,
+    };
+    let (visible, _, _) =
+        crate::triggers::engine::event_delivery::group_correlation_page(&access, delivery, None)
+            .await
+            .unwrap();
+    assert_eq!(visible, vec!["correlation"]);
+    let sibling_access = crate::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        sibling.agent_did.parse().unwrap(),
+        sibling.agent_identity.as_ref(),
+    )
+    .unwrap();
+    assert!(
+        crate::triggers::engine::event_delivery::group_correlation_page(
+            &sibling_access,
+            delivery,
+            None,
+        )
+        .await
+        .is_err(),
+        "source scan must bind its selected actor"
+    );
+    let mut sibling_grouped_source = grouped_source.clone();
+    sibling_grouped_source.task = sibling_task.clone();
+    let sibling_delivery = crate::triggers::engine::event_delivery::Delivery::Trigger {
+        node_did: sibling.node_did(),
+        trigger: &sibling_grouped_source,
+    };
+    let (hidden, _, _) = crate::triggers::engine::event_delivery::group_correlation_page(
+        &sibling_access,
+        sibling_delivery,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        hidden.is_empty(),
+        "a sibling Agent cannot discover the source record"
+    );
+    let sibling_snapshot = Arc::new(
+        ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+            sibling.agent_did.clone(),
+            vec![sibling.clone()],
+            RapidHashMap::new(),
+            RapidHashMap::new(),
+            RapidHashMap::new(),
+        )
+        .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+            event_triggers: RapidHashMap::from_iter([(
+                trigger_id.to_owned(),
+                resolved_event_trigger_with_concurrency(
+                    trigger_id,
+                    sibling_task,
+                    ConcurrencyMode::Parallel,
+                ),
+            )]),
+            ..Default::default()
+        })
+        .with_node(sibling.node.clone())
+        .with_local_did(sibling.node_did().to_owned())
+        .activate(1, RapidHashMap::new()),
+    );
+    let (_sibling_tx, sibling_rx) = watch::channel(sibling_snapshot);
+    let sibling_materializer = ProductionMaterializer::new(db.node.clone(), sibling_rx);
+    assert!(
+        !sibling_materializer
+            .has_materialized_group_request(agent.node_did(), trigger_id, &key)
+            .await
+            .unwrap(),
+        "a different Agent cannot observe the selected Agent's marker"
+    );
+    assert!(materializer
+        .has_materialized_group_request(agent.node_did(), "unconfigured", &key)
+        .await
+        .is_err());
+    db.node.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -1011,23 +1442,29 @@ async fn durable_group_marker_preserves_generation_owner_and_goal_mode() {
 
 #[tokio::test]
 async fn materializer_rejects_workspace_from_different_explicit_owner() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    let behavior = integration_test_agent("general");
-    insert_ready_workspace(
-        &node,
-        "ws-owner",
-        "did:key:z-correct-owner",
-        behavior.node_did(),
+    let (db, _user, _client_access, behavior) =
+        signed_materializer_agent("workspace-reject-owner").await;
+    let (foreign_db, _foreign_user, _foreign_client_access, _foreign_behavior) =
+        signed_materializer_agent("workspace-reject-owner-foreign").await;
+    let node = db.node.clone();
+    let owner = behavior.node_did().to_owned();
+    let workspace_owner = foreign_db.node_identity.did().to_owned();
+    assert_ne!(owner, workspace_owner);
+    let agent_did = behavior.agent_did.clone();
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent_did.parse().unwrap(),
+        behavior.agent_identity.as_ref(),
     )
-    .await;
+    .unwrap();
+    publish_workspace_for_agent(&access, "ws-owner", &workspace_owner, &agent_did).await;
     let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), rx);
-    let context = writer_context("ws-owner", "did:key:z-wrong-owner");
+    let context = writer_context("ws-owner", &owner);
     let error = materializer
         .materialize(
-            &workspace_writer_task(),
+            &workspace_writer_task(&agent_did),
             Some("trigger-owner"),
             TriggerKind::Event,
             Some("trigger-owner-doc"),
@@ -1044,7 +1481,9 @@ async fn materializer_rejects_workspace_from_different_explicit_owner() {
         .unwrap_err();
     assert!(error.to_string().contains("not found"), "{error:#}");
     assert!(
-        workspace_requests(&node, "ws-owner").await.is_empty(),
+        workspace_requests_for_agent(&access, "ws-owner")
+            .await
+            .is_empty(),
         "wrong owner must reject before request publication"
     );
 }
@@ -1154,12 +1593,12 @@ async fn trigger_wide_gate_and_supersede_survive_kind_change_and_preserve_exclus
         .unwrap());
 }
 
-fn workspace_writer_task() -> ResolvedTask {
+fn workspace_writer_task(agent_did: &str) -> ResolvedTask {
     ResolvedTask {
         emit_outcome: false,
         task_id: "task-ws".to_string(),
         name: None,
-        agent_id: "general".to_string(),
+        agent_did: agent_did.to_owned(),
         prompt_template: "patch".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -1172,88 +1611,106 @@ fn writer_context(workspace_id: &str, owner: &str) -> String {
     serde_json::json!({"version":1,"source_fields":{"workspace_id":workspace_id,"workspace_owner_node_did":owner,"workspace_authority":"readWrite"}}).to_string()
 }
 
-async fn insert_ready_workspace(
-    node: &defra_node::EmbeddedNode,
+async fn publish_workspace_for_agent(
+    access: &crate::ConfigAccess,
     workspace_id: &str,
     owner: &str,
-    writer_principal: &str,
+    agent_did: &str,
 ) {
-    let mutation = crate::tools::workspace::isolated_workspace_upsert_mutation(
-        &crate::tools::workspace::IsolatedWorkspaceDoc {
-            path_capability: crate::tools::workspace::WorkspacePathCapability::exact_paths(vec![])
-                .unwrap(),
-            workspace_id: workspace_id.into(),
-            work_unit_id: "unit-1".into(),
-            repository_id: "repo-1".into(),
-            base_sha: "abc".into(),
-            branch: "topic".into(),
-            creation_policy: "git_worktree_diff".into(),
-            adapter: "git_worktree".into(),
-            owner_node_did: owner.into(),
-            writer_principal: writer_principal.into(),
-            integrator_principal: "did:key:integrator".into(),
-            instruction_manifest: "{}".into(),
-            seal_hash: None,
-            lifecycle_state: "ready".into(),
-            caused_by_invocation_id: "inv-1".into(),
-            caused_by_correlation: "corr-1".into(),
-        },
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "creating IsolatedWorkspace failed: {:?}",
-        response.errors
-    );
+    let workspace = crate::tools::workspace::IsolatedWorkspaceDoc {
+        path_capability: crate::tools::workspace::WorkspacePathCapability::exact_paths(vec![])
+            .unwrap(),
+        workspace_id: workspace_id.into(),
+        work_unit_id: "unit-1".into(),
+        repository_id: "repo-1".into(),
+        base_sha: "abc".into(),
+        branch: "topic".into(),
+        creation_policy: "git_worktree_diff".into(),
+        adapter: "git_worktree".into(),
+        owner_node_did: owner.into(),
+        writer_principal: agent_did.into(),
+        integrator_principal: agent_did.into(),
+        instruction_manifest: "{}".into(),
+        seal_hash: None,
+        lifecycle_state: "ready".into(),
+        caused_by_invocation_id: "inv-1".into(),
+        caused_by_correlation: "corr-1".into(),
+    };
+    access
+        .transact_write("test.agent_workspace", |txn| {
+            let workspace = &workspace;
+            Box::pin(async move {
+                let agent = txn
+                    .execute(&format!(
+                        r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
+                        escape_graphql_string(agent_did),
+                    ))
+                    .await?;
+                let agents = agent["data"]["Agent"].as_array().unwrap();
+                assert_eq!(agents.len(), 1, "held Agent has one physical document");
+                let agent_doc = agents[0]["_docID"].as_str().unwrap();
+                let result = txn
+                    .execute(
+                        &crate::tools::workspace::isolated_workspace_upsert_mutation(workspace),
+                    )
+                    .await?;
+                let rows = result["data"]["upsert_IsolatedWorkspace"]
+                    .as_array()
+                    .unwrap();
+                assert_eq!(rows.len(), 1);
+                let doc = rows[0]["_docID"].as_str().unwrap();
+                txn.add_resource_relationship(
+                    "IsolatedWorkspace",
+                    doc,
+                    "parent",
+                    "agents",
+                    agent_doc,
+                )
+                .await?;
+                let actor = identity::Did::new(agent_did)?;
+                txn.add_actor_relationship("IsolatedWorkspace", doc, "writer", &actor)
+                    .await?;
+                txn.add_actor_relationship("IsolatedWorkspace", doc, "integrator", &actor)
+                    .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .expect("publish Agent-owned workspace with native parent and roles");
 }
 
-async fn workspace_requests(
-    node: &defra_node::EmbeddedNode,
+async fn workspace_requests_for_agent(
+    access: &crate::ConfigAccess,
     workspace_id: &str,
 ) -> Vec<serde_json::Value> {
-    let query = format!(
-        r#"{{
-            AgentRequest(filter: {{ workspace_id: {{ _eq: "{id}" }} }}) {{
-                request_id
-                node_did
-                lifecycle_state
-                workspace_id
-                workspace_seal_hash
-                workspace_owner_node_did
-                workspace_authority
-            }}
-        }}"#,
-        id = escape_graphql_string(workspace_id),
-    );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "querying workspace requests failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(serde_json::Value::as_array)
-        .cloned()
-        .unwrap_or_default()
+    let result = access.execute(&format!(
+        r#"{{ AgentRequest(filter: {{workspace_id: {{_eq: "{}"}}}}) {{request_id node_did lifecycle_state workspace_id workspace_seal_hash workspace_owner_node_did workspace_authority}} }}"#,
+        escape_graphql_string(workspace_id),
+    )).await.expect("read the held Agent's workspace requests");
+    result["data"]["AgentRequest"].as_array().unwrap().clone()
 }
 
 #[tokio::test]
 async fn materializer_resolves_missing_workspace_owner_from_canonical_workspace() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    let behavior = integration_test_agent("general");
+    let (db, _user, _client_access, behavior) =
+        signed_materializer_agent("workspace-inferred-owner").await;
+    let node = db.node.clone();
     let owner = behavior.node_did().to_string();
-    insert_ready_workspace(&node, "ws-incomplete", &owner, &owner).await;
+    let agent_did = behavior.agent_did.clone();
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent_did.parse().unwrap(),
+        behavior.agent_identity.as_ref(),
+    )
+    .unwrap();
+    publish_workspace_for_agent(&access, "ws-incomplete", &owner, &agent_did).await;
     let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), rx);
     let context=serde_json::json!({"version":1,"source_fields":{"workspace_id":"ws-incomplete","workspace_authority":"readWrite"}}).to_string();
     let request_id = materializer
         .materialize(
-            &workspace_writer_task(),
+            &workspace_writer_task(&agent_did),
             Some("trigger-incomplete"),
             TriggerKind::Event,
             Some("trigger-incomplete-doc"),
@@ -1268,7 +1725,7 @@ async fn materializer_resolves_missing_workspace_owner_from_canonical_workspace(
         )
         .await
         .expect("canonical workspace resolves the missing owner");
-    let rows = workspace_requests(&node, "ws-incomplete").await;
+    let rows = workspace_requests_for_agent(&access, "ws-incomplete").await;
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!(rows[0]["request_id"].as_str(), Some(request_id.as_str()));
     assert_eq!(
@@ -1280,15 +1737,26 @@ async fn materializer_resolves_missing_workspace_owner_from_canonical_workspace(
 
 #[tokio::test]
 async fn materializer_does_not_infer_an_owner_for_a_foreign_workspace() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    let behavior = integration_test_agent("general");
-    let owner = behavior.node_did().to_string();
-    insert_ready_workspace(
-        &node,
+    let (db, _user, _client_access, behavior) =
+        signed_materializer_agent("workspace-ownerless").await;
+    let (foreign_db, _foreign_user, _foreign_client_access, _foreign_behavior) =
+        signed_materializer_agent("workspace-ownerless-foreign").await;
+    let node = db.node.clone();
+    let owner = behavior.node_did().to_owned();
+    let workspace_owner = foreign_db.node_identity.did().to_owned();
+    assert_ne!(owner, workspace_owner);
+    let agent_did = behavior.agent_did.clone();
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent_did.parse().unwrap(),
+        behavior.agent_identity.as_ref(),
+    )
+    .unwrap();
+    publish_workspace_for_agent(
+        &access,
         "ws-foreign-ownerless",
-        "did:key:another-owner",
-        &owner,
+        &workspace_owner,
+        &agent_did,
     )
     .await;
     let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
@@ -1297,7 +1765,7 @@ async fn materializer_does_not_infer_an_owner_for_a_foreign_workspace() {
     let context = serde_json::json!({"version":1,"source_fields":{"workspace_id":"ws-foreign-ownerless","workspace_authority":"readOnly"}}).to_string();
     let error = materializer
         .materialize(
-            &workspace_writer_task(),
+            &workspace_writer_task(&agent_did),
             Some("trigger-foreign-ownerless"),
             TriggerKind::Event,
             Some("trigger-foreign-ownerless-doc"),
@@ -1318,32 +1786,38 @@ async fn materializer_does_not_infer_an_owner_for_a_foreign_workspace() {
             .contains("isolated workspace ws-foreign-ownerless not found"),
         "{error:#}"
     );
-    assert!(workspace_requests(&node, "ws-foreign-ownerless")
-        .await
-        .is_empty());
+    assert!(
+        workspace_requests_for_agent(&access, "ws-foreign-ownerless")
+            .await
+            .is_empty()
+    );
 }
 
 #[tokio::test]
 async fn materializer_preserves_explicit_workspace_owner_distinct_from_executor() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let behavior = integration_test_agent("general");
-    let executor = behavior.node_did().to_owned();
-    assert_ne!(executor, "did:key:z-workspace-owner");
-    insert_ready_workspace(
-        node.as_ref(),
-        "ws-stamp",
-        "did:key:z-workspace-owner",
-        behavior.node_did(),
+    let (db, _user, _client_access, behavior) =
+        signed_materializer_agent("workspace-explicit-owner").await;
+    let (foreign_db, _foreign_user, _foreign_client_access, _foreign_behavior) =
+        signed_materializer_agent("workspace-explicit-owner-foreign").await;
+    let node = db.node.clone();
+    let owner = behavior.node_did().to_owned();
+    let workspace_owner = foreign_db.node_identity.did().to_owned();
+    assert_ne!(owner, workspace_owner);
+    let agent_did = behavior.agent_did.clone();
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent_did.parse().unwrap(),
+        behavior.agent_identity.as_ref(),
     )
-    .await;
+    .unwrap();
+    publish_workspace_for_agent(&access, "ws-stamp", &workspace_owner, &agent_did).await;
     let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
-    let context = writer_context("ws-stamp", "did:key:z-workspace-owner");
+    let context = writer_context("ws-stamp", &workspace_owner);
     let request_id = materializer
         .materialize(
-            &workspace_writer_task(),
+            &workspace_writer_task(&agent_did),
             Some("trigger-stamp"),
             TriggerKind::Event,
             Some("trigger-stamp-config-doc"),
@@ -1358,35 +1832,40 @@ async fn materializer_preserves_explicit_workspace_owner_distinct_from_executor(
         )
         .await
         .expect("explicit workspace owner survives request publication");
-    let rows = workspace_requests(node.as_ref(), "ws-stamp").await;
+    let rows = workspace_requests_for_agent(&access, "ws-stamp").await;
     assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0]["node_did"].as_str(), Some(executor.as_str()));
+    assert_eq!(rows[0]["node_did"].as_str(), Some(owner.as_str()));
     assert_eq!(rows[0]["workspace_id"].as_str(), Some("ws-stamp"));
     assert_eq!(rows[0]["workspace_authority"].as_str(), Some("readWrite"));
     assert_eq!(rows[0]["request_id"].as_str(), Some(request_id.as_str()));
     assert_eq!(
         rows[0]["workspace_owner_node_did"].as_str(),
-        Some("did:key:z-workspace-owner")
+        Some(workspace_owner.as_str())
     );
 }
 
 #[tokio::test]
 async fn goal_task_workspace_activation_retry_is_idempotent() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let behavior = integration_test_agent("general");
-    insert_ready_workspace(
-        node.as_ref(),
-        "ws-goal-retry",
-        "did:key:z-workspace-owner",
-        behavior.node_did(),
+    let (db, _user, _client_access, behavior) =
+        signed_materializer_agent("workspace-goal-retry").await;
+    let (foreign_db, _foreign_user, _foreign_client_access, _foreign_behavior) =
+        signed_materializer_agent("workspace-goal-foreign-owner").await;
+    let workspace_owner = foreign_db.node_identity.did().to_owned();
+    let agent_did = behavior.agent_did.clone();
+    let agent_identity = behavior.agent_identity.clone();
+    let node = db.node.clone();
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent_did.parse().unwrap(),
+        agent_identity.as_ref(),
     )
-    .await;
+    .unwrap();
+    publish_workspace_for_agent(&access, "ws-goal-retry", &workspace_owner, &agent_did).await;
     let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
-    let context = writer_context("ws-goal-retry", "did:key:z-workspace-owner");
-    let mut task = workspace_writer_task();
+    let context = writer_context("ws-goal-retry", &workspace_owner);
+    let mut task = workspace_writer_task(&agent_did);
     task.goal_objective_template = Some("finish workspace change".to_string());
     task.goal_token_budget = Some(2_048);
     let fire_key = "event:trigger-workspace-goal:doc:source-workspace-goal";
@@ -1427,34 +1906,68 @@ async fn goal_task_workspace_activation_retry_is_idempotent() {
         .expect("activation acknowledgement retry");
 
     assert_eq!(retry, first);
-    let rows = workspace_requests(node.as_ref(), "ws-goal-retry").await;
+    let rows = access.execute(r#"{ AgentRequest(filter: {workspace_id: {_eq: "ws-goal-retry"}}) {_docID request_id session_id lifecycle_state workspace_owner_node_did} }"#).await.unwrap();
+    let rows = rows["data"]["AgentRequest"].as_array().unwrap();
     assert_eq!(rows.len(), 1, "retry must reuse the staged request");
     assert_eq!(
         rows[0]["workspace_owner_node_did"].as_str(),
-        Some("did:key:z-workspace-owner")
+        Some(workspace_owner.as_str())
     );
     assert_eq!(rows[0]["lifecycle_state"].as_str(), Some("pending"));
+    let session = escape_graphql_string(rows[0]["session_id"].as_str().unwrap());
+    let goal = access.execute(&format!(r#"{{Goal(filter: {{session_id: {{_eq: "{session}"}}}}) {{creator_did parent_linked assignment_root_request_doc_id}}}}"#)).await.unwrap();
+    assert_eq!(goal["data"]["Goal"][0]["creator_did"], agent_did);
+    let modeled_link = tokio::task::spawn_blocking(|| {
+        crate::lean_vocab_test::lean_contract_snapshot()
+            .goal_link_cases
+            .iter()
+            .find(|case| {
+                case.collection == "Goal"
+                    && case.actor == "agent"
+                    && case.mode == "fresh"
+                    && case.commit
+            })
+            .unwrap()
+            .clone()
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        goal["data"]["Goal"][0]["parent_linked"],
+        modeled_link.initial.linked
+    );
+    assert_eq!(
+        goal["data"]["Goal"][0]["assignment_root_request_doc_id"],
+        rows[0]["_docID"]
+    );
+    node.shutdown().await.unwrap();
 }
 
 #[tokio::test]
 async fn unique_read_write_denial_does_not_leave_claimable_request() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let behavior = integration_test_agent("general");
-    insert_ready_workspace(
-        node.as_ref(),
-        "ws-rw",
-        "did:key:z-workspace-owner",
-        behavior.node_did(),
+    let (db, _user, _client_access, behavior) =
+        signed_materializer_agent("workspace-unique-writer").await;
+    let (foreign_db, _foreign_user, _foreign_client_access, _foreign_behavior) =
+        signed_materializer_agent("workspace-unique-writer-foreign").await;
+    let node = db.node.clone();
+    let owner = behavior.node_did().to_owned();
+    let workspace_owner = foreign_db.node_identity.did().to_owned();
+    assert_ne!(owner, workspace_owner);
+    let agent_did = behavior.agent_did.clone();
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent_did.parse().unwrap(),
+        behavior.agent_identity.as_ref(),
     )
-    .await;
+    .unwrap();
+    publish_workspace_for_agent(&access, "ws-rw", &workspace_owner, &agent_did).await;
     let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
-    let context = writer_context("ws-rw", "did:key:z-workspace-owner");
+    let context = writer_context("ws-rw", &workspace_owner);
     let first = materializer
         .materialize(
-            &workspace_writer_task(),
+            &workspace_writer_task(&agent_did),
             Some("trigger-rw-1"),
             TriggerKind::Event,
             Some("trigger-rw-1-config-doc"),
@@ -1471,7 +1984,7 @@ async fn unique_read_write_denial_does_not_leave_claimable_request() {
         .expect("first writer");
     let error = materializer
         .materialize(
-            &workspace_writer_task(),
+            &workspace_writer_task(&agent_did),
             Some("trigger-rw-2"),
             TriggerKind::Event,
             Some("trigger-rw-2-config-doc"),
@@ -1490,7 +2003,7 @@ async fn unique_read_write_denial_does_not_leave_claimable_request() {
         error.to_string().contains("unique Active ReadWrite"),
         "{error:#}"
     );
-    let rows = workspace_requests(node.as_ref(), "ws-rw").await;
+    let rows = workspace_requests_for_agent(&access, "ws-rw").await;
     assert_eq!(rows.len(), 2, "{rows:?}");
     let claimable = rows
         .iter()
@@ -1508,7 +2021,7 @@ async fn unique_read_write_denial_does_not_leave_claimable_request() {
 }
 
 async fn claimed_trigger_request(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     request_id: &str,
     node_did: &str,
 ) -> crate::request::lifecycle::RequestLifecycle {
@@ -1536,7 +2049,7 @@ async fn claimed_trigger_request(
             .unwrap();
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
-        "general",
+        spy_test_agent().agent_did.as_str(),
         node_did,
         row.try_into().unwrap(),
         60,
@@ -1549,7 +2062,7 @@ async fn claimed_trigger_request(
 }
 
 async fn canonical_partial_streams(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     row: &gents_protocol::row::AgentRequestRow,
 ) -> (String, String) {
     use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
@@ -1690,7 +2203,7 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot =
-        snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
+        snapshot_with_agent_and_schedules(spy_test_agent(), RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot.clone());
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let identity = gents_protocol::trigger_delivery::FireIdentity {
@@ -1724,7 +2237,7 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
             assert!(crate::triggers::engine::durable::stage_fire_receipt(txn, &fire).await?);
             txn.execute_with_variables("mutation($input: AgentRequestMutationInputArg!) {create_AgentRequest(input: $input) {_docID}}", &serde_json::json!({"input": {
                 "request_id": fire.request_id, "node_did": fire.identity.owner_did,
-                "session_id": fire.session_id, "agent_id": "general", "purpose": "normal",
+                "session_id": fire.session_id, "agent_did": spy_test_agent().agent_did.clone(), "purpose": "normal",
                 "lifecycle_state": "processing", "caused_by_trigger_id": "replay-trigger",
                 "created_at": fire.created_at
             }})).await?;
@@ -1735,13 +2248,14 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
     let engine = TriggerEngine::new(rx, Arc::new(materializer));
     let mut task = resolved_task("{{ doc.field_added_after_admission }}");
     task.task_id = "replay-task".into();
-    task.agent_id = "general".into();
+    task.agent_did = spy_test_agent().agent_did.clone();
     let result = engine.dispatch(FireIntent {
         trigger_id: Some("replay-trigger".into()), trigger_kind: TriggerKind::Event,
         task, concurrency: ConcurrencyMode::LatestOnly,
         event_vars: serde_json::json!({"source_collection":"ReplayWork", "source_doc_id":"physical-source"}),
         doc_vars: None, correlation: None, group_vars: None, trigger_context: None, args_vars: None,
         durable_fire_key: "replayed-arrival".into(), pre_materialized_request_id: None,
+            event_source_generation: None,
         on_result: Box::new(|_| {}),
     }).await;
     assert!(
@@ -1768,7 +2282,7 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot =
-        snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
+        snapshot_with_agent_and_schedules(spy_test_agent(), RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot.clone());
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let identity = gents_protocol::trigger_delivery::FireIdentity {
@@ -1802,7 +2316,7 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
             assert!(crate::triggers::engine::durable::stage_fire_receipt(txn, &fire).await?);
             txn.execute_with_variables("mutation($input: AgentRequestMutationInputArg!) {create_AgentRequest(input: $input) {_docID}}", &serde_json::json!({"input": {
                 "request_id": fire.request_id, "node_did": fire.identity.owner_did,
-                "session_id": fire.session_id, "agent_id": "general", "purpose": "normal",
+                "session_id": fire.session_id, "agent_did": spy_test_agent().agent_did.clone(), "purpose": "normal",
                 "lifecycle_state": "processing", "caused_by_trigger_id": "replay-trigger",
                 "created_at": fire.created_at
             }})).await?;
@@ -1813,13 +2327,14 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
     let engine = TriggerEngine::new(rx, Arc::new(materializer));
     let mut task = resolved_task("{{ doc.field_added_after_admission }}");
     task.task_id = "replay-task".into();
-    task.agent_id = "general".into();
+    task.agent_did = spy_test_agent().agent_did.clone();
     let result = engine.dispatch(FireIntent {
         trigger_id: Some("replay-trigger".into()), trigger_kind: TriggerKind::Schedule,
         task, concurrency: ConcurrencyMode::LatestOnly,
         event_vars: serde_json::json!({"source_collection":"ReplayWork", "source_doc_id":"physical-source"}),
         doc_vars: None, correlation: None, group_vars: None, trigger_context: None, args_vars: None,
         durable_fire_key: "persisted-due-occurrence".into(), pre_materialized_request_id: None,
+            event_source_generation: None,
         on_result: Box::new(|_| {}),
     }).await;
     assert!(
@@ -1845,15 +2360,16 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
 async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let behavior = integration_test_agent("general");
+    let behavior = spy_test_agent();
     let owner = behavior.node_did().to_string();
+    let held_agent = behavior.agent_did.clone();
     for (target, agent, closed) in [
-        ("captain", "general", false),
+        ("captain", held_agent.as_str(), false),
         ("wrong-agent", "other", false),
-        ("closed", "general", true),
-        ("foreign-owner", "general", false),
+        ("closed", held_agent.as_str(), true),
+        ("foreign-owner", held_agent.as_str(), false),
     ] {
-        crate::session::ensure_session_with_agent_id_and_requester_did(
+        crate::session::ensure_session_with_agent_did_and_requester_did(
             &node,
             target,
             if target == "foreign-owner" {
@@ -1910,6 +2426,7 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
             args_vars: None,
             durable_fire_key: "due-2030-01-01".into(),
             pre_materialized_request_id: None,
+            event_source_generation: None,
             on_result: Box::new(|_| {}),
         };
         let first = engine.dispatch(intent()).await;
@@ -1955,7 +2472,7 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
                 let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();
                 let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
                     node.clone(),
-                    "general",
+                    spy_test_agent().agent_did.as_str(),
                     &owner,
                     request,
                     60,

@@ -14,51 +14,77 @@ use crate::request::task_hooks::{
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use crate::tools::call::hook::BackgroundExecutionRegistry;
 
-const AGENT_ID: &str = "general";
-
 pub(super) struct Fixture {
-    pub(super) node: Arc<defra_node::EmbeddedNode>,
+    pub(super) node: Arc<defra_node::Node>,
     identity: Arc<dyn NodeIdentity>,
-    _data: tempfile::TempDir,
+    agent_identity: Arc<dyn NodeIdentity>,
+    _db: crate::support::TestDb,
+    user: KeyIdentity,
+    owner_access: crate::ConfigAccess,
 }
 
 impl Fixture {
     pub(super) async fn new() -> Self {
-        let data = tempfile::tempdir().expect("node data directory");
-        let identity: Arc<dyn NodeIdentity> = Arc::new(
-            KeyIdentity::load_or_create(data.path().join("agent.key"), None).expect("identity"),
-        );
-        let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
-                .with_node_identity_did(identity.did())
-                .data_path(data.path())
-                .build()
-                .await
-                .expect("embedded node"),
-        );
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        crate::test_support::install_test_agent(&node, identity.did(), AGENT_ID).await;
+        let db = crate::support::test_db("task-hook-recovery").await;
+        let (db, user, owner_access, binding) =
+            crate::test_support::signed_test_node_from_db(db, "task-hook-recovery-user").await;
+        let node = db.node.clone();
+        let identity = db.node_identity.clone();
+        let agent_identity =
+            crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
         Self {
             node,
             identity,
-            _data: data,
+            agent_identity,
+            _db: db,
+            user,
+            owner_access,
         }
+    }
+
+    pub(super) fn agent_access(&self) -> crate::ConfigAccess {
+        crate::ConfigAccess::local_managed_agent(
+            self.node.clone(),
+            identity::Did::new(self.agent_identity.did()).unwrap(),
+            self.agent_identity.as_ref(),
+        )
+        .unwrap()
     }
 
     fn did(&self) -> &str {
         self.identity.did()
     }
 
+    async fn other_agent(&self) -> Arc<dyn NodeIdentity> {
+        let user = identity::Did::new(self.user.did()).unwrap();
+        let binding = crate::store::identity::provision_agent_identity_authorized(
+            &self.node,
+            self.identity.as_ref(),
+            &user,
+        )
+        .await
+        .unwrap();
+        crate::test_support::install_test_agent_binding_with_access(
+            self.did(),
+            "other hook agent",
+            &binding,
+            &self.owner_access,
+        )
+        .await;
+        crate::store::identity::resolve_agent_identity(self.identity.as_ref(), &binding).unwrap()
+    }
+
     pub(super) async fn claimed(&self, lease: Duration) -> RequestLifecycle {
         let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
             self.node.clone(),
-            AGENT_ID,
+            self.agent_identity.did(),
             self.identity.clone(),
             "run the task",
             60,
             ExecutionOrigin::Interactive,
             "task-hook-recovery",
             TriggerLineage::default(),
+            Some(self.agent_identity.clone()),
         )
         .await
         .unwrap();
@@ -83,16 +109,11 @@ impl Fixture {
         let snapshot_started = chrono::Utc::now();
         let escaped = crate::store::graphql::escape_graphql_string(request_doc_id);
         let query_future = async {
-            let response = self.node.execute(&format!(
+            let response = self.agent_access().execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state execution_generation execution_lease_expires_at execution_lease_secs }} }}"#
-            )).await;
-            if response.has_errors() {
-                return Err(());
-            }
+            )).await.map_err(|_| ())?;
             let rows = response
-                .data
-                .as_ref()
-                .and_then(|data| data.get("AgentRequest"))
+                .pointer("/data/AgentRequest")
                 .and_then(serde_json::Value::as_array)
                 .cloned()
                 .unwrap_or_default();
@@ -110,11 +131,12 @@ impl Fixture {
     async fn abandoned_request(&self, interrupt_requested: bool) -> String {
         let claim_started = std::time::Instant::now();
         let mut lifecycle = self.claimed(Duration::from_secs(60)).await;
-        let writer = crate::request::streaming::DefraStreamWriter::new(
+        let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
             self.node.clone(),
-            self.did(),
+            &lifecycle,
             Duration::ZERO,
-        );
+        )
+        .unwrap();
         if let Err(begin_error) = lifecycle.begin_owned_execution(&writer).await {
             let expected_generation = lifecycle
                 .execution_generation()
@@ -132,11 +154,11 @@ impl Fixture {
         }
         let doc_id = lifecycle.request().doc_id.clone();
         if interrupt_requested {
-            crate::request::interrupt::interrupt_request_by_doc_id(
-                &self.node,
+            crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+                &self.agent_access(),
                 &doc_id,
                 self.did(),
-                Some(self.did()),
+                Some(self.agent_identity.did()),
             )
             .await
             .unwrap();
@@ -144,14 +166,12 @@ impl Fixture {
         drop(lifecycle);
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                let response = crate::store::graphql::graphql_with_transaction_retry(
-                    &self.node,
+                let response = self.agent_access().execute(
                     &format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ execution_lease_expires_at }} }}"#,
                         crate::store::graphql::escape_graphql_string(&doc_id)),
-                    "test.task_hook_relinquishment",
                 ).await.unwrap();
-                let row: serde_json::Value = crate::store::graphql::first_row(&response, "AgentRequest")
-                    .unwrap().expect("abandoned request");
+                let row = response["data"]["AgentRequest"].as_array().unwrap()
+                    .first().expect("abandoned request");
                 let expiry = chrono::DateTime::parse_from_rfc3339(
                     row["execution_lease_expires_at"].as_str().unwrap(),
                 ).unwrap();
@@ -163,18 +183,14 @@ impl Fixture {
     }
 
     async fn request_state(&self, doc_id: &str) -> String {
-        let response = crate::store::graphql::graphql_with_transaction_retry(
-            self.node.as_ref(),
-            &format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state }} }}"#,
-                crate::store::graphql::escape_graphql_string(doc_id),
-            ),
-            "test.task_hook_recovery_request",
-        )
-        .await
-        .unwrap();
-        let row: serde_json::Value = crate::store::graphql::first_row(&response, "AgentRequest")
+        let response = self.agent_access().execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state }} }}"#,
+            crate::store::graphql::escape_graphql_string(doc_id),
+        )).await.unwrap();
+        let row = response["data"]["AgentRequest"]
+            .as_array()
             .unwrap()
+            .first()
             .expect("request row");
         row["lifecycle_state"].as_str().unwrap().to_owned()
     }
@@ -214,6 +230,7 @@ fn record(
     doc_id: &str,
     name: &str,
     did: &str,
+    agent_did: &str,
     cwd: &Path,
     hooks: Vec<TaskHook>,
     attempts: Vec<RecordedHookAttempt>,
@@ -222,6 +239,7 @@ fn record(
         request_doc_id: doc_id.to_owned(),
         request_id: name.to_owned(),
         node_did: did.to_owned(),
+        agent_did: agent_did.to_owned(),
         cwd: cwd.to_path_buf(),
         root_guard: None,
         hooks,
@@ -279,6 +297,7 @@ async fn generated_task_hook_recovery_cases_drive_startup_recovery_and_host_reco
                     &doc_id,
                     &case.name,
                     fixture.did(),
+                    fixture.agent_identity.did(),
                     dir.path(),
                     hooks,
                     attempts,
@@ -288,12 +307,14 @@ async fn generated_task_hook_recovery_cases_drive_startup_recovery_and_host_reco
         }
         let restarted = BackgroundExecutionRegistry::default()
             .with_task_hook_records(dir.path().join("task-hooks"));
-        let outcome = crate::runtime::startup_recovery::run_startup_recovery_with_executions(
-            &fixture.node,
-            fixture.did(),
-            &restarted,
-        )
-        .await;
+        let outcome =
+            crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
+                &fixture.node,
+                fixture.did(),
+                std::slice::from_ref(&fixture.agent_identity),
+                &restarted,
+            )
+            .await;
         let report = outcome.task_hooks.expect("task hook recovery");
         restarted.task_hook_records().wait_for_recoveries().await;
         assert_eq!(report, usize::from(case.started));
@@ -324,12 +345,14 @@ async fn generated_task_hook_recovery_cases_drive_startup_recovery_and_host_reco
             case.name
         );
 
-        let again = crate::runtime::startup_recovery::run_startup_recovery_with_executions(
-            &fixture.node,
-            fixture.did(),
-            &restarted,
-        )
-        .await;
+        let again =
+            crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
+                &fixture.node,
+                fixture.did(),
+                std::slice::from_ref(&fixture.agent_identity),
+                &restarted,
+            )
+            .await;
         assert!(again.task_hooks.expect("second pass") == 0);
         restarted.task_hook_records().wait_for_recoveries().await;
         assert_eq!(
@@ -350,7 +373,17 @@ async fn generated_task_hook_sweep_cases_drive_the_record_sweep() {
     assert!(!cases.is_empty());
     let fixture = Fixture::new().await;
     for case in cases {
-        let resolved = case.parent_terminal.expect("resolved premise");
+        let observation = case
+            .task_hook_observation
+            .as_deref()
+            .expect("task hook observation");
+        let resolved = matches!(observation, "terminal" | "hidden" | "unavailable");
+        let hidden_agent = if observation == "hidden" {
+            Some(fixture.other_agent().await)
+        } else {
+            None
+        };
+        let selected_agent = hidden_agent.as_ref().unwrap_or(&fixture.agent_identity);
         let live = case.execution_registered.expect("live premise");
         let dir = tempfile::tempdir().expect("case directory");
         let log = dir.path().join("cleanup.log");
@@ -361,9 +394,38 @@ async fn generated_task_hook_sweep_cases_drive_the_record_sweep() {
             (owner.request().doc_id.clone(), Some(owner))
         };
         if resolved {
-            RequestLifecycle::recover_all(&fixture.node, fixture.did())
-                .await
-                .unwrap();
+            RequestLifecycle::recover_all_with_identities(
+                &fixture.node,
+                fixture.did(),
+                std::slice::from_ref(&fixture.agent_identity),
+            )
+            .await
+            .unwrap();
+        }
+        if observation == "hidden" {
+            let state: gents_protocol::request_lifecycle::RequestLifecycleState =
+                serde_json::from_value(fixture.request_state(&doc_id).await.into()).unwrap();
+            assert!(
+                state.is_terminal(),
+                "the owning Agent sees a terminal request"
+            );
+            let hidden_access = crate::ConfigAccess::local_managed_agent(
+                fixture.node.clone(),
+                identity::Did::new(selected_agent.did()).unwrap(),
+                selected_agent.as_ref(),
+            )
+            .unwrap();
+            let escaped = crate::store::graphql::escape_graphql_string(&doc_id);
+            let response = hidden_access.execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 2) {{ _docID }} }}"#,
+            )).await.unwrap();
+            assert!(
+                response["data"]["AgentRequest"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty(),
+                "another held Agent must not observe the terminal request"
+            );
         }
         let store = TaskHookRecordStore::default();
         let handle = store
@@ -371,6 +433,7 @@ async fn generated_task_hook_sweep_cases_drive_the_record_sweep() {
                 &doc_id,
                 &case.name,
                 fixture.did(),
+                selected_agent.did(),
                 dir.path(),
                 vec![logging_hook(&generated("sweep", "finally"), &log, 0)],
                 Vec::new(),
@@ -378,9 +441,18 @@ async fn generated_task_hook_sweep_cases_drive_the_record_sweep() {
             .unwrap();
         handle.work_started().await.unwrap();
         let held = live.then_some(handle);
-        let report = recover_task_hook_records(&fixture.node, fixture.did(), &store)
-            .await
-            .unwrap();
+        let report = recover_task_hook_records(
+            &fixture.node,
+            fixture.did(),
+            if observation == "unavailable" {
+                &[]
+            } else {
+                std::slice::from_ref(selected_agent)
+            },
+            &store,
+        )
+        .await
+        .unwrap();
         store.wait_for_recoveries().await;
         let recorded = !store.list().is_empty();
         assert_eq!(
@@ -430,6 +502,7 @@ async fn recovery_stops_a_surviving_hook_command_before_cleanup() {
             &doc_id,
             "surviving",
             fixture.did(),
+            fixture.agent_identity.did(),
             dir.path(),
             vec![
                 logging_hook(&generated("prepare", "before"), &log, 0),
@@ -446,12 +519,14 @@ async fn recovery_stops_a_surviving_hook_command_before_cleanup() {
     assert_eq!(survivor.identity.observe(), ProcessObservation::Running);
 
     let restarted = BackgroundExecutionRegistry::default().with_task_hook_records(records);
-    let outcome = crate::runtime::startup_recovery::run_startup_recovery_with_executions(
-        &fixture.node,
-        fixture.did(),
-        &restarted,
-    )
-    .await;
+    let outcome =
+        crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
+            &fixture.node,
+            fixture.did(),
+            std::slice::from_ref(&fixture.agent_identity),
+            &restarted,
+        )
+        .await;
     assert_eq!(outcome.task_hooks.unwrap(), 1);
     restarted.task_hook_records().wait_for_recoveries().await;
     assert_ne!(survivor.identity.observe(), ProcessObservation::Running);
@@ -483,6 +558,7 @@ async fn shutdown_during_recovered_cleanup_keeps_only_the_unlaunched_cleanup() {
             &doc_id,
             "shutdown",
             fixture.did(),
+            fixture.agent_identity.did(),
             dir.path(),
             vec![held, logging_hook(&generated("second", "finally"), &log, 0)],
             Vec::new(),
@@ -491,12 +567,14 @@ async fn shutdown_during_recovered_cleanup_keeps_only_the_unlaunched_cleanup() {
     .await;
 
     let running = BackgroundExecutionRegistry::default().with_task_hook_records(records.clone());
-    let outcome = crate::runtime::startup_recovery::run_startup_recovery_with_executions(
-        &fixture.node,
-        fixture.did(),
-        &running,
-    )
-    .await;
+    let outcome =
+        crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
+            &fixture.node,
+            fixture.did(),
+            std::slice::from_ref(&fixture.agent_identity),
+            &running,
+        )
+        .await;
     assert_eq!(outcome.task_hooks.unwrap(), 1);
     tokio::time::timeout(Duration::from_secs(20), async {
         while !started.exists() {
@@ -524,9 +602,10 @@ async fn shutdown_during_recovered_cleanup_keeps_only_the_unlaunched_cleanup() {
     );
 
     let restarted = BackgroundExecutionRegistry::default().with_task_hook_records(records);
-    crate::runtime::startup_recovery::run_startup_recovery_with_executions(
+    crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
         &fixture.node,
         fixture.did(),
+        std::slice::from_ref(&fixture.agent_identity),
         &restarted,
     )
     .await;
@@ -547,7 +626,7 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
             "root-outside-ceiling",
             dir.path().to_path_buf(),
             Some(crate::tools::surface::RootExecutionGuard {
-                agent_id: AGENT_ID.into(),
+                agent_did: fixture.agent_identity.did().to_owned(),
                 selected_root: Some(dir.path().to_path_buf()),
                 ceiling_root: Some(ceiling.path().to_path_buf()),
             }),
@@ -556,7 +635,10 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
     for (name, cwd, root_guard) in cases {
         if let Some(guard) = &root_guard {
             assert!(
-                guard.validate(fixture.node.as_ref()).await.is_err(),
+                guard
+                    .validate(&fixture.node, fixture.agent_identity.as_ref())
+                    .await
+                    .is_err(),
                 "{name}: the root owner must refuse this root"
             );
         }
@@ -570,6 +652,7 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
                     &doc_id,
                     name,
                     fixture.did(),
+                    fixture.agent_identity.did(),
                     &cwd,
                     vec![logging_hook(&generated("sweep", "finally"), &log, 0)],
                     Vec::new(),
@@ -577,12 +660,33 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
             },
         )
         .await;
-        RequestLifecycle::recover_all(&fixture.node, fixture.did())
-            .await
-            .unwrap();
-        let report = recover_task_hook_records(&fixture.node, fixture.did(), &store)
-            .await
-            .unwrap();
+        RequestLifecycle::recover_all_with_identities(
+            &fixture.node,
+            fixture.did(),
+            std::slice::from_ref(&fixture.agent_identity),
+        )
+        .await
+        .unwrap();
+        if name == "root-outside-ceiling" {
+            let unavailable = recover_task_hook_records(&fixture.node, fixture.did(), &[], &store)
+                .await
+                .unwrap();
+            assert_eq!(unavailable, 0);
+            store.wait_for_recoveries().await;
+            assert_eq!(
+                store.list().len(),
+                1,
+                "missing identity must retain the guarded record"
+            );
+        }
+        let report = recover_task_hook_records(
+            &fixture.node,
+            fixture.did(),
+            std::slice::from_ref(&fixture.agent_identity),
+            &store,
+        )
+        .await
+        .unwrap();
         assert_eq!(report, 1, "{name}");
         store.wait_for_recoveries().await;
         assert!(

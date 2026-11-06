@@ -2,7 +2,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::tools::native::{load_session_inference_observation, SessionTokenUsage};
 use serde_json::{json, Value};
@@ -58,21 +58,22 @@ fn context_info(
 
 pub(super) async fn session_info(
     node: &std::sync::Arc<EmbeddedNode>,
+    access: &gents::ConfigAccess,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     session: &str,
     model: &str,
     model_name: &str,
     context_window: u64,
 ) -> Result<Value> {
-    let requests = super::sessions::load(node, node_did, agent_id, session).await?;
+    let requests = super::sessions::load(node, node_did, agent_did, session).await?;
     let observation =
-        load_session_inference_observation(node, node_did, Some(node_did), session).await?;
+        load_session_inference_observation(access, node_did, Some(node_did), session).await?;
     let mut context = context_info(&observation, context_window)?;
     let details = match observation.latest_context.as_ref() {
         Some(snapshot) => {
             gents::tools::native::load_session_context_details(
-                &gents::store::config_client::ConfigAccess::local(node.clone()),
+                access,
                 node_did,
                 Some(node_did),
                 session,
@@ -139,7 +140,7 @@ pub(super) async fn session_info(
     }
     context["compactionCount"] = json!(compactions.len());
     Ok(json!({"result":{
-        "sessionId":session, "cwd":"", "agentName":agent_id, "model":model,
+        "sessionId":session, "cwd":"", "agentName":agent_did, "model":model,
         "modelDisplayName":model_name, "apiBackend":"gents", "turns":turns,
         "turnIndex":turns.saturating_sub(1), "context":context,
         "_meta":{"gents/partialContext":details.is_none(),
@@ -190,12 +191,14 @@ impl Totals {
 
 pub(super) async fn session_usage(
     node: &std::sync::Arc<EmbeddedNode>,
+    access: &gents::ConfigAccess,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     session: &str,
 ) -> Result<Value> {
-    let roots = super::sessions::load(node, node_did, agent_id, session).await?;
-    let root = load_session_inference_observation(node, node_did, Some(node_did), session).await?;
+    let roots = super::sessions::load(node, node_did, agent_did, session).await?;
+    let root =
+        load_session_inference_observation(access, node_did, Some(node_did), session).await?;
     let mut totals = Totals::default();
     totals.add(&root.token_usage);
     totals.incomplete |= roots.iter().any(|row| !row.is_terminal());
@@ -207,7 +210,7 @@ pub(super) async fn session_usage(
     for caused in load_caused_sessions(node, &[root_scope]).await? {
         totals.incomplete |= !caused.latest.is_terminal();
         let observation = load_session_inference_observation(
-            node,
+            access,
             &caused.scope.node_did,
             caused.scope.requester_did.as_deref(),
             &caused.scope.session_id,

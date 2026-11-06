@@ -12,6 +12,7 @@ pub mod record;
 pub mod review;
 pub mod scripted;
 mod spec;
+pub mod subject_binding;
 mod trial;
 pub mod view;
 

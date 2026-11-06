@@ -36,8 +36,8 @@ enum BackgroundTaskResult {
     EnrollmentReconcile(Result<()>),
     RegistryHeartbeat(Result<()>),
     EndpointHeartbeat(Result<()>),
-    SessionHydrationReconcile(Result<()>),
     SessionCommandReconcile(Result<()>),
+    ToolControlReconcile(Result<()>),
     DirectoryProjection(Result<()>),
 }
 
@@ -53,12 +53,10 @@ impl BackgroundTaskResult {
             Self::EnrollmentReconcile(result) => result.context("enrollment reconcile task"),
             Self::RegistryHeartbeat(result) => result.context("registry heartbeat task"),
             Self::EndpointHeartbeat(result) => result.context("endpoint heartbeat task"),
-            Self::SessionHydrationReconcile(result) => {
-                result.context("session hydration reconcile task")
-            }
             Self::SessionCommandReconcile(result) => {
                 result.context("session command reconcile task")
             }
+            Self::ToolControlReconcile(result) => result.context("tool control reconcile task"),
             Self::DirectoryProjection(result) => result.context("directory projection task"),
         }
     }
@@ -78,6 +76,7 @@ pub(in crate::runtime::agent) async fn run_agent(
     agent: Gents,
     external_shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
+    agent.backend_admission.validate(&agent.node).await?;
     crate::store::schema::migration::ensure_all_runtime_migrations(agent.node.clone())
         .await
         .context("ensure runtime schema migrations")?;
@@ -147,7 +146,7 @@ async fn run_agent_with_runtime_status(
 ) -> Result<()> {
     let terminal_observer = agent.process_state_observer.clone();
     let initialized = runtime_status
-        .initialize_startup(agent.default_agent_id())
+        .initialize_startup(agent.default_agent_did())
         .await;
     let body_result = match initialized {
         Ok(()) => {
@@ -280,13 +279,29 @@ async fn run_agent_owned(
     log_recovery(
         &agent.node,
         agent.node_did(),
-        agent.default_agent_id(),
+        agent.default_agent_did(),
+        &resolved_snapshot
+            .agents
+            .values()
+            .map(|agent| agent.agent_identity.clone())
+            .chain(
+                resolved_snapshot
+                    .unavailable_agents
+                    .values()
+                    .filter_map(|unavailable| {
+                        unavailable
+                            .watcher_identity
+                            .as_ref()
+                            .map(|identity| identity.0.clone())
+                    }),
+            )
+            .collect::<Vec<_>>(),
         &agent.background_execution_registry,
     )
     .await;
-    for (agent_id, reason) in &agent.unavailable_agents {
+    for (agent_did, reason) in &agent.unavailable_agents {
         tracing::warn!(
-            agent_id = %agent_id,
+            agent_did = %agent_did,
             public_reason = ?reason.public_reason,
             diagnostic = %reason.diagnostic,
             "agent_config unavailable at startup"
@@ -324,6 +339,7 @@ async fn run_agent_owned(
     let job_driver = crate::tools::background::job::driver::JobDriver::with_service_admission(
         crate::tools::background::job::driver::JobRuntime {
             node: agent.node.clone(),
+            agent_snapshots: Default::default(),
             plugins: agent.plugins().clone(),
             home: agent
                 .plugins()
@@ -409,6 +425,15 @@ async fn run_agent_owned(
         };
     }
     let (active_snapshot_tx, active_snapshot_rx) = watch::channel(initial_active_snapshot.clone());
+    *agent
+        .active_snapshot
+        .write()
+        .map_err(|_| anyhow::anyhow!("runtime snapshot binding unavailable"))? =
+        Some(active_snapshot_rx.clone());
+    runtime
+        .job_driver
+        .runtime()
+        .bind_snapshot(active_snapshot_rx.clone())?;
     let (reconcile_tx, reconcile_rx) = mpsc::channel(8);
     let _reconcile_tx_guard = reconcile_tx.clone();
     let health_checker = AbortOnDropHandle::new(spawn_health_checker(
@@ -477,21 +502,25 @@ async fn run_agent_owned(
     let _ = agent.manual_trigger_handle.set(manual_trigger_handle);
     let trigger_engine_node_did = agent.node_did().to_string();
     let trigger_engine_runtime_observer = agent.runtime_snapshot_observer.clone();
+    let trigger_engine_runtime_status = runtime_status.clone();
     let trigger_engine_handle = AbortOnDropHandle::new(tokio::spawn(async move {
         tokio::select! {
             _ = trigger_engine_cancel.cancelled() => return,
             _ = trigger_engine_startup_barrier.wait_ready() => {}
         }
-        match crate::triggers::engine::production_materializer::recover_workspace_binding_pending_requests(
-            &trigger_engine_node,
-            &trigger_engine_node_did,
-        )
-        .await
-        {
-            Ok(recovered) if recovered > 0 => tracing::info!(
-                recovered,
-                "recovered workspace-binding-pending requests"
-            ),
+        let recovery_identities = trigger_engine_materializer_snapshot_rx
+            .borrow()
+            .watcher_identities();
+        let workspace_recovery = match recovery_identities {
+            Ok(identities) => crate::triggers::engine::production_materializer::recover_workspace_binding_pending_requests(
+                &trigger_engine_node, &trigger_engine_node_did, &identities,
+            ).await,
+            Err(error) => Err(error),
+        };
+        match workspace_recovery {
+            Ok(recovered) if recovered > 0 => {
+                tracing::info!(recovered, "recovered workspace-binding-pending requests")
+            }
             Ok(_) => {}
             Err(error) => tracing::warn!(%error, "workspace binding recovery sweep failed"),
         }
@@ -516,12 +545,14 @@ async fn run_agent_owned(
             )
             .with_runtime_observer(trigger_engine_runtime_observer),
         );
-        let goal_source: Box<dyn crate::triggers::engine::TriggerSource> =
-            Box::new(crate::triggers::engine::goal_source::GoalSource::new(
+        let goal_source: Box<dyn crate::triggers::engine::TriggerSource> = Box::new(
+            crate::triggers::engine::goal_source::GoalSource::new(
                 trigger_engine_goal_snapshot_rx,
                 trigger_engine_node.clone(),
                 trigger_engine_cancel.clone(),
-            ));
+            )
+            .with_runtime_status(trigger_engine_runtime_status),
+        );
         let manual_source_box: Box<dyn crate::triggers::engine::TriggerSource> =
             Box::new(manual_source);
         let sources: Vec<Box<dyn crate::triggers::engine::TriggerSource>> = vec![
@@ -546,6 +577,7 @@ async fn run_agent_owned(
     crate::tools::workspace::install_process_operator_tool_root(callback_ceiling.clone());
     let callback_plugins = agent.plugins().clone();
     let callback_cancel = cancel.child_token();
+    let callback_snapshots = active_snapshot_rx.clone();
     let callback_startup_barrier = startup_barrier.clone();
     let callback_engine_handle = AbortOnDropHandle::new(tokio::spawn(async move {
         tokio::select! {
@@ -557,6 +589,7 @@ async fn run_agent_owned(
             callback_node_did,
             callback_ceiling,
             callback_plugins,
+            callback_snapshots,
             callback_cancel,
         )
         .await
@@ -626,6 +659,7 @@ async fn run_agent_owned(
     let completion_node_did = agent.node_did().to_string();
     let completion_background_executions = agent.background_execution_registry.clone();
     let completion_job_driver = runtime.job_driver.clone();
+    let completion_agents = active_snapshot_rx.clone();
     let completion_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::BackgroundCompletion(
@@ -634,6 +668,7 @@ async fn run_agent_owned(
                 completion_node_did,
                 completion_background_executions,
                 completion_job_driver,
+                completion_agents,
                 completion_cancel,
             )
             .await,
@@ -689,28 +724,14 @@ async fn run_agent_owned(
     let endpoint_node = agent.node.clone();
     let endpoint_identity = agent.runtime_node_arc().identity.clone();
     let endpoint_cancel = cancel.child_token();
+    let advertised_graphql_url = agent.advertised_graphql_url.clone();
     background_tasks.spawn(async move {
         BackgroundTaskResult::EndpointHeartbeat(
             crate::runtime::agent::p2p_reconcile::run_endpoint_heartbeat(
                 endpoint_node,
                 endpoint_identity,
+                advertised_graphql_url,
                 endpoint_cancel,
-            )
-            .await,
-        )
-    });
-
-    let hydration_node = agent.node.clone();
-    let hydration_enrollment = enrollment_handle.clone();
-    let hydration_identity = agent.runtime_node_arc().identity.clone();
-    let hydration_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::SessionHydrationReconcile(
-            crate::runtime::agent::p2p_reconcile::run_session_hydration_reconciler(
-                hydration_node,
-                hydration_enrollment,
-                hydration_identity,
-                hydration_cancel,
             )
             .await,
         )
@@ -718,13 +739,33 @@ async fn run_agent_owned(
 
     let session_command_node = agent.node.clone();
     let session_command_identity = agent.runtime_node_arc().identity.clone();
+    let session_command_agents = active_snapshot_rx.clone();
     let session_command_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::SessionCommandReconcile(
-            crate::runtime::agent::p2p_reconcile::session_commands::run_session_command_reconciler(
+            crate::runtime::agent::p2p_reconcile::session_commands::run_session_command_reconciler_with_agents(
                 session_command_node,
                 session_command_identity,
+                Some(session_command_agents),
                 session_command_cancel,
+            )
+            .await,
+        )
+    });
+
+    let control_node = agent.node.clone();
+    let control_node_did = agent.node_did().to_owned();
+    let control_executions = agent.background_execution_registry.clone();
+    let control_agents = active_snapshot_rx.clone();
+    let control_cancel = cancel.child_token();
+    background_tasks.spawn(async move {
+        BackgroundTaskResult::ToolControlReconcile(
+            crate::tools::call::control::client::run(
+                control_node,
+                control_node_did,
+                control_executions,
+                control_agents,
+                control_cancel,
             )
             .await,
         )
@@ -804,6 +845,7 @@ async fn run_agent_owned(
             .cloned()
             .expect("checked document runtime context");
         let control_tx = reconcile_tx.clone();
+        let control_backend_admission = agent.backend_admission.clone();
         let control_runtime_status = runtime_status.clone();
         let control_shutdown = shutdown.clone();
         background_tasks.spawn(async move {
@@ -811,6 +853,7 @@ async fn run_agent_owned(
                 super::control_watcher::run_control_watcher(
                     super::control_watcher::ControlWatcherInputs {
                         node: control_node,
+                        backend_admission: control_backend_admission,
                         subscription: control_subscription,
                         node_did: control_node_did,
                         resolve_context: control_context,

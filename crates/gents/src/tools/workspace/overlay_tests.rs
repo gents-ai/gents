@@ -520,7 +520,7 @@ fn principal_and_placement_identity_mismatches_fail_closed() {
 pub(crate) struct ArtifactTestFixture {
     pub grant: crate::tools::workspace::ArtifactGrant,
     pub owner: crate::request::lifecycle::RequestLifecycle,
-    pub node: std::sync::Arc<defra_node::EmbeddedNode>,
+    pub node: std::sync::Arc<defra_node::Node>,
     pub _dir: tempfile::TempDir,
 }
 
@@ -546,7 +546,7 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
         );
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     }
-    async fn execute(node: &defra_node::EmbeddedNode, query: &str) {
+    async fn execute(node: &defra_node::Node, query: &str) {
         let result = node.execute(query).await;
         assert!(!result.has_errors(), "{query}: {:?}", result.errors);
     }
@@ -574,7 +574,7 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
     let workspace_owner = workspace_identity.did().to_owned();
     assert_ne!(workspace_owner, did);
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .data_path(root.join("db"))
             .with_node_identity_did(&did)
             .build()
@@ -605,6 +605,11 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
     };
     let created = execute_create_workspace_plan(
         &emit_create_workspace_plan(CreateWorkspaceAction {
+            writer_agent_did: None,
+            writer_agent_doc_id: None,
+            integrator_agent_did: None,
+            integrator_agent_doc_id: None,
+            readers: Vec::new(),
             path_capability: WorkspacePathCapability::exact_paths(Vec::new()).unwrap(),
             workspace_id: "artifact-workspace".into(),
             work_unit_id: "artifact-unit".into(),
@@ -846,7 +851,7 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
     };
     use crate::tools::native::{CommandConstraints, CommandNetworkMode};
 
-    async fn execute(node: &defra_node::EmbeddedNode, mutation: &str) {
+    async fn execute(node: &defra_node::Node, mutation: &str) {
         let result = node.execute(mutation).await;
         assert!(!result.has_errors(), "{mutation}: {:?}", result.errors);
     }
@@ -1026,8 +1031,12 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
             .unwrap();
     let result = node.execute(&mutation).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
+    let admin = crate::ConfigAccess::local_as(
+        node.clone(),
+        node.node_identity_did().unwrap().parse().unwrap(),
+    );
     let error = crate::tools::workspace::cleanup_workspace(
-        &node,
+        &admin,
         owner.request().workspace_owner_node_did.as_deref().unwrap(),
         "artifact-workspace",
         Some(&root),
@@ -1044,11 +1053,20 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
         )
         .await
         .unwrap();
-    crate::tools::workspace::release_writer_binding(&node, owner.request())
+    admin
+        .transact_write("test.workspace.release", |txn| {
+            Box::pin(super::super::runtime::release_writer_binding_in_txn(
+                txn,
+                &owner.request().doc_id,
+                &owner.request().request_id,
+                "artifact-workspace",
+                owner.request().workspace_owner_node_did.as_deref().unwrap(),
+            ))
+        })
         .await
         .unwrap();
     crate::tools::workspace::cleanup_workspace(
-        &node,
+        &admin,
         owner.request().workspace_owner_node_did.as_deref().unwrap(),
         "artifact-workspace",
         Some(&root),

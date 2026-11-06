@@ -219,6 +219,24 @@ def requestInputCases : List RequestInputCase :=
   , { name := "signed-owner-cannot-author-goal-runtime-facts",
       input := { goalContinuation := some ⟨1, false⟩ }, contextSkillIds := [],
       verifiedGoalContinuation := some ⟨1, false⟩ }
+  , { name := "client-goal-original-edge-preserved"
+      input := { goalContinuation := some ⟨1, false⟩, queue := some { source := .goal, policy := .coalesce } }
+      contextSkillIds := [], admissionKind := .client
+      verifiedGoalContinuation := some ⟨1, false⟩ }
+  , { name := "client-goal-without-physical-edge-denied"
+      input := { goalContinuation := some ⟨1, false⟩ }
+      contextSkillIds := [], admissionKind := .client }
+  , { name := "client-goal-changed-wrapup-denied"
+      input := { goalContinuation := some ⟨1, true⟩ }
+      contextSkillIds := [], admissionKind := .client
+      verifiedGoalContinuation := some ⟨1, false⟩ }
+  , { name := "client-goal-zero-sequence-denied"
+      input := { goalContinuation := some ⟨0, false⟩ }
+      contextSkillIds := [], admissionKind := .client
+      verifiedGoalContinuation := some ⟨0, false⟩ }
+  , { name := "client-unrelated-runtime-queue-denied"
+      input := { queue := some { source := .backgroundCompletion, policy := .coalesce } }
+      contextSkillIds := [], admissionKind := .client, queueSourceAllowed := false }
   , { name := "runtime-goal-without-verified-physical-edge-denied",
       input := { goalContinuation := some ⟨1, false⟩ }, contextSkillIds := [],
       admissionKind := .runtimeInternal }
@@ -271,13 +289,15 @@ def requestInputCases : List RequestInputCase :=
       admissionKind := .runtimeInternal
       verifiedGoalContinuation := some ⟨3, false⟩ }
 
-  ] ++ workspaceCases ++ queueExtensionCases ++ capturedContextCases ++ capturedPresentationCases ++ capturedCompatibilityCases ++ goalAssignmentCases ++ attachmentCases
+  ] ++ workspaceCases ++ queueExtensionCases ++ capturedContextCases ++ capturedPresentationCases ++ capturedCompatibilityCases ++ goalAssignmentCases ++ attachmentCases ++
+  [ { name := "client-local-agent-message-steering-candidate",
+      input := { queue := some { source := .steering, policy := .append } }, contextSkillIds := [] } ]
 
 theorem input_boundary_cases_pinned : requestInputCases.map RequestInputCase.accepted =
     [true, true, false, false, false, false, false, true, true, true, false,
-     false, false, true, true, false, false, false, false, false, false, true,
+     false, true, false, false, false, false, false, true, true, false, false, false, false, false, false, true,
      true, false, false, false, false, false, true, false, false, false, true, true, true, true, true] ++
-      List.replicate 17 true ++ [false, false, false, false] ++ List.replicate 33 true ++ List.replicate 4 false := by native_decide
+      List.replicate 17 true ++ [false, false, false, false] ++ List.replicate 33 true ++ List.replicate 4 false ++ [true] := by native_decide
 
 theorem title_creation_cases_pinned :
     (requestInputCases.drop 7 |>.take 3).map

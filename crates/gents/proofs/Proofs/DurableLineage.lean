@@ -267,7 +267,7 @@ def openingRequest (rows : List RequestRow) (cause session : String) : Option Re
   | none => earliest candidates
 
 /-- Whether a lineage reader lists `session` as started by `cause`. Only the
-    session's node-signed creation receipt names its starter
+    session's agent-signed creation receipt names its starter
     (`AgentSession.observedStarter`), and that receipt binds the opening
     request recorded at creation; a session with no recorded opening carries
     no such evidence, so its parent edge alone never lists it. -/
@@ -453,7 +453,7 @@ theorem two_job_requests_have_no_single_projection (call : String) (a b : Reques
   simp [singleRequestProjection, callRequests, jobRows]
 
 /-- Mutable provenance is an observation; creation authority requires the
-node signature and exact receipt, request and scope bindings. -/
+creator's signature and exact receipt, request and scope bindings. -/
 def verifiedCreation (signatureValid scopeMatches openingMatches causeMatches : Bool) : Bool :=
   signatureValid && scopeMatches && openingMatches && causeMatches
 

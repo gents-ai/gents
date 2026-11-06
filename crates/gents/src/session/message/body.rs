@@ -1,14 +1,13 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
-
-use std::sync::Arc;
+use defra_node::Node as EmbeddedNode;
 
 use super::{MessageBody, RenderedBody};
 
 pub(crate) async fn render_body(
     node: &std::sync::Arc<EmbeddedNode>,
+    caller_agent_did: &str,
     caller_node_did: &str,
-    target_agent_id: &str,
+    target_agent_did: &str,
     target_session_id: &str,
     body: MessageBody<'_>,
 ) -> Result<Result<RenderedBody, String>> {
@@ -22,7 +21,13 @@ pub(crate) async fn render_body(
         MessageBody::Task(task) => task,
     };
     let task_id = task.task_id.trim();
-    let Some(task_document) = load_configured_task(node, caller_node_did, task_id).await? else {
+    let Some(task_document) = load_configured_task(
+        &crate::ConfigAccess::local_as(node.clone(), identity::Did::new(caller_agent_did)?),
+        caller_node_did,
+        task_id,
+    )
+    .await?
+    else {
         return Ok(Err(format!("task '{task_id}' is not configured")));
     };
     if task_document.emit_outcome {
@@ -31,22 +36,19 @@ pub(crate) async fn render_body(
     Ok(render_task_body(
         &task_document,
         caller_node_did,
-        target_agent_id,
+        target_agent_did,
         target_session_id,
         task.input.as_ref(),
     ))
 }
 
 pub(crate) async fn load_configured_task(
-    node: &Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     caller_node_did: &str,
     task_id: &str,
 ) -> Result<Option<crate::documents::Task>> {
-    let loaded = crate::store::config_client::ConfigAccess::transact_local_readonly(
-        node,
-        None,
-        "session_message.load_task",
-        {
+    let loaded = access
+        .transact_readonly("session_message.load_task", {
             let owner = caller_node_did.to_owned();
             let task_id = task_id.to_owned();
             move |txn| {
@@ -62,9 +64,8 @@ pub(crate) async fn load_configured_task(
                     .await
                 })
             }
-        },
-    )
-    .await?;
+        })
+        .await?;
     loaded
         .map(|value| serde_json::from_value(value).context("decode configured Task"))
         .transpose()
@@ -73,13 +74,13 @@ pub(crate) async fn load_configured_task(
 pub(crate) fn render_task_body(
     task_document: &crate::documents::Task,
     caller_node_did: &str,
-    target_agent_id: &str,
+    target_agent_did: &str,
     target_session_id: &str,
     input: Option<&serde_json::Value>,
 ) -> Result<RenderedBody, String> {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let (node_scope, ctx_scope) =
-        crate::documents::template::task_node_ctx(caller_node_did, target_agent_id, &now);
+        crate::documents::template::task_node_ctx(caller_node_did, target_agent_did, &now);
     let scope = crate::documents::template::TemplateScope {
         session: Some(serde_json::json!({"session_id": target_session_id})),
         request: None,

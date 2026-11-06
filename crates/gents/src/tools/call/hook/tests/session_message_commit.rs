@@ -30,8 +30,7 @@ where
     .unwrap();
 }
 
-async fn enable_agents_tools(node: &Arc<EmbeddedNode>, did: &str) {
-    crate::test_support::install_test_agent(node, did, "general").await;
+async fn enable_agents_tools(node: &Arc<EmbeddedNode>, did: &str, agent_did: &str) {
     write_config(
         node,
         crate::Collection::AgentTarget,
@@ -39,7 +38,7 @@ async fn enable_agents_tools(node: &Arc<EmbeddedNode>, did: &str) {
             target_id: "general:general".to_owned(),
             node_did: did.to_owned(),
             target_node_did: did.to_owned(),
-            agent_id: "general".to_owned(),
+            agent_did: agent_did.to_owned(),
             name: "general".to_owned(),
             description: None,
             tags: Vec::new(),
@@ -51,7 +50,7 @@ async fn enable_agents_tools(node: &Arc<EmbeddedNode>, did: &str) {
         crate::Collection::Tools,
         &serde_json::json!({
             "node_did": did,
-            "tools_id": "general:tools",
+            "tools_id": format!("{agent_did}:tools"),
             "agents": { "enabled": true, "target_ids": ["general:general"] }
         }),
     )
@@ -62,7 +61,7 @@ async fn enable_agents_tools(node: &Arc<EmbeddedNode>, did: &str) {
         &serde_json::json!({
             "node_did": did,
             "task_id": "goal",
-            "agent_id": "general",
+            "agent_did": agent_did,
             "prompt_template": "pursue the goal",
             "goal_objective_template": "finish the work"
         }),
@@ -155,7 +154,7 @@ async fn agent_new_inherits_the_signed_caller_directory() {
         crate::KeyIdentity::load_or_create(dir.path().join("test-agent.key"), None).unwrap();
     let did = identity.did().to_owned();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(&did)
             .data_path(dir.path())
             .build()
@@ -163,8 +162,7 @@ async fn agent_new_inherits_the_signed_caller_directory() {
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    enable_agents_tools(&node, &did).await;
-    let hook = DefraSessionHook::with_identity(node.clone(), &did, FailurePolicy::default());
+    let mut hook = DefraSessionHook::with_identity(node.clone(), &did, FailurePolicy::default());
     let session = hook.session_id().await.unwrap();
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
@@ -184,6 +182,10 @@ async fn agent_new_inherits_the_signed_caller_directory() {
             &node, &identity, create,
         )
         .await;
+    let agent_signer = lifecycle.managed_agent_signer().unwrap();
+    hook.actor = Some(identity::Did::new(agent_signer.did()).unwrap());
+    hook = hook.with_managed_identity(&agent_signer).unwrap();
+    enable_agents_tools(&node, &did, agent_signer.did()).await;
     bind_claimed_hook_request(
         &hook,
         lifecycle,
@@ -217,7 +219,7 @@ async fn agent_new_inherits_the_signed_caller_directory() {
             dir.path().to_string_lossy().as_ref()
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -226,7 +228,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     let identity =
         crate::KeyIdentity::load_or_create(dir.path().join("test-agent.key"), None).unwrap();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(crate::store::identity::NodeIdentity::did(&identity))
             .data_path(dir.path())
             .build()
@@ -235,11 +237,23 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let did = identity.did().to_owned();
-    enable_agents_tools(&node, &did).await;
-    let hook = DefraSessionHook::with_identity(node.clone(), &did, FailurePolicy::default());
-    bind_signed_hook_request(
-        &hook,
+    let mut hook = DefraSessionHook::with_identity(node.clone(), &did, FailurePolicy::default());
+    let session = hook.session_id().await.unwrap();
+    let lifecycle = crate::tools::call::lifecycle::admission_fixture::claimed_signed_request(
+        &node,
         "request-commit-receipt-loss",
+        &session,
+        &identity,
+        None,
+    )
+    .await;
+    let agent_signer = lifecycle.managed_agent_signer().unwrap();
+    hook.actor = Some(identity::Did::new(agent_signer.did()).unwrap());
+    hook = hook.with_managed_identity(&agent_signer).unwrap();
+    enable_agents_tools(&node, &did, agent_signer.did()).await;
+    bind_claimed_hook_request(
+        &hook,
+        lifecycle,
         chrono::Utc::now() + chrono::Duration::minutes(5),
     )
     .await;
@@ -261,18 +275,23 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     .await
     .unwrap()
     .unwrap();
-    crate::tools::call::lifecycle::admission_fixture::complete_child(
+    crate::tools::call::lifecycle::admission_fixture::complete_child_managed(
         &node,
         &caused_row.request_id,
         &did,
         "done",
+        &agent_signer,
     )
     .await;
     for expected in [1, 0] {
         assert_eq!(
-            crate::tools::background::completion::settle_running_session_message_rows(&node, &did)
-                .await
-                .unwrap(),
+            crate::tools::background::completion::settle_running_session_message_rows_with_access(
+                &node,
+                &hook.actor_access().unwrap(),
+                &did
+            )
+            .await
+            .unwrap(),
             expected
         );
     }
@@ -446,5 +465,5 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     )
     .await;
     assert_eq!(previous[0]["lifecycle_state"], "pending");
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

@@ -1,16 +1,23 @@
 mod apply_txn;
 mod auto_commit;
 mod cursor;
+mod delete_confirmation;
 mod execute;
 #[cfg(test)]
 mod fault_injection;
 mod finalize;
 mod gate;
 mod native;
+mod pack_interpreter;
 mod rollback;
+mod runtime_default_account;
+mod runtime_hop_cap;
 mod telemetry;
 mod transact;
 mod transact_entry;
+mod verified_edit_request;
+mod verified_pack;
+mod verified_request;
 
 use std::time::Duration;
 
@@ -24,7 +31,10 @@ pub use apply_txn::ConfigApplyTxn;
 pub use cursor::ConfigCursor;
 pub use gate::LocalConfigAccess;
 pub use native::{NativeOperationAbandoned, ReentrantEmbeddedWrite};
+#[cfg(test)]
+pub(super) use transact::client_signed_write_may_retry;
 pub use transact::IdempotentTransactionRetry;
+pub use verified_pack::{VerifiedPackTransactionError, VerifiedPackTxn};
 
 /// Tracing target of DefraDB transaction and read telemetry; tests observe it by this name.
 pub const TRACING_TARGET: &str = module_path!();
@@ -99,3 +109,6 @@ mod stream_waiter_conformance;
 
 #[cfg(test)]
 mod variable_tests;
+
+#[cfg(test)]
+mod relationship_tests;

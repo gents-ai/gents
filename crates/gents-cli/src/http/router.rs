@@ -118,6 +118,7 @@ pub(crate) fn empty_activation_state() -> (
 )]
 pub(crate) fn runtime_contract_router(
     graphql: String,
+    p2p_graphql: GraphqlEndpoint,
     node_name: String,
     node_did: String,
     tool_ceiling: String,
@@ -139,7 +140,7 @@ pub(crate) fn runtime_contract_router(
     let operator_did = node_did.clone();
     let graphql_for_mcp = graphql.clone();
     let state = RuntimeHttpState {
-        p2p_graphql: GraphqlEndpoint::as_principal(graphql.clone(), node_did.clone()),
+        p2p_graphql,
         graphql: GraphqlEndpoint::anonymous(graphql),
         node_name,
         node_did,
@@ -165,12 +166,6 @@ pub(crate) fn runtime_contract_router(
 
     let operator_routes = Router::new()
         .route("/packs/ux/watch", post(crate::http::pack_watch::watch))
-        .route(
-            "/packs/install",
-            post(crate::http::pack_install::install_handler).layer(
-                axum::extract::DefaultBodyLimit::max(crate::http::pack_install::MAX_BODY),
-            ),
-        )
         .route("/metrics", get(metrics_handler))
         .route("/healthz", get(healthz_handler))
         .route("/activation", get(activation_handler))
@@ -188,7 +183,21 @@ pub(crate) fn runtime_contract_router(
             super::access::require_operator,
         ));
     let mut router = Router::new()
+        .route(
+            "/packs/install",
+            post(crate::http::pack_install::install_handler).layer(
+                axum::extract::DefaultBodyLimit::max(crate::http::pack_install::MAX_BODY),
+            ),
+        )
+        .route(
+            "/packs/install/session",
+            get(crate::http::pack_install::session::install_session),
+        )
         .route("/version", get(version_handler))
+        .route(
+            gents_protocol::agent_identity::AGENT_IDENTITY_PATH,
+            post(crate::http::agent_identity::provision),
+        )
         .route("/status", get(status_route))
         .route(
             gents_protocol::serve_lifecycle::control::RUNTIME_CONTROL_PATH,
@@ -205,6 +214,10 @@ pub(crate) fn runtime_contract_router(
         .route(
             gents::observe::inference_observation::INFERENCE_ACTIVITY_PATH,
             post(crate::http::inference_activity::read),
+        )
+        .route(
+            crate::http::inference_activity::BACKEND_DISCOVERY_PATH,
+            post(crate::http::inference_activity::discover_backend),
         )
         .route("/enrollment/decisions", post(enrollment_decision_handler))
         .route("/enrollment/pending", post(enrollment_pending_handler))

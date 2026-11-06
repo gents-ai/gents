@@ -46,9 +46,15 @@ pub struct Callback {
 pub enum CallbackHandler {
     BuiltIn {
         emitter: BuiltInCallback,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+        workspace_agents: Option<WorkspaceAgentSelection>,
     },
     Module {
         module_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+        workspace_agents: Option<WorkspaceAgentSelection>,
     },
     Plugin {
         // The artifact is referenced by content hash: any other installed
@@ -73,6 +79,24 @@ pub enum CallbackHandler {
         #[schemars(transform = crate::documents::accepts_null)]
         outputs: Vec<crate::documents::PortSpec>,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct WorkspaceAgentSelection {
+    pub writer_agent_did: String,
+    pub integrator_agent_did: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<WorkspaceReaderSelection>>", optional = nullable))]
+    pub readers: Vec<WorkspaceReaderSelection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct WorkspaceReaderSelection {
+    pub agent_did: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -111,6 +135,7 @@ pub enum BuiltInCallback {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct CallbackBinding {
+    pub agent_did: String,
     pub binding_id: String,
     pub node_did: String,
     pub event_source_id: String,

@@ -20,18 +20,24 @@ mod goal_assignment_wakes;
 mod management;
 mod steering;
 
-const TEST_NODE_DID: &str = "did:test:queue-test";
-const TEST_AGENT_ID: &str = "general";
-
 struct TestDb {
     node: Arc<EmbeddedNode>,
-    identity: Arc<crate::store::identity::KeyIdentity>,
+    identity: Arc<dyn NodeIdentity>,
+    agent_identity: Arc<dyn NodeIdentity>,
+    user: crate::KeyIdentity,
+    user_access: crate::ConfigAccess,
+    agent_access: crate::ConfigAccess,
+    _db: crate::support::TestDb,
     _tempdir: TempDir,
 }
 
 impl TestDb {
     fn node_did(&self) -> &str {
         self.identity.did()
+    }
+
+    fn agent_did(&self) -> &str {
+        self.agent_identity.did()
     }
 }
 
@@ -41,7 +47,7 @@ struct QueueRow {
     doc_id: String,
     request_id: String,
     session_id: String,
-    agent_id: String,
+    agent_did: String,
     content: String,
     #[serde(default)]
     input: Option<RequestInput>,
@@ -77,7 +83,7 @@ fn wake_queue_input(queue: RequestQueue) -> RequestInput {
     }
 }
 
-fn parent_request(node_did: &str, session_id: &str) -> AgentRequest {
+fn parent_request(node_did: &str, agent_did: &str, session_id: &str) -> AgentRequest {
     AgentRequest {
         retry_parent_request_doc_id: None,
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
@@ -85,7 +91,7 @@ fn parent_request(node_did: &str, session_id: &str) -> AgentRequest {
         request_id: "parent-request".to_string(),
         node_did: node_did.to_string(),
         requester_did: None,
-        agent_id: TEST_AGENT_ID.to_string(),
+        agent_did: agent_did.to_string(),
         session_id: session_id.to_string(),
         content: "parent".to_string(),
         max_total_tokens: None,
@@ -129,34 +135,31 @@ fn transaction_create_doc_id_accepts_both_defradb_response_shapes() {
 }
 
 async fn test_db(name: &str) -> TestDb {
-    let tempdir = tempfile::Builder::new()
-        .prefix(&format!("gents-queue-{name}-"))
-        .tempdir()
-        .expect("tempdir");
-    let identity = Arc::new(
-        crate::store::identity::KeyIdentity::load_or_create(tempdir.path().join("agent.key"), None)
-            .expect("test identity"),
-    );
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(tempdir.path())
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .expect("embedded node"),
-    );
-    crate::store::schema::ensure_runtime_schemas(&node)
-        .await
-        .expect("runtime schemas");
-    crate::test_support::install_test_agent(&node, identity.did(), TEST_AGENT_ID).await;
+    let (db, user, user_access, binding) = crate::test_support::signed_test_node(name).await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
+    let agent_identity =
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding)
+            .expect("derived test agent identity");
+    let agent_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent_identity.did()).unwrap(),
+        agent_identity.as_ref(),
+    )
+    .unwrap();
     TestDb {
         node,
         identity,
-        _tempdir: tempdir,
+        agent_identity,
+        user,
+        user_access,
+        agent_access,
+        _db: db,
+        _tempdir: tempfile::tempdir().expect("queue fixture directory"),
     }
 }
 
-async fn queue_rows(node: &EmbeddedNode, session_id: &str) -> Vec<QueueRow> {
+async fn queue_rows(db: &TestDb, session_id: &str) -> Vec<QueueRow> {
     let escaped_session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
@@ -167,7 +170,7 @@ async fn queue_rows(node: &EmbeddedNode, session_id: &str) -> Vec<QueueRow> {
                 _docID
                 request_id
                 session_id
-                agent_id
+                agent_did
                 content
                 input
                 lifecycle_state
@@ -182,30 +185,28 @@ async fn queue_rows(node: &EmbeddedNode, session_id: &str) -> Vec<QueueRow> {
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "queue row query failed: {:?}",
-        response.errors
-    );
+    let response = db
+        .agent_access
+        .execute(&query)
+        .await
+        .expect("queue row query");
     response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("AgentRequest"))
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_default()
 }
 
 async fn insert_raw_queue_request(
-    node: &Arc<EmbeddedNode>,
-    node_did: &str,
+    db: &TestDb,
     request_id: &str,
     session_id: &str,
     input: &RequestInput,
 ) -> String {
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_node_did = escape_graphql_string(node_did);
+    let escaped_node_did = escape_graphql_string(db.node_did());
+    let escaped_agent_did = escape_graphql_string(db.agent_did());
     let input_literal = gents_protocol::graphql::graphql_input_literal(
         &serde_json::to_value(input).expect("canonical input serializes"),
     )
@@ -217,7 +218,7 @@ async fn insert_raw_queue_request(
                 request_id: "{escaped_request_id}",
                 purpose: "normal",
                 node_did: "{escaped_node_did}",
-                agent_id: "{TEST_AGENT_ID}",
+                agent_did: "{escaped_agent_did}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{escaped_request_id}",
@@ -237,7 +238,7 @@ async fn insert_raw_queue_request(
         max_retries = DEFAULT_REQUEST_MAX_RETRIES,
     );
     let response = crate::store::config_client::ConfigAccess::write_local_response(
-        node,
+        &db.node,
         "test.insert_raw_queue_request",
         &mutation,
     )
@@ -245,6 +246,68 @@ async fn insert_raw_queue_request(
     .unwrap();
     extract_single_doc_id(&response, "create_AgentRequest")
         .expect("raw queue create returns _docID")
+}
+
+async fn insert_runtime_queue_request(
+    db: &TestDb,
+    parent: &AgentRequest,
+    request_id: &str,
+    content: &str,
+    input: RequestInput,
+) -> String {
+    let signer = db.agent_identity.managed_agent_signer().unwrap();
+    let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mutation = super::mutation::session_request_create_mutation_at_hop_with_signer(
+        parent,
+        parent.request_hop,
+        SessionRequestFields {
+            agent_did: db.agent_did(),
+            content,
+            execution_origin: ExecutionOrigin::Scheduled,
+            input,
+            request_id,
+            created_at: &created_at,
+            retry_key: None,
+        },
+        Some(&signer),
+    )
+    .await
+    .unwrap();
+    let agent = escape_graphql_string(db.agent_did());
+    let session = escape_graphql_string(&parent.session_id);
+    let node = escape_graphql_string(db.node_did());
+    let targets = db.agent_access.execute(&format!(
+        r#"{{ Agent(filter: {{agent_did: {{_eq: "{agent}"}}}}, limit: 1) {{_docID}} AgentSession(filter: {{node_did: {{_eq: "{node}"}}, session_id: {{_eq: "{session}"}}}}, limit: 1) {{_docID}} }}"#,
+    )).await.unwrap();
+    let agent_doc = targets["data"]["Agent"][0]["_docID"].as_str().unwrap();
+    let session_doc = targets["data"]["AgentSession"][0]["_docID"]
+        .as_str()
+        .unwrap();
+    let actor = identity::Did::new(db.agent_did()).unwrap();
+    db.agent_access
+        .transact_write("test.runtime_queue_fixture", |txn| {
+            let mutation = &mutation;
+            let actor = &actor;
+            Box::pin(async move {
+                let response = txn.execute(mutation).await?;
+                let doc = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                txn.add_actor_relationship("AgentRequest", &doc, "working_agent", actor)
+                    .await?;
+                txn.add_resource_relationship("AgentRequest", &doc, "parent", "agents", agent_doc)
+                    .await?;
+                txn.add_resource_relationship(
+                    "AgentRequest",
+                    &doc,
+                    "session",
+                    "sessions",
+                    session_doc,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        })
+        .await
+        .unwrap()
 }
 
 async fn insert_signed_queue_request(
@@ -260,30 +323,72 @@ async fn insert_signed_queue_request(
         RequestPurpose::Normal,
         request_id,
         db.node_did(),
-        db.node_did(),
-        TEST_AGENT_ID,
+        db.agent_did(),
+        db.agent_did(),
         session_id,
         "work",
         "interactive",
         "2026-10-21T00:00:00Z",
-        AgentRequestAdmissionRecord::local_self(db.node_did()),
+        AgentRequestAdmissionRecord::local_self(db.agent_did()),
     );
     create.input = input.clone();
-    crate::sign_agent_request_create(db.identity.as_ref(), &mut create)
+    publish_signed_queue_request(db, &mut create).await
+}
+
+async fn publish_signed_queue_request(
+    db: &TestDb,
+    create: &mut gents_protocol::request_admission::AgentRequestCreate,
+) -> String {
+    create.admission =
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(db.agent_did());
+    let access = crate::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(db.agent_did()).unwrap(),
+        db.agent_identity.as_ref(),
+    )
+    .unwrap();
+    create.session_doc_id = Some(
+        crate::request::lifecycle::client::reserve_goal_session(&access, create)
+            .await
+            .expect("reserve queue fixture session"),
+    );
+    let agent = escape_graphql_string(db.agent_did());
+    let response = access
+        .execute(&format!(
+            r#"{{ Agent(filter: {{ agent_did: {{ _eq: "{agent}" }} }}, limit: 2) {{ _docID }} }}"#,
+        ))
+        .await
+        .expect("query fixture agent");
+    let [row] = response["data"]["Agent"].as_array().unwrap().as_slice() else {
+        panic!("fixture agent must be unique");
+    };
+    create.agent_doc_id = Some(row["_docID"].as_str().unwrap().to_owned());
+    crate::sign_agent_request_create(db.agent_identity.as_ref(), create)
         .await
         .unwrap();
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
-        &db.node,
-        "test.signed_queue_request",
-        &create.graphql_mutation().unwrap(),
-    )
-    .await
-    .unwrap();
-    extract_single_doc_id(&response, "create_AgentRequest").unwrap()
+    crate::request::lifecycle::client::submit_client_request(&access, create)
+        .await
+        .expect("publish queue fixture request");
+    let request_id = escape_graphql_string(&create.request_id);
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 2) {{ _docID }} }}"#,
+        ))
+        .await
+        .unwrap();
+    let [row] = response["data"]["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("published queue request must be unique");
+    };
+    row["_docID"].as_str().unwrap().to_owned()
 }
 
 struct CanonicalBackgroundFixture {
     node: Arc<EmbeddedNode>,
+    access: crate::ConfigAccess,
     parent: AgentRequest,
     lifecycle: RequestLifecycle,
     writer: DefraStreamWriter,
@@ -300,32 +405,82 @@ async fn canonical_background_fixture_with_input(
     input: &RequestInput,
 ) -> CanonicalBackgroundFixture {
     let request_id = format!("background-parent-{}", uuid::Uuid::new_v4());
-    insert_signed_queue_request(db, &request_id, session_id, input).await;
-    let request = crate::request::binding::load_agent_request(&db.node, &request_id)
+    let mut spec = crate::request::lifecycle::RequestSpec::new(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        crate::request::lifecycle::RequestIdentity {
+            request_id: request_id.clone(),
+            node_did: db.node_did().to_owned(),
+            requester_did: Some(db.user.did().to_owned()),
+            agent_did: db.agent_did().to_owned(),
+            session_id: session_id.to_owned(),
+            content: "work".to_owned(),
+            execution_origin: ExecutionOrigin::Interactive,
+            created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        },
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(db.user.did()),
+    );
+    spec.input = input.clone();
+    let create = crate::request::lifecycle::build_signed_client_request(
+        &db.user_access,
+        spec,
+        crate::request::lifecycle::RequestSigner::Identity(&db.user),
+    )
+    .await
+    .expect("sign canonical fixture parent");
+    crate::request::lifecycle::submit_client_request(&db.user_access, &create)
         .await
-        .expect("load canonical fixture parent")
-        .expect("canonical fixture parent exists");
+        .expect("publish canonical fixture parent");
+    let escaped = escape_graphql_string(&request_id);
+    let response = db.agent_access.execute(&format!(
+        r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{escaped}"}}}}, limit: 2) {{ {} }} }}"#,
+        crate::SIGNED_REQUEST_FIELDS,
+    )).await.expect("read canonical fixture parent");
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+    let request = row.try_into().expect("decode canonical fixture parent");
+    let (_authority_owner, authority) =
+        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        db.node.clone(),
+        db.identity.clone(),
+        authority,
+    );
+    let (request, admission) = verifier
+        .verify_fresh_for_claim_with_identity(&request, db.agent_identity.as_ref())
+        .await
+        .expect("verify canonical fixture client admission");
+    assert!(
+        admission.is_some(),
+        "fixture must retain client claim admission"
+    );
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         db.node.clone(),
-        TEST_AGENT_ID,
+        db.agent_did(),
         db.node_did(),
         request,
         60,
     );
+    lifecycle
+        .bind_managed_agent(db.agent_identity.as_ref())
+        .unwrap();
+    lifecycle.set_client_claim_admission(admission);
     assert_eq!(
         lifecycle
-            .claim()
+            .claim_with_identity()
             .await
             .expect("claim canonical fixture parent"),
         ClaimOutcome::Claimed
     );
-    let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
+    let writer =
+        DefraStreamWriter::new_managed(db.node.clone(), db.agent_identity.as_ref(), Duration::ZERO)
+            .unwrap();
     lifecycle
         .begin_owned_execution(&writer)
         .await
         .expect("begin canonical fixture parent");
     CanonicalBackgroundFixture {
         node: db.node.clone(),
+        access: db.agent_access.clone(),
         parent: lifecycle.request().clone(),
         lifecycle,
         writer,
@@ -342,15 +497,22 @@ impl CanonicalBackgroundFixture {
         queue: RequestQueue,
         existing_notification_doc_id: Option<&str>,
     ) -> anyhow::Result<EnqueuedBackgroundCompletionInput> {
-        anyhow::ensure!(
-            queue.source == QueueSource::BackgroundCompletion
-                && queue.policy == QueuePolicy::Coalesce
-                && queue
-                    .key
-                    .as_deref()
-                    .is_some_and(|key| !key.trim().is_empty()),
-            "fixture notification requires a keyed coalescing background queue"
-        );
+        let publication = self.prepare_notification(notification_content).await?;
+        self.publish_prepared_notification(
+            notification_content,
+            message_key,
+            wake_content,
+            queue,
+            existing_notification_doc_id,
+            &publication,
+        )
+        .await
+    }
+
+    async fn prepare_notification(
+        &mut self,
+        notification_content: &str,
+    ) -> anyhow::Result<ToolNotificationPublication> {
         let turn = self.next_turn;
         self.next_turn += 1;
         self.writer
@@ -419,7 +581,26 @@ impl CanonicalBackgroundFixture {
         let tool_call_doc_id = tool
             .doc_id()
             .context("fixture tool has physical document")?;
-        persist_background_completion_with_message_canonical(
+        Ok(ToolNotificationPublication {
+            tool_call_doc_id: tool_call_doc_id.to_owned(),
+            presentation: vec![PresentationPart::OutputRange {
+                start_byte: 0,
+                end_byte: notification_content.len() as u64,
+            }],
+        })
+    }
+
+    async fn publish_prepared_notification(
+        &self,
+        notification_content: &str,
+        message_key: &str,
+        wake_content: &str,
+        queue: RequestQueue,
+        existing_notification_doc_id: Option<&str>,
+        publication: &ToolNotificationPublication,
+    ) -> anyhow::Result<EnqueuedBackgroundCompletionInput> {
+        persist_background_completion_with_message_canonical_with_access(
+            &self.access,
             &self.node,
             &self.parent,
             notification_content,
@@ -427,13 +608,7 @@ impl CanonicalBackgroundFixture {
             wake_content,
             queue,
             existing_notification_doc_id,
-            &ToolNotificationPublication {
-                tool_call_doc_id: tool_call_doc_id.to_owned(),
-                presentation: vec![PresentationPart::OutputRange {
-                    start_byte: 0,
-                    end_byte: notification_content.len() as u64,
-                }],
-            },
+            publication,
             crate::request::lifecycle::RequestHopCause::Continuation,
         )
         .await
@@ -444,22 +619,8 @@ impl CanonicalBackgroundFixture {
 async fn request_doc_lookup_rejects_duplicate_logical_request_ids() {
     let db = test_db("ambiguous-request-doc-lookup").await;
     let input = wake_queue_input(hints(QueueSource::User, QueuePolicy::Append));
-    insert_raw_queue_request(
-        &db.node,
-        db.node_did(),
-        "duplicate-logical-id",
-        "session-a",
-        &input,
-    )
-    .await;
-    insert_raw_queue_request(
-        &db.node,
-        db.node_did(),
-        "duplicate-logical-id",
-        "session-b",
-        &input,
-    )
-    .await;
+    insert_raw_queue_request(&db, "duplicate-logical-id", "session-a", &input).await;
+    insert_raw_queue_request(&db, "duplicate-logical-id", "session-b", &input).await;
 
     let error = crate::request::binding::resolve_request_doc_id(&db.node, "duplicate-logical-id")
         .await
@@ -489,7 +650,7 @@ mod pin_tests {
     use crate::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 
     fn pin_parent_request() -> AgentRequest {
-        let mut parent = parent_request(PIN_FIXED_DID, "sess-pin-parent");
+        let mut parent = parent_request(PIN_FIXED_DID, PIN_FIXED_DID, "sess-pin-parent");
         parent.request_id = "pin-parent-request".to_string();
         parent.doc_id = "pin-parent-doc".to_string();
         parent.request_hop = 2;
@@ -507,7 +668,7 @@ mod pin_tests {
         let mutation = session_request_create_mutation(
             &parent,
             SessionRequestFields {
-                agent_id: "behavior-1",
+                agent_did: PIN_FIXED_DID,
                 content: "steering content",
                 execution_origin: ExecutionOrigin::Interactive,
                 input: wake_queue_input(RequestQueue {
@@ -536,7 +697,7 @@ mod pin_tests {
         let normalized = normalize_pin_fields(fields);
         assert_eq!(
             normalized,
-            "request_id: \"req-session-mutation-1\", purpose: \"normal\", node_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", agent_id: \"behavior-1\", session_id: \"sess-pin-parent\", retry_root_request: \"req-session-mutation-1\", retry_key: \"retry-key-session-1\", content: \"steering content\", input: { queue: { policy: \"append\", source: \"steering\" } }, execution_origin: \"interactive\", caused_by_correlation: \"corr-parent\", caused_by_trigger_context: \"{\\\"a\\\":\\\"b\\\"}\", created_at: \"2030-01-01T00:00:00Z\", retry_count: 0, max_retries: 3, request_hop: 2, caused_by_parent_request_id: \"pin-parent-request\", caused_by_parent_request_doc_id: \"pin-parent-doc\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"pin-parent-request\", runtime_source_kind: \"local-control\", lifecycle_state: \"pending\", failure_reason: \"\""
+            "request_id: \"req-session-mutation-1\", purpose: \"normal\", node_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", session_id: \"sess-pin-parent\", retry_root_request: \"req-session-mutation-1\", retry_key: \"retry-key-session-1\", content: \"steering content\", input: { queue: { policy: \"append\", source: \"steering\" } }, execution_origin: \"interactive\", caused_by_correlation: \"corr-parent\", caused_by_trigger_context: \"{\\\"a\\\":\\\"b\\\"}\", created_at: \"2030-01-01T00:00:00Z\", retry_count: 0, max_retries: 3, request_hop: 2, caused_by_parent_request_id: \"pin-parent-request\", caused_by_parent_request_doc_id: \"pin-parent-doc\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"pin-parent-request\", runtime_source_kind: \"local-control\", lifecycle_state: \"pending\", failure_reason: \"\""
         );
     }
 
@@ -553,7 +714,7 @@ mod pin_tests {
             let mutation = session_request_create_mutation(
                 &parent,
                 SessionRequestFields {
-                    agent_id: TEST_AGENT_ID,
+                    agent_did: PIN_FIXED_DID,
                     content: "continue",
                     execution_origin: ExecutionOrigin::Scheduled,
                     input: wake_queue_input(hints(source, QueuePolicy::Append)),
@@ -589,11 +750,11 @@ mod pin_tests {
         let goal_id = "goal-1";
         let continuation_sequence: i64 = 3;
         let content = "continue the goal";
-        let agent_id = parent.agent_id.clone();
+        let agent_did = parent.agent_did.clone();
 
         let mut create = prepare_goal_continuation(
             &parent,
-            agent_id,
+            agent_did,
             goal_id,
             content,
             continuation_sequence,
@@ -612,7 +773,7 @@ mod pin_tests {
         let fields = create.graphql_input_fields().expect("graphql_input_fields");
         assert_eq!(
             normalize_pin_fields(&fields),
-            "request_id: \"goal-cont-00000000000000000003-355ac0cefea9f3d0afab06ffb90fd1ec\", purpose: \"normal\", node_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", agent_id: \"general\", session_id: \"sess-pin-parent\", retry_root_request: \"goal-cont-00000000000000000003-355ac0cefea9f3d0afab06ffb90fd1ec\", retry_key: \"goal-continuation:355ac0cefea9f3d0afab06ffb90fd1ec\", content: \"continue the goal\", input: { goal_continuation: { sequence: 3, wrapup: false }, queue: { key: \"goal:355ac0cefea9f3d0afab06ffb90fd1ec\", policy: \"coalesce\", queued_after_request_id: \"pin-parent-request\", source: \"goal\" } }, execution_origin: \"scheduled\", caused_by_trigger_id: \"goal-1\", caused_by_trigger_kind: \"goal\", caused_by_correlation: \"corr-parent\", caused_by_trigger_context: \"{\\\"a\\\":\\\"b\\\"}\", created_at: \"2030-01-01T00:00:00Z\", retry_count: 0, max_retries: 3, request_hop: 2, caused_by_parent_request_id: \"pin-parent-request\", caused_by_parent_request_doc_id: \"pin-parent-doc\", workspace_id: \"ws-goal-1\", workspace_owner_node_did: \"did:key:workspace-owner\", workspace_authority: \"readWrite\", workspace_seal_hash: \"seal-goal-1\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"pin-parent-request\", runtime_source_kind: \"local-control\", lifecycle_state: \"pending\", failure_reason: \"\""
+            "request_id: \"goal-cont-00000000000000000003-355ac0cefea9f3d0afab06ffb90fd1ec\", purpose: \"normal\", node_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", session_id: \"sess-pin-parent\", retry_root_request: \"goal-cont-00000000000000000003-355ac0cefea9f3d0afab06ffb90fd1ec\", retry_key: \"goal-continuation:355ac0cefea9f3d0afab06ffb90fd1ec\", content: \"continue the goal\", input: { goal_continuation: { sequence: 3, wrapup: false }, queue: { key: \"goal:355ac0cefea9f3d0afab06ffb90fd1ec\", policy: \"coalesce\", queued_after_request_id: \"pin-parent-request\", source: \"goal\" } }, execution_origin: \"scheduled\", caused_by_trigger_id: \"goal-1\", caused_by_trigger_kind: \"goal\", caused_by_correlation: \"corr-parent\", caused_by_trigger_context: \"{\\\"a\\\":\\\"b\\\"}\", created_at: \"2030-01-01T00:00:00Z\", retry_count: 0, max_retries: 3, request_hop: 2, caused_by_parent_request_id: \"pin-parent-request\", caused_by_parent_request_doc_id: \"pin-parent-doc\", workspace_id: \"ws-goal-1\", workspace_owner_node_did: \"did:key:workspace-owner\", workspace_authority: \"readWrite\", workspace_seal_hash: \"seal-goal-1\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"pin-parent-request\", runtime_source_kind: \"local-control\", lifecycle_state: \"pending\", failure_reason: \"\""
         );
     }
 }

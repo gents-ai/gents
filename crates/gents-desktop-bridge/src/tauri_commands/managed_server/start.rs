@@ -141,7 +141,7 @@ where
             core.refresh_local_standard_peer(&node_home, &target.node_name)
                 .await
                 .map_err(|error| BridgeError::untyped(error.to_string()))?;
-            start_managed_runtime_pairing(state, core, node_home, target).await;
+            start_managed_runtime_pairing(state, core, target).await;
         }
         external.pairing_ready = pairing_is_ready(state, external.node_did.as_deref()).await;
         return Ok(external);

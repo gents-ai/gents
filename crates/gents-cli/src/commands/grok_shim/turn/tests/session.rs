@@ -4,7 +4,7 @@ use super::*;
 async fn resume_hands_off_active_and_during_replay_requests_without_repeating_history() {
     let (_dir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;
-    let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did));
+    let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did, &node).await);
     let engine = test_engine(node.clone());
     let (buffer, sender) = buffer_sender();
     let prompt = parse_prompt_request(
@@ -71,7 +71,7 @@ async fn resume_hands_off_active_and_during_replay_requests_without_repeating_hi
 async fn session_discovery_excludes_foreign_nodes_and_requesters() {
     let (_tempdir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;
-    let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did));
+    let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did, &node).await);
     let engine = test_engine(node.clone());
     let (_, sender) = buffer_sender();
     for (id, owner, requester) in [
@@ -119,7 +119,7 @@ async fn session_discovery_excludes_foreign_nodes_and_requesters() {
 async fn observed_human_turn_keeps_prompt_identity_echo_and_cancel_target() {
     let (_tempdir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;
-    let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did));
+    let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did, &node).await);
     let engine = test_engine(node.clone());
     let (buffer, sender) = buffer_sender();
     let prompt = parse_prompt_request(
@@ -223,7 +223,7 @@ async fn observed_human_turn_keeps_prompt_identity_echo_and_cancel_target() {
 async fn autonomous_turn_defers_late_notices_and_plain_escape_cancels_its_owner() {
     let (_tempdir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;
-    let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did));
+    let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did, &node).await);
     let engine = test_engine(node.clone());
     let (buffer, sender) = buffer_sender();
     let prompt = parse_prompt_request(

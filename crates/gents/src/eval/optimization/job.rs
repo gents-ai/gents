@@ -249,12 +249,14 @@ pub async fn create_job(
         .transact_write("optimization.create_job", |txn| {
             let variables = &variables;
             Box::pin(async move {
-                txn.execute_with_variables(
+                let response = txn.execute_client_signed_create(
                     "mutation($input: OptimizationJobMutationInputArg!) { create_OptimizationJob(input: $input) { _docID } }",
                     variables,
-                )
-                .await
-                .map(|_| ())
+                    gents_protocol::schemas::OPTIMIZATION_JOB,
+                ).await?;
+                let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, "OptimizationJob")?;
+                crate::store::config_client::publish_node_child_in_txn(txn, "OptimizationJob", &doc_id, owner).await?;
+                Ok::<(), anyhow::Error>(())
             })
         })
         .await
@@ -426,15 +428,33 @@ pub(crate) async fn append_in_txn(
         "journal_len": journal.len(),
         "state": derive_state(&journal).label(),
     }});
-    let response = txn
-        .execute_with_variables(
-            &format!(
-                "mutation($input: OptimizationJobMutationInputArg!) {{ update_OptimizationJob(filter: {{ {}, journal_len: {{ _eq: {expected} }} }}, input: $input) {{ _docID }} }}",
-                filter(&job.owner, &job.job_id)
-            ),
-            &variables,
-        )
+    let current = txn
+        .execute(&format!(
+            "{{ OptimizationJob(filter: {{ {} }}) {{ _docID journal_len }} }}",
+            filter(&job.owner, &job.job_id)
+        ))
         .await?;
+    let row = current["data"]["OptimizationJob"]
+        .as_array()
+        .and_then(|rows| rows.first())
+        .context("optimization job is not available")?;
+    let doc_id = row["_docID"]
+        .as_str()
+        .context("optimization job has no document ID")?;
+    let observed = row["journal_len"]
+        .as_u64()
+        .context("optimization job has no journal length")?;
+    if u64::try_from(expected)? != observed {
+        return Err(anyhow::Error::new(JournalConflict { expected }));
+    }
+    let response = txn.execute_client_signed_update(
+        &format!(
+            "mutation($input: OptimizationJobMutationInputArg!) {{ update_OptimizationJob(filter: {{ _docID: {{ _eq: \"{}\" }}, {}, journal_len: {{ _eq: {expected} }} }}, input: $input) {{ _docID }} }}",
+            escape_graphql_string(doc_id), filter(&job.owner, &job.job_id)
+        ),
+        &variables,
+        gents_protocol::schemas::OPTIMIZATION_JOB,
+    ).await?;
     let matched = response["data"]["update_OptimizationJob"]
         .as_array()
         .is_some_and(|rows| !rows.is_empty());
@@ -462,29 +482,17 @@ pub async fn append(access: &ConfigAccess, job: &mut JobRecord, entry: JournalEn
 mod tests {
     use super::*;
     use crate::eval::optimization::target::{Target, TargetField};
-    use std::sync::Arc;
-
-    async fn access() -> ConfigAccess {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
-        ConfigAccess::local(node)
-    }
-
-    const OWNER: &str = "did:key:job-owner";
-
-    fn origin() -> JobOrigin {
+    fn origin(owner: &str) -> JobOrigin {
         JobOrigin {
             target: Target {
                 field: TargetField::AgentContextSystemPrompt,
-                owner: OWNER.into(),
+                owner: owner.into(),
                 id: "monitor-context".into(),
             },
             closure: Vec::new(),
             subject: crate::eval::SubjectRef {
                 pack_digest: "sha256:baseline".into(),
-                agent_id: "monitor".into(),
+                agent_slot: "monitor".into(),
             },
             definition: crate::eval::DefinitionRef {
                 definition_id: "monitor-findings".into(),
@@ -500,7 +508,7 @@ mod tests {
                 deadline_unix_secs: None,
             },
             baseline_text: "Watch the mailbox.\n".into(),
-            owner: OWNER.into(),
+            owner: owner.into(),
             seed_base: 1_000,
             inference_profile_id: "local".into(),
             max_text_bytes: 32 * 1024,
@@ -544,15 +552,19 @@ mod tests {
 
     #[tokio::test]
     async fn a_job_round_trips_through_the_document() {
-        let access = access().await;
-        let mut job = create_job(&access, "job-1", OWNER, &origin())
+        let fixture = crate::eval::test_support::HeldEvalFixture::new()
             .await
             .unwrap();
-        append(&access, &mut job, JournalEntry::Frozen)
+        let access = &fixture.access;
+        let owner = fixture.node_did.as_str();
+        let mut job = create_job(access, "job-1", owner, &origin(owner))
+            .await
+            .unwrap();
+        append(access, &mut job, JournalEntry::Frozen)
             .await
             .unwrap();
         append(
-            &access,
+            access,
             &mut job,
             JournalEntry::RunStarted {
                 run_id: "job-1-r1-train".into(),
@@ -562,15 +574,19 @@ mod tests {
         )
         .await
         .unwrap();
-        let loaded = load_job(&access, OWNER, "job-1").await.unwrap().unwrap();
+        let loaded = load_job(access, owner, "job-1").await.unwrap().unwrap();
         assert_eq!(loaded, job);
         assert_eq!(derive_state(&loaded.journal), JobState::Running);
     }
 
     #[tokio::test]
     async fn an_append_at_the_expected_length_extends_the_journal_by_one() {
-        let access = access().await;
-        let mut job = create_job(&access, "job-2", OWNER, &origin())
+        let fixture = crate::eval::test_support::HeldEvalFixture::new()
+            .await
+            .unwrap();
+        let access = &fixture.access;
+        let owner = fixture.node_did.as_str();
+        let mut job = create_job(access, "job-2", owner, &origin(owner))
             .await
             .unwrap();
         let entries = [
@@ -580,42 +596,50 @@ mod tests {
         ];
         for entry in entries.iter() {
             let before = job.journal.clone();
-            append(&access, &mut job, entry.clone()).await.unwrap();
+            append(access, &mut job, entry.clone()).await.unwrap();
             assert_eq!(job.journal.len(), before.len() + 1);
             assert_eq!(&job.journal[..before.len()], &before[..]);
             assert_eq!(job.journal.last(), Some(entry));
         }
-        let loaded = load_job(&access, OWNER, "job-2").await.unwrap().unwrap();
+        let loaded = load_job(access, owner, "job-2").await.unwrap().unwrap();
         assert_eq!(loaded.journal, entries.to_vec());
     }
 
     #[tokio::test]
     async fn a_stale_writer_cannot_append_and_changes_nothing() {
-        let access = access().await;
-        let mut job = create_job(&access, "job-3", OWNER, &origin())
+        let fixture = crate::eval::test_support::HeldEvalFixture::new()
+            .await
+            .unwrap();
+        let access = &fixture.access;
+        let owner = fixture.node_did.as_str();
+        let mut job = create_job(access, "job-3", owner, &origin(owner))
             .await
             .unwrap();
         let mut stale = job.clone();
-        append(&access, &mut job, JournalEntry::Frozen)
+        append(access, &mut job, JournalEntry::Frozen)
             .await
             .unwrap();
 
-        let error = append(&access, &mut stale, proposed(1, "racing"))
+        let error = append(access, &mut stale, proposed(1, "racing"))
             .await
             .unwrap_err();
         let conflict = journal_conflict(&error).unwrap_or_else(|| panic!("{error:#}"));
         assert_eq!(conflict.expected, 0);
         assert!(stale.journal.is_empty());
 
-        let loaded = load_job(&access, OWNER, "job-3").await.unwrap().unwrap();
+        let loaded = load_job(access, owner, "job-3").await.unwrap().unwrap();
         assert_eq!(loaded.journal, vec![JournalEntry::Frozen]);
         assert_eq!(derive_state(&loaded.journal), JobState::Running);
     }
 
     #[tokio::test]
     async fn an_origin_with_extreme_budgets_round_trips_through_the_document() {
-        let access = access().await;
-        let mut written = origin();
+        let fixture = crate::eval::test_support::HeldEvalFixture::new()
+            .await
+            .unwrap();
+        let access = &fixture.access;
+        let owner = fixture.node_did.as_str();
+        let mut written = origin(owner);
         written.budgets = Budgets {
             max_rounds: u32::MAX,
             max_case_trials: u64::MAX - 1,
@@ -624,8 +648,8 @@ mod tests {
         };
         written.max_text_bytes = usize::MAX;
         written.baseline_text = "Quote \"this\"\\ and\nthat {}.\n".into();
-        create_job(&access, "job-4", OWNER, &written).await.unwrap();
-        let loaded = load_job(&access, OWNER, "job-4").await.unwrap().unwrap();
+        create_job(access, "job-4", owner, &written).await.unwrap();
+        let loaded = load_job(access, owner, "job-4").await.unwrap().unwrap();
         assert_eq!(loaded.origin, written);
         assert!(loaded.journal.is_empty());
     }

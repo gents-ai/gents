@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::ensure_no_errors;
 use serde_json::json;
@@ -124,7 +124,7 @@ async fn seed_signed_request(
                 request_id: request_id.into(),
                 node_did: node_did.into(),
                 requester_did: None,
-                agent_id: "test".into(),
+                agent_did: "test".into(),
                 session_id: session_id.into(),
                 content: "test".into(),
                 execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,

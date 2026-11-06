@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tracing::{debug, info, warn};
 
 use crate::error::{Error, Result};

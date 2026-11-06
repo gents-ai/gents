@@ -1,13 +1,9 @@
 use super::*;
 
-async fn fixture(name: &str) -> (TestDb, AgentRequest) {
+async fn fixture(name: &str) -> (TestDb, CanonicalBackgroundFixture) {
     let db = test_db(name).await;
-    insert_signed_queue_request(&db, "parent-request", name, &RequestInput::default()).await;
-    let parent = crate::request::binding::load_agent_request(&db.node, "parent-request")
-        .await
-        .unwrap()
-        .unwrap();
-    (db, parent)
+    let fixture = canonical_background_fixture(&db, name).await;
+    (db, fixture)
 }
 
 fn hints(parent: &AgentRequest) -> RequestQueue {
@@ -23,10 +19,16 @@ fn hints(parent: &AgentRequest) -> RequestQueue {
     }
 }
 
-async fn message_ids(db: &TestDb) -> Vec<String> {
-    let response = db.node.execute("{ AgentMessage { _docID } }").await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    response.data.unwrap()["AgentMessage"]
+async fn message_ids(db: &TestDb, key: &str) -> Vec<String> {
+    let key = escape_graphql_string(key);
+    let response = db
+        .agent_access
+        .execute(&format!(
+            r#"{{ AgentMessage(filter: {{message_key: {{_eq: "{key}"}}}}) {{ _docID }} }}"#
+        ))
+        .await
+        .unwrap();
+    response["data"]["AgentMessage"]
         .as_array()
         .unwrap()
         .iter()
@@ -46,7 +48,12 @@ async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
     for (case, status) in cases {
         let status: crate::goal::GoalStatus =
             serde_json::from_value(serde_json::json!(status)).unwrap();
-        let (db, parent) = fixture(&format!("goal-publication-{}", case.name)).await;
+        let (db, mut fixture) = fixture(&format!("goal-publication-{}", case.name)).await;
+        let parent = fixture.parent.clone();
+        let prepared = fixture
+            .prepare_notification("terminal output")
+            .await
+            .unwrap();
         let queue = hints(&parent);
         let gate = super::super::atomic_inputs::background_completion_gate(
             &db.node,
@@ -55,27 +62,38 @@ async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
             queue.key.as_deref().unwrap(),
         );
         let held = gate.lock().await;
+        let publish_access = db.agent_access.clone();
         let publish_node = db.node.clone();
         let publish_parent = parent.clone();
         let publication = tokio::spawn(async move {
-            super::super::atomic_inputs::persist_background_completion_with_message(
+            persist_background_completion_with_message_canonical_with_access(
+                &publish_access,
                 &publish_node,
                 &publish_parent,
                 "terminal output",
                 "canonical-goal-notification",
                 "review notifications",
-                hints(&publish_parent),
+                queue,
                 None,
+                &prepared,
+                crate::request::lifecycle::RequestHopCause::Continuation,
             )
             .await
         });
-        let goal = crate::goal::set_goal(
-            &db.node,
+        let access = crate::ConfigAccess::local_managed_agent(
+            db.node.clone(),
+            identity::Did::new(db.agent_did()).unwrap(),
+            db.agent_identity.as_ref(),
+        )
+        .unwrap();
+        let goal = crate::goal::set_goal_from_access(
+            &access,
             db.node_did(),
             &parent.session_id,
             Some("Goal owns continuation"),
             Some(status),
             Some(Some(10)),
+            None,
         )
         .await
         .unwrap();
@@ -88,13 +106,20 @@ async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
             case.name
         );
         assert_eq!(
-            message_ids(&db).await.len() == 1,
+            message_ids(&db, "canonical-goal-notification").await.len() == 1,
             case.notification_persisted == Some(true),
             "{}",
             case.name
         );
-        assert_eq!(queue_rows(&db.node, &parent.session_id).await.len(), 2);
-        let after = crate::goal::load_canonical_goal(&db.node, db.node_did(), &parent.session_id)
+        assert_eq!(queue_rows(&db, &parent.session_id).await.len(), 2);
+        let after = access
+            .transact_readonly("test.goal_wake_after", |txn| {
+                Box::pin(crate::goal::load_canonical_goal_in_txn(
+                    txn,
+                    db.node_did(),
+                    &parent.session_id,
+                ))
+            })
             .await
             .unwrap()
             .unwrap();
@@ -109,21 +134,26 @@ async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
 
 #[tokio::test]
 async fn canonical_publication_replay_preserves_one_input_and_one_wake() {
-    let (db, parent) = fixture("ordinary-canonical-publication").await;
+    let (db, mut fixture) = fixture("ordinary-canonical-publication").await;
+    let parent = fixture.parent.clone();
+    let prepared = fixture
+        .prepare_notification("terminal output")
+        .await
+        .unwrap();
     let mut first_wake = None;
     let mut first_message = None;
     for first in [true, false] {
-        let result = super::super::atomic_inputs::persist_background_completion_with_message(
-            &db.node,
-            &parent,
-            "terminal output",
-            "canonical-ordinary-notification",
-            "review notifications",
-            hints(&parent),
-            None,
-        )
-        .await
-        .unwrap();
+        let result = fixture
+            .publish_prepared_notification(
+                "terminal output",
+                "canonical-ordinary-notification",
+                "review notifications",
+                hints(&parent),
+                None,
+                &prepared,
+            )
+            .await
+            .unwrap();
         assert_eq!(result.created_request, first);
         let wake = result
             .request
@@ -133,12 +163,12 @@ async fn canonical_publication_replay_preserves_one_input_and_one_wake() {
             first_wake = Some(wake.clone());
         }
         assert_eq!(Some(&wake), first_wake.as_ref());
-        let messages = message_ids(&db).await;
+        let messages = message_ids(&db, "canonical-ordinary-notification").await;
         assert_eq!(messages.len(), 1);
         if first {
             first_message = messages.first().cloned();
         }
         assert_eq!(messages.first(), first_message.as_ref());
-        assert_eq!(queue_rows(&db.node, &parent.session_id).await.len(), 2);
+        assert_eq!(queue_rows(&db, &parent.session_id).await.len(), 2);
     }
 }

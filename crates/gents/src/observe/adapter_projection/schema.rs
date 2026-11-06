@@ -56,7 +56,7 @@ pub fn adapter_projection_json_schema(kind: AdapterProjectionKind) -> Value {
             "source_request_doc_id": optional_string_schema(),
             "source_session_id": optional_string_schema(),
             "source_node_did": optional_string_schema(),
-            "source_agent_id": optional_string_schema(),
+            "source_agent_did": optional_string_schema(),
             "redaction_mode": redaction_mode_schema(),
             "provenance": provenance_schema(),
             "rendered_captures": rendered_captures_schema(),

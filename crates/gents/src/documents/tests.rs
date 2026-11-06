@@ -433,14 +433,7 @@ fn reserved_names_cover_native_and_meta_tools() {
     }
 
     assert!(!is_reserved_builtin_tool_name("request_action"));
-}
-
-#[cfg(feature = "agent-memory")]
-#[test]
-fn memory_tool_name_is_reserved() {
-    assert!(is_reserved_builtin_tool_name(
-        crate::tools::native::MEMORY_TOOL_NAME
-    ));
+    assert!(!is_reserved_builtin_tool_name("memory"));
 }
 
 #[test]
@@ -460,24 +453,34 @@ fn write_tools_deserialize_trims_whitespace() {
 #[test]
 fn stored_built_ins_with_retired_key_decode() {
     let stored: BuiltInTools = serde_json::from_value(
-        serde_json::json!({"enable_graph_tools": true, "enable_memory": true}),
+        serde_json::json!({"enable_graph_tools": true, "enable_goal_tools": true}),
     )
     .expect("a stored built_ins with the retired key decodes");
     let written = serde_json::to_value(&stored).unwrap();
-    assert_eq!(written, serde_json::json!({"enable_memory": true}));
+    assert_eq!(written, serde_json::json!({"enable_goal_tools": true}));
     let without: BuiltInTools =
-        serde_json::from_value(serde_json::json!({"enable_memory": true})).unwrap();
+        serde_json::from_value(serde_json::json!({"enable_goal_tools": true})).unwrap();
     assert_eq!(stored, without);
+}
+
+#[test]
+fn built_ins_reject_the_removed_memory_setting() {
+    assert!(serde_json::from_value::<BuiltInTools>(serde_json::json!({
+        "enable_memory": true
+    }))
+    .is_err());
 }
 
 #[tokio::test]
 async fn tools_document_round_trips_defra_query_fields() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (db, _user, access, _binding) =
+        crate::test_support::signed_test_node("tools_document_round_trips_defra_query_fields")
+            .await;
+    let node_did = db.node_identity.did();
 
     let doc = Tools {
         tools_id: "amy-general-tools".to_string(),
-        node_did: "did:key:z-test".to_string(),
+        node_did: node_did.to_string(),
         built_ins: Some(BuiltInTools {
             enable_session_history_tool: Some(true),
             ..Default::default()
@@ -492,7 +495,6 @@ async fn tools_document_round_trips_defra_query_fields() {
         }),
         ..Default::default()
     };
-    let access = crate::store::config_client::ConfigAccess::local(node);
     write_tools_document(&access, &doc)
         .await
         .expect("write should persist the defra_query fields");
@@ -540,13 +542,13 @@ async fn tools_document_round_trips_defra_query_fields() {
 
 #[tokio::test]
 async fn tools_update_can_clear_lsp_config() {
-    let node = crate::test_support::node_builder().build().await.unwrap();
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (db, _user, access, _binding) =
+        crate::test_support::signed_test_node("tools_update_can_clear_lsp_config").await;
+    let node_did = db.node_identity.did();
 
-    let access = crate::store::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     let lsp = |config: Option<String>| Tools {
         tools_id: "lsp-config-clear".to_string(),
-        node_did: "did:key:z-lsp-config-clear".to_string(),
+        node_did: node_did.to_string(),
         integrations: Some(IntegrationTools {
             lsp: config.map(|config| LspTools {
                 config: Some(config),
@@ -561,6 +563,7 @@ async fn tools_update_can_clear_lsp_config() {
     write_tools_document(&access, &doc).await.unwrap();
     async fn read(
         access: &crate::store::config_client::ConfigAccess,
+        node_did: &str,
     ) -> anyhow::Result<Option<Tools>> {
         access
             .transact_write("test.tools.read", |txn| {
@@ -568,7 +571,7 @@ async fn tools_update_can_clear_lsp_config() {
                     crate::store::config_client::read_desired_state_record_in_txn(
                         txn,
                         crate::Collection::Tools,
-                        "did:key:z-lsp-config-clear",
+                        node_did,
                         "lsp-config-clear",
                     )
                     .await?
@@ -580,7 +583,7 @@ async fn tools_update_can_clear_lsp_config() {
             })
             .await
     }
-    let loaded: Tools = read(&access).await.unwrap().unwrap();
+    let loaded: Tools = read(&access, node_did).await.unwrap().unwrap();
     assert_eq!(
         loaded
             .integrations
@@ -594,7 +597,7 @@ async fn tools_update_can_clear_lsp_config() {
     );
 
     write_tools_document(&access, &lsp(None)).await.unwrap();
-    let cleared: Tools = read(&access).await.unwrap().unwrap();
+    let cleared: Tools = read(&access, node_did).await.unwrap().unwrap();
     let cleared_config = cleared
         .integrations
         .as_ref()
@@ -611,12 +614,14 @@ async fn tools_update_can_clear_lsp_config() {
 
 #[tokio::test]
 async fn tools_document_round_trips_read_only_commands() {
-    let node = crate::test_support::node_builder().build().await.unwrap();
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (db, _user, access, _binding) =
+        crate::test_support::signed_test_node("tools_document_round_trips_read_only_commands")
+            .await;
+    let node_did = db.node_identity.did();
 
     let doc = Tools {
         tools_id: "steward-readonly-allowlist".to_string(),
-        node_did: "did:key:z-test-allowlist".to_string(),
+        node_did: node_did.to_string(),
         host: Some(HostTools {
             bash: Some(BashTools {
                 read_only_commands: Some(vec!["jq".to_string(), "echo".to_string()]),
@@ -626,7 +631,6 @@ async fn tools_document_round_trips_read_only_commands() {
         }),
         ..Default::default()
     };
-    let access = crate::store::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     write_tools_document(&access, &doc)
         .await
         .expect("write should persist the read_only_commands field");
@@ -666,8 +670,9 @@ async fn tools_document_round_trips_read_only_commands() {
 
 #[tokio::test]
 async fn tools_document_round_trips_write_tools() {
-    let node = crate::test_support::node_builder().build().await.unwrap();
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (db, _user, access, _binding) =
+        crate::test_support::signed_test_node("tools_document_round_trips_write_tools").await;
+    let node_did = db.node_identity.did();
 
     let decls = vec![WriteToolDecl {
         notification: None,
@@ -695,7 +700,7 @@ async fn tools_document_round_trips_write_tools() {
     }];
     let tools = Tools {
         tools_id: "steward-write-tools".to_string(),
-        node_did: "did:key:z-test-write".to_string(),
+        node_did: node_did.to_string(),
         datastore: Some(DatastoreTools {
             datastore_tool_surface_ids: Some(vec!["surface".to_string()]),
             ..Default::default()
@@ -704,11 +709,10 @@ async fn tools_document_round_trips_write_tools() {
     };
     let surface: DatastoreToolSurfaceDocument = serde_json::from_value(serde_json::json!({
         "surface_id": "surface",
-        "node_did": "did:key:z-test-write",
+        "node_did": node_did,
         "entries": decls,
     }))
     .unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
         crate::store::config_client::DesiredStateApplyDocument {
             collection: crate::Collection::DatastoreToolSurface,
@@ -744,19 +748,21 @@ async fn tools_document_round_trips_write_tools() {
 
 #[tokio::test]
 async fn tools_document_round_trips_session_message_enablement() {
-    let node = crate::test_support::node_builder().build().await.unwrap();
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (db, _user, access, _binding) = crate::test_support::signed_test_node(
+        "tools_document_round_trips_session_message_enablement",
+    )
+    .await;
+    let node_did = db.node_identity.did();
 
     let doc = Tools {
         tools_id: "amy-background-tools".to_string(),
-        node_did: "did:key:z-test-background".to_string(),
+        node_did: node_did.to_string(),
         agents: Some(AgentTools {
             enabled: Some(true),
             ..Default::default()
         }),
         ..Default::default()
     };
-    let access = crate::store::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     write_tools_document(&access, &doc)
         .await
         .expect("write should persist the session-message enablement");
@@ -786,19 +792,19 @@ async fn tools_document_round_trips_session_message_enablement() {
 
 #[tokio::test]
 async fn agent_description_round_trip_with_explicit_owner_fixture() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-
-    let node_did = "did:key:z-test-desc";
-    crate::test_support::install_test_agent(&node, node_did, "amy-general").await;
+    let (db, _user, access, binding) =
+        crate::test_support::signed_test_node("agent_description_round_trip").await;
+    let node_did = db.node_identity.did();
+    let agent_did = &binding.agent_did;
 
     let authored = serde_json::json!({
-        "agent_id": "amy-general",
+        "agent_did": agent_did,
+        "creation_nonce": binding.creation_nonce,
         "node_did": node_did,
         "display_name": "Amy General",
         "description": "A general-purpose assistant for research and writing.",
         "context_id": null,
-        "inference_profile_id": "amy-general:inference",
+        "inference_profile_id": format!("{agent_did}:inference"),
         "tags": null,
     });
     let sparse: Agent = serde_json::from_value(authored.clone()).unwrap();
@@ -814,30 +820,47 @@ async fn agent_description_round_trip_with_explicit_owner_fixture() {
     assert_eq!(
         serde_json::to_value(&sparse).unwrap(),
         serde_json::json!({
-            "agent_id": "amy-general",
+            "agent_did": agent_did,
+        "creation_nonce": binding.creation_nonce,
             "node_did": node_did,
             "display_name": "Amy General",
             "description": "A general-purpose assistant for research and writing.",
-            "inference_profile_id": "amy-general:inference",
+            "inference_profile_id": format!("{agent_did}:inference"),
         })
     );
 
     let doc = Agent {
-        agent_id: "amy-general".to_string(),
+        agent_did: agent_did.clone(),
+        creation_nonce: binding.creation_nonce.clone(),
         node_did: node_did.to_string(),
         display_name: Some("Amy General".to_string()),
         description: Some("A general-purpose assistant for research and writing.".to_string()),
-        context_id: Some("amy-general:context".to_string()),
-        inference_profile_id: "amy-general:inference".to_string(),
+        context_id: Some(format!("{agent_did}:context")),
+        inference_profile_id: format!("{agent_did}:inference"),
         enabled: true,
         tags: Vec::new(),
         created_at: None,
     };
-    upsert_agent(&node, &doc)
+    let value = serde_json::to_value(&doc).unwrap();
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::Agent,
+            add: value.clone(),
+            update: value,
+        },
+    ])
+    .unwrap();
+    access
+        .transact_write("test.agent.description", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
         .await
         .expect("upsert should persist description fields");
 
-    let loaded = load_agent(&node, "amy-general")
+    let loaded = load_agent(&db.node, agent_did)
         .await
         .expect("load should succeed")
         .expect("agent should exist after upsert");
@@ -850,19 +873,14 @@ async fn agent_description_round_trip_with_explicit_owner_fixture() {
     assert!(loaded.enabled);
 }
 
-fn access_node(
-    access: &crate::store::config_client::ConfigAccess,
-) -> &std::sync::Arc<defra_node::EmbeddedNode> {
-    access.local_node().expect("test helpers use local access")
-}
-
 #[tokio::test]
 async fn inference_retry_policy_fields_round_trip() {
-    let node = crate::test_support::node_builder().build().await.unwrap();
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (db, _user, access, _binding) =
+        crate::test_support::signed_test_node("inference_retry_policy_fields_round_trip").await;
+    let node_did = db.node_identity.did();
 
     let retry = InferenceRetryPolicy {
-        node_did: "did:key:z-test-retry".to_string(),
+        node_did: node_did.to_string(),
         retry_policy_id: "retry-policy".to_string(),
         display_name: Some("Retry Policy".to_string()),
         max_transport_retries: Some(4),
@@ -873,7 +891,7 @@ async fn inference_retry_policy_fields_round_trip() {
         ..Default::default()
     };
     let backend: crate::documents::InferenceBackend = serde_json::from_value(serde_json::json!({
-        "node_did": "did:key:z-test-retry",
+        "node_did": node_did,
         "backend_id": "backend",
         "name": "Local",
         "provider_kind": "OpenAiCompatible",
@@ -882,7 +900,7 @@ async fn inference_retry_policy_fields_round_trip() {
     }))
     .unwrap();
     let profile = InferenceProfile {
-        node_did: "did:key:z-test-retry".to_string(),
+        node_did: node_did.to_string(),
         profile_id: "retry-profile".to_string(),
         display_name: Some("Retry Profile".to_string()),
         backend_id: "backend".to_string(),
@@ -892,13 +910,12 @@ async fn inference_retry_policy_fields_round_trip() {
         ..Default::default()
     };
     let execution = InferenceExecution {
-        node_did: "did:key:z-test-retry".to_string(),
+        node_did: node_did.to_string(),
         execution_id: "retry-execution".to_string(),
         retry_policy_id: Some("retry-policy".to_string()),
         ..Default::default()
     };
 
-    let access = crate::store::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
         crate::store::config_client::DesiredStateApplyDocument {
             collection: crate::Collection::InferenceBackend,
@@ -932,14 +949,10 @@ async fn inference_retry_policy_fields_round_trip() {
         .await
         .expect("apply should persist the retry chain");
 
-    let loaded = load_inference_profile(
-        access_node(&access),
-        "did:key:z-test-retry",
-        "retry-profile",
-    )
-    .await
-    .expect("load should succeed")
-    .expect("profile should exist");
+    let loaded = load_inference_profile(&db.node, node_did, "retry-profile")
+        .await
+        .expect("load should succeed")
+        .expect("profile should exist");
     assert_eq!(
         loaded.reasoning_effort,
         Some(crate::inference::resolved::ReasoningEffort::Max)
@@ -953,7 +966,7 @@ fn validate_accepts_well_formed_agent_target_documents() {
         target_id: "amy-code".to_string(),
         node_did: "did:key:zParent".to_string(),
         target_node_did: "did:key:zParent".to_string(),
-        agent_id: "amy-code".to_string(),
+        agent_did: "amy-code".to_string(),
         name: "Code assistant".to_string(),
         description: None,
         tags: Vec::new(),
@@ -962,7 +975,7 @@ fn validate_accepts_well_formed_agent_target_documents() {
         target_id: "amy-research".to_string(),
         node_did: "did:key:zParent".to_string(),
         target_node_did: "did:key:zDestination".to_string(),
-        agent_id: "amy-research".to_string(),
+        agent_did: "amy-research".to_string(),
         name: "amy-research".to_string(),
         description: None,
         tags: Vec::new(),
@@ -1126,15 +1139,25 @@ fn reference_documents() -> Vec<(crate::Collection, serde_json::Value)> {
 }
 
 fn reference_agent() -> Agent {
-    serde_json::from_value(serde_json::json!({"node_did":"owner","agent_id":"agent","context_id":"context","inference_profile_id":"profile"})).unwrap()
+    use crate::NodeIdentity;
+
+    let directory = tempfile::tempdir().unwrap();
+    let identity =
+        crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+    let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
+    serde_json::from_value(serde_json::json!({"node_did":identity.did(),"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"context_id":"context","inference_profile_id":"profile"})).unwrap()
 }
 
 #[test]
 fn agent_and_context_share_canonical_reference_closure() {
-    let refs = ConfigReferences::from_documents("owner", reference_documents()).unwrap();
-    reference_agent().validate_references(&refs).unwrap();
-    // Absence invokes context defaults, not an implicit tool or skill set.
     let mut agent = reference_agent();
+    let mut documents = reference_documents();
+    for (_, document) in &mut documents {
+        document["node_did"] = agent.node_did.clone().into();
+    }
+    let refs = ConfigReferences::from_documents(&agent.node_did, documents).unwrap();
+    agent.validate_references(&refs).unwrap();
+    // Absence invokes context defaults, not an implicit tool or skill set.
     agent.context_id = None;
     agent.validate_references(&refs).unwrap();
     agent.inference_profile_id = "missing".into();
@@ -1148,14 +1171,33 @@ fn agent_and_context_share_canonical_reference_closure() {
 #[test]
 fn default_agent_publication_matches_lean() {
     use crate::Collection;
+    use crate::NodeIdentity;
     use serde_json::json;
     let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
     let cases = snapshot.configuration_scope_cases["default_agent"]
         .as_array()
         .unwrap();
     assert_eq!(cases.len(), 8);
+    let directory = tempfile::tempdir().unwrap();
+    let alice = crate::KeyIdentity::load_or_create(directory.path().join("alice"), None).unwrap();
+    let bob = crate::KeyIdentity::load_or_create(directory.path().join("bob"), None).unwrap();
+    let missing = crate::store::identity::provision_agent_identity(&alice).unwrap();
+    let principal = |label: &str| match label {
+        "alice" => &alice,
+        "bob" => &bob,
+        _ => panic!("unknown modeled principal {label}"),
+    };
     for case in cases {
-        let scope = case["scope"].as_str().unwrap();
+        let scope = principal(case["scope"].as_str().unwrap()).did();
+        let agent_owner = principal(case["agent_owner"].as_str().unwrap());
+        let binding = crate::store::identity::provision_agent_identity(agent_owner).unwrap();
+        let default = case["default_agent_did"].as_str().map(|id| {
+            if Some(id) == case["agent_did"].as_str() {
+                binding.agent_did.as_str()
+            } else {
+                missing.agent_did.as_str()
+            }
+        });
         let documents = vec![
             (
                 Collection::InferenceBackend,
@@ -1171,13 +1213,14 @@ fn default_agent_publication_matches_lean() {
             ),
             (
                 Collection::Agent,
-                json!({"node_did":case["agent_owner"],"agent_id":case["agent_id"],
+                json!({"node_did":agent_owner.did(),"agent_did":binding.agent_did,
+                    "creation_nonce":binding.creation_nonce,
                     "context_id":case["context_id"],"inference_profile_id":"profile",
                     "enabled":case["enabled"]}),
             ),
             (
                 Collection::Node,
-                json!({"node_did":scope,"default_agent_id":case["default_agent_id"]}),
+                json!({"node_did":scope,"default_agent_did":default}),
             ),
         ];
         let accepted = ConfigReferences::from_documents(scope, documents)
@@ -1194,7 +1237,7 @@ fn default_agent_publication_matches_lean() {
 #[tokio::test]
 async fn oauth_account_scope_matches_lean() {
     use crate::inference::auth::credential::{
-        resolve_oauth_credential, resolve_oauth_pool, upsert_oauth_credential, AccountPick,
+        resolve_oauth_credential, resolve_oauth_pool, upsert_oauth_credential_on, AccountPick,
     };
     use crate::inference::backends::provider::{BackendProviderKind, BackendProviderOauthExt};
     let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
@@ -1203,7 +1246,27 @@ async fn oauth_account_scope_matches_lean() {
         serde_json::from_value(value.clone()).unwrap()
     };
 
-    let node = crate::inference::auth::credential::test_support::test_node().await;
+    let (local_db, _local_user, access, _local_agent) =
+        crate::test_support::signed_test_node("oauth-model-local").await;
+    let (foreign_db, _foreign_user, foreign_access, _foreign_agent) =
+        crate::test_support::signed_test_node("oauth-model-foreign").await;
+    let local_node = local_db.node_identity.did();
+    let foreign_node = foreign_db.node_identity.did();
+    assert_ne!(local_node, foreign_node);
+    let actual_owner = |model: &str| match model {
+        "alice" => local_node,
+        "bob" => foreign_node,
+        _ => panic!("unknown model Node {model}"),
+    };
+    let model_owner = |actual: &str| {
+        if actual == local_node {
+            "alice"
+        } else if actual == foreign_node {
+            "bob"
+        } else {
+            panic!("unknown actual Node {actual}")
+        }
+    };
     for row in lean["rows"].as_array().unwrap() {
         let provider = kind_of(&row["provider_kind"]).oauth_provider().unwrap();
         let owner = row["owner"].as_str().unwrap();
@@ -1211,7 +1274,7 @@ async fn oauth_account_scope_matches_lean() {
         let credential = crate::inference::auth::credential::OAuthCredential {
             doc_id: None,
             credential_id: format!("{provider}:{owner}:{}", account.unwrap_or("original")),
-            node_did: owner.to_string(),
+            node_did: actual_owner(owner).to_string(),
             provider: provider.to_string(),
             access_token: "access-TEST".to_string(),
             refresh_token: "refresh-TEST".to_string(),
@@ -1227,9 +1290,15 @@ async fn oauth_account_scope_matches_lean() {
             provider_account_key: None,
             label: None,
         };
-        upsert_oauth_credential(&node, &credential).await.unwrap();
+        let writer = if owner == "alice" {
+            &access
+        } else {
+            &foreign_access
+        };
+        upsert_oauth_credential_on(writer, &credential)
+            .await
+            .unwrap();
     }
-    let access = crate::store::config_client::ConfigAccess::local(node);
 
     let row_json = |owner: &str, account: Option<&str>| serde_json::json!({"owner": owner, "account": account});
     let cases = lean["cases"].as_array().unwrap();
@@ -1244,14 +1313,17 @@ async fn oauth_account_scope_matches_lean() {
             !text.contains(scope) && !text.contains(stored_owner),
             "{case}"
         );
+        let actual_scope = actual_owner(scope);
         if let BackendAuth::NodeOAuthPool { .. } = auth {
             let owner = case["owner"].as_str().unwrap();
             let provider = kind_of(&case["provider_kind"]).oauth_provider().unwrap();
-            let rows = resolve_oauth_pool(&access, scope, provider).await.unwrap();
+            let rows = resolve_oauth_pool(&access, actual_scope, provider)
+                .await
+                .unwrap();
             let mut pool: Vec<_> = rows
                 .iter()
-                .inspect(|row| assert_eq!(row.node_did, owner, "{case}"))
-                .map(|row| row_json(&row.node_did, row.account_ref.as_deref()))
+                .inspect(|row| assert_eq!(row.node_did, actual_owner(owner), "{case}"))
+                .map(|row| row_json(model_owner(&row.node_did), row.account_ref.as_deref()))
                 .collect();
             let mut expected: Vec<_> = case["resolved"]
                 .as_array()
@@ -1271,16 +1343,16 @@ async fn oauth_account_scope_matches_lean() {
                 let provider = kind_of(&case["provider_kind"]).oauth_provider().unwrap();
                 let row = resolve_oauth_credential(
                     &access,
-                    scope,
+                    actual_scope,
                     provider,
                     AccountPick::Reference(auth.oauth_account_ref()),
                 )
                 .await
                 .unwrap();
                 if let Some(row) = &row {
-                    assert_eq!(row.node_did, owner, "{case}");
+                    assert_eq!(row.node_did, actual_owner(owner), "{case}");
                 }
-                row.map(|row| row_json(&row.node_did, row.account_ref.as_deref()))
+                row.map(|row| row_json(model_owner(&row.node_did), row.account_ref.as_deref()))
             }
             None => {
                 assert!(!matches!(auth, BackendAuth::NodeOAuth { .. }), "{case}");
@@ -1332,9 +1404,13 @@ fn reference_snapshot_rejects_foreign_roots_duplicates_and_malformed_rows() {
 
 #[test]
 fn references_preserve_exact_ids_and_reject_present_blank_selections() {
-    let refs = ConfigReferences::from_documents("owner", reference_documents()).unwrap();
+    let mut agent = reference_agent();
+    let mut documents = reference_documents();
+    for (_, document) in &mut documents {
+        document["node_did"] = agent.node_did.clone().into();
+    }
+    let refs = ConfigReferences::from_documents(&agent.node_did, documents).unwrap();
     for selected in ["", " ", " context ", "missing"] {
-        let mut agent = reference_agent();
         agent.context_id = Some(selected.into());
         assert!(agent.validate_references(&refs).is_err(), "{selected:?}");
     }
@@ -1345,7 +1421,7 @@ fn same_owner_delegation_requires_an_agent_but_foreign_admission_is_separate() {
     let target = |destination| {
         (
             crate::Collection::AgentTarget,
-            serde_json::json!({"node_did":"owner","target_id":"worker","name":"worker","target_node_did":destination,"agent_id":"remote"}),
+            serde_json::json!({"node_did":"owner","target_id":"worker","name":"worker","target_node_did":destination,"agent_did":"remote"}),
         )
     };
     let refs = ConfigReferences::from_documents("owner", vec![target("owner")]).unwrap();
@@ -1356,25 +1432,48 @@ fn same_owner_delegation_requires_an_agent_but_foreign_admission_is_separate() {
 
 #[tokio::test]
 async fn reference_loader_isolates_foreign_malformed_backends_and_rejects_owned_corruption() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    for (owner, id, auth) in [
-        ("owner", "good", "unauthenticated"),
-        ("foreign", "bad", "invalid-auth"),
+    use crate::store::identity::NodeIdentity;
+
+    let (db, _user, access, _binding) =
+        crate::test_support::signed_test_node("reference-owner-isolation").await;
+    let owner = db.node_identity.did();
+    let foreign = tokio::task::spawn_blocking(|| {
+        crate::support::fixtures::test_identity("reference-foreign-node")
+    })
+    .await
+    .unwrap();
+    assert_ne!(owner, foreign.did());
+    crate::test_support::bootstrap_signed_test_node(&access, foreign.did()).await;
+    for (node_did, id, auth) in [
+        (owner, "good", "unauthenticated"),
+        (foreign.did(), "bad", "invalid-auth"),
     ] {
-        let owner = crate::store::graphql::escape_graphql_string(owner);
-        let id = crate::store::graphql::escape_graphql_string(id);
-        let auth = crate::store::graphql::escape_graphql_string(auth);
-        let result = node.execute(&format!(r#"mutation {{ create_InferenceBackend(input: {{node_did: "{owner}", backend_id: "{id}", name: "fixture", provider_kind: "OpenAiCompatible", endpoint: "http://localhost:8000/v1", auth: {{kind: "{auth}"}}, enabled: true}}) {{_docID}} }}"#)).await;
-        assert!(!result.has_errors(), "{:?}", result.errors);
-    }
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "test.reference_owner_isolation",
-        |txn| {
+        let input = serde_json::json!({
+            "node_did": node_did, "backend_id": id, "name": "fixture",
+            "provider_kind": "OpenAiCompatible", "endpoint": "http://localhost:8000/v1",
+            "auth_kind": auth, "enabled": true,
+            "creation_nonce": uuid::Uuid::new_v4().to_string(),
+        });
+        access.transact_write("test.reference_fixture", |txn| {
+            let input = &input;
             Box::pin(async move {
-                let refs = ConfigReferences::load_in_txn(txn, "owner").await?;
+                let response = txn.execute_client_signed_create(
+                    "mutation($input: InferenceBackendMetadataMutationInputArg!) { create_InferenceBackendMetadata(input: $input) { _docID } }",
+                    &serde_json::json!({"input": input}),
+                    gents_protocol::schemas::INFERENCE_BACKEND_METADATA,
+                ).await?;
+                let doc = crate::store::graphql::created_doc_id(&response, "InferenceBackendMetadata")?;
+                crate::store::config_client::publish_node_child_in_txn(
+                    txn, "InferenceBackendMetadata", &doc, node_did,
+                ).await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        }).await.unwrap();
+    }
+    access
+        .transact_write("test.reference_owner_isolation", |txn| {
+            Box::pin(async move {
+                let refs = ConfigReferences::load_in_txn(txn, owner).await?;
                 refs.validate()?;
                 assert!(refs.documents().any(|((collection, id), _)| *collection
                     == crate::Collection::InferenceBackend
@@ -1382,27 +1481,99 @@ async fn reference_loader_isolates_foreign_malformed_backends_and_rejects_owned_
                 assert!(!refs.documents().any(|((_, id), _)| id == "bad"));
                 Ok::<_, anyhow::Error>(())
             })
-        },
-    )
-    .await
-    .unwrap();
-    let result = node.execute(r#"mutation { update_InferenceBackend(filter: {node_did: {_eq: "owner"}, backend_id: {_eq: "good"}}, input: {auth: {kind: "invalid-auth"}}) {_docID} }"#).await;
-    assert!(!result.has_errors(), "{:?}", result.errors);
-    let result = crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "test.reference_owned_corruption",
-        |txn| {
+        })
+        .await
+        .unwrap();
+    let response = access.execute(&format!(
+        r#"{{ InferenceBackendMetadata(filter: {{node_did: {{_eq: "{}"}}, backend_id: {{_eq: "good"}}}}, limit: 2) {{ _docID }} }}"#,
+        crate::store::graphql::escape_graphql_string(owner),
+    )).await.unwrap();
+    let [row] = response["data"]["InferenceBackendMetadata"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("owned backend must be unique");
+    };
+    let doc = crate::store::graphql::escape_graphql_string(row["_docID"].as_str().unwrap());
+    let mutation = format!(
+        r#"mutation($input: InferenceBackendMetadataMutationInputArg!) {{ update_InferenceBackendMetadata(docID: "{doc}", input: $input) {{ _docID }} }}"#,
+    );
+    access
+        .transact_write("test.corrupt_owned_backend", |txn| {
+            let mutation = &mutation;
             Box::pin(async move {
-                ConfigReferences::load_in_txn(txn, "owner")
-                    .await?
-                    .validate()
+                txn.execute_client_signed_update(
+                    mutation,
+                    &serde_json::json!({"input": {"auth_kind": "invalid-auth"}}),
+                    gents_protocol::schemas::INFERENCE_BACKEND_METADATA,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
             })
-        },
-    )
-    .await;
+        })
+        .await
+        .unwrap();
+    let result = access
+        .transact_write("test.reference_owned_corruption", |txn| {
+            Box::pin(async move { ConfigReferences::load_in_txn(txn, owner).await?.validate() })
+        })
+        .await;
     assert!(
         result.is_err(),
         "owned malformed configuration must fail closed"
     );
+}
+
+#[test]
+fn cached_datastore_tool_matches_modeled_selection_and_visibility() {
+    let model = crate::lean_vocab_test::lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .unwrap();
+    assert_eq!(model.configuration_datastore_tool_use_cases.len(), 5);
+    let expected = SurfaceToolDecl::Query(QueryToolDecl {
+        tool_name: "find_entries".into(),
+        collection: "Entry".into(),
+        description: "Find entries".into(),
+        fields: vec!["name".into()],
+        filter_fields: vec![],
+    });
+    for case in &model.configuration_datastore_tool_use_cases {
+        let selected = case["selected"].as_bool().unwrap();
+        let tools = Tools {
+            tools_id: "tools".into(),
+            node_did: "node".into(),
+            datastore: Some(DatastoreTools {
+                datastore_tool_surface_ids: Some(if selected {
+                    vec!["surface".into()]
+                } else {
+                    vec![]
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut entry = expected.clone();
+        if !case["declaration_matches"].as_bool().unwrap() {
+            if let SurfaceToolDecl::Query(query) = &mut entry {
+                query.fields = vec!["other".into()];
+            }
+        }
+        let surface: DatastoreToolSurfaceDocument = serde_json::from_value(serde_json::json!({
+            "surface_id": "surface", "node_did": "node", "enabled": case["enabled"],
+            "entries": [entry]
+        }))
+        .unwrap();
+        let visible = if case["visible"].as_bool().unwrap() {
+            vec![surface]
+        } else {
+            vec![]
+        };
+        let actual = super::surface_tool::confirm_cached_datastore_tool(
+            &tools, &visible, "surface", &expected,
+        )
+        .is_ok();
+        assert_eq!(actual, case["expected"].as_bool().unwrap(), "{case}");
+    }
 }

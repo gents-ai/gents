@@ -299,7 +299,7 @@ async fn trace_project(args: TraceProjectArgs) -> Result<()> {
     let projection_kind = adapter_projection_kind(args.projection);
     let scope = projection_acp::ProjectionDocumentScope {
         node_did: optional_scope_arg("scope-node-did", args.scope_node_did)?,
-        agent_id: optional_scope_arg("scope-agent-id", args.scope_agent_id)?,
+        agent_did: optional_scope_arg("scope-agent-did", args.scope_agent_did)?,
         session_id: optional_scope_arg("scope-session-id", args.scope_session_id)?,
     };
     let rows = load_run_timeline_rows(&access, &args.request_id).await?;
@@ -554,7 +554,7 @@ fn build_record(
         case_id: args.case_id.clone(),
         prompt: request.and_then(|request| request.content.clone()),
         node_did: request.and_then(|request| request.node_did.clone()),
-        agent_id: request.and_then(|request| request.agent_id.clone()),
+        agent_did: request.and_then(|request| request.agent_did.clone()),
         session_id: tool_call.session_id.clone(),
         request_id: request.map(|request| request.request_id.clone()),
         request_status: request

@@ -42,69 +42,167 @@ where
     }
 }
 
-struct LeaseTestIdentity;
-
-#[async_trait::async_trait]
-impl crate::store::identity::NodeIdentity for LeaseTestIdentity {
-    fn did(&self) -> &str {
-        "did:test:execution-lease"
-    }
-    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, crate::store::identity::IdentityError> {
-        use sha2::Digest;
-        Ok(sha2::Sha512::digest(payload).to_vec())
-    }
-    async fn verify(
-        &self,
-        did: &str,
-        payload: &[u8],
-        signature: &[u8],
-    ) -> Result<bool, crate::store::identity::IdentityError> {
-        Ok(did == self.did() && self.sign(payload).await? == signature)
-    }
-    fn service_account(&self) -> Option<&crate::store::identity::ServiceAccount> {
-        None
-    }
+async fn test_node() -> (
+    Arc<EmbeddedNode>,
+    crate::support::TestDb,
+    Arc<dyn crate::store::identity::NodeIdentity>,
+    gents_protocol::agent_identity::AgentIdentityBinding,
+) {
+    let db = crate::support::test_db("execution-lease-fixture").await;
+    let (db, _user, _access, agent) =
+        crate::test_support::signed_test_node_from_db(db, "execution-lease-owner").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
+    (node, db, identity, agent)
 }
 
-async fn test_node() -> (Arc<EmbeddedNode>, tempfile::TempDir) {
-    let dir = tempfile::tempdir().unwrap();
-    let node = Arc::new(
-        crate::test_support::node_builder()
-            .data_path(dir.path())
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_agent(&node, "did:test:execution-lease", "general").await;
-    (node, dir)
-}
-
-async fn claimed_owner(node: &Arc<EmbeddedNode>) -> RequestLifecycle {
-    RequestLifecycle::materialize_claimed_with_execution_binding(
-        node.clone(),
-        "general",
-        Arc::new(LeaseTestIdentity),
-        "hello",
-        60,
-        ExecutionOrigin::Interactive,
-        "lease-test",
-        TriggerLineage::default(),
-    )
-    .await
-    .unwrap()
-}
-
-async fn claimed_owner_with_short_lease(node: &Arc<EmbeddedNode>) -> RequestLifecycle {
+#[tokio::test]
+async fn managed_agent_signs_transcript_and_plugin_effect_blocks() {
+    let (node, _directory, runtime, binding) = test_node().await;
+    let agent = crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
     let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
         node.clone(),
-        "general",
-        Arc::new(LeaseTestIdentity),
+        &binding.agent_did,
+        runtime.clone(),
         "hello",
         60,
         ExecutionOrigin::Interactive,
         "lease-test",
         TriggerLineage::default(),
+        Some(agent.clone()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        node.clone(),
+        agent.as_ref(),
+        Duration::ZERO,
+    )
+    .unwrap();
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    writer
+        .start_provider_attempt(
+            &lifecycle.request().doc_id,
+            0,
+            0,
+            "inference.1".parse().unwrap(),
+        )
+        .await;
+    let message = gents_protocol::message::Message::Assistant {
+        request_id: None,
+        id: Some("signer-test-message".into()),
+        content: vec![gents_protocol::message::AssistantContent::ToolCall(
+            gents_protocol::message::ToolCall {
+                raw_arguments: None,
+                id: "signer-test-tool".into(),
+                call_id: None,
+                function: gents_protocol::message::ToolFunction::new(
+                    "fixture_parent".into(),
+                    serde_json::json!({}),
+                ),
+                signature: None,
+                additional_params: None,
+            },
+        )],
+    };
+    let mut published = writer
+        .publish_native_turn(&lifecycle, 0, 0, &message)
+        .await
+        .unwrap();
+    let accepted = published
+        .accepted_tools
+        .pop()
+        .expect("accepted parent tool");
+    let mut tool = crate::tools::call::lifecycle::ToolCallLifecycle::from_accepted(
+        node.clone(),
+        runtime.did().to_owned(),
+        lifecycle.request().requester_did.clone(),
+        accepted,
+        lifecycle.claimed_deadline_at().unwrap(),
+        crate::tools::call::lifecycle::AwaitMode::Foreground,
+    )
+    .unwrap();
+    tool.start_running().await.unwrap();
+    let effect = tool
+        .admit_plugin_effect(1, "fixture_child", "{}")
+        .await
+        .unwrap();
+    let signer = crate::store::identity::commit_signer_identity_for_did(agent.did()).unwrap();
+    let node_signer =
+        crate::store::identity::commit_signer_identity_for_did(runtime.did()).unwrap();
+    for doc in [
+        published.message_doc_id.as_str(),
+        tool.doc_id().unwrap(),
+        effect.doc_id().unwrap(),
+    ] {
+        let commits =
+            crate::store::graphql::composite_commits(&node, doc, "managed agent transcript signer")
+                .await
+                .unwrap();
+        assert!(
+            commits.iter().any(|commit| commit
+                .signature
+                .as_ref()
+                .is_some_and(|signature| signature.identity == signer)),
+            "{doc}"
+        );
+        assert!(
+            !commits.iter().any(|commit| commit
+                .signature
+                .as_ref()
+                .is_some_and(|signature| signature.identity == node_signer)),
+            "{doc}"
+        );
+    }
+    node.shutdown().await.unwrap();
+}
+
+async fn claimed_owner(
+    node: &Arc<EmbeddedNode>,
+    identity: &Arc<dyn crate::store::identity::NodeIdentity>,
+    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
+) -> RequestLifecycle {
+    let agent_identity =
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), agent).unwrap();
+    let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
+        node.clone(),
+        &agent.agent_did,
+        identity.clone(),
+        "hello",
+        60,
+        ExecutionOrigin::Interactive,
+        "lease-test",
+        TriggerLineage::default(),
+        Some(agent_identity),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    lifecycle
+}
+
+async fn claimed_owner_with_short_lease(
+    node: &Arc<EmbeddedNode>,
+    identity: &Arc<dyn crate::store::identity::NodeIdentity>,
+    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
+) -> RequestLifecycle {
+    let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
+        node.clone(),
+        &agent.agent_did,
+        identity.clone(),
+        "hello",
+        60,
+        ExecutionOrigin::Interactive,
+        "lease-test",
+        TriggerLineage::default(),
+        Some(crate::store::identity::resolve_agent_identity(identity.as_ref(), agent).unwrap()),
     )
     .await
     .unwrap();
@@ -116,13 +214,20 @@ async fn claimed_owner_with_short_lease(node: &Arc<EmbeddedNode>) -> RequestLife
     lifecycle
 }
 
-async fn owner(node: &Arc<EmbeddedNode>) -> RequestLifecycle {
-    let mut lifecycle = claimed_owner(node).await;
-    let writer = crate::request::streaming::DefraStreamWriter::new(
+async fn owner(
+    node: &Arc<EmbeddedNode>,
+    identity: &Arc<dyn crate::store::identity::NodeIdentity>,
+    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
+) -> RequestLifecycle {
+    let mut lifecycle = claimed_owner(node, identity, agent).await;
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
-        "did:test:execution-lease",
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), agent)
+            .unwrap()
+            .as_ref(),
         Duration::ZERO,
-    );
+    )
+    .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     lifecycle
 }
@@ -184,9 +289,9 @@ async fn await_expired(node: &EmbeddedNode, doc_id: &str) {
 
 #[tokio::test]
 async fn execution_owner_drop_panic_and_abort_expire_for_recovery() {
-    let (node, _dir) = test_node().await;
+    let (node, _dir, identity, agent) = test_node().await;
     for exit in ["drop", "panic", "abort"] {
-        let lifecycle = owner(&node).await;
+        let lifecycle = owner(&node, &identity, &agent).await;
         let doc_id = lifecycle.request().doc_id.clone();
         let before = request_row(&node, &doc_id).await;
         assert!(
@@ -218,9 +323,13 @@ async fn execution_owner_drop_panic_and_abort_expire_for_recovery() {
             _ => unreachable!(),
         }
         await_expired(&node, &doc_id).await;
-        let report = RequestLifecycle::recover_all(&node, "did:test:execution-lease")
-            .await
-            .unwrap();
+        let report = RequestLifecycle::recover_all_with_identities(
+            &node,
+            identity.did(),
+            &[crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent).unwrap()],
+        )
+        .await
+        .unwrap();
         assert_eq!(report.requests_recovered, 1, "{exit}");
         assert_eq!(
             request_row(&node, &doc_id).await.lifecycle_state,
@@ -232,8 +341,8 @@ async fn execution_owner_drop_panic_and_abort_expire_for_recovery() {
 
 #[tokio::test]
 async fn stale_execution_owner_drop_does_not_expire_successor_generation() {
-    let (node, _dir) = test_node().await;
-    let lifecycle = owner(&node).await;
+    let (node, _dir, identity, agent) = test_node().await;
+    let lifecycle = owner(&node, &identity, &agent).await;
     let doc_id = lifecycle.request().doc_id.clone();
     let successor_generation = uuid::Uuid::new_v4().to_string();
     let successor_deadline = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
@@ -253,9 +362,13 @@ async fn stale_execution_owner_drop_does_not_expire_successor_generation() {
     .await
     .expect("detached relinquishment task must finish");
     assert_eq!(lease_tuple(&request_row(&node, &doc_id).await), before);
-    let report = RequestLifecycle::recover_all(&node, "did:test:execution-lease")
-        .await
-        .unwrap();
+    let report = RequestLifecycle::recover_all_with_identities(
+        &node,
+        identity.did(),
+        &[crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent).unwrap()],
+    )
+    .await
+    .unwrap();
     assert_eq!(report.requests_recovered, 0);
     assert_eq!(
         request_row(&node, &doc_id).await.lifecycle_state,
@@ -265,8 +378,8 @@ async fn stale_execution_owner_drop_does_not_expire_successor_generation() {
 
 #[tokio::test]
 async fn expired_execution_owner_drop_preserves_the_authoritative_deadline() {
-    let (node, _dir) = test_node().await;
-    let lifecycle = owner(&node).await;
+    let (node, _dir, identity, agent) = test_node().await;
+    let lifecycle = owner(&node, &identity, &agent).await;
     let doc_id = lifecycle.request().doc_id.clone();
     crate::store::config_client::ConfigAccess::write_local(
         &node,
@@ -289,7 +402,7 @@ async fn expired_execution_owner_drop_preserves_the_authoritative_deadline() {
     .await
     .expect("detached relinquishment must finish before its outcome is observed");
     assert_eq!(lease_tuple(&request_row(&node, &doc_id).await), before);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -298,7 +411,7 @@ async fn native_relinquishment_follows_generated_drop_cases() {
         LeanRequestExecutionAction, LeanRequestExecutionBoundary, LeanRequestExecutionLeaseStatus,
     };
 
-    let (node, _dir) = test_node().await;
+    let (node, _dir, identity, agent) = test_node().await;
     let mut exercised = 0;
     for case in crate::lean_vocab_test::lean_request_execution_lease_cases() {
         let LeanRequestExecutionAction::Drop {
@@ -311,7 +424,7 @@ async fn native_relinquishment_follows_generated_drop_cases() {
         let Some(expected) = &case.expected else {
             continue;
         };
-        let mut lifecycle = owner(&node).await;
+        let mut lifecycle = owner(&node, &identity, &agent).await;
         drop(lifecycle.renewal_task.take());
         lifecycle.state = LocalLifecycleState::Completed;
         let doc_id = lifecycle.request().doc_id.clone();
@@ -340,9 +453,17 @@ async fn native_relinquishment_follows_generated_drop_cases() {
             ),
         ).await.unwrap();
         let before = lease_tuple(&request_row(&node, &doc_id).await);
-        relinquish_execution_lease(&node, &doc_id, &generation.to_string(), now)
-            .await
-            .unwrap();
+        relinquish_execution_lease(
+            &crate::ConfigAccess::local_as(
+                node.clone(),
+                identity::Did::new(&agent.agent_did).unwrap(),
+            ),
+            &doc_id,
+            &generation.to_string(),
+            now,
+        )
+        .await
+        .unwrap();
         let row = request_row(&node, &doc_id).await;
         assert_eq!(row.lifecycle_state, Some(expected.request), "{}", case.name);
         assert_eq!(
@@ -371,19 +492,22 @@ async fn native_relinquishment_follows_generated_drop_cases() {
         exercised += 1;
     }
     assert_eq!(exercised, 3);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
 async fn owned_stream_appends_do_not_renew_execution_lease() {
-    let (node, _dir) = test_node().await;
-    let mut lifecycle = claimed_owner(&node).await;
+    let (node, _dir, identity, agent) = test_node().await;
+    let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
     let request = lifecycle.request().clone();
-    let writer = crate::request::streaming::DefraStreamWriter::new(
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
-        &request.node_did,
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
         Duration::ZERO,
-    );
+    )
+    .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     let doc_id = lifecycle.request().doc_id.clone();
     let initial = lease_tuple(&request_row(&node, &request.doc_id).await);
@@ -409,13 +533,16 @@ async fn owned_stream_appends_do_not_renew_execution_lease() {
 async fn renewal_timer_advances_durable_deadline_while_provider_and_tool_reads_wait() {
     use tokio::io::AsyncReadExt;
 
-    let (node, _dir) = test_node().await;
-    let mut lifecycle = claimed_owner_with_short_lease(&node).await;
-    let writer = crate::request::streaming::DefraStreamWriter::new(
+    let (node, _dir, identity, agent) = test_node().await;
+    let mut lifecycle = claimed_owner_with_short_lease(&node, &identity, &agent).await;
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
-        "did:test:execution-lease",
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
         Duration::ZERO,
-    );
+    )
+    .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     let doc_id = lifecycle.request().doc_id.clone();
 
@@ -464,13 +591,16 @@ async fn renewal_timer_advances_durable_deadline_while_provider_and_tool_reads_w
 
 #[tokio::test]
 async fn renewal_after_a_simulated_scheduling_gap_cannot_revive_expired_owner() {
-    let (node, _dir) = test_node().await;
-    let mut lifecycle = claimed_owner_with_short_lease(&node).await;
-    let writer = crate::request::streaming::DefraStreamWriter::new(
+    let (node, _dir, identity, agent) = test_node().await;
+    let mut lifecycle = claimed_owner_with_short_lease(&node, &identity, &agent).await;
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
-        "did:test:execution-lease",
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
         Duration::ZERO,
-    );
+    )
+    .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     let doc_id = lifecycle.request().doc_id.clone();
     let generation = request_row(&node, &doc_id)
@@ -508,10 +638,14 @@ async fn renewal_after_a_simulated_scheduling_gap_cannot_revive_expired_owner() 
         lease_tuple(&before)
     );
     assert_eq!(
-        RequestLifecycle::recover_all(&node, "did:test:execution-lease")
-            .await
-            .unwrap()
-            .requests_recovered,
+        RequestLifecycle::recover_all_with_identities(
+            &node,
+            identity.did(),
+            &[crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent).unwrap()]
+        )
+        .await
+        .unwrap()
+        .requests_recovered,
         1,
     );
     let recovered = request_row(&node, &doc_id).await;
@@ -542,8 +676,8 @@ async fn output_segment_count(node: &EmbeddedNode, request_doc_id: &str) -> usiz
 
 #[tokio::test]
 async fn owned_begin_rejects_expiry_without_materializing_response() {
-    let (node, _dir) = test_node().await;
-    let mut lifecycle = claimed_owner(&node).await;
+    let (node, _dir, identity, agent) = test_node().await;
+    let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
     let doc_id = lifecycle.request.doc_id.clone();
     let expired = (Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
     let result = node.execute(&format!(
@@ -552,11 +686,14 @@ async fn owned_begin_rejects_expiry_without_materializing_response() {
     )).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
     let before = request_row(&node, &doc_id).await;
-    let writer = crate::request::streaming::DefraStreamWriter::new(
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
-        "did:test:execution-lease",
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
         Duration::ZERO,
-    );
+    )
+    .unwrap();
     assert!(lifecycle.begin_owned_execution(&writer).await.is_err());
     let after = request_row(&node, &doc_id).await;
     assert_eq!(after.lifecycle_state, Some(RequestLifecycleState::Claimed));
@@ -566,28 +703,41 @@ async fn owned_begin_rejects_expiry_without_materializing_response() {
 
 #[tokio::test]
 async fn racing_owned_begins_commit_one_processing_transition_without_renewal() {
-    let (node, _dir) = test_node().await;
-    let mut lifecycle = claimed_owner(&node).await;
+    let (node, _dir, identity, agent) = test_node().await;
+    let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
     let before = request_row(&node, &lifecycle.request.doc_id).await;
     let mut competitor = RequestLifecycle::new_with_node_did(
         node.clone(),
-        "general",
-        "did:test:execution-lease",
+        &agent.agent_did,
+        identity.did(),
         lifecycle.request().clone(),
         60,
     );
+    competitor
+        .bind_managed_agent(
+            crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+                .unwrap()
+                .as_ref(),
+        )
+        .unwrap();
     competitor.state = LocalLifecycleState::Claimed;
     competitor.execution_lease = lifecycle.execution_lease.clone();
-    let first_writer = crate::request::streaming::DefraStreamWriter::new(
+    let first_writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
-        "did:test:execution-lease",
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
         Duration::ZERO,
-    );
-    let second_writer = crate::request::streaming::DefraStreamWriter::new(
+    )
+    .unwrap();
+    let second_writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
-        "did:test:execution-lease",
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
         Duration::ZERO,
-    );
+    )
+    .unwrap();
     let (first, second) = tokio::join!(
         lifecycle.begin_owned_execution(&first_writer),
         competitor.begin_owned_execution(&second_writer),
@@ -644,13 +794,23 @@ async fn expire_observed_execution(node: &EmbeddedNode, doc_id: &str) -> AgentRe
 async fn recover_observed_execution(
     node: &Arc<EmbeddedNode>,
     row: &AgentRequestRow,
+    identity: &Arc<dyn crate::store::identity::NodeIdentity>,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
 ) -> Result<TerminalizeResult> {
     let agent = row
         .node_did
         .as_deref()
         .context("observed request missing agent")?;
     let before_generation = row.execution_generation.as_deref();
-    let report = RequestLifecycle::recover_all(node, agent).await?;
+    let report = RequestLifecycle::recover_all_with_identities(
+        node,
+        agent,
+        &[crate::store::identity::resolve_agent_identity(
+            identity.as_ref(),
+            binding,
+        )?],
+    )
+    .await?;
     let after = request_row(
         node,
         row.doc_id
@@ -686,13 +846,16 @@ async fn revocation_preserves_latest_published_header_for_supersession_and_dead_
         RequestTerminalOutcome::Superseded,
         RequestTerminalOutcome::Dead,
     ] {
-        let (node, _dir) = test_node().await;
-        let mut lifecycle = claimed_owner(&node).await;
-        let writer = crate::request::streaming::DefraStreamWriter::new(
+        let (node, _dir, identity, agent) = test_node().await;
+        let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
+        let writer = crate::request::streaming::DefraStreamWriter::new_managed(
             node.clone(),
-            "did:test:execution-lease",
+            crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+                .unwrap()
+                .as_ref(),
             Duration::ZERO,
-        );
+        )
+        .unwrap();
         lifecycle.begin_owned_execution(&writer).await.unwrap();
         let doc_id = lifecycle.request().doc_id.clone();
         let mut latest = None;
@@ -744,13 +907,16 @@ async fn expired_conflicting_source_is_revoked_without_rewriting_its_records() {
         decode_output_segment_row, output_segment_create_variables, AGENT_OUTPUT_SEGMENT_FIELDS,
         CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
-    let (node, _dir) = test_node().await;
-    let mut lifecycle = claimed_owner(&node).await;
-    let writer = crate::request::streaming::DefraStreamWriter::new(
+    let (node, _dir, identity, agent) = test_node().await;
+    let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
-        "did:test:execution-lease",
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
         Duration::ZERO,
-    );
+    )
+    .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     let doc_id = lifecycle.request().doc_id.clone();
     writer
@@ -792,9 +958,13 @@ async fn expired_conflicting_source_is_revoked_without_rewriting_its_records() {
     assert!(!inserted.has_errors(), "{:?}", inserted.errors);
     let before = output_segment_snapshot(&node, &doc_id).await;
     let observed = expire_observed_execution(&node, &doc_id).await;
-    let report = RequestLifecycle::recover_all(&node, "did:test:execution-lease")
-        .await
-        .unwrap();
+    let report = RequestLifecycle::recover_all_with_identities(
+        &node,
+        identity.did(),
+        &[crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent).unwrap()],
+    )
+    .await
+    .unwrap();
     assert_eq!(report.requests_recovered, 1);
     let terminal = request_row(&node, &doc_id).await;
     assert_eq!(terminal.lifecycle_state, Some(RequestLifecycleState::Dead));
@@ -818,13 +988,16 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
         StreamDeclaration, StreamPayload, ToolResultPart, TranscriptMessage,
     };
 
-    let (node, _dir) = test_node().await;
-    let mut lifecycle = claimed_owner(&node).await;
-    let writer = crate::request::streaming::DefraStreamWriter::new(
+    let (node, _dir, identity, agent) = test_node().await;
+    let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
-        "did:test:execution-lease",
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
         Duration::ZERO,
-    );
+    )
+    .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     let request_doc_id = lifecycle.request().doc_id.clone();
     writer
@@ -921,7 +1094,7 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
         native_request_id: None,
         message_key: "corrupt-running-delivery".into(),
         session_id: lifecycle.request().session_id.clone(),
-        node_did: "did:test:execution-lease".into(),
+        node_did: identity.did().to_owned(),
         requester_did: None,
         request_doc_id: Some(request_doc_id.clone()),
         publication: MessagePublication::ToolDelivery {
@@ -1017,13 +1190,16 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
 
 #[tokio::test]
 async fn revoked_execution_rejects_stale_progress_stream_write_and_terminalization() {
-    let (node, _dir) = test_node().await;
-    let mut lifecycle = claimed_owner(&node).await;
-    let writer = crate::request::streaming::DefraStreamWriter::new(
+    let (node, _dir, identity, agent) = test_node().await;
+    let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
-        "did:test:execution-lease",
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
         Duration::ZERO,
-    );
+    )
+    .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     let response_doc_id = lifecycle.request().doc_id.clone();
     writer
@@ -1086,8 +1262,8 @@ async fn revoked_execution_rejects_stale_progress_stream_write_and_terminalizati
 
 #[tokio::test]
 async fn expired_owner_racing_recovery_cannot_win_terminalization() {
-    let (node, _dir) = test_node().await;
-    let mut lifecycle = owner(&node).await;
+    let (node, _dir, identity, agent) = test_node().await;
+    let mut lifecycle = owner(&node, &identity, &agent).await;
     let doc_id = lifecycle.request().doc_id.clone();
     let observed = expire_observed_execution(&node, &doc_id).await;
     let (owner_result, recovery_result) = tokio::join!(
@@ -1096,7 +1272,7 @@ async fn expired_owner_racing_recovery_cannot_win_terminalization() {
             TerminalOutput::NoMessage,
             None
         ),
-        recover_observed_execution(&node, &observed),
+        recover_observed_execution(&node, &observed, &identity, &agent),
     );
     assert_eq!(owner_result.unwrap(), TerminalizeResult::Lost);
     assert_eq!(recovery_result.unwrap(), TerminalizeResult::Won);
@@ -1113,14 +1289,17 @@ async fn expired_owner_racing_recovery_cannot_win_terminalization() {
 async fn expired_stored_deadline_blocks_old_publication_and_tool_admission_after_recovery() {
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
 
-    let (node, _dir) = test_node().await;
-    let lifecycle = owner(&node).await;
+    let (node, _dir, identity, agent) = test_node().await;
+    let lifecycle = owner(&node, &identity, &agent).await;
     let doc_id = lifecycle.request().doc_id.clone();
-    let writer = crate::request::streaming::DefraStreamWriter::new(
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
-        "did:test:execution-lease",
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
         Duration::ZERO,
-    );
+    )
+    .unwrap();
     writer
         .start_provider_attempt(&doc_id, 0, 0, "inference.1".parse().unwrap())
         .await;
@@ -1155,7 +1334,9 @@ async fn expired_stored_deadline_blocks_old_publication_and_tool_admission_after
     assert_eq!(output_segment_count(&node, &doc_id).await, 0);
 
     assert_eq!(
-        recover_observed_execution(&node, &observed).await.unwrap(),
+        recover_observed_execution(&node, &observed, &identity, &agent)
+            .await
+            .unwrap(),
         TerminalizeResult::Won
     );
     let recovered = request_row(&node, &doc_id).await;
@@ -1197,18 +1378,18 @@ async fn expired_stored_deadline_blocks_old_publication_and_tool_admission_after
 
 #[tokio::test]
 async fn concurrent_recovery_of_one_observed_execution_commits_one_terminal_winner() {
-    let (node, _dir) = test_node().await;
+    let (node, _dir, identity, agent) = test_node().await;
     for processing in [false, true] {
         let lifecycle = if processing {
-            owner(&node).await
+            owner(&node, &identity, &agent).await
         } else {
-            claimed_owner(&node).await
+            claimed_owner(&node, &identity, &agent).await
         };
         let doc_id = lifecycle.request().doc_id.clone();
         let observed = expire_observed_execution(&node, &doc_id).await;
         let (first, second) = tokio::join!(
-            recover_observed_execution(&node, &observed),
-            recover_observed_execution(&node, &observed),
+            recover_observed_execution(&node, &observed, &identity, &agent),
+            recover_observed_execution(&node, &observed, &identity, &agent),
         );
         let outcomes = [first.unwrap(), second.unwrap()];
         assert_eq!(
@@ -1235,7 +1416,9 @@ async fn concurrent_recovery_of_one_observed_execution_commits_one_terminal_winn
         );
         assert_eq!(terminal.terminal_output, Some(TerminalOutput::NoMessage));
         assert_eq!(
-            recover_observed_execution(&node, &observed).await.unwrap(),
+            recover_observed_execution(&node, &observed, &identity, &agent)
+                .await
+                .unwrap(),
             TerminalizeResult::Lost
         );
         assert_eq!(
@@ -1248,9 +1431,9 @@ async fn concurrent_recovery_of_one_observed_execution_commits_one_terminal_winn
 
 #[tokio::test]
 async fn cancel_racing_provider_eof_commits_one_agreeing_terminal_pair() {
-    let (node, _dir) = test_node().await;
+    let (node, _dir, identity, agent) = test_node().await;
     for ordering in 0..3 {
-        let mut lifecycle = owner(&node).await;
+        let mut lifecycle = owner(&node, &identity, &agent).await;
         let doc_id = lifecycle.request().doc_id.clone();
         let request_id = lifecycle.request().request_id.clone();
         let outcome = match ordering {
@@ -1333,9 +1516,9 @@ mod workspace_recovery;
 
 #[tokio::test]
 async fn native_doc_id_targeting_preserves_request_update_filters() {
-    let (node, _dir) = test_node().await;
-    let target = claimed_owner(&node).await;
-    let unrelated = claimed_owner(&node).await;
+    let (node, _dir, identity, agent) = test_node().await;
+    let target = claimed_owner(&node, &identity, &agent).await;
+    let unrelated = claimed_owner(&node, &identity, &agent).await;
     let before = request_row(&node, &target.request.doc_id).await;
     let unrelated_before = request_row(&node, &unrelated.request.doc_id).await;
     let doc_id = escape_graphql_string(&target.request.doc_id);
@@ -1402,10 +1585,12 @@ async fn native_doc_id_targeting_preserves_request_update_filters() {
 
 async fn observed_case_request(
     node: &Arc<EmbeddedNode>,
+    identity: &Arc<dyn crate::store::identity::NodeIdentity>,
+    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
     case: &crate::lean_vocab_test::LeanRequestExecutionObservedCase,
     epoch: DateTime<Utc>,
 ) -> RequestLifecycle {
-    let lifecycle = owner(node).await;
+    let lifecycle = owner(node, identity, agent).await;
     let doc_id = escape_graphql_string(&lifecycle.request.doc_id);
     let deadline =
         epoch + chrono::Duration::seconds(case.pre.lease.explicit_deadline.unwrap() as i64);
@@ -1431,9 +1616,9 @@ async fn generated_renewal_invalidates_real_publication_point_read_transaction()
         .iter()
         .find(|case| case.name == "renewal_invalidates_admitted_publication")
         .unwrap();
-    let (node, _dir) = test_node().await;
+    let (node, _dir, identity, agent) = test_node().await;
     let epoch = Utc::now();
-    let lifecycle = observed_case_request(&node, case, epoch).await;
+    let lifecycle = observed_case_request(&node, &identity, &agent, case, epoch).await;
     let row = request_row(&node, &lifecycle.request.doc_id).await;
     let request = escape_graphql_string(&lifecycle.request.doc_id);
     let txn = crate::store::config_client::ConfigApplyTxn::begin_local(&node, None)
@@ -1566,9 +1751,9 @@ async fn generated_recovery_invalidates_real_admitted_renewal_transaction() {
         .iter()
         .find(|case| case.name == "recovery_invalidates_admitted_renewal")
         .unwrap();
-    let (node, _dir) = test_node().await;
+    let (node, _dir, identity, agent) = test_node().await;
     let epoch = Utc::now();
-    let lifecycle = observed_case_request(&node, case, epoch).await;
+    let lifecycle = observed_case_request(&node, &identity, &agent, case, epoch).await;
     let row = request_row(&node, &lifecycle.request.doc_id).await;
     let generation = row.execution_generation.as_deref().unwrap();
     let expiry = row.execution_lease_expires_at.as_deref().unwrap();
@@ -1641,9 +1826,9 @@ async fn renewal_expiring_during_mutation_rolls_back_before_commit_admission() {
         .iter()
         .find(|case| case.name == "renewal_admission_after_expiry_is_rejected")
         .unwrap();
-    let (node, _dir) = test_node().await;
+    let (node, _dir, identity, agent) = test_node().await;
     let epoch = Utc::now();
-    let lifecycle = observed_case_request(&node, admitted, epoch).await;
+    let lifecycle = observed_case_request(&node, &identity, &agent, admitted, epoch).await;
     let before = request_row(&node, &lifecycle.request.doc_id).await;
     let deadline =
         epoch + chrono::Duration::seconds(admitted.pre.lease.explicit_deadline.unwrap() as i64);
@@ -1694,13 +1879,16 @@ async fn natural_finish_retries_changed_pending_snapshot_and_selects_exact_saved
     assert!(finishes[1].terminal.contains(&case.head));
     assert_eq!(case.expected.last().unwrap().active, None);
 
-    let (node, _dir) = test_node().await;
-    let mut lifecycle = owner(&node).await;
-    let writer = crate::request::streaming::DefraStreamWriter::new(
+    let (node, _dir, identity, agent) = test_node().await;
+    let mut lifecycle = owner(&node, &identity, &agent).await;
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
-        "did:test:execution-lease",
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
         Duration::ZERO,
-    );
+    )
+    .unwrap();
     writer
         .start_provider_attempt(
             &lifecycle.request.doc_id,
@@ -1721,20 +1909,25 @@ async fn natural_finish_retries_changed_pending_snapshot_and_selects_exact_saved
     let mut pending = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "late-input",
-        "did:test:execution-lease",
-        "did:test:execution-lease",
-        "general",
+        identity.did(),
+        &agent.agent_did,
+        &agent.agent_did,
         &lifecycle.request.session_id,
         "late input",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-            "did:test:execution-lease",
+            &agent.agent_did,
         ),
     );
-    crate::sign_agent_request_create(&LeaseTestIdentity, &mut pending)
-        .await
-        .unwrap();
+    crate::sign_agent_request_create(
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
+        &mut pending,
+    )
+    .await
+    .unwrap();
     let response = crate::store::config_client::ConfigAccess::write_local(
         &node,
         "test.same_session_pending",
@@ -1816,8 +2009,8 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
         assert!(!case.initial.gate_held, "renewal bypasses mutation gate");
         assert_eq!(case.events.len(), case.observations.len(), "{}", case.name);
 
-        let (node, _dir) = test_node().await;
-        let mut lifecycle = owner(&node).await;
+        let (node, _dir, identity, agent) = test_node().await;
+        let mut lifecycle = owner(&node, &identity, &agent).await;
         drop(lifecycle.renewal_task.take());
         let doc_id = lifecycle.request().doc_id.clone();
         let row = request_row(&node, &doc_id).await;

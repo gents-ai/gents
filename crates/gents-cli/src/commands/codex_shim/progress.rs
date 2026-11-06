@@ -432,14 +432,14 @@ mod tests {
         let state =
             super::super::turn_projection::tests::notification_test_state(temp.path()).await;
         let node_did = escape_graphql_string(state.node_did.as_ref());
-        let agent_id = escape_graphql_string(state.agent_id.as_ref());
+        let agent_did = escape_graphql_string(state.agent_did.as_ref());
         for (id, purpose, created_at) in [
             ("turn", "normal", "2026-09-25T00:00:00Z"),
             ("title", "title-audit", "2026-09-25T00:00:01Z"),
             ("steer", "normal", "2026-09-25T00:00:02Z"),
         ] {
             let mutation = format!(
-                r#"mutation {{ create_AgentRequest(input: {{request_id: "{id}", purpose: "{purpose}", session_id: "thread", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "{agent_id}", content: "prompt", lifecycle_state: "processing", created_at: "{created_at}"}}) {{_docID}} }}"#,
+                r#"mutation {{ create_AgentRequest(input: {{request_id: "{id}", purpose: "{purpose}", session_id: "thread", node_did: "{node_did}", requester_did: "{node_did}", agent_did: "{agent_did}", content: "prompt", lifecycle_state: "processing", created_at: "{created_at}"}}) {{_docID}} }}"#,
                 id = escape_graphql_string(id),
                 purpose = escape_graphql_string(purpose),
                 created_at = escape_graphql_string(created_at),

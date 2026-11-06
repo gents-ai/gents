@@ -2,6 +2,98 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn modeled_affected_validation_preserves_visible_dependencies() {
+    let case = crate::lean_vocab_test::lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .expect("configuration contract");
+    let document = |key: &str| match key {
+        "agent" => (
+            Collection::Agent,
+            json!({"node_did":"owner", "agent_did":"agent",
+            "creation_nonce":"nonce", "inference_profile_id":"profile"}),
+        ),
+        "task" => (
+            Collection::Task,
+            json!({"node_did":"owner", "task_id":"task",
+            "agent_did":"agent", "prompt_template":"work"}),
+        ),
+        "trigger" => (
+            Collection::Trigger,
+            json!({"node_did":"owner", "trigger_id":"trigger",
+            "task_id":"task", "source":{"kind":"schedule", "schedule_id":"schedule"}}),
+        ),
+        "schedule" => (
+            Collection::Schedule,
+            json!({"node_did":"owner", "schedule_id":"schedule",
+            "cadence":{"kind":"interval", "interval_secs":60}}),
+        ),
+        "tools" => (
+            Collection::Tools,
+            json!({"node_did":"owner", "tools_id":"tools"}),
+        ),
+        "tools-collision" => (
+            Collection::Tools,
+            json!({"node_did":"owner", "tools_id":"collision",
+            "datastore":{"datastore_tool_surface_ids":["a", "b"]}}),
+        ),
+        "surface-a" | "surface-b" => (
+            Collection::DatastoreToolSurface,
+            json!({"node_did":"owner",
+            "surface_id": if key == "surface-a" { "a" } else { "b" },
+            "entries":[{"kind":"query", "tool_name":"duplicate", "collection":"Records",
+                "fields":["name"], "description":"Read records"}]}),
+        ),
+        "default-node" => (
+            Collection::Node,
+            json!({"node_did":"owner", "default_agent_did":"disabled-agent"}),
+        ),
+        "disabled-agent" => (
+            Collection::Agent,
+            json!({"node_did":"owner", "agent_did":"disabled-agent",
+            "creation_nonce":"nonce", "inference_profile_id":"profile", "enabled":false}),
+        ),
+        "profile" => (
+            Collection::InferenceProfile,
+            json!({"node_did":"owner", "profile_id":"profile",
+            "backend_id":"backend", "model_name":"model"}),
+        ),
+        _ => panic!("unknown modeled document {key}"),
+    };
+    for modeled in &case.configuration_affected_cases {
+        let documents = modeled["documents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|key| document(key.as_str().unwrap()))
+            .collect::<Vec<_>>();
+        let changed = modeled["changed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|key| {
+                let (collection, value) = document(key.as_str().unwrap());
+                (
+                    collection,
+                    value[collection.unique_field()]
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                )
+            })
+            .collect();
+        let snapshot = ConfigReferences::from_documents("owner", documents).unwrap();
+        let actual = snapshot.validate_affected(&changed);
+        assert_eq!(
+            actual.is_ok(),
+            modeled["expected"].as_bool().unwrap(),
+            "{}: {actual:?}",
+            modeled["name"]
+        );
+    }
+}
+
+#[test]
 fn candidate_tools_reuse_surface_expansion_and_collision_guards() {
     let tools = json!({"tools_id":"tools", "node_did":"owner",
         "datastore":{"datastore_tool_surface_ids":["a", "b"]}});
@@ -90,12 +182,15 @@ fn callback_admission_reuses_projection_and_filter_secret_checks() {
         "handler":{"kind":"built_in","emitter":"create_workspace"}});
     let source =
         json!({"event_source_id":"source", "node_did":"owner", "source_collection":"Records"});
-    let binding = json!({"binding_id":"binding", "node_did":"owner",
+    let binding = json!({"binding_id":"binding", "node_did":"owner", "agent_did":crate::triggers::callback::test_agent_did(),
         "callback_id":"callback", "event_source_id":"source", "input_fields":["name"]});
     let validate = |source, binding| {
         ConfigReferences::from_documents(
             "owner",
             [
+                (Collection::Agent, json!({"node_did":"owner", "agent_did":crate::triggers::callback::test_agent_did(), "creation_nonce":"nonce", "inference_profile_id":"profile"})),
+                (Collection::InferenceProfile, json!({"node_did":"owner", "profile_id":"profile", "backend_id":"backend", "model_name":"model"})),
+                (Collection::InferenceBackend, json!({"node_did":"owner", "backend_id":"backend", "name":"Backend", "provider_kind":"OpenAiCompatible", "endpoint":"http://localhost:8000/v1", "auth":{"kind":"unauthenticated"}})),
                 (Collection::Callback, callback.clone()),
                 (Collection::EventSource, source),
                 (Collection::CallbackBinding, binding),
@@ -126,23 +221,29 @@ fn callback_admission_reuses_projection_and_filter_secret_checks() {
 
 #[test]
 fn trigger_scope_checks_use_bound_task_and_source_for_both_templates() {
+    use crate::NodeIdentity;
+    let directory = tempfile::tempdir().unwrap();
+    let runtime =
+        crate::KeyIdentity::load_or_create(directory.path().join("runtime"), None).unwrap();
+    let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
+    let owner = runtime.did();
     let base = json!({
-        "node":{"node_did":"owner"},
-        "agents":[{"node_did":"owner","agent_id":"behavior","inference_profile_id":"profile"}],
-        "inference_profiles":[{"node_did":"owner","profile_id":"profile","backend_id":"backend","model_name":"model"}],
-        "inference_backends":[{"node_did":"owner","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible",
+        "node":{"node_did":owner},
+        "agents":[{"node_did":owner,"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"inference_profile_id":"profile"}],
+        "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
+        "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible",
             "endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
-        "tasks":[{"node_did":"owner","task_id":"task","agent_id":"behavior","prompt_template":"{{ ctx.now }}"}],
-        "schedules":[{"node_did":"owner","schedule_id":"schedule","cadence":{"kind":"interval","interval_secs":10}}],
-        "event_sources":[{"node_did":"owner","event_source_id":"event","source_collection":"Records"}],
-        "triggers":[{"node_did":"owner","trigger_id":"trigger","task_id":"task","source":{"kind":"schedule","schedule_id":"schedule"}}]
+        "tasks":[{"node_did":owner,"task_id":"task","agent_did":binding.agent_did,"prompt_template":"{{ ctx.now }}"}],
+        "schedules":[{"node_did":owner,"schedule_id":"schedule","cadence":{"kind":"interval","interval_secs":10}}],
+        "event_sources":[{"node_did":owner,"event_source_id":"event","source_collection":"Records"}],
+        "triggers":[{"node_did":owner,"trigger_id":"trigger","task_id":"task","source":{"kind":"schedule","schedule_id":"schedule"}}]
     });
     let validate = |value| {
         let config = serde_json::from_value::<super::super::PackConfig>(value).unwrap();
         let plan =
             crate::store::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
         ConfigReferences::from_documents(
-            "owner",
+            owner,
             plan.documents()
                 .iter()
                 .map(|doc| (doc.collection, doc.add.clone())),
@@ -197,19 +298,26 @@ fn trigger_scope_checks_use_bound_task_and_source_for_both_templates() {
 #[tokio::test]
 async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
     use crate::store::config_client::{
-        apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
-        DesiredStateApplyPlan,
+        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyPlan,
     };
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = ConfigAccess::local(node);
+    use crate::NodeIdentity;
+    let (db, user, access, default) =
+        crate::test_support::signed_test_node("event-args-rollback").await;
+    let owner = db.node_identity.did().to_owned();
+    let binding = crate::store::identity::provision_agent_identity_authorized(
+        &db.node,
+        db.node_identity.as_ref(),
+        &identity::Did::new(user.did()).unwrap(),
+    )
+    .await
+    .unwrap();
     let mut config = json!({
-        "node":{"node_did":"owner"},
-        "agents":[{"node_did":"owner","agent_id":"behavior","inference_profile_id":"profile"}],
-        "inference_profiles":[{"node_did":"owner","profile_id":"profile","backend_id":"backend","model_name":"model"}],
-        "inference_backends":[{"node_did":"owner","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
-        "tasks":[{"node_did":"owner","task_id":"task","agent_id":"behavior","prompt_template":"{{ args.name }}"}],
-        "event_sources":[{"node_did":"owner","event_source_id":"event","source_collection":"Records"}]
+        "node":{"node_did":owner,"default_agent_did":default.agent_did},
+        "agents":[{"node_did":owner,"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"inference_profile_id":"profile"}],
+        "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
+        "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
+        "tasks":[{"node_did":owner,"task_id":"task","agent_did":binding.agent_did,"prompt_template":"{{ args.name }}"}],
+        "event_sources":[{"node_did":owner,"event_source_id":"event","source_collection":"Records"}]
     });
     let plan = DesiredStateApplyPlan::from_pack_config(
         &serde_json::from_value::<super::super::PackConfig>(config.clone()).unwrap(),
@@ -223,7 +331,7 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
         .await
         .unwrap();
     config["tasks"][0]["prompt_template"] = json!("{{ args.other }}");
-    config["triggers"] = json!([{"node_did":"owner","trigger_id":"trigger","task_id":"task","source":{"kind":"event","event_source_id":"event"}}]);
+    config["triggers"] = json!([{"node_did":owner,"trigger_id":"trigger","task_id":"task","source":{"kind":"event","event_source_id":"event"}}]);
     let plan = DesiredStateApplyPlan::from_pack_config(
         &serde_json::from_value::<super::super::PackConfig>(config.clone()).unwrap(),
     )
@@ -237,16 +345,17 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
         .is_err());
     access
         .transact_write("test.rollback", |txn| {
+            let owner = &owner;
             Box::pin(async move {
                 let (_, task) =
-                    read_desired_state_record_in_txn(txn, Collection::Task, "owner", "task")
+                    read_desired_state_record_in_txn(txn, Collection::Task, owner, "task")
                         .await?
                         .unwrap();
                 assert_eq!(task["prompt_template"], json!("{{ args.name }}"));
                 assert!(read_desired_state_record_in_txn(
                     txn,
                     Collection::Trigger,
-                    "owner",
+                    owner,
                     "trigger"
                 )
                 .await?
@@ -268,4 +377,194 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
         })
         .await
         .unwrap();
+}
+
+/// Identifier-shaped fields that do not name a same-owner configuration
+/// document, so no reference consumer selects or grants through them.
+const NOT_REFERENCES: &[(Collection, &str)] = &[
+    // Removed EthTool collection; read and dropped from rc0 documents.
+    (Collection::Tools, "integrations.eth_tool_ids"),
+    (Collection::AgentTarget, "target_node_did"),
+    (Collection::InferenceBackend, "auth.access_key_id"),
+    (Collection::InferenceBackend, "claude_platform.workspace_id"),
+    (Collection::ToolServiceRegistry, "send_node_did"),
+    (Collection::ProjectionAcpBinding, "policy_id"),
+    (Collection::ProjectionAcpBinding, "previous_policy_id"),
+    (Collection::ProjectionAcpBinding, "projection_id"),
+    (Collection::ProjectionAcpBinding, "staged_policy_id"),
+    (Collection::Task, "hooks.hook_id"),
+    (Collection::CallbackModule, "signer_did"),
+    (Collection::EvalDefinition, "cases.case_id"),
+    (Collection::EvalDefinition, "cases.stages.stage_id"),
+];
+
+fn identifier_paths(
+    schema: &Value,
+    definitions: &serde_json::Map<String, Value>,
+    prefix: &str,
+    visiting: &mut Vec<String>,
+    paths: &mut BTreeSet<String>,
+) {
+    if let Some(name) = schema
+        .get("$ref")
+        .and_then(Value::as_str)
+        .and_then(|reference| reference.strip_prefix("#/$defs/"))
+    {
+        if !visiting.iter().any(|seen| seen == name) {
+            visiting.push(name.to_owned());
+            if let Some(definition) = definitions.get(name) {
+                identifier_paths(definition, definitions, prefix, visiting, paths);
+            }
+            visiting.pop();
+        }
+    }
+    for key in ["anyOf", "oneOf", "allOf"] {
+        for branch in schema
+            .get(key)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            identifier_paths(branch, definitions, prefix, visiting, paths);
+        }
+    }
+    if let Some(items) = schema.get("items") {
+        identifier_paths(items, definitions, prefix, visiting, paths);
+    }
+    for (name, property) in schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+    {
+        let path = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}.{name}")
+        };
+        if ["_id", "_ids", "_did"]
+            .iter()
+            .any(|suffix| name.ends_with(suffix))
+        {
+            paths.insert(path.clone());
+        }
+        identifier_paths(property, definitions, &path, visiting, paths);
+    }
+}
+
+#[test]
+fn every_canonical_reference_field_reaches_reference_consumers() {
+    let samples = [
+        (
+            Collection::Node,
+            json!({"node_did":"owner", "default_agent_did":"agent"}),
+        ),
+        (
+            Collection::Agent,
+            json!({"node_did":"owner", "agent_did":"agent", "creation_nonce":"nonce",
+                "context_id":"context", "inference_profile_id":"profile"}),
+        ),
+        (
+            Collection::AgentContext,
+            json!({"node_did":"owner", "context_id":"context", "tools_id":"tools",
+                "compaction_id":"compaction", "skill_ids":["skill"]}),
+        ),
+        (
+            Collection::Compaction,
+            json!({"node_did":"owner", "compaction_id":"compaction",
+                "inference_profile_id":"profile"}),
+        ),
+        (
+            Collection::Tools,
+            json!({"node_did":"owner", "tools_id":"tools",
+                "remote":{"services":[{"mcp_service_id":"service"}]},
+                "agents":{"target_ids":["target"]},
+                "datastore":{"datastore_tool_surface_ids":["surface"]}}),
+        ),
+        (
+            Collection::AgentTarget,
+            json!({"node_did":"owner", "target_id":"target", "target_node_did":"owner",
+                "agent_did":"agent", "name":"target"}),
+        ),
+        (
+            Collection::InferenceProfile,
+            json!({"node_did":"owner", "profile_id":"profile", "backend_id":"backend",
+                "model_name":"model", "sampling_id":"sampling", "execution_id":"execution"}),
+        ),
+        (
+            Collection::InferenceExecution,
+            json!({"node_did":"owner", "execution_id":"execution", "retry_policy_id":"retry"}),
+        ),
+        (
+            Collection::ProjectionAcpBinding,
+            json!({"node_did":"owner", "binding_id":"binding", "agent_did":"agent",
+                "policy_id":"policy"}),
+        ),
+        (
+            Collection::Task,
+            json!({"node_did":"owner", "task_id":"task", "agent_did":"agent",
+                "prompt_template":"work"}),
+        ),
+        (
+            Collection::Trigger,
+            json!({"node_did":"owner", "trigger_id":"scheduled", "task_id":"task",
+                "source":{"kind":"schedule", "schedule_id":"schedule"}}),
+        ),
+        (
+            Collection::Trigger,
+            json!({"node_did":"owner", "trigger_id":"evented", "task_id":"task",
+                "source":{"kind":"event", "event_source_id":"source"}}),
+        ),
+        (
+            Collection::Callback,
+            json!({"node_did":"owner", "callback_id":"callback",
+                "handler":{"kind":"module", "module_id":"module", "workspace_agents":{
+                    "writer_agent_did":"writer", "integrator_agent_did":"integrator",
+                    "readers":[{"agent_did":"reader"}]}}}),
+        ),
+        (
+            Collection::CallbackBinding,
+            json!({"node_did":"owner", "binding_id":"binding", "agent_did":"agent",
+                "event_source_id":"source", "callback_id":"callback", "input_fields":["name"]}),
+        ),
+    ];
+    let mut reported = BTreeSet::new();
+    for (collection, sample) in samples {
+        let value = config_projection(collection, Some(&sample))
+            .unwrap()
+            .1
+            .unwrap();
+        for reference in references_of(collection, &value, "owner").unwrap() {
+            assert!(
+                !reference.id.is_empty(),
+                "{collection:?} {}",
+                reference.field
+            );
+            reported.insert((collection, reference.field.to_owned()));
+        }
+    }
+    let mut declared = BTreeSet::new();
+    for collection in Collection::ALL {
+        let schema =
+            serde_json::to_value(crate::pack::authored_document_schema(collection)).unwrap();
+        let definitions = schema
+            .get("$defs")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let mut paths = BTreeSet::new();
+        identifier_paths(&schema, &definitions, "", &mut Vec::new(), &mut paths);
+        for path in paths {
+            if path != collection.unique_field()
+                && path != "node_did"
+                && !NOT_REFERENCES.contains(&(collection, path.as_str()))
+            {
+                declared.insert((collection, path));
+            }
+        }
+    }
+    assert_eq!(
+        declared, reported,
+        "classify each identifier field as a reference in references_of or in NOT_REFERENCES"
+    );
 }

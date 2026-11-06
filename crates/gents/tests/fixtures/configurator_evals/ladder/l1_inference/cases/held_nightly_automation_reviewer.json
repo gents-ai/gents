@@ -22,7 +22,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "inference_profile_id"
@@ -102,8 +102,8 @@
             "links": [
               {
                 "capture": "agents",
-                "key": "agent_id",
-                "id": "engineer",
+                "key": "agent_did",
+                "id": "gents:agent-slot:engineer",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -148,7 +148,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "inference_profile_id"
@@ -227,8 +227,6 @@
             "links": [
               {
                 "capture": "agents",
-                "key": "agent_id",
-                "id": "nightly-reviewer",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -237,12 +235,14 @@
                     "field": "reasoning_effort",
                     "equals": "medium"
                   }
-                ]
+                ],
+                "source_match": {
+                  "field": "display_name",
+                  "matches": "(?i)^nightly[ -]reviewer$"
+                }
               },
               {
                 "capture": "agents",
-                "key": "agent_id",
-                "id": "nightly-reviewer",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -266,12 +266,14 @@
                     "target_capture": "executions",
                     "target_key": "execution_id"
                   }
-                ]
+                ],
+                "source_match": {
+                  "field": "display_name",
+                  "matches": "(?i)^nightly[ -]reviewer$"
+                }
               },
               {
                 "capture": "agents",
-                "key": "agent_id",
-                "id": "nightly-reviewer",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -282,7 +284,11 @@
                     "target_capture": "backends",
                     "target_key": "backend_id"
                   }
-                ]
+                ],
+                "source_match": {
+                  "field": "display_name",
+                  "matches": "(?i)^nightly[ -]reviewer$"
+                }
               }
             ],
             "present": [
@@ -330,14 +336,37 @@
       "capture": [
         {
           "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
           "name": "completed_review",
           "collection": "AgentRequest",
           "filter": {
             "node_did": {
               "_eq": "$trial"
             },
-            "agent_id": {
-              "_like": "%:nightly-reviewer"
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^nightly[ -]reviewer$"
+                  },
+                  "field": "agent_did"
+                }
+              }
             },
             "content": {
               "_like": "%nightly-digest%"
@@ -351,7 +380,7 @@
           },
           "fields": [
             "request_id",
-            "agent_id",
+            "agent_did",
             "content",
             "lifecycle_state"
           ]

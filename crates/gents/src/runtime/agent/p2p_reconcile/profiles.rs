@@ -68,6 +68,9 @@ pub fn expand_p2p_collection_profile_ids<'a>(
         }
         let profile = P2pCollectionProfile::from_id(profile_id)
             .ok_or_else(|| anyhow::anyhow!("unknown P2P collection profile {profile_id:?}"))?;
+        if profile.collection_names().is_empty() {
+            bail!("P2P profile {profile_id:?} contains runtime-local data; use authenticated GraphQL access");
+        }
         for collection in profile.collection_names() {
             collections.insert((*collection).to_string());
         }
@@ -77,174 +80,17 @@ pub fn expand_p2p_collection_profile_ids<'a>(
         bail!("provide at least one --collection or --profile");
     }
 
+    for collection in &collections {
+        if !gents_protocol::schemas::is_replicated_protocol_collection(collection) {
+            bail!("collection {collection:?} is runtime-local; use authenticated GraphQL access");
+        }
+    }
     Ok(collections)
 }
 
-const RUNTIME_COLLECTIONS: &[&str] = &[
-    "Node",
-    "Agent",
-    "AgentContext",
-    "CompactionConfig",
-    "Tools",
-    "AgentTarget",
-    "InferenceProfile",
-    "InferenceSampling",
-    "InferenceExecution",
-    "InferenceRetryPolicy",
-    "ToolServiceRegistry",
-    "Skill",
-    "DatastoreToolSurface",
-    "InferenceBackend",
-    "NodeRuntime",
-    "NodeReadiness",
-    "AgentRequest",
-    "AgentSessionInputEdit",
-    "AgentSessionGoalControl",
-    "GoalObservation",
-    "AgentOutputSegment",
-    "AgentSession",
-    "AgentMessage",
-    "AgentToolCall",
-    "CompactionEntry",
-    "ProjectionAcpBinding",
-    "Task",
-    "Schedule",
-    "Trigger",
-    "EventSource",
-];
-
-const AGENT_COLLECTIONS: &[&str] = &[
-    "Node",
-    "Agent",
-    "AgentContext",
-    "CompactionConfig",
-    "Tools",
-    "AgentTarget",
-    "InferenceProfile",
-    "InferenceSampling",
-    "InferenceExecution",
-    "InferenceRetryPolicy",
-    "ToolServiceRegistry",
-    "Skill",
-    "DatastoreToolSurface",
-    "InferenceBackend",
-    "NodeRuntime",
-    "NodeReadiness",
-];
-
-const DESKTOP_CONFIG_COLLECTIONS: &[&str] = &[
-    "Node",
-    "Agent",
-    "AgentContext",
-    "CompactionConfig",
-    "Tools",
-    "AgentTarget",
-    "InferenceProfile",
-    "InferenceSampling",
-    "InferenceExecution",
-    "InferenceRetryPolicy",
-    "ToolServiceRegistry",
-    "Skill",
-    "DatastoreToolSurface",
-    "Task",
-    "Schedule",
-    "Trigger",
-    "EventSource",
-];
-
-const CHAT_REQUEST_COLLECTIONS: &[&str] = &[
-    "AgentRequest",
-    "AgentSessionInputEdit",
-    "AgentSessionGoalControl",
-    "GoalObservation",
-    "AgentOutputSegment",
-    "AgentSession",
-    "AgentMessage",
-    "AgentToolCall",
-    "CompactionEntry",
-];
-
-const TOOL_SERVICE_COLLECTIONS: &[&str] = &["ToolServiceRegistry"];
-
-const DISCOVERY_COLLECTIONS: &[&str] = &[
-    "PeerRegistry",
-    "Node",
-    "Agent",
-    "AgentContext",
-    "CompactionConfig",
-    "Tools",
-    "AgentTarget",
-    "InferenceProfile",
-    "InferenceSampling",
-    "InferenceExecution",
-    "InferenceRetryPolicy",
-    "ToolServiceRegistry",
-    "Skill",
-    "DatastoreToolSurface",
-    "NodeRuntime",
-    "NodeReadiness",
-];
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn profiles_select_canonical_documents_without_implicit_client_credentials() {
-        for profile in [
-            P2pCollectionProfile::Runtime,
-            P2pCollectionProfile::Agent,
-            P2pCollectionProfile::DesktopConfig,
-            P2pCollectionProfile::ChatRequests,
-            P2pCollectionProfile::ToolServices,
-            P2pCollectionProfile::Discovery,
-        ] {
-            let names = profile.collection_names();
-            assert_eq!(
-                names.len(),
-                names.iter().collect::<BTreeSet<_>>().len(),
-                "duplicate profile member: {}",
-                profile.id()
-            );
-            for name in names {
-                assert!(
-                    gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(name)
-                        || gents_protocol::schemas::RUNTIME_COLLECTION_NAMES.contains(name),
-                    "{} selects retired/unregistered {name}",
-                    profile.id()
-                );
-            }
-        }
-        for profile in [
-            P2pCollectionProfile::DesktopConfig,
-            P2pCollectionProfile::Discovery,
-            P2pCollectionProfile::ChatRequests,
-        ] {
-            for secret in gents_protocol::schemas::CREDENTIAL_COLLECTION_NAMES {
-                assert!(!profile.collection_names().contains(secret));
-            }
-        }
-        for profile in [
-            P2pCollectionProfile::Runtime,
-            P2pCollectionProfile::ChatRequests,
-        ] {
-            assert!(
-                profile
-                    .collection_names()
-                    .contains(&"AgentSessionInputEdit"),
-                "{} must carry signed pending-input edits and their receipts",
-                profile.id()
-            );
-        }
-        let operator = super::super::templates::resolve_template("agent-config").unwrap();
-        for profile in [P2pCollectionProfile::Runtime, P2pCollectionProfile::Agent] {
-            for name in operator.collections {
-                assert!(
-                    profile.collection_names().contains(name),
-                    "{} loses operator config {name}",
-                    profile.id()
-                );
-            }
-        }
-    }
-}
+const RUNTIME_COLLECTIONS: &[&str] = &[];
+const AGENT_COLLECTIONS: &[&str] = &[];
+const DESKTOP_CONFIG_COLLECTIONS: &[&str] = &[];
+const CHAT_REQUEST_COLLECTIONS: &[&str] = &[];
+const TOOL_SERVICE_COLLECTIONS: &[&str] = &[];
+const DISCOVERY_COLLECTIONS: &[&str] = &["PeerRegistry", "NodeDirectoryEntry"];

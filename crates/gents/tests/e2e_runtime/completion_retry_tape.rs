@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::store::graphql::escape_graphql_string;
 use gents::{
     build_run_timeline, Gents, NodeIdentity, RunTimeline, RunTimelineRows,
@@ -25,7 +25,7 @@ use crate::support::{first_row, test_db};
 
 const RETRY_MODEL: &str = "retry-tape-model";
 const RETRY_BACKEND_ID: &str = "retry-tape-backend";
-const RETRY_AGENT_ID: &str = "retry-tape";
+const RETRY_AGENT_DID: &str = "retry-tape";
 const PROD_PARSE_400_BODY: &str = r#"{"object":"error","message":"BadRequestError: Error in processing prompt inputs: Expecting value: line 1 column 28 (char 27)","type":"BadRequestError","code":400}"#;
 
 #[tokio::test]
@@ -56,7 +56,7 @@ async fn backend_restart_cluster_recovers() {
         let doc_id = create_runtime_request(
             db.node.as_ref(),
             &agent.node_did,
-            RETRY_AGENT_ID,
+            RETRY_AGENT_DID,
             &request_id,
             &session_id,
             &format!("please recover {marker}"),
@@ -133,7 +133,7 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     .unwrap();
     let db = test_db("completion-retry-backoff-liveness").await;
     let deadline_duration_secs = 60u64;
-    let agent = boot_retry_agent_with_liveness(
+    let runtime = build_retry_agent_with_liveness(
         &db,
         "completion-retry-backoff-liveness",
         backend.endpoint(),
@@ -142,12 +142,19 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
         Some(30),
     )
     .await;
+    let identities = runtime
+        .agents()
+        .iter()
+        .map(|agent| agent.agent_identity.clone())
+        .collect::<Vec<_>>();
+    let node_did = runtime.node_did().to_owned();
+    let agent = spawn_agent(db.node.as_ref(), runtime, node_did).await;
 
     let request_id = "req-backoff-vs-liveness";
     let doc_id = create_runtime_request_with_execution_origin(
         db.node.as_ref(),
         &agent.node_did,
-        RETRY_AGENT_ID,
+        RETRY_AGENT_DID,
         request_id,
         "session-backoff-vs-liveness",
         "scheduled",
@@ -258,9 +265,13 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     assert_eq!(call_states(&calls), vec!["failed"]);
     let timeline = build_timeline(db.node.as_ref(), request_id).await;
     assert!(!timeline.request.retry_summary.recovered);
-    let repeated = gents::RequestLifecycle::recover_all(&db.node, &agent.node_did)
-        .await
-        .unwrap();
+    let repeated = gents::RequestLifecycle::recover_all_with_identities(
+        &db.node,
+        &agent.node_did,
+        &identities,
+    )
+    .await
+    .unwrap();
     assert_eq!(repeated.requests_recovered, 0);
     assert_eq!(repeated.responses_recovered, 0);
     agent.shutdown().await;
@@ -300,7 +311,7 @@ async fn deadline_tight_fails_cleanly() {
     let request_doc_id = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        RETRY_AGENT_ID,
+        RETRY_AGENT_DID,
         request_id,
         "session-deadline-tight",
         &format!("tight deadline {marker}"),
@@ -379,7 +390,7 @@ async fn interactive_budget_is_quick() {
     let request_doc_id = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        RETRY_AGENT_ID,
+        RETRY_AGENT_DID,
         request_id,
         "session-interactive-budget",
         &format!("interactive request {marker}"),
@@ -440,9 +451,9 @@ async fn start_stall_tape(
     let agent = Gents::builder()
         .node(db.node.clone())
         .identity(identity)
-        .default_agent_id(RETRY_AGENT_ID)
+        .default_agent_did(RETRY_AGENT_DID)
         .tool_ceiling(ToolCeiling::meta_only())
-        .agent(RETRY_AGENT_ID)
+        .agent(RETRY_AGENT_DID)
         .backend_id(RETRY_BACKEND_ID)
         .model_name(RETRY_MODEL)
         .stream_batch_ms(0)
@@ -458,7 +469,7 @@ async fn start_stall_tape(
     let doc_id = create_runtime_request_with_execution_origin(
         db.node.as_ref(),
         &agent.node_did,
-        RETRY_AGENT_ID,
+        RETRY_AGENT_DID,
         &format!("req-{marker}"),
         &format!("session-{marker}"),
         execution_origin,
@@ -649,7 +660,7 @@ async fn deterministic_400_tape() {
     let request_doc_id = create_runtime_request_with_execution_origin(
         db.node.as_ref(),
         &node_did,
-        RETRY_AGENT_ID,
+        RETRY_AGENT_DID,
         request_id,
         "session-deterministic-400",
         "scheduled",
@@ -751,9 +762,9 @@ async fn build_retry_agent_with_liveness(
     let mut behavior = Gents::builder()
         .node(db.node.clone())
         .identity(identity)
-        .default_agent_id(RETRY_AGENT_ID)
+        .default_agent_did(RETRY_AGENT_DID)
         .tool_ceiling(ToolCeiling::meta_only())
-        .agent(RETRY_AGENT_ID)
+        .agent(RETRY_AGENT_DID)
         .backend_id(RETRY_BACKEND_ID)
         .model_name(RETRY_MODEL)
         .stream_batch_ms(0)
@@ -786,9 +797,9 @@ async fn upsert_retry_backend(
     };
     gents::ensure_node(node, owner).await.unwrap();
     let value = serde_json::json!({"node_did":owner,"backend_id":RETRY_BACKEND_ID,"name":RETRY_BACKEND_ID,"provider_kind":"OpenAiCompatible","openai_wire_api":"chat_completions","endpoint":endpoint,"auth":{"kind":"unauthenticated"},"max_concurrent":max_concurrent,"max_queue_depth":100});
-    let profile_id = format!("{RETRY_AGENT_ID}:inference");
+    let profile_id = format!("{RETRY_AGENT_DID}:inference");
     let profile = serde_json::json!({"node_did":owner,"profile_id":profile_id,"backend_id":RETRY_BACKEND_ID,"model_name":RETRY_MODEL});
-    let behavior = serde_json::json!({"node_did":owner,"agent_id":RETRY_AGENT_ID,"inference_profile_id":profile_id});
+    let behavior = serde_json::json!({"node_did":owner,"agent_did":RETRY_AGENT_DID,"inference_profile_id":profile_id});
     let plan = DesiredStateApplyPlan::new(
         [
             (gents::Collection::InferenceBackend, value),
@@ -830,7 +841,7 @@ async fn fetch_timeline_request(node: &EmbeddedNode, request_id: &str) -> Timeli
                 _docID
                 request_id
                 node_did
-                agent_id
+                agent_did
                 session_id
                 content
                 input

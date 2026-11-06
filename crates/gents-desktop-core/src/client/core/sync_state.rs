@@ -207,7 +207,7 @@ impl ClientSyncStateOwner {
         self.tx.borrow().clone()
     }
 
-    pub(super) fn subscribe(&self) -> watch::Receiver<ClientSyncStateSnapshot> {
+    pub(in crate::client) fn subscribe(&self) -> watch::Receiver<ClientSyncStateSnapshot> {
         self.tx.subscribe()
     }
 
@@ -385,11 +385,12 @@ impl ClientSyncStateOwner {
     ) {
         self.tx.send_if_modified(|state| {
             let transport_changed = p2p_health_materially_changed(&state.transport, &transport);
-            let previous_health = crate::client::project_sync_health(state);
+            let database_changed = state.database_sync != database_sync
+                || state.database_sync_error != database_sync_error;
             state.transport = transport;
             state.database_sync = database_sync;
             state.database_sync_error = database_sync_error;
-            transport_changed || previous_health != crate::client::project_sync_health(state)
+            transport_changed || database_changed
         });
     }
 
@@ -422,7 +423,7 @@ impl ClientSyncStateOwner {
 
     pub(super) async fn finish_runtime_schema_observation(
         &self,
-        local: &Arc<defra_node::EmbeddedNode>,
+        local: &Arc<defra_node::Node>,
         observation: &RuntimeSchemaObservation,
         status: &Value,
     ) -> anyhow::Result<()> {
@@ -434,7 +435,7 @@ impl ClientSyncStateOwner {
     /// authenticated, so an unverified `/status` cannot set or clear skew.
     pub(super) async fn compare_runtime_schema(
         &self,
-        local: &Arc<defra_node::EmbeddedNode>,
+        local: &Arc<defra_node::Node>,
         runtime_did: &str,
         status: &Value,
     ) -> anyhow::Result<()> {
@@ -444,7 +445,7 @@ impl ClientSyncStateOwner {
 
     async fn local_replicated_schema(
         &self,
-        local: &Arc<defra_node::EmbeddedNode>,
+        local: &Arc<defra_node::Node>,
     ) -> anyhow::Result<&ReplicatedSchema> {
         self.local_replicated_schema
             .get_or_try_init(|| read_client_replicated_schema(Arc::clone(local)))
@@ -713,6 +714,31 @@ pub(super) fn conservative_status(record: &PeerRecord) -> ClientPeerStatus {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn native_database_observation_changes_notify_subscribers() {
+        use super::*;
+
+        let (_temp, owner) = ClientSyncStateOwner::for_test(Vec::new(), Vec::new()).await;
+        let mut updates = owner.subscribe();
+        let first = P2pSyncStatusSnapshot::default();
+        owner.replace_database_observation(P2PHealth::default(), Some(first.clone()), None);
+        assert!(updates.has_changed().unwrap());
+        updates.borrow_and_update();
+
+        let next = P2pSyncStatusSnapshot {
+            car_requested_cids: 1,
+            ..first
+        };
+        owner.replace_database_observation(P2PHealth::default(), Some(next.clone()), None);
+        assert!(updates.has_changed().unwrap());
+        assert_eq!(
+            updates.borrow_and_update().database_sync.as_ref(),
+            Some(&next)
+        );
+
+        owner.replace_database_observation(P2PHealth::default(), Some(next), None);
+        assert!(!updates.has_changed().unwrap());
+    }
 
     #[tokio::test]
     async fn generated_activation_traces_drive_the_sync_owner() {
@@ -889,11 +915,6 @@ mod tests {
                 include_str!("writes/config_delete.rs"),
             ),
             ("writes/config_save", include_str!("writes/config_save.rs")),
-            ("writes/hydration", include_str!("writes/hydration.rs")),
-            (
-                "writes/hydration/documents",
-                include_str!("writes/hydration/documents.rs"),
-            ),
             ("writes/manual_runs", include_str!("writes/manual_runs.rs")),
             ("writes/operator", include_str!("writes/operator.rs")),
             (

@@ -115,13 +115,14 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
         !output.contains("file_changes") && !output.contains("AP+A"),
         "{output}"
     );
-    let access = ConfigAccess::local(admission.node.clone());
+    let access = call.access().unwrap();
     let request_doc_id = call.request_doc_id().unwrap().to_owned();
     let session_id = call.session_id().to_owned();
     let requester_did = call.requester_did().map(str::to_owned);
+    let actor = call.actor().clone();
     let inventory_admission = ConfigAccess::transact_local_readonly(
         &admission.node,
-        None,
+        Some(actor),
         "test.inventory.session",
         |txn| {
             let (session_id, requester_did, node_did) =
@@ -198,7 +199,9 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     crate::tools::call::lifecycle::delivery::fail_next_terminal_for_test(&doc_id);
     crate::tools::call::lifecycle::file_inventory::fail_next_publication(&doc_id);
     call.complete(&output).await.unwrap();
-    let row = ConfigAccess::local(admission.node.clone())
+    let row = call
+        .access()
+        .unwrap()
         .execute(&format!(
             "{{ AgentToolCall(docID: \"{}\") {{ lifecycle_state }} ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: \"{}\" }} }}) {{ _docID file_changes }} ToolFileInventory(filter: {{ tool_call_doc_id: {{ _eq: \"{}\" }} }}) {{ _docID observation_doc_id tool_call_doc_id request_doc_id node_did session_id requester_did changes }} }}",
             escape_graphql_string(&doc_id), escape_graphql_string(&doc_id), escape_graphql_string(&doc_id)
@@ -408,7 +411,11 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     ] {
         assert!(load(request, node, session, requester).await.is_err());
     }
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -445,7 +452,7 @@ async fn maximum_images_survive_the_terminal_transaction_and_scoped_read() {
     call.stage_deferred_writes(registry.deferred_writes(&doc_id).await);
     call.complete(&output).await.unwrap();
     let retained = crate::tools::call::lifecycle::load_tool_call_file_changes(
-        &ConfigAccess::local(admission.node.clone()),
+        &call.access().unwrap(),
         &doc_id,
         call.request_doc_id().unwrap(),
         &admission.node_did,
@@ -460,7 +467,11 @@ async fn maximum_images_survive_the_terminal_transaction_and_scoped_read() {
     assert_eq!(decoded_image(&images["before"]), before.as_bytes());
     assert_eq!(decoded_image(&images["after"]), after.as_bytes());
     assert_eq!(std::fs::read(&path).unwrap(), after.as_bytes());
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -613,7 +624,7 @@ async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
         "{{ AgentToolCall(docID: \"{}\") {{ lifecycle_state }} ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: \"{}\" }} }}) {{ file_changes }} ToolFileInventory(filter: {{ tool_call_doc_id: {{ _eq: \"{}\" }} }}) {{ _docID observation_doc_id changes }} }}",
         escape_graphql_string(&doc_id), escape_graphql_string(&doc_id), escape_graphql_string(&doc_id)
     );
-    let access = ConfigAccess::local(admission.node.clone());
+    let access = call.access().unwrap();
     let row = access.execute(&query).await.unwrap()["data"].clone();
     assert_eq!(row["AgentToolCall"][0]["lifecycle_state"], "running");
     assert_eq!(row["ToolFileChange"].as_array().unwrap().len(), 0);
@@ -655,7 +666,11 @@ async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
     competing.complete("write failed").await.unwrap();
     assert_eq!(access.execute(&query).await.unwrap()["data"], row);
     assert_eq!(std::fs::read(&path).unwrap(), b"later user edit");
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -787,8 +802,9 @@ async fn readonly_receipts_commit_without_images_and_survive_terminal_retry() {
     };
     assert!(!output.contains("verified_unchanged"));
     call.stage_deferred_writes(registry.deferred_writes(&doc_id).await);
-    let mut replay = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
+    let mut replay = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
         admission.node.clone(),
+        call.actor().clone(),
         &doc_id,
         &admission.node_did,
         call.session_id(),
@@ -802,7 +818,7 @@ async fn readonly_receipts_commit_without_images_and_survive_terminal_retry() {
     crate::tools::call::lifecycle::file_inventory::fail_next_publication(&doc_id);
     call.complete(&output).await.unwrap();
     replay.complete(&output).await.unwrap();
-    let row = ConfigAccess::local(admission.node.clone()).execute(&format!(
+    let row = call.access().unwrap().execute(&format!(
         "{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: \"{}\" }} }}) {{ _docID }} ToolFileInventory(filter: {{ tool_call_doc_id: {{ _eq: \"{}\" }} }}) {{ _docID observation_doc_id request_doc_id verified_unchanged changes }} }}",
         escape_graphql_string(&doc_id), escape_graphql_string(&doc_id),
     )).await.unwrap()["data"].clone();

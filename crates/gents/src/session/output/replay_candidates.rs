@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
 use gents_protocol::output::{
     MessagePublication, MessageRole, OutputOutcome, OutputSource, OutputWriter, SourceClose,
 };
@@ -26,22 +25,40 @@ use super::{
 /// request supplied by the caller is never a lookup root.
 #[cfg(test)]
 pub(crate) async fn load_canonical_assistant_candidates(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::turn::provider_context_reduction::SourceBoundary,
 ) -> Result<Vec<CanonicalAssistantCandidate>> {
-    load_canonical_assistant_candidates_with(node, node, scope, boundary, None).await
+    load_canonical_assistant_candidates_with(access, access, scope, boundary, None).await
 }
 
+#[cfg(test)]
 pub(crate) async fn load_canonical_assistant_candidates_with(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
+    requests: &impl ReplayRequestReader,
+    scope: CanonicalReplayScope<'_>,
+    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
+    selected_tags: Option<&[gents_loop::claude_messages_body::ReplayTag]>,
+) -> Result<Vec<CanonicalAssistantCandidate>> {
+    load_canonical_assistant_candidates_using(
+        ReadAccess::Config(access),
+        requests,
+        scope,
+        boundary,
+        selected_tags,
+    )
+    .await
+}
+
+pub(super) async fn load_canonical_assistant_candidates_using(
+    access: ReadAccess<'_, '_>,
     requests: &impl ReplayRequestReader,
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::turn::provider_context_reduction::SourceBoundary,
     selected_tags: Option<&[gents_loop::claude_messages_body::ReplayTag]>,
 ) -> Result<Vec<CanonicalAssistantCandidate>> {
     let (request_commits, high_water) =
-        validated_canonical_replay_boundary(node, requests, scope, boundary).await?;
+        validated_canonical_replay_boundary(access, requests, scope, boundary).await?;
     // None records the empty canonical view at capture time. A later current
     // read cannot turn that historical empty boundary into an unbounded scan.
     let Some(high_water) = high_water else {
@@ -68,7 +85,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
         r#"{{ AgentMessage(filter: {{ {session_filter}, sequence: {{ _le: {} }} }}, order: {{ sequence: ASC }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#,
         high_water.sequence
     );
-    let response = ReadAccess::Node(node)
+    let response = access
         .query(&query, "load_canonical_replay_candidates")
         .await?;
     let headers = rows_value(&response, "AgentMessage")?
@@ -108,7 +125,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
         .filter_map(|row| row.message.request_doc_id.clone())
         .collect::<Vec<_>>();
     preload_request_output_segments(
-        node,
+        access,
         &replay_output_requests,
         scope.node_did,
         scope.requester_did,
@@ -122,7 +139,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
         .filter(|row| row.message.role == MessageRole::Assistant)
     {
         let reconstructed = reconstruct_scoped_message_with_facts(
-            ReadAccess::Node(node),
+            access,
             &row.doc_id,
             scope.node_did,
             scope.requester_did,
@@ -275,13 +292,13 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
             message: candidate.message,
         });
     }
-    let capture_rows = load_replay_capture_rows(node, &selected).await?;
-    preload_replay_capture_blocks(node, &capture_rows, &mut capture_cache).await?;
+    let capture_rows = load_replay_capture_rows(access, &selected).await?;
+    preload_replay_capture_blocks(access, &capture_rows, &mut capture_cache).await?;
 
     let mut candidates = Vec::new();
     for item in selected {
         let capture = replay_capture_from_row(
-            node,
+            access,
             &capture_rows,
             &item.capture_key,
             &item.node_did,
@@ -385,11 +402,19 @@ fn provider_coordinate_for_candidate_inner(
             "canonical replay reference has a missing or conflicting physical close {close_id}"
         );
         let close = &matches[0].segment;
+        // A fork copy reproduces the origin's close in the reader's session,
+        // verified against that origin when the fork was published.
+        let copied = gents_protocol::output::reconstruction::is_fork_copy_for(
+            &reconstructed.header.message,
+            close,
+            &close_id,
+        );
         anyhow::ensure!(
             close.node_did == header.node_did
                 && close.requester_did == header.requester_did
-                && close.session_id == header.session_id
-                && close.request_doc_id == request_doc_id
+                && (copied
+                    || (close.session_id == header.session_id
+                        && close.request_doc_id == request_doc_id))
                 && matches!(&close.writer, OutputWriter::RequestExecution { execution_generation: writer } if writer == execution_generation)
                 && matches!(
                     &close.close,

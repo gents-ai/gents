@@ -1,8 +1,7 @@
 use super::*;
 use crate::documents::{Agent, AgentContext, BashTools, BuiltInTools, FileTools, HostTools, Tools};
 use crate::store::config_client::{
-    apply_desired_state_plan, validate_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
-    DesiredStateApplyPlan,
+    validate_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 
 fn catalog_from_documents(refs: &crate::ConfigReferences) -> Result<agent::AgentCatalogView> {
@@ -21,7 +20,7 @@ fn catalog_from_documents(refs: &crate::ConfigReferences) -> Result<agent::Agent
             }
             crate::Collection::Node => {
                 view.default_id = value
-                    .get("default_agent_id")
+                    .get("default_agent_did")
                     .and_then(Value::as_str)
                     .filter(|id| !id.is_empty())
                     .map(str::to_owned);
@@ -32,13 +31,12 @@ fn catalog_from_documents(refs: &crate::ConfigReferences) -> Result<agent::Agent
     Ok(view)
 }
 
-pub(super) async fn load_agent_catalog(
-    node: &Arc<EmbeddedNode>,
-    owner: &str,
-) -> Result<agent::AgentCatalogView> {
+pub(super) async fn load_agent_catalog(core: &SelfConfigCore) -> Result<agent::AgentCatalogView> {
+    let node = core.node_handle();
+    let owner = core.node_did();
     ConfigAccess::transact_local_readonly(
-        node,
-        Some(::identity::Did::new(owner.to_owned())?),
+        &node,
+        Some(core.identity()?),
         "self_config.agent_catalog",
         |txn| {
             Box::pin(async move {
@@ -62,21 +60,6 @@ fn replacement(
 }
 
 #[cfg(test)]
-pub(super) async fn agent_preview(
-    node: &Arc<EmbeddedNode>,
-    owner: &str,
-    args: &ConfigureAgentParams,
-    ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
-) -> Result<String> {
-    match agent_apply(node, owner, args, ceiling, true).await {
-        Ok(result) => Ok(result),
-        Err(error) => {
-            ordered! {"admitted":false,"committed":false,"rejection":format!("{error:#}")}.pretty()
-        }
-    }
-}
-
-#[cfg(test)]
 pub(super) async fn agent_mutate(
     node: &Arc<EmbeddedNode>,
     owner: &str,
@@ -94,15 +77,19 @@ pub(super) async fn agent_mutate(
 pub async fn configure_agent(
     access: &ConfigAccess,
     owner: &str,
-    identity: &dyn NodeIdentity,
     args: &ConfigureAgentParams,
     ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
 ) -> Result<String> {
-    anyhow::ensure!(
-        identity.did() == owner,
-        "agent writes require the exact local node identity"
-    );
-    agent_apply_access(access, owner, args, ceiling, args.action == "preview", None).await
+    agent_apply_access(
+        access,
+        owner,
+        args,
+        ceiling,
+        args.action == "preview",
+        None,
+        None,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -120,6 +107,7 @@ async fn agent_apply(
         ceiling,
         preview,
         None,
+        None,
     )
     .await
 }
@@ -128,13 +116,26 @@ pub(super) async fn model_agent_preview(
     core: &SelfConfigCore,
     args: &ConfigureAgentParams,
 ) -> Result<String> {
+    let mut args = args.clone();
+    if matches!(
+        args.operation.as_deref().unwrap_or(&args.action),
+        "create" | "clone"
+    ) {
+        let runtime = core.runtime_identity()?;
+        anyhow::ensure!(
+            runtime.did() == core.node_did(),
+            "runtime identity does not match node"
+        );
+        args.identity_binding = Some(crate::store::identity::provision_agent_identity(runtime)?);
+    }
     match agent_apply_access(
-        &ConfigAccess::local(core.node_handle()),
+        &core.access()?,
         core.node_did(),
-        args,
+        &args,
         core.process_ceiling(),
         true,
         Some(core.held_grants()),
+        core.node_binding(),
     )
     .await
     {
@@ -150,17 +151,34 @@ pub(super) async fn model_agent_mutate(
     identity: &dyn NodeIdentity,
     args: &ConfigureAgentParams,
 ) -> Result<String> {
+    let actor = core.identity()?;
     anyhow::ensure!(
-        identity.did() == core.node_did(),
-        "agent writes require the exact local node identity"
+        identity.did() == actor.to_string(),
+        "agent configuration requires its selected actor signer"
     );
+    let mut args = args.clone();
+    if matches!(
+        args.operation.as_deref().unwrap_or(&args.action),
+        "create" | "clone"
+    ) {
+        args.identity_binding = Some(
+            crate::store::identity::provision_agent_identity_for_agent(
+                &core.node_handle(),
+                core.runtime_identity()?,
+                identity,
+                core.agent_did(),
+            )
+            .await?,
+        );
+    }
     agent_apply_access(
-        &ConfigAccess::local(core.node_handle()),
+        &ConfigAccess::local_managed_agent(core.node_handle(), actor, identity)?,
         core.node_did(),
-        args,
+        &args,
         core.process_ceiling(),
         false,
         Some(core.held_grants()),
+        core.node_binding(),
     )
     .await
 }
@@ -172,38 +190,36 @@ async fn agent_apply_access(
     ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
     preview: bool,
     held: Option<&ops::OperatorGrants>,
+    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
 ) -> Result<String> {
-    let identity = Some(::identity::Did::new(owner.to_owned())?);
-    match access {
-        ConfigAccess::Local(local) => {
-            let node = local.node();
-            if preview {
-                ConfigAccess::transact_local_readonly(node, identity, "self_config.agent", |txn| {
-                    Box::pin(agent_apply_in_txn(txn, owner, args, ceiling, preview, held))
-                })
-                .await
-            } else {
-                ConfigAccess::transact_local_write(node, identity, "self_config.agent", |txn| {
-                    Box::pin(agent_apply_in_txn(txn, owner, args, ceiling, preview, held))
-                })
-                .await
-            }
-        }
-        ConfigAccess::Graphql(_) => {
-            if preview {
-                access
-                    .transact_readonly("self_config.agent", |txn| {
-                        Box::pin(agent_apply_in_txn(txn, owner, args, ceiling, preview, held))
-                    })
-                    .await
-            } else {
-                access
-                    .transact_write("self_config.agent", |txn| {
-                        Box::pin(agent_apply_in_txn(txn, owner, args, ceiling, preview, held))
-                    })
-                    .await
-            }
-        }
+    if preview {
+        access
+            .transact_readonly("self_config.agent", |txn| {
+                Box::pin(agent_apply_in_txn(
+                    txn,
+                    owner,
+                    args,
+                    ceiling,
+                    preview,
+                    held,
+                    node_binding,
+                ))
+            })
+            .await
+    } else {
+        access
+            .transact_write("self_config.agent", |txn| {
+                Box::pin(agent_apply_in_txn(
+                    txn,
+                    owner,
+                    args,
+                    ceiling,
+                    preview,
+                    held,
+                    node_binding,
+                ))
+            })
+            .await
     }
 }
 
@@ -214,6 +230,7 @@ async fn agent_apply_in_txn(
     ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
     preview: bool,
     held: Option<&ops::OperatorGrants>,
+    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
 ) -> Result<String> {
     let refs = crate::ConfigReferences::load_in_txn(txn, owner).await?;
     let view = catalog_from_documents(&refs)?;
@@ -270,13 +287,16 @@ async fn agent_apply_in_txn(
         _ => bail!("unknown agent operation {operation:?}"),
     };
     let id = match &op {
-        agent::AgentOperation::Create(input) => {
-            derive_agent_id(owner, &input.display_name, &view.agents)
-        }
+        agent::AgentOperation::Create(_) => args
+            .identity_binding
+            .as_ref()
+            .context("agent creation requires a runtime-provisioned identity binding")?
+            .agent_did
+            .clone(),
         _ => args
-            .agent_id
+            .agent_did
             .clone()
-            .context("agent operation requires an exact agent_id")?,
+            .context("agent operation requires an exact agent_did")?,
     };
     agent::decide_agent_operation(&view, &op, &id, args.make_default)?;
     let load = |collection: crate::Collection, id: &str| {
@@ -378,6 +398,7 @@ async fn agent_apply_in_txn(
                 let policy = crate::tools::surface::load_workspace_root_policy_in_txn(
                     txn,
                     ceiling.root.as_deref(),
+                    owner,
                 )
                 .await?;
                 let stored_root = if args.root.is_present() {
@@ -404,7 +425,7 @@ async fn agent_apply_in_txn(
                 documents.push(replacement(crate::Collection::Tools, tools)?);
             }
             doc = serde_json::from_value(
-                json!({"agent_id":id,"node_did":owner,"display_name":input.display_name,"description":args.description.value(),"context_id":context.context_id,"inference_profile_id":input.inference_profile_id}),
+                json!({"agent_did":id,"creation_nonce":args.identity_binding.as_ref().context("agent creation identity binding missing")?.creation_nonce,"node_did":owner,"display_name":input.display_name,"description":args.description.value(),"context_id":context.context_id,"inference_profile_id":input.inference_profile_id}),
             )?;
             guard_agent_profile_choice(
                 txn,
@@ -475,7 +496,7 @@ async fn agent_apply_in_txn(
         let mut node = load(crate::Collection::Node, owner)?;
         node.as_object_mut()
             .context("node object required")?
-            .insert("default_agent_id".into(), json!(id));
+            .insert("default_agent_did".into(), json!(id));
         documents.push(replacement(crate::Collection::Node, node)?);
     }
     let plan = DesiredStateApplyPlan::new(documents)?;
@@ -515,7 +536,12 @@ async fn agent_apply_in_txn(
         );
     }
     if !preview {
-        apply_desired_state_plan(txn, &plan).await?;
+        crate::store::config_client::apply_desired_state_plan_with_node_binding(
+            txn,
+            &plan,
+            node_binding,
+        )
+        .await?;
     }
-    ordered! {"committed":!preview,"admitted":true,"operation":operation,"agent_id":id,"agent":doc,"make_default":args.make_default}.pretty()
+    ordered! {"committed":!preview,"admitted":true,"operation":operation,"agent_did":id,"agent":doc,"make_default":args.make_default}.pretty()
 }

@@ -264,6 +264,15 @@ def deniedClosureInput (key : CanonicalOutput.Hydration.DocumentKey) :
   { hydrationClosureInput with access := hydrationClosureInput.access.map fun observation =>
       if observation.key = key then { observation with state := .denied } else observation }
 
+/-- A fork whose content was copied into its own session; the source session
+contributes nothing to its closure. -/
+def hydrationForkCopyInput : SessionHydration.ClosureInput :=
+  { hydrationClosureInput with
+    messages := [CanonicalOutput.Hydration.Examples.childMessage]
+    segments := [CanonicalOutput.Hydration.Examples.closingCopy]
+    access := CanonicalOutput.Hydration.Examples.copyAccess.map fun observation =>
+      { observation with scope := hydrationRequest.authorizationScope } }
+
 def hydrationEffectInput : SessionHydration.ClosureInput :=
   { hydrationClosureInput with
     roots := [220]
@@ -294,6 +303,16 @@ def sessionHydrationClosureCasesJson : String := jsonArray
   , closureCaseJson "foreign_scope_evidence_rejected"
       { hydrationClosureInput with access := hydrationClosureInput.access.map fun observation =>
           { observation with scope := { observation.scope with peer := "peer-foreign" } } }
+  , closureCaseJson "fork_copy_without_origin" hydrationForkCopyInput
+  , closureCaseJson "fork_copy_preferred_over_visible_origin"
+      { hydrationForkCopyInput with
+        messages := hydrationClosureInput.messages
+        segments := hydrationClosureInput.segments ++ hydrationForkCopyInput.segments
+        access := hydrationClosureInput.access ++ hydrationForkCopyInput.access }
+  , closureCaseJson "fork_copy_acp_denied"
+      { hydrationForkCopyInput with access := hydrationForkCopyInput.access.map fun observation =>
+          if observation.key = ⟨.agentOutputSegment, 300⟩
+          then { observation with state := .denied } else observation }
   , closureCaseJson "plugin_effect_children" hydrationEffectInput
   , closureCaseJson "plugin_effect_slot_conflict"
       { hydrationEffectInput with

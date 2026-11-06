@@ -91,15 +91,15 @@ async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
     gents::ensure_runtime_schemas(&node).await.unwrap();
     let access = ConfigAccess::local(node.clone());
     for mutation in [
-        r#"mutation { create_Agent(input: {node_did:"did:test:amy", agent_id:"agent", inference_profile_id:"profile", enabled:true}) { _docID } }"#,
-        r#"mutation { create_AgentSession(input: {node_did:"did:test:amy", agent_id:"agent", session_id:"source", created_at:"2026-10-26T00:00:00Z"}) { _docID } }"#,
+        r#"mutation { create_Agent(input: {node_did:"did:test:amy", agent_did:"agent", inference_profile_id:"profile", enabled:true}) { _docID } }"#,
+        r#"mutation { create_AgentSession(input: {node_did:"did:test:amy", agent_did:"agent", session_id:"source", created_at:"2026-10-26T00:00:00Z"}) { _docID } }"#,
     ] {
         ConfigAccess::write_local(&node, "test.fork_input", mutation)
             .await
             .unwrap();
     }
     let response = ConfigAccess::write_local(&node, "test.fork_input", r#"mutation {
-        create_AgentRequest(input: {purpose:"normal", node_did:"did:test:amy", agent_id:"agent",
+        create_AgentRequest(input: {purpose:"normal", node_did:"did:test:amy", agent_did:"agent",
             request_id:"goal-continuation", session_id:"source", lifecycle_state:"completed",
             caused_by_trigger_kind:"goal", caused_by_trigger_id:"goal",
             input:{queue:{source:"goal",policy:"coalesce",key:"goal:source"},goal_continuation:{sequence:3,wrapup:false}},
@@ -155,7 +155,7 @@ async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
                 boundary: gents::session::ForkBoundary::UserTurn(1),
                 caller_node_did: "did:test:amy",
                 caller_requester_did: None,
-                target_agent_id: None,
+                target_agent_did: None,
             },
         )
         .await
@@ -207,7 +207,7 @@ async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
         .await
         .unwrap();
     assert_eq!(copied, original);
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
 }
 
 #[test]

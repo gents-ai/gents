@@ -45,8 +45,8 @@ pub async fn session_provenance(
     core: &Arc<ClientCore>,
     scope: SessionScope,
 ) -> Result<SessionProvenanceView, String> {
-    let access = crate::snapshot::node_reads(core, &scope.node_did);
     let fail = |error: anyhow::Error| format!("session provenance: {error:#}");
+    let access = crate::snapshot::node_reads(core, &scope.node_did).map_err(fail)?;
     let lineage = lineage(&access, &scope).await.map_err(fail)?;
     let calls = caused_calls(&access, &scope).await.map_err(fail)?;
     let opening_request_id = match &lineage.started_by {
@@ -263,7 +263,7 @@ async fn related_session_metadata<'a>(
     }
     let mut result = Vec::new();
     for (node, scopes) in scopes {
-        let access = crate::snapshot::node_reads(core, &node);
+        let access = crate::snapshot::node_reads(core, &node)?;
         let filters: Vec<_> = scopes
             .iter()
             .map(|(session, requester)| {
@@ -312,11 +312,7 @@ mod tests {
     use gents::store::graphql::escape_graphql_string;
     use gents_protocol::request_admission::RequestPurpose;
 
-    async fn run(
-        node: &gents::defra_node::EmbeddedNode,
-        mutation: String,
-        collection: &str,
-    ) -> String {
+    async fn run(node: &gents::defra_node::Node, mutation: String, collection: &str) -> String {
         let response = node.execute(&mutation).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         gents::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
@@ -339,7 +335,7 @@ mod tests {
         let mut input = vec![
             format!("node_did: {}", quoted(did)),
             format!("requester_did: {}", quoted(did)),
-            r#"agent_id: "worker", content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", retry_count: 0"#.to_owned(),
+            r#"agent_did: "worker", content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", retry_count: 0"#.to_owned(),
             format!("max_retries: {max_retries}"),
         ];
         for (field, value) in row.as_object().expect("case row") {
@@ -398,7 +394,7 @@ mod tests {
     /// are written as one group, re-created with a different `max_retries`
     /// (which no reader selects) until their native order matches the model's.
     async fn seed_lineage_case(
-        node: &gents::defra_node::EmbeddedNode,
+        node: &gents::defra_node::Node,
         case: &Value,
         did: &str,
     ) -> BTreeMap<String, String> {
@@ -495,7 +491,7 @@ mod tests {
             run(
                 node,
                 format!(
-                    r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", node_did: "{did}", requester_did: "{did}", agent_id: "worker", created_at: "2026-09-26T00:00:00Z"{provenance} }}) {{ _docID }} }}"#
+                    r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", node_did: "{did}", requester_did: "{did}", agent_did: "worker", created_at: "2026-09-26T00:00:00Z"{provenance} }}) {{ _docID }} }}"#
                 ),
                 "AgentSession",
             )
@@ -543,7 +539,7 @@ mod tests {
                     .and_then(|row| row.doc_id);
                 assert_eq!(found, expected, "{}: {query}", case["name"]);
             }
-            node.shutdown().await;
+            node.shutdown().await.unwrap();
         }
     }
 }

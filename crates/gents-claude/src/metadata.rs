@@ -62,7 +62,7 @@ pub fn stable_uuid(key: &[u8]) -> String {
 /// A deterministic subagent id derived from `key`: `a` and the first 8 bytes of its SHA-256 in
 /// lowercase hex. Claude Code gives each spawned agent `a` and 8 random bytes in hex (`$_()`);
 /// Gents derives it from the subagent's session id so every request of that session shares it.
-pub fn agent_id(key: &[u8]) -> String {
+pub fn agent_did(key: &[u8]) -> String {
     let digest = Sha256::digest(key);
     let mut out = String::with_capacity(17);
     out.push('a');

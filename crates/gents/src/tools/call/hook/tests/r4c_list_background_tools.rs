@@ -1,15 +1,12 @@
-use gents::defra_node::EmbeddedNode;
 use gents::inference::llm::tool::BoxFuture;
 use gents::inference::llm::tool::ToolDefinition;
 use gents::inference::llm::tool::{ToolDyn, ToolError};
 use gents::inference::llm::ToolCallHookAction;
 use gents::store::graphql::escape_graphql_string;
-use gents::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
+use gents::{BackgroundToolRegistry, DefraSessionHook};
 use serde_json::{json, Value};
 
-use super::r4c_private_support::{
-    accepted_call, assert_accepted_control_rows, bind_accepted_request,
-};
+use super::r4c_private_support::{accepted_call, assert_accepted_control_rows, setup_private_hook};
 use crate::support::test_db;
 
 #[path = "background_wait_wakes.rs"]
@@ -107,7 +104,7 @@ async fn background_wait_recovers_without_notification(closed: bool) {
         request_id,
         session_id,
         node_did: db.node_identity.did().to_owned(),
-        requester_did: Some(db.node_identity.did().to_owned()),
+        requester_did: hook.active_requester_did().await,
     };
     let waiting = std::sync::Arc::new(tokio::sync::Notify::new());
     let changes = SilentChanges {
@@ -174,36 +171,7 @@ async fn setup_hook(
     let db = test_db(test_name).await;
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-request");
-    let did = db.node_identity.did();
-    gents::session::ensure_session_with_agent_id_and_requester_did(
-        &db.node,
-        &session_id,
-        did,
-        "r4c-background-tools",
-        Some(did),
-    )
-    .await
-    .unwrap();
-
-    let hook = DefraSessionHook::resume_with_identity_policy(
-        db.node.clone(),
-        &session_id,
-        did,
-        Some(did),
-        FailurePolicy::default(),
-    )
-    .await
-    .unwrap()
-    .with_background_tool_registry(registry);
-    bind_accepted_request(
-        &db,
-        &hook,
-        "r4c-background-tools",
-        &request_id,
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    let hook = setup_private_hook(&db, &request_id, &session_id, registry).await;
     (db, hook, session_id, request_id)
 }
 
@@ -299,23 +267,13 @@ async fn read_tool(hook: &DefraSessionHook, internal_call_id: &str, tool_call_id
 async fn persisted_row_snapshot(hook: &DefraSessionHook, handle_tool_call_id: &str) -> Value {
     let session_id = hook.session_id().await.expect("session id");
     let session = crate::store::graphql::escape_graphql_string(&session_id);
-    let response = hook
-        .node
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }} }}, order: {{ _docID: asc }}) {{ tool_call_id tool_name lifecycle_state await_mode started_at completed_at }} }}"#
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "persisted row snapshot query failed: {:?}",
-        response.errors
-    );
-    let rows = response
-        .data
-        .as_ref()
-        .expect("persisted row snapshot query returned no data")
-        .get("AgentToolCall")
-        .expect("AgentToolCall collection missing from snapshot response")
+    let requester = hook.active_requester_did().await.expect("selected agent");
+    let access =
+        crate::ConfigAccess::local_as(hook.node.clone(), identity::Did::new(requester).unwrap());
+    let response = access.execute(&format!(
+        r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }} }}, order: {{ _docID: asc }}) {{ tool_call_id tool_name lifecycle_state await_mode started_at completed_at }} }}"#
+    )).await.expect("persisted row snapshot query");
+    let rows = response["data"]["AgentToolCall"]
         .as_array()
         .expect("AgentToolCall snapshot is not an array")
         .clone();
@@ -359,7 +317,11 @@ fn skip_reason_json(action: ToolCallHookAction) -> Value {
     serde_json::from_str(&reason).expect("skip reason should be JSON")
 }
 
-async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_name: &str) -> usize {
+async fn count_tool_calls_by_name(
+    hook: &DefraSessionHook,
+    session_id: &str,
+    tool_name: &str,
+) -> usize {
     let session_id = escape_graphql_string(session_id);
     let tool_name = escape_graphql_string(tool_name);
     let query = format!(
@@ -372,18 +334,17 @@ async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_na
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "count AgentToolCall by name failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(|rows| rows.as_array())
-        .map_or(0, Vec::len)
+    let requester = hook.active_requester_did().await.expect("selected agent");
+    let access =
+        crate::ConfigAccess::local_as(hook.node.clone(), identity::Did::new(requester).unwrap());
+    let response = access
+        .execute(&query)
+        .await
+        .expect("count AgentToolCall by name");
+    response["data"]["AgentToolCall"]
+        .as_array()
+        .expect("tool call rows")
+        .len()
 }
 
 async fn create_foreground_tool_call(hook: &DefraSessionHook) {
@@ -641,35 +602,7 @@ async fn setup_hook_on_db(
     session_id: &str,
     registry: BackgroundToolRegistry,
 ) -> (DefraSessionHook, String, String) {
-    let did = db.node_identity.did();
-    gents::session::ensure_session_with_agent_id_and_requester_did(
-        &db.node,
-        session_id,
-        did,
-        "r4c-background-tools",
-        Some(did),
-    )
-    .await
-    .unwrap();
-    let hook = DefraSessionHook::resume_with_identity_policy(
-        db.node.clone(),
-        session_id,
-        did,
-        Some(did),
-        FailurePolicy::default(),
-    )
-    .await
-    .unwrap()
-    .with_background_tool_registry(registry);
-    bind_accepted_request(
-        db,
-        &hook,
-        "r4c-background-tools",
-        request_id,
-        session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    let hook = setup_private_hook(db, request_id, session_id, registry).await;
     (hook, session_id.to_string(), request_id.to_string())
 }
 
@@ -739,7 +672,7 @@ async fn list_background_tools_limit_truncates() {
 
 #[tokio::test]
 async fn list_background_tools_keeps_one_accepted_parent_control_row() {
-    let (db, hook, session_id, _request_id) = setup_hook(
+    let (_db, hook, session_id, _request_id) = setup_hook(
         "r4c-list-bg-no-row",
         registry(vec![Box::new(PendingTool)], &["slow_tool"]),
     )
@@ -748,8 +681,43 @@ async fn list_background_tools_keeps_one_accepted_parent_control_row() {
     let _ = list_background_tools(&hook, "list-no-row", json!({})).await;
 
     assert_eq!(
-        count_tool_calls_by_name(db.node.as_ref(), &session_id, "list_processes").await,
+        count_tool_calls_by_name(&hook, &session_id, "list_processes").await,
         1
     );
     assert_accepted_control_rows(&hook, "list_processes", 1).await;
+}
+
+#[tokio::test]
+async fn selected_agent_reads_private_background_call_but_other_agent_cannot() {
+    let (db, hook, session_id, _) = setup_hook(
+        "r4c-private-agent-control",
+        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+    )
+    .await;
+    let handle = background_tool(&hook, "private-background", "slow_tool").await;
+    let call_id = handle["tool_call_id"].as_str().expect("background call ID");
+    let selected = hook.actor.clone().expect("selected agent identity");
+    let visible = crate::tools::call::lifecycle::ToolCallLifecycle::load_as(
+        db.node.clone(),
+        selected,
+        &session_id,
+        call_id,
+    )
+    .await
+    .expect("selected agent read")
+    .expect("selected agent can read the call");
+    assert_eq!(visible.tool_call_id(), call_id);
+    let other = identity::Did::new(crate::test_support::agent_did(&db.node)).unwrap();
+    assert!(
+        crate::tools::call::lifecycle::ToolCallLifecycle::load_as(
+            db.node.clone(),
+            other,
+            &session_id,
+            call_id,
+        )
+        .await
+        .expect("other agent read")
+        .is_none(),
+        "unrelated agent must not see the private call"
+    );
 }

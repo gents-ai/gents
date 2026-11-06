@@ -33,6 +33,7 @@ pub(crate) fn preset_account_backend(
     };
     let spec = crate::inference::backends::setup::connection_spec(provider_id, auth, "")?;
     Ok(crate::InferenceBackend {
+        physical_doc_id: None,
         node_did: node_did.to_owned(),
         backend_id: match account_ref {
             Some(account_ref) => format!("{provider}-{account_ref}"),

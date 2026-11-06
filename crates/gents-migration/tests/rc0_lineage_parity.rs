@@ -1,15 +1,6 @@
-//! One canonical lineage per collection. DefraDB mints a patched version ID over the
-//! previous version's heads, so a store that registers the current SDL directly never
-//! shares a version with a v1.0.0-rc0 store patched to that SDL, and stores on different
-//! versions cannot merge each other's blocks (`gents_protocol::peer_schema`).
-//! - Client-authored collections never change schema: phones and apps register them from
-//!   their own SDL, so their version is the v1.0.0-rc0 one everywhere (#1123/#1125).
-//! - A runtime-authored collection changed since rc0 is registered at its rc0 root on a fresh
-//!   store and takes the same patches an upgraded rc0 store takes
-//!   (`upgrades::CANONICAL_ROOTS`).
-//!
-//! These tests hold a store born on rc0 and one born on this build to the same versions for
-//! every managed collection, and keep the stores v1.0.0-rc1 produced starting.
+//! DefraDB hashes versioned patches over their parent heads. Retained backend
+//! lineages replay their original chain; identity schemas use the current
+//! baseline and reject old stores without converting their identifiers.
 
 use gents_migration::{
     canonical_schema_plan, canonical_versions, ensure_migrations, is_known_off_lineage,
@@ -45,23 +36,7 @@ const CANONICAL: &[(&str, &str)] = &[
         schemas::INFERENCE_BACKEND_NAME,
         "bafyreic7xg6tbg3rooyghvyy7tho52yynp7yqsu4tqbvjmsfnyouv2ieme",
     ),
-    (
-        schemas::NODE_NAME,
-        "bafyreibibfxzzu4wbr2z5w3fxdfik6vnalwg3mkxqm66sivdoesqpjosli",
-    ),
 ];
-
-async fn active_versions(
-    node: &defra_node::EmbeddedNode,
-) -> std::collections::BTreeMap<String, String> {
-    node.get_all_collection_versions()
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|version| version.is_active && !version.is_placeholder)
-        .map(|version| (version.name, version.version_id))
-        .collect()
-}
 
 #[test]
 fn canonical_versions_are_the_rc0_upgrade_targets() {
@@ -95,73 +70,26 @@ fn rc0_baseline() -> Vec<Rc0Collection> {
         .baseline
 }
 
-/// Every store born on v1.0.0-rc0 (the whole fleet reports exactly these pins) upgrades onto
-/// the versions a store born on this build gets, for every collection this build manages.
 #[tokio::test]
-async fn rc0_born_store_upgrades_onto_every_fresh_version() {
-    let upgraded = fresh_node().await;
-    for collection in rc0_baseline() {
-        upgraded
-            .add_collection(&collection.sdl)
-            .await
-            .unwrap_or_else(|error| panic!("rc0 {}: {error}", collection.name));
-        let registered = upgraded.get_collection(&collection.name).unwrap().unwrap();
-        assert_eq!(
-            registered.version_id, collection.version,
-            "{} does not reproduce its rc0 pin",
-            collection.name
-        );
-        if let Some(plan) = canonical_schema_plan(&collection.name).unwrap() {
-            assert_eq!(
-                plan.root_sdl, collection.sdl,
-                "{} rc0 root SDL drifted",
-                collection.name
-            );
-            assert_eq!(
-                plan.root_version, collection.version,
-                "{} rc0 root",
-                collection.name
-            );
-        }
-    }
-    let before = upgraded.get_all_collection_versions().await.unwrap();
-    assert_eq!(
-        non_canonical_store_lineages(&before).unwrap(),
-        vec![],
-        "an rc0 store's steps must land it on the canonical versions"
-    );
-    let report = ensure_migrations(upgraded.as_ref()).await.unwrap();
-    assert!(report.steps_applied > 0);
-    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
-    let rerun = ensure_migrations(upgraded.as_ref()).await.unwrap();
-    assert_eq!(rerun.steps_applied, 0);
-
-    let fresh = fresh_node().await;
-    let report = ensure_migrations(fresh.as_ref()).await.unwrap();
-    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
-
-    let upgraded_versions = active_versions(&upgraded).await;
-    let fresh_versions = active_versions(&fresh).await;
-    let splits = gents_migration::DEFAULT_BASELINE
+async fn legacy_node_identity_schema_is_not_converted() {
+    let node = fresh_node().await;
+    let old = rc0_baseline()
+        .into_iter()
+        .find(|collection| collection.name == schemas::NODE_NAME)
+        .unwrap();
+    node.add_collection(&old.sdl).await.unwrap();
+    assert!(ensure_migrations(&node).await.is_err());
+    let current = node.get_collection(schemas::NODE_NAME).unwrap().unwrap();
+    assert_eq!(current.version_id, old.version);
+    assert!(current
+        .fields
         .iter()
-        .filter(|entry| upgraded_versions.get(entry.name) != fresh_versions.get(entry.name))
-        .map(|entry| entry.name)
-        .collect::<Vec<_>>();
-    assert_eq!(
-        splits,
-        Vec::<&str>::new(),
-        "a store born on rc0 and one born on this build disagree; a collection with a \
-         versioned step on its rc0 pin needs a CANONICAL_ROOTS entry"
-    );
-    for (name, version) in CANONICAL {
-        assert_eq!(
-            fresh_versions.get(*name).map(String::as_str),
-            Some(*version),
-            "{name}"
-        );
-    }
-    upgraded.shutdown().await;
-    fresh.shutdown().await;
+        .any(|field| field.name == "default_agent_id"));
+    assert!(!current
+        .fields
+        .iter()
+        .any(|field| field.name == "default_agent_did"));
+    node.shutdown().await.expect("shut down test node");
 }
 
 /// A store born on v1.0.0-rc1 registered rc1's SDL directly. It must still start, and say
@@ -226,7 +154,7 @@ async fn rc1_born_store_starts_and_reports_its_lineage_split() {
         schemas::AGENT_SESSION_NAME,
         "bafyother"
     ));
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 /// An rc0 store that v1.0.0-rc1 upgraded took rc1's `AgentMessage.native_request_id` patch.
@@ -240,11 +168,9 @@ async fn rc0_store_upgraded_by_rc1_starts_and_reports_agent_message() {
         .find(|c| c.name == schemas::AGENT_MESSAGE_NAME)
         .unwrap();
     node.add_collection(&message.sdl).await.unwrap();
-    let patched = node
-        .patch_collection(schemas::AGENT_MESSAGE_NAME, MESSAGE_RC1_PATCH)
-        .await
-        .unwrap();
-    node.set_active_collection_version(&patched.version_id)
+    let patched =
+        common::patch_collection(&node, schemas::AGENT_MESSAGE_NAME, MESSAGE_RC1_PATCH).await;
+    node.set_active_collection_version_as(&common::node_context(&node), &patched.version_id)
         .await
         .unwrap();
     assert_eq!(patched.version_id, MESSAGE_RC1_PATCHED);
@@ -274,41 +200,23 @@ async fn rc0_store_upgraded_by_rc1_starts_and_reports_agent_message() {
     );
     let rerun = ensure_migrations(node.as_ref()).await.unwrap();
     assert_eq!(rerun.steps_applied, 0);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
-/// Phones and apps register client-authored collections from the SDL they were built with,
-/// so changing one splits every client built before the change off the fleet (#1123/#1125).
-/// An intended change needs a mobile plan, and then an update to this test.
 #[test]
-fn client_authored_collections_keep_their_rc0_schema() {
-    let rc0 = rc0_baseline();
+fn client_authored_collections_register_the_current_baseline_without_legacy_chains() {
     let canonical = canonical_versions().unwrap();
     for name in CLIENT_AUTHORED_COLLECTIONS {
-        let head = DEFAULT_BASELINE
+        let entry = DEFAULT_BASELINE
             .iter()
             .find(|entry| entry.name == *name)
-            .unwrap_or_else(|| panic!("{name} is not in the baseline"));
-        let then = rc0
-            .iter()
-            .find(|collection| collection.name == *name)
-            .unwrap_or_else(|| panic!("{name} is not in the v1.0.0-rc0 baseline"));
-        assert_eq!(
-            head.sdl, then.sdl,
-            "client-authored {name} changed its schema since v1.0.0-rc0"
-        );
-        assert_eq!(head.expected_version, Some(then.version.as_str()), "{name}");
-        // No versioned step may move it either: every store, phones included, holds the rc0
-        // version (a step would move nodes and the desktop but never a phone).
+            .unwrap();
         assert_eq!(
             canonical.get(*name).map(String::as_str),
-            Some(then.version.as_str()),
-            "client-authored {name} must stay on its v1.0.0-rc0 version"
+            entry.expected_version,
+            "{name}"
         );
-        assert!(
-            canonical_schema_plan(name).unwrap().is_none(),
-            "client-authored {name} must not chain from an rc0 root"
-        );
+        assert!(canonical_schema_plan(name).unwrap().is_none(), "{name}");
     }
 }
 
@@ -339,42 +247,29 @@ fn the_baseline_is_the_rc0_root_of_every_changed_collection() {
     }
 }
 
-/// A `Node` registered from the current SDL directly (a #3353 build before the canonical
-/// lineage) still starts, is never patched, and is named off the lineage.
 #[tokio::test]
-async fn node_registered_from_the_current_sdl_starts_and_is_reported() {
-    const NODE_UNPATCHED_FRESH: &str =
-        "bafyreicv7z6tsacsg3xe6iia7a32wxqxth7wzm3nuydgo67lcpkzf2axey";
+async fn current_node_sdl_is_the_canonical_identity_baseline() {
     let node = fresh_node().await;
     node.add_collection(schemas::NODE).await.unwrap();
+    let version = node
+        .get_collection(schemas::NODE_NAME)
+        .unwrap()
+        .unwrap()
+        .version_id;
+    assert_eq!(version, canonical_versions().unwrap()[schemas::NODE_NAME]);
+    assert!(canonical_schema_plan(schemas::NODE_NAME).unwrap().is_none());
+    assert!(!is_known_off_lineage(schemas::NODE_NAME, &version));
+    let report = ensure_migrations(&node).await.unwrap();
+    assert!(report
+        .warnings
+        .iter()
+        .all(|warning| !warning.starts_with(schemas::NODE_NAME)));
     assert_eq!(
         node.get_collection(schemas::NODE_NAME)
             .unwrap()
             .unwrap()
             .version_id,
-        NODE_UNPATCHED_FRESH
+        version
     );
-    let report = ensure_migrations(node.as_ref()).await.unwrap();
-    assert!(
-        report
-            .warnings
-            .iter()
-            .any(|w| w.starts_with(schemas::NODE_NAME)),
-        "{:?}",
-        report.warnings
-    );
-    assert_eq!(
-        node.get_collection(schemas::NODE_NAME)
-            .unwrap()
-            .unwrap()
-            .version_id,
-        NODE_UNPATCHED_FRESH
-    );
-    assert!(is_known_off_lineage(
-        schemas::NODE_NAME,
-        NODE_UNPATCHED_FRESH
-    ));
-    let rerun = ensure_migrations(node.as_ref()).await.unwrap();
-    assert_eq!(rerun.steps_applied, 0);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

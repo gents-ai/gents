@@ -96,7 +96,7 @@ pub struct ChatSendRequest {
     pub node_did: String,
     #[ts(optional = nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     #[ts(optional = nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -143,6 +143,7 @@ pub struct MailboxItemRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MailboxItemObservationRequest {
     pub client_did: String,
+    pub node_did: String,
     pub item_id: String,
 }
 
@@ -193,7 +194,7 @@ pub struct NodeConfigSaveRequest {
 #[serde(deny_unknown_fields)]
 pub struct DefaultAgentSetRequest {
     pub node_did: String,
-    pub agent_id: String,
+    pub agent_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -262,7 +263,7 @@ pub struct ToolServiceDeleteRequest {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDeleteRequest {
-    pub agent_id: String,
+    pub agent_did: String,
     pub node_did: String,
 }
 
@@ -471,7 +472,9 @@ pub struct ConfigComponentsPatchRequest {
 pub enum ConfigComponentPatch {
     Agent {
         id: String,
-        #[ts(type = "Partial<Omit<import(\"./Agent.js\").Agent, \"node_did\" | \"agent_id\">>")]
+        #[ts(
+            type = "Partial<Omit<import(\"./Agent.js\").Agent, \"node_did\" | \"agent_did\" | \"creation_nonce\">>"
+        )]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     AgentContext {
@@ -656,7 +659,7 @@ pub struct PendingQueueEditResult {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentModelSelectionRequest {
     pub node_did: String,
-    pub agent_id: String,
+    pub agent_did: String,
     pub backend_id: String,
     pub model_name: String,
     pub reasoning_effort: Option<gents::inference::resolved::ReasoningEffort>,

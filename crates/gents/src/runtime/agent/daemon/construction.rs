@@ -144,7 +144,10 @@ where
         request: &crate::request::watcher::AgentRequest,
     ) -> Result<Option<serde_json::Value>> {
         let context = crate::claude_request_context::for_request(
-            &crate::store::config_client::ConfigAccess::local(self.node.clone()),
+            &crate::store::config_client::ConfigAccess::local_as(
+                self.node.clone(),
+                identity::Did::new(request.agent_did.clone())?,
+            ),
             &self.agent_config,
             request,
             gents_claude::origin::Kind::Compaction,

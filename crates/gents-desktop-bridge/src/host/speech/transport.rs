@@ -25,7 +25,8 @@ pub(super) enum Response {
 }
 
 struct Work {
-    request: Request,
+    ready: oneshot::Sender<()>,
+    request: oneshot::Receiver<Request>,
     cancelled: CancellationToken,
     reply: oneshot::Sender<Result<Response>>,
 }
@@ -44,12 +45,25 @@ impl SpeechTransport {
         Ok(Self { sender })
     }
 
+    #[cfg(test)]
     pub async fn request(&self, request: Request) -> Result<Response> {
-        let (reply, result) = oneshot::channel();
+        self.request_prepared(async { Ok(request) }).await
+    }
+
+    /// Resolve authorization and routing on the caller only after the worker
+    /// has admitted this request; queued requests must not retain stale routes.
+    pub async fn request_prepared<F>(&self, prepare: F) -> Result<Response>
+    where
+        F: std::future::Future<Output = Result<Request>>,
+    {
+        let (reply, mut result) = oneshot::channel();
+        let (ready, admitted) = oneshot::channel();
+        let (send_request, request) = oneshot::channel();
         let cancelled = CancellationToken::new();
         let _cancel_on_drop = cancelled.clone().drop_guard();
         self.sender
             .try_send(Work {
+                ready,
                 request,
                 cancelled,
                 reply,
@@ -59,6 +73,15 @@ impl SpeechTransport {
                     "The speech worker is busy or unavailable. Stop voice and try again."
                 )
             })?;
+        tokio::select! {
+            biased;
+            response = &mut result => return response.context("The speech worker disconnected.")?,
+            ready = admitted => ready.context("The speech worker disconnected before admission.")?,
+        }
+        let request = prepare.await?;
+        send_request
+            .send(request)
+            .map_err(|_| anyhow::anyhow!("The speech worker disconnected before dispatch."))?;
         result.await.context("The speech worker disconnected.")?
     }
 }
@@ -93,10 +116,16 @@ fn run_worker(mut receiver: mpsc::Receiver<Work>) {
                     }
                     let pool = pool.clone();
                     calls.spawn(async move {
+                        if work.ready.send(()).is_err() { return; }
+                        let request = tokio::select! {
+                            biased;
+                            _ = work.cancelled.cancelled() => return,
+                            request = work.request => match request { Ok(request) => request, Err(_) => return },
+                        };
                         tokio::select! {
                             biased;
                             _ = work.cancelled.cancelled() => {},
-                            result = tokio::time::timeout(std::time::Duration::from_secs(90), execute(&pool, work.request)) => {
+                            result = tokio::time::timeout(std::time::Duration::from_secs(90), execute(&pool, request)) => {
                                 let result = result.unwrap_or_else(|_| Err(anyhow::anyhow!("The speech service timed out. Check its connection before trying again.")));
                                 let _ = work.reply.send(result);
                             }
@@ -192,6 +221,72 @@ mod tests {
         )
         .await
         .expect("dropping a client call must retire its transport work");
+    }
+
+    #[tokio::test]
+    async fn queued_work_observes_service_only_after_worker_admission() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (sender, mut receiver) = mpsc::channel(4);
+        let transport = SpeechTransport { sender };
+        let observed = Arc::new(AtomicBool::new(false));
+        let prepared = observed.clone();
+        let caller = tokio::spawn(async move {
+            transport
+                .request_prepared(async move {
+                    prepared.store(true, Ordering::SeqCst);
+                    Ok(Request {
+                        service: "speech".into(),
+                        endpoint: "http://localhost/mcp".into(),
+                        actor: "did:key:client".into(),
+                        send_node_did: false,
+                        operation: Operation::List,
+                    })
+                })
+                .await
+        });
+        let work = receiver.recv().await.unwrap();
+        assert!(!observed.load(Ordering::SeqCst));
+        work.ready.send(()).unwrap();
+        let request = work.request.await.unwrap();
+        assert_eq!(request.endpoint, "http://localhost/mcp");
+        assert!(observed.load(Ordering::SeqCst));
+        work.reply
+            .send(Ok(Response::Value(Value::Null)))
+            .ok()
+            .unwrap();
+        assert!(matches!(
+            caller.await.unwrap(),
+            Ok(Response::Value(Value::Null))
+        ));
+    }
+
+    #[tokio::test]
+    async fn revoked_queued_service_never_reaches_worker_dispatch() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (sender, mut receiver) = mpsc::channel(4);
+        let transport = SpeechTransport { sender };
+        let visible = Arc::new(AtomicBool::new(true));
+        let observed = visible.clone();
+        let caller = tokio::spawn(async move {
+            transport
+                .request_prepared(async move {
+                    anyhow::ensure!(observed.load(Ordering::SeqCst), "service revoked");
+                    Ok(Request {
+                        service: "speech".into(),
+                        endpoint: "http://localhost/mcp".into(),
+                        actor: "did:key:client".into(),
+                        send_node_did: false,
+                        operation: Operation::List,
+                    })
+                })
+                .await
+        });
+        let work = receiver.recv().await.unwrap();
+        visible.store(false, Ordering::SeqCst);
+        work.ready.send(()).unwrap();
+        assert!(caller.await.unwrap().is_err());
+        assert!(work.request.await.is_err());
+        assert!(work.cancelled.is_cancelled());
     }
 
     async fn service(call_result: Value) -> MockServer {

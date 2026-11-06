@@ -369,7 +369,7 @@ pub(crate) fn readme(
         definition.definition_id,
         definition.comparability_version,
         chrono::Utc::now().format("%Y-%m-%d"),
-        subject.agent_id,
+        subject.agent_slot,
         subject.pack_name,
         subject.pack_digest,
         definition
@@ -546,7 +546,9 @@ async fn round_trip(dir: &Path, expected: &EvalDefinition) -> Result<EvalDefinit
     let (manifest, assets) = read_pack(dir)?;
     let home = EmbeddedHome::create_temp("eval-init-roundtrip").await?;
     let result = install_and_read_back(&home, &manifest, &assets, expected).await;
-    home.node.shutdown().await;
+    if let Err(error) = home.node.shutdown().await {
+        tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down trial node");
+    }
     result
 }
 
@@ -583,8 +585,8 @@ async fn install_and_read_back(
         "the loaded definition differs from the validated draft"
     );
 
-    gents::ensure_node(&home.node, &owner).await?;
-    let access = ConfigAccess::local(home.node.clone());
+    let caller = crate::load_client_identity().await?;
+    let access = ConfigAccess::local_as(home.node.clone(), caller.did().parse()?);
     let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
     access
         .transact_write("eval.init.round_trip", |txn| {

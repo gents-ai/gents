@@ -30,8 +30,189 @@ struct NodeReadinessRow {
     updated_at: String,
 }
 
-async fn test_node() -> Arc<defra_node::EmbeddedNode> {
-    Arc::new(crate::test_support::node_builder().build().await.unwrap())
+async fn test_node() -> Arc<defra_node::Node> {
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let did = node.node_identity_did().unwrap();
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(did).unwrap(),
+    );
+    access
+        .write(
+            "test.status.node",
+            &format!(
+                r#"mutation {{ create_Node(input: {{node_did: "{}"}}) {{_docID}} }}"#,
+                escape_graphql_string(did),
+            ),
+        )
+        .await
+        .unwrap();
+    node
+}
+
+#[tokio::test]
+async fn runtime_status_publication_preserves_native_ownership_and_revocation() -> anyhow::Result<()>
+{
+    use crate::lean_vocab_test::{lean_identity_household_cases, LeanIdentityAction};
+    use crate::store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
+    use crate::NodeIdentity;
+
+    let model = lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "operations-parent-publication")
+        .context("missing operations model")?;
+    let expected: Vec<_> = model
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            LeanIdentityAction::Check { expected, .. } => Some(*expected),
+            _ => None,
+        })
+        .collect();
+    let dir = tempfile::tempdir()?;
+    let user = crate::KeyIdentity::load_or_create(dir.path().join("user"), None)?;
+    let runtime = crate::KeyIdentity::load_or_create(dir.path().join("runtime"), None)?;
+    let agent = crate::KeyIdentity::load_or_create(dir.path().join("agent"), None)?;
+    let sibling = crate::KeyIdentity::load_or_create(dir.path().join("sibling"), None)?;
+    let outsider = crate::KeyIdentity::load_or_create(dir.path().join("outsider"), None)?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(runtime.did())
+            .with_node_acp_enabled()
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .with_storage_backend(defra_node::StorageBackend::Regolith)
+            .data_path(dir.path().join("node"))
+            .build()
+            .await?,
+    );
+    node.add_dac_policy_with_counter_as(
+        &defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned())),
+        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+        0,
+    )
+    .await?;
+    node.add_collection(gents_protocol::schemas::NODE).await?;
+    node.add_collection(gents_protocol::schemas::NODE_RUNTIME)
+        .await?;
+    let access = |actor: &crate::KeyIdentity| -> anyhow::Result<ConfigAccess> {
+        Ok(ConfigAccess::Graphql(
+            GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())
+                .with_client_signing_capability(actor.client_signing_capability()?)?,
+        ))
+    };
+    let user_access = access(&user)?;
+    let runtime_access = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
+    for actor in [&user, &agent, &sibling, &outsider] {
+        for permission in [
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::DacRelationAdd,
+        ] {
+            runtime_access
+                .grant_node_permission(&identity::Did::new(actor.did())?, permission)
+                .await?;
+        }
+    }
+    let parent = user_access
+        .write(
+            "test.status.node",
+            &format!(
+                r#"mutation {{ create_Node(input: {{node_did: "{}"}}) {{_docID}} }}"#,
+                escape_graphql_string(runtime.did()),
+            ),
+        )
+        .await?;
+    let parent = gents_protocol::graphql::extract_mutation_doc_id(&parent, "Node")?;
+    user_access
+        .add_actor_relationship(
+            "Node",
+            &parent,
+            "runtime_reader",
+            &identity::Did::new(runtime.did())?,
+        )
+        .await?;
+    let mut row = RuntimeStatusRow::new(runtime.did().to_owned());
+    upsert_runtime_status(&node, &row).await?;
+    let visible = |response: &serde_json::Value| {
+        !gents_protocol::graphql::graphql_rows_from_response(response, "NodeRuntime").is_empty()
+    };
+    let query = "{ NodeRuntime { _docID reconcile_phase } }";
+    let user_view = user_access.execute(query).await?;
+    let doc = user_view["data"]["NodeRuntime"][0]["_docID"]
+        .as_str()
+        .context("status not visible to Node owner")?;
+    let update = format!(
+        r#"mutation {{ update_NodeRuntime(docID: "{}", input: {{reconcile_phase: "applying"}}) {{_docID}} }}"#,
+        escape_graphql_string(doc)
+    );
+    let user_updated = user_access.write("test.status.denied", &update).await;
+    let runtime_updated = runtime_access.write("test.status.update", &update).await;
+    let affected = |result: anyhow::Result<serde_json::Value>| {
+        result.is_ok_and(|response| {
+            gents_protocol::graphql::extract_mutation_doc_id(&response, "NodeRuntime").is_ok()
+        })
+    };
+    let actual = [
+        visible(&user_view),
+        affected(user_updated.map_err(Into::into)),
+        affected(runtime_updated.map_err(Into::into)),
+        visible(&access(&agent)?.execute(query).await?),
+        visible(&access(&sibling)?.execute(query).await?),
+        affected(
+            access(&outsider)?
+                .write("test.status.outsider", &update)
+                .await
+                .map_err(Into::into),
+        ),
+    ];
+    assert_eq!(
+        actual,
+        [
+            expected[2],
+            expected[4],
+            expected[5],
+            expected[6],
+            expected[7],
+            expected[8]
+        ]
+    );
+    runtime_access
+        .delete_resource_relationship("NodeRuntime", doc, "parent", "nodes", &parent)
+        .await?;
+    row.reconcile_phase = "idle".to_owned();
+    let republished = upsert_runtime_status(&node, &row).await;
+    assert_eq!(republished.is_ok(), expected[10]);
+    republished?;
+    assert_eq!(visible(&user_access.execute(query).await?), expected[9]);
+    drop(user_access);
+    drop(runtime_access);
+    node.shutdown().await?;
+    drop(node);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let restarted = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(runtime.did())
+            .with_node_acp_enabled()
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .with_storage_backend(defra_node::StorageBackend::Regolith)
+            .data_path(dir.path().join("node"))
+            .build()
+            .await?,
+    );
+    let user_access = ConfigAccess::Graphql(
+        GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), user.did())
+            .with_client_signing_capability(user.client_signing_capability()?)?,
+    );
+    assert!(!visible(&user_access.execute(query).await?));
+    row.reconcile_phase = "applying".into();
+    upsert_runtime_status(&restarted, &row).await?;
+    assert!(!visible(&user_access.execute(query).await?));
+    restarted.shutdown().await?;
+    Ok(())
 }
 
 #[test]
@@ -41,11 +222,11 @@ fn node_runtime_writer_source_cannot_serialize_readiness_authority() {
         "row.process_state",
         "row.active_generation",
         "row.router_generation",
-        "row.default_agent_id",
+        "row.default_agent_did",
         "process_state: \"{process_state}\"",
         "active_generation: {active_generation}",
         "router_generation: {router_generation}",
-        "default_agent_id: \"{default_agent_id}\"",
+        "default_agent_did: \"{default_agent_did}\"",
     ] {
         assert!(
             !source.contains(forbidden),
@@ -62,7 +243,7 @@ fn status_test_request(request_id: &str) -> crate::request::watcher::AgentReques
         request_id: request_id.to_string(),
         node_did: "did:test:status-test".to_string(),
         requester_did: None,
-        agent_id: "general".to_string(),
+        agent_did: "general".to_string(),
         session_id: format!("{request_id}-session"),
         content: "status test".to_string(),
         max_total_tokens: None,
@@ -100,7 +281,7 @@ fn unavailable_general() -> RapidHashMap<String, crate::runtime::snapshot::Unava
     )])
 }
 
-async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, node_did: &str) -> NodeRuntimeRow {
+async fn fetch_runtime_row(node: &Arc<defra_node::Node>, node_did: &str) -> NodeRuntimeRow {
     let escaped_node_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
@@ -114,15 +295,13 @@ async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, node_did: &str) -> N
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "NodeRuntime query failed: {:?}",
-        response.errors
-    );
+    let actor = identity::Did::new(node.node_identity_did().unwrap()).unwrap();
+    let response = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor)
+        .execute(&query)
+        .await
+        .unwrap();
     let value = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("NodeRuntime"))
         .and_then(|rows| rows.as_array())
         .and_then(|rows| rows.first())
@@ -132,31 +311,24 @@ async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, node_did: &str) -> N
 }
 
 async fn fetch_node_readiness_row(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
 ) -> NodeReadinessRow {
     let escaped_node_did = escape_graphql_string(node_did);
-    let response = node
+    let actor = identity::Did::new(node.node_identity_did().unwrap()).unwrap();
+    let response = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor)
         .execute(&format!(
             r#"{{
                 NodeReadiness(
                     filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
                     limit: 1
-                ) {{
-                    snapshot_json
-                    updated_at
-                }}
+                ) {{ snapshot_json updated_at }}
             }}"#
         ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "NodeReadiness query failed: {:?}",
-        response.errors
-    );
+        .await
+        .unwrap();
     let value = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("NodeReadiness"))
         .and_then(|rows| rows.as_array())
         .and_then(|rows| rows.first())
@@ -169,7 +341,7 @@ async fn fetch_node_readiness_row(
 async fn restart_publishes_fail_closed_readiness_before_other_runtime_work() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let node_did = "did:test:readiness-restart";
+    let node_did = node.node_identity_did().unwrap();
 
     let (first_owner, first) = RuntimeStatusHandle::start(node.clone(), node_did);
     first.initialize_startup("general").await.unwrap();
@@ -179,7 +351,7 @@ async fn restart_publishes_fail_closed_readiness_before_other_runtime_work() {
         .unwrap();
     assert_eq!(
         serde_json::from_str::<gents_protocol::node_readiness::NodeReadinessSnapshot>(
-            &fetch_node_readiness_row(node.as_ref(), node_did)
+            &fetch_node_readiness_row(&node, node_did)
                 .await
                 .snapshot_json
         )
@@ -192,7 +364,7 @@ async fn restart_publishes_fail_closed_readiness_before_other_runtime_work() {
     let (second_owner, second) = RuntimeStatusHandle::start(node.clone(), node_did);
     second.initialize_startup("general").await.unwrap();
     let restarted = serde_json::from_str::<gents_protocol::node_readiness::NodeReadinessSnapshot>(
-        &fetch_node_readiness_row(node.as_ref(), node_did)
+        &fetch_node_readiness_row(&node, node_did)
             .await
             .snapshot_json,
     )
@@ -248,7 +420,7 @@ fn process_state_from_contract(state: &str) -> ProcessLifecycleState {
 async fn drive_generated_process_legal_case(case: &LeanLifecycleTransitionCase) {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let node_did = format!("did:test:process-contract:{}", case.name);
+    let node_did = node.node_identity_did().unwrap().to_owned();
     let (owner, status) = RuntimeStatusHandle::start(node.clone(), node_did.clone());
     status.readiness().initialize("general").await.unwrap();
     let action = case
@@ -289,7 +461,7 @@ async fn drive_generated_process_legal_case(case: &LeanLifecycleTransitionCase) 
     }
 
     let readiness = serde_json::from_str::<gents_protocol::node_readiness::NodeReadinessSnapshot>(
-        &fetch_node_readiness_row(node.as_ref(), &node_did)
+        &fetch_node_readiness_row(&node, &node_did)
             .await
             .snapshot_json,
     )
@@ -392,13 +564,13 @@ async fn runtime_status_persists_agent_executor_capacity_and_queue_depth() {
     tx.try_send(status_test_request("queued-1")).unwrap();
     tx.try_send(status_test_request("queued-2")).unwrap();
 
-    let status = RuntimeStatusHandle::new(node.clone(), "did:test:executor-status");
+    let status = RuntimeStatusHandle::new(node.clone(), node.node_identity_did().unwrap());
     status
         .publish_startup_snapshot(&ActiveRuntimeSnapshot {
             generation: 1,
             node: None,
             local_did: String::new(),
-            default_agent_id: "general".to_string(),
+            default_agent_did: "general".to_string(),
             agents: RapidHashMap::new(),
             tool_surfaces: RapidHashMap::new(),
             backend_admission_configs: RapidHashMap::new(),
@@ -415,7 +587,7 @@ async fn runtime_status_persists_agent_executor_capacity_and_queue_depth() {
         .await
         .unwrap();
 
-    let row = fetch_runtime_row(node.as_ref(), "did:test:executor-status").await;
+    let row = fetch_runtime_row(&node, node.node_identity_did().unwrap()).await;
     assert_eq!(row.agent_executor_capacity, 3);
     assert_eq!(row.agent_executor_queue_depth, 2);
 
@@ -443,7 +615,7 @@ async fn executor_metrics_do_not_republish_unchanged_node_readiness() {
         generation: 1,
         node: None,
         local_did: String::new(),
-        default_agent_id: "general".to_string(),
+        default_agent_did: "general".to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -457,15 +629,15 @@ async fn executor_metrics_do_not_republish_unchanged_node_readiness() {
         agent_executor_capacities: RapidHashMap::from_iter([("general".to_string(), 1)]),
         agent_executor_queue_capacities: RapidHashMap::from_iter([("general".to_string(), 2)]),
     };
-    let node_did = "did:test:readiness-metric-owner";
+    let node_did = node.node_identity_did().unwrap();
     let status = RuntimeStatusHandle::new(node.clone(), node_did);
     status.publish_startup_snapshot(&snapshot).await.unwrap();
-    let before = fetch_node_readiness_row(node.as_ref(), node_did).await;
+    let before = fetch_node_readiness_row(&node, node_did).await;
 
     tx.try_send(status_test_request("metric-only-change"))
         .unwrap();
     status.publish_executor_snapshot(&snapshot).await;
-    let after = fetch_node_readiness_row(node.as_ref(), node_did).await;
+    let after = fetch_node_readiness_row(&node, node_did).await;
 
     assert_eq!(after.snapshot_json, before.snapshot_json);
     assert_eq!(
@@ -479,12 +651,12 @@ async fn runtime_status_serializes_persisted_generation_updates() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
-    let status = RuntimeStatusHandle::new(node.clone(), "did:test:status-serialize");
+    let status = RuntimeStatusHandle::new(node.clone(), node.node_identity_did().unwrap());
     let startup = ActiveRuntimeSnapshot {
         generation: 1,
         node: None,
         local_did: String::new(),
-        default_agent_id: "general".to_string(),
+        default_agent_did: "general".to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -502,7 +674,7 @@ async fn runtime_status_serializes_persisted_generation_updates() {
         generation: 2,
         node: None,
         local_did: String::new(),
-        default_agent_id: "general".to_string(),
+        default_agent_did: "general".to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -532,13 +704,13 @@ async fn runtime_status_serializes_persisted_generation_updates() {
     publish_snapshot.await.unwrap();
     publish_router.await.unwrap();
 
-    let row = fetch_runtime_row(node.as_ref(), "did:test:status-serialize").await;
+    let row = fetch_runtime_row(&node, node.node_identity_did().unwrap()).await;
     assert_eq!(row.last_reconcile_result, "applied");
     assert!(
         !row.last_reconcile_completed_at.is_empty(),
         "applied publish must stamp last_reconcile_completed_at"
     );
-    let readiness = fetch_node_readiness_row(node.as_ref(), "did:test:status-serialize").await;
+    let readiness = fetch_node_readiness_row(&node, node.node_identity_did().unwrap()).await;
     let readiness: gents_protocol::node_readiness::NodeReadinessSnapshot =
         serde_json::from_str(&readiness.snapshot_json).expect("decode serialized readiness");
     assert_eq!(readiness.active_generation, 2);
@@ -555,12 +727,12 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
-    let status = RuntimeStatusHandle::new(node.clone(), "did:test:runtime-contract");
+    let status = RuntimeStatusHandle::new(node.clone(), node.node_identity_did().unwrap());
     let startup = ActiveRuntimeSnapshot {
         generation: publish.pre_active_generation as u64,
         node: None,
         local_did: String::new(),
-        default_agent_id: "general".to_string(),
+        default_agent_did: "general".to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -578,7 +750,7 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
         generation: publish.post_active_generation as u64,
         node: None,
         local_did: String::new(),
-        default_agent_id: "general".to_string(),
+        default_agent_did: "general".to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -600,11 +772,11 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
         .unwrap();
     status.set_reconcile_phase(ReconcilePhase::Applying).await;
     status.publish_applied(&applied).await;
-    let row = fetch_runtime_row(node.as_ref(), "did:test:runtime-contract").await;
+    let row = fetch_runtime_row(&node, node.node_identity_did().unwrap()).await;
     assert_eq!(row.reconcile_phase, publish.post_phase.as_str());
     assert_eq!(row.last_reconcile_result, "applied");
     let readiness = serde_json::from_str::<gents_protocol::node_readiness::NodeReadinessSnapshot>(
-        &fetch_node_readiness_row(node.as_ref(), "did:test:runtime-contract")
+        &fetch_node_readiness_row(&node, node.node_identity_did().unwrap())
             .await
             .snapshot_json,
     )
@@ -622,10 +794,10 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
         .publish_router_generation(router.post_router_generation as u64)
         .await
         .unwrap();
-    let row = fetch_runtime_row(node.as_ref(), "did:test:runtime-contract").await;
+    let row = fetch_runtime_row(&node, node.node_identity_did().unwrap()).await;
     assert_eq!(row.reconcile_phase, router.post_phase.as_str());
     let readiness = serde_json::from_str::<gents_protocol::node_readiness::NodeReadinessSnapshot>(
-        &fetch_node_readiness_row(node.as_ref(), "did:test:runtime-contract")
+        &fetch_node_readiness_row(&node, node.node_identity_did().unwrap())
             .await
             .snapshot_json,
     )
@@ -638,4 +810,36 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
         readiness.router_generation,
         router.post_router_generation as u64
     );
+}
+
+#[tokio::test]
+async fn goal_settled_uses_live_runtime_status_cases() {
+    let node = test_node().await;
+    let node_did = node.node_identity_did().unwrap().to_owned();
+    let status = RuntimeStatusHandle::new(node, node_did);
+    for case in &crate::lean_vocab_test::lean_contract_snapshot().identity_readiness_settled_cases {
+        {
+            let mut row = status.state.lock().await;
+            row.reconcile_phase = if case["idle"].as_bool().unwrap() {
+                "idle"
+            } else {
+                "applying"
+            }
+            .to_owned();
+            row.last_reconcile_result = if !case["result_known"].as_bool().unwrap() {
+                ""
+            } else if case["result_error"].as_bool().unwrap() {
+                "error"
+            } else {
+                "applied"
+            }
+            .to_owned();
+        }
+        let actual = if case["live_present"].as_bool().unwrap() {
+            status.goal_reconcile_settled().await
+        } else {
+            false
+        };
+        assert_eq!(actual, case["expected"].as_bool().unwrap(), "{case}");
+    }
 }

@@ -9,7 +9,7 @@ use crate::documents::EvalFixtureDocument;
 use crate::documents::EvalFixtureFile;
 use crate::documents::{EvalCase, EvalFixtures, EvalSplit};
 use crate::eval::checks::{Check, CheckDescription, CheckVerdict};
-use crate::eval::runner::freeze::tests::{Launching, OWNER};
+use crate::eval::runner::freeze::tests::Launching;
 use crate::eval::{
     invalidate_run, load_run, load_trials, load_verdicts, OutcomeKind, TrialCompletion,
     TrialIdentity, TrialRecord, VerdictDraft, VerdictRecord,
@@ -24,10 +24,10 @@ mod recording;
 mod retry;
 mod spec;
 
-fn definition(check: &str) -> Value {
+fn definition(owner: &str, check: &str) -> Value {
     json!({
         "definition_id": "loop-def",
-        "node_did": OWNER,
+        "node_did": owner,
         "comparability_version": 1,
         "subject": {"kind": "agent", "inference_slots": ["primary"]},
         "cases": [
@@ -58,7 +58,10 @@ fn case(case_id: &str, split: &str, check: &str) -> Value {
 async fn launching(check: &str) -> (Launching, PathBuf) {
     let launching = Launching::new().await;
     launching
-        .install(vec![(Collection::EvalDefinition, definition(check))])
+        .install(vec![(
+            Collection::EvalDefinition,
+            definition(launching.owner(), check),
+        )])
         .await;
     let pack = launching.pack("pack", "Off");
     (launching, pack)
@@ -67,7 +70,7 @@ async fn launching(check: &str) -> (Launching, PathBuf) {
 fn request(launching: &Launching, pack: &Path, run_id: &str) -> RunRequest {
     RunRequest {
         run_id: run_id.into(),
-        owner: OWNER.into(),
+        owner: launching.owner().into(),
         evaluator_did: launching.evaluator_did(),
         definition_id: "loop-def".into(),
         split: EvalSplit::Validation,
@@ -98,7 +101,7 @@ fn cell(cell_id: &str, pack: &Path) -> CellRequest {
         cell_id: cell_id.into(),
         label: cell_id.into(),
         source: CellSource::Directory(pack.to_path_buf()),
-        agent_id: "monitor".into(),
+        agent_slot: "monitor".into(),
         inference_profile_id: "local".into(),
     }
 }
@@ -250,7 +253,7 @@ async fn a_marker_written_during_the_backoff_ends_the_wait() {
     assert!(outcome.cancelled);
     assert_eq!((outcome.completed, outcome.abandoned), (1, 0));
     assert_eq!(
-        load_trials(&launching.access, OWNER, "run-backoff")
+        load_trials(&launching.access, launching.owner(), "run-backoff")
             .await
             .unwrap()
             .len(),

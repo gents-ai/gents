@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tokio_util::sync::CancellationToken;
 
 use crate::inference::backends::registry::{InferenceBackend, UNKNOWN_PROBE_STATUS};
@@ -77,6 +77,7 @@ pub(super) fn probe_timeout(backend: &InferenceBackend) -> Duration {
 async fn record_discovered_catalog(
     node: &Arc<EmbeddedNode>,
     backend: &InferenceBackend,
+    doc: &str,
     node_did: Option<&str>,
     models: Vec<crate::documents::AdvertisedModel>,
 ) {
@@ -85,8 +86,10 @@ async fn record_discovered_catalog(
         observed_at: Utc::now().to_rfc3339(),
         models,
     };
-    if let Err(error) =
-        crate::inference::backends::registry::record_model_catalog(node, backend, catalog).await
+    if let Err(error) = crate::inference::backends::registry::record_model_catalog_for_document(
+        node, backend, doc, catalog,
+    )
+    .await
     {
         tracing::warn!(
             node_did = %backend.node_did,
@@ -150,6 +153,11 @@ pub(super) async fn probe_selected_backends(
         if selected.is_some_and(|due| !due.contains(&backend.backend_id)) {
             continue;
         }
+        let Ok(doc) =
+            crate::inference::backends::registry::capture_backend_document(node, backend).await
+        else {
+            continue;
+        };
         if backend.auth.uses_node_oauth() {
             let Some(context) = oauth.as_ref() else {
                 continue;
@@ -184,6 +192,7 @@ pub(super) async fn probe_selected_backends(
                             record_discovered_catalog(
                                 &context.node,
                                 backend,
+                                &doc,
                                 Some(context.node_did),
                                 models,
                             )
@@ -215,7 +224,41 @@ pub(super) async fn probe_selected_backends(
             continue;
         }
 
-        let (event, error_text) = match backend.auth.probe_key() {
+        let resolved_auth = crate::inference::auth::credential::resolve_runtime_backend_auth(
+            node,
+            &backend.node_did,
+            backend.provider_kind,
+            &backend.endpoint,
+            &backend.auth,
+        )
+        .await;
+        let private_client = if matches!(
+            &backend.auth,
+            crate::documents::BackendAuth::Credential { .. }
+        ) {
+            match reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+            {
+                Ok(client) => Some(client),
+                Err(error) => {
+                    record_probe_event(
+                        node,
+                        backend,
+                        ProbeEvent::ProbeFail,
+                        Some(error.to_string()),
+                        env,
+                        &mut outcome,
+                    )
+                    .await;
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
+        let client = private_client.as_ref().unwrap_or(client);
+        let (event, error_text) = match resolved_auth.and_then(|auth| auth.probe_key()) {
             Err(error) => (ProbeEvent::ProbeFail, Some(error.to_string())),
             Ok(api_key) => {
                 let cancellation = env.cancel.cloned().unwrap_or_default();
@@ -240,10 +283,22 @@ pub(super) async fn probe_selected_backends(
                 }
                 match probe_result {
                     Ok(Ok(models)) => {
-                        record_discovered_catalog(node, backend, None, models).await;
+                        record_discovered_catalog(node, backend, &doc, None, models).await;
                         (ProbeEvent::ProbeSuccess, None)
                     }
-                    Ok(Err(error)) => (ProbeEvent::ProbeFail, Some(error.to_string())),
+                    Ok(Err(error)) => (
+                        ProbeEvent::ProbeFail,
+                        Some(
+                            if matches!(
+                                &backend.auth,
+                                crate::documents::BackendAuth::Credential { .. }
+                            ) {
+                                "backend discovery failed".to_owned()
+                            } else {
+                                error.to_string()
+                            },
+                        ),
+                    ),
                     Err(_) => (ProbeEvent::ProbeFail, Some("probe timed out".to_string())),
                 }
             }
@@ -307,7 +362,7 @@ pub(super) async fn record_probe_event(
     }
 
     if event == ProbeEvent::ProbeSuccess {
-        match crate::inference::backends::registry::lookup_backend_observation(
+        match crate::inference::backends::registry::lookup_backend_observation_for_runtime(
             node,
             &backend.node_did,
             &backend.backend_id,

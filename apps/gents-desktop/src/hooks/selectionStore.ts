@@ -7,13 +7,13 @@ import { acceptsAsyncResult } from "./observationOrdering";
 export type Selection = {
   nodeDid: string | null;
   sessionId: string | null;
-  agentId: string | null;
+  agentDid: string | null;
 };
 
 export type MailboxRoute = {
   itemId: string;
   nodeDid: string;
-  agentId: string;
+  agentDid: string;
   sessionId: string | null;
 };
 
@@ -28,7 +28,7 @@ export type SelectionStore = WithSelectors<StoreApi<SelectionState>>;
 const EMPTY: SelectionState = {
   nodeDid: null,
   sessionId: null,
-  agentId: null,
+  agentDid: null,
   mailboxRoute: null,
   composingFor: null,
   intent: 0,
@@ -45,7 +45,7 @@ function commit(store: SelectionStore, next: Partial<SelectionState>) {
     const left =
       route !== null &&
       (route.nodeDid !== merged.nodeDid ||
-        route.agentId !== merged.agentId ||
+        route.agentDid !== merged.agentDid ||
         route.sessionId !== merged.sessionId);
     return left ? { ...merged, mailboxRoute: null, composingFor: null } : merged;
   });
@@ -60,7 +60,7 @@ export const selection = {
       commit(store, {
         nodeDid,
         sessionId: null,
-        agentId: null,
+        agentDid: null,
         mailboxRoute: null,
         composingFor: null,
         intent: advanced(store),
@@ -68,10 +68,10 @@ export const selection = {
     return changed;
   },
 
-  selectSession(store: SelectionStore, sessionId: string, agentId?: string | null) {
+  selectSession(store: SelectionStore, sessionId: string, agentDid?: string | null) {
     commit(store, {
       sessionId,
-      ...(agentId ? { agentId } : {}),
+      ...(agentDid ? { agentDid } : {}),
       mailboxRoute: null,
       composingFor: null,
       intent: advanced(store),
@@ -82,33 +82,33 @@ export const selection = {
     store: SelectionStore,
     nodeDid: string,
     sessionId: string,
-    agentId?: string | null,
+    agentDid?: string | null,
   ) {
     commit(store, {
       nodeDid,
       sessionId,
-      agentId: agentId ?? null,
+      agentDid: agentDid ?? null,
       mailboxRoute: null,
       composingFor: null,
       intent: advanced(store),
     });
   },
 
-  selectAgent(store: SelectionStore, agentId: string | null) {
-    if (agentId === store.getState().agentId) return;
+  selectAgent(store: SelectionStore, agentDid: string | null) {
+    if (agentDid === store.getState().agentDid) return;
     commit(store, {
-      agentId,
+      agentDid,
       mailboxRoute: null,
       composingFor: null,
       intent: advanced(store),
     });
   },
 
-  startNewSession(store: SelectionStore, nodeDid: string, agentId: string | null) {
+  startNewSession(store: SelectionStore, nodeDid: string, agentDid: string | null) {
     commit(store, {
       nodeDid,
       sessionId: null,
-      agentId,
+      agentDid,
       mailboxRoute: null,
       composingFor: nodeDid,
       intent: advanced(store),
@@ -118,7 +118,7 @@ export const selection = {
   openMailboxRoute(store: SelectionStore, route: MailboxRoute) {
     commit(store, {
       nodeDid: route.nodeDid,
-      agentId: route.agentId,
+      agentDid: route.agentDid,
       sessionId: route.sessionId,
       mailboxRoute: route,
       composingFor: route.nodeDid,
@@ -139,8 +139,8 @@ export const selection = {
     commit(store, { sessionId });
   },
 
-  settleAgent(store: SelectionStore, agentId: string | null) {
-    if (agentId !== store.getState().agentId) commit(store, { agentId });
+  settleAgent(store: SelectionStore, agentDid: string | null) {
+    if (agentDid !== store.getState().agentDid) commit(store, { agentDid });
   },
 
   advanceIntent(store: SelectionStore) {

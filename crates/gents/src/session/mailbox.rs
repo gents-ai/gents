@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -17,7 +17,9 @@ use crate::store::graphql::{
 
 mod dismiss;
 mod domain;
-pub use dismiss::dismiss_mailbox_item;
+pub use dismiss::{dismiss_mailbox_item, dismiss_mailbox_item_on};
+#[cfg(test)]
+mod native_policy_conformance;
 mod notification;
 mod runtime_notice;
 pub(crate) use runtime_notice::publish as publish_runtime_notice;
@@ -56,7 +58,7 @@ pub const MAILBOX_FIELDS: &str = r#"
     request_id
     cause_doc_id
     target_node_did
-    target_agent_id
+    target_agent_did
     expected_collection
     parent_item_id
     deadline_at
@@ -202,7 +204,7 @@ pub struct MailboxItem {
     #[serde(default)]
     pub cause_doc_id: Option<String>,
     pub target_node_did: String,
-    pub target_agent_id: String,
+    pub target_agent_did: String,
     #[serde(default)]
     pub expected_collection: Option<String>,
     #[serde(default)]
@@ -232,7 +234,7 @@ impl MailboxItem {
 pub struct MailboxStampContext {
     pub requester_did: String,
     pub node_did: String,
-    pub agent_id: String,
+    pub agent_did: String,
     pub session_id: Option<String>,
 }
 
@@ -241,7 +243,7 @@ impl MailboxStampContext {
         for (name, value) in [
             ("requester_did", self.requester_did.as_str()),
             ("node_did", self.node_did.as_str()),
-            ("agent_id", self.agent_id.as_str()),
+            ("agent_did", self.agent_did.as_str()),
         ] {
             if value.trim().is_empty() {
                 bail!("mailbox stamping requires non-empty {name}");
@@ -344,7 +346,7 @@ fn item_key_occurrence(item_key: &str) -> Option<u64> {
 }
 
 async fn load_prefix_items(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     requester_did: &str,
     source_kind: MailboxSourceKind,
     source_id: &str,
@@ -364,17 +366,38 @@ async fn load_prefix_items(
         escape_graphql_string(source_id),
         kind.as_str(),
     );
-    let response = graphql_with_transaction_retry(node, &query, "load mailbox item prefix").await?;
-    Ok(rows(&response, MAILBOX_COLLECTION)?)
+    let response = access.execute(&query).await?;
+    Ok(serde_json::from_value(
+        response["data"][MAILBOX_COLLECTION].clone(),
+    )?)
 }
 
 pub async fn load_mailbox_item(node: &EmbeddedNode, doc_id: &str) -> Result<Option<MailboxItem>> {
-    let query = format!(
+    let response =
+        graphql_with_transaction_retry(node, &mailbox_item_query(doc_id), "load mailbox item")
+            .await?;
+    single_mailbox_item(rows::<MailboxItem>(&response, MAILBOX_COLLECTION)?)
+}
+
+pub async fn load_mailbox_item_with_access(
+    access: &crate::store::config_client::ConfigAccess,
+    doc_id: &str,
+) -> Result<Option<MailboxItem>> {
+    let response = access.execute(&mailbox_item_query(doc_id)).await?;
+    let rows = response
+        .pointer("/data/MailboxItem")
+        .context("mailbox lookup omitted rows")?;
+    single_mailbox_item(serde_json::from_value(rows.clone())?)
+}
+
+fn mailbox_item_query(doc_id: &str) -> String {
+    format!(
         r#"{{ MailboxItem(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ {MAILBOX_FIELDS} }} }}"#,
         escape_graphql_string(doc_id)
-    );
-    let response = graphql_with_transaction_retry(node, &query, "load mailbox item").await?;
-    let mut found = rows::<MailboxItem>(&response, MAILBOX_COLLECTION)?;
+    )
+}
+
+fn single_mailbox_item(mut found: Vec<MailboxItem>) -> Result<Option<MailboxItem>> {
     if found.len() > 1 {
         bail!("MailboxItem _docID lookup returned more than one row");
     }
@@ -382,15 +405,16 @@ pub async fn load_mailbox_item(node: &EmbeddedNode, doc_id: &str) -> Result<Opti
 }
 
 async fn load_mailbox_item_by_key(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     item_key: &str,
 ) -> Result<Option<MailboxItem>> {
     let query = format!(
         r#"{{ MailboxItem(filter: {{ item_key: {{ _eq: "{}" }} }}, limit: 2) {{ {MAILBOX_FIELDS} }} }}"#,
         escape_graphql_string(item_key)
     );
-    let response = graphql_with_transaction_retry(node, &query, "load mailbox item by key").await?;
-    let mut found = rows::<MailboxItem>(&response, MAILBOX_COLLECTION)?;
+    let response = access.execute(&query).await?;
+    let mut found: Vec<MailboxItem> =
+        serde_json::from_value(response["data"][MAILBOX_COLLECTION].clone())?;
     if found.len() > 1 {
         bail!("MailboxItem item_key lookup returned more than one row");
     }
@@ -450,8 +474,27 @@ pub async fn stamp_create_with_close_collections(
     args: FileMailboxItemArgs,
     close_collections: &[MailboxCloseCollection],
 ) -> Result<MailboxItem> {
+    let access =
+        crate::ConfigAccess::local_as(node.clone(), identity::Did::new(&context.agent_did)?);
+    stamp_create_with_access(node, &access, context, args, close_collections).await
+}
+
+pub async fn stamp_create_with_access(
+    node: &Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
+    context: &MailboxStampContext,
+    args: FileMailboxItemArgs,
+    close_collections: &[MailboxCloseCollection],
+) -> Result<MailboxItem> {
+    anyhow::ensure!(
+        access
+            .local_node()
+            .is_some_and(|owner| Arc::ptr_eq(owner, node)),
+        "mailbox access belongs to another node"
+    );
     Ok(stamp_notification(
         node,
+        access,
         context,
         args,
         &NotificationIdentity::Event,
@@ -463,18 +506,44 @@ pub async fn stamp_create_with_close_collections(
 
 async fn stamp_notification(
     node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
+    context: &MailboxStampContext,
+    args: FileMailboxItemArgs,
+    identity: &NotificationIdentity,
+    close_collections: &[MailboxCloseCollection],
+) -> Result<MailboxWriteReceipt> {
+    stamp_notification_with_source(
+        node,
+        access,
+        context,
+        args,
+        identity,
+        close_collections,
+        None,
+    )
+    .await
+}
+
+async fn stamp_notification_with_source(
+    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     context: &MailboxStampContext,
     mut args: FileMailboxItemArgs,
     identity: &NotificationIdentity,
     close_collections: &[MailboxCloseCollection],
+    source: Option<&crate::documents::DatastoreToolSource>,
 ) -> Result<MailboxWriteReceipt> {
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(context.agent_did.as_str()),
+        "mailbox actor mismatch"
+    );
     validate_close_collections(close_collections)?;
     validate_file_args(&mut args, context, close_collections)?;
     if let Some(collection) = args.expected_collection.as_deref() {
         domain::response_field(node, collection, close_collections)?;
     }
     let existing = load_prefix_items(
-        node,
+        access,
         &context.requester_did,
         args.source_kind,
         &args.source_id,
@@ -488,7 +557,10 @@ async fn stamp_notification(
     match open.as_slice() {
         [] => {}
         [item] if item.requester_did == context.requester_did => {
-            return notification::reuse_or_update(node, context, &args, identity, item).await;
+            return notification::reuse_or_update_with_source(
+                node, access, context, &args, identity, item, source,
+            )
+            .await;
         }
         [_] => bail!("mailbox open-row owner mismatch"),
         _ => bail!("mailbox invariant violation: more than one owner-matching open row"),
@@ -525,7 +597,7 @@ async fn stamp_notification(
                 {request_id}
                 {cause_doc_id}
                 target_node_did: "{target_node_did}",
-                target_agent_id: "{target_agent_id}",
+                target_agent_did: "{target_agent_did}",
                 {expected_collection}
                 {parent_item_id}
                 {deadline_at}
@@ -549,19 +621,33 @@ async fn stamp_notification(
         request_id = optional_string_field("request_id", args.request_id.as_deref()),
         cause_doc_id = optional_string_field("cause_doc_id", args.cause_doc_id.as_deref()),
         target_node_did = escape_graphql_string(&context.node_did),
-        target_agent_id = escape_graphql_string(&context.agent_id),
+        target_agent_did = escape_graphql_string(&context.agent_did),
         expected_collection =
             optional_string_field("expected_collection", args.expected_collection.as_deref()),
         parent_item_id = optional_string_field("parent_item_id", args.parent_item_id.as_deref()),
         deadline_at = optional_string_field("deadline_at", args.deadline_at.as_deref()),
         now = escape_graphql_string(&now),
     );
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "mailbox.create_stamped_item",
-        &mutation,
-    )
-    .await;
+    let recipient = identity::Did::new(&context.requester_did)?;
+    let response = access
+        .transact_write("mailbox.create_stamped_item", |txn| {
+            let mutation = &mutation;
+            let recipient = &recipient;
+            Box::pin(async move {
+                if let Some(source) = source {
+                    source.revalidate(txn).await?;
+                }
+                let value = txn.execute(mutation).await?;
+                let doc = crate::store::graphql::created_doc_id(&value, MAILBOX_COLLECTION)?;
+                txn.add_actor_relationship(MAILBOX_COLLECTION, &doc, "recipient", recipient)
+                    .await?;
+                Ok::<_, anyhow::Error>(value)
+            })
+        })
+        .await
+        .and_then(|value| {
+            serde_json::from_value::<defra_node::QueryResponse>(value).map_err(anyhow::Error::from)
+        });
     if let Ok(response) = &response {
         let document = single_mutation_document(response, "create_MailboxItem")?
             .context("create stamped mailbox item returned no row")?;
@@ -573,14 +659,17 @@ async fn stamp_notification(
 
     // A local unique-index race is idempotent only if the exact key resolves
     // to the same owner/source tuple; any other collision fails closed.
-    if let Some(item) = load_mailbox_item_by_key(node, &item_key).await? {
+    if let Some(item) = load_mailbox_item_by_key(access, &item_key).await? {
         if item.requester_did == context.requester_did
             && item.parsed_status() == Some(MailboxStatus::Open)
             && item.source_kind == args.source_kind.as_str()
             && item.source_id == args.source_id
             && item.kind == args.kind.as_str()
         {
-            return notification::reuse_or_update(node, context, &args, identity, &item).await;
+            return notification::reuse_or_update_with_source(
+                node, access, context, &args, identity, &item, source,
+            )
+            .await;
         }
         bail!("mailbox unique-key collision did not match an open stamped owner/source tuple");
     }
@@ -609,11 +698,31 @@ impl From<anyhow::Error> for MailboxToolError {
 pub struct MailboxCreateTool {
     node: Arc<EmbeddedNode>,
     policy: MailboxNotificationPolicy,
+    access: Option<crate::ConfigAccess>,
+    surface_source: Option<crate::documents::DatastoreToolSource>,
 }
 
 impl MailboxCreateTool {
     pub fn new(node: Arc<EmbeddedNode>, policy: MailboxNotificationPolicy) -> Self {
-        Self { node, policy }
+        Self {
+            node,
+            policy,
+            access: None,
+            surface_source: None,
+        }
+    }
+
+    pub(crate) fn with_access(mut self, access: crate::ConfigAccess) -> Self {
+        self.access = Some(access);
+        self
+    }
+
+    pub(crate) fn with_surface_source(
+        mut self,
+        source: crate::documents::DatastoreToolSource,
+    ) -> Self {
+        self.surface_source = Some(source);
+        self
     }
 }
 
@@ -674,19 +783,34 @@ impl crate::inference::llm::tool::Tool for MailboxCreateTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        let runtime = crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
-            .context("file_mailbox_item requires a current AgentRequest context")?;
-        let request_id = runtime.request_id.context("missing request_id")?;
+    async fn call(&self, _args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
+        Err(anyhow::anyhow!("file_mailbox_item requires an admitted request context").into())
+    }
+
+    async fn call_with_request(
+        &self,
+        args: Self::Args,
+        request: &crate::inference::llm::tool::ToolRequestContext,
+    ) -> std::result::Result<Self::Output, Self::Error> {
+        let admitted = request
+            .admitted_client
+            .as_ref()
+            .context("file_mailbox_item requires an admitted client recipient")?;
+        if admitted.request_doc_id != request.request_doc_id {
+            return Err(anyhow::anyhow!(
+                "mailbox request provenance does not match the claimed request"
+            )
+            .into());
+        }
+        let request_id = request.request_id.clone();
         let context = MailboxStampContext {
-            requester_did: runtime.requester_did.context("missing requester_did")?,
-            node_did: runtime.node_did.context("missing node_did")?,
-            agent_id: runtime.agent_id.context("missing agent_id")?,
-            session_id: runtime.session_id,
+            requester_did: admitted.signer_did.clone(),
+            node_did: request.node_did.clone(),
+            agent_did: request.agent_did.clone(),
+            session_id: Some(request.session_id.clone()),
         };
         self.policy.validate()?;
         let question = QuestionFiling::from_args(&args, &request_id)?;
-        let request = notification::request_provenance(&self.node, &request_id, &context).await?;
         let (identity, event_id, kind, action, expected_collection, payload) = match &question {
             Some(question) => (
                 &NotificationIdentity::Event,
@@ -708,11 +832,16 @@ impl crate::inference::llm::tool::Tool for MailboxCreateTool {
         let source_id = identity.source_id(
             &context.node_did,
             &context.requester_did,
-            &context.agent_id,
+            &context.agent_did,
             event_id,
         )?;
-        let receipt = stamp_notification(
+        let access = self
+            .access
+            .as_ref()
+            .context("mailbox tool requires managed Agent access")?;
+        let receipt = stamp_notification_with_source(
             &self.node,
+            access,
             &context,
             FileMailboxItemArgs {
                 kind,
@@ -724,13 +853,14 @@ impl crate::inference::llm::tool::Tool for MailboxCreateTool {
                 source_id,
                 session_id: None,
                 request_id: Some(request_id),
-                cause_doc_id: request.caused_by_source_doc_id,
+                cause_doc_id: request.caused_by_source_doc_id.clone(),
                 expected_collection,
                 parent_item_id: None,
                 deadline_at: None,
             },
             identity,
             MAILBOX_CLOSE_COLLECTIONS,
+            self.surface_source.as_ref(),
         )
         .await?;
         Ok(crate::tools::output::render(&receipt, &["item", "outcome"])
@@ -800,13 +930,33 @@ pub async fn list_mailbox_items(
     requester_did: &str,
     status: Option<MailboxStatus>,
 ) -> Result<Vec<MailboxItem>> {
+    let query = mailbox_list_query(requester_did, status)?;
+    let response = graphql_with_transaction_retry(node, &query, "list mailbox items").await?;
+    Ok(rows(&response, MAILBOX_COLLECTION)?)
+}
+
+pub async fn list_mailbox_items_on(
+    access: &crate::ConfigAccess,
+    requester_did: &str,
+    status: Option<MailboxStatus>,
+) -> Result<Vec<MailboxItem>> {
+    let response = access
+        .execute(&mailbox_list_query(requester_did, status)?)
+        .await?;
+    let values = response
+        .pointer("/data/MailboxItem")
+        .context("mailbox list omitted rows")?;
+    Ok(serde_json::from_value(values.clone())?)
+}
+
+fn mailbox_list_query(requester_did: &str, status: Option<MailboxStatus>) -> Result<String> {
     if requester_did.trim().is_empty() {
         bail!("mailbox list requires requester DID");
     }
     let status_filter = status
         .map(|status| format!(r#", status: {{ _eq: "{}" }}"#, status.as_str()))
         .unwrap_or_default();
-    let query = format!(
+    Ok(format!(
         r#"{{
             MailboxItem(
                 filter: {{ requester_did: {{ _eq: "{}" }}{status_filter} }},
@@ -814,13 +964,11 @@ pub async fn list_mailbox_items(
             ) {{ {MAILBOX_FIELDS} }}
         }}"#,
         escape_graphql_string(requester_did)
-    );
-    let response = graphql_with_transaction_retry(node, &query, "list mailbox items").await?;
-    Ok(rows(&response, MAILBOX_COLLECTION)?)
+    ))
 }
 
 async fn transition_open_item(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     item: &MailboxItem,
     target: MailboxStatus,
     resolved_doc_id: Option<&str>,
@@ -847,17 +995,18 @@ async fn transition_open_item(
         escape_graphql_string(&now),
         escape_graphql_string(&now),
     );
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "mailbox.close_item",
-        &mutation,
-    )
-    .await?;
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(item.target_agent_did.as_str()),
+        "mailbox close actor mismatch"
+    );
+    let response = access.write("mailbox.close_item", &mutation).await?;
+    let response: defra_node::QueryResponse = serde_json::from_value(response)?;
     Ok(single_mutation_document(&response, "update_MailboxItem")?.is_some())
 }
 
 async fn domain_document_satisfying_item(
     node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     item: &MailboxItem,
     entries: &[MailboxCloseCollection],
 ) -> Result<Option<String>> {
@@ -870,9 +1019,14 @@ async fn domain_document_satisfying_item(
         collection = expected,
         item_key = escape_graphql_string(&item.item_key),
     );
-    let response =
-        graphql_with_transaction_retry(node, &query, "find mailbox-correlated document").await?;
-    let found = rows::<Value>(&response, expected)?;
+    let response = access.execute(&query).await?;
+    let found: Vec<Value> = serde_json::from_value(
+        response
+            .get("data")
+            .and_then(|data| data.get(expected))
+            .context("mailbox-correlated document query omitted rows")?
+            .clone(),
+    )?;
     if found.len() > 1 {
         bail!(
             "more than one {expected} row satisfies mailbox key {}",
@@ -906,11 +1060,13 @@ const MAILBOX_SWEEP_TIME_BUDGET: Duration = Duration::from_millis(500);
 pub(crate) async fn sweep_open_mailbox_items(
     node: &Arc<EmbeddedNode>,
     local_did: &str,
+    identities: &[Arc<dyn crate::store::identity::NodeIdentity>],
     after_doc_id: Option<&str>,
 ) -> Result<MailboxSweepPage> {
     sweep_open_mailbox_items_with_close_collections(
         node,
         local_did,
+        identities,
         after_doc_id,
         MAILBOX_CLOSE_COLLECTIONS,
     )
@@ -919,18 +1075,19 @@ pub(crate) async fn sweep_open_mailbox_items(
 
 // Keep this complete order aligned with the ordinary index: Defra only seeks
 // cursor pages when the declared order is fully covered by one index.
-fn open_mailbox_page_query(local_did: &str, after_cursor: Option<&str>) -> String {
+fn open_mailbox_page_query(local_did: &str, agent_did: &str, after_cursor: Option<&str>) -> String {
     let after_arg = after_cursor
         .map(|cursor| format!(", after: \"{}\"", escape_graphql_string(cursor)))
         .unwrap_or_default();
     format!(
         r#"{{ _cursor {{ MailboxItem(
             first: {MAILBOX_SWEEP_PAGE_SIZE}{after_arg},
-            filter: {{ node_did: {{ _eq: "{}" }}, status: {{ _eq: "open" }} }},
+            filter: {{ node_did: {{ _eq: "{}" }}, target_agent_did: {{ _eq: "{}" }}, status: {{ _eq: "open" }} }},
             order: [{{ node_did: ASC }}, {{ status: ASC }}, {{ item_key: ASC }}]
         ) {{ {MAILBOX_FIELDS} }}
         _pageInfo {{ hasNext }} }} }}"#,
         escape_graphql_string(local_did),
+        escape_graphql_string(agent_did),
     )
 }
 
@@ -973,12 +1130,14 @@ fn mailbox_item_cursor(raw_item: &Value) -> Result<String> {
 async fn sweep_open_mailbox_items_with_close_collections(
     node: &Arc<EmbeddedNode>,
     local_did: &str,
+    identities: &[Arc<dyn crate::store::identity::NodeIdentity>],
     after_cursor: Option<&str>,
     close_collections: &[MailboxCloseCollection],
 ) -> Result<MailboxSweepPage> {
     sweep_open_mailbox_items_with_clock(
         node,
         local_did,
+        identities,
         after_cursor,
         close_collections,
         Instant::now,
@@ -989,43 +1148,66 @@ async fn sweep_open_mailbox_items_with_close_collections(
 async fn sweep_open_mailbox_items_with_clock(
     node: &Arc<EmbeddedNode>,
     local_did: &str,
+    identities: &[Arc<dyn crate::store::identity::NodeIdentity>],
     after_cursor: Option<&str>,
     close_collections: &[MailboxCloseCollection],
     read_clock: impl Fn() -> Instant,
 ) -> Result<MailboxSweepPage> {
     validate_close_collections(close_collections)?;
-    let response = graphql_with_transaction_retry(
-        node,
-        &open_mailbox_page_query(local_did, after_cursor),
-        "load open mailbox items",
-    )
-    .await?;
-    let cursor_page = response
-        .data
-        .context("mailbox cursor query omitted data")?
-        .get("_cursor")
-        .context("mailbox cursor query omitted _cursor")?
-        .clone();
-    let raw_items: Vec<Value> = serde_json::from_value(
-        cursor_page
-            .get(MAILBOX_COLLECTION)
-            .context("mailbox cursor query omitted collection rows")?
-            .clone(),
-    )
-    .context("decode MailboxItem cursor rows")?;
-    anyhow::ensure!(
-        raw_items.len() <= MAILBOX_SWEEP_PAGE_SIZE,
-        "mailbox cursor query exceeded requested page size"
-    );
-    let has_more = cursor_page
-        .get("_pageInfo")
-        .and_then(|page_info| page_info.get("hasNext"))
-        .and_then(Value::as_bool)
-        .context("mailbox cursor query omitted _pageInfo.hasNext")?;
-    anyhow::ensure!(
-        !has_more || !raw_items.is_empty(),
-        "mailbox cursor query hasNext without returning rows"
-    );
+    let mut raw_items = Vec::new();
+    let mut has_more = false;
+    let mut seen = std::collections::BTreeSet::new();
+    for identity in identities {
+        if !seen.insert(identity.did()) {
+            continue;
+        }
+        let access = crate::ConfigAccess::local_managed_agent(
+            node.clone(),
+            identity::Did::new(identity.did())?,
+            identity.as_ref(),
+        )?;
+        let response = access
+            .execute(&open_mailbox_page_query(
+                local_did,
+                identity.did(),
+                after_cursor,
+            ))
+            .await?;
+        let cursor_page = response
+            .pointer("/data/_cursor")
+            .context("mailbox cursor query omitted _cursor")?;
+        let page: Vec<Value> = serde_json::from_value(
+            cursor_page
+                .get(MAILBOX_COLLECTION)
+                .context("mailbox cursor query omitted collection rows")?
+                .clone(),
+        )?;
+        anyhow::ensure!(
+            page.len() <= MAILBOX_SWEEP_PAGE_SIZE,
+            "mailbox cursor query exceeded requested page size"
+        );
+        let page_has_more = cursor_page
+            .get("_pageInfo")
+            .and_then(|info| info.get("hasNext"))
+            .and_then(Value::as_bool)
+            .context("mailbox cursor query omitted _pageInfo.hasNext")?;
+        anyhow::ensure!(
+            !page_has_more || !page.is_empty(),
+            "mailbox cursor query hasNext without returning rows"
+        );
+        has_more |= page_has_more;
+        for item in page {
+            raw_items.push((item, access.clone()));
+        }
+    }
+    raw_items.sort_by(|(left, _), (right, _)| {
+        left["item_key"]
+            .as_str()
+            .cmp(&right["item_key"].as_str())
+            .then_with(|| left["_docID"].as_str().cmp(&right["_docID"].as_str()))
+    });
+    has_more |= raw_items.len() > MAILBOX_SWEEP_PAGE_SIZE;
+    raw_items.truncate(MAILBOX_SWEEP_PAGE_SIZE);
     let mut report = MailboxSweepReport {
         scanned: 0,
         ..Default::default()
@@ -1034,7 +1216,7 @@ async fn sweep_open_mailbox_items_with_clock(
     let turn_started = read_clock();
     let mut last_processed_cursor = None;
     let mut stopped_early = false;
-    for raw_item in raw_items {
+    for (raw_item, access) in raw_items {
         if report.scanned > 0
             && read_clock().duration_since(turn_started) >= MAILBOX_SWEEP_TIME_BUDGET
         {
@@ -1057,6 +1239,10 @@ async fn sweep_open_mailbox_items_with_clock(
                 continue;
             }
         };
+        anyhow::ensure!(
+            access.actor_did().as_deref() == Some(item.target_agent_did.as_str()),
+            "mailbox sweep selected a different Agent actor"
+        );
         let Some(action) = item.parsed_action() else {
             report.skipped_unsupported += 1;
             tracing::warn!(
@@ -1070,7 +1256,7 @@ async fn sweep_open_mailbox_items_with_clock(
             // The request claim transaction owns authenticated reply consumption.
             MailboxAction::StartRequest => Ok(None),
             MailboxAction::WriteDocument => {
-                domain_document_satisfying_item(node, &item, close_collections).await
+                domain_document_satisfying_item(node, &access, &item, close_collections).await
             }
             MailboxAction::Ack => Ok(None),
         };
@@ -1083,7 +1269,7 @@ async fn sweep_open_mailbox_items_with_clock(
             }
         };
         if let Some(doc_id) = satisfying {
-            match transition_open_item(node, &item, MailboxStatus::Acted, Some(&doc_id)).await {
+            match transition_open_item(&access, &item, MailboxStatus::Acted, Some(&doc_id)).await {
                 Ok(true) => report.acted += 1,
                 Ok(false) => {}
                 Err(error) => {
@@ -1099,7 +1285,7 @@ async fn sweep_open_mailbox_items_with_clock(
             .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
             .is_some_and(|deadline| deadline.with_timezone(&Utc) <= now);
         if deadline_due {
-            match transition_open_item(node, &item, MailboxStatus::Expired, None).await {
+            match transition_open_item(&access, &item, MailboxStatus::Expired, None).await {
                 Ok(true) => report.expired += 1,
                 Ok(false) => {}
                 Err(error) => {

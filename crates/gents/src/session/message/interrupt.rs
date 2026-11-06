@@ -1,5 +1,5 @@
-use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use anyhow::Result;
+use defra_node::Node as EmbeddedNode;
 
 use std::sync::Arc;
 
@@ -19,20 +19,17 @@ pub fn agent_interrupt_allowed(
 
 pub async fn interrupt_refusal(
     node: &Arc<EmbeddedNode>,
+    caller_agent_did: &str,
     caller: &SessionScope,
     target: &SessionScope,
 ) -> Result<Option<String>> {
-    let started = crate::session::origin::verified_agent_new_creation(
-        &ConfigAccess::local(node.clone()),
-        target,
-        caller,
-    )
-    .await?;
+    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(caller_agent_did)?);
+    let started =
+        crate::session::origin::verified_agent_new_creation(&access, target, caller).await?;
     let cause = started.then_some(caller.session_id.clone());
     let same_node = caller.node_did == target.node_did;
     let task_triggered = if same_node && cause.is_none() {
-        crate::session::origin::task_triggered_opening(&ConfigAccess::local(node.clone()), target)
-            .await?
+        crate::session::origin::task_triggered_opening(&access, target).await?
     } else {
         false
     };
@@ -42,58 +39,44 @@ pub async fn interrupt_refusal(
 
 pub async fn interrupt_session(
     node: &Arc<EmbeddedNode>,
+    caller_agent_did: &str,
     target: &SessionScope,
 ) -> Result<Option<String>> {
-    if node.node_identity_did() == Some(target.node_did.as_str()) {
-        let session_id = target.session_id.clone();
-        let node_did = target.node_did.clone();
-        let requester_did = target.requester_did.clone();
-        return crate::store::config_client::ConfigAccess::transact_local_write(
-            node,
-            None,
-            "session.interrupt",
-            move |txn| {
-                let session_id = session_id.clone();
-                let node_did = node_did.clone();
-                let requester_did = requester_did.clone();
-                Box::pin(async move {
-                    let active = crate::request::interrupt::interrupt_active_session_in_txn(
-                        txn,
-                        &session_id,
-                        &node_did,
-                        requester_did.as_deref(),
-                    )
-                    .await?;
-                    if active.is_none() {
-                        crate::goal::pause_goal_for_interrupt_in_txn(txn, &node_did, &session_id)
-                            .await?;
-                    }
-                    Ok(active)
-                })
-            },
-        )
-        .await;
-    }
+    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(caller_agent_did)?);
+    interrupt_session_with_access(node, &access, target).await
+}
 
-    let Some(active) = crate::request::interrupt::active_session_request(
-        node,
-        &target.session_id,
-        &target.node_did,
-        target.requester_did.as_deref(),
-    )
-    .await?
-    else {
-        return Ok(None);
-    };
-    crate::request::interrupt::interrupt_request_by_doc_id(
-        node,
-        active
-            .doc_id
-            .as_deref()
-            .context("active request lacks physical identity")?,
-        &target.node_did,
-        active.requester_did.as_deref(),
-    )
-    .await?;
-    Ok(Some(active.request_id))
+pub async fn interrupt_session_with_access(
+    node: &Arc<EmbeddedNode>,
+    access: &ConfigAccess,
+    target: &SessionScope,
+) -> Result<Option<String>> {
+    anyhow::ensure!(
+        node.node_identity_did() == Some(target.node_did.as_str()),
+        "remote session interrupt requires an authenticated target runtime route"
+    );
+    let session_id = target.session_id.clone();
+    let node_did = target.node_did.clone();
+    let requester_did = target.requester_did.clone();
+    access
+        .transact_write("session.interrupt", move |txn| {
+            let session_id = session_id.clone();
+            let node_did = node_did.clone();
+            let requester_did = requester_did.clone();
+            Box::pin(async move {
+                let active = crate::request::interrupt::interrupt_active_session_in_txn(
+                    txn,
+                    &session_id,
+                    &node_did,
+                    requester_did.as_deref(),
+                )
+                .await?;
+                if active.is_none() {
+                    crate::goal::pause_goal_for_interrupt_in_txn(txn, &node_did, &session_id)
+                        .await?;
+                }
+                Ok(active)
+            })
+        })
+        .await
 }

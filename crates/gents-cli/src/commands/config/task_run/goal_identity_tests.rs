@@ -64,7 +64,7 @@ async fn signed_request(
                     request_id: fire.request_id.clone(),
                     node_did: signer.did().into(),
                     requester_did: None,
-                    agent_id: "engineer".into(),
+                    agent_did: "engineer".into(),
                     session_id: fire.session_id.clone(),
                     content: "Task work".into(),
                     execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
@@ -90,7 +90,7 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
     let temp = tempfile::tempdir()?;
     let signer = gents::KeyIdentity::load_or_create(temp.path().join("node.key"), None)?;
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(signer.did())
             .build()
             .await?,
@@ -121,7 +121,7 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
                 txn.execute_with_variables(
                     "mutation($input: AgentSessionMutationInputArg!) {create_AgentSession(input: $input) {_docID}}",
                     &json!({"input": {"session_id":session, "node_did":signer.did(),
-                        "requester_did":signer.did(), "agent_id":"engineer", "created_at":NOW}}),
+                        "requester_did":signer.did(), "agent_did":"engineer", "created_at":NOW}}),
                 ).await?;
                 Ok::<_, anyhow::Error>(())
             })
@@ -235,7 +235,7 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
             }
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -254,7 +254,7 @@ async fn manual_task_replay_keeps_signed_goal_identity_without_observing_current
     ] {
         let mut input = crate::request_helpers::goal_input_tests::authored_input();
         input.goal_assignment = reference.clone();
-        let row = super::tests::signed_task_receipt(&identity, input).await?;
+        let row = super::tests::signed_task_receipt(&identity, &source.agent_did, input).await?;
         let receipt: AgentRequestRow = serde_json::from_value(row)?;
         let selected =
             prepare_task_run_goal_id(&access, identity.did(), "chat", true, Some(&receipt)).await?;

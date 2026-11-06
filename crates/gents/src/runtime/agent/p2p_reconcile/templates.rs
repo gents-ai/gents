@@ -16,13 +16,9 @@ pub enum Delivery {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Scope {
-    PeerDid {
-        field: &'static str,
-    },
+    PeerDid { field: &'static str },
     Unscoped,
     PerCollection(&'static [CollectionRule]),
-    /// Return-leg runtime configuration cannot be expressed as a DefraDB
-    /// replicator predicate because its owner fields are mutable.
     ClientRoute,
 }
 
@@ -197,292 +193,25 @@ pub fn decode_pairing_filters(raw: &str) -> serde_json::Result<PairingFilters> {
     serde_json::from_str(raw)
 }
 
-const CONVERSATION_COLLECTIONS: &[&str] = &[
-    "AgentRequest",
-    "AgentMessage",
-    "AgentToolCall",
-    "AgentOutputSegment",
-    "AgentSession",
-    "CompactionEntry",
-    "Agent",
-    "AgentContext",
-    "CompactionConfig",
-    "Tools",
-    "AgentTarget",
-    "InferenceProfile",
-    "InferenceSampling",
-    "InferenceExecution",
-    "InferenceRetryPolicy",
-    "ToolServiceRegistry",
-    "Skill",
-    "DatastoreToolSurface",
-];
-
-const CONVERSATION_TRANSCRIPT_COLLECTIONS: &[&str] = &[
-    "AgentRequest",
-    "AgentMessage",
-    "AgentToolCall",
-    "AgentOutputSegment",
-    "AgentSession",
-    "CompactionEntry",
-];
-
-// InferenceBackend contains raw API-key material; clients resolve model choices through profiles.
-pub const CLIENT_COLLECTIONS: &[&str] = &[
-    "AgentRequest",
-    "AgentMessage",
-    "AgentToolCall",
-    "AgentOutputSegment",
-    "AgentSession",
-    "CompactionEntry",
-    "MailboxItem",
-    "PeerEndpoint",
-    "SessionHydrationRequest",
-    "FileImageHydrationRequest",
-    "FileInventoryImageRequest",
-    "FileInventoryRequest",
-    "AgentSessionInputEdit",
-    "AgentSessionGoalControl",
-    "Node",
-    "Agent",
-    "AgentContext",
-    "CompactionConfig",
-    "Tools",
-    "AgentTarget",
-    "InferenceProfile",
-    "InferenceSampling",
-    "InferenceExecution",
-    "InferenceRetryPolicy",
-    "ToolServiceRegistry",
-    "Skill",
-    "DatastoreToolSurface",
-    "Task",
-    "Schedule",
-    "Trigger",
-    "EventSource",
-    "NodeReadiness",
-    "GoalObservation",
-];
-
-pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
-    "AgentRequest",
-    "AgentMessage",
-    "AgentToolCall",
-    "AgentOutputSegment",
-    "AgentSession",
-    "CompactionEntry",
-    "MailboxItem",
-    "PeerEndpoint",
-    "SessionHydrationRequest",
-    "FileImageHydrationRequest",
-    "FileInventoryImageRequest",
-    "FileInventoryRequest",
-    "AgentSessionInputEdit",
-    "AgentSessionGoalControl",
-];
-
-const CONVERSATION_RULES: &[CollectionRule] = &[
-    CollectionRule {
-        collection: "AgentRequest",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentMessage",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentToolCall",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentOutputSegment",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentSession",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "CompactionEntry",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-];
-
-pub const CLIENT_INDEX_COLLECTIONS: [&str; 2] = ["AgentSession", "MailboxItem"];
-
-const CLIENT_INDEX_RULES: &[CollectionRule] = &[
-    CollectionRule {
-        collection: "AgentSession",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "MailboxItem",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-];
-
+pub const CLIENT_COLLECTIONS: &[&str] = &["PeerRegistry"];
+pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = CLIENT_COLLECTIONS;
+pub const CLIENT_INDEX_COLLECTIONS: [&str; 0] = [];
 pub const NODE_DIRECTORY_COLLECTION: &str = "NodeDirectoryEntry";
 
-const MACHINE_COLLECTIONS: &[&str] = &[
-    "AgentRequest",
-    "AgentMessage",
-    "AgentToolCall",
-    "AgentOutputSegment",
-    "AgentSession",
-    "CompactionEntry",
-    "Agent",
-    "AgentContext",
-    "CompactionConfig",
-    "Tools",
-    "AgentTarget",
-    "InferenceProfile",
-    "InferenceSampling",
-    "InferenceExecution",
-    "InferenceRetryPolicy",
-    "ToolServiceRegistry",
-    "Skill",
-    "DatastoreToolSurface",
-    "MailboxItem",
-    "SessionHydrationRequest",
-    "AgentSessionInputEdit",
-    "AgentSessionGoalControl",
-    NODE_DIRECTORY_COLLECTION,
-];
-
-const MACHINE_RULES: &[CollectionRule] = &[
-    CollectionRule {
-        collection: "AgentRequest",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentMessage",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentToolCall",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentOutputSegment",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentSession",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "CompactionEntry",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "MailboxItem",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "SessionHydrationRequest",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentSessionInputEdit",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentSessionGoalControl",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: NODE_DIRECTORY_COLLECTION,
-        field: "source_did",
-        source: DidSource::HomeDid,
-    },
-];
-
-const AGENT_CONFIG_COLLECTIONS: &[&str] = &[
-    "Agent",
-    "AgentContext",
-    "CompactionConfig",
-    "Tools",
-    "AgentTarget",
-    "InferenceProfile",
-    "InferenceSampling",
-    "InferenceExecution",
-    "InferenceRetryPolicy",
-    "ToolServiceRegistry",
-    "Skill",
-    "DatastoreToolSurface",
-    "InferenceBackend",
-];
-
-const AGENT_TARGET_CALLER_COLLECTIONS: &[&str] = &["AgentRequest"];
-
-const AGENT_TARGET_CALLER_RULES: &[CollectionRule] = &[CollectionRule {
-    collection: "AgentRequest",
-    field: "node_did",
-    source: DidSource::PeerDid,
+const MACHINE_COLLECTIONS: &[&str] = &[NODE_DIRECTORY_COLLECTION];
+const MACHINE_RULES: &[CollectionRule] = &[CollectionRule {
+    collection: NODE_DIRECTORY_COLLECTION,
+    field: "source_did",
+    source: DidSource::HomeDid,
 }];
-
-const AGENT_TARGET_HOST_COLLECTIONS: &[&str] = &[
-    "AgentRequest",
-    "AgentSession",
-    "AgentOutputSegment",
-    "AgentMessage",
-];
-
-const AGENT_TARGET_HOST_RULES: &[CollectionRule] = &[
-    CollectionRule {
-        collection: "AgentOutputSegment",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentRequest",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentSession",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentMessage",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-];
 
 pub const AGENT_TARGET_CALLER_TEMPLATE: &str = "agent-target-caller";
 pub const AGENT_TARGET_HOST_TEMPLATE: &str = "agent-target-host";
-pub const APP_COLLECTIONS_TEMPLATE: &str = "app-collections";
 pub const MACHINE_TEMPLATE: &str = "machine";
 pub const CLIENT_INDEX_TEMPLATE: &str = "client-index";
 pub const CLIENT_TEMPLATE: &str = "client";
 
 static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
-    ScopeTemplate {
-        id: "conversation",
-        collections: CONVERSATION_COLLECTIONS,
-        scope: Scope::PerCollection(CONVERSATION_RULES),
-        delivery: Delivery::Push,
-    },
     ScopeTemplate {
         id: MACHINE_TEMPLATE,
         collections: MACHINE_COLLECTIONS,
@@ -495,42 +224,6 @@ static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
         scope: Scope::ClientRoute,
         delivery: Delivery::Push,
     },
-    ScopeTemplate {
-        id: "agent-config",
-        collections: AGENT_CONFIG_COLLECTIONS,
-        scope: Scope::Unscoped,
-        delivery: Delivery::Replicate,
-    },
-    ScopeTemplate {
-        id: "backup",
-        collections: CONVERSATION_TRANSCRIPT_COLLECTIONS,
-        scope: Scope::Unscoped,
-        delivery: Delivery::Replicate,
-    },
-    ScopeTemplate {
-        id: AGENT_TARGET_CALLER_TEMPLATE,
-        collections: AGENT_TARGET_CALLER_COLLECTIONS,
-        scope: Scope::PerCollection(AGENT_TARGET_CALLER_RULES),
-        delivery: Delivery::Push,
-    },
-    ScopeTemplate {
-        id: AGENT_TARGET_HOST_TEMPLATE,
-        collections: AGENT_TARGET_HOST_COLLECTIONS,
-        scope: Scope::PerCollection(AGENT_TARGET_HOST_RULES),
-        delivery: Delivery::Push,
-    },
-    ScopeTemplate {
-        id: APP_COLLECTIONS_TEMPLATE,
-        collections: &[],
-        scope: Scope::Unscoped,
-        delivery: Delivery::Replicate,
-    },
-    ScopeTemplate {
-        id: CLIENT_INDEX_TEMPLATE,
-        collections: &CLIENT_INDEX_COLLECTIONS,
-        scope: Scope::PerCollection(CLIENT_INDEX_RULES),
-        delivery: Delivery::Push,
-    },
 ];
 
 pub fn builtin_templates() -> &'static [ScopeTemplate] {
@@ -538,13 +231,13 @@ pub fn builtin_templates() -> &'static [ScopeTemplate] {
 }
 
 pub async fn read_client_replicated_schema(
-    node: std::sync::Arc<defra_node::EmbeddedNode>,
+    node: std::sync::Arc<defra_node::Node>,
 ) -> anyhow::Result<ReplicatedSchema> {
     read_replicated_schema(node, CLIENT_COLLECTIONS).await
 }
 
 pub async fn read_replicated_schema(
-    node: std::sync::Arc<defra_node::EmbeddedNode>,
+    node: std::sync::Arc<defra_node::Node>,
     collections: &[&str],
 ) -> anyhow::Result<ReplicatedSchema> {
     let access = crate::store::config_client::ConfigAccess::local(node);
@@ -632,17 +325,22 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[tokio::test]
-    async fn pre_reasoning_audit_runtime_schema_is_refused_as_skew() {
-        async fn node_with(schemas: &[String]) -> std::sync::Arc<defra_node::EmbeddedNode> {
+    async fn changed_discovery_schema_is_refused_as_skew() {
+        async fn node_with(schemas: &[String]) -> std::sync::Arc<defra_node::Node> {
             let node =
                 std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-            node.add_dac_policy_with_counter(
-                node.node_identity_did().unwrap(),
+            let context = defra_core::RequestContext::default()
+                .with_identity(Some(node.node_identity_did().unwrap().to_owned()));
+            node.add_dac_policy_with_counter_as(
+                &context,
                 gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY,
                 0,
             )
             .await
             .unwrap();
+            crate::test_support::acp_policies::install_identity_acp_policies(&node)
+                .await
+                .unwrap();
             for sdl in schemas {
                 node.add_collection(sdl).await.unwrap();
             }
@@ -655,14 +353,14 @@ mod tests {
         let previous = current
             .iter()
             .map(|sdl| {
-                if *sdl == gents_protocol::schemas::AGENT_REQUEST {
-                    sdl.replace("    purpose: String @index @immutable\n", "")
+                if *sdl == gents_protocol::schemas::PEER_REGISTRY {
+                    sdl.replace("    endpoint_updated_at: String", "    revision: String")
                 } else {
                     sdl.clone()
                 }
             })
             .collect::<Vec<_>>();
-        assert_ne!(previous, current, "fixture must revert the purpose field");
+        assert_ne!(previous, current, "fixture must change a discovery field");
 
         let local = read_client_replicated_schema(node_with(&current).await)
             .await
@@ -677,58 +375,7 @@ mod tests {
             .unwrap();
         let skew = compare_client_replicated_schema(&local, Some(&old))
             .expect_err("an old runtime schema must not enroll or sync");
-        assert!(format!("{skew:?}").contains("AgentRequest"), "{skew:?}");
-    }
-
-    #[test]
-    fn skew_names_the_side_off_the_canonical_lineage() {
-        let canonical = crate::store::schema::migration::canonical_versions().unwrap();
-        let identity = |version: &str| ReplicatedCollectionIdentity {
-            version_id: version.to_string(),
-            branchable: true,
-            policy_resource: None,
-        };
-        let canonical_schema: ReplicatedSchema = CLIENT_COLLECTIONS
-            .iter()
-            .map(|name| {
-                let version = canonical.get(*name).map_or("unmanaged", String::as_str);
-                ((*name).to_string(), identity(version))
-            })
-            .collect();
-        assert!(canonical_schema.contains_key("AgentMessage"));
-        // AgentMessage as a store created by v1.0.0-rc1 registered it.
-        let mut rc1_born = canonical_schema.clone();
-        rc1_born.insert(
-            "AgentMessage".to_string(),
-            identity("bafyreih6qxw3cq3uswastxlatdplwmkpknqkf7csgecoswijez5o2uihhm"),
-        );
-
-        let skew = compare_client_replicated_schema(&canonical_schema, Some(&rc1_born))
-            .expect_err("an rc1-born runtime must not sync with a canonical app");
-        assert_eq!(skew.remote_off_lineage, vec!["AgentMessage".to_string()]);
-        assert!(skew.local_off_lineage.is_empty());
-        assert!(
-            skew.to_string().contains("re-create the runtime's"),
-            "{skew}"
-        );
-
-        let skew = compare_client_replicated_schema(&rc1_born, Some(&canonical_schema))
-            .expect_err("an rc1-born app must not sync with a canonical runtime");
-        assert_eq!(skew.local_off_lineage, vec!["AgentMessage".to_string()]);
-        assert!(
-            skew.to_string().contains("reset this app's local data"),
-            "{skew}"
-        );
-
-        // A plain version difference keeps the "same version" advice.
-        let mut other = canonical_schema.clone();
-        other.insert("AgentSession".to_string(), identity("bafyother"));
-        let skew = compare_client_replicated_schema(&canonical_schema, Some(&other)).unwrap_err();
-        assert!(skew.local_off_lineage.is_empty() && skew.remote_off_lineage.is_empty());
-        assert!(
-            skew.to_string().contains("different Gents versions"),
-            "{skew}"
-        );
+        assert!(format!("{skew:?}").contains("PeerRegistry"), "{skew:?}");
     }
 
     #[test]
@@ -773,12 +420,12 @@ mod tests {
         }
 
         let mut missing = local.clone();
-        missing.remove("Task");
+        missing.remove("PeerRegistry");
         assert_eq!(
             compare_client_replicated_schema(&local, Some(&missing))
                 .unwrap_err()
                 .collections,
-            vec!["Task".to_string()]
+            vec!["PeerRegistry".to_string()]
         );
     }
 
