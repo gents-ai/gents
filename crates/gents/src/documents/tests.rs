@@ -473,12 +473,14 @@ fn built_ins_reject_the_removed_memory_setting() {
 
 #[tokio::test]
 async fn tools_document_round_trips_defra_query_fields() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (db, _user, access, _binding) =
+        crate::test_support::signed_test_node("tools_document_round_trips_defra_query_fields")
+            .await;
+    let node_did = db.node_identity.did();
 
     let doc = Tools {
         tools_id: "amy-general-tools".to_string(),
-        node_did: "did:key:z-test".to_string(),
+        node_did: node_did.to_string(),
         built_ins: Some(BuiltInTools {
             enable_session_history_tool: Some(true),
             ..Default::default()
@@ -493,7 +495,6 @@ async fn tools_document_round_trips_defra_query_fields() {
         }),
         ..Default::default()
     };
-    let access = crate::store::config_client::ConfigAccess::local(node);
     write_tools_document(&access, &doc)
         .await
         .expect("write should persist the defra_query fields");
@@ -541,13 +542,13 @@ async fn tools_document_round_trips_defra_query_fields() {
 
 #[tokio::test]
 async fn tools_update_can_clear_lsp_config() {
-    let node = crate::test_support::node_builder().build().await.unwrap();
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (db, _user, access, _binding) =
+        crate::test_support::signed_test_node("tools_update_can_clear_lsp_config").await;
+    let node_did = db.node_identity.did();
 
-    let access = crate::store::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     let lsp = |config: Option<String>| Tools {
         tools_id: "lsp-config-clear".to_string(),
-        node_did: "did:key:z-lsp-config-clear".to_string(),
+        node_did: node_did.to_string(),
         integrations: Some(IntegrationTools {
             lsp: config.map(|config| LspTools {
                 config: Some(config),
@@ -562,6 +563,7 @@ async fn tools_update_can_clear_lsp_config() {
     write_tools_document(&access, &doc).await.unwrap();
     async fn read(
         access: &crate::store::config_client::ConfigAccess,
+        node_did: &str,
     ) -> anyhow::Result<Option<Tools>> {
         access
             .transact_write("test.tools.read", |txn| {
@@ -569,7 +571,7 @@ async fn tools_update_can_clear_lsp_config() {
                     crate::store::config_client::read_desired_state_record_in_txn(
                         txn,
                         crate::Collection::Tools,
-                        "did:key:z-lsp-config-clear",
+                        node_did,
                         "lsp-config-clear",
                     )
                     .await?
@@ -581,7 +583,7 @@ async fn tools_update_can_clear_lsp_config() {
             })
             .await
     }
-    let loaded: Tools = read(&access).await.unwrap().unwrap();
+    let loaded: Tools = read(&access, node_did).await.unwrap().unwrap();
     assert_eq!(
         loaded
             .integrations
@@ -595,7 +597,7 @@ async fn tools_update_can_clear_lsp_config() {
     );
 
     write_tools_document(&access, &lsp(None)).await.unwrap();
-    let cleared: Tools = read(&access).await.unwrap().unwrap();
+    let cleared: Tools = read(&access, node_did).await.unwrap().unwrap();
     let cleared_config = cleared
         .integrations
         .as_ref()
@@ -612,12 +614,14 @@ async fn tools_update_can_clear_lsp_config() {
 
 #[tokio::test]
 async fn tools_document_round_trips_read_only_commands() {
-    let node = crate::test_support::node_builder().build().await.unwrap();
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (db, _user, access, _binding) =
+        crate::test_support::signed_test_node("tools_document_round_trips_read_only_commands")
+            .await;
+    let node_did = db.node_identity.did();
 
     let doc = Tools {
         tools_id: "steward-readonly-allowlist".to_string(),
-        node_did: "did:key:z-test-allowlist".to_string(),
+        node_did: node_did.to_string(),
         host: Some(HostTools {
             bash: Some(BashTools {
                 read_only_commands: Some(vec!["jq".to_string(), "echo".to_string()]),
@@ -627,7 +631,6 @@ async fn tools_document_round_trips_read_only_commands() {
         }),
         ..Default::default()
     };
-    let access = crate::store::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     write_tools_document(&access, &doc)
         .await
         .expect("write should persist the read_only_commands field");
@@ -667,8 +670,9 @@ async fn tools_document_round_trips_read_only_commands() {
 
 #[tokio::test]
 async fn tools_document_round_trips_write_tools() {
-    let node = crate::test_support::node_builder().build().await.unwrap();
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (db, _user, access, _binding) =
+        crate::test_support::signed_test_node("tools_document_round_trips_write_tools").await;
+    let node_did = db.node_identity.did();
 
     let decls = vec![WriteToolDecl {
         notification: None,
@@ -696,7 +700,7 @@ async fn tools_document_round_trips_write_tools() {
     }];
     let tools = Tools {
         tools_id: "steward-write-tools".to_string(),
-        node_did: "did:key:z-test-write".to_string(),
+        node_did: node_did.to_string(),
         datastore: Some(DatastoreTools {
             datastore_tool_surface_ids: Some(vec!["surface".to_string()]),
             ..Default::default()
@@ -705,11 +709,10 @@ async fn tools_document_round_trips_write_tools() {
     };
     let surface: DatastoreToolSurfaceDocument = serde_json::from_value(serde_json::json!({
         "surface_id": "surface",
-        "node_did": "did:key:z-test-write",
+        "node_did": node_did,
         "entries": decls,
     }))
     .unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
         crate::store::config_client::DesiredStateApplyDocument {
             collection: crate::Collection::DatastoreToolSurface,
@@ -745,19 +748,21 @@ async fn tools_document_round_trips_write_tools() {
 
 #[tokio::test]
 async fn tools_document_round_trips_session_message_enablement() {
-    let node = crate::test_support::node_builder().build().await.unwrap();
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (db, _user, access, _binding) = crate::test_support::signed_test_node(
+        "tools_document_round_trips_session_message_enablement",
+    )
+    .await;
+    let node_did = db.node_identity.did();
 
     let doc = Tools {
         tools_id: "amy-background-tools".to_string(),
-        node_did: "did:key:z-test-background".to_string(),
+        node_did: node_did.to_string(),
         agents: Some(AgentTools {
             enabled: Some(true),
             ..Default::default()
         }),
         ..Default::default()
     };
-    let access = crate::store::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     write_tools_document(&access, &doc)
         .await
         .expect("write should persist the session-message enablement");
@@ -787,11 +792,9 @@ async fn tools_document_round_trips_session_message_enablement() {
 
 #[tokio::test]
 async fn agent_description_round_trip_with_explicit_owner_fixture() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-
-    let node_did = "did:key:z-test-desc";
-    let binding = crate::test_support::install_test_agent(&node, node_did, "amy-general").await;
+    let (db, _user, access, binding) =
+        crate::test_support::signed_test_node("agent_description_round_trip").await;
+    let node_did = db.node_identity.did();
     let agent_did = &binding.agent_did;
 
     let authored = serde_json::json!({
@@ -838,11 +841,26 @@ async fn agent_description_round_trip_with_explicit_owner_fixture() {
         tags: Vec::new(),
         created_at: None,
     };
-    upsert_agent(&node, &doc)
+    let value = serde_json::to_value(&doc).unwrap();
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::Agent,
+            add: value.clone(),
+            update: value,
+        },
+    ])
+    .unwrap();
+    access
+        .transact_write("test.agent.description", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
         .await
         .expect("upsert should persist description fields");
 
-    let loaded = load_agent(&node, agent_did)
+    let loaded = load_agent(&db.node, agent_did)
         .await
         .expect("load should succeed")
         .expect("agent should exist after upsert");
@@ -855,19 +873,14 @@ async fn agent_description_round_trip_with_explicit_owner_fixture() {
     assert!(loaded.enabled);
 }
 
-fn access_node(
-    access: &crate::store::config_client::ConfigAccess,
-) -> &std::sync::Arc<defra_node::Node> {
-    access.local_node().expect("test helpers use local access")
-}
-
 #[tokio::test]
 async fn inference_retry_policy_fields_round_trip() {
-    let node = crate::test_support::node_builder().build().await.unwrap();
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (db, _user, access, _binding) =
+        crate::test_support::signed_test_node("inference_retry_policy_fields_round_trip").await;
+    let node_did = db.node_identity.did();
 
     let retry = InferenceRetryPolicy {
-        node_did: "did:key:z-test-retry".to_string(),
+        node_did: node_did.to_string(),
         retry_policy_id: "retry-policy".to_string(),
         display_name: Some("Retry Policy".to_string()),
         max_transport_retries: Some(4),
@@ -878,7 +891,7 @@ async fn inference_retry_policy_fields_round_trip() {
         ..Default::default()
     };
     let backend: crate::documents::InferenceBackend = serde_json::from_value(serde_json::json!({
-        "node_did": "did:key:z-test-retry",
+        "node_did": node_did,
         "backend_id": "backend",
         "name": "Local",
         "provider_kind": "OpenAiCompatible",
@@ -887,7 +900,7 @@ async fn inference_retry_policy_fields_round_trip() {
     }))
     .unwrap();
     let profile = InferenceProfile {
-        node_did: "did:key:z-test-retry".to_string(),
+        node_did: node_did.to_string(),
         profile_id: "retry-profile".to_string(),
         display_name: Some("Retry Profile".to_string()),
         backend_id: "backend".to_string(),
@@ -897,13 +910,12 @@ async fn inference_retry_policy_fields_round_trip() {
         ..Default::default()
     };
     let execution = InferenceExecution {
-        node_did: "did:key:z-test-retry".to_string(),
+        node_did: node_did.to_string(),
         execution_id: "retry-execution".to_string(),
         retry_policy_id: Some("retry-policy".to_string()),
         ..Default::default()
     };
 
-    let access = crate::store::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
         crate::store::config_client::DesiredStateApplyDocument {
             collection: crate::Collection::InferenceBackend,
@@ -937,14 +949,10 @@ async fn inference_retry_policy_fields_round_trip() {
         .await
         .expect("apply should persist the retry chain");
 
-    let loaded = load_inference_profile(
-        access_node(&access),
-        "did:key:z-test-retry",
-        "retry-profile",
-    )
-    .await
-    .expect("load should succeed")
-    .expect("profile should exist");
+    let loaded = load_inference_profile(&db.node, node_did, "retry-profile")
+        .await
+        .expect("load should succeed")
+        .expect("profile should exist");
     assert_eq!(
         loaded.reasoning_effort,
         Some(crate::inference::resolved::ReasoningEffort::Max)
