@@ -5,7 +5,38 @@ use crate::eval::runner::executor::InferenceBinding;
 use crate::eval::OutcomeKind;
 use crate::pack::digest_declared_assets;
 use crate::store::graphql::escape_graphql_string;
+use crate::NodeIdentity;
 use serde_json::{json, Value};
+
+pub(super) fn bind_test_evaluator(
+    spec: &mut TrialSpec,
+    home: &mut EmbeddedHome,
+) -> std::sync::Arc<crate::KeyIdentity> {
+    let identity = super::super::home::bind_test_evaluator(home);
+    spec.evaluator_did = identity.did().to_owned();
+    identity
+}
+
+pub(super) async fn configured_trial(
+    directory: &Path,
+    name: &str,
+) -> (EmbeddedHome, TrialSpec, String) {
+    let pack_dir = directory.join("pack");
+    write_slot_pack(&pack_dir, "gents:inference-slot:primary");
+    let workspace = directory.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let mut spec = TrialSpec {
+        pack_digest: materialized_digest(&pack_dir),
+        pack_dir,
+        agent_slot: "subject".into(),
+        inference: frozen_binding(json!("frozen-profile")),
+        ..TrialSpec::empty_for_tests(name)
+    };
+    let mut home = EmbeddedHome::create_trial_temp(name).await.unwrap();
+    bind_test_evaluator(&mut spec, &mut home);
+    let agent = install(&spec, &home, &workspace).await.unwrap();
+    (home, spec, agent)
+}
 
 pub(super) fn assert_failure_class(
     observed: Option<OutcomeKind>,
@@ -54,12 +85,7 @@ async fn a_declared_slot_the_binding_cannot_fill_is_infrastructure() {
         .join("base")
         .join("pack");
     write_slot_pack(&pack_dir, "gents:inference-slot:primary");
-    let executor = EmbeddedExecutor::new(
-        DocumentRuntimeOptions::default(),
-        runs_dir.clone(),
-        crate::test_support::runtime_handle(),
-    );
-    let spec = TrialSpec {
+    let mut spec = TrialSpec {
         pack_digest: materialized_digest(&pack_dir),
         pack_dir,
         agent_slot: "subject".into(),
@@ -68,7 +94,19 @@ async fn a_declared_slot_the_binding_cannot_fill_is_infrastructure() {
         ..TrialSpec::empty_for_tests("t1")
     };
 
-    let home = EmbeddedHome::create_temp("unbindable-slot").await.unwrap();
+    let mut home = EmbeddedHome::create_trial_temp("unbindable-slot")
+        .await
+        .unwrap();
+    let evaluator = bind_test_evaluator(&mut spec, &mut home);
+    let executor = EmbeddedExecutor::new(
+        DocumentRuntimeOptions::default(),
+        runs_dir.clone(),
+        crate::test_support::runtime_handle(),
+    )
+    .with_evaluator_identity(
+        evaluator.clone(),
+        evaluator.client_signing_capability().unwrap(),
+    );
     let error = install(&spec, &home, &dir.path().join("workspace"))
         .await
         .unwrap_err();

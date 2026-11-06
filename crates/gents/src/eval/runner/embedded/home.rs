@@ -46,6 +46,17 @@ pub struct EmbeddedHome {
     tempdir: Option<TempDir>,
 }
 
+#[cfg(test)]
+pub(super) fn bind_test_evaluator(home: &mut EmbeddedHome) -> Arc<KeyIdentity> {
+    let identity =
+        Arc::new(KeyIdentity::load_or_create(home.path().join("evaluator.key"), None).unwrap());
+    home.set_evaluator(
+        identity.clone(),
+        identity.client_signing_capability().unwrap(),
+    );
+    identity
+}
+
 impl std::fmt::Debug for EmbeddedHome {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EmbeddedHome")

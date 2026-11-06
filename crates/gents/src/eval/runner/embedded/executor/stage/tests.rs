@@ -2,8 +2,8 @@ use super::*;
 use crate::eval::runner::embedded::executor::close;
 use crate::eval::runner::embedded::executor::install::{install, install_schema};
 use crate::eval::runner::embedded::executor::tests::{
-    assert_failure_class, frozen_binding, materialized_digest, seed_request_with_state,
-    write_slot_pack,
+    assert_failure_class, bind_test_evaluator, configured_trial, frozen_binding,
+    materialized_digest, seed_request_with_state, write_slot_pack,
 };
 use crate::eval::runner::embedded::executor::EventSourcesReady;
 use crate::eval::runner::embedded::home::boot_runtime;
@@ -12,7 +12,7 @@ use crate::eval::runner::embedded::observe::{
 };
 use crate::eval::runner::executor::{CaptureResult, FixtureDocument};
 use crate::request::lifecycle::{
-    build_signed_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
+    build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
 };
 use crate::store::graphql::graphql_with_transaction_retry;
 use crate::{ConfigAccess, DocumentRuntimeOptions};
@@ -21,7 +21,21 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn a_cancelled_seed_stage_is_runtime_before_any_request_exists() {
-    let home = EmbeddedHome::create_temp("seed-cancel").await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let pack_dir = dir.path().join("pack");
+    write_slot_pack(&pack_dir, "gents:inference-slot:primary");
+    let mut spec = TrialSpec {
+        pack_digest: materialized_digest(&pack_dir),
+        pack_dir,
+        ..TrialSpec::empty_for_tests("t1")
+    };
+    spec.fixtures
+        .seed_schemas
+        .push("type NoSuchItem { label: String }".to_owned());
+    let mut home = EmbeddedHome::create_trial_temp("seed-cancel")
+        .await
+        .unwrap();
+    bind_test_evaluator(&mut spec, &mut home);
     let cancel = CancellationToken::new();
     let stage = StageSpec {
         stage_id: "fire".into(),
@@ -53,7 +67,7 @@ async fn a_cancelled_seed_stage_is_runtime_before_any_request_exists() {
     let observed = tokio::time::timeout(
         Duration::from_secs(5),
         submit_and_observe(
-            &TrialSpec::empty_for_tests("t1"),
+            &spec,
             &StageEnv {
                 agent_did: "did:test:unselected",
                 cancel: &cancel,
@@ -73,6 +87,7 @@ async fn a_cancelled_seed_stage_is_runtime_before_any_request_exists() {
         (None, Some(OutcomeKind::Runtime))
     );
     assert_eq!(observed.terminal_state, None);
+    close(home).await;
 }
 
 #[tokio::test]
@@ -99,16 +114,17 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
         write_slot_pack(&pack_dir, "gents:inference-slot:primary");
         let mut inference = frozen_binding(json!("frozen-profile"));
         inference.backend["endpoint"] = json!(backend.endpoint());
-        let spec = TrialSpec {
+        let mut spec = TrialSpec {
             pack_digest: materialized_digest(&pack_dir),
             pack_dir,
             agent_slot: "subject".into(),
             inference,
             ..TrialSpec::empty_for_tests("scheduled-teardown")
         };
-        let home = EmbeddedHome::create_temp("scheduled-teardown")
+        let mut home = EmbeddedHome::create_trial_temp("scheduled-teardown")
             .await
             .unwrap();
+        bind_test_evaluator(&mut spec, &mut home);
         let agent_did = install(&spec, &home, &dir.path().join("workspace"))
             .await
             .unwrap();
@@ -120,7 +136,9 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
         .await
         .unwrap();
         let request_id = uuid::Uuid::new_v4().to_string();
-        let request = build_signed_request(
+        let client = home.client_access(&spec.evaluator_did).unwrap();
+        let request = build_signed_client_request(
+            &client,
             RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 RequestIdentity {
@@ -134,30 +152,17 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
                     created_at: chrono::Utc::now()
                         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 },
-                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::client(
                     &spec.evaluator_did,
                 ),
             ),
-            RequestSigner::Identity(
-                &crate::store::identity::RegisteredIdentity::from_registered_did(
-                    &spec.evaluator_did,
-                    None,
-                )
-                .unwrap(),
-            ),
+            RequestSigner::Identity(home.evaluator(&spec.evaluator_did).unwrap()),
         )
         .await
         .unwrap();
-        ConfigAccess::local_as(
-            home.node.clone(),
-            ::identity::Did::new(spec.evaluator_did.clone()).unwrap(),
-        )
-        .write(
-            "test.eval_scheduled_shutdown",
-            &request.graphql_mutation().unwrap(),
-        )
-        .await
-        .unwrap();
+        crate::request::lifecycle::submit_client_request(&client, &request)
+            .await
+            .unwrap();
         tokio::time::timeout(Duration::from_secs(30), async {
             while backend.observed_chunks(marker) == 0 {
                 tokio::time::sleep(Duration::from_millis(20)).await;
@@ -183,14 +188,7 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
             cancel.cancel();
             let (terminal, stopped) = tokio::time::timeout(
                 Duration::from_secs(30),
-                observe_stage_terminal(
-                    &home.node,
-                    &crate::ConfigAccess::local(home.node.clone()),
-                    &cancel,
-                    &runtime,
-                    &request_id,
-                    None,
-                ),
+                observe_stage_terminal(&home.node, &client, &cancel, &runtime, &request_id, None),
             )
             .await
             .expect("stage cancellation must settle active inference");
@@ -236,12 +234,9 @@ async fn a_stage_that_could_not_be_submitted_still_runs_its_captures() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
-    let home = EmbeddedHome::create_temp("submit-failure").await.unwrap();
-    seed_request(&home, "seeded").await;
-
-    let spec = TrialSpec::empty_for_tests("t1");
+    let (home, spec, agent_did) = configured_trial(dir.path(), "submit-failure").await;
     let locator = TrialLocator {
-        trial_node_did: "did:key:zUnregistered".to_string(),
+        trial_node_did: home.did().to_string(),
         session_id: "s-1".to_string(),
         home_hint: None,
     };
@@ -269,6 +264,16 @@ async fn a_stage_that_could_not_be_submitted_still_runs_its_captures() {
         ],
     };
 
+    super::super::submit::submit_stage(
+        &home,
+        &spec.evaluator_did,
+        &locator,
+        &agent_did,
+        &stage,
+        "seeded",
+    )
+    .await
+    .unwrap();
     let runtime = exited_runtime();
     let evidence = run_stage(
         &spec,
@@ -296,7 +301,7 @@ async fn a_stage_that_could_not_be_submitted_still_runs_its_captures() {
         panic!("expected a document capture, got {:?}", evidence.captures);
     };
     assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0]["agent_did"], "seeded-agent");
+    assert_eq!(rows[0]["agent_did"], agent_did);
     assert!(
         !evidence.captures.contains_key("unreadable"),
         "{:?}",
@@ -310,7 +315,7 @@ async fn a_runtime_that_exits_mid_stage_fails_the_stage_as_runtime_at_once() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
-    let home = EmbeddedHome::create_temp("runtime-exit").await.unwrap();
+    let (home, spec, agent_did) = configured_trial(dir.path(), "runtime-exit").await;
     let locator = TrialLocator {
         trial_node_did: home.did().to_string(),
         session_id: "s-1".to_string(),
@@ -331,12 +336,9 @@ async fn a_runtime_that_exits_mid_stage_fails_the_stage_as_runtime_at_once() {
     let evidence = tokio::time::timeout(
         Duration::from_secs(30),
         run_stage(
-            &TrialSpec {
-                agent_slot: "subject".to_string(),
-                ..TrialSpec::empty_for_tests("t1")
-            },
+            &spec,
             &StageEnv {
-                agent_did: "did:test:unselected",
+                agent_did: &agent_did,
                 cancel: &CancellationToken::new(),
                 home: &home,
                 runtime: &runtime,
@@ -385,16 +387,20 @@ async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
         "source": {"kind": "event", "event_source_id": "seed-source"}
     }]);
     std::fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
-    let spec = TrialSpec {
+    let mut spec = TrialSpec {
         pack_digest: materialized_digest(&pack_dir),
         pack_dir,
         agent_slot: "subject".into(),
         inference,
         ..TrialSpec::empty_for_tests("seed-template-failure")
     };
-    let home = EmbeddedHome::create_temp("seed-template-failure")
+    spec.fixtures
+        .seed_schemas
+        .push("type EvalSeed { payload: JSON }".to_owned());
+    let mut home = EmbeddedHome::create_trial_temp("seed-template-failure")
         .await
         .unwrap();
+    bind_test_evaluator(&mut spec, &mut home);
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     install_schema(
