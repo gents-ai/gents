@@ -843,28 +843,6 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     assert!(again.to_string().contains("is not installed"), "{again:#}");
 }
 
-async fn pack_tool(
-    label: &str,
-    plugins: Arc<crate::plugin::executor::PluginExecutor>,
-) -> (Arc<EmbeddedNode>, String, Vec<Box<dyn ToolDyn>>) {
-    let node = build_agent_node().await;
-    let identity = node_identity(label);
-    let node_did = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
-    let mut tool_config = config(&[]);
-    tool_config.agent_did = "setup".to_string();
-    tool_config.enable_pack_install = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        Some(identity),
-        &tool_config,
-        plugins,
-    );
-    (node, node_did, tools)
-}
-
 async fn signed_pack_tool(
     label: &str,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
@@ -7403,8 +7381,10 @@ async fn pack_tool_with_local_read(
 /// resolver needs to keep the account-free reference as the provider
 /// default. Binding to `p-default` is allowed; `p-other` selects another
 /// account and must be refused.
-async fn install_chat_account_fences(node: &Arc<EmbeddedNode>, owner: &str) {
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+async fn install_chat_account_fences(fixture: &SelfConfigFixture) {
+    let owner = fixture.db.node_identity.did();
+    let access = &fixture.user_access;
+    let node = &fixture.db.node;
     for (id, auth) in [
         ("chat-original", json!({"kind":"node_oauth"})),
         (
@@ -7418,7 +7398,7 @@ async fn install_chat_account_fences(node: &Arc<EmbeddedNode>, owner: &str) {
             "auth": auth,
         }))
         .unwrap();
-        crate::store::config_client::write_inference_backend_document(&access, &backend)
+        crate::store::config_client::write_inference_backend_document(access, &backend)
             .await
             .unwrap();
     }
@@ -7428,7 +7408,7 @@ async fn install_chat_account_fences(node: &Arc<EmbeddedNode>, owner: &str) {
             "model_name": "test-model",
         }))
         .unwrap();
-        crate::store::config_client::write_inference_profile_document(&access, &profile)
+        crate::store::config_client::write_inference_profile_document(access, &profile)
             .await
             .unwrap();
     }
@@ -7471,9 +7451,11 @@ async fn install_chat_account_fences(node: &Arc<EmbeddedNode>, owner: &str) {
 #[tokio::test]
 async fn pack_documents_install_refuses_non_default_account_inference_bindings() {
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
-    let (node, did, tools) = pack_tool("documents-account-fence", plugins).await;
-    install_chat_account_fences(&node, &did).await;
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let (fixture, tools) = signed_pack_tool("documents-account-fence", plugins).await;
+    install_chat_account_fences(&fixture).await;
+    let node = &fixture.db.node;
+    let did = fixture.db.node_identity.did();
+    let access = &fixture.user_access;
     let get: Value = serde_json::from_str(
         &config_call(&tools, &["pack", "get", "fixture/documents_fixture"])
             .await
@@ -7537,7 +7519,8 @@ async fn pack_documents_install_refuses_non_default_account_inference_bindings()
 
     // The provider's default account and the account-free setup backend are
     // both admitted, and the pack installs under the pinned digest.
-    for profile in ["p-default", "setup:inference"] {
+    let current_profile = format!("{}:inference", fixture.agent_did());
+    for profile in ["p-default", current_profile.as_str()] {
         let preview: Value = serde_json::from_str(
             &config_call(
                 &tools,
