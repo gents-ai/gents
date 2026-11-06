@@ -206,12 +206,16 @@ pub(in crate::tools::background::job) async fn store_running_progress(
     admission: &crate::tools::call::lifecycle::admission_fixture::PublishedAdmission,
 ) {
     use super::super::records::{write_progress_in_txn, HostProgressFacts};
-    use crate::store::config_client::ConfigAccess;
     use gents_protocol::job::{JobBudget, JobProgress, JobState};
     let doc_id = admission.tool.doc_id().unwrap().to_owned();
-    ConfigAccess::transact_local_write(&admission.node, None, "test.driver.progress", |txn| {
-        let doc_id = doc_id.clone();
-        Box::pin(async move {
+    let access = admission
+        .tool
+        .access()
+        .expect("admission tool carries its agent-scoped access");
+    access
+        .transact_write("test.driver.progress", |txn| {
+            let doc_id = doc_id.clone();
+            Box::pin(async move {
             let guest = JobProgress {
                 title: "audit".to_owned(),
                 state: JobState::Running,

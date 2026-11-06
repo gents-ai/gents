@@ -88,7 +88,8 @@ async fn finish(admission: PublishedAdmission) {
 }
 
 async fn stored_row(admission: &PublishedAdmission) -> Value {
-    let response = ConfigAccess::local(admission.node.clone())
+    let access = admission.tool.access().unwrap();
+    let response = access
         .execute(&format!(
             r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state plugin_execution_receipt }} }}"#,
             escape_graphql_string(admission.tool.doc_id().unwrap()),
@@ -102,7 +103,7 @@ async fn stored_row(admission: &PublishedAdmission) -> Value {
 async fn stored_output(admission: &PublishedAdmission) -> String {
     let tool = &admission.tool;
     match crate::tools::background::status::observe_canonical_tool_output_with_access(
-        &ConfigAccess::local(admission.node.clone()),
+        &admission.tool.access().unwrap(),
         tool.doc_id().unwrap(),
         tool.request_doc_id().unwrap(),
         tool.session_id(),
@@ -121,7 +122,7 @@ async fn stored_output(admission: &PublishedAdmission) -> String {
 
 async fn stored_progress(admission: &PublishedAdmission) -> JobProgress {
     read_progress(
-        &ConfigAccess::local(admission.node.clone()),
+        &admission.tool.access().unwrap(),
         admission.tool.doc_id().unwrap(),
     )
     .await
@@ -301,7 +302,7 @@ async fn a_host_kill_settles_a_row_whose_progress_sits_just_under_the_cap() {
     full.title
         .push_str(&"t".repeat(JOB_PROGRESS_MAX_BYTES - bytes(&full) - 4));
     let doc_id = admission.tool.doc_id().unwrap().to_owned();
-    ConfigAccess::transact_local_write(&admission.node, None, "test.driver.full", |txn| {
+    admission.tool.access().unwrap().transact_write("test.driver.full", |txn| {
         let (doc_id, full) = (doc_id.clone(), full.clone());
         Box::pin(async move {
             let host = HostProgressFacts {
@@ -411,7 +412,7 @@ async fn non_inline_settlement_appends_one_continuation_completion() {
         }),
     )
     .await;
-    let access = ConfigAccess::local(admission.node.clone());
+    let access = admission.tool.access().unwrap();
     let key = crate::tools::background::completion::background_completion_notification_message_key(
         admission.tool.doc_id().unwrap(),
         "tool",
@@ -444,7 +445,7 @@ async fn non_inline_settlement_appends_one_continuation_completion() {
 
 async fn persist_step_state(admission: &PublishedAdmission, evidence: &PluginExecutionReceipt) {
     let doc_id = admission.tool.doc_id().unwrap().to_owned();
-    ConfigAccess::transact_local_write(&admission.node, None, "test.driver.step_state", |txn| {
+    admission.tool.access().unwrap().transact_write("test.driver.step_state", |txn| {
         let doc_id = doc_id.clone();
         Box::pin(async move {
             super::super::records::write_step_state_in_txn(txn, &doc_id, evidence, None, None).await
@@ -612,7 +613,7 @@ async fn read_step_row_in_txn_sees_the_transactions_own_writes() {
     job.write_progress(&row, JobState::Running, 1).await;
     let row = row.as_str();
     let spent =
-        ConfigAccess::transact_local_write(&job.node, None, "test.driver.own_writes", |txn| {
+        job.access.transact_write("test.driver.own_writes", |txn| {
             Box::pin(async move {
                 let host = HostProgressFacts {
                     spawned: 3,
@@ -639,7 +640,7 @@ use crate::pack::{write_home_install, HomePackInstall, PackKind};
 use crate::plugin::store;
 use crate::plugin::tests::constant_output_wat;
 use crate::plugin::tests::executor::installed_plugin;
-use crate::tools::background::job::input::tests::{insert, node_did, Job};
+use crate::tools::background::job::input::tests::{agent_did, insert, node_did, Job};
 use gents_protocol::job::{
     DynamicMode, JobChildState, JobOrigin, PluginJobDeclaration, PluginJobSettings,
 };
@@ -701,7 +702,7 @@ async fn write_inference(job: &Job) {
 
 pub(crate) async fn write_step_tools(job: &Job, settings: Option<&PluginJobSettings>) {
     let tools: crate::documents::Tools = serde_json::from_value(json!({
-        "tools_id": "tools",
+        "tools_id": format!("{}:tools", agent_did()),
         "node_did": node_did(),
         "agents": {"enabled": true, "target_ids": ["t-a", "t-b"]},
         "integrations": {"plugins": [{"plugin": "acme/engine", "job": settings}]},
@@ -961,7 +962,7 @@ impl Stepper {
             pause_reason: None,
         };
         let revision = progress.revision;
-        ConfigAccess::transact_local_write(&self.job.node, None, "test.driver.bump", |txn| {
+        self.job.access.transact_write("test.driver.bump", |txn| {
             let (progress, host) = (progress.clone(), host.clone());
             Box::pin(async move { write_progress_in_txn(txn, row, revision, progress, host).await })
         })
@@ -1305,7 +1306,7 @@ async fn stall_fails_closed() {
     let (input, _) = step.input(&step.row).await;
     let own = step.receipt_of(&input).await;
     let earlier = evidence("persisted");
-    ConfigAccess::transact_local_write(&step.job.node, None, "test.driver.earlier", |txn| {
+    step.job.access.transact_write("test.driver.earlier", |txn| {
         let (row, earlier) = (step.row.clone(), earlier.clone());
         Box::pin(async move { write_step_state_in_txn(txn, &row, &earlier, None, None).await })
     })
@@ -1680,7 +1681,7 @@ async fn concurrent_steps_are_bounded_by_the_semaphore() {
 async fn three_consecutive_step_failures_settle_step_failed_with_the_next_call() {
     let step = stepper(json!("not a step output")).await;
     let earlier = evidence("earlier");
-    ConfigAccess::transact_local_write(&step.job.node, None, "test.driver.earlier", |txn| {
+    step.job.access.transact_write("test.driver.earlier", |txn| {
         let (row, earlier) = (step.row.clone(), earlier.clone());
         Box::pin(async move { write_step_state_in_txn(txn, &row, &earlier, None, None).await })
     })

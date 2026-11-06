@@ -705,7 +705,7 @@ mod tests {
         let tool = &admission.tool;
         let request_doc_id = tool.request_doc_id().unwrap().to_owned();
         let caller =
-            crate::request::binding::load_agent_request_by_doc_id(&admission.node, &request_doc_id)
+            crate::request::binding::load_agent_request_by_doc_id_with_access(&tool.access().unwrap(), &request_doc_id)
                 .await
                 .unwrap()
                 .unwrap();
@@ -886,9 +886,9 @@ mod tests {
         };
         let job = &job;
         let fresh_refs = &fresh_refs;
-        ConfigAccess::transact_local_write(
-            &harness.node,
-            None,
+        harness
+            .access
+            .transact_write(
             "plugin_job.stage_effects",
             move |txn| {
                 Box::pin(
@@ -899,7 +899,7 @@ mod tests {
         .await
     }
 
-    async fn by_key(node: &std::sync::Arc<EmbeddedNode>, key: &str) -> Vec<serde_json::Value> {
+    async fn by_key(access: &ConfigAccess, key: &str) -> Vec<serde_json::Value> {
         let query = format!(
             r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{
                 _docID content request_hop created_at
@@ -909,15 +909,9 @@ mod tests {
             }} }}"#,
             crate::store::graphql::escape_graphql_string(key)
         );
-        let response =
-            crate::store::graphql::graphql_with_transaction_retry(node, &query, "job staging read")
-                .await
-                .unwrap();
-        response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRequest"))
-            .and_then(serde_json::Value::as_array)
+        let response = access.execute(&query).await.unwrap();
+        response["data"]["AgentRequest"]
+            .as_array()
             .cloned()
             .unwrap_or_default()
     }
@@ -938,9 +932,9 @@ mod tests {
         stage(&harness, &[kept], &effects, &harness.row)
             .await
             .unwrap();
-        let rows = by_key(&harness.node, &job_spawn_key("root", "kept", 0)).await;
+        let rows = by_key(&harness.access, &job_spawn_key("root", "kept", 0)).await;
         assert_eq!(rows.len(), 1);
-        assert!(by_key(&harness.node, &job_spawn_key("root", "old", 0))
+        assert!(by_key(&harness.access, &job_spawn_key("root", "old", 0))
             .await
             .is_empty());
         let row = &rows[0];
@@ -972,7 +966,7 @@ mod tests {
         harness.row.row_doc_id = harness.row.root.clone();
         let mut job_pin = pin();
         job_pin.chain_root_doc_id = harness.row.root.clone();
-        ConfigAccess::transact_local_write(&harness.node, None, "test.job_slot_pin", |txn| {
+        harness.access.transact_write("test.job_slot_pin", |txn| {
             let doc = &harness.row.root;
             let pin = &job_pin;
             Box::pin(async move {
@@ -991,9 +985,9 @@ mod tests {
         .await
         .unwrap();
         let key = job_spawn_key(&harness.row.root, "worker", 0);
-        let rows = by_key(&harness.node, &key).await;
+        let rows = by_key(&harness.access, &key).await;
         let doc = rows[0]["_docID"].as_str().unwrap();
-        let response = ConfigAccess::local(harness.node.clone())
+        let response = harness.access
             .execute(&format!(
                 "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
                 crate::store::graphql::escape_graphql_string(doc),
@@ -1077,7 +1071,7 @@ mod tests {
         stage(&harness, &[first], &effects, &harness.row)
             .await
             .unwrap();
-        let rows = by_key(&harness.node, &job_spawn_key("root", "kept", 0)).await;
+        let rows = by_key(&harness.access, &job_spawn_key("root", "kept", 0)).await;
         assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0]["content"],
@@ -1104,9 +1098,7 @@ mod tests {
             cause: &harness.cause,
         };
         let (job, fresh, effects) = (&job, &fresh, &effects);
-        let staged = ConfigAccess::transact_local_write(
-            &harness.node,
-            None,
+        let staged = harness.access.transact_write(
             "plugin_job.stage_effects",
             move |txn| {
                 Box::pin(async move {
@@ -1152,11 +1144,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let first = by_key(&harness.node, &job_spawn_key("root", "kept", 0)).await;
+        let first = by_key(&harness.access, &job_spawn_key("root", "kept", 0)).await;
         stage(&harness, &[kept], &effects, &harness.row)
             .await
             .unwrap();
-        let second = by_key(&harness.node, &job_spawn_key("root", "kept", 0)).await;
+        let second = by_key(&harness.access, &job_spawn_key("root", "kept", 0)).await;
         assert_eq!(second.len(), 1);
         assert_eq!(second[0]["_docID"], first[0]["_docID"]);
         harness.close().await;
@@ -1181,7 +1173,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("integrity"), "{error:#}");
-        let rows = by_key(&harness.node, &job_spawn_key("root", "kept", 0)).await;
+        let rows = by_key(&harness.access, &job_spawn_key("root", "kept", 0)).await;
         assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0]["content"],
@@ -1217,7 +1209,7 @@ mod tests {
         );
         stage(&harness, &[], &effects, &row).await.unwrap();
         let key = job_message_key("root", "slot", 0, 3);
-        let rows = by_key(&harness.node, &key).await;
+        let rows = by_key(&harness.access, &key).await;
         assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0]["content"],
@@ -1230,7 +1222,7 @@ mod tests {
             )
         );
         assert!(
-            by_key(&harness.node, &job_message_key("root", "slot", 0, 1))
+            by_key(&harness.access, &job_message_key("root", "slot", 0, 1))
                 .await
                 .is_empty()
         );
@@ -1245,7 +1237,7 @@ mod tests {
         stage(&harness, &[kept], &effects, &harness.row)
             .await
             .unwrap();
-        let rows = by_key(&harness.node, &job_spawn_key("root", "kept", 0)).await;
+        let rows = by_key(&harness.access, &job_spawn_key("root", "kept", 0)).await;
         assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0]["content"],
@@ -1277,7 +1269,7 @@ mod tests {
         stage(&harness, &[kept], &effects, &harness.row)
             .await
             .unwrap();
-        let rows = by_key(&harness.node, &job_spawn_key("root", "kept", 0)).await;
+        let rows = by_key(&harness.access, &job_spawn_key("root", "kept", 0)).await;
         assert_eq!(input_of(&rows[0])["cwd"], "/work/review_seeded_bug");
         harness.close().await;
     }
