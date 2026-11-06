@@ -257,22 +257,29 @@ async fn non_pin_notification_rejection_restores_previous_plugin_and_home_record
     .unwrap();
     let (packed, _) = crate::pack::archive::pack_dir(&next_dir.path().join("source")).unwrap();
     let next = crate::pack::archive::PackArchive::from_bytes(&packed).unwrap();
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = crate::store::config_client::ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(node.node_identity_did().unwrap()).unwrap(),
-    );
-    access.write("test.pack.node", r#"mutation { create_Node(input: {node_did: "did:test:owner", enabled: true}) { _docID } }"#).await.unwrap();
-    access.write("test.dangling_agent", r#"mutation { create_Agent(input: {agent_did: "broken", node_did: "did:test:owner", context_id: "missing", inference_profile_id: "profile"}) { _docID } }"#).await.unwrap();
+    let (_identity_dir, runtime, node, access) = super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime).to_owned();
+    let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
+    let input = serde_json::json!({"agent_did":binding.agent_did, "creation_nonce":binding.creation_nonce,
+        "node_did":owner, "context_id":"missing", "inference_profile_id":"profile"});
+    access.transact_write("test.dangling_agent", |txn| {
+        let input = &input;
+        Box::pin(async move {
+            txn.execute_client_signed_create(
+                "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                &serde_json::json!({"input":input}), gents_protocol::schemas::AGENT,
+            ).await.map(|_| ())
+        })
+    }).await.unwrap();
     let notify_access = access.clone();
     let notify_home = home.path().to_owned();
     let original_digest = old_plugin.digest.clone();
+    let notify_owner = owner.clone();
     let error = install(
         home.path(),
         &next,
         false,
-        Some("did:test:owner"),
+        Some(&owner),
         &BTreeMap::new(),
         move |identity| async move {
             let staged =
@@ -280,7 +287,7 @@ async fn non_pin_notification_rejection_restores_previous_plugin_and_home_record
             assert_ne!(staged.digest, original_digest);
             super::record_plugin_store_change(
                 &notify_access,
-                "did:test:owner",
+                &notify_owner,
                 &notify_home,
                 &identity.coordinate,
                 Some(&identity),
