@@ -167,6 +167,16 @@ where
     }
 }
 
+// Construct a branch's potentially large future outside the live stream poll
+// frame. The call must remain separate even in optimized builds.
+#[inline(never)]
+fn box_stream_branch<F, T>(branch: F) -> std::pin::Pin<Box<impl std::future::Future<Output = T>>>
+where
+    F: AsyncFnOnce() -> T,
+{
+    Box::pin(branch())
+}
+
 impl<M> AgentDaemon<M>
 where
     M: crate::inference::llm::rig_compat::ProviderModel,
@@ -683,7 +693,7 @@ where
                                 biased;
                                 _ = shutdown.changed() => {
                                     drop(stream);
-                                    return Box::pin(async {
+                                    return box_stream_branch(async || {
                                         match tokio::time::timeout(
                                             crate::store::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
                                             async {
@@ -725,7 +735,7 @@ where
                                     request_token.cancel();
                                     inference_token.cancel();
                                     drop(stream);
-                                    return Box::pin(async {
+                                    return box_stream_branch(async || {
                                         let output_result = processor
                                             .persist_received_partial_turn("persist interrupted assistant turn")
                                             .await.map_err(processor_failure);
@@ -770,7 +780,7 @@ where
                                         None => std::future::pending::<()>().await,
                                     }
                                 } => {
-                                    let (flushed, item) = Box::pin(async {
+                                    let (flushed, item) = box_stream_branch(async || {
                                         let progress = async {
                                             crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
                                                 request_deadline,
@@ -820,7 +830,7 @@ where
                                                 error.to_string(),
                                             );
                                             drop(stream);
-                                            return Box::pin(async {
+                                            return box_stream_branch(async || {
                                                 let output_result = processor
                                                     .persist_received_partial_turn(
                                                         "persist deadline-expired assistant turn",
