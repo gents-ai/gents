@@ -47,7 +47,7 @@ pub use session_tip::{
     RequestPromptFact, RequestPromptOwnership,
 };
 mod snapshot_loaders;
-pub(crate) use snapshot_loaders::load_node_snapshot_on;
+pub use snapshot_loaders::load_node_snapshot_on;
 
 pub use agent_scope::load_node_scoped_snapshot;
 #[cfg(test)]

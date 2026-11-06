@@ -703,7 +703,7 @@ pub async fn load_full_snapshot_with_peer_records(
     Ok(store)
 }
 
-pub(crate) async fn load_node_snapshot_on(
+pub async fn load_node_snapshot_on(
     access: &gents::store::config_client::ConfigAccess,
     node_did: &str,
 ) -> Result<ClientStore> {

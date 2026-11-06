@@ -527,8 +527,9 @@ pub(super) async fn handle_request(
                 .request_id
                 .as_deref()
                 .ok_or_else(|| anyhow!("requestId is required"))?;
+            let access = fixture.desktop_core().operator_access(fixture.node_did())?;
             let result = retained_provider_reasoning(
-                fixture.remote_core().as_ref(),
+                &access,
                 fixture.node_did(),
                 &request.session_id,
                 request_id,
@@ -541,8 +542,12 @@ pub(super) async fn handle_request(
                 &request.body,
                 "decoding operations snapshot request",
             )?;
-            let snapshot =
-                operations_snapshot_response(Arc::clone(fixture.desktop_core()), request).await?;
+            let node_did = request
+                .node_did
+                .as_deref()
+                .unwrap_or_else(|| fixture.node_did());
+            let access = fixture.desktop_core().operator_access(node_did)?;
+            let snapshot = operations_snapshot_response(&access, request).await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
         }
         ("POST", "/desktop/session-provenance") => {

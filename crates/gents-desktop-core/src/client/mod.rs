@@ -40,12 +40,12 @@ pub use peer_directory::{initialize_local_standard_peer, load_peer_records, Peer
 pub use principal_identity::PrincipalIdentity;
 pub(crate) use query::load_request_documents_on;
 pub use query::{
-    load_node_scoped_snapshot, load_request_prompt_ownership, load_request_prompt_ownership_on,
-    load_session_compaction_entries, load_session_compaction_entries_on,
-    load_session_context_store, load_session_context_store_on, load_session_diagnostics_store,
-    load_session_diagnostics_store_on, load_session_live_store, load_session_live_store_on,
-    load_session_tip_store, load_session_tip_store_on, load_session_transcript_page,
-    load_session_transcript_page_on, load_session_transcript_window,
+    load_node_scoped_snapshot, load_node_snapshot_on, load_request_prompt_ownership,
+    load_request_prompt_ownership_on, load_session_compaction_entries,
+    load_session_compaction_entries_on, load_session_context_store, load_session_context_store_on,
+    load_session_diagnostics_store, load_session_diagnostics_store_on, load_session_live_store,
+    load_session_live_store_on, load_session_tip_store, load_session_tip_store_on,
+    load_session_transcript_page, load_session_transcript_page_on, load_session_transcript_window,
     load_session_transcript_window_on, session_transcript_requester_scope,
     CanonicalTranscriptDependencies, RequestPromptFact, RequestPromptOwnership,
     SessionTranscriptQueryPage, TranscriptSpan, TranscriptWindow,

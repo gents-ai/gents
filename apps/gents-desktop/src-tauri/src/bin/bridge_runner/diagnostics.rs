@@ -215,7 +215,6 @@ pub(crate) async fn build_request_diagnostics_bundle(
         .desktop_core()
         .operator_access(fixture.node_did())
         .expect("live fixture runtime endpoint");
-    let remote_access = ConfigAccess::local(fixture.remote_core().node_arc());
     let desktop = build_request_diagnostics(
         DiagnosticSource::Desktop,
         fixture.desktop_core().as_ref(),
@@ -229,15 +228,14 @@ pub(crate) async fn build_request_diagnostics_bundle(
     let mut remote = build_request_diagnostics(
         DiagnosticSource::Remote,
         fixture.remote_core().as_ref(),
-        &remote_access,
+        &desktop_access,
         fixture.node_did(),
         session_id,
         request_id,
         fixture.requester_scope(Some(fixture.node_did()), session_id, Some(request_id)),
     )
     .await;
-    let access = ConfigAccess::local(fixture.remote_core().node_arc());
-    match load_run_timeline_rows(&access, request_id).await {
+    match load_run_timeline_rows(&desktop_access, request_id).await {
         Ok(rows)
             if rows.request.request_id == request_id
                 && rows.request.session_id.as_deref() == Some(session_id)
@@ -293,8 +291,7 @@ async fn build_request_diagnostics(
 ) -> RequestDiagnostics {
     let refresh_error = match source {
         DiagnosticSource::Remote => {
-            match gents_desktop_core::client::load_node_scoped_snapshot(core.node(), node_did).await
-            {
+            match gents_desktop_core::client::load_node_snapshot_on(access, node_did).await {
                 Ok(snapshot) => {
                     core.store().replace_snapshot(snapshot);
                     None
