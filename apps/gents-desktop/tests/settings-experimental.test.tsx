@@ -60,7 +60,9 @@ describe("the experimental features settings", () => {
 
   it("marks only a flag that applies at launch", () => {
     openSection();
-    expect(screen.getAllByText("Relaunch")).toHaveLength(1);
+    expect(screen.getAllByText("Relaunch")).toHaveLength(
+      FLAGS.filter((f) => f.restart).length,
+    );
   });
 
   it("sets an explicit choice when a switch flips, and resets it to the default", async () => {

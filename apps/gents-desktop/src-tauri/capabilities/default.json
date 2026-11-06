@@ -19,6 +19,7 @@
     "gents-desktop-bridge:default",
     "gents-desktop-bridge:full",
     "native-swipe",
-    "open-plugin-window"
+    "open-plugin-window",
+    "native-browser"
   ]
 }
