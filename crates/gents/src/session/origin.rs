@@ -965,11 +965,11 @@ fn creation_receipt_signer<'a>(
     agent: &'a str,
 ) -> Option<&'a str> {
     match cause {
-        gents_protocol::session::SessionCreationCause::AgentNew => {
+        gents_protocol::session::SessionCreationCause::AgentNew
+        | gents_protocol::session::SessionCreationCause::PluginJob => {
             requester.filter(|did| !did.is_empty())
         }
-        gents_protocol::session::SessionCreationCause::TaskTrigger
-        | gents_protocol::session::SessionCreationCause::PluginJob => Some(agent),
+        gents_protocol::session::SessionCreationCause::TaskTrigger => Some(agent),
     }
 }
 
@@ -1207,7 +1207,7 @@ fn job_creation_matches(parent: bool, job: bool, key: bool, spawn: bool) -> bool
     parent && job && key && spawn
 }
 
-async fn plugin_job_creation_binding<R>(
+pub(super) async fn plugin_job_creation_binding<R>(
     access: &R,
     request: &AgentRequestRow,
 ) -> Result<Option<(String, SessionScope)>>

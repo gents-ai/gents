@@ -2114,8 +2114,67 @@ mod job_calls {
             )
             .await
             .unwrap();
-        let plan = crate::session::message::Plan::request(session, 1, create);
-        access
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_job_opening_cases;
+        let expected = |name: &str| {
+            cases.iter().find(|case| case["name"] == name).unwrap()["commits"]
+                .as_bool()
+                .unwrap()
+        };
+        let mut wrong_pin = create.clone();
+        wrong_pin.retry_key = Some(job_spawn_key("wrong-root", "slot-a", 0));
+        let wrong_plan = crate::session::message::Plan::request(session.clone(), 1, wrong_pin);
+        let rejected = access
+            .transact_write("test.job_calls.wrong_pin", |txn| {
+                let (cause, plan) = (&cause, &wrong_plan);
+                Box::pin(async move {
+                    crate::session::message::stage_planned_write_in_txn(txn, cause, plan).await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await;
+        assert_eq!(rejected.is_ok(), expected("wrong_pin"));
+        let escaped = crate::store::graphql::escape_graphql_string(&session);
+        let absent = access.execute(&format!(
+            r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID }} AgentRequest(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#
+        )).await.unwrap();
+        assert!(absent["data"]["AgentSession"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert!(absent["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+
+        let plan = crate::session::message::Plan::request(session.clone(), 1, create);
+        let staged_before_abort = std::sync::atomic::AtomicBool::new(false);
+        let rolled_back: anyhow::Result<()> = access
+            .transact_write("test.job_calls.rollback", |txn| {
+                let (cause, plan, staged) = (&cause, &plan, &staged_before_abort);
+                Box::pin(async move {
+                    crate::session::message::stage_planned_write_in_txn(txn, cause, plan).await?;
+                    staged.store(true, std::sync::atomic::Ordering::SeqCst);
+                    anyhow::bail!("abort the opening transaction")
+                })
+            })
+            .await;
+        assert_eq!(rolled_back.is_ok(), expected("failed_transaction"));
+        assert!(
+            staged_before_abort.load(std::sync::atomic::Ordering::SeqCst),
+            "{rolled_back:?}"
+        );
+        let absent = access.execute(&format!(
+            r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID }} AgentRequest(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#
+        )).await.unwrap();
+        assert!(absent["data"]["AgentSession"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert!(absent["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        let committed = access
             .transact_write("test.job_calls.child", |txn| {
                 let (cause, plan) = (&cause, &plan);
                 Box::pin(async move {
@@ -2123,8 +2182,29 @@ mod job_calls {
                     Ok::<_, anyhow::Error>(())
                 })
             })
-            .await
-            .unwrap();
+            .await;
+        assert_eq!(committed.is_ok(), expected("valid"), "{committed:?}");
+
+        let origin = crate::session::origin::verified_creation_origin(
+            &access,
+            &crate::session::origin::SessionScope {
+                node_did: admission.node_did.clone(),
+                session_id: session,
+                requester_did: Some(agent_did.to_owned()),
+            },
+        )
+        .await
+        .unwrap()
+        .expect("the child has a verified creation receipt");
+        assert_eq!(
+            origin.cause,
+            gents_protocol::session::SessionCreationCause::PluginJob
+        );
+        let starter = origin
+            .starter
+            .expect("the receipt identifies the actual parent");
+        assert_eq!(starter.scope.session_id, tool.session_id());
+        assert_eq!(starter.cause_request_doc_id, tool.request_doc_id().unwrap());
 
         let response = admission.client.execute(&format!(
             r#"{{ Agent(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 2) {{ agent_did creation_nonce }} }}"#,
@@ -2174,6 +2254,7 @@ mod job_calls {
         );
         let pin = json!({"pin": gents_protocol::job::JobPin {
             plugin_ref: plugin_ref.to_owned(),
+            chain_root_doc_id: admission.tool.doc_id().unwrap().to_owned(),
             ..fixture_job_pin()
         }});
         admission

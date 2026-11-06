@@ -2,6 +2,180 @@ use super::query::{decode_session_row, session_scope_filter, validate_agent_sess
 use super::*;
 use anyhow::Context;
 
+/// Reserve a PluginJob child in the transaction that will publish its opening.
+/// The exact pinned job and its authenticated parent are checked before any write.
+pub(crate) async fn stage_plugin_job_session_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    create: &gents_protocol::request_admission::AgentRequestCreate,
+) -> Result<String> {
+    use gents_protocol::request_input::SessionCreationIntent;
+    use gents_protocol::row::AgentRequestRow;
+
+    let source = create
+        .input
+        .started_by
+        .as_ref()
+        .context("job child lacks source")?;
+    let signer = txn
+        .managed_agent_signer()
+        .context("job child requires a managed Agent")?;
+    anyhow::ensure!(
+        create.input.session_creation == Some(SessionCreationIntent::PluginJob)
+            && create.node_did == source.node_did
+            && txn.actor_did() == Some(create.requester_did.as_str())
+            && signer.did() == create.requester_did
+            && create.admission.signer_did == create.requester_did,
+        "job child differs from its authenticated local author"
+    );
+    let candidate = AgentRequestRow {
+        request_id: create.request_id.clone(),
+        requester_did: Some(create.requester_did.clone()),
+        admission_signer_did: Some(create.admission.signer_did.clone()),
+        session_id: Some(create.session_id.clone()),
+        retry_key: create.retry_key.clone(),
+        caused_by_parent_request_doc_id: create.caused_by_parent_request_doc_id.clone(),
+        caused_by_parent_request_id: create.caused_by_parent_request_id.clone(),
+        caused_by_parent_tool_call_doc_id: create.caused_by_parent_tool_call_doc_id.clone(),
+        caused_by_parent_tool_call_id: create.caused_by_parent_tool_call_id.clone(),
+        ..Default::default()
+    };
+    let verified = crate::session::origin::verified_agent_source(txn, &candidate)
+        .await?
+        .context("job child source is unavailable or invalid")?;
+    anyhow::ensure!(
+        verified.node_did == source.node_did
+            && verified.session_id == source.session_id
+            && verified.requester_did == source.requester_did,
+        "job child source differs from its authenticated parent"
+    );
+    anyhow::ensure!(
+        crate::session::origin::plugin_job_creation_binding(txn, &candidate)
+            .await?
+            .is_some(),
+        "job child does not match its pinned spawn"
+    );
+    anyhow::ensure!(
+        load_agent_session_owner_in_txn(txn, &create.node_did, &create.session_id)
+            .await?
+            .is_none(),
+        "job child session identity already exists"
+    );
+    let provenance = gents_protocol::session::SessionProvenance {
+        parent_request_doc_id: create.caused_by_parent_request_doc_id.clone(),
+        started_by: Some(source.clone()),
+        ..Default::default()
+    };
+    let response = txn.execute_client_signed_create(
+        "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+        &serde_json::json!({"input": {
+            "session_id": create.session_id, "node_did": create.node_did,
+            "requester_did": create.requester_did, "agent_did": create.agent_did,
+            "created_at": create.created_at, "title": create.input.initial_title,
+            "relationships_pending": false, "started_by_node_did": source.node_did,
+            "started_by_session_id": source.session_id, "provenance": provenance
+        }}),
+        gents_protocol::schemas::AGENT_SESSION,
+    ).await?;
+    let session_doc = crate::store::graphql::created_doc_id(&response, "AgentSession")?;
+    let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
+        txn,
+        crate::Collection::Agent,
+        &create.node_did,
+        &create.agent_did,
+    )
+    .await?
+    .context("job child Agent is unavailable")?;
+    stage_session_relationships_in_txn(
+        txn,
+        &session_doc,
+        &agent,
+        &identity::Did::new(&create.agent_did)?,
+    )
+    .await?;
+    Ok(session_doc)
+}
+
+/// Record a verified opening and creation receipt before its transaction commits.
+pub(crate) async fn finalize_plugin_job_session_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    create: &gents_protocol::request_admission::AgentRequestCreate,
+    session_doc: &str,
+    opening_doc: &str,
+) -> Result<()> {
+    use gents_protocol::session::{
+        SessionCreationCause, SessionCreationStarter, SessionProvenance,
+    };
+
+    let source = create
+        .input
+        .started_by
+        .as_ref()
+        .context("job child lacks source")?;
+    let parent = create
+        .caused_by_parent_request_doc_id
+        .as_deref()
+        .context("job child lacks parent")?;
+    let mut provenance = SessionProvenance {
+        parent_request_doc_id: Some(parent.to_owned()),
+        started_by: Some(source.clone()),
+        opening_request_doc_id: Some(opening_doc.to_owned()),
+        ..Default::default()
+    };
+    anyhow::ensure!(
+        crate::session::origin::verified_starter_in_txn(
+            txn,
+            &provenance,
+            &create.node_did,
+            &create.session_id,
+            Some(&create.requester_did),
+            &create.agent_did,
+        )
+        .await?
+        .as_ref()
+            == Some(source),
+        "job child starter differs from its opening"
+    );
+    let receipt = crate::session::origin::issue_creation_receipt_in_txn(
+        txn,
+        &create.node_did,
+        &create.session_id,
+        session_doc,
+        Some(&create.requester_did),
+        &create.agent_did,
+        Some(opening_doc),
+    )
+    .await?
+    .context("job child creation receipt unavailable")?;
+    anyhow::ensure!(
+        receipt.cause == SessionCreationCause::PluginJob
+            && receipt.starter
+                == Some(SessionCreationStarter {
+                    source: source.clone(),
+                    parent_request_doc_id: parent.to_owned()
+                }),
+        "job child receipt differs from its verified starter"
+    );
+    provenance.creation_receipt = Some(receipt);
+    let mutation = format!(
+        r#"mutation($input: AgentSessionMutationInputArg!) {{ update_AgentSession(docID: "{}", input: $input) {{ _docID }} }}"#,
+        escape_graphql_string(session_doc),
+    );
+    let response = txn
+        .execute_client_signed_update(
+            &mutation,
+            &serde_json::json!({"input": {"provenance": provenance}}),
+            gents_protocol::schemas::AGENT_SESSION,
+        )
+        .await?;
+    anyhow::ensure!(
+        response["data"]["update_AgentSession"]
+            .as_array()
+            .is_some_and(|rows| rows.len() == 1 && rows[0]["_docID"] == session_doc),
+        "job child provenance update did not match its session"
+    );
+    Ok(())
+}
+
 /// The caller must finalize this provisional session in the same transaction
 /// and propagate every finalization failure so its immutable starter cannot
 /// become durable without the verified opening request and tool receipt.

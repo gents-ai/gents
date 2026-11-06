@@ -542,6 +542,13 @@ pub(crate) async fn stage_planned_write_in_txn(
                     "session message signer differs from caller"
                 );
                 let mut create = create.clone();
+                let job_session = if create.input.session_creation
+                    == Some(gents_protocol::request_input::SessionCreationIntent::PluginJob)
+                {
+                    Some(crate::session::stage_plugin_job_session_in_txn(txn, &create).await?)
+                } else {
+                    None
+                };
                 create.admission =
                     gents_protocol::request_admission::AgentRequestAdmissionRecord::client(
                         &cause.caller_agent_did,
@@ -561,6 +568,16 @@ pub(crate) async fn stage_planned_write_in_txn(
                     txn, &create, session, agent,
                 )
                 .await?;
+                if let Some(session_doc) = job_session {
+                    anyhow::ensure!(session == session_doc, "job child session binding changed");
+                    crate::session::finalize_plugin_job_session_in_txn(
+                        txn,
+                        &create,
+                        &session_doc,
+                        &doc_id,
+                    )
+                    .await?;
+                }
                 let response = txn.execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ {} }} }}"#,
                 escape_graphql_string(&doc_id), crate::SIGNED_REQUEST_FIELDS,
