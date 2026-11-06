@@ -75,6 +75,7 @@ async fn user_rename_rebuilds_after_confirmed_http_commit_conflict() -> anyhow::
         ConfigAccess, ConfigApplyTxn, GraphqlEndpoint, NodePermission,
     };
     use crate::store::identity::NodeIdentity;
+    use anyhow::Context;
 
     let (db, user, access, binding) =
         crate::test_support::signed_test_node("http-user-title-conflict").await;
@@ -98,7 +99,8 @@ async fn user_rename_rebuilds_after_confirmed_http_commit_conflict() -> anyhow::
         ),
         crate::request::lifecycle::RequestSigner::Identity(&user),
     )
-    .await?;
+    .await
+    .context("creating signed session")?;
 
     let reader = tokio::task::spawn_blocking(|| {
         crate::support::fixtures::test_identity("http-user-title-reader")
@@ -111,21 +113,25 @@ async fn user_rename_rebuilds_after_confirmed_http_commit_conflict() -> anyhow::
         NodePermission::DocumentUpdate,
         NodePermission::CollectionGet,
     ] {
-        admin.grant_node_permission(&reader_did, permission).await?;
+        admin
+            .grant_node_permission(&reader_did, permission)
+            .await
+            .with_context(|| format!("granting reader node permission {permission:?}"))?;
     }
     let before = access.execute(
         r#"{ AgentSession(filter: {session_id: {_eq: "http-title-conflict-session"}}) {_docID title} }"#,
-    ).await?;
+    ).await.context("reading session before denied rename")?;
     let doc = before["data"]["AgentSession"][0]["_docID"]
         .as_str()
         .unwrap();
     access
         .add_actor_relationship("AgentSession", doc, "reader", &reader_did)
-        .await?;
+        .await
+        .context("granting session reader relationship")?;
     let reader_access = db.client_access(&reader);
     let visible = reader_access.execute(
         r#"{ AgentSession(filter: {session_id: {_eq: "http-title-conflict-session"}}) {_docID} }"#,
-    ).await?;
+    ).await.context("reading session as reader")?;
     assert_eq!(visible["data"]["AgentSession"][0]["_docID"], doc);
     let denied = super::rename_session_on(
         &reader_access,
@@ -141,7 +147,7 @@ async fn user_rename_rebuilds_after_confirmed_http_commit_conflict() -> anyhow::
     );
     let after_denial = access.execute(
         r#"{ AgentSession(filter: {session_id: {_eq: "http-title-conflict-session"}}) {_docID title} }"#,
-    ).await?;
+    ).await.context("reading session after denied rename")?;
     assert_eq!(
         after_denial["data"]["AgentSession"],
         before["data"]["AgentSession"]
@@ -198,21 +204,31 @@ async fn user_rename_rebuilds_after_confirmed_http_commit_conflict() -> anyhow::
         session_id,
         "concurrent title",
     )
-    .await?;
+    .await
+    .context("committing competing rename")?;
     release.notify_one();
     let (result, paused, updates) = rename.await;
     assert!(paused);
-    result?;
+    result.context("committing and rebuilding paused rename")?;
     assert_eq!(updates, 2, "the aborted signed update must be rebuilt once");
 
     let response = access.execute(
         r#"{ AgentSession(filter: {session_id: {_eq: "http-title-conflict-session"}}) {title _version {cid}} }"#,
-    ).await?;
+    ).await.context("reading final renamed session")?;
     let row = &response["data"]["AgentSession"][0];
     assert_eq!(row["title"]["text"], "final title");
     let cid = row["_version"][0]["cid"].as_str().expect("title version");
-    assert_eq!(db.node.verified_block_signer_did(cid).await?, user.did());
-    db.node.shutdown().await?;
+    assert_eq!(
+        db.node
+            .verified_block_signer_did(cid)
+            .await
+            .context("verifying title signer")?,
+        user.did()
+    );
+    db.node
+        .shutdown()
+        .await
+        .context("shutting down test node")?;
     Ok(())
 }
 
