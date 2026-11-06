@@ -630,6 +630,20 @@ theorem hosted_effect_requires_approved_plan (actor graph native : Bool) :
     hostedPackEffectAllowed actor graph false native = false := by
   simp [hostedPackEffectAllowed]
 
+/-- Plugin-only hosted installation preserves existing pack documents. Its
+  installed plugin records are staged by the host from the reviewed archive;
+  the client independently replays the same native-authorized pack record. -/
+def hostedPluginInstallAllowed (reviewedDigest clientPlan nativeAuthorized : Bool) : Bool :=
+  reviewedDigest && clientPlan && nativeAuthorized
+
+theorem unreviewed_hosted_plugin_is_denied (plan native : Bool) :
+    hostedPluginInstallAllowed false plan native = false := by
+  simp [hostedPluginInstallAllowed]
+
+theorem hosted_plugin_needs_native_authority (reviewed plan : Bool) :
+    hostedPluginInstallAllowed reviewed plan false = false := by
+  simp [hostedPluginInstallAllowed]
+
 /-- A hosted graph reaches native commit only after the User's independent
 replay matches every proposed effect and signals that its plan is complete. -/
 def hostedPackCommitAllowed (effectsMatched clientFinished : Bool) : Bool :=
