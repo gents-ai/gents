@@ -20,7 +20,9 @@ export type Route =
   /* the sessions one session started, a level down the sessions list */
   | { name: "sessionsUnder"; session: string }
   /* the sessions archived out of the list */
-  | { name: "sessionsArchived" };
+  | { name: "sessionsArchived" }
+  /* what runs on its own on the active node; `item` opens one automation */
+  | { name: "automations"; item?: string };
 
 export function pathFor(route: Route): string {
   if (route.name === "plugin") {
@@ -30,6 +32,11 @@ export function pathFor(route: Route): string {
       : page;
   }
   if (route.name === "sessionsArchived") return "/sessions/archived";
+  if (route.name === "automations") {
+    return route.item
+      ? `/automations/${encodeURIComponent(route.item)}`
+      : "/automations";
+  }
   if (route.name === "sessionsUnder") {
     return `/sessions/under/${encodeURIComponent(route.session)}`;
   }
@@ -45,6 +52,11 @@ export function parseRoute(path: string): Route {
       pluginId: decodeURIComponent(parts[1]),
       ...(path ? { path } : {}),
     };
+  }
+  if (parts[0] === "automations") {
+    return parts[1]
+      ? { name: "automations", item: decodeURIComponent(parts[1]) }
+      : { name: "automations" };
   }
   if (parts[0] === "sessions" && parts[1] === "archived") {
     return { name: "sessionsArchived" };

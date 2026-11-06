@@ -6,7 +6,17 @@ use crate::tools::native::CliToolConfig;
 
 use super::policy::{EndpointScope, ToolPolicySurface};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum FileToolMode {
     #[default]
@@ -44,7 +54,17 @@ impl FileToolMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum BashMode {
     #[default]

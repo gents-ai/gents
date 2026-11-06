@@ -97,7 +97,7 @@ test.describe("desktop stable screenshot states", () => {
     }
     await page.getByRole("link", { name: "Mailbox" }).last().click();
     await expect(page.getByTestId("mailbox-screen")).toBeVisible();
-    const mobileNavigation = page.getByRole("dialog", { name: "Navigation" });
+    const mobileNavigation = page.getByRole("dialog", { name: "Sidebar" });
     await expect(mobileNavigation).not.toBeVisible();
     await captureStableScreenshot(page, testInfo, "reconciliation-mailbox-overflow");
 

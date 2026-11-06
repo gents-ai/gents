@@ -13,6 +13,7 @@ import {
   History,
   Inbox,
   Pin,
+  Play,
   Plus,
   RefreshCw,
   ScrollText,
@@ -20,14 +21,15 @@ import {
   Waypoints,
 } from "lucide-react";
 import type { Route } from "@/lib/router";
+import type { FlagId } from "@/lib/flags";
 import {
-  useFlag,
+  isOn,
+  usePreferences,
   useNavLayout,
   type ListedCount,
   type NavLayout,
   type RecentCount,
 } from "@/preferences";
-import { MAILBOX_KEYS, PAGE_KEYS } from "@/screens/shortcutKeys";
 import { TRIAGE, type Triage } from "@/screens/mailbox-triage";
 import {
   isListed,
@@ -38,7 +40,8 @@ import {
 import { useNavItems, type NavContext, type NavItem } from "./navRegistry";
 
 export type NavRow = NavItem & {
-  keys?: string;
+  /** the command whose key its tooltip names */
+  command?: string;
   /** drawn only once chosen on this device */
   optional?: boolean;
   /** the rail has no list of sessions, so it also counts an open session
@@ -51,6 +54,8 @@ export type NavRow = NavItem & {
   countsNodes?: boolean;
   /** what it belongs to, offered with its family and named where listed */
   group?: EntryGroup;
+  /** the experimental feature it belongs to: listed only while it is on */
+  flag?: FlagId;
 };
 
 const sessionLists = (route: Route) =>
@@ -99,7 +104,7 @@ export const APP_NAV_ROWS: readonly NavRow[] = [
   {
     id: "new-session",
     label: "New session",
-    keys: PAGE_KEYS.newSession,
+    command: "page.new-session",
     icon: <Plus className="size-4" />,
     to: { name: "session", sessionId: null },
     active: (route) => route.name === "session" && route.sessionId === null,
@@ -109,7 +114,7 @@ export const APP_NAV_ROWS: readonly NavRow[] = [
   {
     id: "mailbox",
     label: "Mailbox",
-    keys: MAILBOX_KEYS,
+    command: "mailbox.stack",
     icon: <Inbox className="size-4" />,
     to: { name: "mailbox" },
     active: (route) => route.name === "mailbox",
@@ -118,9 +123,20 @@ export const APP_NAV_ROWS: readonly NavRow[] = [
     own: true,
   },
   {
+    id: "automations",
+    label: "Automations",
+    command: "page.automations",
+    icon: <Play className="size-4" />,
+    to: { name: "automations" },
+    active: (route) => route.name === "automations",
+    placement: "primary",
+    own: true,
+    flag: "automations",
+  },
+  {
     id: "sessions",
     label: "Sessions",
-    keys: PAGE_KEYS.sessions,
+    command: "page.sessions",
     icon: <ScrollText className="size-4" />,
     to: { name: "sessions" },
     active: sessionLists,
@@ -213,15 +229,8 @@ export function useNavSections(): {
   /** how many items a mailbox section lists */
   listed: (id: string) => ListedCount;
 } {
-  const customizable = useFlag("customize-nav");
   const layout = useNavLayout();
   const candidates = useNavSectionCandidates();
-  if (!customizable)
-    return {
-      sections: NAV_SECTIONS.filter((s) => !s.optional),
-      recent: DEFAULT_RECENT,
-      listed: () => DEFAULT_LISTED,
-    };
   return {
     sections: arrange(candidates, layout)
       .filter(({ shown }) => shown)
@@ -235,7 +244,7 @@ export const APP_FOOTER_ROWS: readonly NavRow[] = [
   {
     id: "nodes",
     label: "Nodes",
-    keys: PAGE_KEYS.nodes,
+    command: "page.nodes",
     icon: <Waypoints className="size-4" />,
     to: { name: "nodes" },
     active: (route) => route.name === "nodes" || route.name === "agents",
@@ -262,10 +271,8 @@ export function useNavFooterCandidates(): NavRow[] {
 /** the rows at the nav's foot, in order, and whether the sync status shows;
     Settings is drawn after them, always */
 export function useNavFooter(): { rows: NavRow[]; status: boolean } {
-  const customizable = useFlag("customize-nav");
   const layout = useNavLayout();
   const candidates = useNavFooterCandidates();
-  if (!customizable) return { rows: candidates, status: true };
   return {
     rows: arrange(candidates, layout)
       .filter(({ shown }) => shown)
@@ -349,16 +356,15 @@ export function useNavCandidates(): (NavRow | NavDivider)[] {
   );
   const layout = useNavLayout();
   const dividers = dividersIn(layout.order, "items");
-  return [...APP_NAV_ROWS, ...config, ...contributed, ...dividers];
+  const flags = usePreferences((p) => p.flags);
+  const own = APP_NAV_ROWS.filter((row) => !row.flag || isOn(flags, row.flag));
+  return [...own, ...config, ...contributed, ...dividers];
 }
 
 /** the entries the nav's top draws, in order */
 export function useNavRows(): (NavRow | NavDivider)[] {
-  const customizable = useFlag("customize-nav");
   const layout = useNavLayout();
   const candidates = useNavCandidates();
-  if (!customizable)
-    return candidates.filter((row) => !isDivider(row) && !row.optional);
   return arrange(candidates, layout)
     .filter(({ shown }) => shown)
     .map(({ row }) => row);

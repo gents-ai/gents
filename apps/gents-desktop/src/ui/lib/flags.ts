@@ -40,14 +40,14 @@ export const FLAGS = [
     restart: false,
   },
   {
-    id: "customize-nav",
-    name: "Customize navigation",
+    id: "automations",
+    name: "Automations",
     description:
-      "Reorder and hide the side nav's items, and add Tasks, Skills, Tools or Packs to it.",
+      "An Automations page for the active node: what runs on its own, when it runs next, and how its runs went.",
     default: false,
     owner: "david-on-github",
-    removeBy: "2027-02-01",
-    removeWhen: "Customizing the side nav ships to everyone.",
+    removeBy: "2027-03-01",
+    removeWhen: "The Automations page ships to everyone.",
     restart: false,
   },
   {

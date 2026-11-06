@@ -144,6 +144,35 @@ export function dropUxPlugin(id: string): void {
   notify();
 }
 
+/* Another window's toggle. The choice is shared storage, but each window
+   runs its own copy of every plugin, and a storage event reaches only the
+   windows that did not write it; they apply it as their own toggle would. */
+export function followOtherWindowsDecisions(): () => void {
+  const follow = (event: StorageEvent) => {
+    if (event.key !== DECISIONS_KEY) return;
+    let next: Record<string, boolean> = {};
+    try {
+      if (event.newValue) next = parseDecisions(event.newValue);
+    } catch {
+      /* unreadable: no choices */
+    }
+    decisions = next;
+    for (const [id, enabled] of Object.entries(next)) {
+      const handle = handles.get(id);
+      const loaded = records[id]?.status === "loaded";
+      if (!handle || enabled === loaded) continue;
+      if (enabled) void handle.activate();
+      else {
+        handle.deactivate();
+        patchUxPlugin(id, { status: "disabled" });
+      }
+    }
+    notify();
+  };
+  window.addEventListener("storage", follow);
+  return () => window.removeEventListener("storage", follow);
+}
+
 /** live toggle: deactivate and remember, or remember and reactivate */
 export async function setUxPluginEnabled(id: string, enabled: boolean): Promise<void> {
   saveDecisions({ ...decisions, [id]: enabled });

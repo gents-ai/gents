@@ -33,6 +33,21 @@ where
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct RetiredKey(serde::de::IgnoredAny);
 
+/// Any value is accepted and discarded.
+impl schemars::JsonSchema for RetiredKey {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "RetiredKey".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({})
+    }
+}
+
 impl PartialEq for RetiredKey {
     fn eq(&self, _: &Self) -> bool {
         true

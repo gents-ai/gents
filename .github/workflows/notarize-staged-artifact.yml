@@ -53,16 +53,16 @@ defaults:
 env:
   GENTS_REPO: gents-ai/gents
   NOTARY_INBOX_DIR: /Users/admin/gents-notary-inbox
-  EXPECTED_TEAM_ID: NXJ753WW5X
+  EXPECTED_TEAM_ID: 4LPKFKCXDA
   EXPECTED_BUNDLE_ID: com.source-inc.gents
   EXPECTED_CLI_NAME: gents
   # Match the exact identifier emitted by release-macos.yml for current
   # candidates. Historical 039e2299 artifacts used Identifier=gents; their
   # verification metadata remains separately pinned in the control tests.
   EXPECTED_CLI_IDENTIFIER: com.source-inc.gents.cli
-  # SHA-256 of the existing "Developer ID Application: John Zampolin
-  # (NXJ753WW5X)" leaf certificate (SHA-1 4855F05BB34BFB227F828F9856DA05D2D02E7D0F).
-  EXPECTED_LEAF_CERT_SHA256: ffe161226e3ba89575fbb2fa4e0ffc2f7b0a7c99de8fc2f696a24fb8d74f1baf
+  # SHA-256 of the "Developer ID Application: Source, Inc. (CA)
+  # (4LPKFKCXDA)" leaf certificate (SHA-1 68C9E5EAC68B8CF6AF1925CE0CC686370DE1171D).
+  EXPECTED_LEAF_CERT_SHA256: 02d9c8a2b434f50c6298f8aefea8ef9269a0b619d29c3f2eeba96ca04cf00625
   # Host-local, durable duplicate-guard authority (single fixed runner host).
   NOTARY_STATE_DIR: /Users/admin/gents-notary-state
 

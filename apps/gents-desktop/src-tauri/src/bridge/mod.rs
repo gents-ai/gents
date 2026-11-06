@@ -2,6 +2,8 @@
 mod links;
 #[cfg(target_os = "macos")]
 mod notifications;
+#[cfg(desktop)]
+mod plugin_window;
 mod product_telemetry;
 #[cfg(target_os = "macos")]
 mod swipe;
@@ -119,6 +121,7 @@ pub fn run() {
         windows::desktop_window_setup_complete,
         swipe::swipe_scroll_edges,
         links::desktop_take_links,
+        plugin_window::desktop_open_plugin_window,
         notifications::desktop_post_notification,
         product_telemetry::product_telemetry_app_opened,
         product_telemetry::product_telemetry_status,
@@ -127,6 +130,7 @@ pub fn run() {
     #[cfg(all(desktop, not(target_os = "macos")))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         links::desktop_take_links,
+        plugin_window::desktop_open_plugin_window,
         product_telemetry::product_telemetry_app_opened,
         product_telemetry::product_telemetry_status,
         product_telemetry::product_telemetry_set_enabled

@@ -18,7 +18,12 @@ import { discoverBundledUxPlugins } from "@/contrib/bundled";
 import { emitClientUpdated } from "@/contrib/events";
 import { installUxHost, type UxHost } from "@/contrib/plugin";
 import { createPluginNotifier } from "@/lib/notify/plugins";
-import { configureUxDoors, scanRuntimeUxPlugins } from "@/contrib/runtime-door";
+import { followOtherWindowsDecisions } from "@/contrib/plugins-store";
+import {
+  configureUxDoors,
+  followOtherWindowsPackChanges,
+  scanRuntimeUxPlugins,
+} from "@/contrib/runtime-door";
 import type { DesktopClientUpdatedEvent } from "@source-inc/gents-desktop-client";
 
 /* the gate on ctx.send and os.openExternal: a plugin posts a turn in the
@@ -143,6 +148,7 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
 }
 
 let opened = false;
+let following: Array<() => void> = [];
 
 /* idempotent: the doors open once per webview, however often the shell
    re-renders or HMR re-evaluates the caller */
@@ -155,6 +161,7 @@ export function openUxDoors(app: DesktopApp): void {
   });
   discoverBundledUxPlugins();
   void scanRuntimeUxPlugins();
+  following = [followOtherWindowsDecisions(), followOtherWindowsPackChanges()];
 }
 
 export function useUxHost(
@@ -190,4 +197,5 @@ export function useUxHost(
 /** test seam */
 export function resetUxDoors(): void {
   opened = false;
+  following.splice(0).forEach((stop) => stop());
 }
