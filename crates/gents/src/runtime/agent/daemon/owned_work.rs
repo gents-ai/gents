@@ -33,6 +33,10 @@ where
         if hooks.is_empty() {
             return Ok((hooks, PathBuf::new(), None, task_owned));
         }
+        anyhow::ensure!(
+            request.agent_did == self.agent_config.agent_did,
+            "task hook request does not belong to the selected Agent"
+        );
         let cwd = self.task_hook_cwd().await?;
         let record = self
             .background_execution_registry
@@ -41,6 +45,7 @@ where
                 request_doc_id: request.doc_id.clone(),
                 request_id: request.request_id.clone(),
                 node_did: request.node_did.clone(),
+                agent_did: self.agent_config.agent_did.clone(),
                 cwd: cwd.clone(),
                 root_guard: self.root_execution_guard.clone(),
                 hooks: hooks.clone(),

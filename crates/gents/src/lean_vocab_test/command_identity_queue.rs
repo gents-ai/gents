@@ -376,6 +376,7 @@ pub(crate) struct LeanRecoverySweepCase {
     pub(crate) parent_live: Option<bool>,
     pub(crate) parent_interrupted: Option<bool>,
     pub(crate) parent_terminal: Option<bool>,
+    pub(crate) task_hook_observation: Option<String>,
     pub(crate) execution_registered: Option<bool>,
     pub(crate) process_outcome: Option<String>,
     pub(crate) owner_task_deleted: Option<bool>,

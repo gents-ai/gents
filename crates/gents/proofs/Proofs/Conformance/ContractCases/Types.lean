@@ -483,6 +483,7 @@ structure RecoverySweepCase where
   parentLive : Option Bool := none
   parentInterrupted : Option Bool := none
   parentTerminal : Option Bool := none
+  taskHookObservation : Option String := none
   executionRegistered : Option Bool := none
   processOutcome : Option String := none
   ownerTaskDeleted : Option Bool := none

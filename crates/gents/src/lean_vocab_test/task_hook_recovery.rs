@@ -18,44 +18,61 @@ pub(super) struct Fixture {
     pub(super) node: Arc<defra_node::Node>,
     identity: Arc<dyn NodeIdentity>,
     agent_identity: Arc<dyn NodeIdentity>,
-    _data: tempfile::TempDir,
+    _db: crate::support::TestDb,
+    user: KeyIdentity,
+    owner_access: crate::ConfigAccess,
 }
 
 impl Fixture {
     pub(super) async fn new() -> Self {
-        let data = tempfile::tempdir().expect("node data directory");
-        let identity: Arc<dyn NodeIdentity> = Arc::new(
-            KeyIdentity::load_or_create(data.path().join("agent.key"), None).expect("identity"),
-        );
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(identity.did())
-                .data_path(data.path())
-                .build()
-                .await
-                .expect("embedded node"),
-        );
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
-        crate::test_support::install_test_agent_binding(
-            &node,
-            identity.did(),
-            "hook recovery",
-            &binding,
-        )
-        .await;
+        let db = crate::support::test_signed_db("task-hook-recovery").await;
+        let (db, user, owner_access, binding) =
+            crate::test_support::signed_test_node_from_db(db, "task-hook-recovery-user").await;
+        let node = db.node.clone();
+        let identity = db.node_identity.clone();
         let agent_identity =
             crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
         Self {
             node,
             identity,
             agent_identity,
-            _data: data,
+            _db: db,
+            user,
+            owner_access,
         }
+    }
+
+    pub(super) fn agent_access(&self) -> crate::ConfigAccess {
+        crate::ConfigAccess::local_managed_agent(
+            self.node.clone(),
+            identity::Did::new(self.agent_identity.did()).unwrap(),
+            self.agent_identity.as_ref(),
+        )
+        .unwrap()
     }
 
     fn did(&self) -> &str {
         self.identity.did()
+    }
+
+    async fn other_agent(&self) -> Arc<dyn NodeIdentity> {
+        let user = identity::Did::new(self.user.did()).unwrap();
+        let binding = crate::store::identity::provision_agent_identity_authorized(
+            &self.node,
+            self.identity.as_ref(),
+            &user,
+        )
+        .await
+        .unwrap();
+        crate::test_support::install_test_agent_binding_with_access(
+            &self.node,
+            self.did(),
+            "other hook agent",
+            &binding,
+            &self.owner_access,
+        )
+        .await;
+        crate::store::identity::resolve_agent_identity(self.identity.as_ref(), &binding).unwrap()
     }
 
     pub(super) async fn claimed(&self, lease: Duration) -> RequestLifecycle {
@@ -93,16 +110,11 @@ impl Fixture {
         let snapshot_started = chrono::Utc::now();
         let escaped = crate::store::graphql::escape_graphql_string(request_doc_id);
         let query_future = async {
-            let response = self.node.execute(&format!(
+            let response = self.agent_access().execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state execution_generation execution_lease_expires_at execution_lease_secs }} }}"#
-            )).await;
-            if response.has_errors() {
-                return Err(());
-            }
+            )).await.map_err(|_| ())?;
             let rows = response
-                .data
-                .as_ref()
-                .and_then(|data| data.get("AgentRequest"))
+                .pointer("/data/AgentRequest")
                 .and_then(serde_json::Value::as_array)
                 .cloned()
                 .unwrap_or_default();
@@ -143,11 +155,11 @@ impl Fixture {
         }
         let doc_id = lifecycle.request().doc_id.clone();
         if interrupt_requested {
-            crate::request::interrupt::interrupt_request_by_doc_id(
-                &self.node,
+            crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+                &self.agent_access(),
                 &doc_id,
                 self.did(),
-                Some(self.did()),
+                Some(self.agent_identity.did()),
             )
             .await
             .unwrap();
@@ -155,14 +167,12 @@ impl Fixture {
         drop(lifecycle);
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                let response = crate::store::graphql::graphql_with_transaction_retry(
-                    &self.node,
+                let response = self.agent_access().execute(
                     &format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ execution_lease_expires_at }} }}"#,
                         crate::store::graphql::escape_graphql_string(&doc_id)),
-                    "test.task_hook_relinquishment",
                 ).await.unwrap();
-                let row: serde_json::Value = crate::store::graphql::first_row(&response, "AgentRequest")
-                    .unwrap().expect("abandoned request");
+                let row = response["data"]["AgentRequest"].as_array().unwrap()
+                    .first().expect("abandoned request");
                 let expiry = chrono::DateTime::parse_from_rfc3339(
                     row["execution_lease_expires_at"].as_str().unwrap(),
                 ).unwrap();
@@ -174,18 +184,14 @@ impl Fixture {
     }
 
     async fn request_state(&self, doc_id: &str) -> String {
-        let response = crate::store::graphql::graphql_with_transaction_retry(
-            self.node.as_ref(),
-            &format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state }} }}"#,
-                crate::store::graphql::escape_graphql_string(doc_id),
-            ),
-            "test.task_hook_recovery_request",
-        )
-        .await
-        .unwrap();
-        let row: serde_json::Value = crate::store::graphql::first_row(&response, "AgentRequest")
+        let response = self.agent_access().execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state }} }}"#,
+            crate::store::graphql::escape_graphql_string(doc_id),
+        )).await.unwrap();
+        let row = response["data"]["AgentRequest"]
+            .as_array()
             .unwrap()
+            .first()
             .expect("request row");
         row["lifecycle_state"].as_str().unwrap().to_owned()
     }
@@ -225,6 +231,7 @@ fn record(
     doc_id: &str,
     name: &str,
     did: &str,
+    agent_did: &str,
     cwd: &Path,
     hooks: Vec<TaskHook>,
     attempts: Vec<RecordedHookAttempt>,
@@ -233,6 +240,7 @@ fn record(
         request_doc_id: doc_id.to_owned(),
         request_id: name.to_owned(),
         node_did: did.to_owned(),
+        agent_did: agent_did.to_owned(),
         cwd: cwd.to_path_buf(),
         root_guard: None,
         hooks,
@@ -290,6 +298,7 @@ async fn generated_task_hook_recovery_cases_drive_startup_recovery_and_host_reco
                     &doc_id,
                     &case.name,
                     fixture.did(),
+                    fixture.agent_identity.did(),
                     dir.path(),
                     hooks,
                     attempts,
@@ -365,7 +374,17 @@ async fn generated_task_hook_sweep_cases_drive_the_record_sweep() {
     assert!(!cases.is_empty());
     let fixture = Fixture::new().await;
     for case in cases {
-        let resolved = case.parent_terminal.expect("resolved premise");
+        let observation = case
+            .task_hook_observation
+            .as_deref()
+            .expect("task hook observation");
+        let resolved = matches!(observation, "terminal" | "hidden" | "unavailable");
+        let hidden_agent = if observation == "hidden" {
+            Some(fixture.other_agent().await)
+        } else {
+            None
+        };
+        let selected_agent = hidden_agent.as_ref().unwrap_or(&fixture.agent_identity);
         let live = case.execution_registered.expect("live premise");
         let dir = tempfile::tempdir().expect("case directory");
         let log = dir.path().join("cleanup.log");
@@ -384,12 +403,38 @@ async fn generated_task_hook_sweep_cases_drive_the_record_sweep() {
             .await
             .unwrap();
         }
+        if observation == "hidden" {
+            let state: gents_protocol::request_lifecycle::RequestLifecycleState =
+                serde_json::from_value(fixture.request_state(&doc_id).await.into()).unwrap();
+            assert!(
+                state.is_terminal(),
+                "the owning Agent sees a terminal request"
+            );
+            let hidden_access = crate::ConfigAccess::local_managed_agent(
+                fixture.node.clone(),
+                identity::Did::new(selected_agent.did()).unwrap(),
+                selected_agent.as_ref(),
+            )
+            .unwrap();
+            let escaped = crate::store::graphql::escape_graphql_string(&doc_id);
+            let response = hidden_access.execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 2) {{ _docID }} }}"#,
+            )).await.unwrap();
+            assert!(
+                response["data"]["AgentRequest"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty(),
+                "another held Agent must not observe the terminal request"
+            );
+        }
         let store = TaskHookRecordStore::default();
         let handle = store
             .begin(record(
                 &doc_id,
                 &case.name,
                 fixture.did(),
+                selected_agent.did(),
                 dir.path(),
                 vec![logging_hook(&generated("sweep", "finally"), &log, 0)],
                 Vec::new(),
@@ -400,7 +445,11 @@ async fn generated_task_hook_sweep_cases_drive_the_record_sweep() {
         let report = recover_task_hook_records(
             &fixture.node,
             fixture.did(),
-            std::slice::from_ref(&fixture.agent_identity),
+            if observation == "unavailable" {
+                &[]
+            } else {
+                std::slice::from_ref(selected_agent)
+            },
             &store,
         )
         .await
@@ -454,6 +503,7 @@ async fn recovery_stops_a_surviving_hook_command_before_cleanup() {
             &doc_id,
             "surviving",
             fixture.did(),
+            fixture.agent_identity.did(),
             dir.path(),
             vec![
                 logging_hook(&generated("prepare", "before"), &log, 0),
@@ -509,6 +559,7 @@ async fn shutdown_during_recovered_cleanup_keeps_only_the_unlaunched_cleanup() {
             &doc_id,
             "shutdown",
             fixture.did(),
+            fixture.agent_identity.did(),
             dir.path(),
             vec![held, logging_hook(&generated("second", "finally"), &log, 0)],
             Vec::new(),
@@ -602,6 +653,7 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
                     &doc_id,
                     name,
                     fixture.did(),
+                    fixture.agent_identity.did(),
                     &cwd,
                     vec![logging_hook(&generated("sweep", "finally"), &log, 0)],
                     Vec::new(),
@@ -620,7 +672,7 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
             let unavailable = recover_task_hook_records(&fixture.node, fixture.did(), &[], &store)
                 .await
                 .unwrap();
-            assert_eq!(unavailable, 1);
+            assert_eq!(unavailable, 0);
             store.wait_for_recoveries().await;
             assert_eq!(
                 store.list().len(),

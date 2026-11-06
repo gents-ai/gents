@@ -111,9 +111,10 @@ def pluginJobRecoveryCase (c : Conformance.PluginJob.RecoveryCase) : RecoverySwe
   }
 
 def taskHookRecordRecoveryCase
-    (name : String) (requestResolved liveExecution : Bool) : RecoverySweepCase :=
+    (name : String) (observation : TaskHookRequestObservation)
+    (liveExecution : Bool) : RecoverySweepCase :=
   let row : TaskHookRecordRow :=
-    { recorded := true, requestResolved := requestResolved, liveExecution := liveExecution }
+    { recorded := true, requestObservation := observation, liveExecution := liveExecution }
   let recovered := taskHookRecordRecover row
   let state := fun (row : TaskHookRecordRow) => if row.recorded then "running" else "released"
   { (recoveryCase
@@ -124,7 +125,15 @@ def taskHookRecordRecoveryCase
       "gents-1956-task-hook-cleanup-recovery"
       (taskHookRecordMeasure row)
       (taskHookRecordMeasure recovered)) with
-    parentTerminal := some requestResolved
+    parentTerminal := match observation with
+      | .terminal => some true
+      | .active => some false
+      | .hidden | .unavailable => none
+    taskHookObservation := some (match observation with
+      | .terminal => "terminal"
+      | .active => "active"
+      | .hidden => "hidden"
+      | .unavailable => "unavailable")
     executionRegistered := some liveExecution
   }
 
@@ -276,11 +285,15 @@ def recoverySweepCases : List RecoverySweepCase :=
       "cancelled"
       "deadline-plumbing-audit-2026-05-12-follow-up-6-pr-e"
   , taskHookRecordRecoveryCase
-      "task_hook_record_resolved_request_to_released" true false
+      "task_hook_record_resolved_request_to_released" .terminal false
   , taskHookRecordRecoveryCase
-      "task_hook_record_owned_request_deferred" false false
+      "task_hook_record_owned_request_deferred" .active false
   , taskHookRecordRecoveryCase
-      "task_hook_record_live_execution_deferred" true true
+      "task_hook_record_live_execution_deferred" .terminal true
+  , taskHookRecordRecoveryCase
+      "task_hook_record_hidden_request_deferred" .hidden false
+  , taskHookRecordRecoveryCase
+      "task_hook_record_unavailable_identity_deferred" .unavailable false
   ]
 
 def restartDispositionCase
