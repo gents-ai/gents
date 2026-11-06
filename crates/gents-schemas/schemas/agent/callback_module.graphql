@@ -2,7 +2,7 @@
 # base64 of the decoded .afb package. `module_id` is content-addressed over
 # (decoded bytes, canonical_args, abi_version). Resource limits deny execution;
 # they do not mint capabilities.
-type CallbackModule @policy(id: "ccd6eb63ec1545f3ce27fb3f33f687e74895848180e87b064d1ca9ac331f1cd8", resource: "configuration") @index(fields: ["node_did", "module_id"], unique: true) {
+type CallbackModule @policy(id: "c5c32a000066af90f6ad561eb349b22652db223c9f69aef9920186793b7a5360", resource: "configuration") @index(fields: ["node_did", "module_id"], unique: true) {
     module_id: String
     node_did: String @index
     abi_version: Int

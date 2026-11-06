@@ -1,6 +1,6 @@
 # Admin-authored immutable terminal decision for one exact request digest;
 # denial never materializes membership or routes.
-type NetworkEnrollmentDecision @branchable {
+type NetworkEnrollmentDecision @policy(id: "c5c32a000066af90f6ad561eb349b22652db223c9f69aef9920186793b7a5360", resource: "enrollment_records") @branchable {
     protocol_version: Int @immutable
     decision_id: String @index(unique: true) @immutable
     request_id: String @index(unique: true) @immutable

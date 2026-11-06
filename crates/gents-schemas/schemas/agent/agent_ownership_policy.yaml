@@ -39,6 +39,63 @@ resources:
         expr: route_reader + tool_reader + parent->read
       - name: update
       - name: delete
+  - name: discovery
+    relations:
+      - name: parent
+        types: [nodes]
+      - name: reader
+        types: [actor]
+      - name: reader_manager
+        types: [actor]
+        manages: [reader]
+      - name: writer
+        types: [actor]
+      - name: local_publication
+        types: [actor]
+      - name: pending_parent
+        types: [actor]
+    permissions:
+      - name: read
+        expr: reader + writer + parent->read
+      - name: update
+        expr: writer
+      - name: delete
+  - name: scoped_discovery
+    relations:
+      - name: parent
+        types: [nodes]
+      - name: reader
+        types: [actor]
+      - name: reader_manager
+        types: [actor]
+        manages: [reader]
+      - name: local_publication
+        types: [actor]
+      - name: pending_parent
+        types: [actor]
+    permissions:
+      - name: read
+        expr: reader + parent->read
+      - name: update
+      - name: delete
+  - name: enrollment_records
+    relations:
+      - name: parent
+        types: [nodes]
+      - name: reader
+        types: [actor]
+      - name: reader_manager
+        types: [actor]
+        manages: [reader]
+      - name: local_publication
+        types: [actor]
+      - name: pending_parent
+        types: [actor]
+    permissions:
+      - name: read
+        expr: reader + parent->read
+      - name: update
+      - name: delete
   - name: configuration
     relations:
       - name: parent
