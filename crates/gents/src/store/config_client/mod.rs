@@ -22,9 +22,9 @@ mod client_agent_publication;
 mod client_pack_evidence;
 mod client_signed_agent;
 pub use client_pack_evidence::{
-    prepare_pack_evidence, prepare_pack_evidence_in_txn, prepare_pack_relationship, PackApprovalScope, PackEvidence,
-    PackEvidenceError, PackMutation, PackRelationship, PackRelationshipEvidence,
-    PackRelationshipTarget,
+    prepare_pack_evidence, prepare_pack_evidence_in_txn, prepare_pack_relationship,
+    PackApprovalScope, PackEvidence, PackEvidenceError, PackMutation, PackRelationship,
+    PackRelationshipEvidence, PackRelationshipTarget,
 };
 pub use client_signed_agent::prepare_request_evidence;
 pub use client_signed_agent::ClientSigningCapability;
@@ -251,6 +251,20 @@ impl GraphqlEndpoint {
         }
         self.client_signing_capability = Some(capability);
         Ok(self)
+    }
+
+    /// Return only the explicitly held key bound to this client actor.
+    pub fn held_client_signing_capability(&self) -> Result<&ClientSigningCapability> {
+        let capability = self
+            .client_signing_capability
+            .as_ref()
+            .ok_or(ConfigClientError::ClientAgentSignerRequired)?;
+        if self.delegated_authorization.is_some()
+            || self.principal_did.as_deref() != Some(capability.did())
+        {
+            return Err(ConfigClientError::ClientSignerMismatch);
+        }
+        Ok(capability)
     }
 
     pub fn is_anonymous(&self) -> bool {

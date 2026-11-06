@@ -9,8 +9,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::client_signed_agent::{signing_schema, trusted_delete_schema};
-use super::{ConfigAccess, ConfigApplyTxn, ConfigClientError};
-use crate::store::identity::NodeIdentity;
+use super::{ClientSigningCapability, ConfigAccess, ConfigApplyTxn, ConfigClientError};
 
 /// An exact mutation independently selected by the pack installation plan.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -183,18 +182,41 @@ fn graph_payload(
 
 /// Approve one plan-selected relationship with the client's key.
 pub async fn prepare_pack_relationship(
-    actor: &dyn NodeIdentity,
+    actor: &ClientSigningCapability,
     scope: &PackApprovalScope,
     relationship: &PackRelationship,
 ) -> Result<PackRelationshipEvidence, PackEvidenceError> {
     let payload = relationship_payload(scope, actor.did(), relationship)?;
-    let signature = actor.sign(&payload).await?;
+    let signature = sign_client_payload(actor, payload).await?;
     Ok(PackRelationshipEvidence {
         scope: scope.clone(),
         actor_did: actor.did().to_owned(),
         relationship: relationship.clone(),
         signature,
     })
+}
+
+async fn sign_client_payload(
+    actor: &ClientSigningCapability,
+    payload: Vec<u8>,
+) -> Result<Vec<u8>, PackEvidenceError> {
+    use identity::FullIdentity as _;
+    let actor = actor.clone();
+    tokio::task::spawn_blocking(move || {
+        let identity = identity::RawIdentity::from_bytes(
+            crypto::KeyType::Ed25519,
+            &actor.config.private_key_bytes,
+        )
+        .map_err(crate::store::identity::IdentityError::LoadNodeSigning)?;
+        identity.sign(&payload).map_err(|source| {
+            crate::store::identity::IdentityError::SignPayload {
+                did: actor.did().to_owned(),
+                source,
+            }
+            .into()
+        })
+    })
+    .await?
 }
 
 pub(super) fn verify_pack_relationship(
@@ -246,7 +268,7 @@ fn trusted_schema(mutation: &PackMutation) -> Result<schema::CollectionVersion, 
 /// Sign the caller's already validated pack plan with the held client key.
 pub async fn prepare_pack_evidence(
     access: &ConfigAccess,
-    actor: &dyn NodeIdentity,
+    actor: &ClientSigningCapability,
     scope: &PackApprovalScope,
     mutation: &PackMutation,
 ) -> Result<PackEvidence, PackEvidenceError> {
@@ -269,7 +291,7 @@ pub async fn prepare_pack_evidence(
 /// Use the caller's transaction snapshot, including its earlier staged writes.
 pub async fn prepare_pack_evidence_in_txn(
     txn: &ConfigApplyTxn<'_>,
-    actor: &dyn NodeIdentity,
+    actor: &ClientSigningCapability,
     scope: &PackApprovalScope,
     mutation: &PackMutation,
 ) -> Result<PackEvidence, PackEvidenceError> {
@@ -286,18 +308,14 @@ pub async fn prepare_pack_evidence_in_txn(
 }
 
 async fn prepare_pack_evidence_observed(
-    actor: &dyn NodeIdentity,
+    actor: &ClientSigningCapability,
     scope: &PackApprovalScope,
     mutation: &PackMutation,
     observed: Option<ClientUpdateSnapshot>,
 ) -> Result<PackEvidence, PackEvidenceError> {
-    let capability = actor.client_signing_capability()?;
-    if capability.did() != actor.did() {
-        return Err(PackEvidenceError::Mismatch);
-    }
     let schema = trusted_schema(mutation)?;
     let requested = mutation.clone();
-    let signing = (*capability.config).clone();
+    let signing = (*actor.config).clone();
     let graph =
         tokio::task::spawn_blocking(move || -> Result<PackGraphEvidence, PackEvidenceError> {
             let crdts = storage::Crdts::default();
@@ -337,7 +355,7 @@ async fn prepare_pack_evidence_observed(
         Ok::<_, PackEvidenceError>((graph, payload))
     })
     .await??;
-    let signature = actor.sign(&payload).await?;
+    let signature = sign_client_payload(actor, payload).await?;
     Ok(PackEvidence {
         scope: scope.clone(),
         actor_did: actor.did().to_owned(),
@@ -480,7 +498,7 @@ pub(super) async fn apply_pack_evidence(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::identity::KeyIdentity;
+    use crate::store::identity::{KeyIdentity, NodeIdentity};
     use serde_json::json;
 
     #[tokio::test]
@@ -489,6 +507,8 @@ mod tests {
         let actor = KeyIdentity::load_or_create(directory.path().join("user.key"), None)?;
         let runtime = KeyIdentity::load_or_create(directory.path().join("node.key"), None)?;
         let other = KeyIdentity::load_or_create(directory.path().join("other.key"), None)?;
+        let actor_key = actor.client_signing_capability()?;
+        let other_key = other.client_signing_capability()?;
         let mut public_only = defra_core::signing::get_identity(actor.did()).unwrap();
         public_only.private_key_bytes.clear();
         defra_core::signing::store_identity(actor.did(), public_only);
@@ -513,7 +533,8 @@ mod tests {
             collection: "Node".into(),
             input: json!({"node_did": runtime.did(), "enabled": true}),
         };
-        let node_evidence = prepare_pack_evidence(&access, &actor, &scope, &node_create).await?;
+        let node_evidence =
+            prepare_pack_evidence(&access, &actor_key, &scope, &node_create).await?;
         let node_doc = access
             .transact_verified_pack("test.pack_evidence.node", |txn| {
                 let node_create = &node_create;
@@ -531,9 +552,10 @@ mod tests {
             collection: "PackInstallation".into(),
             input: json!({"node_did": runtime.did(), "coordinate": "acme/fixture", "version": "1", "digest": "one"}),
         };
-        let evidence = prepare_pack_evidence(&access, &actor, &scope, &create).await?;
+        let evidence = prepare_pack_evidence(&access, &actor_key, &scope, &create).await?;
         let other_access = ConfigAccess::local_as(node.clone(), other.did().parse()?);
-        let other_evidence = prepare_pack_evidence(&other_access, &other, &scope, &create).await?;
+        let other_evidence =
+            prepare_pack_evidence(&other_access, &other_key, &scope, &create).await?;
         let cases = tokio::task::spawn_blocking(|| {
             crate::lean_vocab_test::lean_contract_snapshot()
                 .hosted_pack_evidence_cases
@@ -551,8 +573,8 @@ mod tests {
                 let create = &create;
                 let tampered = &tampered;
                 let cases = &cases;
-                let actor = &actor;
-                let other = &other;
+                let actor = &actor_key;
+                let other = &other_key;
                 let node_doc = &node_doc;
                 let scope = &scope;
                 Box::pin(async move {
@@ -657,7 +679,7 @@ mod tests {
         };
         let evidence = access
             .transact_readonly("test.pack_evidence.prepare_in_txn", |txn| {
-                let actor = &actor;
+                let actor = &actor_key;
                 let scope = &scope;
                 let update = &update;
                 Box::pin(
@@ -688,7 +710,7 @@ mod tests {
             },
             input: json!({"version": "stale"}),
         };
-        let stale_evidence = prepare_pack_evidence(&access, &actor, &scope, &stale).await?;
+        let stale_evidence = prepare_pack_evidence(&access, &actor_key, &scope, &stale).await?;
         let replacement = PackMutation::Update {
             collection: "PackInstallation".into(),
             doc_id: match &update {
@@ -698,7 +720,7 @@ mod tests {
             input: json!({"version": "winner"}),
         };
         let replacement_evidence =
-            prepare_pack_evidence(&access, &actor, &scope, &replacement).await?;
+            prepare_pack_evidence(&access, &actor_key, &scope, &replacement).await?;
         access
             .transact_verified_pack("test.pack_evidence.winner", |txn| {
                 let replacement_evidence = replacement_evidence.clone();
