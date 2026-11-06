@@ -79,6 +79,7 @@ impl GoalCommand {
         &self,
         node: &Arc<EmbeddedNode>,
         actor: &identity::Did,
+        access: &gents::ConfigAccess,
         principal: &str,
         session: &str,
     ) -> Result<String> {
@@ -91,7 +92,13 @@ impl GoalCommand {
             "goal creation must use atomic request admission"
         );
         if *self == Self::Clear {
-            let count = gents::goal::delete_goals_for_session(node, principal, session).await?;
+            anyhow::ensure!(
+                access.actor_did().as_deref() == Some(actor.as_str()),
+                "goal clear requires the authenticated client capability"
+            );
+            let count =
+                gents::goal::delete_goals_for_session_from_access(access, principal, session)
+                    .await?;
             return Ok(if count == 0 {
                 "No goal is set."
             } else {
@@ -384,7 +391,13 @@ mod tests {
         let blocked = node.execute(r#"mutation {update_Goal(filter:{goal_id:{_eq:"owned"}}, input:{status:"blocked"}) {_docID}}"#).await;
         ensure_no_errors(&blocked, "blocked fixture").unwrap();
         let reply = GoalCommand::Pause
-            .execute(&node, &actor, "principal", "session")
+            .execute(
+                &node,
+                &actor,
+                &gents::ConfigAccess::local_as(node.clone(), actor.clone()),
+                "principal",
+                "session",
+            )
             .await
             .unwrap();
         assert!(reply.contains("Goal remains blocked"), "{reply}");
@@ -478,7 +491,13 @@ mod tests {
         assert_eq!(late["params"]["update"]["status"], "complete");
         drop(lines);
         let reply = GoalCommand::Status
-            .execute(&node, &actor, "principal", "session")
+            .execute(
+                &node,
+                &actor,
+                &gents::ConfigAccess::local_as(node.clone(), actor.clone()),
+                "principal",
+                "session",
+            )
             .await
             .unwrap();
         assert!(reply.contains("Tokens used: 28"), "{reply}");

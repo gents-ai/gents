@@ -3,8 +3,8 @@ use chrono::{DateTime, Utc};
 use gents_codex_protocol as codex;
 
 use gents::goal::{
-    delete_goals_for_session, load_canonical_goal, refresh_goal_usage, set_goal, GoalDocument,
-    GoalStatus,
+    delete_goals_for_session_from_access, load_canonical_goal, refresh_goal_usage, set_goal,
+    GoalDocument, GoalStatus,
 };
 
 use crate::commands::codex_shim::ShimState;
@@ -62,7 +62,11 @@ pub(in crate::commands::codex_shim) async fn clear_codex_thread_goal(
     {
         return Ok(false);
     }
-    Ok(delete_goals_for_session(&state.node, state.node_did.as_ref(), thread_id).await? > 0)
+    let access = gents::ConfigAccess::Graphql(state.graphql.clone());
+    Ok(
+        delete_goals_for_session_from_access(&access, state.node_did.as_ref(), thread_id).await?
+            > 0,
+    )
 }
 
 fn client_actor(state: &ShimState) -> Result<identity::Did> {

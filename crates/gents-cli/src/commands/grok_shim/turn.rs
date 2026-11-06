@@ -249,6 +249,10 @@ impl TurnManager {
     pub(super) fn actor(&self) -> &identity::Did {
         &self.config.actor
     }
+
+    pub(super) fn client_access(&self) -> gents::ConfigAccess {
+        gents::ConfigAccess::Graphql(self.config.graphql.clone())
+    }
     pub(super) fn new(node: Arc<EmbeddedNode>, config: TurnManagerConfig) -> Self {
         TurnManager {
             node,

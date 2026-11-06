@@ -2168,9 +2168,13 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
             .expect("load goal")
             .expect("goal exists");
         assert_eq!(goal.objective, "revised while active");
-        crate::goal::delete_goals_for_session(&node, identity.did(), &session_id)
-            .await
-            .expect("clear goal");
+        crate::goal::delete_goals_for_session_from_access(
+            &hook.actor_access().unwrap(),
+            identity.did(),
+            &session_id,
+        )
+        .await
+        .expect("clear goal");
     }
 
     for (status, expected_hint) in [
@@ -2286,7 +2290,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         }
         // Rebuild from a fresh active goal for the next case; complete and
         // budget_limited cannot be reset to active via set_goal.
-        crate::goal::delete_goals_for_session(&node, identity.did(), &session_id)
+        crate::goal::delete_goals_for_session_from_access(&hook.actor_access().unwrap(), identity.did(), &session_id)
             .await
             .expect("clear goal for next case");
     }

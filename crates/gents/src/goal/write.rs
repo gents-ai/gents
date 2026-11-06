@@ -260,71 +260,50 @@ pub(super) async fn set_goal_in_txn(
     Ok(created)
 }
 
-pub async fn delete_goal(node: &std::sync::Arc<EmbeddedNode>, goal: &GoalDocument) -> Result<bool> {
-    let doc_id = escape_graphql_string(&goal.doc_id);
-    let node_did = escape_graphql_string(&goal.node_did);
-    let mutation = format!(
-        r#"mutation {{
-            delete_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }} }}) {{ _docID }}
-        }}"#
-    );
-    let response = crate::store::config_client::ConfigAccess::local_as(
-        node.clone(),
-        crate::session::load_session_agent_did(node, &goal.node_did, &goal.session_id).await?,
-    )
-    .write("goal.delete", &mutation)
-    .await?;
-    let response: defra_node::QueryResponse = serde_json::from_value(response)?;
-    Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("delete_Goal"))
-        .is_some_and(mutation_returned_rows))
+/// Delete the exact Goal through the caller's held native authority.
+pub async fn delete_goal_from_access(
+    access: &crate::ConfigAccess,
+    goal: &GoalDocument,
+) -> Result<bool> {
+    access.transact_write("goal.delete", |txn| {
+        Box::pin(async move {
+            let doc = escape_graphql_string(&goal.doc_id);
+            let owner = escape_graphql_string(&goal.node_did);
+            let session = escape_graphql_string(&goal.session_id);
+            let response = txn.execute(&format!(r#"{{ Goal(filter: {{_docID: {{_eq: "{doc}"}}, node_did: {{_eq: "{owner}"}}, session_id: {{_eq: "{session}"}}}}, limit: 2) {{_docID}} }}"#)).await?;
+            let rows = response["data"]["Goal"].as_array().context("Goal delete read omitted rows")?;
+            anyhow::ensure!(rows.len() <= 1, "Goal delete target is ambiguous");
+            if rows.is_empty() { return Ok::<_, anyhow::Error>(false); }
+            txn.delete_configuration_document("Goal", &goal.doc_id).await?;
+            Ok(true)
+        })
+    }).await
 }
 
-pub async fn delete_goals_for_session(
-    node: &std::sync::Arc<EmbeddedNode>,
+/// Delete only visible Goal and claim documents through the caller's held authority.
+pub async fn delete_goals_for_session_from_access(
+    access: &crate::ConfigAccess,
     node_did: &str,
     session_id: &str,
 ) -> Result<usize> {
-    let actor = crate::session::load_session_agent_did(node, node_did, session_id).await?;
-    let node_did = escape_graphql_string(node_did);
-    let session_id = escape_graphql_string(session_id);
-    let node_did = &node_did;
-    let session_id = &session_id;
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        Some(actor),
-        "goal.delete_for_session",
-        move |txn| {
-            Box::pin(async move {
-                let response = txn
-                    .execute(&format!(
-                        r#"mutation {{
-            delete_Goal(filter: {{
-                node_did: {{ _eq: "{node_did}" }},
-                session_id: {{ _eq: "{session_id}" }}
-            }}) {{ _docID }}
-        }}"#
-                    ))
-                    .await?;
-                txn.execute(&format!(
-                    r#"mutation {{
-                delete_GoalCreationClaim(filter: {{
-                    node_did: {{ _eq: "{node_did}" }},
-                    session_id: {{ _eq: "{session_id}" }}
-                }}) {{ _docID }}
-            }}"#
-                ))
-                .await?;
-                Ok::<_, anyhow::Error>(
-                    response
-                        .pointer("/data/delete_Goal")
-                        .map(mutation_row_count)
-                        .unwrap_or_default(),
-                )
-            })
-        },
-    )
-    .await
+    access.transact_write("goal.delete_for_session", |txn| {
+        Box::pin(async move {
+            let owner = escape_graphql_string(node_did);
+            let session = escape_graphql_string(session_id);
+            let response = txn.execute(&format!(r#"{{
+                Goal(filter: {{node_did: {{_eq: "{owner}"}}, session_id: {{_eq: "{session}"}}}}) {{_docID}}
+                GoalCreationClaim(filter: {{node_did: {{_eq: "{owner}"}}, session_id: {{_eq: "{session}"}}}}) {{_docID}}
+            }}"#)).await?;
+            let mut goals = 0;
+            for collection in ["Goal", "GoalCreationClaim"] {
+                let rows = response["data"][collection].as_array().context("Goal delete read omitted rows")?;
+                for row in rows {
+                    let doc = row["_docID"].as_str().context("Goal delete target has no physical ID")?;
+                    txn.delete_configuration_document(collection, doc).await?;
+                    if collection == "Goal" { goals += 1; }
+                }
+            }
+            Ok::<_, anyhow::Error>(goals)
+        })
+    }).await
 }

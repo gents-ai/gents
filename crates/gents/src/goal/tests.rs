@@ -212,69 +212,203 @@ async fn auto_resume_none_and_set_goal_keep_the_stored_value() {
 
 #[tokio::test]
 async fn session_goal_delete_uses_selected_agent_native_owner() {
-    use crate::{ConfigAccess, KeyIdentity, NodeIdentity};
+    use crate::store::identity::NodeIdentity;
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
 
-    let directory = tempfile::tempdir().unwrap();
-    let runtime = KeyIdentity::load_or_create(directory.path().join("runtime.key"), None).unwrap();
-    let agent = KeyIdentity::load_or_create(directory.path().join("agent.key"), None).unwrap();
-    let node = std::sync::Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(runtime.did())
-            .build()
-            .await
-            .unwrap(),
+    let (db, user, user_access, binding) =
+        crate::test_support::signed_test_node("goal-selected-agent-delete").await;
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let admin = crate::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(db.node_identity.did()).unwrap(),
     );
-    let policy = node.add_dac_policy_as(
-        &defra_core::RequestContext::ambient().with_identity(Some(agent.did().to_owned())),
-        "name: Session goal owner\nresources:\n  - name: goals\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n"
-    ).await.unwrap();
-    node.add_collection(include_str!(
-        "../../../gents-schemas/schemas/agent/agent_session.graphql"
-    ))
-    .await
-    .unwrap();
-    node.add_collection(&format!(
-        "type Goal @policy(id: \"{}\", resource: \"goals\") {{ goal_id: String node_did: String session_id: String }}",
-        escape_graphql_string(&policy)
-    )).await.unwrap();
-    let agent_access =
-        ConfigAccess::local_as(node.clone(), identity::Did::new(agent.did()).unwrap());
-    agent_access.write("test.selected_agent_session", &format!(
-        "mutation {{ create_AgentSession(input: {{ session_id: \"session\", node_did: \"{}\", agent_did: \"{}\", created_at: \"2026-11-04T00:00:00Z\" }}) {{ _docID }} }}",
-        escape_graphql_string(runtime.did()), escape_graphql_string(agent.did())
-    )).await.unwrap();
-    let created = agent_access.write("test.selected_agent_goal", &format!(
-        "mutation {{ create_Goal(input: {{ goal_id: \"goal\", node_did: \"{}\", session_id: \"session\" }}) {{ _docID goal_id node_did session_id }} }}",
-        escape_graphql_string(runtime.did())
-    )).await.unwrap();
-    let goal: GoalDocument =
-        serde_json::from_value(created["data"]["create_Goal"][0].clone()).unwrap();
-    node.add_dac_actor_relationship(agent.did(), "Goal", &goal.doc_id, "reader", runtime.did())
+    admin
+        .grant_node_permission(
+            &identity::Did::new(agent.did()).unwrap(),
+            crate::store::config_client::NodePermission::DocumentDelete,
+        )
         .await
         .unwrap();
-    let runtime_access =
-        ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
-    let denied = runtime_access
-        .write(
-            "test.runtime_cannot_delete_goal",
-            &format!(
-                "mutation {{ delete_Goal(docID: \"{}\") {{ _docID }} }}",
-                escape_graphql_string(&goal.doc_id)
-            ),
+    let create = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        "delete-request",
+        db.node_identity.did(),
+        user.did(),
+        agent.did(),
+        "delete-session",
+        "test",
+        "interactive",
+        "2026-07-15T00:00:00Z",
+        AgentRequestAdmissionRecord::client(user.did()),
+    );
+    let _lifecycle =
+        crate::tools::call::lifecycle::admission_fixture::pending_client_fixture_request(
+            &db.node,
+            &user_access,
+            db.node_identity.clone(),
+            &user,
+            agent.as_ref(),
+            create,
         )
-        .await;
+        .await
+        .unwrap();
+    let agent_access = crate::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let goal = set_goal_from_access(
+        &agent_access,
+        db.node_identity.did(),
+        "delete-session",
+        Some("test deletion"),
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    agent_access
+        .add_actor_relationship(
+            "Goal",
+            &goal.doc_id,
+            "reader",
+            &identity::Did::new(db.node_identity.did()).unwrap(),
+        )
+        .await
+        .unwrap();
+    let runtime_access = crate::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(db.node_identity.did()).unwrap(),
+    );
+    let denied = delete_goal_from_access(&runtime_access, &goal).await;
     assert!(
         denied.is_err(),
         "runtime identity must not delete the selected agent's goal"
     );
-    assert!(delete_goal(&node, &goal).await.unwrap());
+    assert!(delete_goal_from_access(&agent_access, &goal).await.unwrap());
     assert!(
         agent_access.execute("{ Goal { _docID } }").await.unwrap()["data"]["Goal"]
             .as_array()
             .unwrap()
             .is_empty()
     );
-    node.shutdown().await.expect("node shutdown");
+}
+
+#[tokio::test]
+async fn held_user_deletes_own_goal_and_claim_by_physical_id() {
+    use crate::store::identity::NodeIdentity;
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
+
+    let (db, user, user_access, binding) =
+        crate::test_support::signed_test_node("goal-user-delete").await;
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let admin = crate::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(db.node_identity.did()).unwrap(),
+    );
+    admin
+        .grant_node_permission(
+            &identity::Did::new(user.did()).unwrap(),
+            crate::store::config_client::NodePermission::DocumentDelete,
+        )
+        .await
+        .unwrap();
+    let create = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        "user-delete-request",
+        db.node_identity.did(),
+        user.did(),
+        agent.did(),
+        "user-delete-session",
+        "test",
+        "interactive",
+        "2026-07-15T00:00:00Z",
+        AgentRequestAdmissionRecord::client(user.did()),
+    );
+    let _lifecycle =
+        crate::tools::call::lifecycle::admission_fixture::pending_client_fixture_request(
+            &db.node,
+            &user_access,
+            db.node_identity.clone(),
+            &user,
+            agent.as_ref(),
+            create,
+        )
+        .await
+        .unwrap();
+    set_goal_from_access(
+        &user_access,
+        db.node_identity.did(),
+        "user-delete-session",
+        Some("user-owned goal"),
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let other_create = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        "other-delete-request",
+        db.node_identity.did(),
+        user.did(),
+        agent.did(),
+        "other-delete-session",
+        "test",
+        "interactive",
+        "2026-07-15T00:00:00Z",
+        AgentRequestAdmissionRecord::client(user.did()),
+    );
+    let _other_lifecycle =
+        crate::tools::call::lifecycle::admission_fixture::pending_client_fixture_request(
+            &db.node,
+            &user_access,
+            db.node_identity.clone(),
+            &user,
+            agent.as_ref(),
+            other_create,
+        )
+        .await
+        .unwrap();
+    let other = set_goal_from_access(
+        &user_access,
+        db.node_identity.did(),
+        "other-delete-session",
+        Some("keep this goal"),
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        delete_goals_for_session_from_access(
+            &user_access,
+            db.node_identity.did(),
+            "user-delete-session",
+        )
+        .await
+        .unwrap(),
+        1
+    );
+    let rows = user_access
+        .execute("{ Goal {_docID session_id} GoalCreationClaim {_docID session_id} }")
+        .await
+        .unwrap();
+    let goals = rows["data"]["Goal"].as_array().unwrap();
+    let claims = rows["data"]["GoalCreationClaim"].as_array().unwrap();
+    assert_eq!(goals.len(), 1);
+    assert_eq!(goals[0]["_docID"], other.doc_id);
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0]["session_id"], "other-delete-session");
 }
 
 #[tokio::test]

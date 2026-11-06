@@ -58,6 +58,7 @@ impl AcpService {
                                 .execute(
                                     &self.config.node,
                                     self.turns.actor(),
+                                    &self.turns.client_access(),
                                     &self.config.node_did,
                                     &parsed.session_id,
                                 )

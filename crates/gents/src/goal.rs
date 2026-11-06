@@ -146,8 +146,8 @@ pub use usage::{
 pub(crate) use write::pause_goal_for_interrupt_in_txn;
 use write::set_goal_in_txn;
 pub use write::{
-    delete_goal, delete_goals_for_session, set_goal, set_goal_auto_resume_from_access,
-    set_goal_from_access,
+    delete_goal_from_access, delete_goals_for_session_from_access, set_goal,
+    set_goal_auto_resume_from_access, set_goal_from_access,
 };
 
 /// Resume only a paused Goal; an interrupted/claimed execution must settle
@@ -192,12 +192,6 @@ pub use gents_protocol::goal::GoalSnapshot;
 
 fn mutation_returned_rows(value: &serde_json::Value) -> bool {
     value.as_array().is_some_and(|rows| !rows.is_empty()) || value.get("_docID").is_some()
-}
-
-fn mutation_row_count(value: &serde_json::Value) -> usize {
-    value
-        .as_array()
-        .map_or_else(|| usize::from(value.get("_docID").is_some()), Vec::len)
 }
 
 fn optional_int_graphql_field(name: &str, value: Option<i64>) -> String {

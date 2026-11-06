@@ -122,9 +122,13 @@ async fn goal_prompt_atomically_submits_scoped_goal_and_signed_request() {
             .objective,
         "Explain the architecture"
     );
-    gents::goal::delete_goals_for_session(&node, &node_did, &prompt.session_id)
-        .await
-        .unwrap();
+    gents::goal::delete_goals_for_session_from_access(
+        &manager.client_access(),
+        &node_did,
+        &prompt.session_id,
+    )
+    .await
+    .unwrap();
     let next_receipt = manager
         .submit_request(&prompt, "new-incarnation")
         .await
