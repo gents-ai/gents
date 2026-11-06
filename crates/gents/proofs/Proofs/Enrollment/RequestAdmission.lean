@@ -405,8 +405,8 @@ def clientGoalClaimBinding (goalVisible goalMatches rootBound : Bool) : Bool :=
   goalVisible && goalMatches && rootBound
 
 theorem client_goal_claim_requires_physical_binding
-    (visible matches root : Bool) (h : clientGoalClaimBinding visible matches root = true) :
-    visible = true ∧ matches = true ∧ root = true := by
+    (visible goalMatches root : Bool) (h : clientGoalClaimBinding visible goalMatches root = true) :
+    visible = true ∧ goalMatches = true ∧ root = true := by
   simpa [clientGoalClaimBinding, Bool.and_eq_true, and_assoc] using h
 
 /-- Queue selection is only one input to a Client Goal claim. The signed edge,
@@ -419,9 +419,9 @@ def clientGoalClaimAllowed (input : RequestInput) (signatureValid sessionAgentBo
     ancestryVerified
 
 theorem client_goal_claim_requires_current_author_and_ancestry (input : RequestInput)
-    (signature sessionAgent native visible matches root ancestry : Bool)
-    (h : clientGoalClaimAllowed input signature sessionAgent native visible matches root ancestry = true) :
-    native = true ∧ ancestry = true := by
+    (signature sessionAgent nativeAccess visible goalMatches root ancestry : Bool)
+    (h : clientGoalClaimAllowed input signature sessionAgent nativeAccess visible goalMatches root ancestry = true) :
+    nativeAccess = true ∧ ancestry = true := by
   simp only [clientGoalClaimAllowed, Bool.and_eq_true] at h
   aesop
 

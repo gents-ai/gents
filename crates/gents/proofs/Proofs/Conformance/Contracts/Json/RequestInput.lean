@@ -149,11 +149,11 @@ private def requestInputCaseJson (c : RequestInputCase) : String :=
   ",\"expected_agent_message_claim_queue_candidate\":" ++ boolString (clientClaimQueueCandidate c.input true) ++
   ",\"client_goal_claim_binding_cases\":" ++ jsonArray
     (([false, true] : List Bool).flatMap fun visible =>
-      ([false, true] : List Bool).flatMap fun matches =>
+      ([false, true] : List Bool).flatMap fun goalMatches =>
       ([false, true] : List Bool).map fun root =>
-        "{\"visible\":" ++ boolString visible ++ ",\"matches\":" ++ boolString matches ++
+        "{\"visible\":" ++ boolString visible ++ ",\"matches\":" ++ boolString goalMatches ++
         ",\"root\":" ++ boolString root ++ ",\"expected\":" ++
-        boolString (clientGoalClaimBinding visible matches root) ++ "}") ++
+        boolString (clientGoalClaimBinding visible goalMatches root) ++ "}") ++
   ",\"context_skill_ids\":" ++ jsonStringArray c.contextSkillIds ++
   ",\"cwd_allowed\":" ++ boolString c.cwdAllowed ++
   ",\"queue_source_allowed\":" ++ boolString c.queueSourceAllowed ++
