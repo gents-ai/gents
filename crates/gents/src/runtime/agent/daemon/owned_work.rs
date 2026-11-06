@@ -23,9 +23,13 @@ where
         Option<crate::request::task_hooks::TaskHookRecordHandle>,
         bool,
     )> {
+        let access = crate::ConfigAccess::local_managed_agent(
+            self.node.clone(),
+            identity::Did::new(&self.agent_config.agent_did)?,
+            self.agent_config.agent_identity.as_ref(),
+        )?;
         let (hooks, task_owned) =
-            crate::request::task_hooks::resolve_request_task_hooks(self.node.as_ref(), request)
-                .await?;
+            crate::request::task_hooks::resolve_request_task_hooks(&access, request).await?;
         if hooks.is_empty() {
             return Ok((hooks, PathBuf::new(), None, task_owned));
         }

@@ -575,6 +575,16 @@ async fn passing_hooks_leave_a_manual_task_run_completed() {
         ]))
         .await;
     let request = harness.create_request(Lineage::ManualFire, false).await;
+    let fire_query = format!(
+        r#"{{ TriggerFire(filter: {{request_id: {{_eq: "{}"}}}}) {{_docID task_id}} }}"#,
+        crate::store::graphql::escape_graphql_string(&request.request_id),
+    );
+    let selected = harness.agent_access.execute(&fire_query).await.unwrap();
+    assert_eq!(selected["data"]["TriggerFire"][0]["task_id"], TASK_ID);
+    let node_view = ConfigAccess::local(harness.node.clone())
+        .execute(&fire_query)
+        .await;
+    assert!(node_view.is_err() || node_view.unwrap()["data"]["TriggerFire"] == json!([]));
     let row = harness.run(request, false).await;
     assert_eq!(harness.calls(), 1, "{row}");
     assert_eq!(row["lifecycle_state"], "completed", "{row}");
