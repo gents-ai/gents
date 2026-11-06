@@ -28,7 +28,7 @@ parents and its working-Agent grant. Native relationship checks supply the
 authority premise. A duplicate observes its existing receipt and does not
 restore relationships that were subsequently revoked. -/
 def claimedTargetsValid (session observedSession agent observedAgent : String) : Bool :=
-  session != "" && agent != "" && session == observedSession && agent == observedAgent
+  GoalAutomation.requestPhysicalTargetsValid session observedSession agent observedAgent
 
 def commitClaimedRequest (state : Identity.SessionChild.ClientRequestPublication)
     (selected signer actor parentAgent session observedSession agent observedAgent : String)

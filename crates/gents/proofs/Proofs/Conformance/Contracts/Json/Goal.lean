@@ -517,6 +517,23 @@ structure GoalSubmissionCase where
   state : GoalAutomation.SubmissionState
   action : GoalAutomation.SubmissionAction
 
+def runtimeGoalPublicationCasesJson : String :=
+  let cases : List (String × String × String × String × String × String × String × String × Bool × Bool) :=
+    [("created", "agent", "agent", "agent", "session", "session", "agent-doc", "agent-doc", true, true),
+     ("aborted", "agent", "agent", "agent", "session", "session", "agent-doc", "agent-doc", true, false),
+     ("foreign-actor", "other", "agent", "agent", "session", "session", "agent-doc", "agent-doc", true, true),
+     ("wrong-session", "agent", "agent", "agent", "other", "session", "agent-doc", "agent-doc", true, true),
+     ("wrong-agent", "agent", "agent", "agent", "session", "session", "other", "agent-doc", true, true),
+     ("duplicate-after-revocation", "agent", "agent", "agent", "session", "session", "agent-doc", "agent-doc", false, true)]
+  (Lean.toJson (cases.map fun (name, actor, signer, selected, session, observedSession, agent, observedAgent, fresh, commit) =>
+    let before : GoalAutomation.RuntimeGoalPublication :=
+      if fresh then ⟨false, false, false, false⟩ else ⟨true, true, true, false⟩
+    let result := GoalAutomation.commitRuntimeGoalOpening before actor signer selected
+      session observedSession agent observedAgent fresh commit
+    Lean.Json.mkObj [("name", Lean.toJson name), ("session", Lean.toJson result.session),
+      ("goal", Lean.toJson result.goal), ("request", Lean.toJson result.request),
+      ("grants", Lean.toJson result.grants)])).compress
+
 def goalSubmissionCases : List GoalSubmissionCase :=
   [ { name := "stage_goal_not_visible", state := ⟨false, false, false, false⟩,
       action := .stageGoal }
