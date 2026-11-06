@@ -2490,6 +2490,26 @@ async fn signed_statement_conflict_rebuilds_only_after_successful_discard() {
 }
 
 #[tokio::test]
+async fn signed_conflict_without_held_signer_does_not_rebuild() {
+    let (endpoint, state, server) = fake_transaction_server(FirstCommit::ConfirmedConflict).await;
+    let access = ConfigAccess::graphql(endpoint);
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let captured = attempts.clone();
+    let result = access
+        .transact_signed_conflict_rebuild("test.signed_conflict_without_signer", move |txn| {
+            captured.fetch_add(1, Ordering::SeqCst);
+            txn.client_signed_write_dispatched
+                .store(true, Ordering::Release);
+            Box::pin(async { Ok::<_, TestError>(()) })
+        })
+        .await;
+    assert!(result.is_err());
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(state.next_id.load(Ordering::SeqCst), 1);
+    server.abort();
+}
+
+#[tokio::test]
 async fn ambiguous_signed_conflict_does_not_rebuild() {
     for first_commit in [
         FirstCommit::Conflict,

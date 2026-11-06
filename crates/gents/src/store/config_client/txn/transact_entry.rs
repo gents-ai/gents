@@ -122,11 +122,16 @@ impl ConfigAccess {
         F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
     {
         let mode = match self {
-            Self::Graphql(endpoint) if endpoint.pack_replay.is_none() => {
-                endpoint.held_client_signing_capability().map_err(E::from)?;
+            Self::Graphql(endpoint)
+                if endpoint.pack_replay.is_none()
+                    && endpoint.held_client_signing_capability().is_ok() =>
+            {
                 TransactionMode::SignedConflictRebuild
             }
-            Self::Graphql(_) => TransactionMode::SingleAttempt,
+            Self::Graphql(endpoint) if endpoint.pack_replay.is_some() => {
+                TransactionMode::SingleAttempt
+            }
+            Self::Graphql(_) => TransactionMode::ConflictRetry,
             Self::Local(_) => TransactionMode::ConflictRetry,
         };
         transact_owned(
