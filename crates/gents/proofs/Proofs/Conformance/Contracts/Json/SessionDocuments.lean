@@ -207,7 +207,9 @@ private def historyJson (h : SessionFork.History) : Json := Json.mkObj
   [("messages", toJson (h.messages.map messageJson)),
    ("compactions", toJson (h.compactions.map fun c => Json.mkObj
      [("doc_id", toJson c.id), ("session", toJson c.session),
-      ("sequence", toJson c.sequence), ("through_sequence", toJson c.throughSequence)]))]
+      ("sequence", toJson c.sequence), ("through_sequence", toJson c.throughSequence)])),
+   ("closures", toJson (h.closures.map fun c => Json.mkObj
+     [("doc_id", toJson c.id), ("session", toJson c.session), ("logical", toJson c.logical)]))]
 private def selectionJson (name : String) (rows : List AgentSession.RequestFact)
     (node session : Nat) (requester : Option (Option Nat)) : Json := Json.mkObj
   [("name", toJson name), ("requests", toJson (rows.map requestJson)),
@@ -219,16 +221,23 @@ private def forkJson (name : String) (source : SessionFork.History)
     (target : AgentSession.Scope) (cut : Nat) (authorized idle coherent : Bool) : Json :=
   let authorization : SessionFork.SourceAuthorization :=
     if authorized then
-      ⟨scope, source.messages.map (·.header.id), source.compactions.map (·.id)⟩
+      ⟨scope, source.messages.map (·.header.id), source.compactions.map (·.id),
+        source.closures.map (·.id)⟩
     else
       ⟨{ scope with node := scope.node + 1 }, source.messages.map (·.header.id),
-        source.compactions.map (·.id)⟩
+        source.compactions.map (·.id), source.closures.map (·.id)⟩
+  let published := SessionFork.publish source scope target remap childKey cut authorization idle coherent
   Json.mkObj [("name", toJson name), ("source", historyJson source), ("parent", scopeJson scope),
    ("child", scopeJson target), ("exclusive_sequence_cut", toJson cut),
    ("document_id_offset", toJson (1000 : Nat)), ("authorized", toJson authorized),
    ("idle", toJson idle), ("coherent", toJson coherent),
-   ("published", (SessionFork.publish source scope target remap childKey cut authorization idle coherent).map
-      historyJson |>.getD Json.null)]
+   ("published", published.map historyJson |>.getD Json.null),
+   ("readers", toJson (published.map (fun copied =>
+      [("child_session", target.session), ("source_session", scope.session),
+       ("unrelated_session", target.session + scope.session + 1)].map fun (name, grant) =>
+        Json.mkObj [("grant", toJson name),
+          ("reads_transcript", toJson (SessionFork.readsTranscript grant copied target.session))])
+      |>.getD []))]
 
 private def editForkBindingJson (binding : SessionFork.EditForkBinding) : Json := Json.mkObj
   [("client", toJson binding.client), ("parent", scopeJson binding.parent), ("child", scopeJson binding.child),
@@ -292,8 +301,10 @@ private def archiveCases : List Json := do
     ("archived_visible", toJson (AgentSession.Archive.visible .archived after)),
     ("all_visible", toJson (AgentSession.Archive.visible .all after))])
 
-/-- Header-only fork inputs and computed durable outputs. Payload/tool/segment
-rows remain origin dependencies and are never copied or remapped. -/
+/-- Fork inputs and computed durable outputs. Referenced payload closures are
+copied into the child under their logical reference; tool rows are never copied
+and no reference is remapped. `readers` states which direct session grant reads
+the published child's whole transcript. -/
 private def starterVerificationCases : List Json :=
   let source : AgentSession.Scope := ⟨5, 6, some 7⟩
   let receipt : AgentSession.CreationReceipt :=

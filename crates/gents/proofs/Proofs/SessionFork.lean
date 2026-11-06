@@ -15,9 +15,21 @@ structure Compaction where
   throughSequence : Nat
   deriving DecidableEq, Repr
 
+/-- One retained payload source, observed through its closing record. Payload
+references name `logical`; a source's own closing record has `logical = id`. A
+fork copy keeps the logical name its copied headers already carry while its
+physical document (closing and source records) belongs to the copying session,
+so header bytes and fork metadata stay exact and only the physical owner moves. -/
+structure Closure where
+  id : DocId
+  session : SessionId
+  logical : DocId
+  deriving DecidableEq, Repr
+
 structure History where
   messages : List MessageEnvelope
   compactions : List Compaction
+  closures : List Closure := []
   deriving DecidableEq, Repr
 
 def isUserTurn (message : MessageEnvelope) : Bool :=
@@ -52,9 +64,8 @@ theorem ambiguous_edit_anchor (source : History) (key : String)
     editCut source key = none := by
   simp [editCut, ambiguous]
 
-/-- Fork headers currently reuse physical source fragments. A different target
-agent requires a destination-owned copy of the selected fragments before those
-references can be used without granting access to the wider source session. -/
+/-- Fork content is copied into destination-owned documents by `publish`;
+retargeting a fork to another agent remains a separate, unadmitted decision. -/
 def mayReuseSourceFragments (sourceAgent targetAgent : String) : Bool :=
   sourceAgent == targetAgent
 
@@ -71,13 +82,38 @@ def copyMessage (child : AgentSession.Scope) (childId : DocId)
     header := forkHeader message.header childId child.session
     key := childKey message.key }
 
+/-- The unique closure a reader of `session` resolves for a logical reference.
+Resolution never leaves that session. -/
+def resolveIn (closures : List Closure) (session : SessionId) (logical : DocId) :
+    Option Closure :=
+  match closures.filter (fun c => c.session == session && c.logical == logical) with
+  | [closure] => some closure
+  | _ => none
+
+/-- The closure the source snapshot holds for a logical reference. An earlier
+fork's headers resolve in that fork's own session; a source authored before
+destination-owned copies may still name a physical closure elsewhere. -/
+def sourceClosure (source : History) (logical : DocId) : Option Closure :=
+  match source.closures.filter (·.logical == logical) with
+  | [closure] => some closure
+  | _ => none
+
+def referencedLogicals (messages : List MessageEnvelope) : List DocId :=
+  (messages.flatMap fun message => message.header.refs.map (·.closeId)).dedup
+
+def retainedMessages (source : History) (cut : Nat) : List MessageEnvelope :=
+  source.messages.filter (fun message => message.sequence < cut)
+
 def copyPrefix (source : History) (child : AgentSession.Scope)
     (childDocumentId : DocId → DocId) (childKey : String → String)
     (cut : Nat) : History :=
-  { messages := (source.messages.filter (fun message => message.sequence < cut)).map
+  { messages := (retainedMessages source cut).map
       (fun message => copyMessage child (childDocumentId message.header.id) childKey message)
   , compactions := (source.compactions.filter (fun c => c.throughSequence < cut)).map
-      (fun c => { c with id := childDocumentId c.id, session := child.session }) }
+      (fun c => { c with id := childDocumentId c.id, session := child.session })
+  , closures := (referencedLogicals (retainedMessages source cut)).filterMap fun logical =>
+      (sourceClosure source logical).map fun closure =>
+        { id := childDocumentId closure.id, session := child.session, logical } }
 
 theorem copied_header_satisfies_reader_provenance (child : AgentSession.Scope)
     (id : DocId) (key : String → String) (origin : MessageEnvelope) :
@@ -88,7 +124,7 @@ theorem copied_prefix_preserves_order (source : History) (child : AgentSession.S
     (ids : DocId → DocId) (keys : String → String) (cut : Nat) :
     ((copyPrefix source child ids keys cut).messages.map (·.sequence)) =
       (source.messages.filter (fun message => message.sequence < cut)).map (·.sequence) := by
-  simp [copyPrefix, copyMessage, List.map_map]
+  simp [copyPrefix, retainedMessages, copyMessage, List.map_map]
 
 def validChain (session : SessionId) : Nat → Option Nat → List Compaction → Bool
   | _, _, [] => true
@@ -105,7 +141,33 @@ def allInSession (history : History) (session : SessionId) : Bool :=
     history.compactions.all (·.session == session)
 
 def documentIds (history : History) : List DocId :=
-  history.messages.map (·.header.id) ++ history.compactions.map (·.id)
+  history.messages.map (·.header.id) ++ history.compactions.map (·.id) ++
+    history.closures.map (·.id)
+
+/-- Every document a reader of `session` needs to reconstruct the transcript is
+owned by that session: headers, compaction cursors and the closure each payload
+reference resolves to there. Origin provenance is not consulted. -/
+def selfContained (history : History) (session : SessionId) : Bool :=
+  allInSession history session && history.closures.all (·.session == session) &&
+    history.messages.all fun message => message.header.refs.all fun ref =>
+      (resolveIn history.closures session ref.closeId).isSome
+
+/-- Household ACP `children`: a session's documents are read through that
+session's grant (`reader + working_agent + parent->read`). A direct session
+reader holds exactly that grant and nothing on any other session. -/
+def readableUnder (grant session : SessionId) : Bool := session == grant
+
+def readerSessions (history : History) (session : SessionId) : List SessionId :=
+  history.messages.map (·.header.session) ++ history.compactions.map (·.session) ++
+    (history.messages.flatMap fun message => message.header.refs.filterMap fun ref =>
+      (resolveIn history.closures session ref.closeId).map (·.session))
+
+/-- A grant on `grant` reads the transcript of `session` exactly when every
+payload reference resolves and every needed document is readable under it. -/
+def readsTranscript (grant : SessionId) (history : History) (session : SessionId) : Bool :=
+  (history.messages.all fun message => message.header.refs.all fun ref =>
+      (resolveIn history.closures session ref.closeId).isSome) &&
+    (readerSessions history session).all (readableUnder grant)
 
 def structurallyValid (history : History) : Bool :=
   decide (history.messages.map (·.sequence)).Nodup &&
@@ -119,17 +181,21 @@ structure SourceAuthorization where
   owner : AgentSession.Scope
   messageDocuments : List DocId
   compactionDocuments : List DocId
+  closureDocuments : List DocId
   deriving DecidableEq, Repr
 
 def authorizes (authorization : SourceAuthorization) (parent : AgentSession.Scope)
     (source : History) : Bool :=
   authorization.owner == parent &&
     source.messages.all (fun message => authorization.messageDocuments.contains message.header.id) &&
-    source.compactions.all (fun compaction => authorization.compactionDocuments.contains compaction.id)
+    source.compactions.all (fun compaction => authorization.compactionDocuments.contains compaction.id) &&
+    source.closures.all (fun closure => authorization.closureDocuments.contains closure.id)
 
 /-- Revision, authorization and source idleness remain inputs from existing
-owners; allocators apply only to child messages/compactions and message keys —
-payload, segment and tool identities are never remapped. -/
+owners; allocators apply only to child messages/compactions/closure copies and
+message keys. Logical payload references and tool identities are never
+remapped; the referenced closures are copied into the child so the published
+child is `selfContained`. -/
 def publish (source : History) (parent child : AgentSession.Scope)
     (childDocumentId : DocId → DocId) (childKey : String → String) (cut : Nat)
     (authorization : SourceAuthorization) (idle coherent : Bool) : Option History :=
@@ -141,6 +207,7 @@ def publish (source : History) (parent child : AgentSession.Scope)
       validChain parent.session 1 none source.compactions &&
       validChain child.session 1 none copied.compactions &&
       structurallyValid source && structurallyValid copied &&
+      selfContained copied child.session &&
       (documentIds copied).all (fun id => !(documentIds source).contains id) then
     some copied
   else none
@@ -178,7 +245,7 @@ theorem copied_message_carries_exact_origin
       copied.header.refs = origin.header.refs ∧
       copied.blocks = origin.blocks ∧ copied.nativeId = origin.nativeId ∧
       copied.nativeRequestId = origin.nativeRequestId := by
-  simp only [copyPrefix, List.mem_map, List.mem_filter] at h
+  simp only [copyPrefix, retainedMessages, List.mem_map, List.mem_filter] at h
   obtain ⟨origin, ⟨hmem, hcut⟩, rfl⟩ := h
   exact ⟨origin, hmem, of_decide_eq_true hcut,
     by simp [copyMessage, forkHeader], rfl, rfl, rfl, rfl⟩
@@ -230,15 +297,106 @@ theorem publish_postconditions
     exact ⟨origin, horigin, hcopy⟩
   · contradiction
 
+theorem resolveIn_session {closures : List Closure} {session logical : DocId} {closure : Closure}
+    (h : resolveIn closures session logical = some closure) : closure.session = session := by
+  unfold resolveIn at h
+  split at h
+  · rename_i found hfilter
+    simp only [Option.some.injEq] at h
+    subst h
+    have hmem : found ∈ closures.filter
+        (fun c => c.session == session && c.logical == logical) := by
+      rw [hfilter]; simp
+    simp only [List.mem_filter, Bool.and_eq_true, beq_iff_eq] at hmem
+    exact hmem.2.1
+  · contradiction
+
+theorem resolveIn_mem {closures : List Closure} {session logical : DocId} {closure : Closure}
+    (h : resolveIn closures session logical = some closure) : closure ∈ closures := by
+  unfold resolveIn at h
+  split at h
+  · rename_i found hfilter
+    simp only [Option.some.injEq] at h
+    subst h
+    have hmem : found ∈ closures.filter
+        (fun c => c.session == session && c.logical == logical) := by
+      rw [hfilter]; simp
+    exact (List.mem_filter.mp hmem).1
+  · contradiction
+
+theorem self_contained_reads_with_own_grant (history : History) (session : SessionId)
+    (h : selfContained history session = true) :
+    readsTranscript session history session = true := by
+  simp only [selfContained, allInSession, Bool.and_eq_true, List.all_eq_true] at h
+  obtain ⟨⟨⟨hmessages, hcompactions⟩, _⟩, hrefs⟩ := h
+  simp only [readsTranscript, Bool.and_eq_true, List.all_eq_true]
+  refine ⟨hrefs, ?_⟩
+  intro observed hobserved
+  simp only [readerSessions, List.mem_append, List.mem_map, List.mem_flatMap,
+    List.mem_filterMap] at hobserved
+  simp only [readableUnder, beq_iff_eq]
+  rcases hobserved with (⟨message, hmessage, rfl⟩ | ⟨compaction, hcompaction, rfl⟩) |
+      ⟨message, _, ref, _, hresolved⟩
+  · simpa using hmessages message hmessage
+  · simpa using hcompactions compaction hcompaction
+  · simp only [Option.map_eq_some'] at hresolved
+    obtain ⟨closure, hcase, rfl⟩ := hresolved
+    exact resolveIn_session hcase
+
+/-- The read-side fork contract: a published fork is self-contained, so a
+direct reader granted only the child session reads its whole retained
+transcript with no grant on, or visibility of, the source session. -/
+theorem fork_reader_needs_only_child_grant
+    (source : History) (parent child : AgentSession.Scope)
+    (childDocumentId : DocId → DocId) (childKey : String → String) (cut : Nat)
+    (authorization : SourceAuthorization) (idle coherent : Bool) (copied : History)
+    (hpub : publish source parent child childDocumentId childKey cut
+      authorization idle coherent = some copied) :
+    selfContained copied child.session = true ∧
+      readsTranscript child.session copied child.session = true := by
+  have hcontained : selfContained copied child.session = true := by
+    unfold publish at hpub
+    dsimp only at hpub
+    split at hpub
+    · simp only [Option.some.injEq] at hpub
+      subst copied
+      rename_i hguard
+      simp only [Bool.and_eq_true] at hguard
+      exact hguard.1.2
+    · contradiction
+  exact ⟨hcontained, self_contained_reads_with_own_grant copied child.session hcontained⟩
+
+/-- No grant on another session, including the source, substitutes for the
+child grant once the child holds a message. -/
+theorem other_grant_cannot_read_fork (history : History) (session grant : SessionId)
+    (different : grant ≠ session) (message : MessageEnvelope)
+    (hmessage : message ∈ history.messages) (hsession : message.header.session = session) :
+    readsTranscript grant history session = false := by
+  have hmem : session ∈ readerSessions history session := by
+    simp only [readerSessions, List.mem_append, List.mem_map]
+    exact Or.inl (Or.inl ⟨message, hmessage, hsession⟩)
+  have hdenied : readableUnder grant session = false := by
+    simp [readableUnder, beq_iff_eq, Ne.symm different]
+  cases hread : readsTranscript grant history session with
+  | false => rfl
+  | true =>
+      simp only [readsTranscript, Bool.and_eq_true, List.all_eq_true] at hread
+      have := hread.2 session hmem
+      simp [hdenied] at this
+
 structure RetentionDependencies where
   originMessages : List DocId
   closingRecords : List DocId
   deriving DecidableEq, Repr
 
+/-- Origin messages are provenance only. Closing records are the physical
+closures this history's references resolve to in their own session, so a
+fork depends on its destination-owned copies and never on source content. -/
 def retentionDependencies (history : History) : RetentionDependencies :=
   { originMessages := (history.messages.filterMap (·.header.origin)).dedup
-  , closingRecords :=
-      (history.messages.flatMap fun message => message.header.refs.map (·.closeId)).dedup }
+  , closingRecords := (history.messages.flatMap fun message =>
+      message.header.refs.filterMap fun ref =>
+        (resolveIn history.closures message.header.session ref.closeId).map (·.id)).dedup }
 
 def canDeleteOriginMessage (dependencies : RetentionDependencies) (id : DocId) : Bool :=
   !dependencies.originMessages.contains id
@@ -247,14 +405,16 @@ def canDeleteClosingRecord (dependencies : RetentionDependencies) (id : DocId) :
   !dependencies.closingRecords.contains id
 
 theorem copied_reference_is_retained (history : History) (message : MessageEnvelope)
-    (ref : PayloadRef) (hmessage : message ∈ history.messages)
-    (href : ref ∈ message.header.refs) :
-    canDeleteClosingRecord (retentionDependencies history) ref.closeId = false := by
-  have hmem : ref.closeId ∈
-      (history.messages.flatMap fun message => message.header.refs.map (·.closeId)).dedup := by
+    (ref : PayloadRef) (closure : Closure) (hmessage : message ∈ history.messages)
+    (href : ref ∈ message.header.refs)
+    (hresolved : resolveIn history.closures message.header.session ref.closeId = some closure) :
+    canDeleteClosingRecord (retentionDependencies history) closure.id = false := by
+  have hmem : closure.id ∈ (history.messages.flatMap fun message =>
+      message.header.refs.filterMap fun ref =>
+        (resolveIn history.closures message.header.session ref.closeId).map (·.id)).dedup := by
     rw [List.mem_dedup]
     exact List.mem_flatMap.mpr
-      ⟨message, hmessage, List.mem_map.mpr ⟨ref, href, rfl⟩⟩
+      ⟨message, hmessage, List.mem_filterMap.mpr ⟨ref, href, by simp [hresolved]⟩⟩
   simpa [canDeleteClosingRecord, retentionDependencies, List.contains_eq_mem] using hmem
 
 theorem copied_origin_message_is_retained (history : History) (message : MessageEnvelope)
@@ -265,6 +425,39 @@ theorem copied_origin_message_is_retained (history : History) (message : Message
     rw [List.mem_dedup, List.mem_filterMap]
     exact ⟨message, hmessage, horigin⟩
   simpa [canDeleteOriginMessage, retentionDependencies, List.contains_eq_mem] using hmem
+
+theorem closing_record_is_closure (history : History) (id : DocId)
+    (h : id ∈ (retentionDependencies history).closingRecords) :
+    id ∈ history.closures.map (·.id) := by
+  simp only [retentionDependencies, List.mem_dedup, List.mem_flatMap,
+    List.mem_filterMap] at h
+  obtain ⟨message, _, ref, _, hresolved⟩ := h
+  simp only [Option.map_eq_some'] at hresolved
+  obtain ⟨closure, hcase, rfl⟩ := hresolved
+  exact List.mem_map.mpr ⟨closure, resolveIn_mem hcase, rfl⟩
+
+/-- Copied content is owned by the child: deleting any source document never
+removes a closing record the published fork depends on. -/
+theorem source_deletion_preserves_fork_content
+    (source : History) (parent child : AgentSession.Scope)
+    (childDocumentId : DocId → DocId) (childKey : String → String) (cut : Nat)
+    (authorization : SourceAuthorization) (idle coherent : Bool) (copied : History)
+    (hpub : publish source parent child childDocumentId childKey cut
+      authorization idle coherent = some copied)
+    (id : DocId) (hsource : id ∈ documentIds source) :
+    canDeleteClosingRecord (retentionDependencies copied) id = true := by
+  obtain ⟨_, hfresh, _⟩ := publish_postconditions source parent child childDocumentId
+    childKey cut authorization idle coherent copied hpub
+  cases hdep : (retentionDependencies copied).closingRecords.contains id with
+  | false => simp only [canDeleteClosingRecord, hdep, Bool.not_false]
+  | true =>
+      have hmem := closing_record_is_closure copied id (by simpa using hdep)
+      have hcopied : id ∈ documentIds copied := by
+        simp only [documentIds, List.mem_append]
+        exact Or.inr hmem
+      simp only [List.all_eq_true] at hfresh
+      have := hfresh id hcopied
+      simp [List.contains_eq_mem, hsource] at this
 
 /-- The caller saves the child identity before requesting an edit fork. The
 existing AgentSession owner persists its exact source-message binding with the
