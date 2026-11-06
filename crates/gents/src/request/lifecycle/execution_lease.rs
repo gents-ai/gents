@@ -417,43 +417,6 @@ pub(crate) async fn revoke_execution_preserving_output_with_access(
 }
 
 #[cfg(test)]
-pub(crate) async fn revoke_execution_preserving_output_at(
-    node: &std::sync::Arc<EmbeddedNode>,
-    row: &AgentRequestRow,
-    outcome: RequestTerminalOutcome,
-    reason: &str,
-    expected_generation: &str,
-    fresh_generation: &str,
-    now: DateTime<Utc>,
-) -> Result<TerminalizeResult> {
-    terminalize_execution_with_time(
-        node,
-        identity::Did::new(
-            row.agent_did
-                .clone()
-                .context("request is missing agent DID")?,
-        )?,
-        TerminalizeSpec {
-            request_doc_id: row.doc_id.as_deref().context("missing request document")?,
-            authority: TerminalAuthority::Revocation {
-                generation: expected_generation,
-                expiry: row
-                    .execution_lease_expires_at
-                    .as_deref()
-                    .context("missing execution expiry")?,
-            },
-            outcome,
-            selection: None,
-            reason,
-            fixture_now: Some(now),
-            fixture_fresh_generation: Some(fresh_generation),
-            pending_fence: None,
-        },
-    )
-    .await
-}
-
-#[cfg(test)]
 pub(crate) async fn revoke_execution_preserving_output_at_with_access(
     access: &crate::ConfigAccess,
     row: &AgentRequestRow,

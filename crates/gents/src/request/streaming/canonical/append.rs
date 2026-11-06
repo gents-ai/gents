@@ -53,32 +53,6 @@ pub(in crate::request::streaming) async fn append_provider_segment_with_signer(
 }
 
 #[cfg(test)]
-pub(crate) async fn append_provider_segment_at(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor: identity::Did,
-    generation: &str,
-    prepared: &OutputSegment,
-    now: DateTime<Utc>,
-) -> Result<String> {
-    let result = ConfigAccess::transact_local_idempotent(
-        node,
-        Some(actor.clone()),
-        IdempotentTransactionRetry::Standard,
-        "streaming.append_provider_segment",
-        |txn| Box::pin(async move { append_in_txn_at(txn, generation, prepared, now).await }),
-    )
-    .await?;
-    crate::session::child_ownership::publish_agent_session_child_relationships(
-        node,
-        &prepared.node_did,
-        &actor,
-        &prepared.session_id,
-    )
-    .await?;
-    Ok(result)
-}
-
-#[cfg(test)]
 pub(crate) async fn append_provider_segment_at_with_access(
     access: &ConfigAccess,
     generation: &str,

@@ -36,8 +36,6 @@ pub(crate) use terminal_binding::is_exact_invocation_reply;
 mod terminal_tools;
 pub use crate::triggers::engine::durable::request_arrival_order;
 #[cfg(test)]
-pub(crate) use execution_lease::revoke_execution_preserving_output_at;
-#[cfg(test)]
 pub(crate) use execution_lease::revoke_execution_preserving_output_at_with_access;
 #[cfg(test)]
 pub(crate) use execution_lease::terminalize_owned_at;

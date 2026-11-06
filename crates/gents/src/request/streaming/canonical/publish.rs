@@ -97,17 +97,6 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_signer(
 }
 
 #[cfg(test)]
-pub(crate) async fn publish_provider_turn_at(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor: identity::Did,
-    generation: &str,
-    plan: ProviderPublicationPlan,
-    now: DateTime<Utc>,
-) -> Result<PublishedProviderTurn> {
-    publish_provider_turn_with_time(node, actor, None, generation, plan, Some(now)).await
-}
-
-#[cfg(test)]
 pub(crate) async fn publish_provider_turn_at_with_access(
     access: &ConfigAccess,
     generation: &str,
