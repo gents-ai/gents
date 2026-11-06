@@ -1152,6 +1152,118 @@ mod tests {
         node.shutdown().await?;
         Ok(())
     }
+
+    #[tokio::test]
+    async fn non_admin_tools_writer_cannot_project_schema_authority() -> anyhow::Result<()> {
+        let (_directory, runtime, node) = projection_node().await?;
+        let binding = crate::store::identity::provision_agent_identity(&runtime)?;
+        let signer = crate::store::identity::resolve_agent_identity(&runtime, &binding)?;
+        let agent = identity::Did::new(&binding.agent_did)?;
+        let owner = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
+        for permission in [
+            NodePermission::CollectionGet,
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+        ] {
+            owner.grant_node_permission(&agent, permission).await?;
+        }
+        let node_value = escape_graphql_string(runtime.did());
+        let agent_value = escape_graphql_string(&binding.agent_did);
+        let nonce = escape_graphql_string(&binding.creation_nonce);
+        let response = owner.write("test.projection.writer_tools", &format!(
+            r#"mutation {{ create_Tools(input: {{node_did:"{node_value}",tools_id:"writer-tools",built_ins:{{enable_schema_tool:false}}}}) {{_docID}} }}"#
+        )).await?;
+        let tools_doc = crate::store::graphql::created_doc_id(&response, "Tools")?;
+        for mutation in [
+            format!(
+                r#"mutation {{ create_AgentContext(input: {{node_did:"{node_value}",context_id:"writer-context",tools_id:"writer-tools"}}) {{_docID}} }}"#
+            ),
+            format!(
+                r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{agent_value}",creation_nonce:"{nonce}",context_id:"writer-context",enabled:true}}) {{_docID}} }}"#
+            ),
+        ] {
+            owner
+                .write("test.projection.writer_setup", &mutation)
+                .await?;
+        }
+        owner
+            .add_actor_relationship("Tools", &tools_doc, "writer", &agent)
+            .await?;
+        assert!(!node.nac_manager().is_admin(&agent).await?);
+        assert!(
+            !node
+                .nac_manager()
+                .check_permission(&agent, NodePermission::CollectionPatch)
+                .await?
+        );
+
+        let model = crate::lean_vocab_test::lean_identity_household_cases()
+            .iter()
+            .find(|case| case.name == "configuration-explicit-grants")
+            .expect("configuration model");
+        let case = model
+            ._tool_grantor_cases
+            .iter()
+            .find(|case| {
+                case["committed"] == true
+                    && case["admins"]
+                        .as_array()
+                        .is_some_and(|admins| !admins.contains(&case["grantor"]))
+            })
+            .expect("non-admin Tools writer model");
+        let expected_grants = case["expected_grants"].as_array().expect("modeled grants");
+        assert!(expected_grants.is_empty());
+
+        let writer =
+            crate::ConfigAccess::local_managed_agent(node.clone(), agent.clone(), signer.as_ref())?;
+        let mutation = format!(
+            r#"mutation($input: ToolsMutationInputArg!) {{ update_Tools(docID:"{}", input:$input) {{_docID}} }}"#,
+            escape_graphql_string(&tools_doc)
+        );
+        let harmless = serde_json::json!({"input":{"built_ins":{"enable_schema_tool":false}}});
+        let response = writer
+            .transact_write("test.projection.writer_control", |txn| {
+                let mutation = &mutation;
+                let harmless = &harmless;
+                Box::pin(async move {
+                    txn.execute_client_signed_update(
+                        mutation,
+                        harmless,
+                        gents_protocol::schemas::TOOLS,
+                    )
+                    .await
+                })
+            })
+            .await?;
+        assert_eq!(response["data"]["update_Tools"][0]["_docID"], tools_doc);
+
+        let elevated = serde_json::json!({"input":{"built_ins":{"enable_schema_tool":true}}});
+        let attempt = writer
+            .transact_write("test.projection.writer_schema", |txn| {
+                let mutation = &mutation;
+                let elevated = &elevated;
+                Box::pin(async move {
+                    txn.execute_client_signed_update(
+                        mutation,
+                        elevated,
+                        gents_protocol::schemas::TOOLS,
+                    )
+                    .await
+                })
+            })
+            .await;
+        if let Ok(response) = attempt {
+            assert_eq!(response["data"]["update_Tools"][0]["_docID"], tools_doc);
+        }
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::CollectionPatch)
+                .await?,
+            !expected_grants.is_empty()
+        );
+        node.shutdown().await?;
+        Ok(())
+    }
     #[tokio::test]
     async fn reviewed_plugin_delete_source_tracks_selection_and_reinstall() -> anyhow::Result<()> {
         use gents_protocol::job::PluginDataDeclaration;
