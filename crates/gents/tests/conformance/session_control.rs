@@ -53,6 +53,10 @@ async fn seed_agent_session(
     (access, agent_doc, session_doc)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the signed fixture binds a request to its physical session and Agent"
+)]
 async fn seed_agent_request(
     db: &support::TestDb,
     fixture: &support::ManagedAgentFixture,
