@@ -321,7 +321,7 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
         review_previous: false,
         captures: Vec::new(),
     };
-    for state in ["pending", "processing"] {
+    for state in ["processing", "pending"] {
         super::submit::submit_stage(
             &home,
             &spec.evaluator_did,
