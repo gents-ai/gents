@@ -1371,6 +1371,22 @@ mod tests {
         (node, format!("http://{address}/api/v0/graphql"))
     }
 
+    /// Grants the user the `OperatorUser` set as the runtime admin, as
+    /// `signed_test_node` does. Without it, seeding the user's client-signed
+    /// Node and Agent ends in an incomplete signing conversation.
+    async fn grant_operator_user(
+        node: &Arc<defra_node::Node>,
+        runtime: &dyn NodeIdentity,
+        user: &KeyIdentity,
+    ) {
+        let admin =
+            ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
+        crate::store::identity::GrantSet::OperatorUser
+            .grant(&admin, &identity::Did::new(user.did()).unwrap())
+            .await
+            .unwrap();
+    }
+
     fn client_access(endpoint: &str, identity: &KeyIdentity) -> ConfigAccess {
         ConfigAccess::Graphql(
             crate::store::config_client::GraphqlEndpoint::as_principal(endpoint, identity.did())
@@ -1658,6 +1674,7 @@ mod tests {
         let runtime = KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap();
         let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
         let (node, endpoint) = serve_client_node(&runtime).await;
+        grant_operator_user(&node, &runtime, &user).await;
         let agent = crate::store::identity::provision_agent_identity(&runtime).unwrap();
         let access = client_access(&endpoint, &user);
         seed_owned_agent(&access, runtime.did(), &agent).await;
@@ -1780,6 +1797,7 @@ mod tests {
         let runtime = KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap();
         let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
         let (node, endpoint) = serve_client_node(&runtime).await;
+        grant_operator_user(&node, &runtime, &user).await;
         let agent = crate::store::identity::provision_agent_identity(&runtime).unwrap();
         let access = client_access(&endpoint, &user);
         seed_owned_agent(&access, runtime.did(), &agent).await;
@@ -2005,6 +2023,7 @@ mod tests {
         let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
         let other = KeyIdentity::load_or_create(home.path().join("other.key"), None).unwrap();
         let (node, endpoint) = serve_client_node(&runtime).await;
+        grant_operator_user(&node, &runtime, &user).await;
         let agent = crate::store::identity::provision_agent_identity(&runtime).unwrap();
         let access = client_access(&endpoint, &user);
         seed_owned_agent(&access, runtime.did(), &agent).await;
