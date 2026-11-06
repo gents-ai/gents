@@ -74,10 +74,12 @@ export interface UxCaller {
 
 /** the plugin a notification is from: `key` is what the person's switches
     are kept under (the pack's listing for a pack plugin, so another pack
-    reusing the id inherits nothing), and `kinds` what its module declared */
+    reusing the id inherits nothing), `kinds` what its module declared, and
+    `pack` the pack it shipped in, which a notification names as its sender */
 export interface UxNotifyCaller extends UxCaller {
   key: string;
   kinds: readonly UxNotificationKind[];
+  pack?: string;
 }
 
 /** the host's shell: `send` takes the caller, which the plugin's context
@@ -355,6 +357,8 @@ export interface CreateContextOptions {
   notifier?: string;
   /** the kinds of notification its module declared */
   notifications?: readonly UxNotificationKind[];
+  /** the pack it shipped in (`<ns>/<pack>`); absent outside a pack */
+  pack?: string;
 }
 
 export function createUxContext(
@@ -393,7 +397,12 @@ export function createUxContext(
     if (!h.notify || !options.notifier)
       return Promise.reject(new Error(`${pluginId}: ctx.notify is unavailable here`));
     return h.notify(
-      { ...caller, key: options.notifier, kinds: options.notifications ?? [] },
+      {
+        ...caller,
+        key: options.notifier,
+        kinds: options.notifications ?? [],
+        ...(options.pack ? { pack: options.pack } : {}),
+      },
       request,
     );
   };

@@ -44,6 +44,7 @@ const BOARD: UxNotifyCaller = {
   name: "Board",
   key: "acme/kit/board",
   kinds: [{ kind: "task-assigned", label: "Task assigned" }],
+  pack: "acme/kit",
 };
 
 describe("the kinds a plugin's module declares", () => {
@@ -122,7 +123,7 @@ describe("the owner of plugins' notifications", () => {
     offered = [];
   });
 
-  it("tells a switched-on kind, attributed, with a click that opens the plugin's page", async () => {
+  it("tells a switched-on kind, from its pack, with a click that opens the plugin's page", async () => {
     const notify = notifier();
     await notify(BOARD, { kind: "task-assigned", title: "Ship the release" });
     await notify(BOARD, {
@@ -133,15 +134,27 @@ describe("the owner of plugins' notifications", () => {
     });
     expect(told).toEqual([
       {
-        title: "Board: Ship the release",
+        title: "acme/kit: Ship the release",
         to: { name: "plugin", pluginId: "board" },
       },
       {
-        title: "Board: Review the notes",
+        title: "acme/kit: Review the notes",
         body: "Due Friday",
         to: { name: "plugin", pluginId: "board", path: "tasks/42" },
       },
     ]);
+  });
+
+  it("names a plugin outside a pack by its own name", async () => {
+    const home: UxNotifyCaller = {
+      id: "board",
+      name: "Board",
+      key: "home:board",
+      kinds: BOARD.kinds,
+    };
+    switched.add("home:board task-assigned");
+    await notifier()(home, { kind: "task-assigned", title: "x" });
+    expect(told.map((n) => n.title)).toEqual(["Board: x"]);
   });
 
   it("refuses an undeclared kind", async () => {
@@ -239,7 +252,7 @@ describe("the owner of plugins' notifications", () => {
     focused = true;
     await notifier()(BOARD, { kind: "task-assigned", title: "x", target: "tasks/4" });
     expect(told).toEqual([]);
-    expect(shownInApp.map((s) => s.notice)).toEqual([{ title: "Board: x" }]);
+    expect(shownInApp.map((s) => s.notice)).toEqual([{ title: "acme/kit: x" }]);
     shownInApp[0]!.open();
     expect(opened).toEqual([{ name: "plugin", pluginId: "board", path: "tasks/4" }]);
   });
@@ -457,6 +470,7 @@ export default {
           name: "Board",
           key: "acme/kit/board",
           kinds: [{ kind: "task-assigned", label: "Task assigned" }],
+          pack: "acme/kit",
         },
         request: { kind: "task-assigned", title: "New task", target: "tasks/4" },
       },

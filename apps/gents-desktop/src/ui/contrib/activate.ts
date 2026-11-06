@@ -103,6 +103,7 @@ export function activateUxPlugin(
           name: record.name,
           notifier: notifierKey(record),
           notifications: plugin.notifications,
+          pack: record.pack,
         }),
       );
     } catch (error) {
