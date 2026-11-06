@@ -648,140 +648,76 @@ async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
 
 #[tokio::test]
 async fn close_session_preserves_creation_time() {
-    let data_path = std::env::temp_dir().join(format!("gents-session-{}", uuid::Uuid::new_v4()));
-    let node = std::sync::Arc::new(
-        crate::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
-
-    create_session_with_id(&node, "session-1", "deploy-test", "did:test:test")
-        .await
-        .unwrap();
-    let before = node
+    use crate::store::identity::NodeIdentity;
+    let (db, user, client, binding) = crate::test_support::signed_test_node("close-session").await;
+    let node_did = db.node_identity.did();
+    reserve_signed_session(&db, &user, &client, &binding, "session-1").await;
+    let before = client
         .execute(r#"{ AgentSession(filter: {session_id: {_eq: "session-1"}}) {created_at} }"#)
-        .await;
-    assert!(!before.has_errors(), "{:?}", before.errors);
-    let original_created_at =
-        before.data.as_ref().unwrap()["AgentSession"][0]["created_at"].clone();
-    close_session(&node, "did:test:test", "session-1", None)
         .await
         .unwrap();
-
-    let resp = node
-        .execute(
-            r#"{
-                AgentSession(
-                    filter: { session_id: { _eq: "session-1" } },
-                    limit: 1
-                ) {
-                    agent_did
-                    created_at
-                    closed_at
-                }
-            }"#,
-        )
-        .await;
-    assert!(
-        !resp.has_errors(),
-        "query session failed: {:?}",
-        resp.errors
-    );
-
-    let row = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentSession"))
-        .and_then(|value| value.as_array())
-        .and_then(|rows| rows.first())
-        .cloned()
-        .expect("session row");
-
-    assert_eq!(
-        row.get("agent_did").and_then(|value| value.as_str()),
-        Some("deploy-test")
-    );
-    assert!(row
-        .get("created_at")
-        .and_then(|value| value.as_str())
+    let original_created_at = before["data"]["AgentSession"][0]["created_at"].clone();
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let agent_access = crate::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    sessions::close_session_with_access(&agent_access, node_did, "session-1", Some(user.did()))
+        .await
+        .unwrap();
+    let resp = client.execute(r#"{ AgentSession(filter: {session_id: {_eq: "session-1"}}, limit: 1) { agent_did created_at closed_at } }"#).await.unwrap();
+    let row = &resp["data"]["AgentSession"][0];
+    assert_eq!(row["agent_did"].as_str(), Some(binding.agent_did.as_str()));
+    assert!(row["created_at"]
+        .as_str()
         .is_some_and(|value| !value.is_empty()));
-    assert!(row
-        .get("closed_at")
-        .and_then(|value| value.as_str())
+    assert!(row["closed_at"]
+        .as_str()
         .is_some_and(|value| !value.is_empty()));
-
     assert_eq!(row["created_at"], original_created_at);
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
 async fn create_session_with_id_is_idempotent() {
-    let data_path =
-        std::env::temp_dir().join(format!("gents-session-upsert-{}", uuid::Uuid::new_v4()));
-    let node = std::sync::Arc::new(
-        crate::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
+    let (db, user, client, binding) =
+        crate::test_support::signed_test_node("session-idempotent").await;
+    let node_did = db.node_identity.did();
+    reserve_signed_session(&db, &user, &client, &binding, "session-1").await;
+    let before = client
+        .execute(
+            r#"{ AgentSession(filter: {session_id: {_eq: "session-1"}}) { _docID created_at } }"#,
+        )
+        .await
+        .unwrap();
+    let original_created_at = before["data"]["AgentSession"][0]["created_at"].clone();
+    let doc = escape_graphql_string(
+        before["data"]["AgentSession"][0]["_docID"]
+            .as_str()
             .unwrap(),
     );
-    ensure_runtime_schemas(&node).await.unwrap();
-
-    create_session_with_id(&node, "session-1", "general", "did:test:test")
-        .await
-        .unwrap();
-    let before = node
-        .execute(r#"{ AgentSession(filter: {session_id: {_eq: "session-1"}}) {created_at} }"#)
-        .await;
-    assert!(!before.has_errors(), "{:?}", before.errors);
-    let original_created_at =
-        before.data.as_ref().unwrap()["AgentSession"][0]["created_at"].clone();
-    let patched = node
-        .execute(
-            r#"mutation { update_AgentSession(filter: {session_id: {_eq: "session-1"}}, input: {
-        tags: ["keep-on-resume"], title: {text: "User title", source: "user"}
-    }) {_docID} }"#,
-        )
-        .await;
-    assert!(!patched.has_errors(), "{:?}", patched.errors);
-
-    create_session_with_id(&node, "session-1", "general", "did:test:test")
-        .await
-        .unwrap();
-
-    let resp = node
-        .execute(
-            r#"{
-                AgentSession(
-                    filter: { session_id: { _eq: "session-1" } }
-                ) {
-                    session_id
-                    created_at
-                    tags
-                    title
-                    node_did
-                    agent_did
-                }
-            }"#,
-        )
-        .await;
-    assert!(
-        !resp.has_errors(),
-        "query session rows failed: {:?}",
-        resp.errors
+    let mutation = format!(
+        r#"mutation($input: AgentSessionMutationInputArg!) {{ update_AgentSession(docID: "{doc}", input: $input) {{ _docID }} }}"#
     );
-
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentSession"))
-        .and_then(|value| value.as_array())
-        .cloned()
+    client
+        .transact_write("test.session.patch", |txn| {
+            let mutation = &mutation;
+            Box::pin(async move {
+                txn.execute_client_signed_update(mutation, &serde_json::json!({"input": {
+                "tags": ["keep-on-resume"], "title": {"text": "User title", "source": "user"}
+            }}), gents_protocol::schemas::AGENT_SESSION).await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
+    reserve_signed_session(&db, &user, &client, &binding, "session-1").await;
+    let resp = client.execute(r#"{ AgentSession(filter: {session_id: {_eq: "session-1"}}) { session_id created_at tags title node_did agent_did } }"#).await.unwrap();
+    let rows = resp["data"]["AgentSession"]
+        .as_array()
         .expect("session rows");
-
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["created_at"], original_created_at);
     assert_eq!(rows[0]["tags"], serde_json::json!(["keep-on-resume"]));
@@ -789,16 +725,11 @@ async fn create_session_with_id_is_idempotent() {
         rows[0]["title"],
         serde_json::json!({"text": "User title", "source": "user"})
     );
+    assert_eq!(rows[0]["node_did"].as_str(), Some(node_did));
     assert_eq!(
-        rows[0].get("node_did").and_then(|value| value.as_str()),
-        Some("did:test:test")
+        rows[0]["agent_did"].as_str(),
+        Some(binding.agent_did.as_str())
     );
-    assert_eq!(
-        rows[0].get("agent_did").and_then(|value| value.as_str()),
-        Some("general")
-    );
-
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
@@ -1536,6 +1467,35 @@ async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
     .await
     .unwrap()
     .is_empty());
+}
+
+async fn reserve_signed_session(
+    db: &crate::support::TestDb,
+    user: &dyn crate::store::identity::NodeIdentity,
+    client: &crate::ConfigAccess,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    session_id: &str,
+) {
+    crate::request::lifecycle::build_signed_client_request(
+        client,
+        crate::request::lifecycle::RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            crate::request::lifecycle::RequestIdentity {
+                request_id: format!("{session_id}-reservation"),
+                node_did: db.node_identity.did().into(),
+                requester_did: Some(user.did().into()),
+                agent_did: binding.agent_did.clone(),
+                session_id: session_id.into(),
+                content: "work".into(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: "2026-09-22T00:00:00Z".into(),
+            },
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+        ),
+        crate::request::lifecycle::RequestSigner::Identity(user),
+    )
+    .await
+    .unwrap();
 }
 
 async fn publish_signed_history(
