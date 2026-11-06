@@ -722,7 +722,25 @@ mod tests {
             correlation: None,
         };
         let ctx = context(&admission.node_did);
-        let row = running_row();
+        // Child session creation verifies each spawn against the job row's
+        // pin, so the harness job is its own chain root with that pin stored.
+        let mut row = running_row();
+        row.root = cause.tool_call_doc_id.clone();
+        row.row_doc_id = row.root.clone();
+        let mut job_pin = pin();
+        job_pin.chain_root_doc_id = row.root.clone();
+        row.pin = Some(job_pin.clone());
+        tool.access()
+            .unwrap()
+            .transact_write("test.job_harness_pin", |txn| {
+                let doc = &row.row_doc_id;
+                let pin = &job_pin;
+                Box::pin(async move {
+                    crate::tools::background::job::records::write_pin_in_txn(txn, doc, pin).await
+                })
+            })
+            .await
+            .unwrap();
         Harness {
             node: admission.node.clone(),
             access: tool.access().unwrap(),
@@ -932,9 +950,9 @@ mod tests {
         stage(&harness, &[kept], &effects, &harness.row)
             .await
             .unwrap();
-        let rows = by_key(&harness.access, &job_spawn_key("root", "kept", 0)).await;
+        let rows = by_key(&harness.access, &job_spawn_key(&harness.row.root, "kept", 0)).await;
         assert_eq!(rows.len(), 1);
-        assert!(by_key(&harness.access, &job_spawn_key("root", "old", 0))
+        assert!(by_key(&harness.access, &job_spawn_key(&harness.row.root, "old", 0))
             .await
             .is_empty());
         let row = &rows[0];
@@ -1071,7 +1089,7 @@ mod tests {
         stage(&harness, &[first], &effects, &harness.row)
             .await
             .unwrap();
-        let rows = by_key(&harness.access, &job_spawn_key("root", "kept", 0)).await;
+        let rows = by_key(&harness.access, &job_spawn_key(&harness.row.root, "kept", 0)).await;
         assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0]["content"],
@@ -1113,7 +1131,7 @@ mod tests {
             .await
             .unwrap();
         let mut absent = staged.clone();
-        absent[0].retry_key = Some(job_spawn_key("root", "never", 0));
+        absent[0].retry_key = Some(job_spawn_key(&harness.row.root, "never", 0));
         let error = super::recover_step_commit(&harness.node, None, lost(), &absent)
             .await
             .unwrap_err();
@@ -1144,11 +1162,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let first = by_key(&harness.access, &job_spawn_key("root", "kept", 0)).await;
+        let first = by_key(&harness.access, &job_spawn_key(&harness.row.root, "kept", 0)).await;
         stage(&harness, &[kept], &effects, &harness.row)
             .await
             .unwrap();
-        let second = by_key(&harness.access, &job_spawn_key("root", "kept", 0)).await;
+        let second = by_key(&harness.access, &job_spawn_key(&harness.row.root, "kept", 0)).await;
         assert_eq!(second.len(), 1);
         assert_eq!(second[0]["_docID"], first[0]["_docID"]);
         harness.close().await;
@@ -1173,7 +1191,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("integrity"), "{error:#}");
-        let rows = by_key(&harness.access, &job_spawn_key("root", "kept", 0)).await;
+        let rows = by_key(&harness.access, &job_spawn_key(&harness.row.root, "kept", 0)).await;
         assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0]["content"],
@@ -1193,7 +1211,7 @@ mod tests {
         let harness = harness("job-stage-message").await;
         let mut row = harness.row.clone();
         row.children.push(StepChild {
-            retry_key: job_spawn_key("root", "slot", 0),
+            retry_key: job_spawn_key(&harness.row.root, "slot", 0),
             slot: "slot".to_owned(),
             attempt: 0,
             target: (harness.cause.caller_node_did.clone(), "general".to_owned()),
@@ -1208,7 +1226,7 @@ mod tests {
             }],
         );
         stage(&harness, &[], &effects, &row).await.unwrap();
-        let key = job_message_key("root", "slot", 0, 3);
+        let key = job_message_key(&harness.row.root, "slot", 0, 3);
         let rows = by_key(&harness.access, &key).await;
         assert_eq!(rows.len(), 1);
         assert_eq!(
@@ -1222,7 +1240,7 @@ mod tests {
             )
         );
         assert!(
-            by_key(&harness.access, &job_message_key("root", "slot", 0, 1))
+            by_key(&harness.access, &job_message_key(&harness.row.root, "slot", 0, 1))
                 .await
                 .is_empty()
         );
@@ -1237,7 +1255,7 @@ mod tests {
         stage(&harness, &[kept], &effects, &harness.row)
             .await
             .unwrap();
-        let rows = by_key(&harness.access, &job_spawn_key("root", "kept", 0)).await;
+        let rows = by_key(&harness.access, &job_spawn_key(&harness.row.root, "kept", 0)).await;
         assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0]["content"],
@@ -1269,7 +1287,7 @@ mod tests {
         stage(&harness, &[kept], &effects, &harness.row)
             .await
             .unwrap();
-        let rows = by_key(&harness.access, &job_spawn_key("root", "kept", 0)).await;
+        let rows = by_key(&harness.access, &job_spawn_key(&harness.row.root, "kept", 0)).await;
         assert_eq!(input_of(&rows[0])["cwd"], "/work/review_seeded_bug");
         harness.close().await;
     }
