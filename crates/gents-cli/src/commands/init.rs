@@ -2143,6 +2143,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fresh_init_writes_backend_metadata_with_the_installed_schema() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let home = temp.path().join("home");
+        initialize_disposable_home(&home, false).await?;
+
+        let stored = read_init_config(&home)?.context("initialized home missing configuration")?;
+        let identity = crate::home_state::load_initialized_home_identity(&home, &stored)?;
+        let data = default_data_dir(&home);
+        let lock_home = home.clone();
+        let lock_data = data.clone();
+        let _claim =
+            tokio::task::spawn_blocking(move || lock_init_store(&lock_home, &lock_data, false))
+                .await??;
+        let node = Arc::new(
+            crate::persistent_node_builder(&home, &data)
+                .await?
+                .with_node_identity_did(identity.did())
+                .with_node_acp_enabled()
+                .build()
+                .await?,
+        );
+        let access = ConfigAccess::local(node.clone());
+        let response = access.execute("{ InferenceBackendMetadata { node_did backend_id auth_kind credential_id credential_version endpoint } }").await?;
+        let rows = gents_protocol::graphql::graphql_rows_from_response(
+            &response,
+            "InferenceBackendMetadata",
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["auth_kind"], "credential");
+        assert!(!rows[0].to_string().contains("unused-init-test-key"));
+        for field in ["auth", "catalogs", "probe_status", "last_probe"] {
+            assert!(
+                access
+                    .execute(&format!("{{ InferenceBackendMetadata {{ {field} }} }}"))
+                    .await
+                    .is_err(),
+                "legacy field {field} is not metadata"
+            );
+        }
+        node.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn fresh_backend_baseline_commits_before_http_is_started() -> Result<()> {
         let snapshot: Value =
             tokio::task::spawn_blocking(|| gents_lean_contract::load_contract_snapshot().unwrap())

@@ -1,3 +1,5 @@
+#[path = "cli_enrollment/live_delegation.rs"]
+mod live_delegation;
 #[path = "cli_enrollment/live_two_agent.rs"]
 mod live_two_agent;
 #[path = "cli_enrollment/contract.rs"]
