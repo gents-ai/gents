@@ -248,6 +248,17 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                 .await
                 .unwrap();
             assert_eq!(owners.len(), 1);
+            assert!(owners[0].visible);
+            assert!(owners[0].owner.is_none());
+            let owners = foreign_access
+                .transact_readonly("test.foreign_session_creator", |txn| {
+                    Box::pin(
+                        txn.document_owners("AgentSession", std::slice::from_ref(&session.doc_id)),
+                    )
+                })
+                .await
+                .unwrap();
+            assert_eq!(owners.len(), 1);
             assert_eq!(
                 owners[0].owner.as_ref().map(::identity::Did::as_str),
                 Some(foreign.did())
@@ -915,6 +926,13 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
             crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
         let admin =
             ConfigAccess::local_as(node.clone(), ::identity::Did::new(runtime.did()).unwrap());
+        admin
+            .grant_node_permission(
+                &::identity::Did::new(user.did()).unwrap(),
+                crate::store::config_client::NodePermission::DocumentDelete,
+            )
+            .await
+            .unwrap();
         let actor = ::identity::Did::new(agent.did()).unwrap();
         for permission in [
             crate::store::config_client::NodePermission::CollectionGet,
