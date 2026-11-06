@@ -673,6 +673,9 @@ where
                         lease_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                         let mut stream_error = None;
 
+                        // The drain and flush futures are large. Construct them only
+                        // after their branch wins so polling the live stream retains
+                        // enough stack for nested provider and storage owners.
                         loop {
                             let mut flush_failure = None;
                             let flush_deadline = processor.next_flush_deadline().await;
@@ -680,36 +683,38 @@ where
                                 biased;
                                 _ = shutdown.changed() => {
                                     drop(stream);
-                                    match tokio::time::timeout(
-                                        crate::store::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-                                        async {
-                                            match processor.validate_execution().await.map_err(RuntimeSeamError::into_inner) {
-                                                Ok(()) => {}
-                                                Err(error) if error.is::<crate::request::lifecycle::ExecutionOwnershipLost>() => {
-                                                    tracing::warn!(
-                                                        request_id = %request_id,
-                                                        session_id = %session_id,
-                                                        error = %error,
-                                                        "execution ownership lost before shutdown drain; received in-memory bytes, if any, were not committed by this drain; only durable output remains recoverable"
-                                                    );
-                                                    return Ok(false);
+                                    return Box::pin(async {
+                                        match tokio::time::timeout(
+                                            crate::store::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+                                            async {
+                                                match processor.validate_execution().await.map_err(RuntimeSeamError::into_inner) {
+                                                    Ok(()) => {}
+                                                    Err(error) if error.is::<crate::request::lifecycle::ExecutionOwnershipLost>() => {
+                                                        tracing::warn!(
+                                                            request_id = %request_id,
+                                                            session_id = %session_id,
+                                                            error = %error,
+                                                            "execution ownership lost before shutdown drain; received in-memory bytes, if any, were not committed by this drain; only durable output remains recoverable"
+                                                        );
+                                                        return Ok(false);
+                                                    }
+                                                    Err(error) => return Err(error),
                                                 }
-                                                Err(error) => return Err(error),
-                                            }
-                                            processor.persist_received_partial_turn("persist received assistant turn during graceful shutdown").await.map_err(processor_failure)?;
-                                            Ok(true)
-                                        },
-                                    ).await {
-                                        Ok(Ok(false)) => return Err(anyhow::Error::new(crate::request::lifecycle::ExecutionOwnershipLost)
-                                            .context("shutdown drain was not attempted")),
-                                        Ok(Ok(true)) => return Err(anyhow!("shutdown requested during inference stream")),
-                                        Ok(Err(error)) => return Err(ShutdownDrainFailure {
-                                            reason: format!("partial-turn persistence failed: {error:#}"),
-                                        }.into()),
-                                        Err(_) => return Err(ShutdownDrainFailure {
-                                            reason: "partial-turn persistence exceeded the embedded storage-step deadline; commit outcome must be recovered from durable state".into(),
-                                        }.into()),
-                                    }
+                                                processor.persist_received_partial_turn("persist received assistant turn during graceful shutdown").await.map_err(processor_failure)?;
+                                                Ok(true)
+                                            },
+                                        ).await {
+                                            Ok(Ok(false)) => return Err(anyhow::Error::new(crate::request::lifecycle::ExecutionOwnershipLost)
+                                                .context("shutdown drain was not attempted")),
+                                            Ok(Ok(true)) => return Err(anyhow!("shutdown requested during inference stream")),
+                                            Ok(Err(error)) => return Err(ShutdownDrainFailure {
+                                                reason: format!("partial-turn persistence failed: {error:#}"),
+                                            }.into()),
+                                            Err(_) => return Err(ShutdownDrainFailure {
+                                                reason: "partial-turn persistence exceeded the embedded storage-step deadline; commit outcome must be recovered from durable state".into(),
+                                            }.into()),
+                                        }
+                                    }).await;
                                 }
                                 _ = async {
                                     tokio::select! {
@@ -720,29 +725,31 @@ where
                                     request_token.cancel();
                                     inference_token.cancel();
                                     drop(stream);
-                                    let output_result = processor
-                                        .persist_received_partial_turn("persist interrupted assistant turn")
-                                        .await.map_err(processor_failure);
-                                    if let Err(error) =
-                                        persistence_hook.cancel_in_flight_tool_calls().await
-                                    {
-                                        tracing::warn!(
-                                            request_id = %request_id,
-                                            session_id = %session_id,
-                                            error = %error,
-                                            "failed to cancel in-flight tool calls during request interrupt"
-                                        );
-                                    }
-                                    if let Err(error) = output_result {
-                                        tracing::warn!(
-                                            request_id = %request_id,
-                                            session_id = %session_id,
-                                            error = %error,
-                                            "failed to persist received provider audit before interrupt terminal transition"
-                                        );
-                                        return Err(error.context("persisting received provider audit during interrupt"));
-                                    }
-                                    return Err(anyhow!("request interrupted during inference"));
+                                    return Box::pin(async {
+                                        let output_result = processor
+                                            .persist_received_partial_turn("persist interrupted assistant turn")
+                                            .await.map_err(processor_failure);
+                                        if let Err(error) =
+                                            persistence_hook.cancel_in_flight_tool_calls().await
+                                        {
+                                            tracing::warn!(
+                                                request_id = %request_id,
+                                                session_id = %session_id,
+                                                error = %error,
+                                                "failed to cancel in-flight tool calls during request interrupt"
+                                            );
+                                        }
+                                        if let Err(error) = output_result {
+                                            tracing::warn!(
+                                                request_id = %request_id,
+                                                session_id = %session_id,
+                                                error = %error,
+                                                "failed to persist received provider audit before interrupt terminal transition"
+                                            );
+                                            return Err(error.context("persisting received provider audit during interrupt"));
+                                        }
+                                        Err(anyhow!("request interrupted during inference"))
+                                    }).await;
                                 }
                                 _ = lease_poll.tick() => {
                                     if let Err(error) = processor.validate_execution().await.map_err(RuntimeSeamError::into_inner) {
@@ -763,22 +770,24 @@ where
                                         None => std::future::pending::<()>().await,
                                     }
                                 } => {
-                                    let progress = async {
-                                        crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-                                            request_deadline,
-                                            request_token.clone(),
-                                            None,
-                                            None,
-                                            Some(session_id.clone()),
-                                            trigger_correlation.clone(),
-                                            trigger_context.source_fields.clone(),
-                                            false,
-                                            stream.next(),
+                                    let (flushed, item) = Box::pin(async {
+                                        let progress = async {
+                                            crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+                                                request_deadline,
+                                                request_token.clone(),
+                                                None,
+                                                None,
+                                                Some(session_id.clone()),
+                                                trigger_correlation.clone(),
+                                                trigger_context.source_fields.clone(),
+                                                false,
+                                                stream.next(),
+                                            ).await
+                                        };
+                                        crate::runtime::agent::stream_processor::flush_while_polling(
+                                            processor.flush_pending(), progress,
                                         ).await
-                                    };
-                                    let (flushed, item) = crate::runtime::agent::stream_processor::flush_while_polling(
-                                        processor.flush_pending(), progress,
-                                    ).await;
+                                    }).await;
                                     match item {
                                         Some(Some(item)) => {
                                             flush_failure = flushed.err().map(processor_failure);
@@ -811,25 +820,27 @@ where
                                                 error.to_string(),
                                             );
                                             drop(stream);
-                                            let output_result = processor
-                                                .persist_received_partial_turn(
-                                                    "persist deadline-expired assistant turn",
-                                                )
-                                                .await.map_err(processor_failure);
-                                            if let Err(sweep_error) =
-                                                persistence_hook.timeout_expired_tool_calls().await
-                                            {
-                                                tracing::warn!(
-                                                    request_id = %request_id,
-                                                    session_id = %session_id,
-                                                    error = %sweep_error,
-                                                    "failed to sweep expired in-flight tool calls after request deadline"
-                                                );
-                                            }
-                                            output_result.context(
-                                                "persisting received provider audit after request deadline",
-                                            )?;
-                                            return Err(error);
+                                            return Box::pin(async {
+                                                let output_result = processor
+                                                    .persist_received_partial_turn(
+                                                        "persist deadline-expired assistant turn",
+                                                    )
+                                                    .await.map_err(processor_failure);
+                                                if let Err(sweep_error) =
+                                                    persistence_hook.timeout_expired_tool_calls().await
+                                                {
+                                                    tracing::warn!(
+                                                        request_id = %request_id,
+                                                        session_id = %session_id,
+                                                        error = %sweep_error,
+                                                        "failed to sweep expired in-flight tool calls after request deadline"
+                                                    );
+                                                }
+                                                output_result.context(
+                                                    "persisting received provider audit after request deadline",
+                                                )?;
+                                                Err(error)
+                                            }).await;
                                         }
                                     }
                                 }
