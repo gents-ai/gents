@@ -7,14 +7,11 @@ use crate::eval::runner::embedded::executor::tests::{
 };
 use crate::eval::runner::embedded::executor::EventSourcesReady;
 use crate::eval::runner::embedded::home::boot_runtime;
-use crate::eval::runner::embedded::observe::{
-    classify_request_outcome, request_evidence_from_query_data,
-};
+use crate::eval::runner::embedded::observe::classify_request_outcome;
 use crate::eval::runner::executor::{CaptureResult, FixtureDocument};
 use crate::request::lifecycle::{
     build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
 };
-use crate::store::graphql::graphql_with_transaction_retry;
 use crate::{ConfigAccess, DocumentRuntimeOptions};
 use serde_json::json;
 use std::sync::Arc;
@@ -170,14 +167,9 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
         })
         .await
         .expect("scheduled inference must reach its paused provider stream");
-        let before = graphql_with_transaction_retry(
-            &home.node,
-            &crate::eval::runner::embedded::observe::evidence_query(&request_id),
-            "test.eval_scheduled_inference",
-        )
-        .await
-        .unwrap();
-        let before = request_evidence_from_query_data(before.data.as_ref().unwrap());
+        let before = collect_request_evidence_with_access(&client, &request_id)
+            .await
+            .unwrap();
         assert!(before
             .inference_calls
             .iter()
@@ -203,14 +195,14 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
             .await
             .expect("trial shutdown must settle active inference")
             .unwrap();
-        let state = poll_request(&home.node, &request_id)
+        let state = poll_request_with_access(&client, &request_id)
             .await
             .unwrap()
             .unwrap();
         let terminal_state =
             RequestLifecycleState::parse(state.lifecycle_state.as_deref().unwrap()).unwrap();
         assert!(terminal_state.is_terminal());
-        let evidence = collect_request_evidence(&home.node, &request_id)
+        let evidence = collect_request_evidence_with_access(&client, &request_id)
             .await
             .unwrap();
         assert!(!evidence.inference_calls.is_empty());
