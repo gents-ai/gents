@@ -1232,7 +1232,9 @@ async fn an_upgrade_that_drops_a_documents_dependency_releases_it() {
 
 #[tokio::test]
 async fn installing_a_pack_keeps_the_users_default_behavior() {
-    let access = access().await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime);
+    let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
     let home = |collection, value: Value| DesiredStateApplyDocument {
         collection,
         add: value.clone(),
@@ -1240,20 +1242,12 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
     };
     let seed = crate::store::config_client::DesiredStateApplyPlan::new(vec![
         home(
-            Collection::InferenceBackend,
-            json!({"node_did":OWNER,"backend_id":"backend","name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"unauthenticated"}}),
-        ),
-        home(
-            Collection::InferenceProfile,
-            json!({"node_did":OWNER,"profile_id":"profile","backend_id":"backend","model_name":"model"}),
-        ),
-        home(
             Collection::Agent,
-            json!({"node_did":OWNER,"agent_did":"chosen","inference_profile_id":"profile"}),
+            json!({"node_did":owner,"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"inference_profile_id":"profile"}),
         ),
         home(
             Collection::Node,
-            json!({"node_did":OWNER,"default_agent_did":"chosen"}),
+            json!({"node_did":owner,"default_agent_did":binding.agent_did}),
         ),
     ])
     .unwrap();
@@ -1280,13 +1274,13 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
     let pack = crate::pack::load_pack_config(
         &manifest,
         &crate::pack::PackInstallOptions {
-            node_did: OWNER.into(),
+            node_did: owner.into(),
         },
         &|_| Ok(serde_json::to_vec(&authored)?),
         &|_| None,
     )
     .unwrap();
-    install(&access, "1", &pack, DriftPolicy::Refuse)
+    install_owned(&access, owner, "1", &pack, DriftPolicy::Refuse)
         .await
         .unwrap();
 
@@ -1296,9 +1290,10 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
         .unwrap();
     assert_eq!(
         principal["data"]["Node"],
-        json!([{"default_agent_did": "chosen"}])
+        json!([{"default_agent_did": binding.agent_did}])
     );
     assert_eq!(tools_ids(&access).await, ["pack-tools"]);
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -2607,19 +2602,25 @@ async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_document
 
 #[tokio::test]
 async fn removing_agents_with_their_plugin_pack_requires_complete_inventory() {
-    let (_node, access) = dependency_fixture().await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime);
+    let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
     let retained_tools = tools_ids(&access).await;
     let mut config = config_naming_plugin("acme/echo");
+    config.node.node_did = owner.to_owned();
+    for tools in &mut config.tools {
+        tools.node_did = owner.to_owned();
+    }
     config.contexts = vec![serde_json::from_value(json!({
-        "context_id": "owned-context", "node_did": OWNER, "tools_id": "web_persona:tools"
+        "context_id": "owned-context", "node_did": owner, "tools_id": "web_persona:tools"
     }))
     .unwrap()];
     config.agents = vec![serde_json::from_value(json!({
-        "agent_did": "owned-agent", "node_did": OWNER, "context_id": "owned-context", "inference_profile_id": "glm:inference"
+        "agent_did": binding.agent_did, "creation_nonce": binding.creation_nonce, "node_did": owner, "context_id": "owned-context", "inference_profile_id": "profile"
     })).unwrap()];
     super::super::install_pack_documents(
         &access,
-        OWNER,
+        owner,
         &identity("1"),
         &config,
         DriftPolicy::Refuse,
@@ -2627,7 +2628,7 @@ async fn removing_agents_with_their_plugin_pack_requires_complete_inventory() {
     .await
     .unwrap();
     let before = tools_ids(&access).await;
-    let error = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+    let error = remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
         .await
         .unwrap_err();
     assert!(matches!(
@@ -2636,10 +2637,11 @@ async fn removing_agents_with_their_plugin_pack_requires_complete_inventory() {
     ));
     assert_eq!(tools_ids(&access).await, before);
     assert_ne!(before, retained_tools);
-    assert!(read_installed_pack(&access, OWNER, "acme/demo")
+    assert!(read_installed_pack(&access, owner, "acme/demo")
         .await
         .unwrap()
         .is_some());
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
