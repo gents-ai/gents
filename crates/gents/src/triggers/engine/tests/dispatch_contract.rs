@@ -35,7 +35,7 @@ pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_case
     for case in cases {
         let trigger_kind = trigger_kind_from_lean(&case.trigger_kind);
         let concurrency = concurrency_from_lean(&case.concurrency);
-        let task = resolved_task(&format!("lean case {}", case.name));
+        let task = spy_resolved_task(&format!("lean case {}", case.name));
         let snapshot = snapshot_from_trigger_contract(case, &task, concurrency);
         let (_tx, rx) = watch::channel(snapshot);
         let materializer = SpyMaterializer::new();

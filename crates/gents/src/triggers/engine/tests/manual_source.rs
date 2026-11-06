@@ -17,9 +17,10 @@ fn resolved_task_for_test(task_id: &str, agent_did: &str, prompt_template: &str)
 fn snapshot_with_active_task(task: ResolvedTask) -> Arc<ActiveRuntimeSnapshot> {
     let mut tasks = RapidHashMap::new();
     tasks.insert(task.task_id.clone(), task);
+    let agent = spy_test_agent();
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-        "general".to_string(),
-        vec![integration_test_agent("general")],
+        agent.agent_did.clone(),
+        vec![agent.clone()],
         RapidHashMap::new(),
         RapidHashMap::new(),
         RapidHashMap::new(),
@@ -28,7 +29,8 @@ fn snapshot_with_active_task(task: ResolvedTask) -> Arc<ActiveRuntimeSnapshot> {
         tasks,
         ..Default::default()
     })
-    .with_node(stub_principal());
+    .with_node(agent.node.clone())
+    .with_local_did(agent.node_did().to_string());
     Arc::new(resolved.activate(1, RapidHashMap::new()))
 }
 
@@ -36,7 +38,7 @@ fn snapshot_with_active_task(task: ResolvedTask) -> Arc<ActiveRuntimeSnapshot> {
 async fn manual_source_run_task_now_yields_intent_with_args_vars() {
     let snapshot = snapshot_with_active_task(resolved_task_for_test(
         "greet-user",
-        "behavior-1",
+        &spy_test_agent().agent_did,
         "hello {{ args.name }}",
     ));
     let cancel = CancellationToken::new();
@@ -521,7 +523,11 @@ async fn production_materializer_rejects_manual_lineage_with_trigger_id() {
 
 #[tokio::test]
 async fn dispatch_manual_intent_renders_with_args_and_materializes() {
-    let task = resolved_task_for_test("greet-user", "general", "hello {{ args.name }}");
+    let task = resolved_task_for_test(
+        "greet-user",
+        &spy_test_agent().agent_did,
+        "hello {{ args.name }}",
+    );
     let snapshot = snapshot_with_active_task(task.clone());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
@@ -570,7 +576,7 @@ async fn dispatch_manual_intent_renders_with_args_and_materializes() {
 
 #[tokio::test]
 async fn dispatch_rejects_manual_intent_with_trigger_id() {
-    let task = resolved_task_for_test("greet-user", "general", "hello");
+    let task = resolved_task_for_test("greet-user", &spy_test_agent().agent_did, "hello");
     let snapshot = snapshot_with_active_task(task.clone());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();

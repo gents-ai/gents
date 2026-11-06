@@ -415,19 +415,20 @@ impl MaterializerHandle for SpyMaterializer {
 fn snapshot_with_schedules(
     schedules: RapidHashMap<String, ResolvedSchedule>,
 ) -> Arc<ActiveRuntimeSnapshot> {
-    let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-        "general".to_string(),
-        vec![integration_test_agent("general")],
-        RapidHashMap::new(),
-        RapidHashMap::new(),
-        RapidHashMap::new(),
-    )
-    .with_automation(crate::runtime::snapshot::ResolvedAutomation {
-        schedules,
-        ..Default::default()
-    })
-    .with_node(stub_principal());
-    Arc::new(resolved.activate(1, RapidHashMap::new()))
+    snapshot_with_agent_and_schedules(spy_test_agent(), schedules)
+}
+
+fn spy_test_agent() -> Arc<ResolvedAgent> {
+    static AGENT: std::sync::OnceLock<Arc<ResolvedAgent>> = std::sync::OnceLock::new();
+    AGENT
+        .get_or_init(|| integration_test_agent("trigger-spy"))
+        .clone()
+}
+
+fn spy_resolved_task(prompt_template: &str) -> ResolvedTask {
+    let mut task = resolved_task(prompt_template);
+    task.agent_did = spy_test_agent().agent_did.clone();
+    task
 }
 
 fn resolved_task(prompt_template: &str) -> ResolvedTask {
@@ -544,9 +545,10 @@ fn snapshot_from_trigger_contract(
             )
         })
         .collect();
+    let agent = spy_test_agent();
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-        "general".to_string(),
-        vec![integration_test_agent("general")],
+        agent.agent_did.clone(),
+        vec![agent.clone()],
         RapidHashMap::new(),
         RapidHashMap::new(),
         RapidHashMap::new(),
@@ -556,7 +558,8 @@ fn snapshot_from_trigger_contract(
         event_triggers: active_event_triggers,
         ..Default::default()
     })
-    .with_node(stub_principal());
+    .with_node(agent.node.clone())
+    .with_local_did(agent.node_did().to_string());
     Arc::new(resolved.activate(1, RapidHashMap::new()))
 }
 
