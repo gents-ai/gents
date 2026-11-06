@@ -1,12 +1,5 @@
-use std::sync::Arc;
-
-use defra_node::QueryRequest;
-
-use super::apply_txn::TxnBackend;
-use super::native::execute_owned_native;
-use super::{retry, ConfigApplyTxn, ConfigClientError};
+use super::{ConfigApplyTxn, ConfigClientError};
 use crate::inference::auth::credential::{AccountPick, RuntimeAccountSelection};
-use crate::store::config_client::write_telemetry::ConflictSource;
 use crate::store::identity::NodeIdentity;
 
 #[derive(Debug, thiserror::Error)]
@@ -62,45 +55,18 @@ impl ConfigApplyTxn<'_> {
         provider: &str,
         pick: AccountPick<'_>,
     ) -> Result<Option<RuntimeAccountSelection>, RuntimeAccountMetadataError> {
-        let TxnBackend::Embedded {
-            node,
-            handle,
-            agent_signer: Some(agent_signer),
-            native_operations,
-            ..
-        } = &self.backend
-        else {
-            return Err(RuntimeAccountMetadataError::RuntimeScope);
-        };
-        if node.node_identity_did() != Some(node_did)
-            || agent_signer.node_did() != node_did
-            || self.actor_did() != Some(agent_signer.did())
-        {
-            return Err(RuntimeAccountMetadataError::RuntimeScope);
-        }
         let runtime =
             identity::Did::new(node_did).map_err(ConfigClientError::RelationshipTargetIdentity)?;
-        let query = crate::inference::auth::credential::runtime_account_query(node_did, provider);
-        let node = Arc::clone(node);
-        let handle = handle.clone();
-        let request = QueryRequest::new(&query).with_identity(Some(runtime.clone()));
-        let response = execute_owned_native(
-            async move { node.execute_request_in_txn(request, &handle).await },
-            Arc::clone(native_operations),
-            self.operation,
-        )
-        .await?;
-        if response.is_transaction_conflict() {
-            return Err(retry::transaction_conflict(ConflictSource::StructuredCode).into());
-        }
-        if response.has_errors() {
-            return Err(retry::transaction_storage_failure(
-                ConfigClientError::EmbeddedGraphqlErrors {
-                    errors: response.errors,
-                },
-            )
-            .into());
-        }
+        let response = self
+            .execute_runtime_account_metadata_query(node_did, provider)
+            .await
+            .map_err(|error| match error {
+                ConfigClientError::EmbeddedAccessRequired
+                | ConfigClientError::TransactionActorMismatch => {
+                    RuntimeAccountMetadataError::RuntimeScope
+                }
+                error => RuntimeAccountMetadataError::Access(error),
+            })?;
         let response = crate::store::graphql::into_data_envelope(response.data);
         let selected = crate::inference::auth::credential::runtime_account_from_response(
             &response, node_did, provider, pick,

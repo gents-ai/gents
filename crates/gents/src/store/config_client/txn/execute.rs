@@ -11,6 +11,7 @@ use super::fault_injection::{after_successful_mutation_for_test, SUCCESSFUL_MUTA
 use super::native::execute_owned_native;
 use super::{graphql, graphql_api_base, retry, ConfigApplyTxn, ConfigClientError, Result};
 use crate::store::config_client::write_telemetry::{record_slow_native_phase, ConflictSource};
+use crate::store::identity::NodeIdentity;
 
 impl ConfigApplyTxn<'_> {
     pub(crate) async fn delete_verified_configuration_document(
@@ -977,20 +978,69 @@ impl ConfigApplyTxn<'_> {
         document: &str,
     ) -> Result<defra_node::QueryResponse> {
         let TxnBackend::Embedded {
+            identity,
+            agent_signer,
+            ..
+        } = &self.backend
+        else {
+            return Err(ConfigClientError::EmbeddedAccessRequired);
+        };
+        self.execute_local_response_with_actor(
+            document,
+            identity.clone(),
+            agent_signer.as_deref().cloned(),
+        )
+        .await
+    }
+
+    /// Read only account-selection metadata as this transaction's bound
+    /// runtime. Native document ACP still filters and authorizes the read.
+    pub(super) async fn execute_runtime_account_metadata_query(
+        &self,
+        node_did: &str,
+        provider: &str,
+    ) -> Result<defra_node::QueryResponse> {
+        let TxnBackend::Embedded {
+            node,
+            agent_signer: Some(agent_signer),
+            ..
+        } = &self.backend
+        else {
+            return Err(ConfigClientError::EmbeddedAccessRequired);
+        };
+        if node.node_identity_did() != Some(node_did)
+            || agent_signer.node_did() != node_did
+            || self.actor_did() != Some(agent_signer.did())
+        {
+            return Err(ConfigClientError::TransactionActorMismatch);
+        }
+        let runtime =
+            identity::Did::new(node_did).map_err(ConfigClientError::RelationshipTargetIdentity)?;
+        let query = crate::inference::auth::credential::runtime_account_query(node_did, provider);
+        graphql::ensure_query_document(&query)?;
+        self.execute_local_response_with_actor(&query, Some(runtime), None)
+            .await
+    }
+
+    async fn execute_local_response_with_actor(
+        &self,
+        document: &str,
+        identity: Option<identity::Did>,
+        agent_signer: Option<crate::store::identity::ManagedAgentSigner>,
+    ) -> Result<defra_node::QueryResponse> {
+        let TxnBackend::Embedded {
             node,
             handle,
-            identity,
             native_operations,
-            agent_signer,
+            ..
         } = &self.backend
         else {
             return Err(ConfigClientError::EmbeddedAccessRequired);
         };
         let started = Instant::now();
         let node = Arc::clone(node);
-        let request = QueryRequest::new(document).with_identity(identity.clone());
+        let request = QueryRequest::new(document).with_identity(identity);
         let handle = handle.clone();
-        let agent_signer = agent_signer.as_deref().cloned();
         let result = execute_owned_native(
             async move {
                 match agent_signer {
