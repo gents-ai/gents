@@ -76,7 +76,8 @@ async fn generated_kill_cases_drive_the_session_message_kill() {
             .await
             .unwrap();
         let (notifications, _) =
-            completion_obligations(&node, &session_id, &did, tool.requester_did()).await;
+            completion_obligations(&tool.access().unwrap(), &session_id, &did, tool.requester_did())
+                .await;
         match case.action.as_str() {
             "settle" => {
                 assert_eq!(outcome, KillOutcome::Settled, "{case:?}");

@@ -27,10 +27,11 @@ async fn caused_result_is_delivered_after_the_row_outlives_its_stored_deadline()
         .unwrap();
     let identities: Vec<Arc<dyn NodeIdentity>> = vec![Arc::new(signer.clone())];
     let node = &admission.node;
+    let access = admission.tool.access().unwrap();
     let did = admission.node_did.clone();
     let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
     let session_id = admission.tool.session_id().to_owned();
-    update(node, &tool_doc_id, r#"deadline_at: "2020-01-01T00:00:00Z""#).await;
+    update(&access, &tool_doc_id, r#"deadline_at: "2020-01-01T00:00:00Z""#).await;
 
     let restart = ToolCallLifecycle::recover_all(node, &did, &identities)
         .await
@@ -46,22 +47,22 @@ async fn caused_result_is_delivered_after_the_row_outlives_its_stored_deadline()
         .unwrap(),
         0
     );
-    let row = |node: Arc<crate::defra_node::Node>| {
+    let row = |access: crate::ConfigAccess| {
         let tool_doc_id = tool_doc_id.clone();
         async move {
-            let response = node
+            let response = access
                 .execute(&format!(
                     r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state cancel_cause }} }}"#,
                     crate::store::graphql::escape_graphql_string(&tool_doc_id)
                 ))
-                .await;
-            assert!(!response.has_errors(), "{:?}", response.errors);
-            response.data.unwrap()["AgentToolCall"][0].clone()
+                .await
+                .unwrap();
+            response["data"]["AgentToolCall"][0].clone()
         }
     };
-    assert_eq!(row(node.clone()).await["lifecycle_state"], "running");
+    assert_eq!(row(access.clone()).await["lifecycle_state"], "running");
     let (notifications, _) =
-        completion_obligations(node, &session_id, &did, admission.tool.requester_did()).await;
+        completion_obligations(&access, &session_id, &did, admission.tool.requester_did()).await;
     assert!(notifications.is_empty(), "{notifications:?}");
 
     complete_child_managed_verified(
@@ -83,11 +84,11 @@ async fn caused_result_is_delivered_after_the_row_outlives_its_stored_deadline()
         .unwrap(),
         1
     );
-    let settled = row(node.clone()).await;
+    let settled = row(access.clone()).await;
     assert_eq!(settled["lifecycle_state"], "completed");
     assert!(settled["cancel_cause"].is_null());
     let (notifications, wakes) =
-        completion_obligations(node, &session_id, &did, admission.tool.requester_did()).await;
+        completion_obligations(&access, &session_id, &did, admission.tool.requester_did()).await;
     assert_eq!(notifications.len(), 1, "{notifications:?}");
     assert!(notifications[0].contains("late caused result"));
     assert_eq!(wakes.len(), 1);
@@ -110,7 +111,7 @@ async fn caused_result_is_delivered_after_the_row_outlives_its_stored_deadline()
         0
     );
     let (notifications, _) =
-        completion_obligations(node, &session_id, &did, admission.tool.requester_did()).await;
+        completion_obligations(&access, &session_id, &did, admission.tool.requester_did()).await;
     assert_eq!(notifications.len(), 1, "delivered exactly once");
     message
         .admission
@@ -223,7 +224,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         1
     );
     let (notifications, _) = completion_obligations(
-        &node,
+        &message.admission.tool.access().unwrap(),
         &session_id,
         &did,
         message.admission.tool.requester_did(),
