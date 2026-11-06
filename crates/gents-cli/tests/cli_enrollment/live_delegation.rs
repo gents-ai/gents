@@ -262,6 +262,11 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
         anyhow::ensure!(!output.is_empty(), "denied tool output is empty");
         assert!(!output.contains(&b.agent_did), "denied tool disclosed the hidden Agent DID: {output}");
         assert!(!output.contains("no longer exists"), "denied tool asserted hidden target nonexistence: {output}");
+        let denial: Value = serde_json::from_str(&output).context("denied tool output is not structured JSON")?;
+        assert_eq!(denial["failure_class"], "service_unavailable");
+        assert_eq!(denial["path"], "/agent");
+        assert_eq!(denial["message"], "selected agent is unavailable");
+        assert_eq!(denial["retryable"], false);
         Arc::new(core).shutdown().await?;
         Ok(([a, b], (child_doc, session_doc, tool_doc, inference_docs)))
     }).await?;

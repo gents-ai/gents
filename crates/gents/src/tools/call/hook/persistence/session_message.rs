@@ -2,6 +2,20 @@ use super::*;
 use anyhow::Context;
 
 use crate::session::message::{AgentMessageArgs, AgentNewArgs};
+use crate::store::config_client::TransactionFailure;
+
+fn unavailable_agent_payload(tool_name: &str) -> String {
+    service_unavailable_payload(tool_name, "/agent", "selected agent is unavailable", false)
+}
+
+fn native_permission_denied<E>(error: &E) -> bool
+where
+    E: TransactionFailure,
+{
+    error
+        .config_client_error()
+        .is_some_and(|error| error.is_permission_denied())
+}
 
 impl DefraSessionHook {
     pub(super) async fn persist_session_message_tool_call(
@@ -89,26 +103,28 @@ impl DefraSessionHook {
                     )
                 );
             };
-            if target.target_node_did == caller.node_did
-                && !crate::session::message::target_agent_exists(
+            if target.target_node_did == caller.node_did {
+                match crate::session::message::target_agent_exists(
                     &access,
                     &target.target_node_did,
                     &target.agent_did,
                 )
-                .await?
-            {
-                refuse!(
-                    FailureClass::ServiceUnavailable,
-                    service_unavailable_payload(
-                        tool_name,
-                        "/agent",
-                        format!(
-                            "agent '{agent}' refers to agent '{}' which no longer exists",
-                            target.agent_did
-                        ),
-                        false,
-                    )
-                );
+                .await
+                {
+                    Ok(true) => {}
+                    Ok(false) => refuse!(
+                        FailureClass::ServiceUnavailable,
+                        unavailable_agent_payload(tool_name)
+                    ),
+                    Err(error) if native_permission_denied(&error) => {
+                        tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(error.as_ref()), "agent_new target observation denied");
+                        refuse!(
+                            FailureClass::ServiceUnavailable,
+                            unavailable_agent_payload(tool_name)
+                        );
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             (
                 crate::request::lifecycle::SessionMessageTarget {
@@ -261,6 +277,24 @@ impl DefraSessionHook {
                     message
                 )
             ),
+            Err(error) if create => {
+                tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(error.as_ref()), "agent_new target planning failed");
+                if native_permission_denied(&error) {
+                    refuse!(
+                        FailureClass::ServiceUnavailable,
+                        unavailable_agent_payload(tool_name)
+                    );
+                }
+                refuse!(
+                    FailureClass::ServiceUnavailable,
+                    service_unavailable_payload(
+                        tool_name,
+                        "/agent",
+                        "selected agent is temporarily unavailable",
+                        true
+                    )
+                );
+            }
             Err(error) => refuse!(
                 FailureClass::ServiceUnavailable,
                 service_unavailable_payload(
@@ -319,6 +353,24 @@ impl DefraSessionHook {
                             background_budget_exceeded_payload(tool_name, capacity.0)
                         );
                     }
+                }
+                if create {
+                    tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "agent_new publication failed");
+                    if native_permission_denied(&error) {
+                        refuse!(
+                            FailureClass::ServiceUnavailable,
+                            unavailable_agent_payload(tool_name)
+                        );
+                    }
+                    refuse!(
+                        FailureClass::ServiceUnavailable,
+                        service_unavailable_payload(
+                            tool_name,
+                            "/agent",
+                            "selected agent is temporarily unavailable",
+                            true
+                        )
+                    );
                 }
                 refuse!(
                     FailureClass::ServiceUnavailable,
