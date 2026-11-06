@@ -2469,6 +2469,22 @@ async fn thin_client_publishes_signed_enrollment_without_a_node_document() -> Re
     );
     let runtime = identity::Did::new(core.node_identity().did())?;
     let local = ConfigAccess::local_as(core.node_arc(), runtime.clone());
+    for actor in [&admin, &user, &agent, &outsider] {
+        for permission in [
+            gents::defra_node::NodePermission::DocumentRead,
+            gents::defra_node::NodePermission::CollectionGet,
+        ] {
+            local
+                .grant_node_permission(&identity::Did::new(actor.did())?, permission)
+                .await?;
+        }
+    }
+    local
+        .grant_node_permission(
+            &identity::Did::new(admin.did())?,
+            gents::defra_node::NodePermission::DocumentUpdate,
+        )
+        .await?;
     let nodes = local.execute("{ Node { _docID } }").await?;
     assert!(gents_protocol::graphql::graphql_rows_from_response(&nodes, "Node").is_empty());
     let doc = write_enrollment_request(&core.node, &request).await?;
