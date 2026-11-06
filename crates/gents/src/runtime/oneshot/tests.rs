@@ -14,7 +14,6 @@ async fn oneshot_fixture(
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
     use crate::store::config_client::NodePermission;
-    use crate::store::identity::NodeIdentity;
     let (db, user, user_access, binding) = crate::test_support::signed_test_node(name).await;
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();

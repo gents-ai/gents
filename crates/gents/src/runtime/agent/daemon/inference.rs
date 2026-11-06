@@ -1379,31 +1379,62 @@ pub(super) mod tests {
         (db, user, access, config)
     }
 
+    fn held_daemon_agent_access(
+        db: &crate::support::TestDb,
+        config: &ResolvedAgent,
+    ) -> crate::ConfigAccess {
+        crate::ConfigAccess::local_managed_agent(
+            db.node.clone(),
+            identity::Did::new(&config.agent_did).unwrap(),
+            config.agent_identity.as_ref(),
+        )
+        .unwrap()
+    }
+
+    async fn held_daemon_query(
+        access: &crate::ConfigAccess,
+        document: &str,
+    ) -> query::QueryResponse {
+        let result = if document.trim_start().starts_with("mutation") {
+            access.write("test.daemon_fixture", document).await
+        } else {
+            access.execute(document).await
+        }
+        .unwrap();
+        serde_json::from_value(result).unwrap()
+    }
+
     async fn create_held_routed_request(
         db: &crate::support::TestDb,
         user: &crate::KeyIdentity,
         access: &crate::ConfigAccess,
         agent_config: &ResolvedAgent,
+        title: Option<&str>,
     ) -> AgentRequest {
         use crate::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
         use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
         let request_id = uuid::Uuid::new_v4().to_string();
+        let mut spec = RequestSpec::new(
+            RequestPurpose::Normal,
+            RequestIdentity {
+                request_id: request_id.clone(),
+                node_did: db.node_identity.did().to_owned(),
+                requester_did: Some(user.did().to_owned()),
+                agent_did: agent_config.agent_did.clone(),
+                session_id: uuid::Uuid::new_v4().to_string(),
+                content: "route this reply".into(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: chrono::Utc::now().to_rfc3339(),
+            },
+            AgentRequestAdmissionRecord::client(user.did()),
+        );
+        spec.input.initial_title = title.map(|text| gents_protocol::session::SessionTitle {
+            text: text.to_owned(),
+            source: gents_protocol::session::SessionTitleSource::Task,
+        });
         let create = crate::request::lifecycle::build_signed_client_request(
             access,
-            RequestSpec::new(
-                RequestPurpose::Normal,
-                RequestIdentity {
-                    request_id: request_id.clone(),
-                    node_did: db.node_identity.did().to_owned(),
-                    requester_did: Some(user.did().to_owned()),
-                    agent_did: agent_config.agent_did.clone(),
-                    session_id: uuid::Uuid::new_v4().to_string(),
-                    content: "route this reply".into(),
-                    execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
-                    created_at: chrono::Utc::now().to_rfc3339(),
-                },
-                AgentRequestAdmissionRecord::client(user.did()),
-            ),
+            spec,
             RequestSigner::Identity(user),
         )
         .await
@@ -1660,7 +1691,7 @@ pub(super) mod tests {
         let node = db.node.clone();
         let node_did = db.node_identity.did().to_owned();
         let requester_did = user.did().to_owned();
-        let request = create_held_routed_request(&db, &user, &access, &agent_config).await;
+        let request = create_held_routed_request(&db, &user, &access, &agent_config, None).await;
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &agent_config.system_prompt,
             &agent_config.agent_did,
@@ -2104,7 +2135,7 @@ pub(super) mod tests {
         )
         .await
         .unwrap();
-        let first = create_held_routed_request(&db, &user, &user_access, &agent_config).await;
+        let first = create_held_routed_request(&db, &user, &user_access, &agent_config, None).await;
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &agent_config.system_prompt,
             &agent_config.agent_did,
@@ -2189,7 +2220,8 @@ pub(super) mod tests {
         )
         .await
         .unwrap();
-        let second = create_held_routed_request(&db, &user, &user_access, &agent_config).await;
+        let second =
+            create_held_routed_request(&db, &user, &user_access, &agent_config, None).await;
         let second_doc_id = second.doc_id.clone();
         daemon.process_request(second, shutdown_rx).await.unwrap();
         assert_eq!(
