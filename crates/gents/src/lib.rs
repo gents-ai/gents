@@ -243,7 +243,12 @@ pub(crate) mod test_support {
         use crate::store::identity::NodeIdentity;
 
         let db = crate::support::test_db(name).await;
-        let user = crate::support::fixtures::test_identity(name);
+        let fixture_name = name.to_owned();
+        let user = tokio::task::spawn_blocking(move || {
+            crate::support::fixtures::test_identity(&fixture_name)
+        })
+        .await
+        .unwrap();
         let runtime = db.node_identity.as_ref();
         assert_ne!(runtime.did(), user.did());
         let admin =
