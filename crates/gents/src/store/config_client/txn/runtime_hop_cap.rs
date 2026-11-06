@@ -63,8 +63,42 @@ impl ConfigApplyTxn<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::store::config_client::{ConfigAccess, NodePermission};
+    use anyhow::Context as _;
+
+    use crate::store::config_client::{
+        apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
+        DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
+    };
     use crate::store::identity::NodeIdentity;
+
+    async fn set_node_hop_cap(
+        owner: &ConfigAccess,
+        node_did: &str,
+        cap: u32,
+    ) -> anyhow::Result<()> {
+        owner
+            .transact_write("test.runtime_hop_cap.bound", |txn| {
+                Box::pin(async move {
+                    let (_, mut node) = read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Node,
+                        node_did,
+                        node_did,
+                    )
+                    .await?
+                    .context("owned Node is unavailable")?;
+                    node["max_request_hop"] = serde_json::json!(cap);
+                    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                        collection: crate::Collection::Node,
+                        add: node.clone(),
+                        update: node,
+                    }])?;
+                    apply_desired_state_plan(txn, &plan).await
+                })
+            })
+            .await?;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn agent_transaction_reads_hidden_node_cap_as_runtime_and_fails_closed(
@@ -78,15 +112,7 @@ mod tests {
             identity::Did::new(&binding.agent_did)?,
             signer.as_ref(),
         )?;
-        let escaped = crate::store::graphql::escape_graphql_string(runtime.did());
-        user_access
-            .write(
-                "test.runtime_hop_cap.bound",
-                &format!(
-                    r#"mutation {{ update_Node(filter: {{ node_did: {{ _eq: "{escaped}" }} }}, input: {{ max_request_hop: 1 }}) {{ _docID }} }}"#
-                ),
-            )
-            .await?;
+        set_node_hop_cap(&user_access, runtime.did(), 1).await?;
         let observe = |node_did: String| {
             agent.transact_readonly("test.runtime_hop_cap.observe", move |txn| {
                 let node_did = node_did.clone();
