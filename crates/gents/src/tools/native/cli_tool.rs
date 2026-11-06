@@ -465,11 +465,11 @@ mod tests {
     }
 
     async fn presented(
-        node: &std::sync::Arc<defra_node::Node>,
+        _node: &std::sync::Arc<defra_node::Node>,
         tool: &crate::tools::call::lifecycle::ToolCallLifecycle,
     ) -> String {
         crate::tools::call::lifecycle::load_tool_call_presentation(
-            &crate::store::config_client::ConfigAccess::local(node.clone()),
+            &tool.access().unwrap(),
             tool.doc_id().unwrap(),
             tool.node_did(),
             tool.session_id(),
