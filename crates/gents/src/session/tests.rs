@@ -853,6 +853,61 @@ async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_sou
 }
 
 #[tokio::test]
+async fn edit_fork_reuses_canonical_request_reads_for_the_retained_prefix() {
+    const NODE: &str = "did:test:fork-shared-reads";
+    const SOURCE: &str = "fork-shared-source";
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    crate::test_support::install_test_agent(&node, NODE, "fork-reader").await;
+    create_session_with_agent_id(&node, SOURCE, NODE, "fork-reader")
+        .await
+        .unwrap();
+    for sequence in 1..=21 {
+        let key = format!("message-{sequence}");
+        import_history_observation(
+            &node,
+            "shared-request",
+            SOURCE,
+            NODE,
+            None,
+            &key,
+            &key,
+            sequence,
+            None,
+        )
+        .await;
+    }
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let params = ForkParams {
+        source_session_id: SOURCE,
+        boundary: ForkBoundary::BeforeMessageKey("message-21"),
+        caller_node_did: NODE,
+        caller_requester_did: None,
+        target_agent_id: None,
+    };
+    let (result, scans) = count_request_output_scans(fork_edit_on(
+        &access,
+        params,
+        "fork-shared-child",
+        "test-client",
+    ))
+    .await;
+    assert_eq!(result.unwrap(), "fork-shared-child");
+    assert_eq!(
+        scans, 1,
+        "retained messages from one request share one output scan"
+    );
+    assert_eq!(
+        load_history(&node, "fork-shared-child", NODE, None)
+            .await
+            .unwrap()
+            .len(),
+        20
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_current_agent() {
     use crate::NodeIdentity as _;
     const NODE: &str = "did:test:retained-edit-fork";
