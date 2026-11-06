@@ -160,6 +160,10 @@ pub(in crate::client::core) async fn reconcile_status_enrollment_approvals(
     for existing in sync_state.records().into_iter().filter(|record| {
         record.source.as_deref() == Some("enrollment") && !outcomes.contains_key(&record.peer_id)
     }) {
+        if existing.is_managed_runtime() {
+            demote_enrollment_peer(sync_state, &existing.peer_id).await;
+            continue;
+        }
         let removal = route_manager
             .remove_peer(sync_state, &existing.peer_id, RemovalCause::Reconciliation)
             .await?;

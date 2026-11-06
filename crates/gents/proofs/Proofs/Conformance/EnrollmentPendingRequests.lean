@@ -81,4 +81,14 @@ private def caseJson (value : Case) : String :=
 
 def casesJson : String := jsonArray (cases.map caseJson)
 
+def absentPeerCasesJson : String :=
+  jsonArray ([false, true].flatMap fun managed =>
+    [false, true].map fun ready =>
+      let expected := absentEnrollmentPeer managed
+      "{\"managed\":" ++ boolJson managed ++
+      ",\"initial_ready\":" ++ boolJson ready ++
+      ",\"expected_present\":" ++ boolJson expected.1 ++
+      ",\"expected_ready\":" ++ boolJson expected.2 ++ "}")
+
+
 end Conformance.EnrollmentPendingRequests

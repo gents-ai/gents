@@ -2105,6 +2105,79 @@ async fn malformed_authority_rows_are_skipped_by_the_active_listing() {
     Arc::new(core).shutdown().await.unwrap();
 }
 
+#[derive(Deserialize)]
+struct AbsentEnrollmentPeerCase {
+    managed: bool,
+    initial_ready: bool,
+    expected_present: bool,
+    expected_ready: bool,
+}
+
+#[tokio::test]
+async fn absent_enrollment_preserves_managed_deployment_and_demotes_readiness() {
+    let snapshot: Value =
+        gents_lean_contract::load_contract_snapshot().expect("Lean absent enrollment peer cases");
+    let cases: Vec<AbsentEnrollmentPeerCase> =
+        serde_json::from_value(snapshot["enrollment_absent_peer_cases"].clone())
+            .expect("decode absent enrollment peer cases");
+    assert!(!cases.is_empty());
+    for case in cases {
+        let temp = tempfile::tempdir().unwrap();
+        let core = start_unsupervised_core(temp.path().join("desktop")).await;
+        let admin =
+            PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
+                .await
+                .unwrap();
+        let authority =
+            signed_enrollment_authority(&admin, core.node_identity(), core.local_peer_id());
+        let mut record = core
+            .sync_state
+            .upsert_enrollment_peer(
+                &authority.request.server_peer,
+                "Enrolled server",
+                &authority.offer.server_ticket,
+                &authority.request.owner_node_did,
+                &authority.request.network_id,
+                &authority.request.request_id,
+                &authority.request.request_digest,
+                &authority.request.admin_did,
+                authority.decision.authorization_sequence,
+                &authority.decision.authorization_expires_at,
+            )
+            .await
+            .unwrap();
+        if case.managed {
+            record = core
+                .sync_state
+                .upsert_local_standard_peer(
+                    "Local runtime",
+                    &authority.offer.server_ticket,
+                    &authority.request.owner_node_did,
+                    "http://127.0.0.1:9191/api/v0/graphql",
+                    "/managed/home",
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(record.is_managed_runtime(), case.managed);
+        core.sync_state
+            .set_pairing_ready(&record, case.initial_ready)
+            .await
+            .unwrap()
+            .expect("the enrollment record is still current");
+
+        reconcile_with_test_transport(&core, test_transport(&authority, true)).await;
+        let records = core.peer_records().await;
+        assert_eq!(records.len(), usize::from(case.expected_present));
+        if let Some(retained) = records.first() {
+            assert_eq!(retained.peer_id, authority.request.server_peer);
+            assert_eq!(retained.local_node_home.as_deref(), Some("/managed/home"));
+            assert_eq!(retained.pairing_ready, case.expected_ready);
+        }
+        Arc::new(core).shutdown().await.unwrap();
+    }
+}
+
 #[tokio::test]
 async fn a_saved_peer_removed_for_an_absent_receipt_reinstalls_when_it_returns() {
     use crate::client::paths::DesktopPaths;

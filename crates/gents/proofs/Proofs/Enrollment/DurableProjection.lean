@@ -61,6 +61,19 @@ theorem applied_request_is_hidden (requestFresh hasDecision currentApproval : Bo
     activeRequestVisible requestFresh hasDecision currentApproval true = false := by
   simp [activeRequestVisible]
 
+/-- Missing enrollment authority removes enrollment-owned peers, but the local
+managed deployment has an independent owner and survives with readiness closed. -/
+def absentEnrollmentPeer (managed : Bool) : Bool × Bool :=
+  (managed, false)
+
+theorem absent_enrollment_never_remains_ready (managed : Bool) :
+    (absentEnrollmentPeer managed).2 = false := by
+  simp [absentEnrollmentPeer]
+
+theorem absent_enrollment_preserves_managed_deployment :
+    absentEnrollmentPeer true = (true, false) := by
+  rfl
+
 structure DurableDocuments where
   offers : Finset Offer := ∅
   adminPins : Finset NetworkAdminPin := ∅
