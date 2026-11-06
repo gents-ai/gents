@@ -117,7 +117,7 @@ fn plugin_documents_fixture_loads_slot_authoring_and_literal_prompt_assets() {
         .join("tests/fixtures/packs/plugin_documents_fixture");
     let manifest: PackManifest =
         serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
-    let config = load_pack_config(
+    let authored_config = crate::pack::load_pack_authoring_config(
         &manifest,
         &PackInstallOptions {
             node_did: "did:key:review-owner".into(),
@@ -126,10 +126,11 @@ fn plugin_documents_fixture_loads_slot_authoring_and_literal_prompt_assets() {
         &|_| None,
     )
     .unwrap();
+    let config = &authored_config.documents;
     assert!(config.inference_backends.is_empty());
     assert!(config.inference_profiles.is_empty());
     assert_eq!(
-        config.agents[0].inference_profile_id,
+        authored_config.value["agents"][0]["inference_profile_id"],
         "gents:inference-slot:coordinator"
     );
     let authored: Value =
@@ -178,7 +179,7 @@ fn every_fixture_pack_that_ships_a_config_loads_it_cleanly() {
         if manifest.config.is_none() {
             continue;
         }
-        load_pack_config(
+        crate::pack::load_pack_authoring_config(
             &manifest,
             &PackInstallOptions {
                 node_did: "did:key:fixture-owner".into(),
