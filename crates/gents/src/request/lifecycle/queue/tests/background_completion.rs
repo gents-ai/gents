@@ -1410,32 +1410,40 @@ async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
 #[tokio::test]
 async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() {
     let db = test_db("wake-hop-refusal").await;
-    crate::documents::upsert_node(
-        &db.node,
-        db.node_did(),
-        None,
-        Some(db.agent_did()),
-        true,
-        Some(8),
-    )
-    .await
-    .unwrap();
-    let parent = root_parent(&db, "wake-hop-refusal-session").await;
+    db.user_access.write("test.max_request_hop", &format!(
+        r#"mutation {{ update_Node(filter: {{ node_did: {{ _eq: "{}" }} }}, input: {{ max_request_hop: 8 }}) {{ _docID }} }}"#,
+        escape_graphql_string(db.node_did()),
+    )).await.unwrap();
+    let mut fixture = canonical_background_fixture(&db, "wake-hop-refusal-session").await;
+    let parent = fixture.parent.clone();
+    let native_tool = fixture.prepare_notification("sleep done").await.unwrap();
+    let returned_tool = fixture.prepare_notification("B result").await.unwrap();
+    let refused_tool = fixture.prepare_notification("C message").await.unwrap();
+    let later_tool = fixture
+        .prepare_notification("another B result")
+        .await
+        .unwrap();
+    let selection = fixture.writer.terminal_output(&parent.doc_id).await;
+    fixture
+        .lifecycle
+        .terminalize_owned(RequestTerminalOutcome::Completed, selection, None)
+        .await
+        .unwrap();
     let bound = 8;
     let hop_of = |doc_id: String| {
-        let node = db.node.clone();
+        let access = db.agent_access.clone();
         async move {
-            let response = node
+            let response = access
                 .execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ request_hop lifecycle_state }} }}"#,
                     escape_graphql_string(&doc_id)
                 ))
-                .await;
-            assert!(!response.has_errors(), "{:?}", response.errors);
-            response.data.unwrap()["AgentRequest"][0].clone()
+                .await.unwrap();
+            response["data"]["AgentRequest"][0].clone()
         }
     };
-    let native = persist_background_completion_with_message_waking(
+    let native = persist_background_completion_with_message_canonical_with_access(
+        &db.agent_access,
         &db.node,
         &parent,
         "sleep done",
@@ -1443,12 +1451,14 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         "review notifications",
         background_hints(&parent),
         None,
+        &native_tool,
         crate::request::lifecycle::RequestHopCause::Continuation,
     )
     .await
     .unwrap();
     let native_wake = native.request.expect("native wake").doc_id;
-    let returned = persist_background_completion_with_message_waking(
+    let returned = persist_background_completion_with_message_canonical_with_access(
+        &db.agent_access,
         &db.node,
         &parent,
         "B result",
@@ -1456,6 +1466,7 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         "review notifications",
         background_hints(&parent),
         None,
+        &returned_tool,
         crate::request::lifecycle::RequestHopCause::Return,
     )
     .await
@@ -1463,7 +1474,8 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
     assert!(!returned.created_request);
     assert_eq!(returned.request.expect("joined wake").doc_id, native_wake);
     assert_eq!(hop_of(native_wake.clone()).await["request_hop"], 0);
-    let refused = persist_background_completion_with_message_waking(
+    let refused = persist_background_completion_with_message_canonical_with_access(
+        &db.agent_access,
         &db.node,
         &parent,
         "C message",
@@ -1471,6 +1483,7 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         "review notifications",
         background_hints(&parent),
         None,
+        &refused_tool,
         crate::request::lifecycle::RequestHopCause::CrossSession { cause_hop: bound },
     )
     .await
@@ -1483,15 +1496,14 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         bound + 1
     ));
     assert_eq!(hop_of(native_wake).await["lifecycle_state"], "superseded");
-    let response = db
-        .node
-        .execute(&format!(
+    db.agent_access
+        .write("test.refuse_wake", &format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "dead" }}) {{ _docID }} }}"#,
             escape_graphql_string(&refused_wake)
         ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let later = persist_background_completion_with_message_waking(
+        .await.unwrap();
+    let later = persist_background_completion_with_message_canonical_with_access(
+        &db.agent_access,
         &db.node,
         &parent,
         "another B result",
@@ -1499,6 +1511,7 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         "review notifications",
         background_hints(&parent),
         None,
+        &later_tool,
         crate::request::lifecycle::RequestHopCause::Return,
     )
     .await
