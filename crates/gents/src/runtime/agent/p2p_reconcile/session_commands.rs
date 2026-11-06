@@ -620,6 +620,8 @@ mod tests {
                 escape_graphql_string(&expected[0])
             );
             let response = access.execute(&query).await.unwrap();
+            let response: defra_node::QueryResponse = serde_json::from_value(response)
+                .expect("decode native session-command query response");
             let visible = !crate::store::graphql::rows::<serde_json::Value>(
                 &response,
                 "AgentSessionGoalControl",

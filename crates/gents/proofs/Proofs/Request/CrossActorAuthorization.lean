@@ -129,9 +129,9 @@ claim transaction. The source observation is not modeled as a claim-time
 transaction fence: in particular, the source tool call's session ID is not
 declared immutable. Cross-runtime delivery requires the separate authenticated
 HTTP and distributed receipt owner, which is not assumed here. -/
-def decideLocalAgentMessage (local sourceVerified sessionVisible : Bool) (intent : Intent)
+def decideLocalAgentMessage (isLocal sourceVerified sessionVisible : Bool) (intent : Intent)
     (observation : Observation) (commit : NativeCommit) : Decision :=
-  if !local || !sourceVerified || !sessionVisible then .unavailable else decideClaim intent observation commit
+  if !isLocal || !sourceVerified || !sessionVisible then .unavailable else decideClaim intent observation commit
 
 theorem unverified_agent_message_cannot_claim (intent : Intent) (observation : Observation)
     (commit : NativeCommit) :
