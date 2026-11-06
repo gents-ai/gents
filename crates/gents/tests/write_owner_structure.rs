@@ -1787,8 +1787,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-desktop-core/src/client/core/route_manager.rs", 2),
     ("crates/gents-desktop-core/src/client/core/sync_state.rs", 1),
     ("crates/gents-desktop-core/src/client/core/writes/pending_submissions.rs", 2),
-    ("crates/gents-desktop-core/src/client/mutations/chat/request.rs", 1),
-    ("crates/gents-desktop-core/src/client/mutations/chat/request/receipt/delivery.rs", 1),
     ("crates/gents-desktop-core/src/error.rs", 1),
     ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", 4),
     ("crates/gents-protocol/src/database_error.rs", 1),

@@ -8,8 +8,8 @@
 use anyhow::Result;
 
 use super::super::super::mutations::{
-    reconcile_unretained_submission, resolve_unresolved_submission, SubmissionCleanupIncomplete,
-    SubmissionOutcomeUnknown, SubmittedRequest,
+    reconcile_unretained_submission, resolve_unresolved_submission, SubmissionAttemptError,
+    SubmissionCleanupIncomplete, SubmissionOutcomeUnknown, SubmittedRequest,
 };
 use super::super::super::mutations::{
     submission_delivery, submission_journal, SubmissionIntent, SubmissionReference,
@@ -226,11 +226,11 @@ impl ClientCore {
                             cleanup,
                         )?)
                     }
-                    Err(error) if error.is::<SubmissionOutcomeUnknown>() => return Err(error),
+                    Err(SubmissionAttemptError::Unknown(error)) => return Err(error.into()),
                     // The receipt proved absence and the owner definitely
                     // rejected the identical replay, so it holds nothing with
                     // this identity.
-                    Err(error) => {
+                    Err(SubmissionAttemptError::Rejected(error)) => {
                         let cleanup = super::super::super::mutations::submission_journal::forget(
                             &self.node,
                             self.node_identity.did(),
@@ -238,7 +238,9 @@ impl ClientCore {
                         )
                         .await;
                         return Err(super::super::super::mutations::report_submission_rejection(
-                            &pending, error, cleanup,
+                            &pending,
+                            error.into(),
+                            cleanup,
                         ));
                     }
                 }

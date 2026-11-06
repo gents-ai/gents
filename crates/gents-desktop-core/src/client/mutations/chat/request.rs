@@ -98,12 +98,8 @@ pub async fn submit_request(
     }
     receipt::journal::save(node, signer.did(), &pending).await?;
     let result = receipt::commit_signed_submission(access, pending.clone()).await;
-    if result
-        .as_ref()
-        .err()
-        .is_some_and(|error| error.is::<receipt::SubmissionOutcomeUnknown>())
-    {
-        return result;
+    if matches!(result, Err(receipt::SubmissionAttemptError::Unknown(_))) {
+        return result.map_err(receipt::SubmissionAttemptError::into_error);
     }
     let cleanup = receipt::journal::forget(node, signer.did(), &pending.request_id).await;
     receipt::report_cleanup(&pending, result, cleanup)
@@ -368,6 +364,6 @@ pub(super) mod retry;
 pub use receipt::correlated::{Intent as SubmissionIntent, Reference as SubmissionReference};
 pub use receipt::{
     reconcile_unretained_submission, resolve_unresolved_submission, DeliveryUnconfirmed,
-    SubmissionCleanupIncomplete, SubmissionNotDelivered, SubmissionOutcomeUnknown,
-    UnresolvedSubmission,
+    SubmissionAttemptError, SubmissionCleanupIncomplete, SubmissionNotDelivered,
+    SubmissionOutcomeUnknown, UnresolvedSubmission,
 };

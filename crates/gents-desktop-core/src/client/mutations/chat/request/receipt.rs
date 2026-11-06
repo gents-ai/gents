@@ -76,6 +76,23 @@ pub struct SubmissionOutcomeUnknown {
     pub cause: Option<anyhow::Error>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum SubmissionAttemptError {
+    #[error(transparent)]
+    Unknown(SubmissionOutcomeUnknown),
+    #[error(transparent)]
+    Rejected(ClientSubmissionError),
+}
+
+impl SubmissionAttemptError {
+    pub(crate) fn into_error(self) -> anyhow::Error {
+        match self {
+            Self::Unknown(error) => error.into(),
+            Self::Rejected(error) => error.into(),
+        }
+    }
+}
+
 /// A confirmed delivery outcome whose retained local journal could not be retired.
 #[derive(Debug, thiserror::Error)]
 pub enum SubmissionCleanupIncomplete {
@@ -96,16 +113,13 @@ pub enum SubmissionCleanupIncomplete {
 
 pub(crate) fn report_cleanup(
     pending: &UnresolvedSubmission,
-    delivery: Result<SubmittedRequest>,
+    delivery: std::result::Result<SubmittedRequest, SubmissionAttemptError>,
     cleanup: Result<()>,
 ) -> Result<SubmittedRequest> {
-    if delivery
-        .as_ref()
-        .err()
-        .is_some_and(|error| error.is::<SubmissionOutcomeUnknown>())
-    {
-        return delivery;
+    if matches!(delivery, Err(SubmissionAttemptError::Unknown(_))) {
+        return delivery.map_err(SubmissionAttemptError::into_error);
     }
+    let delivery = delivery.map_err(SubmissionAttemptError::into_error);
     match cleanup {
         Ok(()) => delivery,
         Err(cause) => match delivery {
@@ -125,16 +139,18 @@ pub(crate) fn report_rejection(
     rejection: anyhow::Error,
     cleanup: Result<()>,
 ) -> anyhow::Error {
-    let error = report_cleanup(pending, Err(rejection), cleanup)
-        .expect_err("a rejected submission cannot produce a delivery receipt");
-    if error.is::<SubmissionCleanupIncomplete>() {
-        error
-    } else {
-        SubmissionNotDelivered::Rejected {
+    match cleanup {
+        Err(cause) => SubmissionCleanupIncomplete::Rejected {
             request: pending.result.clone(),
-            cause: Some(error),
+            cause,
+            rejection,
         }
-        .into()
+        .into(),
+        Ok(()) => SubmissionNotDelivered::Rejected {
+            request: pending.result.clone(),
+            cause: Some(rejection),
+        }
+        .into(),
     }
 }
 
@@ -226,7 +242,7 @@ impl UnresolvedSubmission {
         })
     }
 
-    fn outcome_unknown(&self, cause: Option<anyhow::Error>) -> anyhow::Error {
+    fn unknown(&self, cause: Option<anyhow::Error>) -> SubmissionOutcomeUnknown {
         tracing::warn!(
             action = "chat_submit_receipt_unresolved",
             request_id = %self.request_id,
@@ -240,7 +256,10 @@ impl UnresolvedSubmission {
             pending: self.clone(),
             cause,
         }
-        .into()
+    }
+
+    fn outcome_unknown(&self, cause: Option<anyhow::Error>) -> anyhow::Error {
+        self.unknown(cause).into()
     }
 }
 
@@ -324,7 +343,7 @@ async fn read_owner_receipt(access: &ConfigAccess, create: &AgentRequestCreate) 
 pub(super) async fn commit_signed_submission(
     access: &ConfigAccess,
     pending: UnresolvedSubmission,
-) -> Result<SubmittedRequest> {
+) -> std::result::Result<SubmittedRequest, SubmissionAttemptError> {
     let written = gents::request::lifecycle::submit_client_request(access, &pending.create).await;
     let Err(error) = written else {
         return Ok(pending.result);
@@ -336,16 +355,20 @@ async fn reconcile_commit_failure(
     access: &ConfigAccess,
     pending: UnresolvedSubmission,
     error: ClientSubmissionError,
-) -> Result<SubmittedRequest> {
+) -> std::result::Result<SubmittedRequest, SubmissionAttemptError> {
     if gents::store::graphql::is_storage_full(&error) {
-        return Err(pending.outcome_unknown(Some(error.into())));
+        return Err(SubmissionAttemptError::Unknown(
+            pending.unknown(Some(error.into())),
+        ));
     }
     match gents::request::lifecycle::reconcile_client_request(access, &pending.create).await {
         Ok(true) => Ok(pending.result),
         Ok(false) if !error.is_unconfirmed() && !reports_existing_request(&error) => {
-            Err(error.into())
+            Err(SubmissionAttemptError::Rejected(error))
         }
-        _ => Err(pending.outcome_unknown(Some(error.into()))),
+        _ => Err(SubmissionAttemptError::Unknown(
+            pending.unknown(Some(error.into())),
+        )),
     }
 }
 
@@ -438,11 +461,13 @@ async fn submitted_request_exists(
 pub async fn resolve_unresolved_submission(
     access: &ConfigAccess,
     pending: &UnresolvedSubmission,
-) -> Result<SubmittedRequest> {
+) -> std::result::Result<SubmittedRequest, SubmissionAttemptError> {
     match gents::request::lifecycle::reconcile_client_request(access, &pending.create).await {
         Ok(true) => Ok(pending.result.clone()),
         Ok(false) => commit_signed_submission(access, pending.clone()).await,
-        Err(error) => Err(pending.outcome_unknown(Some(error.into()))),
+        Err(error) => Err(SubmissionAttemptError::Unknown(
+            pending.unknown(Some(error.into())),
+        )),
     }
 }
 
@@ -531,8 +556,10 @@ mod tests {
             let outcome = case["outcome"].as_str().unwrap();
             let delivery = match outcome {
                 "accepted" => Ok(pending.result.clone()),
-                "notDelivered" => Err(anyhow::anyhow!("confirmed rejection")),
-                "unresolved" => Err(pending.outcome_unknown(None)),
+                "notDelivered" => Err(SubmissionAttemptError::Rejected(
+                    ClientSubmissionError::Rejected(anyhow::anyhow!("confirmed rejection")),
+                )),
+                "unresolved" => Err(SubmissionAttemptError::Unknown(pending.unknown(None))),
                 _ => panic!("unknown modeled delivery"),
             };
             let cleanup = if case["cleanup_succeeded"].as_bool().unwrap() {
@@ -940,9 +967,9 @@ mod tests {
         let error = resolve_unresolved_submission(&access, &pending)
             .await
             .expect_err("an absent receipt for every attempt is an unknown outcome");
-        let unknown = error
-            .downcast_ref::<SubmissionOutcomeUnknown>()
-            .expect("unknown outcome is a typed error");
+        let SubmissionAttemptError::Unknown(unknown) = &error else {
+            panic!("unknown outcome is a typed error: {error:#}");
+        };
         assert_eq!(unknown.request_id, REQUEST_ID);
         assert_eq!(unknown.session_id, SESSION_ID);
         assert_eq!(unknown.pending.request_id, REQUEST_ID);
@@ -1029,7 +1056,10 @@ mod tests {
             let error = commit_signed_submission(&access, pending.clone())
                 .await
                 .unwrap_err();
-            let unknown = error.downcast_ref::<SubmissionOutcomeUnknown>();
+            let unknown = match &error {
+                SubmissionAttemptError::Unknown(unknown) => Some(unknown),
+                SubmissionAttemptError::Rejected(_) => None,
+            };
             assert_eq!(
                 unknown.is_some(),
                 case["outcome_unknown"].as_bool().unwrap()
@@ -1072,7 +1102,7 @@ mod tests {
             .expect_err("a definite rejection with no receipt fails");
 
         assert!(
-            error.downcast_ref::<SubmissionOutcomeUnknown>().is_none(),
+            matches!(error, SubmissionAttemptError::Rejected(_)),
             "a definite rejection must not be reported as possibly delivered: {error:#}"
         );
         assert_eq!(create_requests(&server).await.len(), 1);
@@ -1162,9 +1192,9 @@ mod tests {
         .await
         .expect_err("a local post-send failure does not prove rejection");
 
-        let unknown = error
-            .downcast_ref::<SubmissionOutcomeUnknown>()
-            .expect("local non-GraphQL errors remain uncertain");
+        let SubmissionAttemptError::Unknown(unknown) = &error else {
+            panic!("local non-GraphQL errors remain uncertain: {error:#}");
+        };
         assert_eq!(unknown.request_id, pending.request_id);
         assert_eq!(unknown.pending.mutation, pending.mutation);
         node.shutdown().await.unwrap();
@@ -1182,9 +1212,9 @@ mod tests {
                 .await
                 .expect_err("an unconfirmed post-send failure is not a success");
 
-            let unknown = error
-                .downcast_ref::<SubmissionOutcomeUnknown>()
-                .unwrap_or_else(|| panic!("HTTP {status} must be an unknown outcome: {error:#}"));
+            let SubmissionAttemptError::Unknown(unknown) = &error else {
+                panic!("HTTP {status} must be an unknown outcome: {error:#}");
+            };
             assert_eq!(unknown.request_id, test_result().request_id);
         }
     }
@@ -1207,7 +1237,7 @@ mod tests {
             .expect_err("an unconfirmed duplicate rejection is not a success");
 
         assert!(
-            error.downcast_ref::<SubmissionOutcomeUnknown>().is_some(),
+            matches!(error, SubmissionAttemptError::Unknown(_)),
             "an existing-request rejection with no visible receipt may still be delivered: {error:#}"
         );
     }

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use super::correlated::{Decision, Outcome, Record};
 use super::{
-    journal, resolve_unresolved_submission, SubmissionNotDelivered, SubmissionOutcomeUnknown,
+    journal, resolve_unresolved_submission, SubmissionAttemptError, SubmissionNotDelivered,
     SubmittedRequest,
 };
 
@@ -38,10 +38,12 @@ pub(crate) async fn reconcile(
     let delivered = resolve_unresolved_submission(access, pending).await;
     let outcome = match &delivered {
         Ok(_) => Outcome::Accepted,
-        Err(error) if error.is::<SubmissionOutcomeUnknown>() => return delivered,
-        Err(_) => Outcome::NotDelivered,
+        Err(SubmissionAttemptError::Unknown(_)) => {
+            return delivered.map_err(SubmissionAttemptError::into_error);
+        }
+        Err(SubmissionAttemptError::Rejected(_)) => Outcome::NotDelivered,
     };
-    let rejection = delivered.err();
+    let rejection = delivered.err().map(SubmissionAttemptError::into_error);
     let settled =
         match journal::caller::update(node, &record.intent, &record.reference, Some(outcome)).await
         {
