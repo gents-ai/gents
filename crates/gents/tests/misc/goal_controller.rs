@@ -4720,43 +4720,30 @@ async fn seed_goal_fields(
 
 async fn seed_same_second_canonical_goal_child(
     db: &TestDb,
+    user: &gents::KeyIdentity,
+    agent: &Arc<dyn NodeIdentity>,
+    access: &ConfigAccess,
     parent_id: &str,
     paused: bool,
 ) -> (String, String) {
+    use gents::request::lifecycle::{
+        build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
+        RequestSigner, RequestSpec,
+    };
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     use sha2::{Digest, Sha256};
     let did = db.node_identity.did();
-    let mut parent = gents_protocol::request_admission::AgentRequestCreate::base(
-        gents_protocol::request_admission::RequestPurpose::Normal,
+    let parent_doc = goal_fixture_request_with_state_at(
+        db,
+        user,
+        agent,
         parent_id,
-        did,
-        did,
-        crate::support::AGENT_NAME,
-        SESSION,
-        "Signed root of the same-second continuation chain",
-        "interactive",
+        "completed",
         "2026-07-15T00:00:00Z",
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(did),
-    );
-    gents::sign_agent_request_create(db.node_identity.as_ref(), &mut parent)
-        .await
-        .unwrap();
-    let response = db.node.execute(&parent.graphql_mutation().unwrap()).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let response = db
-        .node
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            gents::store::graphql::escape_graphql_string(parent_id),
-        ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let parent_doc = response.data.unwrap()["AgentRequest"][0]["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    set_request_lifecycle_state(db.node.as_ref(), &parent_doc, "completed").await;
-    let goal = set_goal(
-        &db.node,
+    )
+    .await;
+    let goal = set_goal_from_access(
+        access,
         did,
         SESSION,
         Some("Continue from the actual causal head"),
@@ -4765,6 +4752,7 @@ async fn seed_same_second_canonical_goal_child(
         } else {
             GoalStatus::Active
         }),
+        None,
         None,
     )
     .await
@@ -4779,78 +4767,79 @@ async fn seed_same_second_canonical_goal_child(
         child_id.as_str() < parent_id,
         "fixture must defeat lexical head selection"
     );
-    let identity = gents::RequestIdentity {
-        requester_did: None,
+    let identity = RequestIdentity {
+        requester_did: Some(user.did().into()),
         request_id: child_id.clone(),
         node_did: did.to_owned(),
-        agent_did: crate::support::AGENT_NAME.to_owned(),
+        agent_did: agent.did().into(),
         session_id: SESSION.to_owned(),
         content: "The canonical continuation made durable progress".to_owned(),
-        execution_origin: gents::request::lifecycle::ExecutionOrigin::Scheduled,
-        created_at: "2026-07-15T00:00:00Z".to_owned(),
+        execution_origin: ExecutionOrigin::Scheduled,
+        created_at: "2026-07-15T00:00:00Z".into(),
     };
-    let admission =
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
-            did, parent_id,
-        );
-    let mut spec = gents::RequestSpec::new(
-        gents_protocol::request_admission::RequestPurpose::Normal,
+    let mut spec = RequestSpec::new(
+        RequestPurpose::Normal,
         identity,
-        admission,
+        AgentRequestAdmissionRecord::client(user.did()),
     );
     spec.trigger_lineage.trigger_id = Some(goal.goal_id.clone());
     spec.trigger_lineage.trigger_kind = Some("goal".to_owned());
     spec.parent = Some(gents::ParentLink {
         parent_request_id: parent_id.to_owned(),
-        parent_request_doc_id: parent_doc,
+        parent_request_doc_id: parent_doc.clone(),
         ..Default::default()
     });
     spec.retry_key = Some(format!("goal-continuation:{suffix}"));
     spec.input = serde_json::from_value(serde_json::json!({
-        "queue": {
-            "source": "goal", "policy": "coalesce", "key": format!("goal:{suffix}"),
-            "queued_after_request_id": parent_id
-        },
-        "goal_continuation": {"sequence": 1, "wrapup": false}
-    }))
-    .unwrap();
-    let child = gents::build_signed_request(
-        spec,
-        gents::RequestSigner::Identity(db.node_identity.as_ref()),
-    )
-    .await
-    .unwrap();
-    let response = db.node.execute(&child.graphql_mutation().unwrap()).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let children = goal_children(db).await;
+        "queue": {"source":"goal", "policy":"coalesce", "key":format!("goal:{suffix}"), "queued_after_request_id":parent_id},
+        "goal_continuation": {"sequence":1, "wrapup":false},
+        "goal_assignment": {"goal_id":goal.goal_id, "root_request_doc_id":null}
+    })).unwrap();
+    let client = db.client_access(user);
+    let child = build_signed_client_request(&client, spec, RequestSigner::Identity(user))
+        .await
+        .unwrap();
+    submit_client_request(&client, &child).await.unwrap();
+    let children = goal_children_from_access(access).await;
     assert_eq!(children.len(), 1);
     let child_doc = children[0].doc_id.clone();
-    set_request_lifecycle_state(
-        db.node.as_ref(),
+    set_request_state_as(
+        access,
         &child_doc,
         if paused { "interrupted" } else { "completed" },
     )
     .await;
     if paused {
-        select_no_terminal_message(db, &child_doc).await;
+        let terminal = gents_protocol::graphql::graphql_input_literal(
+            &serde_json::to_value(gents_protocol::output::TerminalOutput::NoMessage).unwrap(),
+        )
+        .unwrap();
+        let changed = access.write("test.goal_no_terminal_message", &format!(r#"mutation {{update_AgentRequest(docID: "{}", input: {{terminal_output: {terminal}}}) {{_docID}}}}"#, escape_graphql_string(&child_doc))).await.unwrap();
+        assert_eq!(
+            changed["data"]["update_AgentRequest"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
     } else {
-        publish_canonical_terminal_activity(
-            db,
+        publish_owned_terminal_activity(
+            access,
+            agent.as_ref(),
             &child_doc,
             "canonical child produced durable activity",
         )
         .await;
     }
-    seed_goal_fields(
-        db.node.as_ref(),
+    seed_goal_fields_from_access(
+        access,
         &goal,
         &format!(
             "continuation_sequence: 1, last_continued_from_request_id: \"{}\"",
-            gents::store::graphql::escape_graphql_string(parent_id),
+            escape_graphql_string(parent_id)
         ),
     )
-    .await
-    .unwrap();
+    .await;
     (child_id, child_doc)
 }
 
@@ -4858,8 +4847,17 @@ async fn seed_same_second_canonical_goal_child(
 async fn goal_source_continues_same_second_child_that_sorts_before_root() {
     for parent_id in ["graph-parent", "task-goal-request:parent"] {
         let db = test_db(&format!("goal-head-order-{}", parent_id.replace(':', "-"))).await;
-        let (child_id, _) = seed_same_second_canonical_goal_child(&db, parent_id, false).await;
-        let (mut controller, _snapshot_tx) = source(&db).await;
+        let (user, agent) = goal_creation_actors(&db).await;
+        let access = ConfigAccess::local_managed_agent(
+            db.node.clone(),
+            agent.did().parse().unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
+        let (child_id, _) =
+            seed_same_second_canonical_goal_child(&db, &user, &agent, &access, parent_id, false)
+                .await;
+        let (mut controller, _snapshot_tx) = source_for_agent(&db, &agent).await;
         let intent = tokio::time::timeout(Duration::from_secs(2), controller.next_fire())
             .await
             .expect("causal child must not be hidden by lexical root ordering")
@@ -4867,7 +4865,7 @@ async fn goal_source_continues_same_second_child_that_sorts_before_root() {
         let next_id = intent
             .pre_materialized_request_id
             .expect("materialized child");
-        let children = goal_children(&db).await;
+        let children = goal_children_from_access(&access).await;
         let next = children
             .iter()
             .find(|row| row.request_id == next_id)
@@ -4876,10 +4874,7 @@ async fn goal_source_continues_same_second_child_that_sorts_before_root() {
             next.caused_by_parent_request_id.as_deref(),
             Some(child_id.as_str())
         );
-        let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
-            .await
-            .unwrap()
-            .unwrap();
+        let goal = load_goal_as(&access, db.node_identity.did()).await.unwrap();
         assert_eq!(goal.continuation_sequence(), 2);
         assert_eq!(
             goal.last_continued_from_request_id.as_deref(),
@@ -4896,27 +4891,30 @@ async fn operator_resume_accepts_same_second_child_that_sorts_before_root() {
             parent_id.replace(':', "-")
         ))
         .await;
+        let (user, agent) = goal_creation_actors(&db).await;
+        let access = ConfigAccess::local_managed_agent(
+            db.node.clone(),
+            agent.did().parse().unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
+        let client = db.client_access(&user);
         let (child_id, child_doc) =
-            seed_same_second_canonical_goal_child(&db, parent_id, true).await;
+            seed_same_second_canonical_goal_child(&db, &user, &agent, &access, parent_id, true)
+                .await;
         let receipt = gents::goal::resume_goal_request(
-            &ConfigAccess::local_as(
-                db.node.clone(),
-                ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-            ),
-            db.node_identity.as_ref(),
+            &client,
+            &user,
             db.node_identity.did(),
             SESSION,
             &child_id,
         )
         .await
         .expect("canonical child is latest despite its lexical position");
-        let next = operator_resume_child_row(&db, &receipt.doc_id).await;
+        let next = operator_resume_child_row_from_access(&client, &receipt.doc_id).await;
         assert_eq!(next["caused_by_parent_request_id"], child_id);
         assert_eq!(next["caused_by_parent_request_doc_id"], child_doc);
-        let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
-            .await
-            .unwrap()
-            .unwrap();
+        let goal = load_goal_as(&client, db.node_identity.did()).await.unwrap();
         assert_eq!(goal.continuation_sequence(), 2);
         assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
     }
