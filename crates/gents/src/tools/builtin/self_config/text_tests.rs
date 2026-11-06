@@ -604,7 +604,7 @@ async fn lists_include_unselected_documents() {
 
 #[tokio::test]
 async fn target_id_fills_a_positional_id() {
-    let (fixture, tools) = authenticated_setup("positional", &["node", "tools"]).await;
+    let (fixture, tools) = authenticated_setup("positional", &["node", "tools", "agent"]).await;
     let agent_did = fixture.agent_did();
     for args in [
         json!({"argv":["agent","get"],"target_id":agent_did}),
@@ -1504,7 +1504,8 @@ async fn local_target_creation_defaults_identity_but_updates_preserve_remote_des
 
 #[tokio::test]
 async fn profile_receipt_selects_current_agent_without_changing_original_profile() {
-    let (fixture, tools) = authenticated_setup("selection-receipt", &["node", "profile"]).await;
+    let (fixture, tools) =
+        authenticated_setup("selection-receipt", &["node", "profile", "agent"]).await;
     let agent_did = fixture.agent_did();
     let before = ok(
         &tools,
@@ -1546,7 +1547,7 @@ async fn structured_failure(tools: &Tools, args: Value) -> Value {
 #[tokio::test]
 async fn config_usage_errors_return_executable_resource_verb_recovery() {
     let (fixture, tools) =
-        authenticated_setup("usage-recovery", &["node", "tools", "automation"]).await;
+        authenticated_setup("usage-recovery", &["node", "tools", "automation", "agent"]).await;
     let agent_did = fixture.agent_did();
     for args in [
         json!({"argv":["get"],"target_id":agent_did}),
@@ -1576,7 +1577,7 @@ async fn config_usage_errors_return_executable_resource_verb_recovery() {
 
 #[tokio::test]
 async fn saved_config_audit_reports_broken_references_without_mutation_and_accepts_repair() {
-    let (fixture, tools) = authenticated_setup("saved-audit", &["node", "tools"]).await;
+    let (fixture, tools) = authenticated_setup("saved-audit", &["node", "tools", "agent"]).await;
     let context_id = format!("{}:context", fixture.agent_did());
     let tools_id = format!("{}:tools", fixture.agent_did());
     let failure = structured_failure(&tools, json!({"argv":["datastore","validate"]})).await;
@@ -1700,7 +1701,7 @@ async fn saved_config_audit_is_node_scoped_and_does_not_require_preview() {
 async fn config_error_recovery_is_executable_for_single_and_batch_calls() {
     let (fixture, tools) = authenticated_setup(
         "error-guidance",
-        &["node", "tools", "profile", "automation"],
+        &["node", "tools", "profile", "automation", "agent"],
     )
     .await;
     let agent_did = fixture.agent_did();
@@ -1790,7 +1791,7 @@ async fn delete_recovery_previews_the_same_resource_before_committing() {
 async fn composition_help_and_field_placement_match_the_accepted_calls() {
     let (fixture, tools) = authenticated_setup(
         "composition-help",
-        &["node", "tools", "profile", "automation"],
+        &["node", "tools", "profile", "automation", "agent"],
     )
     .await;
     let agent_did = fixture.agent_did();

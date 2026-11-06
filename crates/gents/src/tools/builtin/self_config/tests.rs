@@ -2600,7 +2600,7 @@ async fn config_errors_name_the_next_call() {
     fixture.grant_selected_configuration().await;
     let builder = fixture.install_sibling("Builder").await;
     fixture.grant_node_reader().await;
-    let tools = fixture.tools(&["node", "tools"]);
+    let tools = fixture.tools(&["node", "tools", "agent"]);
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -6959,7 +6959,7 @@ async fn no_lockout_rejects_current_agent_disable_in_preview_and_commit() {
         )
         .await;
     let current = fixture.agent_did();
-    let mut grants = config(&["node"]);
+    let mut grants = config(&["node", "agent"]);
     grants.agent_did = current.to_owned();
     grants.no_lockout = true;
     grants.preview = true;
