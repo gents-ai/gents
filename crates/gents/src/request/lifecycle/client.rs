@@ -1319,44 +1319,31 @@ mod tests {
 
     #[tokio::test]
     async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back_together() {
-        let modeled = crate::lean_vocab_test::lean_contract_snapshot()
-            .goal_client_start_cases
-            .iter()
-            .find(|case| case["name"] == "reserved_session")
-            .expect("modeled goal publication");
-        let home = tempfile::tempdir().unwrap();
-        let runtime = KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap();
-        let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(runtime.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        crate::store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
-        let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
-        seed_owned_agent(
-            &ConfigAccess::local_as(node.clone(), user.did().parse().unwrap()),
-            runtime.did(),
-            &binding,
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().goal_backed_runtime_cases;
+        let modeled = |name: &str| cases.iter().find(|case| case["name"] == name).unwrap();
+        let (db, user, client, binding) =
+            crate::test_support::signed_test_node("runtime-goal-opening").await;
+        let node = db.node.clone();
+        let agent =
+            crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+                .unwrap();
+        let access = ConfigAccess::local_managed_agent(
+            node.clone(),
+            identity::Did::new(agent.did()).unwrap(),
+            agent.as_ref(),
         )
-        .await;
-        let agent = crate::store::identity::resolve_agent_identity(&runtime, &binding).unwrap();
-        let access = ConfigAccess::local_as(node.clone(), binding.agent_did.parse().unwrap());
+        .unwrap();
         let mut request = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "task-opening",
-            runtime.did(),
-            &binding.agent_did,
-            &binding.agent_did,
+            db.node_identity.did(),
+            agent.did(),
+            agent.did(),
             "task-session",
             "work",
             "scheduled",
             "2026-11-04T00:00:00Z",
-            AgentRequestAdmissionRecord::local_self(&binding.agent_did),
+            AgentRequestAdmissionRecord::runtime_automated_trigger(agent.did(), "trigger"),
         );
         request.retry_key = Some("task-retry".into());
         request.caused_by_trigger_id = Some("trigger".into());
@@ -1365,32 +1352,71 @@ mod tests {
         crate::sign_agent_request_create(agent.as_ref(), &mut request)
             .await
             .unwrap();
-        let created = crate::goal::submit_goal_backed_request_local(
+        let submitted = crate::goal::submit_goal_backed_request_with_identity(
             &node,
-            binding.agent_did.parse().unwrap(),
-            runtime.did(),
+            identity::Did::new(agent.did()).unwrap(),
+            db.node_identity.did(),
             "task-session",
             "finish work",
             None,
             &request,
+            Some(agent.as_ref()),
         )
         .await
         .unwrap();
-        let rows = access.execute("{ AgentSession { _docID session_id provenance } AgentRequest { _docID } Goal { _docID } GoalCreationClaim { _docID } }").await.unwrap();
+        let rows = access.execute(&format!("{{ AgentSession {{_docID provenance}} AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ {} relationships_pending }} Goal {{_docID}} GoalCreationClaim {{_docID}} }}", crate::store::graphql::escape_graphql_string(&submitted.doc_id), crate::SIGNED_REQUEST_FIELDS)).await.unwrap();
+        let session = &rows["data"]["AgentSession"][0];
+        let row: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(rows["data"]["AgentRequest"][0].clone()).unwrap();
         assert_eq!(
-            rows["data"]["AgentSession"].as_array().unwrap().len() == 1,
-            modeled["published"].as_bool().unwrap()
-        );
-        assert_eq!(rows["data"]["AgentRequest"].as_array().unwrap().len(), 1);
-        assert_eq!(rows["data"]["Goal"].as_array().unwrap().len(), 1);
-        assert_eq!(
-            rows["data"]["GoalCreationClaim"].as_array().unwrap().len(),
-            1
+            !rows["data"]["Goal"].as_array().unwrap().is_empty(),
+            modeled("created")["goal"]
         );
         assert_eq!(
-            rows["data"]["AgentSession"][0]["provenance"]["opening_request_doc_id"],
-            created.doc_id
+            !rows["data"]["AgentRequest"].as_array().unwrap().is_empty(),
+            modeled("created")["request"]
         );
+        assert_eq!(row.session_doc_id.as_deref(), session["_docID"].as_str());
+        assert!(row
+            .agent_doc_id
+            .as_deref()
+            .is_some_and(|doc| !doc.is_empty()));
+        assert_eq!(
+            session["provenance"]["opening_request_doc_id"],
+            submitted.doc_id
+        );
+        crate::request::admission::verify_request_receipt_signature(&row).unwrap();
+        let user_rows = client
+            .execute("{ AgentSession {_docID} AgentRequest {_docID} }")
+            .await
+            .unwrap();
+        assert_eq!(
+            !user_rows["data"]["AgentSession"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            modeled("created")["session"]
+        );
+        assert_eq!(
+            !user_rows["data"]["AgentRequest"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            modeled("created")["grants"]
+        );
+        let retry = crate::goal::submit_goal_backed_request_with_identity(
+            &node,
+            identity::Did::new(agent.did()).unwrap(),
+            db.node_identity.did(),
+            "task-session",
+            "finish work",
+            None,
+            &request,
+            Some(agent.as_ref()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(retry.doc_id, submitted.doc_id);
         let mut rejected = request.clone();
         rejected.request_id = "rejected-opening".into();
         rejected.session_id = "rejected-session".into();
@@ -1402,22 +1428,26 @@ mod tests {
         crate::sign_agent_request_create(agent.as_ref(), &mut rejected)
             .await
             .unwrap();
-        assert!(crate::goal::submit_goal_backed_request_local(
+        assert!(crate::goal::submit_goal_backed_request_with_identity(
             &node,
-            binding.agent_did.parse().unwrap(),
-            runtime.did(),
+            identity::Did::new(agent.did()).unwrap(),
+            db.node_identity.did(),
             "rejected-session",
             "finish work",
             None,
             &rejected,
+            Some(agent.as_ref()),
         )
         .await
         .is_err());
-        let after = access.execute("{ AgentSession { _docID } AgentRequest { _docID } Goal { _docID } GoalCreationClaim { _docID } }").await.unwrap();
+        let after = access.execute("{ AgentSession {_docID} AgentRequest {_docID} Goal {_docID} GoalCreationClaim {_docID} }").await.unwrap();
         for name in ["AgentSession", "AgentRequest", "Goal", "GoalCreationClaim"] {
             assert_eq!(after["data"][name].as_array().unwrap().len(), 1, "{name}");
         }
-        node.shutdown().await.expect("shut down test node");
+        assert_eq!(modeled("aborted")["session"], false);
+        assert_eq!(modeled("aborted")["goal"], false);
+        assert_eq!(modeled("aborted")["request"], false);
+        drop(user);
     }
 
     #[tokio::test]
