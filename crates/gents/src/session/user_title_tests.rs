@@ -160,10 +160,19 @@ async fn user_rename_rebuilds_after_confirmed_http_commit_conflict() -> anyhow::
     )
     .await
     .unwrap_err();
-    assert!(error.chain().any(|cause| matches!(
-        cause.downcast_ref::<crate::store::config_client::ConfigClientError>(),
-        Some(crate::store::config_client::ConfigClientError::ClientAgentSignerRequired)
-    )));
+    assert!(
+        error.chain().any(|cause| matches!(
+            cause.downcast_ref::<crate::store::config_client::ConfigClientError>(),
+            Some(crate::store::config_client::ConfigClientError::ClientAgentSignerRequired)
+        )),
+        "unexpected missing-signer error: {error:?}; typed causes: {:?}",
+        error
+            .chain()
+            .filter_map(
+                |cause| cause.downcast_ref::<crate::store::config_client::ConfigClientError>()
+            )
+            .collect::<Vec<_>>()
+    );
     let error =
         super::rename_session_on(&access, node_did, user.did(), "missing-session", "missing")
             .await

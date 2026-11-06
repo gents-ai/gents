@@ -85,7 +85,13 @@ pub(super) fn transaction_storage_failure(error: ConfigClientError) -> ConfigCli
         ConfigClientError::EmbeddedGraphqlErrors { errors }
         if !errors.is_empty() && errors.iter().all(|item|
             item.message == "document not found: document not found or not authorized to access"));
-    if error.transaction_conflict().is_some() || missing_or_denied {
+    if error.transaction_conflict().is_some()
+        || missing_or_denied
+        || matches!(
+            error,
+            ConfigClientError::ClientAgentSignerRequired | ConfigClientError::ClientSignerMismatch
+        )
+    {
         error
     } else {
         ConfigClientError::StorageFailure(Box::new(error))
@@ -148,6 +154,19 @@ mod tests {
         #[error("callback step")]
         struct Step(#[source] ConfigClientError);
         Box::new(Step(error))
+    }
+
+    #[test]
+    fn missing_or_mismatched_client_signer_is_not_a_storage_failure() {
+        let missing = transaction_storage_failure(ConfigClientError::ClientAgentSignerRequired);
+        assert!(!missing.is_storage_failure());
+        assert!(matches!(
+            missing,
+            ConfigClientError::ClientAgentSignerRequired
+        ));
+        let mismatch = transaction_storage_failure(ConfigClientError::ClientSignerMismatch);
+        assert!(!mismatch.is_storage_failure());
+        assert!(matches!(mismatch, ConfigClientError::ClientSignerMismatch));
     }
 
     #[test]
