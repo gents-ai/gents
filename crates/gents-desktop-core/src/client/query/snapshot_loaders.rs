@@ -710,7 +710,28 @@ pub async fn load_node_snapshot_on(
     let query = snapshot_query(Some(node_did))?;
     let data = execute_access_graphql_query(access, &query, "runtime desktop snapshot").await?;
     let requests = complete_access_snapshot_requests(access, &data, Some(node_did)).await?;
-    snapshot_rows_with_requests(&data, Some(node_did), requests)
+    if access.actor_did().is_some() {
+        authenticated_node_snapshot_rows(&data, node_did, requests)
+    } else {
+        snapshot_rows_with_requests(&data, Some(node_did), requests)
+    }
+}
+
+pub(super) fn authenticated_node_snapshot_rows(
+    data: &Value,
+    node_did: &str,
+    requests: Vec<AgentRequestRow>,
+) -> Result<ClientStore> {
+    let mut snapshot = snapshot_rows_with_requests(data, Some(node_did), requests)?;
+    let config = operator_config_store_from_data_with_requests(
+        data,
+        node_did,
+        Vec::new(),
+        OperatorConfigScope::Inference,
+    )?;
+    snapshot.operator_config_authoritative_node_dids =
+        config.operator_config_authoritative_node_dids;
+    Ok(snapshot)
 }
 
 #[derive(Clone, Copy)]

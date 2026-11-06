@@ -440,7 +440,7 @@ fn malformed_default_backend_keeps_operator_config_authority_unresolved() {
         "inference_execution": [], "tasks": [], "schedules": [], "triggers": [],
         "skills": [], "compactions": [], "tool_service_registries": [],
         "event_sources": [], "agent_targets": [], "datastore_tool_surfaces": [],
-        "sessions": [], "requests": [],
+        "sessions": [], "requests": [], "goals": [], "mailbox_items": [],
         "inference_backends": [{
             "node_did": "did:alpha", "backend_id": "b", "name": "backend",
             "provider_kind": "OpenAiCompatible", "openai_wire_api": "chat_completions",
@@ -455,6 +455,15 @@ fn malformed_default_backend_keeps_operator_config_authority_unresolved() {
     assert!(partial.inference_backends.is_empty());
     assert_eq!(partial.backend_observations.len(), 1);
     assert!(!partial
+        .operator_config_authoritative_node_dids
+        .contains("did:alpha"));
+    let snapshot = super::super::snapshot_loaders::authenticated_node_snapshot_rows(
+        &data,
+        "did:alpha",
+        Vec::new(),
+    )
+    .expect("partial authenticated snapshot");
+    assert!(!snapshot
         .operator_config_authoritative_node_dids
         .contains("did:alpha"));
     let local = ClientStore::from_rows(ClientStoreRows {
@@ -474,6 +483,15 @@ fn malformed_default_backend_keeps_operator_config_authority_unresolved() {
         operator_config_store_from_data(&data, "did:alpha").expect("canonical config rows decode");
     assert_eq!(complete.inference_backends.len(), 1);
     assert!(complete
+        .operator_config_authoritative_node_dids
+        .contains("did:alpha"));
+    let snapshot = super::super::snapshot_loaders::authenticated_node_snapshot_rows(
+        &data,
+        "did:alpha",
+        Vec::new(),
+    )
+    .expect("complete authenticated snapshot");
+    assert!(snapshot
         .operator_config_authoritative_node_dids
         .contains("did:alpha"));
     let projected = local.overlay_node_operator_config("did:alpha", &complete);
