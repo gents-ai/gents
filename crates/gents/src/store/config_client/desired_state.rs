@@ -339,6 +339,8 @@ pub(crate) async fn apply_desired_state_plan_with_node_binding(
     }
     for (node_did, agent_did, agent_doc) in created_agents {
         let node_doc = configuration_node_doc(txn, &node_did, binding).await?;
+        super::publish_node_managers_in_txn(txn, "Agent", &agent_doc, "administrator", &node_doc)
+            .await?;
         if txn.managed_agent_signer().is_some() {
             txn.add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
                 .await?;

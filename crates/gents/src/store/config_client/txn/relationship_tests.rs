@@ -943,7 +943,7 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
         let selected = &selected;
         Box::pin(async move {
             let mut docs = Vec::new();
-            for (collection, manager) in [("ManagerConfig", "selection_manager"), ("ManagerRoot", "reader_manager"), ("ManagerAgent", "")] {
+            for (collection, manager) in [("ManagerConfig", "selection_manager"), ("ManagerRoot", "reader_manager"), ("ManagerAgent", "administrator")] {
                 let response = txn.execute(&format!("mutation {{ create_{collection}(input: {{label: \"one\"}}) {{_docID}} }}")).await?;
                 let doc = crate::store::graphql::created_doc_id(&response, collection)?;
                 txn.add_resource_relationship(collection, &doc, "parent", "nodes", node_doc).await?;
@@ -978,11 +978,11 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
         let expected = case["expected"].as_bool().unwrap();
         let collection = case["resource"].as_str().unwrap();
         let relation = case["relation"].as_str().unwrap();
-        let is_config = collection == "configuration";
-        let (name, doc) = if is_config {
-            ("ManagerConfig", &config_doc)
-        } else {
-            ("ManagerRoot", &root_doc)
+        let (name, doc) = match collection {
+            "configuration" => ("ManagerConfig", &config_doc),
+            "workspace_roots" => ("ManagerRoot", &root_doc),
+            "agents" => ("ManagerAgent", &selected_doc),
+            other => panic!("unknown modeled resource {other}"),
         };
         let selected_did = identity::Did::new(selected.did())?;
         let result = actor
@@ -1034,6 +1034,60 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
                 })
                 .await?;
         }
+    }
+    let owners = creator_access
+        .transact_readonly("test.manager.agent_owner", |txn| {
+            let selected_doc = &selected_doc;
+            Box::pin(async move {
+                txn.document_owners("ManagerAgent", std::slice::from_ref(selected_doc))
+                    .await
+                    .map_err(anyhow::Error::from)
+            })
+        })
+        .await?;
+    assert_eq!(
+        owners[0].owner.as_ref().map(|did| did.as_str()),
+        Some(creator.did())
+    );
+    assert_ne!(creator.did(), user.did());
+    let reader = identity::Did::new(other.did())?;
+    owner
+        .add_actor_relationship("ManagerAgent", &selected_doc, "session_writer", &reader)
+        .await?;
+    for phase in ["before", "after"] {
+        if phase == "after" {
+            owner
+                .delete_actor_relationship("ManagerAgent", &selected_doc, "session_writer", &reader)
+                .await?;
+        }
+        let observed = creator_access
+            .transact_readonly("test.manager.invoke", |txn| {
+                let (selected_doc, reader) = (&selected_doc, &reader);
+                Box::pin(async move {
+                    txn.observe_document_access(
+                        reader,
+                        "ManagerAgent",
+                        std::slice::from_ref(selected_doc),
+                        defra_node::DocumentAccessMode::Named {
+                            permission: "invoke".into(),
+                            node_permission: acp::nac::NodePermission::DocumentUpdate,
+                        },
+                    )
+                    .await
+                    .map_err(anyhow::Error::from)
+                })
+            })
+            .await?;
+        assert_eq!(
+            matches!(
+                observed.as_slice(),
+                [defra_node::DocumentAccessDecision::Allowed]
+            ),
+            model.agent_node_manager_invoke_case[phase]
+                .as_bool()
+                .unwrap(),
+            "Agent invoke {phase} user revocation"
+        );
     }
     let admin_did = identity::Did::new(admin.did())?;
     owner
@@ -1089,6 +1143,44 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
                 .as_bool()
                 .expect("modeled manager link revocation"),
             "manager {name} after unrelated update"
+        );
+    }
+    creator_access
+        .transact_write("test.agent_manager.revoke_source", |txn| {
+            let (selected_doc, node_doc) = (&selected_doc, &node_doc);
+            Box::pin(async move {
+                txn.delete_entity_set_relationship(
+                    "ManagerAgent",
+                    selected_doc,
+                    "administrator",
+                    "nodes",
+                    node_doc,
+                    "administrator",
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await?;
+    creator_access
+        .write(
+            "test.agent_manager.unrelated_update",
+            &format!(
+                "mutation {{ update_ManagerAgent(docID: \"{}\", input: {{label: \"updated\"}}) {{_docID}} }}",
+                crate::store::graphql::escape_graphql_string(&selected_doc)
+            ),
+        )
+        .await?;
+    for (name, actor) in [("admin", &admin_access), ("user", &owner)] {
+        let result = actor
+            .add_actor_relationship("ManagerAgent", &selected_doc, "reader", &reader)
+            .await;
+        assert_eq!(
+            result.is_ok(),
+            model.agent_node_manager_link_revocation_case[name]
+                .as_bool()
+                .expect("modeled Agent manager link revocation"),
+            "Agent manager {name} after unrelated update"
         );
     }
     node.shutdown().await?;
