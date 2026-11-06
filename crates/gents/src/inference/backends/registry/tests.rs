@@ -597,13 +597,28 @@ async fn backend_lists_skip_an_unknown_provider_kind_and_lookups_stay_strict() -
     Ok(())
 }
 
+async fn record_catalog_for_runtime(
+    node: &Arc<EmbeddedNode>,
+    backend: &InferenceBackend,
+    catalog: BackendModelCatalog,
+) -> Result<()> {
+    let access =
+        crate::inference::auth::credential::runtime_credential_access(node, &backend.node_did)?;
+    access
+        .transact_write("test.registry.runtime_catalog", |txn| {
+            let catalog = catalog.clone();
+            Box::pin(async move { record_model_catalog_in_txn(txn, backend, catalog).await })
+        })
+        .await
+}
+
 #[tokio::test]
 async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catalog() -> Result<()> {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
-    crate::ensure_runtime_schemas(&node).await?;
-    crate::ensure_node(&node, &base_backend().node_did).await?;
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
-    let backend = base_backend();
+    let (db, _user, access) =
+        crate::test_support::signed_test_node_without_agent("registry-catalog").await;
+    let node = db.node.clone();
+    let mut backend = base_backend();
+    backend.node_did = db.node_identity.did().to_owned();
     crate::store::config_client::write_inference_backend_document(&access, &backend).await?;
     let catalog = BackendModelCatalog {
         node_did: None,
@@ -617,21 +632,22 @@ async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catal
             reasoning_efforts: None,
         }],
     };
-    record_model_catalog(&node, &backend, catalog.clone()).await?;
+    record_catalog_for_runtime(&node, &backend, catalog.clone()).await?;
+    let other_db = crate::support::test_db("registry-other-node").await;
     let mut wrong_scope = catalog.clone();
-    wrong_scope.node_did = Some("did:key:other".into());
-    assert!(record_model_catalog(&node, &backend, wrong_scope)
+    wrong_scope.node_did = Some(other_db.node_identity.did().to_owned());
+    assert!(record_catalog_for_runtime(&node, &backend, wrong_scope)
         .await
         .is_err());
     let mut older = catalog.clone();
     older.observed_at = "2026-09-09T09:00:00Z".into();
     older.models.clear();
-    record_model_catalog(&node, &backend, older).await?;
+    record_catalog_for_runtime(&node, &backend, older).await?;
     let mut rediscovered = catalog.clone();
     rediscovered.observed_at = "2026-09-09T11:00:00Z".into();
-    record_model_catalog(&node, &backend, rediscovered.clone()).await?;
+    record_catalog_for_runtime(&node, &backend, rediscovered.clone()).await?;
     assert_eq!(
-        lookup_backend_observation(&node, &backend.node_did, &backend.backend_id)
+        lookup_backend_observation_for_runtime(&node, &backend.node_did, &backend.backend_id)
             .await?
             .unwrap()
             .catalogs,
@@ -641,11 +657,11 @@ async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catal
     let mut changed = backend.clone();
     changed.endpoint = "http://127.0.0.1:9000/v1".into();
     crate::store::config_client::write_inference_backend_document(&access, &changed).await?;
-    assert!(record_model_catalog(&node, &backend, catalog.clone())
+    assert!(record_catalog_for_runtime(&node, &backend, catalog.clone())
         .await
         .is_err());
     assert_eq!(
-        lookup_backend_observation(&node, &backend.node_did, &backend.backend_id)
+        lookup_backend_observation_for_runtime(&node, &backend.node_did, &backend.backend_id)
             .await?
             .unwrap()
             .catalogs,
@@ -656,11 +672,11 @@ async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catal
 
 #[tokio::test]
 async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Result<()> {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
-    crate::ensure_runtime_schemas(&node).await?;
-    crate::ensure_node(&node, &base_backend().node_did).await?;
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
-    let backend = base_backend();
+    let (db, _user, access) =
+        crate::test_support::signed_test_node_without_agent("registry-catalog").await;
+    let node = db.node.clone();
+    let mut backend = base_backend();
+    backend.node_did = db.node_identity.did().to_owned();
     crate::store::config_client::write_inference_backend_document(&access, &backend).await?;
     let catalog = BackendModelCatalog {
         node_did: None,
@@ -682,7 +698,7 @@ async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Re
         })
         .await?;
     assert_eq!(
-        lookup_backend_observation(&node, &backend.node_did, &backend.backend_id)
+        lookup_backend_observation_for_runtime(&node, &backend.node_did, &backend.backend_id)
             .await?
             .unwrap()
             .catalogs,
@@ -705,15 +721,15 @@ async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Re
         .await;
     assert!(failed.is_err());
     assert_eq!(
-        lookup_backend_observation(&node, &backend.node_did, &backend.backend_id)
+        lookup_backend_observation_for_runtime(&node, &backend.node_did, &backend.backend_id)
             .await?
             .unwrap()
             .catalogs,
         vec![catalog]
     );
-    record_model_catalog(&node, &backend, empty.clone()).await?;
+    record_catalog_for_runtime(&node, &backend, empty.clone()).await?;
     assert_eq!(
-        lookup_backend_observation(&node, &backend.node_did, &backend.backend_id)
+        lookup_backend_observation_for_runtime(&node, &backend.node_did, &backend.backend_id)
             .await?
             .unwrap()
             .catalogs,
@@ -760,13 +776,13 @@ async fn spawn_echoing_models_server(secret: &'static str) -> String {
 #[tokio::test]
 async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result<()> {
     const SECRET: &str = "subscription-access-token-never-stored";
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
-    crate::ensure_runtime_schemas(&node).await?;
-    let owner = base_backend().node_did;
-    crate::ensure_node(&node, &owner).await?;
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let (db, _user, access) =
+        crate::test_support::signed_test_node_without_agent("registry-operator").await;
+    let node = db.node.clone();
+    let owner = db.node_identity.did().to_owned();
     let endpoint = spawn_echoing_models_server(SECRET).await;
     let mut claude = base_backend();
+    claude.node_did = owner.clone();
     claude.backend_id = "claude".into();
     claude.provider_kind = BackendProviderKind::ClaudeCliSubscription;
     claude.auth = BackendAuth::NodeOAuth { account_ref: None };
@@ -816,7 +832,7 @@ async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result
     .await?;
     assert_eq!(recorded, 1, "only the backend on this exact connection");
 
-    let observation = lookup_backend_observation(&node, &owner, "claude")
+    let observation = lookup_backend_observation_for_runtime(&node, &owner, "claude")
         .await?
         .unwrap();
     let catalog = observation.catalog_for(Some(&owner))?.expect("OAuth scope");
@@ -834,16 +850,17 @@ async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result
     );
     assert!(observation.catalog_for(None)?.is_none());
     assert!(
-        lookup_backend_observation(&node, &owner, "claude-elsewhere")
+        lookup_backend_observation_for_runtime(&node, &owner, "claude-elsewhere")
             .await?
             .unwrap()
             .catalogs
             .is_empty()
     );
 
-    let stored = node.execute("{ InferenceBackend { catalogs } }").await;
-    assert!(!stored.has_errors(), "{:?}", stored.errors);
-    let stored = serde_json::to_string(&stored.data)?;
+    let stored = access
+        .execute("{ InferenceBackendObservation { catalogs } }")
+        .await?;
+    let stored = serde_json::to_string(&stored)?;
     assert!(stored.contains("claude-opus-5-5"));
     assert!(
         !stored.contains(SECRET),
