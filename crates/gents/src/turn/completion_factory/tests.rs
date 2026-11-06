@@ -701,33 +701,63 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
         "all nullable restart witnesses must be exercised"
     );
     for case in cases {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(&node).await.unwrap();
-        let agent = agent_with_retry(CompletionRetryProfileFields::default());
-        crate::test_support::install_test_agent(&node, agent.node_did(), &agent.agent_did).await;
-        let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-            gents_protocol::request_admission::RequestPurpose::Normal,
-            "req-budget",
-            agent.node_did(),
-            agent.node_did(),
-            &agent.agent_did,
-            "session-budget",
-            "Resume the request",
-            "interactive",
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                agent.node_did(),
-            ),
+        let (db, user, owner, binding) =
+            crate::test_support::signed_test_node("completion-budget-rehydration").await;
+        let node = db.node.clone();
+        let agent = agent_with_binding(
+            db.node_identity.clone(),
+            &binding,
+            CompletionRetryProfileFields::default(),
         );
-        crate::sign_agent_request_create(agent.node.identity.as_ref(), &mut create)
+        let access = crate::store::config_client::ConfigAccess::local_managed_agent(
+            node.clone(),
+            identity::Did::new(&agent.agent_did).unwrap(),
+            agent.agent_identity.as_ref(),
+        )
+        .unwrap();
+        let create = crate::request::lifecycle::build_signed_client_request(
+            &owner,
+            crate::request::lifecycle::RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                crate::request::lifecycle::RequestIdentity {
+                    request_id: "req-budget".into(),
+                    node_did: agent.node_did().into(),
+                    requester_did: Some(user.did().into()),
+                    agent_did: agent.agent_did.clone(),
+                    session_id: "session-budget".into(),
+                    content: "Resume the request".into(),
+                    execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                    created_at: chrono::Utc::now()
+                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                },
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+            ),
+            crate::request::lifecycle::RequestSigner::Identity(&user),
+        )
+        .await
+        .unwrap();
+        crate::request::lifecycle::submit_client_request(&owner, &create)
             .await
             .unwrap();
-        let response = crate::store::config_client::ConfigAccess::local(node.clone())
-            .write("test.budget_parent", &create.graphql_mutation().unwrap())
+        let response = access
+            .execute(&format!(
+                "{{ AgentRequest {{ {} }} }}",
+                crate::SIGNED_REQUEST_FIELDS
+            ))
             .await
             .unwrap();
-        let doc_id = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
-        let parent = crate::request::admission::load_request_for_admission_test(&node, &doc_id)
+        let row: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+        let parent = row.try_into().unwrap();
+        let (_authority_owner, authority) =
+            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+        let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+            node.clone(),
+            db.node_identity.clone(),
+            authority,
+        );
+        let (parent, admission) = verifier
+            .verify_fresh_for_claim(&parent, &agent.agent_did)
             .await
             .unwrap();
         let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
@@ -739,6 +769,10 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
             crate::request::lifecycle::ExecutionOrigin::Interactive,
             agent.backend_id.clone().unwrap(),
         );
+        lifecycle
+            .bind_managed_agent(agent.agent_identity.as_ref())
+            .unwrap();
+        lifecycle.set_client_claim_admission(admission);
         lifecycle.set_configured_max_total_tokens(case.pinned_limit.filter(|limit| *limit != 0));
         assert_eq!(
             lifecycle.claim_with_identity().await.unwrap(),
@@ -747,17 +781,23 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
         let mut request = lifecycle.request().clone();
         if case.pinned_limit == Some(0) {
             let doc_id = escape_graphql_string(&request.doc_id);
-            crate::store::config_client::ConfigAccess::local(node.clone())
+            access
                 .write(
                     "test.observed_zero_budget",
                     &format!("mutation {{ update_AgentRequest(docID: \"{doc_id}\", input: {{ max_total_tokens: 0 }}) {{ _docID }} }}"),
                 )
                 .await
                 .unwrap();
-            request =
-                crate::request::admission::load_request_for_admission_test(&node, &request.doc_id)
-                    .await
-                    .unwrap();
+            let response = access
+                .execute(&format!(
+                    "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc_id}\" }} }}) {{ {} }} }}",
+                    crate::SIGNED_REQUEST_FIELDS
+                ))
+                .await
+                .unwrap();
+            let row: gents_protocol::row::AgentRequestRow =
+                serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+            request = row.try_into().unwrap();
         }
         let did = escape_graphql_string(agent.node_did());
         for (index, row) in case.rows.iter().enumerate() {
@@ -779,7 +819,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
                     request_doc_id: "{doc_id}"
                     call_seq: {index}
                     backend_id: "backend-rehydrate"
-                    agent_did: "agent-rehydrate"
+                    agent_did: "{agent_did}"
                     node_did: "{did}"
                     call_kind: "{call_kind}"
                     attempt: 1
@@ -792,18 +832,16 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
                     backend_config_fingerprint: "fp"
                 }}) {{ _docID }}
             }}"#
+                agent_did = escape_graphql_string(&agent.agent_did),
             );
-            crate::store::config_client::ConfigAccess::local(node.clone())
+            access
                 .write("test.budget_call", &seed)
                 .await
                 .unwrap_or_else(|error| panic!("{}: {error}", case.name));
         }
-        let budget = aggregate_token_budget_for_request(
-            &crate::store::config_client::ConfigAccess::local(node.clone()),
-            &request,
-        )
-        .await
-        .unwrap_or_else(|error| panic!("{}: rehydrate: {error}", case.name));
+        let budget = aggregate_token_budget_for_request(&access, &request)
+            .await
+            .unwrap_or_else(|error| panic!("{}: rehydrate: {error}", case.name));
         match (&case.ledger, budget) {
             (None, None) => {}
             (Some(expected), Some(budget)) => {
