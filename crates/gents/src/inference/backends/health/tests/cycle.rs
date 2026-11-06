@@ -393,10 +393,13 @@ async fn cycle_probes_anthropic_key_backends_independently() {
     let fixture = CycleFixture::new().await;
     let node = fixture.db.node.clone();
     let listener = ModelsListener::start();
+    // The Anthropic API-key adapter only reaches its fixed public endpoint, so a
+    // local listener cannot stand in for it. The keyed probe path under test is
+    // provider-independent, so the backends use a keyed OpenAI-compatible adapter.
     let key_backend = |backend_id: &str, endpoint: String| {
         let mut backend = fixture.backend(backend_id, endpoint);
         backend.provider_kind =
-            crate::inference::backends::provider::BackendProviderKind::AnthropicApiKey;
+            crate::inference::backends::provider::BackendProviderKind::OpenAiCompatible;
         backend.auth = crate::documents::BackendAuth::ApiKey {
             key: "placeholder-key".to_string(),
         };
