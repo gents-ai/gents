@@ -191,6 +191,15 @@ mod tests {
                 })
             })
             .await?;
+        let profile_after = agent
+            .execute(&format!(
+                r#"{{ InferenceProfile(docID:"{profile_value}") {{ execution_id }} }}"#
+            ))
+            .await?;
+        assert_eq!(
+            profile_after["data"]["InferenceProfile"][0]["execution_id"],
+            "new-execution"
+        );
         owner
             .delete_actor_relationship("InferenceExecution", &execution, "writer", &actor)
             .await?;
