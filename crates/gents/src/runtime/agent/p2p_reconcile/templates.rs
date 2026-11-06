@@ -339,13 +339,9 @@ mod tests {
             )
             .await
             .unwrap();
-            node.add_dac_policy_with_counter_as(
-                &context,
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
-                0,
-            )
-            .await
-            .unwrap();
+            crate::test_support::acp_policies::install_identity_acp_policies(&node)
+                .await
+                .unwrap();
             for sdl in schemas {
                 node.add_collection(sdl).await.unwrap();
             }
