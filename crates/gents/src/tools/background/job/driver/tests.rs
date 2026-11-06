@@ -1230,9 +1230,21 @@ async fn narrowed_live_ceiling_is_reread_inside_the_step_transaction() {
         StepOutcome::Refused(Refusal::PolicyDenied)
     );
     assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "failed");
-    assert_eq!(
-        step.output(&step.row).await["code"],
-        "plugin_job_policy_denied"
+    let output = step.output(&step.row).await;
+    assert_eq!(output["code"], "plugin_job_policy_denied");
+    assert!(
+        output["message"]
+            .as_str()
+            .unwrap()
+            .contains("caller\u{27}s configured target scope"),
+        "{output}"
+    );
+    assert!(
+        output["next"]
+            .as_str()
+            .unwrap()
+            .contains("agents.target_ids"),
+        "{output}"
     );
     step.close().await;
 }

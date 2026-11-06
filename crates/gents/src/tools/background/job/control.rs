@@ -12,7 +12,8 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 
 use super::admit::{
-    resume_pin, resume_valid, root_call_of, HostFacts, Refusal, RootCall, StepChild, StepRow,
+    resume_pin, resume_valid, root_call_of, HostFacts, PolicyDenialDetail, Refusal, RootCall,
+    StepChild, StepRow,
 };
 use super::driver::{read_step_row_in_txn, settle_plugin_job_in_txn, Settlement};
 use super::input::chain_of;
@@ -29,6 +30,7 @@ pub enum KillCause {
     Pause,
     Deadline,
     FailClosed(Refusal),
+    FailClosedWithDetail(Refusal, PolicyDenialDetail),
 }
 
 impl KillCause {
@@ -39,7 +41,7 @@ impl KillCause {
             Self::Stop => JobState::Cancelled,
             Self::Pause => JobState::Completed,
             Self::Deadline => JobState::TimedOut,
-            Self::FailClosed(_) => JobState::Failed,
+            Self::FailClosed(_) | Self::FailClosedWithDetail(_, _) => JobState::Failed,
         }
     }
 
@@ -49,6 +51,9 @@ impl KillCause {
             Self::Pause => Settlement::Control(JobControlKind::Pause),
             Self::Deadline => Settlement::Refused(Refusal::TimedOut),
             Self::FailClosed(refusal) => Settlement::Refused(refusal),
+            Self::FailClosedWithDetail(refusal, detail) => {
+                Settlement::RefusedWithDetail(refusal, detail)
+            }
         }
     }
 }

@@ -171,6 +171,21 @@ pub enum PolicyDenialDetail {
     TargetUnavailable,
 }
 
+impl PolicyDenialDetail {
+    pub(super) fn guidance(self) -> (&'static str, &'static str) {
+        match self {
+            Self::DynamicCheck => (
+                "job.policy.dynamic is check: scripts cannot start or message child agents.",
+                "Next: use an installed job, or inspect job.policy.dynamic and dynamic_targets with config {\"argv\":[\"tools\",\"edit\",\"--help\"]}; change them only with the required Tools authority.",
+            ),
+            Self::TargetUnavailable => (
+                "The requested job target is unavailable in this caller's configured target scope.",
+                "Next: inspect this agent's Tools agents.target_ids and the job's agent_targets; select an available target or update an authorized Tools document. For the fields, call config with {\"argv\":[\"tools\",\"edit\",\"--help\"]}.",
+            ),
+        }
+    }
+}
+
 struct AdmissionFailure {
     refusal: Refusal,
     detail: Option<PolicyDenialDetail>,

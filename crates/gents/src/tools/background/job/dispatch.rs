@@ -919,18 +919,13 @@ fn step0_refusal(
     let tool = binding.tool_name.as_str();
     let coordinate = binding.plugin.plugin.as_str();
     if refusal == Refusal::PolicyDenied {
-        match detail {
-            Some(PolicyDenialDetail::DynamicCheck) => return (
+        if let Some(detail) = detail {
+            let (message, next) = detail.guidance();
+            return (
                 FailureClass::PolicyDenied,
-                "job.policy.dynamic is check: scripts cannot start or message child agents.".to_owned(),
-                "Next: use an installed job, or inspect job.policy.dynamic and dynamic_targets with config {\"argv\":[\"tools\",\"edit\",\"--help\"]}; change them only with the required Tools authority.".to_owned(),
-            ),
-            Some(PolicyDenialDetail::TargetUnavailable) => return (
-                FailureClass::PolicyDenied,
-                "The requested job target is unavailable in this caller's configured target scope.".to_owned(),
-                "Next: inspect this agent's Tools agents.target_ids and the job's agent_targets; select an available target or update an authorized Tools document. For the fields, call config with {\"argv\":[\"tools\",\"edit\",\"--help\"]}.".to_owned(),
-            ),
-            None => {}
+                message.to_owned(),
+                next.to_owned(),
+            );
         }
     }
     match refusal {

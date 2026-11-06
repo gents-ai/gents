@@ -7,7 +7,7 @@ use gents_protocol::job::{
 };
 use gents_protocol::plugin::PluginExecutionReceipt;
 
-use super::super::admit::{admit_step, fresh_spawns, Refusal};
+use super::super::admit::{admit_step, fresh_spawns, PolicyDenialDetail, Refusal};
 use super::super::control::{kill, KillCause};
 use super::super::effects::{
     interrupt_slots, recover_step_commit, stage_recorded_effects_in_txn, write_scratch, JobContext,
@@ -53,7 +53,7 @@ enum Stepped {
     /// The row had already ended; the step did nothing.
     Ended,
     Stale,
-    Refused(Refusal),
+    Refused(Refusal, Option<PolicyDenialDetail>),
     Stopped,
     Committed(Option<PluginJobTerminal>),
 }
@@ -290,9 +290,13 @@ pub(super) async fn step_on(
     match stepped {
         Stepped::Ended => Ok(StepOutcome::Refused(Refusal::Terminal)),
         Stepped::Stale => Ok(StepOutcome::Stale),
-        Stepped::Refused(refusal) => {
+        Stepped::Refused(refusal, detail) => {
             lifecycle.stage_plugin_receipt(Some(receipt));
-            kill(&access, lifecycle, KillCause::FailClosed(refusal)).await?;
+            let cause = match detail {
+                Some(detail) => KillCause::FailClosedWithDetail(refusal, detail),
+                None => KillCause::FailClosed(refusal),
+            };
+            kill(&access, lifecycle, cause).await?;
             Ok(StepOutcome::Refused(refusal))
         }
         Stepped::Stopped => {
@@ -362,7 +366,7 @@ async fn step_transaction(
     let (ctx, installed) = step_context(txn, runtime, input, pin, output, lifecycle).await?;
     let admitted = match admit_step(&ctx, &row, output) {
         Ok(admitted) => admitted,
-        Err(refusal) => return Ok(Stepped::Refused(refusal.refusal)),
+        Err(refusal) => return Ok(Stepped::Refused(refusal.refusal, refusal.detail)),
     };
     if let JobStepOutput::Effects { effects } = output {
         let fresh = fresh_spawns(&ctx, &row, output);
