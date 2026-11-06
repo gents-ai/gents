@@ -272,11 +272,15 @@ impl SelfConfigFixture {
     }
 
     async fn grant_pack_install(&self) {
+        self.grant_pack_install_to(&self.agent_did).await;
+    }
+
+    async fn grant_pack_install_to(&self, agent_did: &str) {
         use crate::store::config_client::{
             apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
             DesiredStateApplyPlan,
         };
-        let tools_id = format!("{}:tools", self.agent_did);
+        let tools_id = format!("{agent_did}:tools");
         self.user_access
             .transact_write("test.self_config.grant_pack_install", |txn| {
                 let tools_id = &tools_id;
@@ -290,7 +294,8 @@ impl SelfConfigFixture {
                     )
                     .await?
                     .expect("selected Tools exists");
-                    tools["self_config"] = json!({"enable_pack_install": true});
+                    tools["self_config"] =
+                        json!({"enable_self_config": true, "enable_pack_install": true});
                     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
                         collection: crate::Collection::Tools,
                         add: tools.clone(),
@@ -1255,21 +1260,10 @@ async fn operator_grant_pack_install(node: &Arc<defra_node::Node>, owner: &str, 
 
 #[tokio::test]
 async fn config_tools_unrelated_edit_on_granted_tools_is_accepted() {
-    let node = build_agent_node().await;
-    let identity = node_identity("granted-tools-edit");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "granted").await;
-    operator_grant_pack_install(&node, &owner, "granted:tools").await;
-    let mut tool_config = config(&["tools"]);
-    tool_config.agent_did = "granted".to_string();
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("granted-tools-edit").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_pack_install().await;
+    let tools = fixture.tools(&["tools"]);
 
     let edited = call_config_tool(
         &tools,
@@ -1305,29 +1299,23 @@ async fn config_tools_unrelated_edit_on_granted_tools_is_accepted() {
 
 #[tokio::test]
 async fn config_tools_holder_may_grant_pack_install_to_a_sibling() {
-    let node = build_agent_node().await;
-    let identity = node_identity("pack-holder-sibling");
-    let node_did = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
-    crate::test_support::install_test_agent(&node, &node_did, "sibling").await;
+    let fixture = SelfConfigFixture::new("pack-holder-sibling").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_pack_install().await;
+    let sibling = fixture.install_sibling("sibling").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&sibling).await;
     let mut tool_config = config(&["node", "tools"]);
-    tool_config.agent_did = "setup".to_string();
+    tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.enable_pack_install = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        node_did,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let tools = fixture.tools_with_config(&tool_config);
     let applied = call_config_tool(
         &tools,
         vec![
             "tools".into(),
             "edit".into(),
             "--agent".into(),
-            "sibling".into(),
+            sibling.clone(),
             "--set".into(),
             r#"self_config={"enable_self_config":true,"enable_pack_install":true}"#.into(),
         ],
@@ -1369,49 +1357,64 @@ async fn config_call_message(
         .map_err(config_error_message)
 }
 
-async fn reselection_tools(
-    label: &str,
-    hold_pack_install: bool,
-) -> Vec<Box<dyn crate::inference::llm::tool::ToolDyn>> {
-    let node = build_agent_node().await;
-    let identity = node_identity(label);
-    let owner = identity.did().to_string();
-    for agent in ["worker", "sibling", "granted", "granted-2"] {
-        crate::test_support::install_test_agent(&node, &owner, agent).await;
+struct ReselectionFixture {
+    _fixture: SelfConfigFixture,
+    sibling: String,
+    granted: String,
+    granted2: String,
+    tools: Vec<Box<dyn crate::inference::llm::tool::ToolDyn>>,
+}
+
+impl std::ops::Deref for ReselectionFixture {
+    type Target = [Box<dyn crate::inference::llm::tool::ToolDyn>];
+    fn deref(&self) -> &Self::Target {
+        &self.tools
     }
-    operator_grant_pack_install(&node, &owner, "granted:tools").await;
-    operator_grant_pack_install(&node, &owner, "granted-2:tools").await;
+}
+
+async fn reselection_tools(label: &str, hold_pack_install: bool) -> ReselectionFixture {
+    let fixture = SelfConfigFixture::new(label).await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    let sibling = fixture.install_sibling("sibling").await;
+    let granted = fixture.install_sibling("granted").await;
+    let granted2 = fixture.install_sibling("granted-2").await;
+    for target in [&sibling, &granted, &granted2] {
+        fixture.grant_sibling_configuration(target).await;
+    }
+    fixture.grant_pack_install_to(&granted).await;
+    fixture.grant_pack_install_to(&granted2).await;
+    if hold_pack_install {
+        fixture.grant_pack_install().await;
+    }
     let mut tool_config = config(&["node", "agent", "tools"]);
-    tool_config.agent_did = "worker".to_owned();
+    tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.enable_pack_install = hold_pack_install;
-    build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    )
+    let tools = fixture.tools_with_config(&tool_config);
+    ReselectionFixture {
+        _fixture: fixture,
+        sibling,
+        granted,
+        granted2,
+        tools,
+    }
 }
 
 #[tokio::test]
 async fn context_reselect_cannot_acquire_grants() {
     let tools = reselection_tools("context-reselect", false).await;
-    for target in [None, Some("sibling")] {
+    let granted_tools = format!("{}:tools", tools.granted);
+    let selection = format!("tools_id=\"{granted_tools}\"");
+    for target in [None, Some(tools.sibling.as_str())] {
         let mut argv = argv_of(&["agent", "context", "edit"]);
         if let Some(target) = target {
             argv.extend(argv_of(&["--agent", target]));
         }
-        argv.extend(argv_of(&["--set", r#"tools_id="granted:tools""#]));
+        argv.extend(argv_of(&["--set", &selection]));
         let refused = config_call_message(&tools, argv)
             .await
             .expect_err("re-pointing a Context at granted Tools must not acquire the grant");
-        assert!(
-            refused.contains(
-                "tools_id \"granted:tools\" selects Tools carrying an operator grant this agent does not hold"
-            ),
-            "{target:?}: {refused}"
-        );
+        assert!(refused.contains(&format!("tools_id {granted_tools:?} selects Tools carrying an operator grant this agent does not hold")), "{target:?}: {refused}");
         assert!(
             refused.contains("cannot be self-granted"),
             "{target:?}: {refused}"
@@ -1425,18 +1428,13 @@ async fn context_reselect_cannot_acquire_grants() {
     .expect_err("a missing Tools reference is still refused");
     assert!(
         !missing.contains("operator grant"),
-        "the reference validator, not the grant guard, refuses a missing document: {missing}"
+        "the reference validator refuses a missing document: {missing}"
     );
     let holder = reselection_tools("context-reselect-holder", true).await;
+    let selection = format!("tools_id=\"{}:tools\"", holder.granted);
     call_config_tool(
         &holder,
-        argv_of(&[
-            "agent",
-            "context",
-            "edit",
-            "--set",
-            r#"tools_id="granted:tools""#,
-        ]),
+        argv_of(&["agent", "context", "edit", "--set", &selection]),
     )
     .await
     .expect("an agent holding the grant may select Tools that carry it");
@@ -1445,36 +1443,22 @@ async fn context_reselect_cannot_acquire_grants() {
 #[tokio::test]
 async fn agent_reselect_cannot_acquire_grants() {
     let tools = reselection_tools("agent-reselect", false).await;
-    for target in ["worker", "sibling"] {
+    let granted_context = format!("{}:context", tools.granted);
+    let selection = format!("context_id=\"{granted_context}\"");
+    for target in [tools._fixture.agent_did(), tools.sibling.as_str()] {
         let refused = config_call_message(
             &tools,
-            argv_of(&[
-                "agent",
-                "edit",
-                target,
-                "--set",
-                r#"context_id="granted:context""#,
-            ]),
+            argv_of(&["agent", "edit", target, "--set", &selection]),
         )
         .await
-        .expect_err("re-pointing a Agent at a granted chain must not acquire the grant");
-        assert!(
-            refused.contains(
-                "context_id \"granted:context\" selects Tools carrying an operator grant this agent does not hold"
-            ),
-            "{target}: {refused}"
-        );
+        .expect_err("re-pointing an Agent at a granted chain must not acquire the grant");
+        assert!(refused.contains(&format!("context_id {granted_context:?} selects Tools carrying an operator grant this agent does not hold")), "{target}: {refused}");
     }
     let holder = reselection_tools("agent-reselect-holder", true).await;
+    let selection = format!("context_id=\"{}:context\"", holder.granted);
     call_config_tool(
         &holder,
-        argv_of(&[
-            "agent",
-            "edit",
-            "sibling",
-            "--set",
-            r#"context_id="granted:context""#,
-        ]),
+        argv_of(&["agent", "edit", &holder.sibling, "--set", &selection]),
     )
     .await
     .expect("an agent holding the grant may select a chain that carries it");
@@ -1483,6 +1467,7 @@ async fn agent_reselect_cannot_acquire_grants() {
 #[tokio::test]
 async fn context_reselect_between_granted_tools_is_accepted() {
     let tools = reselection_tools("context-between-granted", false).await;
+    let selection = format!("tools_id=\"{}:tools\"", tools.granted2);
     call_config_tool(
         &tools,
         argv_of(&[
@@ -1490,9 +1475,9 @@ async fn context_reselect_between_granted_tools_is_accepted() {
             "context",
             "edit",
             "--agent",
-            "granted",
+            &tools.granted,
             "--set",
-            r#"tools_id="granted-2:tools""#,
+            &selection,
         ]),
     )
     .await
@@ -1501,15 +1486,10 @@ async fn context_reselect_between_granted_tools_is_accepted() {
 
 #[tokio::test]
 async fn context_create_selecting_granted_tools_requires_the_grant() {
-    let create = argv_of(&[
-        "context",
-        "create",
-        "fresh:context",
-        "--set",
-        r#"tools_id="granted:tools""#,
-    ]);
     let tools = reselection_tools("context-create-granted", false).await;
-    let refused = config_call_message(&tools, create.clone())
+    let selection = format!("tools_id=\"{}:tools\"", tools.granted);
+    let create = argv_of(&["context", "create", "fresh:context", "--set", &selection]);
+    let refused = config_call_message(&tools, create)
         .await
         .expect_err("a new Context must not select Tools whose grant the agent does not hold");
     assert!(
@@ -1517,9 +1497,13 @@ async fn context_create_selecting_granted_tools_requires_the_grant() {
         "{refused}"
     );
     let holder = reselection_tools("context-create-holder", true).await;
-    call_config_tool(&holder, create)
-        .await
-        .expect("an agent holding the grant may create a Context that selects it");
+    let selection = format!("tools_id=\"{}:tools\"", holder.granted);
+    call_config_tool(
+        &holder,
+        argv_of(&["context", "create", "fresh:context", "--set", &selection]),
+    )
+    .await
+    .expect("an agent holding the grant may create a Context that selects it");
 }
 
 pub(super) async fn build_agent_node() -> std::sync::Arc<defra_node::Node> {
