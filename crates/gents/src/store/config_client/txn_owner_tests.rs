@@ -2549,7 +2549,7 @@ async fn canonical_conflict_without_receipt_has_unconfirmed_finality() {
         .await
         .unwrap_err();
     assert!(error.unconfirmed);
-    assert!(super::is_classified_transaction_conflict(&error.error));
+    assert!(crate::store::config_client::is_classified_transaction_conflict(&error.error));
     server.abort();
 }
 
@@ -2566,7 +2566,7 @@ async fn confirmed_signed_commit_conflict_reports_known_finality() {
         .await
         .unwrap_err();
     assert!(!error.unconfirmed);
-    assert!(super::is_classified_transaction_conflict(&error.error));
+    assert!(crate::store::config_client::is_classified_transaction_conflict(&error.error));
     server.abort();
 }
 
