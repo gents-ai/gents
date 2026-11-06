@@ -220,6 +220,16 @@ pub(super) async fn held_runtime_fixture(
     backend_id: &str,
     endpoint: &str,
 ) -> HeldRuntimeFixture {
+    held_runtime_fixture_with_status(name, backend_id, endpoint, 1, "healthy").await
+}
+
+pub(super) async fn held_runtime_fixture_with_status(
+    name: &str,
+    backend_id: &str,
+    endpoint: &str,
+    max_concurrent: i64,
+    probe_status: &str,
+) -> HeldRuntimeFixture {
     use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let (db, user, user_access, binding) = crate::test_support::signed_test_node(name).await;
     let node_did = db.node_identity.did();
@@ -237,7 +247,7 @@ pub(super) async fn held_runtime_fixture(
             serde_json::json!({
                 "node_did": node_did, "backend_id": backend_id,
                 "name": backend_id, "provider_kind": "OpenAiCompatible", "endpoint": endpoint,
-                "max_concurrent": 1, "auth": {"kind": "unauthenticated"}
+                "max_concurrent": max_concurrent, "auth": {"kind": "unauthenticated"}
             }),
         ),
     ]
@@ -263,7 +273,7 @@ pub(super) async fn held_runtime_fixture(
         &runtime_access,
         node_did,
         backend_id,
-        "healthy",
+        probe_status,
     )
     .await
     .unwrap();
@@ -848,26 +858,20 @@ pub(super) async fn wait_for_inference_call_state(
 }
 
 pub(super) async fn update_backend_probe_status(
-    node: &defra_node::Node,
+    node: &Arc<defra_node::Node>,
+    node_did: &str,
     backend_id: &str,
     probe_status: &str,
 ) {
-    let escaped_backend_id = escape_graphql_string(backend_id);
-    let escaped_probe_status = escape_graphql_string(probe_status);
-    let mutation = format!(
-        r#"mutation {{
-            update_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                input: {{ probe_status: "{escaped_probe_status}" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "update InferenceBackend probe_status failed: {:?}",
-        response.errors
-    );
+    let access = crate::ConfigAccess::local_as(node.clone(), node_did.parse().unwrap());
+    crate::inference::backends::registry::set_backend_probe_status_as(
+        &access,
+        node_did,
+        backend_id,
+        probe_status,
+    )
+    .await
+    .unwrap();
 }
 
 pub(super) struct ScriptedWatcher {

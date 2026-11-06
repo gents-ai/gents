@@ -153,7 +153,7 @@ async fn fetch_backend_probe_row(
     let escaped_backend_id = escape_graphql_string(backend_id);
     let query = format!(
         r#"{{
-            InferenceBackend(filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }}, limit: 1) {{
+            InferenceBackendObservation(filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }}, limit: 1) {{
                 probe_status
                 last_probe
             }}
@@ -162,17 +162,17 @@ async fn fetch_backend_probe_row(
     let response = node.execute(&query).await;
     assert!(
         !response.has_errors(),
-        "InferenceBackend probe row query failed: {:?}",
+        "InferenceBackendObservation probe row query failed: {:?}",
         response.errors
     );
     let row = response
         .data
         .as_ref()
-        .and_then(|data| data.get("InferenceBackend"))
+        .and_then(|data| data.get("InferenceBackendObservation"))
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
         .cloned()
-        .expect("InferenceBackend row");
+        .expect("InferenceBackendObservation row");
     let probe_status = row
         .get("probe_status")
         .and_then(Value::as_str)
@@ -207,24 +207,23 @@ async fn wait_for_backend_probe_status(
 
 #[tokio::test]
 async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("startup-probe-discovers-model"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend_with_capacity_and_probe_status(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture_with_status(
+        "startup-probe-discovers-model",
         "backend-startup-probe",
         mock_endpoint.endpoint(),
         1,
         "unknown",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
     let observer = Arc::new(RecordingObserver::default());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             process_state_observer: Some(observer.clone()),
             ..Default::default()
@@ -241,9 +240,7 @@ async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
     assert!(status.active_generation >= 1);
     assert!(status.last_reconcile_error.is_empty());
     let readiness = fetch_node_readiness(node.as_ref(), identity.did()).await;
-    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, identity.did())
-        .await
-        .agent_did;
+    let default_agent_did = fixture.agent.did().to_owned();
     let agent = readiness
         .agents
         .iter()
@@ -426,21 +423,22 @@ async fn router_generation_persistence_failure_terminates_run_agent_before_dispa
 
 #[tokio::test]
 async fn slot_drain_failure_reaches_run_agent_after_external_shutdown() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("slot-drain-failure"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture_with_status(
+        "slot-drain-failure",
         "backend-slot-drain-failure",
         mock_endpoint.endpoint(),
+        1,
+        "healthy",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -485,22 +483,23 @@ async fn slot_drain_failure_reaches_run_agent_after_external_shutdown() {
 
 #[tokio::test]
 async fn startup_source_persistence_exhaustion_fails_closed_and_is_the_exact_run_error() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("startup-source-persistence-exhaustion"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture_with_status(
+        "startup-source-persistence-exhaustion",
         "backend-startup-source-persistence",
         mock_endpoint.endpoint(),
+        1,
+        "healthy",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
     let observer = Arc::new(RecordingObserver::default());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             process_state_observer: Some(observer.clone()),
             ..Default::default()
@@ -637,22 +636,23 @@ async fn startup_source_persistence_exhaustion_fails_closed_and_is_the_exact_run
 
 #[tokio::test]
 async fn ready_persistence_exhaustion_is_fatal_and_never_opens_runtime_readiness() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("ready-persistence-exhaustion"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture_with_status(
+        "ready-persistence-exhaustion",
         "backend-ready-persistence",
         mock_endpoint.endpoint(),
+        1,
+        "healthy",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
     let observer = Arc::new(RecordingObserver::default());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             process_state_observer: Some(observer.clone()),
             ..Default::default()
@@ -807,22 +807,21 @@ async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_ru
 
 #[tokio::test]
 async fn run_agent_recovers_backend_availability_without_restart() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("startup-backend-recovers"));
-    bind_default_agent_backend_with_capacity_and_probe_status(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture_with_status(
+        "startup-backend-recovers",
         "backend-recovers",
         "http://127.0.0.1:9/v1",
         1,
         "unknown",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -846,7 +845,7 @@ async fn run_agent_recovers_backend_availability_without_restart() {
         AgentReadinessState::Unavailable
     );
 
-    update_backend_probe_status(node.as_ref(), "backend-recovers", "healthy").await;
+    update_backend_probe_status(&node, identity.did(), "backend-recovers", "healthy").await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
     loop {
@@ -1014,21 +1013,22 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
             .collect()
     }
 
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("snapshot-demotion"));
     let endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture_with_status(
+        "snapshot-demotion",
         "demotion-backend",
         endpoint.endpoint(),
+        1,
+        "healthy",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
