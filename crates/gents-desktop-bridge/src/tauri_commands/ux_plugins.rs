@@ -136,6 +136,26 @@ pub struct UxDataCallRequest {
     pub args: Value,
 }
 
+#[derive(Debug, Deserialize, serde::Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum UxDataCallKind {
+    Query,
+    Create,
+}
+
+#[derive(Debug, Deserialize, serde::Serialize, TS)]
+pub struct UxDataCallResult {
+    pub kind: UxDataCallKind,
+    pub output: Value,
+}
+
+#[derive(Debug, serde::Serialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum UxDataWatchEvent {
+    Snapshot { value: UxDataCallResult },
+    Error { message: String },
+}
+
 /// One declared datastore tool, run as the operator on the agent's node;
 /// answers `{"kind": "query" | "create", "output": <the tool's result>}`.
 #[tauri::command]
@@ -186,7 +206,7 @@ pub fn desktop_ux_data_watch<R: tauri::Runtime>(
     window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
     request: UxDataCallRequest,
-    channel: tauri::ipc::Channel<Value>,
+    channel: tauri::ipc::Channel<UxDataWatchEvent>,
 ) -> Result<String, BridgeError> {
     let home = home(&state)?;
     let core = current_core(&state).ok_or_else(|| {
@@ -223,9 +243,9 @@ pub fn desktop_ux_data_watch<R: tauri::Runtime>(
     tauri::async_runtime::spawn(async move {
         let result = watch_stream(endpoint, url, request, &channel, &cancel).await;
         if result.is_err() && !cancel.is_cancelled() {
-            let _ = channel.send(
-                serde_json::json!({"kind":"error", "message":"Pack updates are unavailable."}),
-            );
+            let _ = channel.send(UxDataWatchEvent::Error {
+                message: "Pack updates are unavailable.".to_owned(),
+            });
         }
         registry.cancel(&label, &task_id);
     });
@@ -245,7 +265,7 @@ async fn watch_stream(
     endpoint: gents::store::config_client::GraphqlEndpoint,
     url: reqwest::Url,
     request: UxDataCallRequest,
-    channel: &tauri::ipc::Channel<Value>,
+    channel: &tauri::ipc::Channel<UxDataWatchEvent>,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<()> {
     let client = reqwest::Client::builder()
@@ -274,7 +294,9 @@ async fn watch_stream(
                 if cancel.is_cancelled() {
                     return Ok(());
                 }
-                channel.send(serde_json::json!({"kind":"snapshot", "value": value}))?;
+                channel.send(UxDataWatchEvent::Snapshot {
+                    value: serde_json::from_value(value)?,
+                })?;
             }
         }
         anyhow::ensure!(

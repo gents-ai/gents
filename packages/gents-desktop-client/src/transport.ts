@@ -1,9 +1,8 @@
 import type { ClientUpdateEvent as GeneratedClientUpdateEvent } from "./generated/ClientUpdateEvent.js";
-import type { UxDataCallRequest, UxDataCallResult } from "./types/uxPlugins.js";
+import type { UxDataWatchEvent } from "./generated/UxDataWatchEvent.js";
+import type { UxDataCallRequest } from "./types/uxPlugins.js";
 
-export type UxDataWatchEvent =
-  | { kind: "snapshot"; value: UxDataCallResult }
-  | { kind: "error"; message: string };
+export type { UxDataWatchEvent } from "./generated/UxDataWatchEvent.js";
 
 export type ClientUpdateEvent = Partial<GeneratedClientUpdateEvent>;
 
