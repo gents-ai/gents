@@ -129,11 +129,6 @@ async fn stage_goal_backed_request(
         let owners = txn
             .document_owners("AgentRequest", &[existing_doc.to_owned()])
             .await?;
-        anyhow::ensure!(
-            matches!(owners.as_slice(), [owner] if owner.doc_id == existing_doc
-            && owner.visible && owner.owner.as_ref().is_some_and(|owner| owner.as_str() == request.admission.signer_did)),
-            "persisted Goal request differs from its native author"
-        );
         if let Some(graph) = client_graph {
             let expected_signature = bs58::encode(&request.admission.signature).into_string();
             anyhow::ensure!(
@@ -145,6 +140,11 @@ async fn stage_goal_backed_request(
                 "persisted Goal request differs from its signed native graph or owner"
             );
         }
+        anyhow::ensure!(
+            matches!(owners.as_slice(), [owner] if owner.doc_id == existing_doc
+            && owner.visible && owner.owner.as_ref().is_some_and(|owner| owner.as_str() == request.admission.signer_did)),
+            "persisted Goal request differs from its native author"
+        );
         (
             existing_doc.to_owned(),
             GoalBackedRequestDisposition::Idempotent,

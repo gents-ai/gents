@@ -391,6 +391,21 @@ async fn stage_resume_inner(
         session_hop,
     )?;
     create.input.goal_assignment = Some(continuation_assignment(&goal, &parent, None)?);
+    if agent_initiated {
+        let session = crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+            .await?
+            .context("goal session is unavailable")?;
+        let (agent_doc_id, _) = crate::store::config_client::read_desired_state_record_in_txn(
+            txn,
+            crate::Collection::Agent,
+            node_did,
+            &create.agent_did,
+        )
+        .await?
+        .context("goal Agent is unavailable")?;
+        create.session_doc_id = Some(session.doc_id);
+        create.agent_doc_id = Some(agent_doc_id);
+    }
     if !agent_initiated {
         create.admission =
             gents_protocol::request_admission::AgentRequestAdmissionRecord::client(identity.did());

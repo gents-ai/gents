@@ -119,6 +119,8 @@ pub(super) fn verify_goal_continuation_receipt(
             .and_then(|hop| u32::try_from(hop).ok())
             .context("continuation receipt lacks its hop")?,
     )?;
+    expected.session_doc_id = parent_row.session_doc_id.clone();
+    expected.agent_doc_id = parent_row.agent_doc_id.clone();
     if child.admission_kind.as_deref() == Some("client") {
         expected.admission = AgentRequestAdmissionRecord::client(
             child
@@ -126,8 +128,6 @@ pub(super) fn verify_goal_continuation_receipt(
                 .as_deref()
                 .context("client continuation has no signer")?,
         );
-        expected.session_doc_id = child.session_doc_id.clone();
-        expected.agent_doc_id = child.agent_doc_id.clone();
     }
     expected.input.goal_assignment = Some(continuation_assignment(
         goal,
