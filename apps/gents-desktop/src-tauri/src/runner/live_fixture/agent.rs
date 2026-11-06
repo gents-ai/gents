@@ -229,6 +229,9 @@ fn live_backend_candidate(
             }),
     };
     let candidate = InferenceBackend {
+        physical_doc_id: existing
+            .as_ref()
+            .and_then(|value| value.physical_doc_id.clone()),
         node_did: node_did.into(),
         backend_id: backend_id.into(),
         name: backend_id.into(),
