@@ -104,9 +104,14 @@ fn an_older_client_store_fails_start_as_an_incompatible_local_store() {
         Some(gents::store::local::storage_backend::IncompatibleStoreKind::UnknownLineage)
     );
 
-    let (error, store) =
-        classify_client_start_error(&anyhow::anyhow!("peer directory is locked"), node);
+    let refused =
+        anyhow::anyhow!("peer directory is locked").context("starting embedded desktop node");
+    let (error, store) = classify_client_start_error(&refused, node);
     assert_eq!(error.code, BridgeErrorCode::Unknown);
+    assert_eq!(
+        error.message,
+        "starting embedded desktop node: peer directory is locked"
+    );
     assert!(store.is_none());
 }
 
