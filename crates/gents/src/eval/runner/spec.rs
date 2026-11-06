@@ -78,6 +78,9 @@ pub(super) fn fixtures(
     for declared in [definition, case].into_iter().flatten() {
         fixtures.schemas.extend(declared.schemas.iter().cloned());
         fixtures
+            .seed_schemas
+            .extend(declared.seed_schemas.iter().cloned());
+        fixtures
             .documents
             .extend(declared.documents.iter().map(|document| FixtureDocument {
                 collection: document.collection.clone(),

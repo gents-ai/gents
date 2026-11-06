@@ -10,6 +10,7 @@ fn fixtures_merge_the_case_after_the_definition_and_read_assets_from_the_pack() 
         documents: Vec::new(),
         files: Vec::new(),
         schemas: vec!["type A {}".into()],
+        seed_schemas: vec!["type SeedA { value: String }".into()],
     };
     let per_case = EvalFixtures {
         assets: Vec::new(),
@@ -25,10 +26,18 @@ fn fixtures_merge_the_case_after_the_definition_and_read_assets_from_the_pack() 
             contents: "{\"disk\": \"84%\"}\n".into(),
         }],
         schemas: vec!["type B {}".into()],
+        seed_schemas: vec!["type SeedB { value: String }".into()],
     };
 
     let merged = fixtures(pack.path(), Some(&shared), Some(&per_case)).unwrap();
     assert_eq!(merged.schemas, ["type A {}", "type B {}"]);
+    assert_eq!(
+        merged.seed_schemas,
+        [
+            "type SeedA { value: String }",
+            "type SeedB { value: String }"
+        ]
+    );
     assert_eq!(merged.documents.len(), 1);
     assert_eq!(
         merged.files,

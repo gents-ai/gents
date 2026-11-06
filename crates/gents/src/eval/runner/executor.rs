@@ -92,6 +92,8 @@ pub struct InferenceBinding {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrialFixtures {
     pub schemas: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub seed_schemas: Vec<String>,
     pub documents: Vec<FixtureDocument>,
     pub files: Vec<FixtureFile>,
 }

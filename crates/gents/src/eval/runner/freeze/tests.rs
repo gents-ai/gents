@@ -277,6 +277,25 @@ fn frozen_files_preserve_complete_snapshots_for_existing_readers() {
     );
 }
 
+#[test]
+fn seed_schema_is_covered_by_the_frozen_definition_digest() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut value = definition("did:key:owner");
+    value["cases"][0]["fixtures"] = json!({"seed_schemas": ["type Seed { message: String }"]});
+    let original: EvalDefinition = serde_json::from_value(value).unwrap();
+    let reference = definition_ref(&original).unwrap();
+    write_frozen_definition(dir.path(), &original).unwrap();
+    assert_eq!(
+        read_frozen_definition(dir.path(), &reference).unwrap(),
+        Some(original.clone())
+    );
+    let mut altered = original;
+    altered.cases[0].fixtures.as_mut().unwrap().seed_schemas[0] =
+        "type Seed { message: Int }".into();
+    write_frozen_definition(dir.path(), &altered).unwrap();
+    assert!(read_frozen_definition(dir.path(), &reference).is_err());
+}
+
 fn case(case_id: &str, split: &str) -> Value {
     json!({
         "case_id": case_id,

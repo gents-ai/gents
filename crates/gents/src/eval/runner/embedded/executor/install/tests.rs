@@ -514,6 +514,79 @@ async fn a_trial_subject_supplies_an_omitted_default_agent() {
 }
 
 #[tokio::test]
+async fn authored_seed_schema_signs_without_installing_the_collection() {
+    let dir = tempfile::tempdir().unwrap();
+    let pack_dir = dir.path().join("pack");
+    write_slot_pack(&pack_dir, "gents:inference-slot:primary");
+    let sdl = "type EvalSeedInput { correlation: String message: String }";
+    let mut spec = TrialSpec {
+        pack_digest: materialized_digest(&pack_dir),
+        pack_dir,
+        agent_slot: "subject".into(),
+        inference: frozen_binding(json!("frozen-profile")),
+        fixtures: TrialFixtures {
+            seed_schemas: vec![sdl.into()],
+            ..Default::default()
+        },
+        ..TrialSpec::empty_for_tests("seed-schema")
+    };
+    let mut home = EmbeddedHome::create_trial_temp("seed-schema")
+        .await
+        .unwrap();
+    bind_test_evaluator(&mut spec, &mut home);
+    install(&spec, &home, &dir.path().join("workspace"))
+        .await
+        .unwrap();
+    let owner = ConfigAccess::local(home.node.clone());
+    assert!(owner
+        .execute("{ EvalSeedInput { correlation } }")
+        .await
+        .is_err());
+    let trusted = trusted_seed_schema(&spec, "EvalSeedInput").unwrap();
+    assert_eq!(trusted, sdl);
+    let mut missing = spec.clone();
+    missing.fixtures.seed_schemas.clear();
+    assert!(trusted_seed_schema(&missing, "EvalSeedInput").is_err());
+
+    install_schema(&owner, sdl).await.unwrap();
+    let client = home.client_access(&spec.evaluator_did).unwrap();
+    let doc = json!({"correlation":"seed-1", "message":"process this"});
+    create_document(
+        &client,
+        "eval.test.authored_seed",
+        "EvalSeedInput",
+        &doc,
+        Some(&trusted),
+    )
+    .await
+    .unwrap();
+    let rows = owner
+        .execute("{ EvalSeedInput { correlation message } }")
+        .await
+        .unwrap();
+    assert_eq!(rows["data"]["EvalSeedInput"], json!([doc]));
+
+    let mismatched = "type EvalSeedInput { correlation: String message: String extra: String }";
+    let error = create_document(
+        &client,
+        "eval.test.mismatched_seed",
+        "EvalSeedInput",
+        &json!({"correlation":"seed-2", "message":"must not commit"}),
+        Some(mismatched),
+    )
+    .await;
+    assert!(error.is_err());
+    assert_eq!(
+        owner
+            .execute("{ EvalSeedInput { correlation message } }")
+            .await
+            .unwrap(),
+        rows
+    );
+    home.node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn subject_schemas_are_installed_before_documents_without_fixture_copies() {
     let dir = tempfile::tempdir().unwrap();
     let pack_dir = dir.path().join("pack");

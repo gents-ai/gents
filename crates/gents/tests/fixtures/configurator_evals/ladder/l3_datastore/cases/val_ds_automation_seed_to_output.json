@@ -2,6 +2,11 @@
   "case_id": "val-ds-automation-seed-to-output",
   "split": "validation",
   "reducer": "all",
+  "fixtures": {
+    "seed_schemas": [
+      "type EvalAutomationInput {\n  correlation: String\n  message: String\n}"
+    ]
+  },
   "stages": [
     {
       "stage_id": "configure",

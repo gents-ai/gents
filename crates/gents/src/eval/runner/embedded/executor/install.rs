@@ -472,6 +472,7 @@ async fn install_fixtures(
                 assets,
                 fixtures,
                 &fixture.collection,
+                &[],
             )?),
             None => None,
         };
@@ -630,7 +631,13 @@ pub(super) fn trusted_seed_schema(spec: &TrialSpec, collection: &str) -> Result<
         digest == spec.pack_digest,
         "pack digest changed before seeding the trial"
     );
-    trusted_fixture_schema(&manifest, &assets, &spec.fixtures, collection)
+    trusted_fixture_schema(
+        &manifest,
+        &assets,
+        &spec.fixtures,
+        collection,
+        &spec.fixtures.seed_schemas,
+    )
 }
 
 fn trusted_fixture_schema(
@@ -638,6 +645,7 @@ fn trusted_fixture_schema(
     assets: &BTreeMap<String, Vec<u8>>,
     fixtures: &TrialFixtures,
     collection: &str,
+    seed_schemas: &[String],
 ) -> Result<String> {
     let mut selected = None;
     let pack_schemas = manifest
@@ -654,6 +662,7 @@ fn trusted_fixture_schema(
         .iter()
         .copied()
         .chain(fixtures.schemas.iter().map(String::as_str))
+        .chain(seed_schemas.iter().map(String::as_str))
         .chain(pack_schemas)
     {
         let schemas = query::parse_sdl(sdl)?;

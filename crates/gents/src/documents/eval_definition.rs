@@ -128,6 +128,14 @@ pub struct EvalFixtures {
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     pub schemas: Vec<String>,
+    /// Authored SDL for signing stage seeds; the trial does not install it.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    pub seed_schemas: Vec<String>,
 }
 
 fn default_weight() -> u32 {
