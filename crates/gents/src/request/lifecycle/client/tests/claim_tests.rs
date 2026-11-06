@@ -1561,7 +1561,8 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
         crate::SIGNED_REQUEST_FIELDS
     );
     let response = agent_access.execute(&query).await.unwrap();
-    let row = serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
     let request = AgentRequest::try_from(row).unwrap();
     let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
     let verifier = AgentRequestAdmissionVerifier::new(node.clone(), runtime.clone(), authority);
