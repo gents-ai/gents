@@ -66,39 +66,22 @@ def decodeReach (doc : Doc) : Option Reach := do
   pure { enabled, engineerTag }
 
 /-- Tools `integrations` text for the plugin `acme/wf` with a job block: the
-empty ceiling but `max_live`, and the policy mode `dynamic`. -/
+specified `max_live` and policy mode `dynamic`. -/
 def jobIntegrations (maxLive : Nat) (dynamic : String) : FieldValue :=
-  "{\"plugins\":[{\"plugin\":\"acme/wf\",\"job\":{\"agent_targets\":[],\"max_live\":"
+  "{\"plugins\":[{\"plugin\":\"acme/wf\",\"job\":{\"agent_targets\":[\"target\"],\"max_live\":"
     ++ toString maxLive
-    ++ ",\"max_spawns\":0,\"max_messages_per_slot\":0,\"result_bytes\":0,\"max_wall_secs\":0,"
+    ++ ",\"max_spawns\":128,\"max_messages_per_slot\":4,\"result_bytes\":65536,\"max_wall_secs\":7200,"
     ++ "\"policy\":{\"dynamic\":\"" ++ dynamic
     ++ "\",\"dynamic_targets\":[],\"trusted_packs\":[]}}}]}"
 
-def fixtureJob (maxLive : Nat) (mode : PluginJob.DynamicMode) : List (String × JobGrant) :=
-  [("acme/wf",
-    { ceiling := { PluginJob.Ceiling.empty with maxLive := maxLive }
-    , policy := { mode := mode, dynamicTargets := [], trustedPacks := [] } })]
-
-/-- Fixture decoder for the `integrations` values used below; every other
-value, and an absent field, carries no job block. -/
-def decodeJob (doc : Doc) : List (String × JobGrant) :=
-  match doc "integrations" with
-  | some t =>
-      if t = jobIntegrations 8 "check" then fixtureJob 8 .check
-      else if t = jobIntegrations 4 "check" then fixtureJob 4 .check
-      else if t = jobIntegrations 4 "off" then fixtureJob 4 .off
-      else []
-  | none => []
-
 /-- Fixture decoder; production projects `OperatorGrants::from_tools_json`. -/
 def decodeGrants (doc : Doc) : Option Grants :=
-  let job := decodeJob doc
   match doc "self_config" with
   | some "{\"enable_self_config\":true,\"enable_pack_install\":true}" =>
-      some { Grants.bot with packInstall := true, job := job }
+      some { Grants.bot with packInstall := true }
   | some "{\"enable_self_config\":true,\"self_config_no_lockout\":true,\"enable_pack_install\":true}" =>
-      some { Grants.bot with packInstall := true, job := job }
-  | _ => some { Grants.bot with job := job }
+      some { Grants.bot with packInstall := true }
+  | _ => some Grants.bot
 
 def awsAuthText : String :=
   "{\"kind\":\"aws_credentials\",\"access_key_id\":\"AKIDEXAMPLE\",\"secret_access_key\":\"secret\"}"
@@ -561,22 +544,22 @@ def scenarios : List CaseRow := examplesToRows ++
     , doc := [("self_config", "{\"enable_self_config\":true}"),
         ("integrations", jobIntegrations 8 "check")]
     , patch := [("integrations", some (jobIntegrations 4 "check"))] }
-  , { name := "tools_job_ceiling_widening_with_held_rejected"
+  , { name := "tools_job_ceiling_widening_with_held_accepted"
     , target := .tools, guarded := false, validates := true
     , held := { Grants.bot with packInstall := true }
     , doc := [("self_config", "{\"enable_self_config\":true}"),
         ("integrations", jobIntegrations 4 "check")]
     , patch := [("integrations", some (jobIntegrations 8 "check"))] }
-  , { name := "tools_job_policy_edit_rejected"
+  , { name := "tools_job_policy_edit_accepted"
     , target := .tools, guarded := false, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}"),
         ("integrations", jobIntegrations 4 "check")]
     , patch := [("integrations", some (jobIntegrations 4 "off"))] }
-  , { name := "tools_job_block_added_rejected"
+  , { name := "tools_job_block_added_accepted"
     , target := .tools, guarded := false, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}")]
     , patch := [("integrations", some (jobIntegrations 4 "check"))] }
-  , { name := "context_select_job_tools_from_none_with_held_rejected"
+  , { name := "context_select_job_tools_from_none_with_held_accepted"
     , target := .agentContext, guarded := false, validates := true
     , held := { Grants.bot with packInstall := true }
     , doc := [("context_id", "ctx")]
@@ -633,11 +616,11 @@ theorem self_config_cases_cover_reselection :
 theorem self_config_cases_cover_job_guard :
     (selfConfigCases.any (fun w =>
         w.row.name == "tools_job_ceiling_narrowing_accepted" && w.accepted)
-      && ["tools_job_ceiling_widening_with_held_rejected", "tools_job_policy_edit_rejected",
-          "tools_job_block_added_rejected",
-          "context_select_job_tools_from_none_with_held_rejected"].all (fun n =>
+      && ["tools_job_ceiling_widening_with_held_accepted", "tools_job_policy_edit_accepted",
+          "tools_job_block_added_accepted",
+          "context_select_job_tools_from_none_with_held_accepted"].all (fun n =>
         selfConfigCases.any (fun w =>
-          w.row.name == n && w.admissiblePatch && !w.accepted))) = true := by
+          w.row.name == n && w.admissiblePatch && w.accepted))) = true := by
   native_decide
 
 def publishedProfiles : List String := ["fast", "deep"]

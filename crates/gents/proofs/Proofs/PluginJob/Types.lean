@@ -72,7 +72,7 @@ def Ceiling.meet (a b : Ceiling) : Ceiling :=
   , resultBytes := Nat.min a.resultBytes b.resultBytes
   , maxWallSecs := Nat.min a.maxWallSecs b.maxWallSecs }
 
-/-- Fieldwise order; `JobGrant.narrows` compares stored ceilings with it. -/
+/-- Fieldwise order for job execution ceilings. -/
 def Ceiling.leB (a b : Ceiling) : Bool :=
   decide (a.targets ⊆ b.targets) && decide (a.maxLive ≤ b.maxLive)
     && decide (a.maxSpawns ≤ b.maxSpawns)

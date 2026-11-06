@@ -159,6 +159,9 @@ private def jobGuardCaseJson (r : JobGuardRow) : String :=
     ++ "\"name\":" ++ jsonString r.name ++ ","
     ++ "\"writer\":" ++ jsonString (if r.operator then "operator" else "model") ++ ","
     ++ "\"selected_before\":" ++ agentBool r.selectedBefore ++ ","
+    ++ "\"native_authorized\":" ++ agentBool r.nativeAuthorized ++ ","
+    ++ "\"native_source_authorized\":" ++ agentBool r.nativeSourceAuthorized ++ ","
+    ++ "\"add_schema_tool\":" ++ agentBool r.addSchemaTool ++ ","
     ++ "\"stored_integrations\":" ++ r.stored.getD "null" ++ ","
     ++ "\"candidate_integrations\":" ++ r.candidate ++ ","
     ++ "\"accepted\":" ++ agentBool r.accepted
