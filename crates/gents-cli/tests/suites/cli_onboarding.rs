@@ -122,6 +122,27 @@ fn bare_gents_without_a_terminal_prints_help_and_exits_2() -> Result<()> {
 }
 
 #[test]
+fn print_without_a_terminal_on_a_home_not_set_up_says_how_to_set_it_up() -> Result<()> {
+    let user_home = tempfile::tempdir()?;
+    let home = tempfile::tempdir()?;
+
+    let output = run_gents(
+        user_home.path(),
+        &["-p", "hello", "--home", &home.path().to_string_lossy()],
+    )?;
+
+    let stderr = stderr_of(&output);
+    assert_eq!(output.status.code(), Some(1), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("run `gents` in a terminal"),
+        "stderr:\n{stderr}"
+    );
+    assert!(output.stdout.is_empty(), "wrote to stdout");
+    assert_eq!(fs::read_dir(home.path())?.count(), 0, "wrote to the home");
+    Ok(())
+}
+
+#[test]
 fn root_flags_conflict_with_subcommands() -> Result<()> {
     let user_home = tempfile::tempdir()?;
 
@@ -129,7 +150,10 @@ fn root_flags_conflict_with_subcommands() -> Result<()> {
 
     let stderr = stderr_of(&output);
     assert_eq!(output.status.code(), Some(2), "stderr:\n{stderr}");
-    assert!(stderr.contains("cannot be used with"), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("`status` is a command; put options after it"),
+        "stderr:\n{stderr}"
+    );
     Ok(())
 }
 
@@ -154,7 +178,10 @@ fn the_root_agent_flag_conflicts_with_subcommands() -> Result<()> {
 
     let stderr = stderr_of(&output);
     assert_eq!(output.status.code(), Some(2), "stderr:\n{stderr}");
-    assert!(stderr.contains("cannot be used with"), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("`status` is a command; put options after it"),
+        "stderr:\n{stderr}"
+    );
     Ok(())
 }
 

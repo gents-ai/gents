@@ -31,7 +31,7 @@ enum RemoteEndpoint {
 
 pub(crate) async fn codex(args: CodexArgs) -> Result<()> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-        bail!("`gents codex` is interactive and needs a terminal; use `gents chat` for scripted turns");
+        bail!("`gents codex` is interactive and needs a terminal; use `gents -p MESSAGE` for scripted turns");
     }
     open_codex(args).await
 }
@@ -247,6 +247,21 @@ async fn preflight_agent(
     }
 }
 
+/// Waits until the runtime at `remote` publishes `agent`, so a just-made agent is not refused
+/// as unknown by the preflight that opening it runs. The preflight still decides.
+pub(crate) async fn wait_for_agent_to_publish(remote: &str, agent: &str, publish_wait: Duration) {
+    let Ok(RemoteEndpoint::WebSocket { authority, .. }) = resolve_endpoint(remote) else {
+        return;
+    };
+    read_identity_until(&authority, None, publish_wait, |identity| {
+        identity
+            .runnable_agents
+            .as_ref()
+            .is_none_or(|runnable| admits_connection(agent, runnable.iter().map(String::as_str)))
+    })
+    .await;
+}
+
 /// Plain `gents` opens the bound agent, so that one has to be runnable. An agent named with
 /// `--agent` gets its own check when it opens, so here only an empty set stops it.
 fn can_open(identity: &RuntimeIdentity, agent_given: bool) -> bool {
@@ -363,13 +378,20 @@ fn outside_tool_root_notice(cwd: &Path, identity: &RuntimeIdentity) -> Option<St
 }
 
 fn codex_command_args(args: &CodexArgs, cd: Option<&Path>) -> Vec<String> {
-    let mut command = vec![
-        "--remote".to_string(),
-        args.remote.clone(),
-        "--dangerously-bypass-approvals-and-sandbox".to_string(),
+    let mut command = Vec::new();
+    if args.resume.is_some() {
+        command.push("resume".to_string());
+    }
+    command.extend(["--remote".to_string(), args.remote.clone()]);
+    // Codex refuses permission overrides when resuming a thread on a remote server, and a
+    // resumed thread takes its approval and sandbox settings from the shim's answer anyway.
+    if args.resume.is_none() {
+        command.push("--dangerously-bypass-approvals-and-sandbox".to_string());
+    }
+    command.extend([
         "--config".to_string(),
         "show_raw_agent_reasoning=true".to_string(),
-    ];
+    ]);
     if let Some(env_name) = &args.remote_auth_token_env {
         command.push("--remote-auth-token-env".to_string());
         command.push(env_name.clone());
@@ -381,8 +403,13 @@ fn codex_command_args(args: &CodexArgs, cd: Option<&Path>) -> Vec<String> {
         command.push("--cd".to_string());
         command.push(cd.display().to_string());
     }
-    if let Some(prompt) = &args.prompt {
-        command.push(prompt.clone());
+    // Codex's prompt is a positional beside its subcommands, so without the separator a
+    // prompt that is a subcommand's name, such as `login`, would run that subcommand.
+    // `codex resume` takes the session first, then the prompt.
+    let positionals: Vec<String> = args.resume.iter().chain(&args.prompt).cloned().collect();
+    if !positionals.is_empty() {
+        command.push("--".to_string());
+        command.extend(positionals);
     }
     command
 }
@@ -471,6 +498,7 @@ pub(crate) mod tests {
             agent: None,
             no_alt_screen: false,
             prompt: None,
+            resume: None,
         }
     }
 
@@ -560,6 +588,7 @@ pub(crate) mod tests {
                 "--remote-auth-token-env",
                 "GENTS_TOKEN",
                 "--no-alt-screen",
+                "--",
                 "hello",
             ]
         );
@@ -911,6 +940,22 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_resumed_session_opens_through_codex_resume_with_its_id_before_the_prompt() {
+        let mut args = args(crate::DEFAULT_CODEX_REMOTE);
+        args.resume = Some("s1".to_string());
+        args.prompt = Some("next".to_string());
+
+        let command = codex_command_args(&args, None);
+
+        assert_eq!(command[0], "resume");
+        assert_eq!(command[command.len() - 3..], ["--", "s1", "next"]);
+        assert!(
+            !command.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()),
+            "Codex refuses permission overrides when resuming a remote thread: {command:?}"
+        );
+    }
+
+    #[test]
     fn the_directory_goes_before_the_prompt() {
         let mut args = args(crate::DEFAULT_CODEX_REMOTE);
         args.prompt = Some("hello".to_string());
@@ -918,8 +963,8 @@ pub(crate) mod tests {
         let command = codex_command_args(&args, Some(Path::new("/srv/root/project")));
 
         assert_eq!(
-            command[command.len() - 3..],
-            ["--cd", "/srv/root/project", "hello"]
+            command[command.len() - 4..],
+            ["--cd", "/srv/root/project", "--", "hello"]
         );
     }
 }

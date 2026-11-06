@@ -522,7 +522,7 @@ jobs:
             echo "::warning::Unsigned manual dry-run artifact. Do not deploy this binary to steward agents."
           fi
 
-          version_output="$("${binary_path}" version)"
+          version_output="$("${binary_path}" runtime version)"
           printf '%s\n' "${version_output}"
           expected_prefix="gents ${RELEASE_VERSION} ("
           if [[ "${version_output}" != "${expected_prefix}"* ]]; then
@@ -637,7 +637,7 @@ jobs:
             exit 1
           fi
 
-          version_output="$("${packaged_binary}" version)"
+          version_output="$("${packaged_binary}" runtime version)"
           printf '%s\n' "${version_output}"
           expected_prefix="gents ${RELEASE_VERSION} ("
           if [[ "${version_output}" != "${expected_prefix}"* ]]; then

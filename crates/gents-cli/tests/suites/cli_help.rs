@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use std::fs;
 
 #[test]
-fn top_level_help_lists_the_eight_groups() -> Result<()> {
+fn top_level_help_lists_the_groups() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
