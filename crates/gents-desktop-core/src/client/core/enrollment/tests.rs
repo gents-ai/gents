@@ -1152,9 +1152,8 @@ async fn commit_enrollment_request(core: &ClientCore, request: &EnrollmentReques
     commit_document(core, "desktop.enrollment.test.request", &mutation).await;
 }
 
-async fn commit_decision(core: &ClientCore, authority: &SignedEnrollmentAuthority) {
-    let decision = &authority.decision;
-    let mutation = format!(
+fn decision_mutation(decision: &EnrollmentDecisionRecord) -> String {
+    format!(
         r#"mutation {{ create_NetworkEnrollmentDecision(input: {{
                 protocol_version: {}, decision_id: "{}", request_id: "{}", request_digest: "{}",
                 network_id: "{}", admin_did: "{}", candidate_did: "{}", candidate_peer: "{}",
@@ -1176,7 +1175,11 @@ async fn commit_decision(core: &ClientCore, authority: &SignedEnrollmentAuthorit
         escape_graphql_string(&decision.decided_at),
         escape_graphql_string(&decision.signer_did),
         bs58::encode(&decision.admin_sig).into_string(),
-    );
+    )
+}
+
+async fn commit_decision(core: &ClientCore, authority: &SignedEnrollmentAuthority) {
+    let mutation = decision_mutation(&authority.decision);
     commit_document(core, "desktop.enrollment.test.decision", &mutation).await;
 }
 
@@ -2569,5 +2572,301 @@ async fn thin_client_publishes_signed_enrollment_without_a_node_document() -> Re
             .is_ok()
     }));
     Arc::new(core).shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn thin_client_automatically_publishes_received_decision_reader() -> Result<()> {
+    use gents::defra_node::{AcpIdentity, DocumentPermission, NodePermission};
+    use gents::runtime::agent::p2p_reconcile::EnrollmentOfferIssuer;
+    use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
+    use gents_protocol::enrollment::derive_decision_id;
+
+    let directory = tempfile::tempdir()?;
+    let sender = Arc::new(start_unsupervised_core(directory.path().join("server")).await);
+    let receiver_root = directory.path().join("client");
+    let address = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?;
+    let mut options = super::super::ClientCoreOptions::local_only();
+    options.http_addr = Some(address);
+    let receiver = Arc::new(
+        ClientCore::start_with_paths_and_options(DesktopPaths::from_root(&receiver_root), options)
+            .await?,
+    );
+    if let Some(supervisor) = receiver.p2p_supervisor.lock().await.take() {
+        supervisor.abort();
+        let _ = supervisor.await;
+    }
+    let user =
+        PrincipalIdentity::load_or_create(&DesktopPaths::from_root(directory.path().join("user")))
+            .await?;
+    let agent =
+        PrincipalIdentity::load_or_create(&DesktopPaths::from_root(directory.path().join("agent")))
+            .await?;
+    let outsider = PrincipalIdentity::load_or_create(&DesktopPaths::from_root(
+        directory.path().join("outsider"),
+    ))
+    .await?;
+    let client_did = identity::Did::new(receiver.node_identity().did())?;
+    let server_did = identity::Did::new(sender.node_identity().did())?;
+    let source = ConfigAccess::local_as(sender.node_arc(), server_did.clone());
+    let client = ConfigAccess::local_as(receiver.node_arc(), client_did.clone());
+    for actor in [&user, &agent, &outsider] {
+        for permission in [NodePermission::DocumentRead, NodePermission::CollectionGet] {
+            client
+                .grant_node_permission(&identity::Did::new(actor.did())?, permission)
+                .await?;
+        }
+    }
+    assert!(gents_protocol::graphql::graphql_rows_from_response(
+        &client.execute("{ Node { _docID } }").await?,
+        "Node"
+    )
+    .is_empty());
+
+    let issuer = EnrollmentOfferIssuer::new(
+        Arc::new(sender.node_identity().clone()),
+        sender.p2p.clone(),
+        "client-receiver".into(),
+        sender.node_identity().did().to_owned(),
+        "client".into(),
+    );
+    let offer = issuer.mint().await?;
+    let receiver_ticket = local_enrollment_ticket(&receiver.p2p, receiver.local_peer_id()).await?;
+    let request = sign_enrollment_request(
+        receiver.node_identity(),
+        &offer.offer,
+        &offer.token,
+        receiver.local_peer_id().to_owned(),
+        receiver_ticket.clone(),
+    )
+    .await?;
+    assert!(
+        receiver
+            .node_identity()
+            .verify(
+                receiver.node_identity().did(),
+                &request.signing_payload(),
+                &request.candidate_sig
+            )
+            .await?
+    );
+    let decided_at = Utc::now();
+    let mut decision = EnrollmentDecisionRecord {
+        protocol_version: ENROLLMENT_PROTOCOL_VERSION,
+        decision_id: derive_decision_id(&request.request_id, &request.request_digest),
+        request_id: request.request_id.clone(),
+        request_digest: request.request_digest.clone(),
+        network_id: request.network_id.clone(),
+        admin_did: request.admin_did.clone(),
+        candidate_did: request.candidate_did.clone(),
+        candidate_peer: request.candidate_peer.clone(),
+        owner_node_did: request.owner_node_did.clone(),
+        decision: EnrollmentDecisionKind::Approved,
+        authorization_sequence: 1,
+        authorization_expires_at: (decided_at + chrono::Duration::days(1))
+            .to_rfc3339_opts(SecondsFormat::Secs, true),
+        decided_at: decided_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+        signer_did: sender.node_identity().did().to_owned(),
+        admin_sig: Vec::new(),
+    };
+    decision.admin_sig = sender.node_identity().sign(&decision.signing_payload())?;
+    decision.validate_against_request(&request)?;
+    assert!(
+        receiver
+            .node_identity()
+            .verify(
+                sender.node_identity().did(),
+                &decision.signing_payload(),
+                &decision.admin_sig
+            )
+            .await?
+    );
+    let mutation = decision_mutation(&decision);
+    let doc = source
+        .transact_write("test.client_receiver.decision", |txn| {
+            let mutation = &mutation;
+            let client_did = &client_did;
+            Box::pin(async move {
+                let response = txn.execute(mutation).await?;
+                let doc = gents_protocol::graphql::extract_mutation_doc_id(
+                    &response,
+                    "NetworkEnrollmentDecision",
+                )?;
+                txn.add_actor_relationship("NetworkEnrollmentDecision", &doc, "reader", client_did)
+                    .await?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        })
+        .await?;
+    let mut arrivals =
+        gents::subscribe_collections(receiver.node.as_ref(), ["NetworkEnrollmentDecision"])?;
+    sender
+        .p2p
+        .connect_peer(&receiver_ticket)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    sender
+        .p2p
+        .add_replicator(
+            vec!["NetworkEnrollmentDecision".into()],
+            Some(&receiver_ticket),
+            Default::default(),
+            Vec::new(),
+            None,
+        )
+        .await
+        .map_err(anyhow::Error::msg)?;
+    sender
+        .p2p
+        .push_documents_to_peer(
+            receiver.local_peer_id(),
+            vec![P2pDocumentRequest {
+                collection: "NetworkEnrollmentDecision".into(),
+                doc_id: doc.clone(),
+            }],
+        )
+        .await
+        .map_err(anyhow::Error::msg)?;
+    tokio::time::timeout(Duration::from_secs(20), arrivals.recv())
+        .await?
+        .context("received-decision notification closed")?;
+    drop(arrivals);
+
+    let model: Value = gents_lean_contract::load_contract_snapshot()?;
+    let cases = model["identity_client_transport_cases"]
+        .as_array()
+        .context("missing client transport cases")?;
+    let expected = |name: &str| -> Result<bool> {
+        cases
+            .iter()
+            .find(|case| case["name"] == name)
+            .and_then(|case| case["allowed"].as_bool())
+            .with_context(|| format!("missing client transport case {name}"))
+    };
+    let policy = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
+    let acp = receiver.node.document_acp();
+    assert_eq!(
+        acp.get_doc_owner(policy, "enrollment_records", &doc)
+            .await?,
+        Some(server_did.clone())
+    );
+    for (name, did, permission) in [
+        (
+            "foreign-owner-update",
+            &server_did,
+            DocumentPermission::Update,
+        ),
+        ("client-read", &client_did, DocumentPermission::Read),
+        ("client-update", &client_did, DocumentPermission::Update),
+        (
+            "user-read",
+            &identity::Did::new(user.did())?,
+            DocumentPermission::Read,
+        ),
+        (
+            "agent-read",
+            &identity::Did::new(agent.did())?,
+            DocumentPermission::Read,
+        ),
+        (
+            "outsider-read",
+            &identity::Did::new(outsider.did())?,
+            DocumentPermission::Read,
+        ),
+    ] {
+        assert_eq!(
+            acp.check_doc_access(
+                &AcpIdentity::Authenticated(did.clone()),
+                permission,
+                policy,
+                "enrollment_records",
+                &doc
+            )
+            .await?,
+            expected(name)?,
+            "{name}"
+        );
+    }
+    let query = format!(
+        r#"{{ NetworkEnrollmentDecision(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID request_id}} }}"#,
+        escape_graphql_string(&doc)
+    );
+    assert_eq!(
+        gents_protocol::graphql::graphql_rows_from_response(
+            &client.execute(&query).await?,
+            "NetworkEnrollmentDecision"
+        )
+        .len(),
+        1
+    );
+    for (name, actor) in [
+        ("user-read", &user),
+        ("agent-read", &agent),
+        ("outsider-read", &outsider),
+    ] {
+        let access = ConfigAccess::Graphql(
+            GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())
+                .with_client_signing_capability(actor.client_signing_capability()?)?,
+        );
+        let response = access.execute(&query).await?;
+        assert_eq!(
+            !gents_protocol::graphql::graphql_rows_from_response(
+                &response,
+                "NetworkEnrollmentDecision"
+            )
+            .is_empty(),
+            expected(name)?,
+            "{name}"
+        );
+    }
+    client
+        .transact_write("test.client_receiver.revoke", |txn| {
+            let client_did = &client_did;
+            let doc = &doc;
+            Box::pin(async move {
+                txn.delete_actor_relationship(
+                    "NetworkEnrollmentDecision",
+                    doc,
+                    "reader",
+                    client_did,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await?;
+    assert!(gents_protocol::graphql::graphql_rows_from_response(
+        &client.execute(&query).await?,
+        "NetworkEnrollmentDecision"
+    )
+    .is_empty());
+    drop(acp);
+    drop(client);
+    receiver.shutdown().await?;
+    drop(receiver);
+    let reopened = Arc::new(
+        ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(&receiver_root),
+            super::super::ClientCoreOptions::local_only(),
+        )
+        .await?,
+    );
+    assert_eq!(reopened.node_identity().did(), client_did.as_str());
+    let reopened_access = ConfigAccess::local_as(reopened.node_arc(), client_did);
+    assert!(gents_protocol::graphql::graphql_rows_from_response(
+        &reopened_access.execute(&query).await?,
+        "NetworkEnrollmentDecision"
+    )
+    .is_empty());
+    assert_eq!(
+        reopened
+            .node
+            .document_acp()
+            .get_doc_owner(policy, "enrollment_records", &doc)
+            .await?,
+        Some(server_did)
+    );
+    reopened.shutdown().await?;
+    sender.shutdown().await?;
     Ok(())
 }
