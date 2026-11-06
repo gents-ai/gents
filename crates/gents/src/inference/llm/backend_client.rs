@@ -865,7 +865,8 @@ mod tests {
                 (&on_a, original.clone(), "access-original"),
                 (&on_b, format!("{original}:acct-b"), "access-acct-b"),
             ] {
-                build_backend_client(
+                // The bearer is registered only while its client lives.
+                let _client = build_backend_client(
                     std::sync::Arc::default(),
                     node.clone(),
                     agent,

@@ -406,7 +406,8 @@ async fn next_turns_use_the_target_credentials() {
         behavior.openai_wire_api = fields.openai_wire_api;
         behavior.backend_endpoint = fields.backend_endpoint;
         behavior.backend_auth = fields.backend_auth;
-        crate::inference::llm::backend_client::build_backend_client(
+        // The bearer is registered only while its client lives.
+        let _client = crate::inference::llm::backend_client::build_backend_client(
             std::sync::Arc::default(),
             fixture.node.clone(),
             &behavior,
