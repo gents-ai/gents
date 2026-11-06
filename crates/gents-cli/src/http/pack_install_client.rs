@@ -448,8 +448,13 @@ pub(crate) async fn install_remote(
     tokio::task::spawn_blocking(move || gents::pack::materialize::materialize(&root, &path))
         .await
         .context("materializing the reviewed root pack")??;
-    crate::commands::schema::apply_pack_schemas_if_present(&access, temp.path()).await?;
-    send(&mut session.socket, json!({"type": "schemas_ready"})).await?;
+    let schemas =
+        crate::commands::schema::apply_pack_schemas_if_present(&access, temp.path()).await?;
+    send(
+        &mut session.socket,
+        json!({"type": "schemas_ready", "schemas": schemas}),
+    )
+    .await?;
     let replay = std::sync::Arc::new(PackReplaySession::new(session));
     let access = gents::store::config_client::ConfigAccess::Graphql(
         endpoint.clone().with_pack_replay(replay.clone())?,
