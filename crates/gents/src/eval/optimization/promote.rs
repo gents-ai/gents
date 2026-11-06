@@ -889,6 +889,17 @@ mod tests {
                 &identity::Did::new(outsider.did())?,
             )
             .await?;
+        harness
+            .launching
+            .grant_node_permissions(
+                outsider.did(),
+                &[
+                    crate::store::config_client::NodePermission::CollectionGet,
+                    crate::store::config_client::NodePermission::DocumentRead,
+                    crate::store::config_client::NodePermission::DocumentUpdate,
+                ],
+            )
+            .await?;
         let before_prompt = live_prompt(&harness).await.expect("target prompt");
         let before_job = load_job(harness.access(), harness.owner(), &request.job_id)
             .await?

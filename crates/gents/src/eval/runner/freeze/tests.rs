@@ -109,6 +109,20 @@ impl Launching {
             .unwrap();
     }
 
+    pub(crate) async fn grant_node_permissions(
+        &self,
+        actor: &str,
+        permissions: &[crate::store::config_client::NodePermission],
+    ) -> anyhow::Result<()> {
+        let admin =
+            ConfigAccess::local_as(self.home.node.clone(), identity::Did::new(self.owner())?);
+        let actor = identity::Did::new(actor)?;
+        for permission in permissions {
+            admin.grant_node_permission(&actor, *permission).await?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn owner(&self) -> &str {
         self.home.did()
     }
