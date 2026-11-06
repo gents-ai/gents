@@ -134,6 +134,7 @@ pub(super) async fn step_on(
             chain_root_doc_id: pin.chain_root_doc_id.clone(),
         },
     )
+    .with_agent_access(access.clone())
     .with_children(input.job.chain.clone(), input.ceiling.result_bytes);
     let (call, receipt) = runtime
         .plugins

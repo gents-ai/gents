@@ -105,6 +105,7 @@ async fn caller(
             tool_call_doc_id: row_doc_id.into(),
         },
     )
+    .with_agent_access(h.agent_access())
 }
 
 async fn parent_request_doc_id(h: &JobHarness) -> String {

@@ -14,7 +14,7 @@ use gents_protocol::job::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::data::{DataCaller, Invocation, Stamp, StampContext};
+use super::data::{Invocation, Stamp, StampContext};
 use crate::defra_node::Node as EmbeddedNode;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::{escape_graphql_string, graphql_string_list_literal};
@@ -33,6 +33,7 @@ pub struct JobCaller {
     node: Arc<EmbeddedNode>,
     scope: ProcessControlScope,
     stamp: StampContext,
+    agent_access: Option<ConfigAccess>,
     chain: Vec<String>,
     result_bytes: u64,
 }
@@ -44,12 +45,19 @@ impl JobCaller {
             node,
             scope,
             stamp,
+            agent_access: None,
             chain: Vec::new(),
             result_bytes: 0,
         }
     }
 
-    fn caller_access(&self) -> Result<ConfigAccess> {
+    /// The host supplies the actual managed Agent capability for this invocation.
+    pub fn with_agent_access(mut self, access: ConfigAccess) -> Self {
+        self.agent_access = Some(access);
+        self
+    }
+
+    fn caller_access(&self) -> Result<&ConfigAccess> {
         anyhow::ensure!(
             self.node.node_identity_did() == Some(self.scope.node_did.as_str()),
             "job caller belongs to another runtime"
@@ -58,12 +66,23 @@ impl JobCaller {
             .stamp
             .value(Stamp::CallerDid)
             .context("job caller has no identity")?;
-        let bound = DataCaller::for_agent(self.node.clone(), &self.scope.node_did, caller)?;
-        let actor = bound
-            .actor()
-            .context("job caller has no agent actor")?
-            .clone();
-        Ok(ConfigAccess::local_as(self.node.clone(), actor))
+        let access = self
+            .agent_access
+            .as_ref()
+            .context("job caller has no held agent access")?;
+        let signer = access
+            .managed_agent_signer()
+            .context("job caller has no managed agent signer")?;
+        anyhow::ensure!(
+            access
+                .local_node()
+                .is_some_and(|node| Arc::ptr_eq(node, &self.node))
+                && access.actor_did().as_deref() == Some(caller)
+                && signer.did() == caller
+                && signer.node_did() == self.scope.node_did,
+            "job caller access does not match its invocation"
+        );
+        Ok(access)
     }
 
     /// A job step's chain rows, whose caused requests are its children, and
@@ -392,7 +411,7 @@ pub async fn result(
         .unwrap_or(usize::MAX)
         .min(max_bytes);
     let ReadToolOutputOutcome::Found(page) = read_tool_output_slice_with_access(
-        &access,
+        access,
         &caller.scope,
         &LiveToolOutputRegistry::default(),
         &row.tool_call_id,

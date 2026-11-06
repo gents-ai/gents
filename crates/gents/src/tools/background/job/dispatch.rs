@@ -130,6 +130,7 @@ pub async fn run_step0(
             tool_call_doc_id: row_doc_id.clone(),
         },
     )
+    .with_agent_access(access.clone())
     .with_children(input.job.chain.clone(), input.ceiling.result_bytes);
     let (call, receipt) = runtime
         .plugins

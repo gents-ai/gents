@@ -2221,7 +2221,8 @@ mod job_calls {
                 admission.node.clone(),
                 row_scope(&admission),
                 tool_output_for(&admission),
-            );
+            )
+            .with_agent_access(admission.tool.access().unwrap());
             let offset = paged.len() as u64;
             let call = run(
                 json!([result_request("r", &row, offset, 4000)]),
@@ -2248,12 +2249,23 @@ mod job_calls {
         let mut ours = job_row("job-calls-result-ours", "team/plugin").await;
         settle(&mut ours, "done").await;
         let row = ours.tool.doc_id().unwrap().to_owned();
+        let missing_access =
+            JobCaller::new(ours.node.clone(), row_scope(&ours), tool_output_for(&ours));
+        let call = run(
+            json!([result_request("r", &row, 0, 100)]),
+            true,
+            missing_access,
+        )
+        .await;
+        assert!(refusal(&call).contains("scope"), "{}", refusal(&call));
         let mut outside_scope = row_scope(&ours);
         outside_scope.session_id = "another-session".into();
-        let outsider = JobCaller::new(ours.node.clone(), outside_scope, tool_output_for(&ours));
+        let outsider = JobCaller::new(ours.node.clone(), outside_scope, tool_output_for(&ours))
+            .with_agent_access(ours.tool.access().unwrap());
         let call = run(json!([result_request("r", &row, 0, 100)]), true, outsider).await;
         assert!(refusal(&call).contains("scope"), "{}", refusal(&call));
-        let missing = JobCaller::new(ours.node.clone(), row_scope(&ours), tool_output_for(&ours));
+        let missing = JobCaller::new(ours.node.clone(), row_scope(&ours), tool_output_for(&ours))
+            .with_agent_access(ours.tool.access().unwrap());
         let call = run(
             json!([result_request("r", "no-such-row", 0, 100)]),
             true,
@@ -2265,7 +2277,8 @@ mod job_calls {
         if let StampContext::ToolOutput { caller_did, .. } = &mut node_stamp {
             *caller_did = ours.node_did.clone();
         }
-        let node_caller = JobCaller::new(ours.node.clone(), row_scope(&ours), node_stamp);
+        let node_caller = JobCaller::new(ours.node.clone(), row_scope(&ours), node_stamp)
+            .with_agent_access(ours.tool.access().unwrap());
         let call = run(
             json!([result_request("r", &row, 0, 100)]),
             true,
@@ -2282,7 +2295,8 @@ mod job_calls {
             theirs.node.clone(),
             row_scope(&theirs),
             tool_output_for(&theirs),
-        );
+        )
+        .with_agent_access(theirs.tool.access().unwrap());
         let call = run(json!([result_request("r", &row, 0, 100)]), true, caller).await;
         assert!(
             refusal(&call).contains("another plugin"),
@@ -2300,7 +2314,8 @@ mod job_calls {
             admission.node.clone(),
             row_scope(&admission),
             tool_output_for(&admission),
-        );
+        )
+        .with_agent_access(admission.tool.access().unwrap());
         let call = run(json!([result_request("r", &row, 0, 100)]), true, caller).await;
         let error = refusal(&call);
         assert!(error.starts_with("not_terminal"), "{error}");
@@ -2354,6 +2369,7 @@ mod job_calls {
             row_scope(&admission),
             tool_output_for(&admission),
         )
+        .with_agent_access(admission.tool.access().unwrap())
         .with_children(vec![CHAIN.into()], 64);
         let call = run(
             json!([
@@ -2392,7 +2408,8 @@ mod job_calls {
             admission.node.clone(),
             row_scope(&admission),
             tool_output_for(&admission),
-        );
+        )
+        .with_agent_access(admission.tool.access().unwrap());
         let mut unknown = result_request("r", &row, 0, 1);
         unknown["extra"] = json!(true);
         let call = run(json!([unknown]), true, caller).await;
