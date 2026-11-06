@@ -11,9 +11,10 @@ use gents::tools::background::job::view::{
     list_jobs, load_job_view, JobFilter, JobKey, StateFilter,
 };
 use gents::tools::background::status::ProcessControlScope;
+use gents::tools::call::control::client::send::ControlSendError;
 use gents_protocol::job::{
     JobChildState, JobControlKind, JobControlOutcome, JobOrigin, JobPauseReason, JobPhaseState,
-    JobReadError, JobState, JobView, JOB_CONTROL_PATH,
+    JobReadError, JobState, JobView,
 };
 
 use serde_json::{json, Value};
@@ -343,183 +344,37 @@ async fn control_job(
     view: &JobView,
     kind: JobControlKind,
 ) -> Result<Vec<String>> {
-    let result = control_job_remote(access, view, kind).await;
-    control_lines(kind, view, result)
+    match control_job_remote(access, view, kind).await {
+        Ok(outcome) => control_lines(kind, view, Ok(outcome)),
+        Err(ControlSendError::NotFound) => {
+            control_lines(kind, view, Err(JobReadError::NotYetObservable))
+        }
+        Err(ControlSendError::NotAuthorized) => {
+            control_lines(kind, view, Err(JobReadError::NotAuthorized))
+        }
+        Err(ControlSendError::PermissionDenied) => {
+            control_lines(kind, view, Err(JobReadError::PermissionDenied))
+        }
+        Err(error) => Err(anyhow::Error::new(error)),
+    }
 }
 
 async fn control_job_remote(
     access: &ConfigAccess,
     view: &JobView,
     kind: JobControlKind,
-) -> std::result::Result<JobControlOutcome, JobReadError> {
-    let ConfigAccess::Graphql(endpoint) = access else {
-        return Err(JobReadError::Unavailable {
-            message: "start the hosting runtime to control a job".to_owned(),
-        });
-    };
-    if endpoint.is_anonymous() {
-        return Err(JobReadError::NotAuthorized);
-    }
-    let unavailable = |message: String| JobReadError::Unavailable { message };
-    let actor = access.actor_did().ok_or(JobReadError::NotAuthorized)?;
+) -> std::result::Result<JobControlOutcome, ControlSendError> {
+    let actor = access.actor_did().ok_or(ControlSendError::NotAuthorized)?;
     let signer = gents::store::identity::RegisteredIdentity::from_registered_did(&actor, None)
-        .map_err(|error| unavailable(error.to_string()))?;
-    let action = match kind {
-        JobControlKind::Stop => "job_stop",
-        JobControlKind::Pause => "job_pause",
-    };
-    let intent = gents::tools::call::control::client::prepare(
+        .map_err(|error| ControlSendError::Unavailable(error.into()))?;
+    gents::tools::call::control::client::send::control_job(
         access,
         &signer,
         &view.scope.node_did,
         &view.row_doc_id,
-        None,
-        action,
+        kind,
     )
     .await
-    .map_err(|error| match error {
-        gents::tools::call::control::client::ClientControlError::NotFound => {
-            JobReadError::NotYetObservable
-        }
-        gents::tools::call::control::client::ClientControlError::NotAuthorized
-        | gents::tools::call::control::client::ClientControlError::WrongNode => {
-            JobReadError::NotAuthorized
-        }
-        error => unavailable(error.to_string()),
-    })?;
-    let unconfirmed = |detail: String| {
-        unavailable(format!("control intent {} was not confirmed after submission; the action may still take effect: {detail}", intent.intent_id))
-    };
-    let mut url =
-        reqwest::Url::parse(endpoint.url()).map_err(|error| unavailable(error.to_string()))?;
-    let prefix = url
-        .path()
-        .strip_suffix("/api/v0/graphql")
-        .ok_or_else(|| unavailable("runtime endpoint has no canonical GraphQL path".to_owned()))?;
-    url.set_path(&format!("{prefix}{JOB_CONTROL_PATH}"));
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|error| unavailable(error.to_string()))?;
-    let response = endpoint
-        .authorize(client.post(url))
-        .map_err(|error| unavailable(error.to_string()))?
-        .json(&intent)
-        .send()
-        .await
-        .map_err(|error| unconfirmed(error.to_string()))?;
-    match response.status() {
-        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
-            Err(JobReadError::NotAuthorized)
-        }
-        reqwest::StatusCode::NOT_FOUND => Err(JobReadError::NotYetObservable),
-        status if status.is_server_error() || status == reqwest::StatusCode::REQUEST_TIMEOUT => {
-            let detail = response.text().await.unwrap_or_default();
-            Err(unconfirmed(format!("runtime returned {status}: {detail}")))
-        }
-        status if !status.is_success() => Err(unavailable(format!("runtime returned {status}"))),
-        _ => {
-            let outcome: JobControlOutcome = response
-                .json()
-                .await
-                .map_err(|error| unconfirmed(error.to_string()))?;
-            let JobControlOutcome::Queued { intent_doc_id } = outcome else {
-                return Err(unconfirmed(
-                    "runtime returned an unsigned job outcome".into(),
-                ));
-            };
-            observe_control_receipt(access, view, kind, &intent_doc_id).await
-        }
-    }
-}
-
-async fn observe_control_receipt(
-    access: &ConfigAccess,
-    view: &JobView,
-    kind: JobControlKind,
-    intent_doc_id: &str,
-) -> std::result::Result<JobControlOutcome, JobReadError> {
-    tokio::time::timeout(
-        Duration::from_secs(30),
-        observe_control_receipt_inner(access, view, kind, intent_doc_id),
-    ).await.unwrap_or_else(|_| Err(JobReadError::Unavailable {
-        message: format!("control {intent_doc_id} was not confirmed before the observation deadline; it may still complete"),
-    }))
-}
-
-async fn observe_control_receipt_inner(
-    access: &ConfigAccess,
-    view: &JobView,
-    kind: JobControlKind,
-    intent_doc_id: &str,
-) -> std::result::Result<JobControlOutcome, JobReadError> {
-    let unavailable = |error: String| JobReadError::Unavailable {
-        message: format!("control {intent_doc_id}: {error}"),
-    };
-    let query = format!(
-        r#"subscription {{ AgentToolControl(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-        gents::store::graphql::escape_graphql_string(intent_doc_id)
-    );
-    let mut events = access
-        .subscribe(&query)
-        .await
-        .map_err(|error| unavailable(error.to_string()))?;
-    let claim_query = format!(
-        r#"subscription {{ AgentToolControlClaim(filter: {{ intent_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-        gents::store::graphql::escape_graphql_string(intent_doc_id)
-    );
-    let mut claim_events = access
-        .subscribe(&claim_query)
-        .await
-        .map_err(|error| unavailable(error.to_string()))?;
-    let action = match kind {
-        JobControlKind::Stop => "job_stop",
-        JobControlKind::Pause => "job_pause",
-    };
-    loop {
-        match gents::tools::call::control::client::read_receipt(
-            access,
-            &view.scope.node_did,
-            intent_doc_id,
-            &view.row_doc_id,
-            action,
-        )
-        .await
-        {
-            Ok(Some(receipt)) => return match receipt.outcome {
-                gents_protocol::process_control::ToolControlReceiptOutcome::Job(outcome) => {
-                    Ok(outcome)
-                }
-                gents_protocol::process_control::ToolControlReceiptOutcome::Rejected => {
-                    Err(JobReadError::PermissionDenied)
-                }
-                gents_protocol::process_control::ToolControlReceiptOutcome::Unconfirmed => {
-                    Err(unavailable(
-                        "the runtime could not confirm the control outcome; refresh the job state because the action may have taken effect"
-                            .into(),
-                    ))
-                }
-                _ => Err(JobReadError::Malformed {
-                    message: "unexpected control receipt".into(),
-                }),
-            },
-            Ok(None) => {}
-            Err(error) => return Err(unavailable(error.to_string())),
-        }
-        let event = tokio::select! {
-            event = events.recv() => event,
-            event = claim_events.recv() => event,
-        };
-        if event
-            .map_err(|error| unavailable(error.to_string()))?
-            .is_none()
-        {
-            return Err(unavailable(
-                "outcome subscription closed before a receipt arrived".into(),
-            ));
-        }
-    }
 }
 
 /// Answer first. A job that is not ours or not a job is an error carrying the
@@ -1489,7 +1344,7 @@ mod tests {
         let access = ConfigAccess::graphql("http://127.0.0.1:9/api/v0/graphql");
         assert!(matches!(
             control_job_remote(&access, &row, JobControlKind::Stop).await,
-            Err(JobReadError::NotAuthorized)
+            Err(ControlSendError::NotAuthorized)
         ));
     }
 
@@ -1517,7 +1372,7 @@ mod tests {
                 }]}}))
             }
         })).route(
-            JOB_CONTROL_PATH,
+            gents_protocol::job::JOB_CONTROL_PATH,
             post(
                 move |actor: defra_http::ExtractIdentity,
                       Json(request): Json<gents_protocol::process_control::ToolControlIntent>| {
@@ -1557,12 +1412,21 @@ mod tests {
         let access =
             ConfigAccess::graphql_as(format!("http://{address}/api/v0/graphql"), identity.did());
         let row = view("s1", "call-1", "alpha", JobState::Running, 1);
+        let error = control_job_remote(&access, &row, JobControlKind::Stop)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, ControlSendError::Unconfirmed { intent_doc_id: None, .. }),
+            "{error:?}"
+        );
+        let rendered = control_job(&access, &row, JobControlKind::Stop)
+            .await
+            .unwrap_err();
         assert!(matches!(
-            control_job_remote(&access, &row, JobControlKind::Stop).await,
-            Err(JobReadError::Unavailable { message }) if message.contains("control intent ")
-                && message.contains("the action may still take effect")
-                && message.contains("runtime returned an unsigned job outcome")
+            rendered.downcast_ref::<ControlSendError>(),
+            Some(ControlSendError::Unconfirmed { .. })
         ));
+        assert!(rendered.to_string().contains("the action may still take effect"));
     }
 
     #[test]

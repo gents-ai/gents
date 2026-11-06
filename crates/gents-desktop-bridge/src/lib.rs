@@ -30,7 +30,6 @@ pub mod snapshot;
 pub mod state;
 #[cfg(feature = "tauri-host")]
 pub mod tauri_commands;
-mod tool_control;
 pub mod types;
 #[cfg(feature = "tauri-host")]
 mod ux_watch;

@@ -8,6 +8,8 @@ use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
 
+pub mod send;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ClientControlError {
     #[error("the signed control intent is not authorized")]

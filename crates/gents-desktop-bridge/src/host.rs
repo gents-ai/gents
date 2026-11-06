@@ -750,9 +750,7 @@ impl ClientHost {
                     .map_err(BridgeError::untyped)?,
             ),
             ClientCommand::ProcessControl { request } => encode(
-                crate::process_control::process_control(&self.core, &request)
-                    .await
-                    .map_err(BridgeError::untyped)?,
+                crate::process_control::process_control(&self.core, &request).await?,
             ),
         }
     }
