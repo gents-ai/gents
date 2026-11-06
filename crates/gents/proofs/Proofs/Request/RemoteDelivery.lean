@@ -79,7 +79,7 @@ theorem missing_native_authorization_blocks_claim (record : RemoteRecord)
     (commit : CrossActorAuthorization.NativeCommit) (unsupported : observation.supported = false) :
     claim record observation commit = false := by
   cases h : record.intent.targetSessionDoc with
-  | none => simp [claim, claimDecision, h] <;> rfl
+  | none => simp [claim, claimDecision, h]; rfl
   | some session =>
       simp [claim, claimDecision, h, CrossActorAuthorization.decideClaim, unsupported]
       all_goals split <;> rfl

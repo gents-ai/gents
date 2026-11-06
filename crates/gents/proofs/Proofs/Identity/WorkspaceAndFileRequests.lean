@@ -351,8 +351,8 @@ def workspaceAgentSelectionCasesJson : String :=
   (Lean.toJson (cases.map fun (name, configured) =>
       let selected := freezeWorkspaceAgents "node" configured
       Lean.Json.mkObj [("name", Lean.toJson name), ("accepted", Lean.toJson selected.isSome),
-        ("writer", Lean.toJson (selected.map (·.writer))),
-        ("integrator", Lean.toJson (selected.map (·.integrator)))] )).compress
+        ("writer", Lean.toJson (selected.map WorkspaceAgentSelection.writer)),
+        ("integrator", Lean.toJson (selected.map WorkspaceAgentSelection.integrator))] )).compress
 
 def rootCompletenessCasesJson : String :=
   (Lean.toJson ([false, true].flatMap fun complete => [false, true].map fun configured =>
