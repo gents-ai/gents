@@ -8,7 +8,7 @@ use super::super::admit::{HostFacts, StepContext};
 use super::super::origin::engine_guard;
 use super::super::settings::effective_ceiling;
 use super::JobRuntime;
-use crate::plugin::store::{parse_coordinate, read_record, InstalledPlugin};
+use crate::plugin::store::{parse_coordinate, read_published_record, InstalledPlugin};
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::escape_graphql_string;
 use crate::tools::background::status::ProcessControlScope;
@@ -65,9 +65,18 @@ pub(in crate::tools::background::job) async fn step_context_for(
         .flatten()
         .find(|plugin| plugin.plugin == facts.plugin_ref)
         .and_then(|plugin| plugin.job);
-    let installed = parse_coordinate(&facts.plugin_ref)
-        .ok()
-        .and_then(|(namespace, name)| read_record(&runtime.home, namespace, name).ok());
+    let observed = match parse_coordinate(&facts.plugin_ref) {
+        Ok((namespace, name)) => match read_published_record(&runtime.home, namespace, name) {
+            Ok(record) => Some(record),
+            Err(error) if error.is_busy() => return Err(error.into()),
+            Err(_) => None,
+        },
+        Err(_) => None,
+    };
+    let (installed, _guard) = match observed {
+        Some((record, guard)) => (Some(record), Some(guard)),
+        None => (None, None),
+    };
     let policy = settings.as_ref().map(|settings| &settings.policy);
     let cwd = Path::new(&facts.cwd);
     let key = |target: &crate::documents::AgentTargetDocument| {

@@ -25,7 +25,9 @@ use super::settle::settle_plugin_job_in_txn;
 use super::{step_failure, JobRuntime, StepFailure};
 use crate::plugin::data::{DataCaller, StampContext};
 use crate::plugin::job_calls::JobCaller;
-use crate::plugin::store::{parse_coordinate, read_record, InstalledPlugin};
+use crate::plugin::store::{
+    parse_coordinate, read_published_record, InstalledPlugin, PublishedPluginReadError,
+};
 use crate::plugin::GuestTrap;
 use crate::request::lifecycle::SessionMessageCause;
 use crate::session::origin::SessionScope;
@@ -89,9 +91,10 @@ pub async fn run_step(
         .await?
         .with_context(|| format!("job row {row_doc_id} has no job_pin"))?;
     let (namespace, name) = parse_coordinate(&pin.plugin_ref)?;
-    let installed = match read_record(&runtime.home, namespace, name) {
-        Ok(record) if record.digest == pin.engine_digest => record,
+    let installed = match read_published_record(&runtime.home, namespace, name) {
+        Ok((record, _guard)) if record.digest == pin.engine_digest => record,
         Ok(_) => return fail_closed(&access, &mut lifecycle, Refusal::EngineChanged).await,
+        Err(error) if error.is_busy() => return Err(error.into()),
         Err(_) => return fail_closed(&access, &mut lifecycle, Refusal::NotAvailable).await,
     };
     let (input, revision) = build_step_input(&access, runtime, row_doc_id, StepKind::Later).await?;
@@ -148,6 +151,9 @@ pub(super) async fn step_on(
     let call = match call {
         Ok(call) => call,
         Err(error) => {
+            if crate::plugin::executor::publication_busy(&error) {
+                return Err(error);
+            }
             let trapped = error
                 .chain()
                 .any(|cause| cause.downcast_ref::<GuestTrap>().is_some());
@@ -260,6 +266,9 @@ pub(super) async fn step_on(
     let stepped = match stepped {
         Ok(stepped) => stepped,
         Err(error) => {
+            if PublishedPluginReadError::error_chain_is_busy(error.as_ref()) {
+                return Err(error);
+            }
             if matches!(
                 error.downcast_ref::<RecordError>(),
                 Some(RecordError::StaleRevision { .. })

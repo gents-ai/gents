@@ -130,11 +130,22 @@ pub fn check_plugin_ownership(
     }
 }
 
+fn any_error<E>(
+    error: &(dyn std::error::Error + 'static),
+    mut predicate: impl FnMut(&E) -> bool,
+) -> bool
+where
+    E: std::error::Error + 'static,
+{
+    gents_protocol::error_chain::find_map_source(error, |cause| {
+        cause.downcast_ref::<E>().filter(|error| predicate(error))
+    })
+    .is_some()
+}
+
 pub(crate) fn is_not_found(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+    any_error::<std::io::Error>(error.as_ref(), |io| {
+        io.kind() == std::io::ErrorKind::NotFound
     })
 }
 
@@ -277,20 +288,44 @@ pub fn lock_store(home: &Path, exclusive: bool) -> Result<StoreGuard> {
     })
 }
 
-/// Async mutation owners use a nonblocking lock attempt to avoid parking a Tokio worker.
-pub fn try_lock_store(home: &Path) -> Result<StoreGuard> {
-    try_lock_store_mode(home, true)
+#[derive(Debug, thiserror::Error)]
+pub enum PublishedPluginReadError {
+    #[error("plugin store is busy; retry this pack operation")]
+    Busy,
+    #[error("reading the published plugin store")]
+    Read(#[source] anyhow::Error),
 }
 
-pub(crate) fn try_lock_store_shared(home: &Path) -> Result<StoreGuard> {
+impl PublishedPluginReadError {
+    pub fn is_busy(&self) -> bool {
+        matches!(self, Self::Busy)
+    }
+
+    pub fn error_chain_is_busy(error: &(dyn std::error::Error + 'static)) -> bool {
+        any_error::<Self>(error, Self::is_busy)
+    }
+}
+
+/// Async mutation owners use a nonblocking lock attempt to avoid parking a Tokio worker.
+pub fn try_lock_store(home: &Path) -> Result<StoreGuard> {
+    try_lock_store_mode(home, true).map_err(Into::into)
+}
+
+pub(crate) fn try_lock_store_shared(
+    home: &Path,
+) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
     try_lock_store_mode(home, false)
 }
 
-fn try_lock_store_mode(home: &Path, exclusive: bool) -> Result<StoreGuard> {
+fn try_lock_store_mode(
+    home: &Path,
+    exclusive: bool,
+) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
     let path = plugins_root(home).join(".store.lock");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
+            .with_context(|| format!("creating {}", parent.display()))
+            .map_err(PublishedPluginReadError::Read)?;
     }
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -298,7 +333,8 @@ fn try_lock_store_mode(home: &Path, exclusive: bool) -> Result<StoreGuard> {
         .create(true)
         .truncate(false)
         .open(&path)
-        .with_context(|| format!("opening {}", path.display()))?;
+        .with_context(|| format!("opening {}", path.display()))
+        .map_err(PublishedPluginReadError::Read)?;
     let result = if exclusive {
         crate::store::local::file_lock::FileLock::try_exclusive(file)
     } else {
@@ -306,17 +342,28 @@ fn try_lock_store_mode(home: &Path, exclusive: bool) -> Result<StoreGuard> {
     };
     let lock = match result {
         Ok(lock) => lock,
-        Err(std::fs::TryLockError::WouldBlock) => {
-            anyhow::bail!("plugin store is busy; retry this pack operation")
-        }
+        Err(std::fs::TryLockError::WouldBlock) => return Err(PublishedPluginReadError::Busy),
         Err(std::fs::TryLockError::Error(error)) => {
-            return Err(error).with_context(|| format!("locking {}", path.display()));
+            return Err(PublishedPluginReadError::Read(
+                anyhow::Error::new(error).context(format!("locking {}", path.display())),
+            ));
         }
     };
     Ok(StoreGuard {
         home: home.to_owned(),
         _lock: lock,
     })
+}
+
+/// The guard keeps the plugin record and its pack provenance in one published observation.
+pub fn read_published_record(
+    home: &Path,
+    namespace: &str,
+    name: &str,
+) -> std::result::Result<(InstalledPlugin, StoreGuard), PublishedPluginReadError> {
+    let guard = try_lock_store_shared(home)?;
+    let record = read_record(home, namespace, name).map_err(PublishedPluginReadError::Read)?;
+    Ok((record, guard))
 }
 
 pub fn release_unreferenced_bytes(home: &Path, digests: &BTreeSet<String>) -> Result<Vec<String>> {

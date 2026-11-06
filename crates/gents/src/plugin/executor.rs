@@ -103,6 +103,17 @@ struct PluginAttemptError {
     receipt: PluginExecutionReceipt,
 }
 
+fn plugin_attempt_error(error: &anyhow::Error) -> Option<&PluginAttemptError> {
+    error.downcast_ref::<PluginAttemptError>()
+}
+
+pub(crate) fn publication_busy(error: &anyhow::Error) -> bool {
+    store::PublishedPluginReadError::error_chain_is_busy(error.as_ref())
+        || plugin_attempt_error(error).is_some_and(|attempt| {
+            store::PublishedPluginReadError::error_chain_is_busy(attempt.source.as_ref())
+        })
+}
+
 fn json_digest(value: &serde_json::Value) -> String {
     let canonical = crate::tools::workspace::canonical_json_string(value)
         .expect("JSON value has a canonical encoding");
@@ -554,8 +565,7 @@ impl PluginExecutor {
         let home = self.home.as_deref().with_context(|| {
             format!("plugin {coordinate} is not installed: this runtime has no plugin directory")
         })?;
-        let _store = store::try_lock_store_shared(home)?;
-        let record = store::read_record(home, namespace, name)
+        let (record, _store) = store::read_published_record(home, namespace, name)
             .with_context(|| format!("plugin {coordinate} is not installed"))?;
         if let Some(pinned) = pinned {
             anyhow::ensure!(
@@ -827,8 +837,7 @@ fn receipt_of(
 ) -> PluginExecutionReceipt {
     match result {
         Ok(call) => call.receipt.clone(),
-        Err(error) => error
-            .downcast_ref::<PluginAttemptError>()
+        Err(error) => plugin_attempt_error(error)
             .map(|error| error.receipt.clone())
             .unwrap_or(refused),
     }

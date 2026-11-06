@@ -13,7 +13,7 @@ use super::driver::{load_lifecycle, read_step_row, JobDriver, StepOutcome};
 use super::input::live_job_settings;
 use super::origin::engine_guard;
 use super::records::read_progress;
-use crate::plugin::store::{parse_coordinate, read_record};
+use crate::plugin::store::{parse_coordinate, read_published_record};
 use crate::request::binding::load_agent_request_by_doc_id_with_access;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
@@ -258,8 +258,12 @@ async fn facts_of(
         lifecycle.requester_did(),
     )
     .await?;
+    let now_millis = u64::try_from(chrono::Utc::now().timestamp_millis())?;
+    let deadline_expired = pin.adopted_at + pin.ceiling_at_pin.max_wall_secs * 1000 <= now_millis;
     let available = if session_stopped {
         Err(Refusal::NotAvailable)
+    } else if deadline_expired {
+        Ok(())
     } else {
         let caller = load_agent_request_by_doc_id_with_access(access, request_doc_id)
             .await?
@@ -267,11 +271,16 @@ async fn facts_of(
                 format!("the caller request of job row {row_doc_id} does not exist")
             })?;
         let settings = live_job_settings(runtime, &caller, &pin.plugin_ref).await?;
-        match parse_coordinate(&pin.plugin_ref)
-            .ok()
-            .and_then(|(namespace, name)| read_record(&runtime.home, namespace, name).ok())
-        {
-            Some(installed)
+        let observed = match parse_coordinate(&pin.plugin_ref) {
+            Ok((namespace, name)) => match read_published_record(&runtime.home, namespace, name) {
+                Ok(record) => Some(record),
+                Err(error) if error.is_busy() => return Err(error.into()),
+                Err(_) => None,
+            },
+            Err(_) => None,
+        };
+        match observed {
+            Some((installed, _guard))
                 if settings.is_some() && engine_guard(&runtime.home, &installed).is_ok() =>
             {
                 if installed.digest == pin.engine_digest {
@@ -289,7 +298,7 @@ async fn facts_of(
         pin,
         DurableRead {
             session_stopped,
-            now_millis: u64::try_from(chrono::Utc::now().timestamp_millis())?,
+            now_millis,
             available,
             progress_revision,
             in_flight,

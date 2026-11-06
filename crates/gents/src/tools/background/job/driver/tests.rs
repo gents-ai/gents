@@ -79,7 +79,11 @@ async fn job_row(name: &str) -> PublishedAdmission {
 }
 
 async fn finish(admission: PublishedAdmission) {
-    admission.node.shutdown().await.expect("shut down test node");
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     let _ = std::fs::remove_dir_all(admission.path);
 }
 
@@ -1129,6 +1133,64 @@ async fn budget_exceeded_pause_settles_paused() {
     let progress = step.progress(&step.row).await;
     assert_eq!(progress.state, JobState::Paused);
     assert_eq!(progress.pause_reason, Some(JobPauseReason::BudgetExceeded));
+    step.close().await;
+}
+
+#[tokio::test]
+async fn staged_plugin_defers_running_job_without_counting_a_failure() {
+    let step = stepper(json!({"result": "done"})).await;
+    let driver = JobDriver::new(step.job.runtime.clone());
+    let actor = super::super::input::tests::agent_actor();
+    let before = step.row_json(&step.row).await;
+    let guard = crate::plugin::store::try_lock_store(&step.job.runtime.home).unwrap();
+    for _ in 0..3 {
+        let error = driver
+            .step_now(&step.row, &actor)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            crate::plugin::store::PublishedPluginReadError::error_chain_is_busy(error.as_ref())
+        );
+    }
+    crate::tools::background::job::recovery::redrive_running_jobs(&driver, &actor)
+        .await
+        .unwrap();
+    assert_eq!(step.row_json(&step.row).await, before);
+    assert!(!driver.failures.lock().unwrap().contains_key(&step.row));
+    drop(guard);
+    assert_eq!(step.run(&step.row).await, StepOutcome::Settled);
+    step.close().await;
+}
+
+#[tokio::test]
+async fn plugin_publication_after_step_precheck_is_transient() {
+    let step = stepper(json!({"result": "done"})).await;
+    let (input, revision) = step.input(&step.row).await;
+    let (namespace, name) =
+        crate::plugin::store::parse_coordinate(&input.pin.as_ref().unwrap().plugin_ref).unwrap();
+    let (installed, guard) =
+        crate::plugin::store::read_published_record(&step.job.runtime.home, namespace, name)
+            .unwrap();
+    drop(guard);
+    let mut lifecycle = step.lifecycle(&step.row).await;
+    let guard = crate::plugin::store::try_lock_store(&step.job.runtime.home).unwrap();
+    let error = super::step::step_on(
+        &step.job.runtime,
+        &mut lifecycle,
+        &installed,
+        input,
+        revision,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        crate::plugin::executor::publication_busy(&error),
+        "{error:#}"
+    );
+    assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "running");
+    drop(guard);
+    assert_eq!(step.run(&step.row).await, StepOutcome::Settled);
     step.close().await;
 }
 
