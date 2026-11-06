@@ -475,6 +475,7 @@ pub(crate) async fn install_remote(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents::store::identity::{KeyIdentity, NodeIdentity};
     use tokio::net::TcpListener;
     use tokio_tungstenite::accept_async;
 
@@ -503,7 +504,9 @@ mod tests {
             );
             Ok::<_, anyhow::Error>(())
         });
-        let key = ClientSigningCapability::from_ed25519_key(&[7; 32])?;
+        let key_home = tempfile::tempdir()?;
+        let key = KeyIdentity::load_or_create(key_home.path().join("user.key"), None)?
+            .client_signing_capability()?;
         let endpoint = GraphqlEndpoint::as_principal(
             format!("http://{address}/api/v0/graphql"),
             key.did().to_owned(),
@@ -571,7 +574,9 @@ mod tests {
             );
             Ok::<_, anyhow::Error>(())
         });
-        let key = ClientSigningCapability::from_ed25519_key(&[8; 32])?;
+        let key_home = tempfile::tempdir()?;
+        let key = KeyIdentity::load_or_create(key_home.path().join("user.key"), None)?
+            .client_signing_capability()?;
         let endpoint = GraphqlEndpoint::as_principal(
             format!("http://{address}/api/v0/graphql"),
             key.did().to_owned(),
