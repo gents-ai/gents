@@ -228,6 +228,25 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
+    pub(crate) async fn begin_execution_renewal_for_test_with_signer(
+        node: &Arc<EmbeddedNode>,
+        identity: Did,
+        signer: crate::store::identity::ManagedAgentSigner,
+    ) -> Result<ConfigApplyTxn<'static>> {
+        Self::begin_local_owned_with_signer(
+            node,
+            Some(identity),
+            Some(signer),
+            WriteOperation::new("test.execution_renewal")?,
+            Arc::new(AtomicBool::new(false)),
+            EmbeddedTransactionPurpose::ExecutionRenewal(Arc::new(
+                NativeOperationTracker::default(),
+            )),
+        )
+        .await
+    }
+
+    #[cfg(test)]
     pub(crate) async fn begin_local(
         node: &Arc<EmbeddedNode>,
         identity: Option<Did>,

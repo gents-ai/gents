@@ -105,7 +105,7 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             .await;
             bound.insert(
                 active,
-                extract_single_doc_id(&response, "create_AgentRequest").unwrap(),
+                response["create_AgentRequest"][0]["_docID"].as_str().map(str::to_owned).unwrap(),
             );
             names.insert(active, active.to_string());
         }
@@ -132,7 +132,7 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
                     );
                 }
                 let response = agent_write(&db, "test.management.seed", &mutation).await;
-                extract_single_doc_id(&response, "create_AgentRequest").unwrap()
+                response["create_AgentRequest"][0]["_docID"].as_str().map(str::to_owned).unwrap()
             };
             bound.insert(entry.request_id, id);
         }

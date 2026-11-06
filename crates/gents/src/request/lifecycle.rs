@@ -26,8 +26,6 @@ mod claim;
 mod execution_lease;
 mod execution_renewal;
 #[cfg(test)]
-pub(crate) use execution_renewal::renew_once_at as renew_execution_lease_once_at;
-#[cfg(test)]
 pub(crate) use execution_renewal::renew_once_at_with_access as renew_execution_lease_once_at_with_access;
 #[cfg(test)]
 pub(crate) use execution_renewal::renew_with_recheck_at;
