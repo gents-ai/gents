@@ -345,7 +345,8 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     );
     let session = http(admin_address, &candidate)?.write(
         "test.transport.private_session",
-        "mutation { create_AgentSession(input:{session_id:\"private\",node_did:\"foreign\",agent_did:\"foreign-agent\"}) {_docID} }",
+        &format!(r#"mutation {{ create_AgentSession(input:{{session_id:"private",node_did:"{}",agent_did:"{}"}}) {{_docID}} }}"#,
+            escape_graphql_string(candidate.did()), escape_graphql_string(agent.did())),
     ).await?;
     let session = gents_protocol::graphql::extract_mutation_doc_id(&session, "AgentSession")?;
     let session_query = format!(
