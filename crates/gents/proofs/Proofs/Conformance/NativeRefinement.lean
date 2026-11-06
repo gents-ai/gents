@@ -54,12 +54,14 @@ def targetCasesJson : String :=
   let cases := do
     let table ← [[], bindings.take 3, bindings]
     let wire ← ["review-local", "review-remote", "review-alias", "reviewer", "missing"]
-    let ids ← [[], ["review-local"], ["review-remote"], ["reviewer"], ["review-alias"]]
+    let ids ← [[], ["review-local"], ["review-remote"], ["reviewer"], ["review-alias"],
+      ["missing"], ["review-remote", "missing", "review-local"]]
     let target ← [("node-local", "reviewer"), ("node-remote", "reviewer"),
       ("node-local", "other-agent")]
     pure (Json.mkObj [
       ("bindings", toJson (table.map bindingJson)), ("wire", toJson wire),
       ("ids", toJson ids), ("target", toJson [target.1, target.2]),
+      ("expected_guest_targets", toJson (guestTargets ids table)),
       ("expected_resolved", match resolve table wire with
         | none => Json.null
         | some pair => toJson [pair.1, pair.2]),

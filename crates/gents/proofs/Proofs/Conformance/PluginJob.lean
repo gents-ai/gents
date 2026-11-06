@@ -1356,6 +1356,9 @@ private def wireInputJson (s : InputSample) : Json :=
   let j := s.job
   let echo := stepEcho j
   let c := context
+  let targets := match j.pin with
+    | none => c.live.targets
+    | some pin => TargetResolution.meetIds c.live.targets pin.ceilingAtPin.targets
   Json.mkObj ([("protocol", toJson (1 : Nat)),
     ("job", Json.mkObj [("row_doc_id", toJson j.rowDoc), ("chain_root_doc_id", toJson j.root),
       ("chain", toJson (if j.root == j.rowDoc then [j.rowDoc] else [j.root, j.rowDoc])),
@@ -1373,7 +1376,7 @@ private def wireInputJson (s : InputSample) : Json :=
     optField "root_call" (echo.rootCall.map wireRootCallJson) ++
     [("pin", toJson (j.pin.map wirePinJson)),
      ("origin", toJson (j.pin.map fun p => originJson p.origin)),
-     ("ceiling", Json.mkObj [("targets", toJson c.live.targets),
+     ("ceiling", Json.mkObj [("targets", toJson (TargetResolution.guestTargets targets c.bindings)),
         ("max_live", toJson c.live.maxLive),
         ("remaining_spawns", toJson (Step.remainingSpawns c.live.maxSpawns j)),
         ("max_messages_per_slot", toJson c.live.maxMessagesPerSlot),
