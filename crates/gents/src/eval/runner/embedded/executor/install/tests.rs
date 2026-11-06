@@ -249,7 +249,7 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
             case.cursor.to_string()
         );
         let through = case.through.to_string();
-        let advanced = access
+        let result = access
             .transact_write("test.checkpoint.advance", |txn| {
                 let consumer = &consumer;
                 let through = &through;
@@ -258,8 +258,7 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
                     checkpoint_prefix(txn, owner, consumer, "CheckpointWork", through, false).await
                 })
             })
-            .await
-            .unwrap();
+            .await;
         let after = agent
             .execute("{ EventSourceCursor { after } }")
             .await
@@ -268,7 +267,11 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
             after["data"]["EventSourceCursor"][0]["after"],
             case.expected.to_string()
         );
-        assert_eq!(advanced, case.expected == case.through);
+        if case.actor == *modeled_agent {
+            assert_eq!(result.unwrap(), case.expected == case.through);
+        } else {
+            assert!(result.is_err());
+        }
     }
     assert_eq!(fixture.task_checkpoint_cases.len(), 5);
     home.node.shutdown().await.unwrap();
