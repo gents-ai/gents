@@ -55,7 +55,10 @@ def datastoreScopeEnabled : ToolPolicy.EndpointScope (String × String) (Finset 
 /-- Project operation requirements from the existing configured tool surface
 after its stable ceiling, independently of transient service availability.
 These source-specific node permissions do not confer document ACP, bypass,
-or the ability to grant permissions. Native authorization remains decisive. -/
+or the ability to grant permissions. Native authorization remains decisive.
+Datastore write declarations create documents only. Self-configuration cleanup
+requires the node category for Agent and Context deletion; the agent category
+alone does not authorize cleanup. -/
 def toolOperationSources (surface : ToolPolicy.Surface) (packInstall : Bool) : List (String × String) :=
   let emit (purpose : String) (enabled : Bool) (permissions : List String) : List (String × String) :=
     if enabled then permissions.map (fun permission => (purpose, permission)) else []
@@ -70,8 +73,13 @@ def toolOperationSources (surface : ToolPolicy.Surface) (packInstall : Bool) : L
     ("self-config:tools", "tools"), ("self-config:profile", "profile")].flatMap fun (purpose, category) =>
       emit purpose (surface.selfConfig && selfConfigCategoryEnabled surface.selfConfigCategories category)
         ["delete-dac-relation"]) ++
+  ([("self-config:node", "node"), ("self-config:tools", "tools"),
+    ("self-config:profile", "profile"), ("self-config:backend", "backend"),
+    ("self-config:mcp-service", "mcp_service"), ("self-config:automation", "automation")].flatMap fun (purpose, category) =>
+      emit purpose (surface.selfConfig && selfConfigCategoryEnabled surface.selfConfigCategories category)
+        ["delete-document"]) ++
   emit "pack-install" (surface.selfConfig && selfConfigScopeEnabled surface.selfConfigCategories && packInstall)
-    ["delete-dac-relation"]
+    ["delete-dac-relation", "delete-document"]
 
 /-- Tool selections and their source-scoped native grants change together.
 Direct grants and ownership are separate native paths. The authorization and

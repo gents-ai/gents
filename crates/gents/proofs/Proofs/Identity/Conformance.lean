@@ -1404,6 +1404,7 @@ def toolOperationCases : List Json :=
    toolOperationCaseJson "self-config-tools" false false false false true false "tools",
    toolOperationCaseJson "self-config-profile" false false false false true false "profile",
    toolOperationCaseJson "self-config-backend" false false false false true false "backend",
+   toolOperationCaseJson "self-config-mcp-service" false false false false true false "mcp_service",
    toolOperationCaseJson "self-config-automation" false false false false true false "automation",
    toolOperationCaseJson "pack-independent" false false false false true true "backend",
    toolOperationCaseJson "schema-and-pack-overlap" true false false false true true "all",
