@@ -2,56 +2,91 @@ use super::*;
 
 #[tokio::test]
 async fn session_token_usage_breakdown_sums_to_the_total() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::store::schema::ensure_runtime_schemas(&node)
+    use crate::store::identity::NodeIdentity;
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
+    use serde_json::json;
+
+    let (db, user, user_access, binding) =
+        crate::test_support::signed_test_node("goal-session-usage").await;
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let owner = db.node_identity.did();
+    let create = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        "usage-request",
+        owner,
+        user.did(),
+        agent.did(),
+        "usage-session",
+        "test",
+        "interactive",
+        "2026-07-15T00:00:00Z",
+        AgentRequestAdmissionRecord::client(user.did()),
+    );
+    let lifecycle =
+        crate::tools::call::lifecycle::admission_fixture::pending_client_fixture_request(
+            &db.node,
+            &user_access,
+            db.node_identity.clone(),
+            &user,
+            agent.as_ref(),
+            create,
+        )
         .await
         .unwrap();
-    let owner = "did:key:z6MkTestOwner";
-    let request = format!(
-        r#"mutation {{ create_AgentRequest(input: {{
-            request_id: "usage-request", purpose: "normal", node_did: "{owner}",
-            session_id: "usage-session", agent_did: "general", content: "test",
-            lifecycle_state: "completed", backend_id: "",
-            created_at: "2026-07-15T00:00:00Z", retry_count: 0, max_retries: 0
-        }}) {{ _docID }} }}"#
-    );
-    let response = node.execute(&request).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let request_doc_id =
-        crate::store::graphql::single_mutation_document(&response, "create_AgentRequest")
-            .unwrap()
-            .and_then(|document| document.get("_docID"))
-            .and_then(serde_json::Value::as_str)
-            .unwrap()
-            .to_owned();
+    let request_doc_id = lifecycle.request().doc_id.clone();
+    let session_doc_id = user_access
+        .transact_readonly("test.goal_usage.session", |txn| {
+            Box::pin(async move {
+                crate::session::load_agent_session_owner_in_txn(txn, owner, "usage-session").await
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap()
+        .doc_id;
+    let agent_access = crate::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
     for (seq, prompt, completion) in [(1, 1000, 50), (2, 200, 7)] {
-        let call = format!(
-            r#"mutation {{ add_InferenceCall(input: {{
-                call_id: "usage-call-{seq}", runtime_instance_id: "goal-test",
-                request_id: "usage-request", request_doc_id: "{request_doc_id}", call_seq: {seq}, backend_id: "backend-test",
-                agent_did: "test", node_did: "{owner}", call_kind: "inference", attempt: 1,
-                call_state: "completed", queued_at: "2026-07-15T00:00:00Z",
-                started_at: "2026-07-15T00:00:00Z", ended_at: "2026-07-15T00:00:01Z",
-                priority: 0, queue_depth_at_enqueue: 0, controller_generation: 1,
-                backend_config_fingerprint: "goal-test",
-                prompt_tokens: {prompt}, completion_tokens: {completion}
-            }}) {{ _docID }} }}"#
-        );
-        let response = node.execute(&call).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
+        let input = json!({
+            "call_id": format!("usage-call-{seq}"), "runtime_instance_id": "goal-test",
+            "request_id": "usage-request", "request_doc_id": request_doc_id,
+            "session_id": "usage-session", "call_seq": seq, "backend_id": "backend-test",
+            "agent_did": agent.did(), "node_did": owner, "call_kind": "inference", "attempt": 1,
+            "call_state": "completed", "queued_at": "2026-07-15T00:00:00Z",
+            "started_at": "2026-07-15T00:00:00Z", "ended_at": "2026-07-15T00:00:01Z",
+            "priority": 0, "queue_depth_at_enqueue": 0, "controller_generation": 1,
+            "backend_config_fingerprint": "goal-test", "prompt_tokens": prompt,
+            "completion_tokens": completion,
+        });
+        agent_access.transact_write("test.goal_usage.call", |txn| {
+            let input = &input;
+            let session_doc_id = &session_doc_id;
+            Box::pin(async move {
+                let response = txn.execute_with_variables(
+                    "mutation($input: InferenceCallMutationInputArg!) { create_InferenceCall(input: $input) { _docID } }",
+                    &json!({"input": input}),
+                ).await?;
+                let doc = crate::store::graphql::created_doc_id(&response, "InferenceCall")?;
+                txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc_id).await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        }).await.unwrap();
     }
-    let usage = crate::store::config_client::ConfigAccess::transact_local_readonly(
-        &node,
-        None,
-        "goal.session_usage_breakdown_test",
-        |txn| {
+    let usage = agent_access
+        .transact_readonly("goal.session_usage_breakdown_test", |txn| {
             Box::pin(async move {
                 session_token_usage_breakdown_in_txn(txn, owner, "usage-session").await
             })
-        },
-    )
-    .await
-    .unwrap();
+        })
+        .await
+        .unwrap();
     assert_eq!(
         usage,
         SessionTokenUsage {
@@ -63,8 +98,8 @@ async fn session_token_usage_breakdown_sums_to_the_total() {
     assert_eq!(usage.input + usage.output, usage.total);
     assert_eq!(
         session_token_usage(
-            &node,
-            &identity::Did::new(owner).unwrap(),
+            &db.node,
+            &identity::Did::new(agent.did()).unwrap(),
             owner,
             "usage-session"
         )
@@ -72,6 +107,11 @@ async fn session_token_usage_breakdown_sums_to_the_total() {
         .unwrap(),
         1257
     );
+    let calls = user_access
+        .execute("{ InferenceCall { _docID } }")
+        .await
+        .unwrap();
+    assert_eq!(calls["data"]["InferenceCall"].as_array().unwrap().len(), 2);
 }
 
 async fn auto_resume_access() -> (crate::ConfigAccess, String) {
