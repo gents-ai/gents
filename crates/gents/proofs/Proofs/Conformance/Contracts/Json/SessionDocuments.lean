@@ -10,6 +10,14 @@ import Proofs.Conformance.RuntimeInput
 namespace Conformance.Contracts
 open Lean Conformance.SessionDocuments
 
+def pluginJobOpeningCasesJson : String :=
+  let good : AgentSession.PluginJobOpening := ⟨true, true, true, true, true⟩
+  let cases : List (String × AgentSession.PluginJobOpening) :=
+    [("valid", good), ("wrong_pin", { good with pinnedSpawnMatches := false }),
+     ("failed_transaction", { good with writesComplete := false })]
+  (toJson (cases.map fun (name, opening) => Json.mkObj [
+    ("name", toJson name), ("commits", toJson (AgentSession.pluginJobOpeningCommits opening))])).compress
+
 def scopeJson (s : AgentSession.Scope) : Json := Json.mkObj
   [("node", toJson s.node), ("session", toJson s.session), ("requester", toJson s.requester)]
 def requestJson (r : AgentSession.RequestFact) : Json := Json.mkObj

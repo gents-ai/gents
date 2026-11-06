@@ -565,6 +565,7 @@ def snapshotSessionCasesJson : String :=
     ++ "\"configuration_scope_cases\":" ++ Conformance.ConfigurationScope.casesJson ++ ","
     ++ "\"initial_inference_cases\":" ++ Conformance.Initialization.casesJson ++ ","
     ++ "\"session_document_cases\":" ++ sessionDocumentsJson ++ ","
+    ++ "\"plugin_job_opening_cases\":" ++ pluginJobOpeningCasesJson ++ ","
     ++ "\"session_reply_preview_cases\":" ++ Conformance.SessionReplyPreview.casesJson ++ ","
     ++ "\"background_wake_row_cases\":" ++ backgroundWakeRowsCasesJson ++ ","
     ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","

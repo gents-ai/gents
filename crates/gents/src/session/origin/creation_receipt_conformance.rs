@@ -203,5 +203,28 @@ async fn receipt_signer_matches_creation_model() {
             case.expected,
             "{case:?}"
         );
+        if case.agent_new {
+            let mut job_receipt = session
+                .provenance
+                .as_ref()
+                .unwrap()
+                .creation_receipt
+                .clone()
+                .unwrap();
+            job_receipt.cause = SessionCreationCause::PluginJob;
+            job_receipt.signature = signer.sign(&job_receipt.signing_payload()).await.unwrap();
+            let mut job_session = session.clone();
+            job_session.provenance.as_mut().unwrap().creation_receipt = Some(job_receipt);
+            assert_eq!(
+                verified_creation_receipt(
+                    &job_session,
+                    "physical",
+                    SessionCreationCause::PluginJob
+                )
+                .is_some(),
+                case.expected,
+                "PluginJob: {case:?}"
+            );
+        }
     }
 }

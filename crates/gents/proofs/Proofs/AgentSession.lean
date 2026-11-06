@@ -34,7 +34,7 @@ structure StarterEvidence where
   deriving DecidableEq, Repr
 
 /-- A receipt is signed by the creating Agent in the transaction that creates
-the session. For agent_new that is the requester; the selected Agent is the
+the session. For agent_new and PluginJob that is the requester; the selected Agent is the
 worker and may differ. The node identifier is routing data, not the signer. Its
 request and causal kind bind the verified opening evidence; a
 pre-existing session never receives one from a later request. -/
@@ -48,15 +48,18 @@ structure CreationReceipt where
   starter : Option StarterEvidence := none
   deriving DecidableEq, Repr
 
-def creationReceiptSigner (agentNew : Bool) (requester : Option AgentDid)
+def creationReceiptSigner (creatorSigned : Bool) (requester : Option AgentDid)
     (selected : AgentDid) : Option AgentDid :=
-  if agentNew then requester else some selected
+  if creatorSigned then requester else some selected
 
 theorem agent_new_receipt_uses_creator (creator worker : AgentDid) :
     creationReceiptSigner true (some creator) worker = some creator := rfl
 
 theorem agent_new_receipt_requires_creator (worker : AgentDid) :
     creationReceiptSigner true none worker = none := rfl
+
+theorem plugin_job_receipt_uses_creator (creator worker : AgentDid) :
+    creationReceiptSigner true (some creator) worker = some creator := rfl
 
 def creationReceiptAtEnsure (existing : Bool) (receipt : CreationReceipt) : Option CreationReceipt :=
   if existing then none else some receipt
@@ -68,6 +71,36 @@ theorem existing_session_never_receives_creation_receipt (receipt : CreationRece
 theorem new_session_receives_creation_receipt (receipt : CreationReceipt) :
     creationReceiptAtEnsure false receipt = some receipt := by
   simp [creationReceiptAtEnsure]
+
+/-- A PluginJob opening binds the signed immediate author, accepted parent
+tool and pinned spawn identity before reserving the target. The session,
+opening request, working-agent link and creation receipt commit together. -/
+structure PluginJobOpening where
+  authorMatches : Bool
+  parentVerified : Bool
+  pinnedSpawnMatches : Bool
+  targetAbsent : Bool
+  writesComplete : Bool
+  deriving DecidableEq, Repr
+
+def pluginJobOpeningCommits (opening : PluginJobOpening) : Bool :=
+  opening.authorMatches && opening.parentVerified && opening.pinnedSpawnMatches &&
+    opening.targetAbsent && opening.writesComplete
+
+theorem plugin_job_missing_parent_refused (opening : PluginJobOpening)
+    (missing : opening.parentVerified = false) :
+    pluginJobOpeningCommits opening = false := by
+  simp [pluginJobOpeningCommits, missing]
+
+theorem plugin_job_incomplete_write_refused (opening : PluginJobOpening)
+    (incomplete : opening.writesComplete = false) :
+    pluginJobOpeningCommits opening = false := by
+  simp [pluginJobOpeningCommits, incomplete]
+
+theorem plugin_job_existing_target_refused (opening : PluginJobOpening)
+    (existing : opening.targetAbsent = false) :
+    pluginJobOpeningCommits opening = false := by
+  simp [pluginJobOpeningCommits, existing]
 
 structure Provenance where
   task : Option Nat := none
