@@ -235,18 +235,20 @@ fn enrollment_owned_base_route_has_explicit_runtime_to_client_direction() {
     .expect("enrollment-owned client route")
     .expect("some enrollment base layer");
 
-    assert!(desired.replicator_collections.contains("Agent"));
+    // Client routes carry only the signed PeerRegistry discovery documents; the
+    // runtime-to-client direction scopes them to the runtime's own DID.
+    assert!(desired.replicator_collections.contains("PeerRegistry"));
+    assert!(!desired.replicator_collections.contains("AgentRequest"));
     let encoded = serde_json::to_string(
         desired
             .replicator_filter
-            .get("AgentRequest")
-            .expect("request filter"),
+            .get("PeerRegistry")
+            .expect("registry filter"),
     )
     .unwrap();
-    assert!(encoded.contains("requester_did"));
-    assert!(encoded.contains("did:key:phone"));
     assert!(encoded.contains("node_did"));
     assert!(encoded.contains("did:key:runtime"));
+    assert!(!desired.replicator_filter.contains_key("AgentRequest"));
 }
 
 #[tokio::test]
