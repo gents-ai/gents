@@ -31,8 +31,11 @@ impl NodeReadinessWriter for FailDemotionWriter {
 async fn aborted_staged_generation_does_not_release_active_startup_obligation() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let (status_owner, runtime_status) =
-        RuntimeStatusHandle::start(node.clone(), "did:test:startup-generation-barrier");
+    let node_did = node
+        .node_identity_did()
+        .expect("fixture node has an identity")
+        .to_owned();
+    let (status_owner, runtime_status) = RuntimeStatusHandle::start(node.clone(), node_did);
     runtime_status.initialize_startup("general").await.unwrap();
     let barrier = Arc::new(StartupBarrier::ready_for_test());
     let (fatal_error, _fatal_errors) = mpsc::unbounded_channel();
