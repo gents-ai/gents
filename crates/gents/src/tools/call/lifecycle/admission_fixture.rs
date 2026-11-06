@@ -214,7 +214,8 @@ async fn complete_child_managed_inner(
         .expect("fixture request selects an agent");
     let request = row.try_into().unwrap();
     let (request, admission) = if let Some(runtime) = runtime {
-        let (_, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+        let (_owner, authority) =
+            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
         let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             runtime,
