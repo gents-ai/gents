@@ -326,6 +326,7 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
     let node = Arc::new(
         EmbeddedNode::builder()
             .with_node_identity_did(identity.did())
+            .with_node_acp_owner(identity.did().to_owned())
             .build()
             .await
             .unwrap(),
@@ -996,6 +997,14 @@ async fn remote_client_signs_conditional_mailbox_dismissal() -> anyhow::Result<(
             .build()
             .await?,
     );
+    let owner_context =
+        defra_core::RequestContext::default().with_identity(Some(actor.did().to_owned()));
+    node.add_dac_policy_with_counter_as(
+        &owner_context,
+        gents_protocol::schemas::MAILBOX_POLICY,
+        0,
+    )
+    .await?;
     node.add_collection(gents_protocol::schemas::MAILBOX_ITEM)
         .await?;
     let endpoint = crate::store::config_client::GraphqlEndpoint::as_principal(
