@@ -12,12 +12,57 @@ structure Installed where
   operations : List String
   deriving FromJson
 
+structure Agent where
+  nodeDid : String
+  agentDid : String
+  derived : String
+  contextId : String
+  enabled : Bool
+  deriving FromJson
+
+structure Context where
+  nodeDid : String
+  docId : String
+  contextId : String
+  toolsId : String
+  deriving FromJson
+
+structure Plugin where
+  coordinate : String
+  pin : Option String
+  deriving FromJson
+
+structure Tools where
+  nodeDid : String
+  docId : String
+  toolsId : String
+  plugins : List Plugin
+  deriving FromJson
+
 structure Observation where
+  node : String
   installed : List Installed
-  selections : List Identity.Configuration.PluginDeleteSelection
+  agents : List Agent
+  contexts : List Context
+  tools : List Tools
   actor : String
   direct : Bool
   deriving FromJson
+
+/-- Join the observed native document fields in the model; Rust supplies
+physical IDs, immutable identity derivation, selected plugin fields, and the
+reviewed host records without independently deciding the authorization. -/
+def selections (input : Observation) : List Identity.Configuration.PluginDeleteSelection :=
+  input.agents.flatMap fun agent =>
+    input.contexts.flatMap fun context =>
+      input.tools.flatMap fun tools =>
+        if agent.nodeDid == input.node && context.nodeDid == input.node &&
+            tools.nodeDid == input.node && agent.contextId == context.contextId &&
+            context.toolsId == tools.toolsId then
+          tools.plugins.map fun plugin =>
+            ⟨tools.docId, context.docId, plugin.coordinate, plugin.pin,
+              agent.agentDid, agent.derived, agent.enabled⟩
+        else []
 
 def expected (input : Observation) : Bool :=
   let roots := input.installed.filterMap fun record =>
@@ -25,7 +70,7 @@ def expected (input : Observation) : Bool :=
       some (⟨record.coordinate, record.digest⟩ : Identity.Configuration.PluginDeleteRoot)
     else none
   let state : Identity.Configuration.PluginDeleteProjection :=
-    { roots := roots, selections := input.selections }
+    { roots := roots, selections := selections input }
   input.direct || (Identity.Configuration.pluginDeleteSources state).any
     (fun source => source.agent == input.actor && source.permission == "delete-document")
 
