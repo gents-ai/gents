@@ -249,8 +249,9 @@ pub async fn run_step0(
             let (owner, _) = target
                 .as_ref()
                 .context("an admitted control entry has no job row")?;
-            let mut target_lifecycle = ToolCallLifecycle::load_by_doc_id(
+            let mut target_lifecycle = ToolCallLifecycle::load_by_doc_id_as(
                 runtime.node.clone(),
+                lifecycle.actor().clone(),
                 &request.row_doc_id,
                 &owner.node_did,
                 &owner.session_id,
