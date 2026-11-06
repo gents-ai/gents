@@ -279,7 +279,17 @@ function useEntries(): SearchEntry[] {
           run: () => void c.run(0),
         })),
     });
-  }, [fleet, selected, sections, homeDid, commands, automationsOn, hidden, packsHere, installed]);
+  }, [
+    fleet,
+    selected,
+    sections,
+    homeDid,
+    commands,
+    automationsOn,
+    hidden,
+    packsHere,
+    installed,
+  ]);
 }
 
 function PaletteBody({
