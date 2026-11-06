@@ -6,6 +6,19 @@ use super::query::load_agent_session;
 use super::*;
 use gents_protocol::session::{SessionTitle, SessionTitleSource};
 
+async fn verified_signer_as_user(
+    node: &defra_node::Node,
+    cid: &str,
+    user_did: &str,
+) -> anyhow::Result<String> {
+    let (block, signature) = node
+        .authorized_signed_block_bytes(cid, Some(user_did))
+        .await?;
+    let block = defra_core::block::Block::from_dag_cbor(&block)?;
+    let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
+    db::block::verify::verified_signature_signer_did(&block, &signature).map_err(anyhow::Error::msg)
+}
+
 #[tokio::test]
 async fn user_title_update_is_signed_on_authenticated_http() -> anyhow::Result<()> {
     use crate::store::identity::NodeIdentity;
@@ -64,7 +77,10 @@ async fn user_title_update_is_signed_on_authenticated_http() -> anyhow::Result<(
     let cid = row["_version"][0]["cid"]
         .as_str()
         .expect("signed title version");
-    assert_eq!(db.node.verified_block_signer_did(cid).await?, user.did());
+    assert_eq!(
+        verified_signer_as_user(&db.node, cid, user.did()).await?,
+        user.did()
+    );
     db.node.shutdown().await?;
     Ok(())
 }
@@ -219,8 +235,7 @@ async fn user_rename_rebuilds_after_confirmed_http_commit_conflict() -> anyhow::
     assert_eq!(row["title"]["text"], "final title");
     let cid = row["_version"][0]["cid"].as_str().expect("title version");
     assert_eq!(
-        db.node
-            .verified_block_signer_did(cid)
+        verified_signer_as_user(&db.node, cid, user.did())
             .await
             .context("verifying title signer")?,
         user.did()
