@@ -4,6 +4,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use defra_node::Node as EmbeddedNode;
 use gents_loop::account_usage::{UsageReport, UsageSource, UsageWindow};
+use gents_protocol::agent_identity::AgentIdentityBinding;
 use serde_json::{json, Value};
 
 use super::*;
@@ -38,6 +39,22 @@ fn claude_sign_in(did: &str, who: &str) -> OAuthCredential {
     )
 }
 
+/// Agents are identified by a DID derived from the node root and a random
+/// creation nonce, so fixtures provision them the way production does.
+fn provision_agents(
+    did: &str,
+    names: &[&'static str],
+) -> BTreeMap<&'static str, AgentIdentityBinding> {
+    let root = crate::test_support::held_runtime_identity(did);
+    names
+        .iter()
+        .map(|name| {
+            let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
+            (*name, binding)
+        })
+        .collect()
+}
+
 struct Fixture {
     cache: crate::inference::usage_observation::UsageCache,
     node: Arc<EmbeddedNode>,
@@ -45,6 +62,7 @@ struct Fixture {
     did: String,
     credentials: BTreeMap<&'static str, OAuthCredential>,
     backends: BTreeMap<&'static str, String>,
+    agents: BTreeMap<&'static str, AgentIdentityBinding>,
 }
 
 impl Fixture {
@@ -90,6 +108,7 @@ impl Fixture {
                 .await
                 .unwrap();
         }
+        let agents = provision_agents(did, &["x", "y", "z"]);
         let fixture = Self {
             cache: Default::default(),
             node,
@@ -97,6 +116,7 @@ impl Fixture {
             did: did.to_owned(),
             credentials,
             backends,
+            agents,
         };
         for (who, models) in [
             ("a", &["model-x", "model-s"][..]),
@@ -133,15 +153,25 @@ impl Fixture {
                 ),
                 (
                     Collection::Agent,
-                    json!({"node_did": did, "agent_did": "x", "context_id": "context-x", "inference_profile_id": "p"}),
+                    json!({"node_did": did, "agent_did": fixture.agents["x"].agent_did, "creation_nonce": fixture.agents["x"].creation_nonce, "context_id": "context-x", "inference_profile_id": "p"}),
                 ),
                 (
                     Collection::Agent,
-                    json!({"node_did": did, "agent_did": "y", "inference_profile_id": "p"}),
+                    json!({"node_did": did, "agent_did": fixture.agents["y"].agent_did, "creation_nonce": fixture.agents["y"].creation_nonce, "inference_profile_id": "p"}),
                 ),
             ])
             .await;
         fixture
+    }
+
+    /// Sorted DIDs of the named fixture agents, the order `agents_on_profile` uses.
+    fn agent_dids(&self, names: &[&str]) -> Vec<String> {
+        let mut dids: Vec<String> = names
+            .iter()
+            .map(|name| self.agents[*name].agent_did.clone())
+            .collect();
+        dids.sort();
+        dids
     }
 
     async fn apply(&self, documents: Vec<(Collection, Value)>) {
@@ -288,7 +318,7 @@ async fn candidates_list_other_enabled_accounts_with_usage() {
 
     assert_eq!(plan.profile, "p");
     assert_eq!(plan.account.label, "label-a");
-    assert_eq!(plan.agents, ["x", "y"]);
+    assert_eq!(plan.agents, fixture.agent_dids(&["x", "y"]));
     assert_eq!(plan.companions, ["summ"]);
     assert_eq!(plan.cost, SWITCH_COST);
     let listed: Vec<_> = plan
@@ -331,7 +361,7 @@ async fn switch_moves_only_the_profile() {
     );
     assert_eq!(receipt.account.label, "label-b");
     assert_eq!(receipt.backend_id, fixture.backends["b"]);
-    assert_eq!(receipt.agents, ["x", "y"]);
+    assert_eq!(receipt.agents, fixture.agent_dids(&["x", "y"]));
     assert_eq!(receipt.cost, SWITCH_COST);
     assert_eq!(receipt.companions_offered, ["summ"]);
     assert!(receipt.companions_moved.is_empty());
@@ -387,7 +417,8 @@ async fn next_turns_use_the_target_credentials() {
         })
         .await
         .unwrap();
-    for agent_did in ["x", "y"] {
+    for name in ["x", "y"] {
+        let agent_did = fixture.agents[name].agent_did.as_str();
         let profile = &references.agent_profiles(agent_did)[0];
         let (_, backend) = references.profile_with_backend(profile).unwrap().unwrap();
         let fields = backend.backend_fields();
@@ -396,9 +427,9 @@ async fn next_turns_use_the_target_credentials() {
             Some(fixture.backends["b"].as_str()),
             "{agent_did}"
         );
-        let mut behavior = PendingAgent::new(agent_did).build_with_identity_for_test(
-            crate::test_support::held_runtime_identity(&did),
-        );
+        let mut behavior = PendingAgent::new(agent_did)
+            .with_identity_binding_for_test(fixture.agents[name].clone())
+            .build_with_identity_for_test(crate::test_support::held_runtime_identity(&did));
         behavior.backend_id = fields.backend_id;
         behavior.backend_provider_kind = fields.backend_provider_kind;
         behavior.openai_wire_api = fields.openai_wire_api;
@@ -454,7 +485,7 @@ async fn companions_are_the_other_profiles_of_the_same_behaviors_on_one_account(
             ),
             (
                 Collection::Agent,
-                json!({"node_did": did, "agent_did": "y", "context_id": "context-y", "inference_profile_id": "p"}),
+                json!({"node_did": did, "agent_did": fixture.agents["y"].agent_did, "creation_nonce": fixture.agents["y"].creation_nonce, "context_id": "context-y", "inference_profile_id": "p"}),
             ),
             (
                 Collection::Compaction,
@@ -466,13 +497,13 @@ async fn companions_are_the_other_profiles_of_the_same_behaviors_on_one_account(
             ),
             (
                 Collection::Agent,
-                json!({"node_did": did, "agent_did": "z", "context_id": "context-z", "inference_profile_id": "m"}),
+                json!({"node_did": did, "agent_did": fixture.agents["z"].agent_did, "creation_nonce": fixture.agents["z"].creation_nonce, "context_id": "context-z", "inference_profile_id": "m"}),
             ),
         ])
         .await;
 
     let plan = fixture.plan().await.unwrap();
-    assert_eq!(plan.agents, ["x", "y", "z"]);
+    assert_eq!(plan.agents, fixture.agent_dids(&["x", "y", "z"]));
     assert_eq!(plan.companions, ["m", "summ"], "o is on another account");
     let summ = switch_candidates(&fixture.access, did, "summ", &[], Utc::now(), &[])
         .await
@@ -599,6 +630,7 @@ async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
         did: did.to_owned(),
         credentials: BTreeMap::new(),
         backends: BTreeMap::from([("k1", "k1".to_owned()), ("k2", "k2".to_owned())]),
+        agents: provision_agents(did, &["reader"]),
     };
     for (id, port) in [("k1", 1), ("k2", 2)] {
         let backend: InferenceBackend = serde_json::from_value(json!({
@@ -619,7 +651,7 @@ async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
             ),
             (
                 Collection::Agent,
-                json!({"node_did": did, "agent_did": "reader", "inference_profile_id": "k"}),
+                json!({"node_did": did, "agent_did": fixture.agents["reader"].agent_did, "creation_nonce": fixture.agents["reader"].creation_nonce, "inference_profile_id": "k"}),
             ),
         ])
         .await;
