@@ -1,7 +1,10 @@
 use std::borrow::Cow;
 
 use crate::app::{sample_chat, ChatLine};
-use crate::source::{Agent, Day, Intent, Session, SessionState, Update};
+use crate::source::{
+    Agent, Answer, BackgroundCall, Day, Intent, Job, Prompt, PromptKind, Session, SessionState,
+    Update,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tone {
@@ -27,6 +30,8 @@ pub enum RowAction {
     /// A position in `App.sessions`.
     OpenSession(usize),
     OpenDiff(usize),
+    /// A position in `App.jobs`.
+    OpenJob(usize),
     NotWired,
 }
 
@@ -128,7 +133,7 @@ pub fn sessions() -> Vec<Session> {
 
 pub const START_SESSION: usize = 3;
 
-const CHANGES: &[SidebarRow] = &[
+pub const CHANGES: &[SidebarRow] = &[
     note(" 3 files   +58  -12", Tone::Label),
     BLANK,
     row(
@@ -152,40 +157,61 @@ const CHANGES: &[SidebarRow] = &[
     note(" + Auth {", Tone::Add),
 ];
 
-const WORKFLOWS: &[SidebarRow] = &[
-    note(" 2 running   1 waiting", Tone::Label),
-    BLANK,
-    row(" ● change unit: cli ux", Tone::Plain, RowAction::NotWired),
-    note("     build · step 3 of 5", Tone::Label),
-    row(" ● nightly eval", Tone::Plain, RowAction::NotWired),
-    note("     trial 12 of 40", Tone::Label),
-    row(" ! pack release", Tone::Warn, RowAction::NotWired),
-    note("     waiting on your approval", Tone::Label),
-];
+/// Today's Workflows view: the sample's running row opens the first.
+pub fn jobs() -> Vec<Job> {
+    let job = |address: &str, session: &str, name: &str, title: &str, status: &str| Job {
+        address: address.to_string(),
+        session: session.to_string(),
+        name: name.to_string(),
+        title: title.to_string(),
+        status: status.to_string(),
+        waiting: false,
+        detail: Vec::new(),
+    };
+    let phases = ["✓ plan", "✓ edit", "● build", "○ test", "○ review"];
+    vec![
+        Job {
+            detail: phases.map(str::to_string).into(),
+            ..job(
+                "sample:change-unit",
+                "cli ux redesign",
+                "change unit",
+                "cli ux",
+                "build · step 3 of 5",
+            )
+        },
+        job(
+            "sample:nightly-eval",
+            "eval baseline",
+            "nightly eval",
+            "",
+            "trial 12 of 40",
+        ),
+        Job {
+            waiting: true,
+            ..job(
+                "sample:pack-release",
+                "pack registry login",
+                "pack release",
+                "",
+                "waiting on your approval",
+            )
+        },
+    ]
+}
 
-const BACKGROUND_AGENTS: &[SidebarRow] = &[
-    note(" 3 background   1 done", Tone::Label),
-    BLANK,
-    row(" ● Reviewer · cli ux", Tone::Plain, RowAction::NotWired),
-    note("     reading crates/gents-cli", Tone::Label),
-    row(
-        " ● Researcher · flaky test",
-        Tone::Plain,
-        RowAction::NotWired,
-    ),
-    note("     running for 4m", Tone::Label),
-    row(" ● Engineer · pack sync", Tone::Plain, RowAction::NotWired),
-    note("     running for 11m", Tone::Label),
-    row(" ✓ Triage · inbox", Tone::Accent, RowAction::NotWired),
-    note("     finished 2m ago", Tone::Label),
-];
-
-pub fn view_rows(view: View) -> &'static [SidebarRow] {
-    match view {
-        View::Changes => CHANGES,
-        View::Workflows => WORKFLOWS,
-        View::Agents => BACKGROUND_AGENTS,
-    }
+pub fn background() -> Vec<BackgroundCall> {
+    let call = |name: &str, status: &str, done| BackgroundCall {
+        name: name.to_string(),
+        status: status.to_string(),
+        done,
+    };
+    vec![
+        call("Reviewer · cli ux", "reading crates/gents-cli", false),
+        call("Researcher · flaky test", "running for 4m", false),
+        call("Engineer · pack sync", "running for 11m", false),
+        call("Triage · inbox", "finished 2m ago", true),
+    ]
 }
 
 pub const RAIL: &[SidebarRow] = &[
@@ -194,8 +220,6 @@ pub const RAIL: &[SidebarRow] = &[
     note(" +58", Tone::Add),
     note(" -12", Tone::Del),
 ];
-
-pub const PROMPT_ROW: &str = "  y yes   n no   a always";
 
 pub const CHAT: &[(&str, Tone)] = &[
     ("Group the sign-in commands under one parent.", Tone::You),
@@ -218,12 +242,6 @@ pub const CHAT: &[(&str, Tone)] = &[
     ("  M cli/mod.rs       +11 -5", Tone::File(1)),
     ("  A shell/mod.rs      +5", Tone::File(2)),
     ("", Tone::Plain),
-    (
-        "! Allow Engineer to run `cargo test -p gents-cli`?",
-        Tone::Warn,
-    ),
-    (PROMPT_ROW, Tone::Label),
-    ("", Tone::Plain),
 ];
 
 /// Marks a subagent's reply. Its row in the running list uses the same glyph.
@@ -237,11 +255,11 @@ pub enum RunState {
 }
 
 /// What `enter` on a running row reaches: a subagent's session, which opens on its parent tab's
-/// connection, or a row of the Workflows view.
+/// connection, or a job of the Workflows view, by its address.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Opens {
     Agent(String),
-    Workflow(usize),
+    Workflow(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -328,7 +346,7 @@ pub fn running() -> Vec<Running> {
         "cli ux",
         "build · step 3 of 5",
         RunState::Working,
-        Opens::Workflow(2),
+        Opens::Workflow("sample:change-unit".to_string()),
     );
     SUBAGENTS
         .iter()
@@ -381,6 +399,18 @@ pub fn agents() -> Vec<Agent> {
 
 const SAMPLE_REPLY: &str = " sample reply: nothing is wired to an agent yet.";
 
+/// The sample session's approval, asked as `agent`.
+pub(crate) fn approval(agent: &str) -> Prompt {
+    Prompt {
+        item: "sample:approval".to_string(),
+        kind: PromptKind::Gate,
+        title: format!("Allow {agent} to run `cargo test -p gents-cli`?"),
+        summary: None,
+        answer: Answer::Ack,
+        dismissable: true,
+    }
+}
+
 fn chat_lines(chat: Chat) -> Vec<ChatLine> {
     chat.iter()
         .map(|&(text, tone)| ChatLine {
@@ -398,9 +428,9 @@ pub fn answer(intent: &Intent) -> Vec<Update> {
             let child = SUBAGENTS
                 .iter()
                 .find(|(name, ..)| session.strip_prefix("child:") == Some(name));
-            let (lines, rows) = match child {
-                Some(&(.., chat)) => (chat_lines(chat), Vec::new()),
-                None => (sample_chat(agent), running()),
+            let (lines, rows, prompts) = match child {
+                Some(&(.., chat)) => (chat_lines(chat), Vec::new(), Vec::new()),
+                None => (sample_chat(), running(), vec![approval(agent)]),
             };
             vec![
                 Update::Opened {
@@ -410,6 +440,10 @@ pub fn answer(intent: &Intent) -> Vec<Update> {
                 Update::Running {
                     session: session.clone(),
                     rows,
+                },
+                Update::Prompts {
+                    session: session.clone(),
+                    prompts,
                 },
             ]
         }
@@ -441,7 +475,25 @@ pub fn answer(intent: &Intent) -> Vec<Update> {
             }
             updates
         }
-        Intent::Interrupt { .. } => Vec::new(),
+        Intent::Dismiss { session, .. } => vec![Update::Prompts {
+            session: session.clone(),
+            prompts: Vec::new(),
+        }],
+        Intent::Reply { session, text, .. } => vec![
+            Update::Prompts {
+                session: session.clone(),
+                prompts: Vec::new(),
+            },
+            Update::Item {
+                session: session.clone(),
+                line: ChatLine {
+                    text: text.clone(),
+                    tone: Tone::You,
+                    item: None,
+                },
+            },
+        ],
+        Intent::Interrupt { .. } | Intent::Refresh => Vec::new(),
     }
 }
 
@@ -550,7 +602,7 @@ pub const KEY_ROWS: &[(&str, &str, &str)] = &[
     ("Move between panes", "h / l, ctrl-w h/j/k/l", "ctrl-x o"),
     ("Next or previous tab", "gt / gT", "ctrl-x n / ctrl-x p"),
     ("Open a tab", ":tabnew", "ctrl-x t"),
-    ("Close the pane or tab", "ctrl-w q", "ctrl-x 0"),
+    ("Close the pane or tab", "ctrl-w q · :close", "ctrl-x 0"),
     ("Toggle the sessions sidebar", "[ or ctrl-w [", "ctrl-x ["),
     ("Toggle the right sidebar", "] or ctrl-w ]", "ctrl-x ]"),
     ("Next sidebar view", "ctrl-w }", "ctrl-x }"),
@@ -564,7 +616,7 @@ pub const KEY_ROWS: &[(&str, &str, &str)] = &[
         "j/k · pgup/pgdn",
         "ctrl-n/p · pgup/pgdn",
     ),
-    ("Send", "enter", "enter"),
+    ("Send, or stop the turn", "enter · s", "enter · ctrl-c"),
     ("Quit", ":q then enter", "ctrl-x ctrl-c"),
     ("ctrl-c", "clears, or says how to quit", ""),
 ];

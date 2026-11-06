@@ -1,4 +1,4 @@
-use std::io::{self, stdout};
+use std::io::{self, stdout, Write};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
@@ -102,29 +102,96 @@ where
     }
 }
 
-/// Renders before each input. Ends on quit, or with a failed terminal read.
+/// Takes every queued input, then renders once if any could change the screen: a render costs
+/// a pass over the transcript, and the terminal reports each mouse move. Ends on quit, or with a
+/// failed terminal read.
 fn run_loop<F>(mut app: App, receiver: &Receiver<Input>, mut render: F) -> io::Result<()>
 where
     F: FnMut(&App) -> io::Result<()>,
 {
+    render(&app)?;
     loop {
-        render(&app)?;
-        match receiver.recv() {
-            Ok(Input::Terminal(event)) => app.handle(event),
-            Ok(Input::Runtime(update)) => app.apply(update),
-            Ok(Input::TerminalError(error)) => return Err(error),
-            Err(_) => return Err(io::Error::other("the terminal stopped sending input")),
+        let Ok(first) = receiver.recv() else {
+            return Err(io::Error::other("the terminal stopped sending input"));
+        };
+        let mut changed = false;
+        for input in std::iter::once(first).chain(receiver.try_iter()) {
+            changed |= !inert(&input);
+            match input {
+                Input::Terminal(event) => {
+                    app.handle(event);
+                    if let Some(text) = app.take_clipboard() {
+                        copy(&text)?;
+                    }
+                }
+                Input::Runtime(update) => app.apply(update),
+                Input::TerminalError(error) => return Err(error),
+            }
+            if app.should_quit() {
+                return Ok(());
+            }
         }
-        if app.should_quit() {
-            return Ok(());
+        if changed {
+            render(&app)?;
         }
     }
+}
+
+/// Inputs `App::handle` ignores: pointer motion, releases, and key releases.
+fn inert(input: &Input) -> bool {
+    use event::{KeyEventKind, MouseEventKind};
+    match input {
+        Input::Terminal(Event::Mouse(mouse)) => matches!(
+            mouse.kind,
+            MouseEventKind::Moved | MouseEventKind::Drag(_) | MouseEventKind::Up(_)
+        ),
+        Input::Terminal(Event::Key(key)) => key.kind != KeyEventKind::Press,
+        _ => false,
+    }
+}
+
+/// OSC 52: the terminal puts `text` on the system clipboard.
+fn copy(text: &str) -> io::Result<()> {
+    let mut out = stdout();
+    write!(out, "\x1b]52;c;{}\x07", base64(text.as_bytes()))?;
+    out.flush()
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let bits = chunk.iter().enumerate().fold(0u32, |bits, (at, &byte)| {
+            bits | u32::from(byte) << (16 - 8 * at)
+        });
+        for at in 0..4 {
+            match at <= chunk.len() {
+                true => out.push(char::from(ALPHABET[(bits >> (18 - 6 * at) & 63) as usize])),
+                false => out.push('='),
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::keys::KeySet::Vim;
+
+    #[test]
+    fn base64_matches_known_vectors() {
+        let vectors = [
+            ("", ""),
+            ("f", "Zg=="),
+            ("fo", "Zm8="),
+            ("foo", "Zm9v"),
+            ("key:1", "a2V5OjE="),
+        ];
+        for (text, encoded) in vectors {
+            assert_eq!(base64(text.as_bytes()), encoded, "{text:?}");
+        }
+    }
 
     fn failure() -> io::Error {
         io::Error::other("the tty went away")
@@ -164,7 +231,42 @@ mod tests {
         });
         let error = ended.expect_err("the loop ends on the failure");
         assert_eq!(error.to_string(), "the tty went away");
-        assert_eq!(renders, 2, "a render before each input");
+        assert_eq!(renders, 1, "one render before the queued inputs");
         drop(sender);
+    }
+
+    #[test]
+    fn a_queued_batch_draws_once_and_mouse_motion_draws_nothing() {
+        let (sender, receiver) = mpsc::channel();
+        let mut sender = Some(sender);
+        let moved = || {
+            Input::Terminal(Event::Mouse(event::MouseEvent {
+                kind: event::MouseEventKind::Moved,
+                column: 3,
+                row: 3,
+                modifiers: event::KeyModifiers::NONE,
+            }))
+        };
+        let mut renders = 0;
+        let ended = run_loop(App::new(Vim, 80, 24), &receiver, |_| {
+            renders += 1;
+            if renders == 1 {
+                let sender = sender.as_ref().expect("held until the motion");
+                for _ in 0..20 {
+                    sender.send(Input::Terminal(Event::FocusGained)).unwrap();
+                }
+            } else if let Some(sender) = sender.take() {
+                for _ in 0..20 {
+                    sender.send(moved()).unwrap();
+                }
+            }
+            Ok(())
+        });
+        let error = ended.expect_err("the loop ends when its input stops");
+        assert_eq!(error.to_string(), "the terminal stopped sending input");
+        assert_eq!(
+            renders, 2,
+            "one draw for the 20 queued, none for the motion"
+        );
     }
 }

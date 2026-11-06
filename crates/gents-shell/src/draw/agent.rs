@@ -10,7 +10,8 @@ use crate::app::{App, Mode, Pane, Tab};
 use crate::commands::COMMANDS;
 use crate::keys::KeySet;
 use crate::layout::running_area;
-use crate::sample::{Opens, RunState, Tone, SUBAGENT_MARK};
+use crate::sample::{Opens, RunState, Running, Tone, SUBAGENT_MARK};
+use crate::source::Answer;
 
 const WORD: &str = "g e n t s";
 const HINT_SESSIONS_DOCKED: &str = "Pick a session on the left, or just start typing";
@@ -33,12 +34,12 @@ pub fn draw(app: &App, area: Rect, sessions_docked: bool, buf: &mut Buffer) {
     buf.set_string(x + 1, y + 2, rule, theme::edge(false));
 
     let tab = &app.tabs[app.active];
-    if tab.lines.is_empty() && tab.running.is_empty() {
+    if tab.lines.is_empty() && tab.running.is_empty() && tab.prompts.is_empty() {
         let typing = app.keymap.set() == KeySet::Emacs || app.mode == Mode::Input;
         startup(area, sessions_docked, typing, buf);
     } else {
         let rows = app.visible_rows(Pane::Agent, app.conversation_rect(area));
-        conversation(tab, rows, buf);
+        conversation(app, rows, buf);
     }
     running_rows(app, tab, area, buf);
     message_box(tab, message_box_area(area), focused, buf);
@@ -150,9 +151,9 @@ pub fn first_line(total: usize, height: u16, scroll: usize) -> usize {
     total.saturating_sub(usize::from(height) + scroll)
 }
 
-fn conversation(tab: &Tab, area: Rect, buf: &mut Buffer) {
-    let rows = tab.wrapped_rows(area.width);
-    let first = first_line(rows.len(), area.height, tab.scroll);
+fn conversation(app: &App, area: Rect, buf: &mut Buffer) {
+    let rows = app.conversation_rows(area.width);
+    let first = first_line(rows.len(), area.height, app.tabs[app.active].scroll);
     for ((text, tone), y) in rows[first..].iter().zip(area.top()..area.bottom()) {
         draw_row(buf, area, y, text, *tone, *tone == Tone::Reply);
         if *tone == Tone::You {
@@ -167,21 +168,57 @@ fn conversation(tab: &Tab, area: Rect, buf: &mut Buffer) {
     }
 }
 
+fn running_head(running: &Running) -> (String, Tone) {
+    let (mark, tone) = match (&running.opens, running.state) {
+        (Opens::Workflow(_), _) => ("▸", Tone::Plain),
+        (Opens::Agent(_), RunState::Working) => ("◆", Tone::Plain),
+        (Opens::Agent(_), RunState::Done) => ("◇", Tone::Label),
+        (Opens::Agent(_), RunState::Failed) => ("✗", Tone::Warn),
+    };
+    (format!(" {mark} {} · {}", running.name, running.job), tone)
+}
+
+/// `text` within `room` columns, ending in `…` where it is cut.
+fn clip(text: &str, room: usize) -> String {
+    if Span::raw(text).width() <= room {
+        return text.to_string();
+    }
+    let mut kept = String::new();
+    let mut used = 0;
+    for grapheme in Span::raw(text).styled_graphemes(Style::new()) {
+        let cell = Span::raw(grapheme.symbol).width();
+        if used + cell + 1 > room {
+            break;
+        }
+        kept.push_str(grapheme.symbol);
+        used += cell;
+    }
+    kept.push('…');
+    kept
+}
+
 fn running_rows(app: &App, tab: &Tab, pane: Rect, buf: &mut Buffer) {
     if tab.running.is_empty() {
         return;
     }
     let area = running_area(pane, tab.running.len() as u16);
-    let rows = tab.running.iter().zip(area.top()..area.bottom());
-    for (index, (running, y)) in rows.enumerate() {
+    let heads: Vec<(String, Tone)> = tab.running.iter().map(running_head).collect();
+    let width = |text: &str| Span::raw(text).width() as u16;
+    // One status column, clear of the longest title, unless the statuses need the room.
+    let head_w = heads.iter().map(|(head, _)| width(head)).max().unwrap_or(0);
+    let status_w = tab
+        .running
+        .iter()
+        .map(|running| width(&running.status))
+        .max()
+        .unwrap_or(0);
+    let status_x = (head_w + 2)
+        .max(RUNNING_STATUS_X)
+        .min(area.width.saturating_sub(status_w));
+    let rows = tab.running.iter().zip(heads).zip(area.top()..area.bottom());
+    for (index, ((running, (head, tone)), y)) in rows.enumerate() {
         let selected = tab.running_sel == Some(index);
-        let (mark, tone) = match (&running.opens, running.state) {
-            (Opens::Workflow(_), _) => ("▸", Tone::Plain),
-            (Opens::Agent(_), RunState::Working) => ("◆", Tone::Plain),
-            (Opens::Agent(_), RunState::Done) => ("◇", Tone::Label),
-            (Opens::Agent(_), RunState::Failed) => ("✗", Tone::Warn),
-        };
-        let head = format!(" {mark} {} · {}", running.name, running.job);
+        let head = clip(&head, usize::from(status_x.saturating_sub(1)));
         draw_row(buf, area, y, &head, tone, selected);
         if !selected && running.state == RunState::Working {
             let cell = Rect::new(area.x + 1, y, 1, 1);
@@ -192,8 +229,8 @@ fn running_rows(app: &App, tab: &Tab, pane: Rect, buf: &mut Buffer) {
         } else {
             theme::tone(Tone::Label)
         };
-        let room = usize::from(area.width.saturating_sub(RUNNING_STATUS_X));
-        buf.set_stringn(area.x + RUNNING_STATUS_X, y, &running.status, room, style);
+        let room = usize::from(area.width.saturating_sub(status_x));
+        buf.set_stringn(area.x + status_x, y, &running.status, room, style);
     }
     let hint = if app.can_fall_into_running() {
         Some("j select ")
@@ -223,11 +260,18 @@ fn message_box(tab: &Tab, area: Rect, focused: bool, buf: &mut Buffer) {
         buf.set_stringn(text_x, y, text, room as usize, theme::tone(Tone::Plain));
         return;
     }
-    if tab.parent.is_some() {
+    let answers = matches!(
+        tab.prompts.first().map(|prompt| &prompt.answer),
+        Some(Answer::Reply | Answer::Choose { .. })
+    );
+    if tab.parent.is_some() && !answers {
         buf.set_stringn(text_x, y, READ_ONLY, room as usize, label);
         return;
     }
-    let placeholder = format!("Message {}", tab.agent);
+    let placeholder = match answers {
+        true => "answer the prompt above".to_string(),
+        false => format!("Message {}", tab.agent),
+    };
     buf.set_stringn(text_x, y, placeholder, room as usize, label);
     if area.width > 40 {
         buf.set_string(area.right() - 12, y, "enter send", label);
@@ -364,7 +408,7 @@ mod tests {
 
     fn chat_app() -> App {
         let mut app = with_right_pane(App::new(Vim, 132, 36));
-        app.tabs[0].lines = sample_chat("Engineer");
+        app.tabs[0].lines = sample_chat();
         app
     }
 
@@ -382,7 +426,8 @@ mod tests {
 
     #[test]
     fn a_reply_is_highlighted_across_the_row() {
-        let app = chat_app();
+        let mut app = chat_app();
+        app.tabs[0].prompts = vec![crate::sample::approval("Engineer")];
         let s = screen(&app);
         let buf = buffer(&app);
         let (reply, column) = find(&s, "Moving them").expect("the reply");
@@ -427,7 +472,7 @@ mod tests {
     #[test]
     fn no_logo_with_messages() {
         let mut app = App::new(Vim, 132, 36);
-        app.tabs[0].lines = sample_chat("Engineer");
+        app.tabs[0].lines = sample_chat();
         let s = screen(&app);
         assert_eq!(find(&s, "g e n t s"), None);
         assert_eq!(find(&s, "Group the sign-in").map(|at| at.0), Some(4));
@@ -439,10 +484,9 @@ mod tests {
     fn chat_uses_the_agent_of_the_tab() {
         let mut app = App::new(Vim, 132, 36);
         app.tabs[0].agent = "Reviewer".to_string();
-        app.tabs[0].lines = sample_chat("Reviewer");
+        app.tabs[0].lines = sample_chat();
         let s = screen(&app);
         assert_eq!(find(&s, "Reviewer"), Some((1, 46)));
-        assert!(find(&s, "! Allow Reviewer to run").is_some());
         assert_eq!(find(&s, "Engineer"), None);
     }
 

@@ -5,9 +5,11 @@ pub enum Effect {
     OpenPicker,
     OpenKeys,
     ClearTab,
+    CloseTab,
     ShowSidebar(View),
     NotWired,
     SwitchKeys,
+    DismissPrompt,
     Quit,
 }
 
@@ -43,12 +45,14 @@ const SIDEBAR_VIEW: &str = "right sidebar view";
 pub const COMMANDS: &[Command] = &[
     command(Some("agent"), "/agent", &[], "open an agent in a new tab", Effect::OpenPicker),
     command(Some("new"), "New tab", &["tabnew", "new"], "open a new tab", Effect::OpenPicker),
+    command(None, "Close tab", &["close", "tabclose", "tabc"], "close this tab", Effect::CloseTab),
     command(Some("model"), "/model", &[], "pick a model for this agent", Effect::NotWired),
     command(Some("goal"), "/goal", &[], "set or check this session's goal", Effect::NotWired),
     command(Some("clear"), "/clear", &[], "clear this tab's view", Effect::ClearTab),
     command(Some("jobs"), "/jobs", &[], "show background jobs", Effect::ShowSidebar(View::Agents)),
     command(Some("help"), "/help", &[], "show the keys", Effect::OpenKeys),
     command(Some("quit"), "Quit", &["q", "q!", "qa", "wq"], "quit", Effect::Quit),
+    command(Some("dismiss"), "/dismiss", &[], "dismiss the prompt above", Effect::DismissPrompt),
     command(None, "Switch key set", &["vim", "emacs", "keys"], "vim to emacs or back", Effect::SwitchKeys),
     command(Some("changes"), "Sidebar: Changes", &["changes", "diff"], SIDEBAR_VIEW, Effect::ShowSidebar(View::Changes)),
     command(Some("workflows"), "Sidebar: Workflows", &["workflows"], SIDEBAR_VIEW, Effect::ShowSidebar(View::Workflows)),

@@ -1,17 +1,22 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
+use gents::store::config_client::GraphqlEndpoint;
 use gents_codex_protocol as codex;
 use gents_shell::app::{App, ChatLine};
 use gents_shell::keys::KeySet;
 use gents_shell::sample::{Opens, RunState, Running, Tone};
-use gents_shell::source::{Connection, Input, Intent, Session, Update};
+use gents_shell::source::{
+    Answer as PromptAnswer, BackgroundCall, Connection, Input, Intent, Job, Prompt, PromptKind,
+    Session, Update,
+};
 use rapidhash::RapidHashMap;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -20,7 +25,8 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc, watch};
 
 use super::client::{Client, ClientError, ClientEvent, ANSWER_WAIT};
-use super::source;
+use super::source::{self, Opening};
+use super::work::{self, Work};
 use crate::commands::codex::tests::identity;
 use crate::commands::codex_shim::RuntimeIdentity;
 use crate::commands::eval::testing::test_runtime_handle;
@@ -28,8 +34,11 @@ use crate::commands::eval::testing::test_runtime_handle;
 const WAIT: Duration = Duration::from_secs(10);
 
 /// `None` leaves the request unanswered.
-type Answer = Option<Result<Value, (i64, String)>>;
+pub(super) type Answer = Option<Result<Value, (i64, String)>>;
 type Script = Box<dyn Fn(&str, &str, &Value) -> Answer + Send + Sync>;
+/// Answers a GraphQL query, given its text.
+type Graphql = Box<dyn Fn(&str) -> Value + Send + Sync>;
+type Chunks = mpsc::UnboundedSender<Result<Bytes, std::io::Error>>;
 
 #[derive(Debug, Clone)]
 pub(super) struct Call {
@@ -46,20 +55,45 @@ struct Shared {
     script: Script,
     calls: watch::Sender<Vec<Call>>,
     sockets: Mutex<RapidHashMap<String, mpsc::UnboundedSender<Message>>>,
+    graphql: Graphql,
+    /// Every GraphQL document posted, subscriptions included, in order.
+    queries: watch::Sender<Vec<String>>,
+    /// The open subscriptions' documents and event streams.
+    streams: Mutex<Vec<(String, Chunks)>>,
+    /// While true, every query waits before it is answered.
+    held: watch::Sender<bool>,
 }
 
 /// `/runtime` answers `identity`, or fails without one. `/agents/{id}` serves that agent and
 /// `/` the bound one, whose calls it records under the agent `/`. Each answers `initialize`
 /// itself and every other request from `script`, given the agent, the method and the params.
+/// `/api/v0/graphql` answers each query from a second script and holds each subscription open.
 pub(super) struct FakeRuntime {
     shared: Arc<Shared>,
     authority: String,
+}
+
+/// No jobs and no background calls.
+fn no_work(_: &str) -> Value {
+    json!({ "data": { "AgentToolCall": [] } })
 }
 
 impl FakeRuntime {
     pub(super) async fn start<F>(identity: Option<RuntimeIdentity>, script: F) -> FakeRuntime
     where
         F: Fn(&str, &str, &Value) -> Answer + Send + Sync + 'static,
+    {
+        Self::start_with(identity, script, no_work).await
+    }
+
+    pub(super) async fn start_with<F, G>(
+        identity: Option<RuntimeIdentity>,
+        script: F,
+        graphql: G,
+    ) -> FakeRuntime
+    where
+        F: Fn(&str, &str, &Value) -> Answer + Send + Sync + 'static,
+        G: Fn(&str) -> Value + Send + Sync + 'static,
     {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let authority = listener.local_addr().unwrap().to_string();
@@ -68,11 +102,21 @@ impl FakeRuntime {
             script: Box::new(script),
             calls: watch::channel(Vec::new()).0,
             sockets: Mutex::default(),
+            graphql: Box::new(graphql),
+            queries: watch::channel(Vec::new()).0,
+            streams: Mutex::default(),
+            held: watch::channel(false).0,
         });
         let app = Router::new()
             .route("/runtime", get(runtime))
             .route("/", get(root))
             .route("/agents/{id}", get(routed))
+            .route("/api/v0/graphql", post(serve_graphql))
+            .route("/api/v0/tx", post(|| async { Json(json!({ "id": 1 })) }))
+            .route(
+                "/api/v0/tx/{id}",
+                post(|| async { "" }).delete(|| async { "" }),
+            )
             .with_state(shared.clone());
         tokio::spawn(async move { axum::serve(listener, app).await });
         FakeRuntime { shared, authority }
@@ -84,6 +128,74 @@ impl FakeRuntime {
 
     pub(super) fn route(&self, agent: &str) -> String {
         format!("ws://{}/agents/{agent}", self.authority)
+    }
+
+    pub(super) fn graphql(&self) -> String {
+        format!("http://{}/api/v0/graphql", self.authority)
+    }
+
+    pub(super) fn queries(&self) -> Vec<String> {
+        self.shared.queries.borrow().clone()
+    }
+
+    fn subscriptions(&self) -> usize {
+        let queries = self.queries();
+        queries
+            .iter()
+            .filter(|query| query.starts_with("subscription"))
+            .count()
+    }
+
+    /// Returns once `count` posted GraphQL documents contain `text`.
+    async fn posted(&self, text: &str, count: usize) {
+        let mut queries = self.shared.queries.subscribe();
+        let found =
+            |queries: &Vec<String>| queries.iter().filter(|query| query.contains(text)).count();
+        within(queries.wait_for(|queries| found(queries) >= count))
+            .await
+            .expect("the fake keeps its queries");
+    }
+
+    /// Returns once `count` GraphQL documents have been posted.
+    async fn queried(&self, count: usize) {
+        let mut queries = self.shared.queries.subscribe();
+        queries
+            .wait_for(|queries| queries.len() >= count)
+            .await
+            .expect("the fake keeps its queries");
+    }
+
+    /// One `next` event on each open tool-call subscription, as a tool call's commit sends.
+    fn changed(&self) {
+        self.next_event("AgentToolCall");
+    }
+
+    /// One `next` event on each open mailbox subscription, as an item's commit sends.
+    fn mailbox_changed(&self) {
+        self.next_event("MailboxItem");
+    }
+
+    fn next_event(&self, collection: &str) {
+        let event = format!(
+            "event: next\ndata: {{\"data\":{{\"{collection}\":[{{\"_docID\":\"bae-1\"}}]}}}}\n\n"
+        );
+        let streams = self.shared.streams.lock().unwrap();
+        for (_, stream) in streams
+            .iter()
+            .filter(|(query, _)| query.contains(collection))
+        {
+            stream.send(Ok(Bytes::from(event.clone()))).unwrap();
+        }
+    }
+
+    /// Holds every query's answer until `hold(false)`, as a slow node would.
+    fn hold(&self, held: bool) {
+        self.shared.held.send_replace(held);
+    }
+
+    /// Closes every subscription, as a node whose event bus stops does.
+    fn end_streams(&self) {
+        self.shared.streams.lock().unwrap().clear();
     }
 
     pub(super) fn calls(&self) -> Vec<Call> {
@@ -122,6 +234,32 @@ impl FakeRuntime {
     fn socket(&self, agent: &str) -> mpsc::UnboundedSender<Message> {
         self.shared.sockets.lock().unwrap()[agent].clone()
     }
+}
+
+async fn serve_graphql(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    let query = body["query"].as_str().unwrap_or_default().to_string();
+    shared
+        .queries
+        .send_modify(|queries| queries.push(query.clone()));
+    if headers
+        .get(header::ACCEPT)
+        .is_none_or(|accept| accept != "text/event-stream")
+    {
+        let mut held = shared.held.subscribe();
+        let _ = held.wait_for(|held| !held).await;
+        return Json((shared.graphql)(&query)).into_response();
+    }
+    let (chunks, sent) = mpsc::unbounded_channel();
+    shared.streams.lock().unwrap().push((query, chunks));
+    let events = futures_util::stream::unfold(sent, |mut sent| async move {
+        sent.recv().await.map(|chunk| (chunk, sent))
+    });
+    let body = Body::from_stream(events);
+    ([(header::CONTENT_TYPE, "text/event-stream")], body).into_response()
 }
 
 async fn runtime(State(shared): State<Arc<Shared>>) -> Response {
@@ -207,11 +345,11 @@ where
         .expect("the shell should have answered by now")
 }
 
-fn agents_a_and_b() -> Option<RuntimeIdentity> {
+pub(super) fn agents_a_and_b() -> Option<RuntimeIdentity> {
     Some(identity(Some(&["a", "b"])))
 }
 
-async fn connect(
+pub(super) async fn connect(
     fake: &FakeRuntime,
     agent: &str,
     events: mpsc::UnboundedSender<(String, ClientEvent)>,
@@ -398,12 +536,12 @@ pub(super) fn thread(id: &str, updated_at: i64) -> Value {
     })
 }
 
-fn turn(id: &str, status: &str, items: Value) -> Value {
+pub(super) fn turn(id: &str, status: &str, items: Value) -> Value {
     json!({ "id": id, "items": items, "status": status, "error": null })
 }
 
 /// What `thread/start` and `thread/resume` answer.
-fn thread_answer(thread: Value) -> Value {
+pub(super) fn thread_answer(thread: Value) -> Value {
     json!({
         "thread": thread,
         "model": "m",
@@ -426,14 +564,14 @@ fn turn_answer(id: &str) -> Answer {
 }
 
 /// Lists nothing and leaves everything else unanswered.
-fn quiet(method: &str) -> Answer {
+pub(super) fn quiet(method: &str) -> Answer {
     match method {
         "thread/list" => page(&[], None),
         _ => None,
     }
 }
 
-fn user_message(id: &str, text: &str) -> Value {
+pub(super) fn user_message(id: &str, text: &str) -> Value {
     json!({ "type": "userMessage", "id": id, "content": [{ "type": "text", "text": text }] })
 }
 
@@ -485,13 +623,37 @@ fn open_shell_with(
     prompt: Option<&str>,
     answer_wait: Duration,
 ) -> Shell {
+    // `work_for` refuses an anonymous endpoint; the fake checks no bearer.
+    let endpoint = GraphqlEndpoint::with_delegated_authorization(fake.graphql(), "Bearer shell")
+        .expect("a bearer");
+    let home = std::path::PathBuf::new();
+    open_shell_on(
+        fake,
+        agent,
+        prompt,
+        answer_wait,
+        Ok(Work { endpoint, home }),
+    )
+}
+
+fn open_shell_on(
+    fake: &FakeRuntime,
+    agent: Option<&str>,
+    prompt: Option<&str>,
+    answer_wait: Duration,
+    work: Result<Work, String>,
+) -> Shell {
     let runtime = test_runtime_handle();
     let (intents, intended) = mpsc::unbounded_channel();
     let (sender, updates) = std::sync::mpsc::channel();
+    let opening = Opening {
+        remote: fake.remote(),
+        agent: agent.map(str::to_string),
+        prompt: prompt.map(str::to_string),
+        work,
+    };
     runtime.spawn(source::run(
-        fake.remote(),
-        agent.map(str::to_string),
-        prompt.map(str::to_string),
+        opening,
         intended,
         sender,
         runtime.clone(),
@@ -517,8 +679,19 @@ impl Shell {
         }
     }
 
-    /// Reads `Agents`, `Ready` and the first session list.
+    /// Reads `Agents`, `Ready`, the first session list, then the first jobs and background
+    /// calls.
     async fn ready(&self) -> Vec<Session> {
+        let sessions = self.opened().await;
+        let update = self.next().await;
+        assert!(matches!(update, Update::Jobs { .. }), "{update:?}");
+        let update = self.next().await;
+        assert!(matches!(update, Update::Background { .. }), "{update:?}");
+        sessions
+    }
+
+    /// Reads `Agents`, `Ready` and the first session list.
+    async fn opened(&self) -> Vec<Session> {
         let update = self.next().await;
         let Update::Agents(agents) = update else {
             panic!("{update:?}");
@@ -531,6 +704,22 @@ impl Shell {
             panic!("{update:?}");
         };
         sessions
+    }
+
+    /// Reads updates through the first that `wanted` matches, and returns them.
+    async fn until<F>(&self, wanted: F) -> Vec<Update>
+    where
+        F: Fn(&Update) -> bool,
+    {
+        let mut read = Vec::new();
+        loop {
+            let update = self.next().await;
+            let done = wanted(&update);
+            read.push(update);
+            if done {
+                return read;
+            }
+        }
     }
 
     fn intend(&self, intent: Intent) {
@@ -676,14 +865,16 @@ async fn with_no_agent_or_prompt_the_shell_opens_as_before() {
     let (mut app, intended) = connected_app();
 
     let applied = shell
-        .apply_through(&mut app, |update| matches!(update, Update::Sessions(_)))
+        .apply_through(&mut app, |update| {
+            matches!(update, Update::Background { .. })
+        })
         .await;
     fake.push(
         "a",
         &item_note("item/completed", "s1", agent_message("r1", "hi")),
     );
 
-    assert_eq!(applied.len(), 3, "{applied:?}");
+    assert_eq!(applied.len(), 5, "{applied:?}");
     let item = Update::Item {
         session: "s1".to_string(),
         line: line("hi", Tone::Reply, "r1"),
@@ -867,7 +1058,7 @@ fn open_s1(shell: &Shell) {
     });
 }
 
-fn resumes_of(fake: &FakeRuntime, thread: &str) -> usize {
+pub(super) fn resumes_of(fake: &FakeRuntime, thread: &str) -> usize {
     let calls = fake.calls().into_iter();
     calls
         .filter(|call| call.method == "thread/resume" && call.params["threadId"] == thread)
@@ -1294,7 +1485,11 @@ async fn a_refused_send_becomes_a_notice_in_the_runtimes_words() {
         agent: "a".to_string(),
         text: "hi".to_string(),
     });
-    let refused = Update::Notice("turn/start: the session is busy".to_string());
+    // A failure the tab is told of, so it stops showing the turn as running.
+    let refused = Update::StartFailed {
+        tab: 3,
+        message: "turn/start: the session is busy".to_string(),
+    };
     assert_eq!(shell.next().await, refused);
 
     shell.intend(Intent::Send {
@@ -1459,7 +1654,11 @@ async fn an_unanswered_request_becomes_a_notice_and_the_shell_goes_on() {
     let expired = |method: &str| {
         format!("no answer from the runtime: check `gents status`, then reopen the shell ({method} waited 1s)")
     };
-    assert_eq!(shell.next().await, Update::Notice(expired("turn/start")));
+    let unanswered = Update::StartFailed {
+        tab: 0,
+        message: expired("turn/start"),
+    };
+    assert_eq!(shell.next().await, unanswered);
     shell.intend(Intent::Send {
         tab: 1,
         session: None,
@@ -1485,4 +1684,898 @@ async fn an_unanswered_request_becomes_a_notice_and_the_shell_goes_on() {
         turn: "t2".to_string(),
     };
     assert_eq!(shell.next().await, running);
+}
+
+/// An initialized home whose recorded runtime serves GraphQL at `graphql`, signed by `key` when
+/// one is given.
+fn home_serving(graphql: &str, key: Option<&std::path::Path>) -> (tempfile::TempDir, String) {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().to_string_lossy().into_owned();
+    let node_did = match key {
+        Some(key) => {
+            let identity = gents::store::identity::KeyIdentity::load_or_create(key, None).unwrap();
+            let did = gents::store::identity::NodeIdentity::did(&identity).to_string();
+            crate::home_state::write_init_config(
+                home.path(),
+                &crate::shared::StoredInitConfig {
+                    home: path.clone(),
+                    node_name: "fixture".into(),
+                    node_did: did.clone(),
+                    key_path: Some(key.to_string_lossy().into_owned()),
+                    identity_backend: None,
+                    keychain_label: None,
+                    secure_enclave_label: None,
+                    tool_package: None,
+                    tool_ceiling: crate::cli::args::ToolCeilingArg::MetaOnly,
+                    tool_root: None,
+                    store_encryption: None,
+                },
+            )
+            .unwrap();
+            did
+        }
+        None => "did:key:z6MkuNotThisShells".to_string(),
+    };
+    crate::home_state::write_runtime_state(
+        home.path(),
+        &crate::shared::StoredRuntimeState {
+            home: path,
+            graphql: graphql.to_string(),
+            node_name: "fixture".into(),
+            node_did: node_did.clone(),
+            default_agent_id: "a".into(),
+            p2p_transport: "none".into(),
+            p2p_peer_id: None,
+            p2p_listen_addresses: Vec::new(),
+            p2p_admission: None,
+        },
+    )
+    .unwrap();
+    (home, node_did)
+}
+
+#[test]
+fn work_for_signs_as_this_homes_node() {
+    let keys = tempfile::tempdir().unwrap();
+    let key = keys.path().join("principal.key");
+    let graphql = "http://127.0.0.1:39999/api/v0/graphql";
+    let (home, did) = home_serving(graphql, Some(&key));
+
+    let work = work::work_for(home.path()).expect("this home's node signs");
+
+    assert_eq!(work.endpoint, GraphqlEndpoint::as_principal(graphql, did));
+}
+
+/// A recorded runtime without an initialized identity would be read anonymously, and an
+/// anonymous read shows nothing.
+#[test]
+fn work_for_turns_off_when_the_endpoint_would_be_anonymous() {
+    let (home, _) = home_serving("http://127.0.0.1:39999/api/v0/graphql", None);
+
+    let off = work::work_for(home.path())
+        .err()
+        .expect("no node to sign as");
+
+    assert!(off.starts_with("jobs and the mailbox are off: "), "{off}");
+    assert!(off.contains("gents status"), "{off}");
+
+    let bare = tempfile::tempdir().unwrap();
+    let off = work::work_for(bare.path())
+        .err()
+        .expect("no runtime recorded");
+    assert!(off.starts_with("jobs and the mailbox are off: "), "{off}");
+    assert!(off.contains("gents runtime server"), "{off}");
+}
+
+#[tokio::test]
+async fn an_unavailable_graphql_is_told_once_and_the_shell_still_opens() {
+    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
+    let off = "jobs and the mailbox are off: no runtime".to_string();
+    let shell = open_shell_on(&fake, None, None, ANSWER_WAIT, Err(off.clone()));
+
+    shell.opened().await;
+    assert_eq!(shell.next().await, Update::Notice(off));
+    let off_jobs = Update::Jobs {
+        jobs: Vec::new(),
+        as_of: "off".to_string(),
+    };
+    assert_eq!(shell.next().await, off_jobs);
+    let off_calls = Update::Background {
+        calls: Vec::new(),
+        as_of: "off".to_string(),
+    };
+    assert_eq!(shell.next().await, off_calls);
+    fake.push(
+        "a",
+        &item_note("item/completed", "s1", agent_message("r1", "hi")),
+    );
+
+    let item = shell.next().await;
+    assert!(
+        matches!(item, Update::Item { .. }),
+        "one notice only: {item:?}"
+    );
+}
+
+/// A running plugin job's row in session `session`, as `list_jobs` reads it.
+fn job_row(session: &str, call: &str) -> Value {
+    json!({
+        "_docID": format!("bae-{call}"),
+        "session_id": session,
+        "tool_call_id": call,
+        "request_id": "r1",
+        "request_doc_id": "bae-r1",
+        "node_did": "did:key:z6MkNode",
+        "requester_did": null,
+        "lifecycle_state": "running",
+        "started_at": "2026-11-05T12:00:00Z",
+        "completed_at": null,
+        "job_pin": {
+            "script_id": "change_unit",
+            "source_digest": "s1",
+            "origin": "installed",
+            "engine_digest": "e1",
+            "plugin_ref": "gents/change-unit",
+            "agent_budget": 4,
+            "handle": "change-unit-7",
+            "cwd": "/srv",
+            "adopted_at": 0,
+            "args_digest": "a1",
+            "chain_root_doc_id": format!("bae-{call}"),
+            "ceiling_at_pin": {
+                "targets": [],
+                "max_live": 1,
+                "max_spawns": 1,
+                "max_messages_per_slot": 1,
+                "result_bytes": 1024,
+                "max_wall_secs": 60,
+            },
+        },
+        "job_progress": {
+            "title": "cli ux",
+            "state": "running",
+            "phases": [
+                { "title": "build", "state": "active" },
+                { "title": "test", "state": "pending" },
+            ],
+            "active": [],
+            "spawned": 0,
+            "budget": { "total": 4, "spent": 0, "remaining": 4 },
+            "last_event": "",
+            "observed_terminal_children": 0,
+        },
+    })
+}
+
+fn background_row(tool: &str, state: &str) -> Value {
+    json!({
+        "request_id": "r1",
+        "tool_call_id": format!("{tool}-call"),
+        "tool_name": tool,
+        "status": null,
+        "lifecycle_state": state,
+        "await_mode": "background",
+        "started_at": null,
+    })
+}
+
+/// Answers `list_jobs`' query with `jobs`, the background owner's with `calls`, and the
+/// children read with none.
+fn work_answer(query: &str, jobs: &[Value], calls: &[Value]) -> Value {
+    if query.contains("job_pin") {
+        json!({ "data": { "AgentToolCall": jobs } })
+    } else if query.contains("await_mode") {
+        json!({ "data": { "AgentToolCall": calls } })
+    } else {
+        json!({ "data": { "AgentRequest": [] } })
+    }
+}
+
+fn shown_job(session: &str, call: &str) -> Job {
+    Job {
+        address: format!("{session}:{call}"),
+        session: session.to_string(),
+        name: "change-unit".to_string(),
+        title: "cli ux".to_string(),
+        status: "build · step 1 of 2".to_string(),
+        waiting: false,
+        detail: vec!["● build".to_string(), "○ test".to_string()],
+    }
+}
+
+fn job_running(session: &str, call: &str) -> Running {
+    Running {
+        name: "change-unit".to_string(),
+        job: "cli ux".to_string(),
+        status: "build · step 1 of 2".to_string(),
+        state: RunState::Working,
+        opens: Opens::Workflow(format!("{session}:{call}")),
+    }
+}
+
+const RUNNING_CALLS: &str = r#"lifecycle_state: { _in: ["pending", "running"] }"#;
+
+#[tokio::test]
+async fn jobs_and_background_calls_are_read_once_the_shell_is_ready() {
+    let fake = FakeRuntime::start_with(
+        agents_a_and_b(),
+        |_, method, _| quiet(method),
+        |query| {
+            let calls = [background_row("bash", "pending")];
+            work_answer(query, &[job_row("s1", "call-1")], &calls)
+        },
+    )
+    .await;
+    let shell = open_shell(&fake);
+    shell.opened().await;
+
+    let jobs = Update::Jobs {
+        jobs: vec![shown_job("s1", "call-1")],
+        as_of: "live".to_string(),
+    };
+    assert_eq!(shell.next().await, jobs);
+    let calls = Update::Background {
+        calls: vec![BackgroundCall {
+            name: "bash".to_string(),
+            status: "pending".to_string(),
+            done: false,
+        }],
+        as_of: "live".to_string(),
+    };
+    assert_eq!(shell.next().await, calls);
+    let queries = fake.queries();
+    assert_eq!(
+        queries[0],
+        source::WATCHED,
+        "it subscribes before it reads: {queries:?}"
+    );
+    assert!(queries[1].contains("job_pin"), "{queries:?}");
+    let background = queries.last().unwrap();
+    assert!(background.contains("await_mode"), "{queries:?}");
+    assert!(
+        background.contains(RUNNING_CALLS),
+        "the node, not the shell, keeps only running calls: {background}"
+    );
+}
+
+/// The no-polling rule: only an event, or the view being shown, reads again.
+#[tokio::test]
+async fn nothing_rereads_without_an_event() {
+    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+    let read = fake.queries().len();
+
+    let more = tokio::time::timeout(SHORT_WAIT, fake.queried(read + 1)).await;
+    assert!(more.is_err(), "{:?}", fake.queries());
+
+    shell.intend(Intent::Refresh);
+    let update = shell.next().await;
+    assert!(matches!(update, Update::Jobs { .. }), "{update:?}");
+    let update = shell.next().await;
+    assert!(matches!(update, Update::Background { .. }), "{update:?}");
+    assert_eq!(fake.queries().len(), read + 2, "{:?}", fake.queries());
+    assert_eq!(fake.subscriptions(), 1, "a live subscription is kept");
+}
+
+#[tokio::test]
+async fn a_tool_call_change_rereads_the_jobs() {
+    let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let job = started.clone();
+    let fake = FakeRuntime::start_with(
+        agents_a_and_b(),
+        |_, method, _| quiet(method),
+        move |query| {
+            let jobs = match job.load(std::sync::atomic::Ordering::SeqCst) {
+                true => vec![job_row("s1", "call-1")],
+                false => Vec::new(),
+            };
+            work_answer(query, &jobs, &[])
+        },
+    )
+    .await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+
+    started.store(true, std::sync::atomic::Ordering::SeqCst);
+    fake.changed();
+
+    let jobs = Update::Jobs {
+        jobs: vec![shown_job("s1", "call-1")],
+        as_of: "live".to_string(),
+    };
+    assert_eq!(shell.next().await, jobs);
+    let update = shell.next().await;
+    assert!(matches!(update, Update::Background { .. }), "{update:?}");
+}
+
+fn turn_completed(fake: &FakeRuntime) {
+    let completed = json!({ "threadId": "s9", "turn": turn("t1", "completed", json!([])) });
+    fake.push(
+        "a",
+        &json!({ "method": "turn/completed", "params": completed }),
+    );
+}
+
+/// The node sends no keep-alives and replays nothing, so an ended subscription is only noticed,
+/// and the next turn subscribes again and rereads, once.
+#[tokio::test]
+async fn an_ended_subscription_goes_stale_until_the_next_turn() {
+    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+    let read = fake.queries().len();
+
+    turn_completed(&fake);
+    assert!(matches!(shell.next().await, Update::TurnEnded { .. }));
+    assert!(matches!(shell.next().await, Update::Sessions(_)));
+    let more = tokio::time::timeout(SHORT_WAIT, fake.queried(read + 1)).await;
+    assert!(
+        more.is_err(),
+        "a live view needs no reread: {:?}",
+        fake.queries()
+    );
+
+    fake.end_streams();
+    for _ in 0..2 {
+        let update = shell.next().await;
+        let (Update::Jobs { as_of, .. } | Update::Background { as_of, .. }) = &update else {
+            panic!("{update:?}");
+        };
+        assert!(as_of.starts_with("as of "), "{update:?}");
+    }
+    assert_eq!(fake.queries().len(), read, "ending reads nothing");
+
+    turn_completed(&fake);
+    assert!(matches!(shell.next().await, Update::TurnEnded { .. }));
+    assert!(matches!(shell.next().await, Update::Sessions(_)));
+    let live = |update: &Update| matches!(update, Update::Jobs { as_of, .. } | Update::Background { as_of, .. } if as_of == "live");
+    assert!(live(&shell.next().await));
+    assert!(live(&shell.next().await));
+    assert_eq!(fake.subscriptions(), 2);
+    assert_eq!(
+        fake.queries()[read],
+        source::WATCHED,
+        "it subscribes before it reads"
+    );
+
+    turn_completed(&fake);
+    assert!(matches!(shell.next().await, Update::TurnEnded { .. }));
+    assert!(matches!(shell.next().await, Update::Sessions(_)));
+    let more = tokio::time::timeout(SHORT_WAIT, fake.queried(read + 4)).await;
+    assert!(more.is_err(), "live again: {:?}", fake.queries());
+}
+
+#[tokio::test]
+async fn a_sessions_jobs_follow_its_subagents_in_its_running_rows() {
+    let fake = FakeRuntime::start_with(
+        agents_a_and_b(),
+        |agent, method, params| match method {
+            "thread/resume" => resumed(params, &[]),
+            _ if agent == "a" && is_child_list(method, params) => {
+                page(&[child("c1", "s1", idle())], None)
+            }
+            _ => quiet(method),
+        },
+        |query| {
+            work_answer(
+                query,
+                &[job_row("s1", "call-1"), job_row("s2", "call-2")],
+                &[],
+            )
+        },
+    )
+    .await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+
+    open_s1(&shell);
+
+    let opened = shell.next().await;
+    assert!(matches!(opened, Update::Opened { .. }), "{opened:?}");
+    let expected = vec![
+        row("c1", "finished", RunState::Done),
+        job_running("s1", "call-1"),
+    ];
+    assert_eq!(shell.next().await, rows("s1", expected.clone()));
+
+    fake.changed();
+    let update = shell.next().await;
+    assert!(matches!(update, Update::Jobs { .. }), "{update:?}");
+    let update = shell.next().await;
+    assert!(matches!(update, Update::Background { .. }), "{update:?}");
+    assert_eq!(shell.next().await, rows("s1", expected));
+}
+
+#[tokio::test]
+async fn a_failed_job_read_is_one_notice_and_the_background_still_reads() {
+    let fake = FakeRuntime::start_with(
+        agents_a_and_b(),
+        |_, method, _| quiet(method),
+        |query| match query.contains("job_pin") {
+            true => json!({ "data": null, "errors": [{ "message": "the job store is closed" }] }),
+            false => work_answer(query, &[], &[background_row("bash", "running")]),
+        },
+    )
+    .await;
+    let shell = open_shell(&fake);
+    shell.opened().await;
+
+    let update = shell.next().await;
+    let Update::Notice(notice) = &update else {
+        panic!("{update:?}");
+    };
+    assert!(
+        notice.starts_with("jobs: job store unavailable: "),
+        "{notice}"
+    );
+    assert!(notice.contains("the job store is closed"), "{notice}");
+    let never_read = Update::Jobs {
+        jobs: Vec::new(),
+        as_of: "off".to_string(),
+    };
+    assert_eq!(shell.next().await, never_read);
+    let update = shell.next().await;
+    let Update::Background { calls, .. } = &update else {
+        panic!("one notice, then the calls: {update:?}");
+    };
+    assert_eq!(calls[0].name, "bash");
+}
+
+#[tokio::test]
+async fn a_failed_reread_after_a_good_one_says_as_of() {
+    let failing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let fails = failing.clone();
+    let fake = FakeRuntime::start_with(
+        agents_a_and_b(),
+        |_, method, _| quiet(method),
+        move |query| {
+            let failed = fails.load(std::sync::atomic::Ordering::SeqCst);
+            match failed && query.contains("job_pin") {
+                true => {
+                    json!({ "data": null, "errors": [{ "message": "the job store is closed" }] })
+                }
+                false => work_answer(query, &[job_row("s1", "call-1")], &[]),
+            }
+        },
+    )
+    .await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+
+    failing.store(true, std::sync::atomic::Ordering::SeqCst);
+    fake.changed();
+
+    let update = shell.next().await;
+    assert!(matches!(update, Update::Notice(_)), "{update:?}");
+    let update = shell.next().await;
+    let Update::Jobs { jobs, as_of } = &update else {
+        panic!("{update:?}");
+    };
+    assert_eq!(jobs, &[shown_job("s1", "call-1")], "the last good rows");
+    assert!(as_of.starts_with("as of "), "not live: {as_of}");
+    let update = shell.next().await;
+    assert!(
+        matches!(&update, Update::Background { as_of, .. } if as_of == "live"),
+        "{update:?}"
+    );
+}
+
+/// A reread waits on the node, never the chat: deltas and intents go on meanwhile.
+#[tokio::test]
+async fn a_slow_reread_holds_back_no_chat() {
+    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| match method {
+        "turn/start" => turn_answer("t1"),
+        _ => quiet(method),
+    })
+    .await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+    let read = fake.queries().len();
+    fake.hold(true);
+    fake.changed();
+    within(fake.queried(read + 1)).await;
+
+    let params = json!({ "threadId": "s1", "turnId": "t1", "itemId": "r1", "delta": "Hel" });
+    fake.push(
+        "a",
+        &json!({ "method": "item/agentMessage/delta", "params": params }),
+    );
+    let update = shell.next().await;
+    assert!(matches!(update, Update::Delta { .. }), "{update:?}");
+    shell.intend(Intent::Send {
+        tab: 0,
+        session: Some("s1".to_string()),
+        agent: "a".to_string(),
+        text: "hi".to_string(),
+    });
+    let update = shell.next().await;
+    assert!(matches!(update, Update::Turn { .. }), "{update:?}");
+
+    fake.hold(false);
+    let update = shell.next().await;
+    assert!(matches!(update, Update::Jobs { .. }), "{update:?}");
+    let update = shell.next().await;
+    assert!(matches!(update, Update::Background { .. }), "{update:?}");
+}
+
+#[tokio::test]
+async fn changes_during_a_reread_read_exactly_once_more() {
+    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+    let read = fake.queries().len();
+    fake.hold(true);
+    fake.changed();
+    within(fake.queried(read + 1)).await;
+
+    for _ in 0..3 {
+        fake.changed();
+    }
+    let more = tokio::time::timeout(SHORT_WAIT, fake.queried(read + 2)).await;
+    assert!(more.is_err(), "one reread at a time: {:?}", fake.queries());
+    fake.hold(false);
+
+    for _ in 0..2 {
+        let update = shell.next().await;
+        assert!(matches!(update, Update::Jobs { .. }), "{update:?}");
+        let update = shell.next().await;
+        assert!(matches!(update, Update::Background { .. }), "{update:?}");
+    }
+    let more = tokio::time::timeout(SHORT_WAIT, fake.queried(read + 5)).await;
+    assert!(more.is_err(), "{:?}", fake.queries());
+    assert_eq!(
+        fake.queries().len(),
+        read + 4,
+        "two rereads, two reads each"
+    );
+}
+
+/// An open mailbox item on `session` for node `node`, created `at` minutes past noon.
+fn mailbox_item(id: &str, session: &str, kind: &str, action: &str, node: &str, at: u32) -> Value {
+    json!({
+        "_docID": id,
+        "item_key": format!("key:{id}"),
+        "requester_did": "did:key:z",
+        "node_did": "did:key:z",
+        "status": "open",
+        "kind": kind,
+        "action": action,
+        "title": format!("{id} title"),
+        "summary": null,
+        "payload": null,
+        "source_kind": "runtime",
+        "source_id": "request-doc",
+        "session_id": session,
+        "request_id": null,
+        "cause_doc_id": null,
+        "target_node_did": node,
+        "target_agent_id": "a",
+        "expected_collection": null,
+        "parent_item_id": null,
+        "deadline_at": null,
+        "created_at": format!("2026-11-05T12:{at:02}:00Z"),
+        "updated_at": null,
+        "resolved_at": null,
+        "resolved_doc_id": null,
+    })
+}
+
+/// Answers the open-mailbox list with the open `items`, newest first as the node orders them,
+/// each `_docID` read with its item, and every other query with no work.
+fn mailbox_answer(query: &str, items: &[Value]) -> Value {
+    if !query.contains("MailboxItem") {
+        return no_work(query);
+    }
+    let rows: Vec<&Value> = match query.split_once(r#"_docID: { _eq: ""#) {
+        Some((_, rest)) => {
+            let id = rest.split('"').next().unwrap();
+            items.iter().filter(|item| item["_docID"] == id).collect()
+        }
+        None => {
+            let mut open: Vec<_> = items
+                .iter()
+                .filter(|item| item["status"] == "open")
+                .collect();
+            open.sort_by_key(|item| {
+                std::cmp::Reverse(item["created_at"].as_str().unwrap().to_string())
+            });
+            open
+        }
+    };
+    json!({ "data": { "MailboxItem": rows } })
+}
+
+fn asked(id: &str, kind: PromptKind, answer: PromptAnswer) -> Prompt {
+    Prompt {
+        item: id.to_string(),
+        kind,
+        title: format!("{id} title"),
+        summary: None,
+        answer,
+        dismissable: true,
+    }
+}
+
+fn prompts(session: &str, prompts: Vec<Prompt>) -> Update {
+    Update::Prompts {
+        session: session.to_string(),
+        prompts,
+    }
+}
+
+fn is_prompts(update: &Update) -> bool {
+    matches!(update, Update::Prompts { .. })
+}
+
+const MAILBOX_LIST: &str = r#"requester_did: { _eq: "did:key:z" }, status: { _eq: "open" }"#;
+
+/// Runs `fake`'s threads as plain sessions, with `items` in its mailbox.
+async fn with_mailbox<G>(graphql: G) -> FakeRuntime
+where
+    G: Fn(&str) -> Value + Send + Sync + 'static,
+{
+    FakeRuntime::start_with(
+        agents_a_and_b(),
+        |_, method, params| match method {
+            "thread/resume" => resumed(params, &[]),
+            _ => quiet(method),
+        },
+        graphql,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn an_open_session_shows_its_ask_and_gate_items_oldest_first() {
+    let items = [
+        mailbox_item("i5", "s1", "ask", "ack", "did:key:zOther", 5),
+        mailbox_item("i4", "s1", "finished", "ack", "did:key:z", 4),
+        mailbox_item("i3", "s2", "ask", "ack", "did:key:z", 3),
+        mailbox_item("i2", "s1", "gate", "ack", "did:key:z", 2),
+        mailbox_item("i1", "s1", "ask", "start_request", "did:key:z", 1),
+    ];
+    let fake = with_mailbox(move |query| mailbox_answer(query, &items)).await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+
+    open_s1(&shell);
+
+    let read = shell.until(is_prompts).await;
+    let shown = vec![
+        asked("i1", PromptKind::Ask, PromptAnswer::Reply),
+        asked("i2", PromptKind::Gate, PromptAnswer::Ack),
+    ];
+    assert_eq!(read.last(), Some(&prompts("s1", shown)));
+    let queries = fake.queries();
+    let watched = queries
+        .iter()
+        .position(|query| query == source::MAILBOX_WATCHED);
+    let listed = queries
+        .iter()
+        .position(|query| query.contains(MAILBOX_LIST));
+    assert!(
+        watched.is_some() && watched < listed,
+        "it subscribes before it reads: {queries:?}"
+    );
+    assert!(
+        source::MAILBOX_WATCHED.contains(r#"kind: { _in: ["ask", "gate"] }"#),
+        "only items a prompt shows: {}",
+        source::MAILBOX_WATCHED
+    );
+}
+
+/// An item answered or closed elsewhere while the tab shows it: opening the tab again shows
+/// the prompts as they are now, not as they were.
+#[tokio::test]
+async fn reopening_an_open_tab_clears_a_prompt_answered_elsewhere() {
+    let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let elsewhere = closed.clone();
+    let fake = with_mailbox(move |query| {
+        let mut item = mailbox_item("p1", "s1", "gate", "ack", "did:key:z", 1);
+        if elsewhere.load(std::sync::atomic::Ordering::SeqCst) {
+            item["status"] = json!("acted");
+        }
+        mailbox_answer(query, &[item])
+    })
+    .await;
+    let shell = open_shell(&fake);
+    let (mut app, _intended) = connected_app();
+    app.tabs[0].session = Some("s1".to_string());
+    let ready = |update: &Update| matches!(update, Update::Background { .. });
+    shell.apply_through(&mut app, ready).await;
+    open_s1(&shell);
+    shell.apply_through(&mut app, is_prompts).await;
+    assert_eq!(app.tabs[0].prompts.len(), 1);
+    closed.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    open_s1(&shell);
+    let opened_rows =
+        |update: &Update| matches!(update, Update::Running { session, .. } if session == "s1");
+    shell.apply_through(&mut app, opened_rows).await;
+    fake.posted(MAILBOX_LIST, 2).await;
+
+    assert!(app.tabs[0].prompts.is_empty(), "{:?}", app.tabs[0].prompts);
+}
+
+/// A subagent's question lands on its own session, which the parent tab does not show, so the
+/// parent's row for it says so.
+#[tokio::test]
+async fn a_subagent_waiting_on_a_question_says_so_in_its_parents_row() {
+    let fake = FakeRuntime::start_with(
+        agents_a_and_b(),
+        |agent, method, params| match method {
+            "thread/resume" => resumed(params, &[]),
+            _ if agent == "a" && is_child_list(method, params) => {
+                page(&[child("c1", "s1", idle())], None)
+            }
+            _ => quiet(method),
+        },
+        |query| {
+            let asked = mailbox_item("i1", "c1", "ask", "start_request", "did:key:z", 1);
+            mailbox_answer(query, &[asked])
+        },
+    )
+    .await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+
+    open_s1(&shell);
+
+    let waits = |update: &Update| matches!(update, Update::Running { rows, .. } if rows.iter().any(|row| row.status == "waiting on you"));
+    let read = shell.until(waits).await;
+    let waiting = Running {
+        status: "waiting on you".to_string(),
+        ..row("c1", "finished", RunState::Done)
+    };
+    assert_eq!(read.last(), Some(&rows("s1", vec![waiting])));
+}
+
+#[tokio::test]
+async fn dismissing_sends_the_mailbox_dismiss_and_shows_the_rest() {
+    let gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let dismissed = gone.clone();
+    let fake = with_mailbox(move |query| {
+        if query.contains("update_MailboxItem") {
+            dismissed.store(true, std::sync::atomic::Ordering::SeqCst);
+            return json!({ "data": { "update_MailboxItem": [{ "_docID": "i1" }] } });
+        }
+        let mut first = mailbox_item("i1", "s1", "gate", "ack", "did:key:z", 1);
+        if dismissed.load(std::sync::atomic::Ordering::SeqCst) {
+            first["status"] = json!("dismissed");
+        }
+        let items = [
+            first,
+            mailbox_item("i2", "s1", "ask", "start_request", "did:key:z", 2),
+        ];
+        mailbox_answer(query, &items)
+    })
+    .await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+    open_s1(&shell);
+    let read = shell.until(is_prompts).await;
+    let both = vec![
+        asked("i1", PromptKind::Gate, PromptAnswer::Ack),
+        asked("i2", PromptKind::Ask, PromptAnswer::Reply),
+    ];
+    assert_eq!(read.last(), Some(&prompts("s1", both)));
+
+    shell.intend(Intent::Dismiss {
+        session: "s1".to_string(),
+        item: "i1".to_string(),
+    });
+
+    let read = shell.until(is_prompts).await;
+    let rest = vec![asked("i2", PromptKind::Ask, PromptAnswer::Reply)];
+    assert_eq!(read, [prompts("s1", rest)], "no notice: {read:?}");
+    assert!(gone.load(std::sync::atomic::Ordering::SeqCst));
+    let queries = fake.queries();
+    let mutation = queries
+        .iter()
+        .find(|query| query.contains("update_MailboxItem"))
+        .unwrap();
+    assert!(
+        mutation.contains(r#"_docID: { _eq: "i1" }"#)
+            && mutation.contains(r#"status: "dismissed""#),
+        "{mutation}"
+    );
+}
+
+/// An item closed elsewhere while the mailbox feed is quiet: the refused reply rereads, so the
+/// tab is not left answering a prompt that is gone.
+#[tokio::test]
+async fn a_reply_to_a_closed_item_is_a_notice_in_the_owners_words() {
+    let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let elsewhere = closed.clone();
+    let fake = with_mailbox(move |query| {
+        let mut item = mailbox_item("i1", "s1", "ask", "start_request", "did:key:z", 1);
+        if elsewhere.load(std::sync::atomic::Ordering::SeqCst) {
+            item["status"] = json!("acted");
+        }
+        mailbox_answer(query, &[item])
+    })
+    .await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+    open_s1(&shell);
+    let read = shell.until(is_prompts).await;
+    let shown = vec![asked("i1", PromptKind::Ask, PromptAnswer::Reply)];
+    assert_eq!(read.last(), Some(&prompts("s1", shown)));
+    closed.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    shell.intend(Intent::Reply {
+        session: "s1".to_string(),
+        agent: "a".to_string(),
+        item: "i1".to_string(),
+        text: "ship it".to_string(),
+    });
+
+    let closed = Update::Notice("MailboxItem is no longer open".to_string());
+    assert_eq!(
+        shell.until(is_prompts).await,
+        [closed, prompts("s1", Vec::new())]
+    );
+    assert_eq!(
+        resumes_of(&fake, "s1"),
+        1,
+        "a refused reply reopens nothing"
+    );
+}
+
+/// The mailbox subscription is the only reason to read the prompts again.
+#[tokio::test]
+async fn a_mailbox_change_rereads_the_open_sessions_prompts() {
+    let asked_now = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let asking = asked_now.clone();
+    let fake = with_mailbox(move |query| {
+        let items = match asking.load(std::sync::atomic::Ordering::SeqCst) {
+            true => vec![mailbox_item("i1", "s1", "gate", "ack", "did:key:z", 1)],
+            false => Vec::new(),
+        };
+        mailbox_answer(query, &items)
+    })
+    .await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+    open_s1(&shell);
+    fake.posted(MAILBOX_LIST, 1).await;
+
+    let more = tokio::time::timeout(SHORT_WAIT, fake.posted(MAILBOX_LIST, 2)).await;
+    assert!(
+        more.is_err(),
+        "no reread without an event: {:?}",
+        fake.queries()
+    );
+
+    asked_now.store(true, std::sync::atomic::Ordering::SeqCst);
+    fake.mailbox_changed();
+
+    let read = shell.until(is_prompts).await;
+    let shown = vec![asked("i1", PromptKind::Gate, PromptAnswer::Ack)];
+    assert_eq!(read.last(), Some(&prompts("s1", shown)));
+}
+
+/// The node replays nothing, so an ended subscription is told, and the next turn subscribes
+/// again and rereads.
+#[tokio::test]
+async fn an_ended_mailbox_subscription_is_told_and_the_next_turn_subscribes_again() {
+    let fake = with_mailbox(|query| mailbox_answer(query, &[])).await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+    open_s1(&shell);
+    fake.posted(MAILBOX_LIST, 1).await;
+
+    fake.end_streams();
+
+    let not_live = |update: &Update| matches!(update, Update::Notice(notice) if notice.starts_with("prompts are not live"));
+    shell.until(not_live).await;
+    turn_completed(&fake);
+    fake.posted(MAILBOX_LIST, 2).await;
+    let watched = fake
+        .queries()
+        .iter()
+        .filter(|query| *query == source::MAILBOX_WATCHED)
+        .count();
+    assert_eq!(watched, 2, "{:?}", fake.queries());
 }

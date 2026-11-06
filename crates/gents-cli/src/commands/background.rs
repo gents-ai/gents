@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
-use gents::store::graphql::escape_graphql_string;
+use gents::store::graphql::{escape_graphql_string, graphql_string_list_literal};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 
@@ -26,7 +26,11 @@ async fn background_list(args: BackgroundListArgs) -> Result<()> {
     let age_cutoff = age_cutoff(args.age_gt.as_deref(), now)?;
     let (access, _home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let tool_calls = load_background_tool_calls(&access, &args, age_cutoff).await?;
+    let mut tool_calls =
+        load_background_tool_calls(&access, args.request_id.as_deref(), age_cutoff, &[]).await?;
+    if let Some(state) = normalize_optional_string(args.state.as_deref()) {
+        tool_calls.retain(|row| row_state(row).as_deref() == Some(state.as_str()));
+    }
     let liveness = match &access {
         ConfigAccess::Graphql(graphql) => {
             crate::commands::status::load_liveness_value(graphql, "").await
@@ -60,13 +64,15 @@ async fn background_list(args: BackgroundListArgs) -> Result<()> {
     }
 }
 
-async fn load_background_tool_calls(
+/// Background tool calls, newest first, in one of `lifecycle_states` unless it is empty.
+pub(crate) async fn load_background_tool_calls(
     access: &ConfigAccess,
-    args: &BackgroundListArgs,
+    request_id: Option<&str>,
     age_cutoff: Option<DateTime<Utc>>,
+    lifecycle_states: &[&str],
 ) -> Result<Vec<BackgroundToolCallRow>> {
     let mut filters = vec![r#"{ await_mode: { _eq: "background" } }"#.to_string()];
-    if let Some(request_id) = normalize_optional_string(args.request_id.as_deref()) {
+    if let Some(request_id) = normalize_optional_string(request_id) {
         filters.push(format!(
             r#"{{ request_id: {{ _eq: "{}" }} }}"#,
             escape_graphql_string(&request_id)
@@ -77,6 +83,12 @@ async fn load_background_tool_calls(
         filters.push(format!(
             r#"{{ started_at: {{ _lt: "{}" }} }}"#,
             escape_graphql_string(&cutoff)
+        ));
+    }
+    if !lifecycle_states.is_empty() {
+        filters.push(format!(
+            "{{ lifecycle_state: {{ _in: {} }} }}",
+            graphql_string_list_literal(lifecycle_states.iter().copied())
         ));
     }
 
@@ -97,11 +109,7 @@ async fn load_background_tool_calls(
         }}"#,
         filters.join(", ")
     );
-    let mut rows = load_rows::<BackgroundToolCallRow>(access, "AgentToolCall", &query).await?;
-    if let Some(state) = normalize_optional_string(args.state.as_deref()) {
-        rows.retain(|row| row_state(row).as_deref() == Some(state.as_str()));
-    }
-    Ok(rows)
+    load_rows::<BackgroundToolCallRow>(access, "AgentToolCall", &query).await
 }
 
 fn build_output_rows(
@@ -275,21 +283,21 @@ where
 }
 
 #[derive(Debug, Deserialize)]
-struct BackgroundToolCallRow {
+pub(crate) struct BackgroundToolCallRow {
     #[serde(default)]
-    request_id: Option<String>,
+    pub(crate) request_id: Option<String>,
     #[serde(default)]
-    tool_call_id: Option<String>,
+    pub(crate) tool_call_id: Option<String>,
     #[serde(default)]
-    tool_name: Option<String>,
+    pub(crate) tool_name: Option<String>,
     #[serde(default)]
-    status: Option<String>,
+    pub(crate) status: Option<String>,
     #[serde(default)]
-    lifecycle_state: Option<String>,
+    pub(crate) lifecycle_state: Option<String>,
     #[serde(default)]
-    await_mode: Option<String>,
+    pub(crate) await_mode: Option<String>,
     #[serde(default)]
-    started_at: Option<String>,
+    pub(crate) started_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

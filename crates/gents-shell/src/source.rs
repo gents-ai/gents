@@ -24,6 +24,20 @@ pub enum Intent {
         agent: String,
         turn: String,
     },
+    /// The Workflows or Background view is shown.
+    Refresh,
+    /// Closes the mailbox item a prompt shows.
+    Dismiss {
+        session: String,
+        item: String,
+    },
+    /// Answers the mailbox item a prompt shows with what the user typed.
+    Reply {
+        session: String,
+        agent: String,
+        item: String,
+        text: String,
+    },
 }
 
 /// What the source tells the shell. One for a session no tab shows is dropped.
@@ -49,7 +63,7 @@ pub enum Update {
         tab: u64,
         session: String,
     },
-    /// The source could not start a session for `tab`.
+    /// The source could not start `tab`'s session or turn.
     StartFailed {
         tab: u64,
         message: String,
@@ -75,6 +89,22 @@ pub enum Update {
         turn: String,
     },
     Notice(String),
+    /// The session's open questions and approvals, oldest first, replaced whole.
+    Prompts {
+        session: String,
+        prompts: Vec<Prompt>,
+    },
+    /// The Workflows view's jobs, replaced whole. `as_of` says how current they are, in the
+    /// view's header: `live`, `as of 14:05`, or nothing.
+    Jobs {
+        jobs: Vec<Job>,
+        as_of: String,
+    },
+    /// The Background view's calls, replaced whole, with `as_of` as for `Jobs`.
+    Background {
+        calls: Vec<BackgroundCall>,
+        as_of: String,
+    },
     /// What `gents` was opened with: the starter tab takes `agent` and sends `prompt`.
     Begin {
         agent: Option<String>,
@@ -132,6 +162,59 @@ pub enum SessionState {
     Active,
     Idle,
     Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Job {
+    pub address: String,
+    pub session: String,
+    pub name: String,
+    pub title: String,
+    pub status: String,
+    pub waiting: bool,
+    /// The phase and active-child lines, already formatted.
+    pub detail: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackgroundCall {
+    pub name: String,
+    pub status: String,
+    pub done: bool,
+}
+
+/// A mailbox item that asks the user something, shown under the conversation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Prompt {
+    pub item: String,
+    pub kind: PromptKind,
+    pub title: String,
+    pub summary: Option<String>,
+    pub answer: Answer,
+    pub dismissable: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptKind {
+    Ask,
+    Gate,
+}
+
+/// How the item is answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Answer {
+    Ack,
+    Reply,
+    Choose {
+        options: Vec<String>,
+        free_text: bool,
+        skip: bool,
+    },
+    /// By writing a document of `collection`, which names the item by `key`.
+    Document {
+        collection: String,
+        key: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

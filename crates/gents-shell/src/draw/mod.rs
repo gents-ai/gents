@@ -453,7 +453,7 @@ mod tests {
                 let size = format!("{width}x{height}");
                 assert!(find(&screen(&app), "sample data").is_some(), "{size}");
 
-                app.tabs[0].lines = sample_chat("Engineer");
+                app.tabs[0].lines = sample_chat();
                 app.diff = Some(0);
                 for focus in [Pane::Sessions, Pane::Agent, Pane::Sidebar] {
                     app.focus = focus;

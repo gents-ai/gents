@@ -619,7 +619,7 @@ mod tests {
     #[test]
     fn a_layer_hides_what_is_beneath_it() {
         let mut app = App::new(Vim, 132, 36);
-        app.tabs[0].lines = crate::app::sample_chat("Engineer");
+        app.tabs[0].lines = crate::app::sample_chat();
         press(&mut app, "esc ?");
         let s = screen(&app);
         assert_eq!(find(&s, "Moving them"), None);

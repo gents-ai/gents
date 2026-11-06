@@ -48,6 +48,8 @@ pub enum Action {
     Submit,
     Back,
     Interrupt,
+    /// Stops the tab's running turn, leaving the box as it is.
+    Stop,
     EnterInput,
     MoveFocus(Dir),
     NextPane,
@@ -70,6 +72,8 @@ pub enum Action {
     SearchNext,
     SearchPrev,
     Complete,
+    /// `y`: the shown prompt's main answer.
+    Accept,
     NotWired,
     Quit,
 }
@@ -229,7 +233,8 @@ impl Keymap {
             (KeyCtx::Normal, '?') => Action::OpenKeys,
             (KeyCtx::Normal, 'n') => Action::SearchNext,
             (KeyCtx::Normal, 'N') => Action::SearchPrev,
-            (KeyCtx::Normal, 'y' | 'a') => Action::NotWired,
+            (KeyCtx::Normal, 'y') => Action::Accept,
+            (KeyCtx::Normal, 's') if self.set == KeySet::Vim => Action::Stop,
             (KeyCtx::Menu, 'd') => Action::NotWired,
             (KeyCtx::Normal, ':') => Action::OpenBar,
             (KeyCtx::Menu, ':') if self.set == KeySet::Vim => Action::OpenBar,
@@ -282,7 +287,7 @@ mod tests {
         (Input, "ctrl-p", A::Palette), (Input, "h", A::Insert('h')), (Input, "[", A::Insert('[')), (Filter, "]", A::Insert(']')),
         (Menu, "ctrl-p", A::Prev), (Filter, "ctrl-p", A::Prev), (SearchLine, "ctrl-p", A::Prev),
         (Normal, "enter", A::Submit), (Normal, "esc", A::Back), (Normal, "ctrl-g", A::Back), (Normal, "ctrl-c", A::Interrupt),
-        (Normal, "n", A::SearchNext), (Normal, "N", A::SearchPrev), (Normal, "y", A::NotWired), (Normal, "a", A::NotWired),
+        (Normal, "n", A::SearchNext), (Normal, "N", A::SearchPrev), (Normal, "y", A::Accept), (Normal, "a", A::None), (Normal, "s", A::Stop),
         (Input, "x", A::Insert('x')), (Input, "T", A::Insert('T')), (Input, "/", A::Insert('/')), (Input, "bs", A::Backspace), (Input, "enter", A::Submit), (Input, "esc", A::Back),
         (Input, "tab", A::Complete), (Input, "ctrl-c", A::Interrupt), (Input, "ctrl-w", A::DeleteWord), (Input, "ctrl-n", A::Next), (Input, "left", A::CursorLeft),
         (Input, "right", A::CursorRight), (Input, "home", A::Home), (Input, "end", A::End), (Input, "del", A::Delete),

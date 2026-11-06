@@ -8,7 +8,7 @@ use crate::draw::layers::list_start;
 use crate::draw::sidebar::{first_diff_row, view_at};
 use crate::keys::Action;
 use crate::layout::{running_area, sidebar_rows_area, Right};
-use crate::sample::{diff, menu, view_rows, MenuId, SidebarRow, Tone, DIFF_BACK_ROW};
+use crate::sample::{diff, menu, MenuId, SidebarRow, Tone, DIFF_BACK_ROW};
 
 impl App {
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent) {
@@ -164,7 +164,8 @@ impl App {
             if back {
                 self.diff = None;
             }
-        } else if view_rows(self.view)
+        } else if self
+            .view_rows(self.view)
             .get(row)
             .is_some_and(SidebarRow::selectable)
         {
@@ -227,9 +228,8 @@ impl App {
         if !area.contains(at) {
             return None;
         }
-        let tab = &self.tabs[self.active];
-        let rows = tab.wrapped_rows(area.width);
-        let first = first_line(rows.len(), area.height, tab.scroll);
+        let rows = self.conversation_rows(area.width);
+        let first = first_line(rows.len(), area.height, self.tabs[self.active].scroll);
         match rows.get(first + usize::from(at.y - area.y))?.1 {
             Tone::File(file) => Some(file),
             _ => None,

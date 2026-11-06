@@ -4,7 +4,7 @@ use super::input::LineInput;
 use super::{App, Pane};
 use crate::keys::{Action, KeySet};
 use crate::layout::{sidebar_rows_area, Right};
-use crate::sample::{view_rows, SidebarRow, Tone};
+use crate::sample::{SidebarRow, Tone};
 
 /// `start` and `end` count characters, not bytes or columns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,8 +150,8 @@ impl App {
             }
             (Pane::Sidebar, Some(_)) => self.diff_scroll = found.row.min(max),
             (Pane::Sidebar, None) => {
-                let selected = &mut self.view_sel[self.view as usize];
-                select_at_or_after(view_rows(self.view), found.row, selected);
+                let rows = self.view_rows(self.view);
+                select_at_or_after(&rows, found.row, &mut self.view_sel[self.view as usize]);
             }
         }
     }
@@ -173,13 +173,14 @@ impl App {
                 .map(|row| row.text.into_owned())
                 .collect(),
             (Pane::Sidebar, Some(file)) => texts(self.diff_rows(file)),
-            (Pane::Sidebar, None) => view_rows(self.view)
-                .iter()
-                .map(|row| row.text.to_string())
+            (Pane::Sidebar, None) => self
+                .view_rows(self.view)
+                .into_iter()
+                .map(|row| row.text.into_owned())
                 .collect(),
-            (Pane::Agent, _) => self.pane_rows(pane).map_or(Vec::new(), |rows| {
-                texts(self.tabs[self.active].wrapped_rows(rows.width))
-            }),
+            (Pane::Agent, _) => self
+                .pane_rows(pane)
+                .map_or(Vec::new(), |rows| texts(self.conversation_rows(rows.width))),
         }
     }
 
@@ -279,7 +280,10 @@ mod tests {
         assert_eq!(app.search, None);
         assert_ne!(cell_bg(&app, "src/cli/args", 8), theme::MATCH);
         press(&mut app, "n");
-        assert_eq!(app.notice.as_deref(), Some("not wired yet"));
+        assert!(
+            app.tabs[0].prompts.is_empty(),
+            "n dismisses the prompt again"
+        );
     }
 
     #[test]
@@ -732,13 +736,13 @@ mod tests {
         press(&mut app, "/ enter");
         assert_eq!(app.search, None);
         press(&mut app, "n");
-        assert_eq!(app.notice.as_deref(), Some("not wired yet"));
+        assert!(app.tabs[0].prompts.is_empty(), "n dismisses the prompt");
     }
 
     #[test]
     fn the_transcript_and_slash_list_are_left_alone() {
         let mut app = App::new(Vim, 132, 36);
-        app.tabs[0].lines = sample_chat("Engineer");
+        app.tabs[0].lines = sample_chat();
         press(&mut app, "esc /");
         type_text(&mut app, "n");
         assert!(app.tabs[0].input.is_empty());

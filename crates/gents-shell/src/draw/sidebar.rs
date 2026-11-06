@@ -4,7 +4,7 @@ use ratatui::layout::{Margin, Rect};
 use super::{draw_rows, pane_box, theme};
 use crate::app::{App, Pane};
 use crate::layout::sidebar_rows_area;
-use crate::sample::{view_rows, View, RAIL};
+use crate::sample::{View, RAIL};
 
 const HEADER: [(View, &str); 3] = [
     (View::Changes, "Changes"),
@@ -37,7 +37,7 @@ pub fn draw(app: &App, area: Rect, focused: bool, buf: &mut Buffer) {
         draw_diff(app, app.visible_rows(Pane::Sidebar, rows), file, buf);
     } else {
         let selected = app.view_sel[app.view as usize];
-        draw_rows(buf, rows, view_rows(app.view), Some(selected));
+        draw_rows(buf, rows, &app.view_rows(app.view), Some(selected));
     }
 }
 

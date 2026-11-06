@@ -1,8 +1,12 @@
 pub mod input;
 pub mod layers;
 mod mouse;
+mod prompt;
 pub mod search;
+pub mod work;
 
+use std::cell::RefCell;
+use std::fmt;
 use std::sync::mpsc::Sender;
 
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -18,10 +22,12 @@ use crate::layout::{
     Right, Screen, Wanted,
 };
 use crate::sample::{
-    answer, diff, note, row, view_rows, Opens, RowAction, Running, SidebarRow, Tone, View, CHAT,
-    DIFF_BACK_ROW, PROMPT_ROW, START_SESSION, SUBAGENT_MARK,
+    answer, diff, note, row, Opens, RowAction, Running, SidebarRow, Tone, View, CHAT,
+    DIFF_BACK_ROW, START_SESSION, SUBAGENT_MARK,
 };
-use crate::source::{Agent, Connection, Day, Intent, Session, SessionState, Update};
+use crate::source::{
+    Agent, BackgroundCall, Connection, Day, Intent, Job, Prompt, Session, SessionState, Update,
+};
 use input::LineInput;
 use layers::{Layer, LayerKind};
 use search::Search;
@@ -30,6 +36,7 @@ const NOT_WIRED: &str = "not wired yet";
 const SOURCE_GONE: &str = "the runtime source stopped: reopen the shell";
 const CONNECTING: &str = "still connecting to the runtime";
 const STOPPING: &str = "stopping the turn";
+const NOTHING_RUNNING: &str = "nothing is running";
 const STARTING: &str = "starting the session, try again in a moment";
 const READ_ONLY: &str = "a subagent takes input from its parent";
 
@@ -87,6 +94,40 @@ pub struct Tab {
     pub sidebar: bool,
     /// The tab to step back out to. Stepping in swaps the subagent's tab into this slot.
     pub parent: Option<Box<Tab>>,
+    /// The session's open mailbox questions and approvals, oldest first.
+    pub prompts: Vec<Prompt>,
+    /// The tab sent a turn it has not seen end. The endpoint streams that turn here, and no
+    /// other client's.
+    pub following: bool,
+    wrapped: Wrapped,
+}
+
+/// Each line's rows at the width they were wrapped for. Every frame reads the rows, and wrapping
+/// a long transcript costs far more than drawing it, so only a changed line is wrapped again.
+#[derive(Default)]
+struct Wrapped(RefCell<(u16, Vec<WrappedLine>)>);
+
+type WrappedLine = (ChatLine, Vec<String>);
+
+/// A copy starts empty, and two tabs never differ by what they have cached.
+impl Clone for Wrapped {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for Wrapped {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Wrapped {}
+
+impl fmt::Debug for Wrapped {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Wrapped")
+    }
 }
 
 impl Tab {
@@ -107,22 +148,32 @@ impl Tab {
             starting: false,
             sidebar: false,
             parent: None,
+            prompts: Vec::new(),
+            following: false,
+            wrapped: Wrapped::default(),
         }
     }
 
     pub fn wrapped_rows(&self, width: u16) -> Vec<(String, Tone)> {
-        let width = usize::from(width);
-        self.lines
-            .iter()
-            .flat_map(|line| {
-                let rows = if line.tone == Tone::You {
-                    bubble(&line.text, width)
-                } else {
-                    wrap_lines(&line.text, width)
-                };
-                rows.into_iter().map(|row| (row, line.tone))
-            })
-            .collect()
+        let mut wrapped = self.wrapped.0.borrow_mut();
+        let (wrapped_at, seen) = &mut *wrapped;
+        if *wrapped_at != width {
+            *wrapped_at = width;
+            seen.clear();
+        }
+        seen.truncate(self.lines.len());
+        let mut rows = Vec::new();
+        for (at, line) in self.lines.iter().enumerate() {
+            if !matches!(seen.get(at), Some((was, _)) if was == line) {
+                let fresh = (line.clone(), line_rows(line, usize::from(width)));
+                match seen.get_mut(at) {
+                    Some(slot) => *slot = fresh,
+                    None => seen.push(fresh),
+                }
+            }
+            rows.extend(seen[at].1.iter().map(|row| (row.clone(), line.tone)));
+        }
+        rows
     }
 
     /// This tab or the parent it boxes that shows `session`.
@@ -152,6 +203,17 @@ impl Tab {
         }
     }
 
+    /// The selected row stays selected while it is listed, else its position is kept in range.
+    fn set_running(&mut self, rows: Vec<Running>) {
+        let selected = self.running_sel.and_then(|row| self.running.get(row));
+        let kept =
+            selected.and_then(|selected| rows.iter().position(|row| row.opens == selected.opens));
+        let last = rows.len().checked_sub(1);
+        let clamped = self.running_sel.zip(last).map(|(sel, last)| sel.min(last));
+        self.running_sel = kept.or(clamped);
+        self.running = rows;
+    }
+
     fn set_agent(&mut self, agent: &Agent) {
         self.agent = agent.name.clone();
         self.agent_id = agent.id.clone();
@@ -161,6 +223,13 @@ impl Tab {
         self.lines
             .iter()
             .position(|line| line.item.as_deref() == Some(item))
+    }
+}
+
+fn line_rows(line: &ChatLine, width: usize) -> Vec<String> {
+    match line.tone {
+        Tone::You => bubble(&line.text, width),
+        _ => wrap_lines(&line.text, width),
     }
 }
 
@@ -214,10 +283,10 @@ fn bubble(text: &str, width: usize) -> Vec<String> {
         .collect()
 }
 
-pub fn sample_chat(agent: &str) -> Vec<ChatLine> {
+pub fn sample_chat() -> Vec<ChatLine> {
     CHAT.iter()
         .map(|&(text, tone)| ChatLine {
-            text: text.replace("Engineer", agent),
+            text: text.to_string(),
             tone,
             item: None,
         })
@@ -282,9 +351,17 @@ pub struct App {
     pub search: Option<Search>,
     pub sessions: Vec<Session>,
     pub agents: Vec<Agent>,
+    pub jobs: Vec<Job>,
+    pub jobs_as_of: String,
+    /// The address of the job whose detail the Workflows view shows.
+    pub job_open: Option<String>,
+    pub background: Vec<BackgroundCall>,
+    pub background_as_of: String,
     /// Without a source, the sample answers each intent at once.
     intents: Option<Sender<Intent>>,
     pub connection: Connection,
+    /// Text the terminal copies after this input.
+    clipboard: Option<String>,
     next_tab: u64,
     quit: bool,
 }
@@ -323,8 +400,7 @@ impl App {
             sessions_wanted: true,
             view: View::Changes,
             sessions_sel: START_SESSION,
-            view_sel: [View::Changes, View::Workflows, View::Agents]
-                .map(|view| first_selectable(view_rows(view))),
+            view_sel: [0; 3],
             notice: None,
             tabs: Vec::new(),
             active: 0,
@@ -335,24 +411,40 @@ impl App {
             search: None,
             sessions: crate::sample::sessions(),
             agents: crate::sample::agents(),
+            jobs: crate::sample::jobs(),
+            jobs_as_of: String::new(),
+            job_open: None,
+            background: crate::sample::background(),
+            background_as_of: String::new(),
             intents: None,
             connection: Connection::Sample,
+            clipboard: None,
             next_tab: 0,
             quit: false,
         };
         app.push_tab(Tab::new_session());
+        app.start_view_rows();
         app
     }
 
     pub fn connected(set: KeySet, width: u16, height: u16, intents: Sender<Intent>) -> App {
-        App {
+        let mut app = App {
             sessions: Vec::new(),
             agents: Vec::new(),
+            jobs: Vec::new(),
+            background: Vec::new(),
             sessions_sel: 0,
             intents: Some(intents),
             connection: Connection::Connecting,
             ..App::new(set, width, height)
-        }
+        };
+        app.start_view_rows();
+        app
+    }
+
+    fn start_view_rows(&mut self) {
+        self.view_sel = [View::Changes, View::Workflows, View::Agents]
+            .map(|view| first_selectable(&self.view_rows(view)));
     }
 
     /// A tab with no picked agent starts on the default one, once the agents are known.
@@ -392,9 +484,7 @@ impl App {
             Update::Opened { session, lines } => self.opened(&session, lines),
             Update::Running { session, rows } => {
                 if let Some(tab) = self.showing(&session) {
-                    let last = rows.len().checked_sub(1);
-                    tab.running_sel = tab.running_sel.zip(last).map(|(sel, last)| sel.min(last));
-                    tab.running = rows;
+                    tab.set_running(rows);
                 }
             }
             Update::Started { tab, session } => self.started(tab, session),
@@ -419,6 +509,7 @@ impl App {
                 if let Some(tab) = self.showing(&session) {
                     if tab.turn.as_ref() == Some(&turn) {
                         tab.turn = None;
+                        tab.following = false;
                     }
                 }
             }
@@ -431,6 +522,13 @@ impl App {
             Update::Agents(agents) => self.set_agents(agents),
             Update::Connection(connection) => self.connection = connection,
             Update::Notice(notice) => self.notice = Some(notice),
+            Update::Prompts { session, prompts } => {
+                if let Some(tab) = self.showing(&session) {
+                    tab.prompts = prompts;
+                }
+            }
+            Update::Jobs { jobs, as_of } => self.set_jobs(jobs, as_of),
+            Update::Background { calls, as_of } => self.set_background(calls, as_of),
             Update::Begin { agent, prompt } => self.begin(agent, prompt),
         }
     }
@@ -517,6 +615,7 @@ impl App {
         if let Some(text) = prompt {
             let first = &mut self.tabs[0];
             first.starting = true;
+            first.following = true;
             let intent = Intent::Send {
                 tab: first.id,
                 session: None,
@@ -538,6 +637,8 @@ impl App {
             return;
         };
         tab.lines = lines.into_iter().map(|line| tab.marked(line)).collect();
+        // The source tells the prompts again after each open.
+        tab.prompts.clear();
         // Opening left an empty tab in input mode; a user who has acted since keeps their mode.
         let active = &self.tabs[self.active];
         let untouched = active.session.as_deref() == Some(session)
@@ -554,6 +655,7 @@ impl App {
     fn start_failed(&mut self, tab: u64, message: String) {
         if let Some(tab) = self.tabs.iter_mut().find(|shown| shown.id == tab) {
             tab.starting = false;
+            tab.following = false;
             self.notice = Some(message);
         }
     }
@@ -705,14 +807,14 @@ impl App {
                 self.activate_tab(self.active);
                 self.emit(Intent::Open { session, agent });
             }
-            Opens::Workflow(row) => self.show_workflow(row),
+            Opens::Workflow(address) => self.show_workflow(&address),
         }
     }
 
-    fn show_workflow(&mut self, row: usize) {
+    fn show_workflow(&mut self, address: &str) {
         self.tabs[self.active].running_sel = None;
         self.run_effect(Effect::ShowSidebar(View::Workflows));
-        self.view_sel[View::Workflows as usize] = row;
+        self.select_job(address);
         if sidebar_can_dock(self.size.0) {
             self.focus_pane(Pane::Sidebar);
         }
@@ -723,7 +825,7 @@ impl App {
         self.run_effect(Effect::ShowSidebar(View::Changes));
         self.diff = Some(file);
         self.diff_scroll = 0;
-        let rows = view_rows(View::Changes);
+        let rows = self.view_rows(View::Changes);
         if let Some(row) = rows
             .iter()
             .position(|row| row.action == RowAction::OpenDiff(file))
@@ -804,9 +906,15 @@ impl App {
             Action::Next if self.slash.is_some() => self.step_slash(true),
             Action::Prev if self.slash.is_some() => self.step_slash(false),
             Action::Complete => self.complete_slash(),
+            Action::Submit if self.enter_accepts() => self.accept(),
             Action::Submit => self.submit(),
             Action::Back => self.back(),
             Action::Interrupt => self.interrupt(),
+            Action::Stop => {
+                if !self.stop() {
+                    self.notice = Some(NOTHING_RUNNING.to_string());
+                }
+            }
             Action::EnterInput => {
                 self.search = None;
                 self.tabs[self.active].running_sel = None;
@@ -825,6 +933,8 @@ impl App {
             Action::OpenSearch => self.open_search(),
             Action::SearchNext if self.search.is_some() => self.step_match(true),
             Action::SearchPrev if self.search.is_some() => self.step_match(false),
+            Action::SearchNext if self.shown_prompt().is_some() => self.dismiss(),
+            Action::Accept if self.shown_prompt().is_some() => self.accept(),
             Action::NextTab => self.step_tab(1),
             Action::PrevTab => self.step_tab(self.tabs.len() - 1),
             Action::ClosePane => self.close_pane(),
@@ -835,7 +945,6 @@ impl App {
             Action::PageDown if self.focus == Pane::Agent => self.scroll_agent(false, true),
             Action::Next => self.step(true),
             Action::Prev => self.step(false),
-            Action::NotWired | Action::SearchNext if self.shows_prompt() => self.not_wired(),
             Action::Quit => self.quit = true,
             _ => {}
         }
@@ -927,6 +1036,10 @@ impl App {
                 tab.scroll = 0;
                 self.activate_tab(self.active);
             }
+            Effect::CloseTab => {
+                self.close_tab();
+                self.recheck_focus();
+            }
             Effect::ShowSidebar(view) => {
                 self.set_view(view);
                 if sidebar_can_dock(self.size.0) {
@@ -936,6 +1049,7 @@ impl App {
                 }
             }
             Effect::NotWired => self.not_wired(),
+            Effect::DismissPrompt => self.dismiss(),
             Effect::SwitchKeys => {
                 self.keymap = Keymap::new(match self.keymap.set() {
                     KeySet::Vim => KeySet::Emacs,
@@ -980,11 +1094,22 @@ impl App {
 
     /// The runtime refuses a turn on a subagent's thread.
     fn send(&mut self) {
+        let typed = !self.tabs[self.active].input.text().trim().is_empty();
+        // A reply to a prompt is a mailbox request, not a turn, so a subagent's tab takes it.
+        if let Some(reply) = self.prompt_reply().filter(|_| typed) {
+            if self.says_lost() {
+                return;
+            }
+            let tab = &mut self.tabs[self.active];
+            tab.input.clear();
+            tab.scroll = 0;
+            return self.emit(reply);
+        }
         if self.tabs[self.active].parent.is_some() {
             self.notice = Some(READ_ONLY.to_string());
             return;
         }
-        if self.tabs[self.active].input.text().trim().is_empty() || self.says_lost() {
+        if !typed || self.says_lost() {
             return;
         }
         if self.agents.is_empty() {
@@ -1003,6 +1128,7 @@ impl App {
             text: tab.input.text().to_string(),
         };
         tab.starting = tab.session.is_none();
+        tab.following = true;
         tab.input.clear();
         tab.scroll = 0;
         self.emit(intent);
@@ -1025,21 +1151,27 @@ impl App {
             }
             return;
         }
-        let tab = &self.tabs[self.active];
-        if let (Some(session), Some(turn)) = (&tab.session, &tab.turn) {
-            let intent = Intent::Interrupt {
-                session: session.clone(),
-                agent: tab.agent_id.clone(),
-                turn: turn.clone(),
-            };
-            if self.says_lost() {
-                return;
-            }
-            self.emit(intent);
-            self.notice = Some(STOPPING.to_string());
-        } else {
+        if !self.stop() {
             self.notice = Some(self.quit_hint().to_string());
         }
+    }
+
+    /// Stops the active tab's turn, if one runs.
+    fn stop(&mut self) -> bool {
+        let tab = &self.tabs[self.active];
+        let (Some(session), Some(turn)) = (&tab.session, &tab.turn) else {
+            return false;
+        };
+        let intent = Intent::Interrupt {
+            session: session.clone(),
+            agent: tab.agent_id.clone(),
+            turn: turn.clone(),
+        };
+        if !self.says_lost() {
+            self.emit(intent);
+            self.notice = Some(STOPPING.to_string());
+        }
+        true
     }
 
     /// `:` opens the bar only in normal mode and menus. Anywhere else it is text, and `esc` leaves
@@ -1059,11 +1191,6 @@ impl App {
 
     fn not_wired(&mut self) {
         self.notice = Some(NOT_WIRED.to_string());
-    }
-
-    fn shows_prompt(&self) -> bool {
-        let lines = &self.tabs[self.active].lines;
-        lines.iter().any(|line| line.text == PROMPT_ROW)
     }
 
     fn panes(&self) -> Option<Panes> {
@@ -1212,6 +1339,17 @@ impl App {
                 *tab = *parent;
             }
             self.activate_tab(index);
+            // Picking it again reads it again, for what other clients added. A resume under a
+            // turn this tab streams could repeat or drop that turn's text, and the sample keeps
+            // nothing to reread.
+            let tab = &self.tabs[index];
+            let (streaming, agent) = (tab.following, tab.agent_id.clone());
+            if self.intents.is_some() && !streaming && !self.says_lost() {
+                self.emit(Intent::Open {
+                    session: session.id,
+                    agent,
+                });
+            }
             return;
         }
         if self.says_lost() {
@@ -1289,11 +1427,16 @@ impl App {
         });
     }
 
-    /// A diff belongs to the Changes view, so it closes when the view changes.
+    /// A diff belongs to the Changes view, so it closes when the view changes. The source
+    /// rereads a work view as it is shown.
     pub fn set_view(&mut self, view: View) {
         self.view = view;
         self.diff = None;
         self.search.take_if(|search| search.pane == Pane::Sidebar);
+        let lost = matches!(self.connection, Connection::Lost(_));
+        if view != View::Changes && !lost {
+            self.emit(Intent::Refresh);
+        }
     }
 
     pub fn diff_rows(&self, file: usize) -> Vec<(String, Tone)> {
@@ -1323,8 +1466,9 @@ impl App {
 
     fn step_sidebar(&mut self, forward: bool) {
         let Some(file) = self.diff else {
+            let rows = self.view_rows(self.view);
             let selected = &mut self.view_sel[self.view as usize];
-            *selected = step_row(view_rows(self.view), *selected, forward);
+            *selected = step_row(&rows, *selected, forward);
             return;
         };
         if let Some(pane) = self.sidebar_pane() {
@@ -1352,8 +1496,8 @@ impl App {
             return;
         };
         let area = self.visible_rows(Pane::Agent, self.conversation_rect(panes.agent));
+        let lines = self.conversation_rows(area.width).len();
         let tab = &mut self.tabs[self.active];
-        let lines = tab.wrapped_rows(area.width).len();
         let max = lines.saturating_sub(usize::from(area.height));
         let by = if page { usize::from(area.height) } else { 1 };
         let scroll = tab.scroll.min(max);
@@ -1376,13 +1520,18 @@ impl App {
         if self.diff.is_some() {
             return;
         }
-        match view_rows(self.view)[self.view_sel[self.view as usize]].action {
-            RowAction::OpenDiff(file) => {
+        let rows = self.view_rows(self.view);
+        match rows
+            .get(self.view_sel[self.view as usize])
+            .map(|row| row.action)
+        {
+            Some(RowAction::OpenDiff(file)) => {
                 self.diff = Some(file);
                 self.diff_scroll = 0;
                 self.search = None;
             }
-            RowAction::NotWired => self.not_wired(),
+            Some(RowAction::OpenJob(job)) => self.toggle_job(job),
+            Some(RowAction::NotWired) => self.not_wired(),
             _ => {}
         }
     }
@@ -1450,7 +1599,7 @@ mod tests {
             .into_iter()
             .zip(app.view_sel)
         {
-            assert!(view_rows(view)[selected].selectable(), "{view:?}");
+            assert!(app.view_rows(view)[selected].selectable(), "{view:?}");
         }
     }
 
@@ -1783,6 +1932,40 @@ mod tests {
     }
 
     #[test]
+    fn a_long_running_row_keeps_its_status_apart_from_its_title() {
+        let mut app = session_app();
+        let row = &mut app.tabs[0].running[1];
+        row.name = "wf-read-only".to_string();
+        row.job = "Disk scan: modules summary.".to_string();
+        row.status = "finished".to_string();
+        row.state = RunState::Done;
+        let s = screen(&app);
+        let title = "◇ wf-read-only · Disk scan: modules summary.";
+        let (y, x) = find(&s, title).expect("the whole title");
+        let after = &s[usize::from(y)]
+            .chars()
+            .skip(usize::from(x))
+            .collect::<String>();
+        let status = after[title.len()..].trim_start();
+        assert!(status.starts_with("finished"), "{after:?}");
+        assert_eq!(
+            find(&s, "reading crates/gents-cli").map(|at| at.1),
+            find(&s, "finished").map(|at| at.1),
+            "the statuses stay in one column"
+        );
+
+        let mut app = session_app();
+        app.handle(Event::Resize(60, 36));
+        app.tabs[0].running[1].job = "a title much longer than the row has room for".into();
+        let s = screen(&app);
+        let (y, _) = find(&s, "Researcher · a title").expect("the row");
+        let shown = &s[usize::from(y)];
+        let cut = shown.find('…').expect("the title is cut");
+        let status = shown.find("running for 4m").expect("the status whole");
+        assert!(cut < status, "{shown:?}");
+    }
+
+    #[test]
     fn a_tab_with_nothing_running_has_no_rows() {
         let s = screen(&App::new(Vim, 132, 36));
         assert_eq!(find(&s, "◆"), None);
@@ -1793,6 +1976,7 @@ mod tests {
     fn the_conversation_gives_up_a_row_for_each() {
         let mut app = session_app();
         app.tabs[0].lines = numbered(100);
+        app.tabs[0].prompts.clear();
         assert_eq!(find(&screen(&app), "message 99").map(|at| at.0), Some(26));
     }
 
@@ -1957,7 +2141,15 @@ mod tests {
             .iter()
             .position(|row| row.text.contains("s1"));
         app.open_session(row.expect("the session's row"));
-        assert!(intents.try_recv().is_err(), "it is already open");
+        let reread = Intent::Open {
+            session: "s1".to_string(),
+            agent: "local:default".to_string(),
+        };
+        assert_eq!(
+            intents.try_recv(),
+            Ok(reread),
+            "picking it again rereads it"
+        );
         assert_eq!(
             (app.tabs.len(), app.tabs[0].session.as_deref()),
             (1, Some("s1"))
@@ -1966,6 +2158,68 @@ mod tests {
         assert_eq!(
             app.tabs[0].lines,
             [said("later", Tone::Reply, "r9"), blank()]
+        );
+    }
+
+    /// Picking an open session again reads it again, unless its tab follows a turn it sent: a
+    /// resume under a streaming turn could repeat or drop its text. Another client's turn is not
+    /// streamed here, so it does not block the reread, and ctrl-c still stops it.
+    #[test]
+    fn picking_an_open_session_again_rereads_it_unless_it_follows_its_own_turn() {
+        let (mut app, intents) = with_runtime_agents();
+        let listed = Session {
+            agent: "local:default".to_string(),
+            ..listed("s1", Day::Today, SessionState::Idle)
+        };
+        app.apply(Update::Sessions(vec![listed]));
+        let row = app
+            .session_rows()
+            .iter()
+            .position(|row| row.text.contains("s1"))
+            .expect("the session's row");
+        let open = Intent::Open {
+            session: "s1".to_string(),
+            agent: "local:default".to_string(),
+        };
+        app.open_session(row);
+        assert_eq!(intents.try_recv(), Ok(open.clone()));
+
+        app.open_session(row);
+        assert_eq!(intents.try_recv(), Ok(open.clone()), "picked again");
+        assert_eq!(app.tabs.len(), 1);
+
+        app.apply(turn("t1"));
+        app.open_session(row);
+        assert_eq!(intents.try_recv(), Ok(open.clone()), "a foreign turn");
+        press(&mut app, "ctrl-c");
+        let stop = Intent::Interrupt {
+            session: "s1".to_string(),
+            agent: "local:default".to_string(),
+            turn: "t1".to_string(),
+        };
+        assert_eq!(intents.try_recv(), Ok(stop), "ctrl-c still stops it");
+
+        type_text(&mut app, "hi");
+        press(&mut app, "enter");
+        assert!(matches!(intents.try_recv(), Ok(Intent::Send { .. })));
+        app.apply(turn("t2"));
+        app.open_session(row);
+        assert!(intents.try_recv().is_err(), "its own turn is left alone");
+        assert_eq!((app.tabs.len(), app.active), (1, 0));
+        app.apply(ended("t2"));
+        app.open_session(row);
+        assert_eq!(intents.try_recv(), Ok(open), "once it ends");
+
+        let mut app = App::new(Vim, 132, 36);
+        enter_on_session(&mut app, "flaky");
+        press(&mut app, "i");
+        type_text(&mut app, "hi");
+        press(&mut app, "enter");
+        let lines = app.tabs[0].lines.clone();
+        enter_on_session(&mut app, "flaky");
+        assert_eq!(
+            app.tabs[0].lines, lines,
+            "the sample keeps nothing to reread"
         );
     }
 
@@ -2075,7 +2329,12 @@ mod tests {
             "s1",
             vec![subagent("researcher", RunState::Done, "c1")],
         ));
+        app.apply(Update::Prompts {
+            session: "s1".to_string(),
+            prompts: vec![crate::sample::approval("Engineer")],
+        });
         assert!(app.tabs[0].lines.is_empty(), "the subagent shows its own");
+        assert!(app.tabs[0].prompts.is_empty());
 
         press(&mut app, "esc esc");
         let parent = &app.tabs[0];
@@ -2086,6 +2345,30 @@ mod tests {
         );
         assert_eq!(parent.running[0].state, RunState::Done);
         assert_eq!(parent.running_sel, Some(0));
+        assert_eq!(parent.prompts.len(), 1);
+    }
+
+    /// Rows change live, so a selection follows its row rather than its position, on the tab
+    /// and on a parent boxed behind a subagent.
+    #[test]
+    fn a_running_selection_follows_its_row() {
+        let (mut app, _intents) = with_subagents();
+        let researcher = subagent("researcher", RunState::Working, "c1");
+        let triage = subagent("triage", RunState::Done, "c2");
+        let scout = subagent("scout", RunState::Working, "c0");
+        press(&mut app, "up");
+        assert_eq!(app.tabs[0].running_sel, Some(1));
+        let rows = vec![scout.clone(), researcher.clone(), triage.clone()];
+        app.apply(running("s1", rows));
+        assert_eq!(app.tabs[0].running_sel, Some(2), "still triage");
+
+        press(&mut app, "up enter");
+        assert_eq!(app.tabs[0].session.as_deref(), Some("c1"));
+        let newest = subagent("newest", RunState::Working, "c9");
+        app.apply(running("s1", vec![newest, scout, researcher, triage]));
+        press(&mut app, "esc esc");
+        assert_eq!(app.tabs[0].session.as_deref(), Some("s1"));
+        assert_eq!(app.tabs[0].running_sel, Some(2), "still researcher");
     }
 
     #[test]
@@ -2135,7 +2418,6 @@ mod tests {
         press(&mut app, "j j j j enter");
         assert!(right_is_shown(&app));
         assert_eq!(app.view, View::Workflows);
-        assert_eq!(app.view_sel[View::Workflows as usize], 2);
         assert_eq!(app.tabs[0].running_sel, None);
         assert_eq!(app.focus, Pane::Sidebar);
         assert_eq!(app.tabs[0].agent, "Engineer");
@@ -2162,8 +2444,9 @@ mod tests {
                 .iter()
                 .find(|line| line.tone == Tone::File(file))
                 .expect("a row per file");
-            let row = view_rows(View::Changes)
-                .iter()
+            let row = app
+                .view_rows(View::Changes)
+                .into_iter()
                 .find(|row| row.action == RowAction::OpenDiff(file))
                 .expect("the same file in the Changes view");
             assert_eq!(line.text.trim(), row.text.trim());
@@ -2188,7 +2471,7 @@ mod tests {
         assert_eq!(app.focus, Pane::Agent);
         let selected = app.view_sel[View::Changes as usize];
         assert_eq!(
-            view_rows(View::Changes)[selected].action,
+            app.view_rows(View::Changes)[selected].action,
             RowAction::OpenDiff(1)
         );
 
@@ -2539,6 +2822,7 @@ mod tests {
             let mut app = App::new(set, 132, 36);
             enter_on_session(&mut app, "pack registry");
             app.tabs[0].lines = numbered(100);
+            app.tabs[0].prompts.clear();
             press(&mut app, "pgup");
             assert_eq!(app.tabs[0].scroll, 23, "{set:?}");
             assert_eq!(app.tabs[0].running_sel, None);
@@ -3027,7 +3311,7 @@ mod tests {
         for _ in 0..20 {
             press(&mut app, "ctrl-n");
         }
-        assert_eq!(app.slash, Some(9));
+        assert_eq!(app.slash, Some(10));
         type_text(&mut app, "c");
         assert_eq!(app.slash, Some(0));
         press(&mut app, "enter");
@@ -3178,7 +3462,7 @@ mod tests {
     fn switch_key_set_is_not_a_slash_command() {
         let mut app = with_right_pane(App::new(Vim, 132, 36));
         type_text(&mut app, "/");
-        assert_eq!(app.slash_matches().len(), 10);
+        assert_eq!(app.slash_matches().len(), 11);
         type_text(&mut app, "switch");
         assert!(app.slash_matches().is_empty());
         assert!(find(&screen(&app), "no matches").is_some());
@@ -3360,7 +3644,7 @@ mod tests {
     }
 
     #[test]
-    fn sending_on_a_session_tab_leaves_a_blank_after_the_prompt() {
+    fn sending_on_a_session_tab_leaves_a_blank_after_the_transcript() {
         let mut app = App::new(Vim, 132, 36);
         enter_on_session(&mut app, "flaky");
         press(&mut app, "i");
@@ -3370,7 +3654,7 @@ mod tests {
         let sent = lines.len() - 4;
         assert_eq!(lines[sent].text, "hi");
         assert_eq!(lines[sent - 1].text, "");
-        assert_eq!(lines[sent - 2].text, PROMPT_ROW);
+        assert_eq!(lines[sent - 2].text, "  A shell/mod.rs      +5");
     }
 
     #[test]
@@ -3566,9 +3850,9 @@ mod tests {
 
         app.apply(Update::Opened {
             session: "flaky recovery test".to_string(),
-            lines: sample_chat("Reviewer"),
+            lines: sample_chat(),
         });
-        assert_eq!(app.tabs[0].lines, sample_chat("Reviewer"));
+        assert_eq!(app.tabs[0].lines, sample_chat());
         assert_eq!(app.mode, Mode::Normal);
         assert!(find(&screen(&app), "Group the sign-in").is_some());
     }
@@ -3585,7 +3869,7 @@ mod tests {
             item("s1", said("hi", Tone::You, "u1")),
             Update::Opened {
                 session: "s1".to_string(),
-                lines: sample_chat("Engineer"),
+                lines: sample_chat(),
             },
             running("s1", crate::sample::running()),
             Update::Delta {
@@ -3695,6 +3979,66 @@ mod tests {
         assert!(intents.try_recv().is_err());
         let hint = "esc first, then :q then enter to quit";
         assert_eq!(app.notice.as_deref(), Some(hint));
+    }
+
+    #[test]
+    fn s_in_normal_mode_stops_the_running_turn_and_keeps_the_draft() {
+        let (mut app, intents) = connected();
+        app.tabs[0].session = Some("s1".to_string());
+        press(&mut app, "esc");
+        press(&mut app, "s");
+        assert!(intents.try_recv().is_err());
+        assert_eq!(app.notice.as_deref(), Some("nothing is running"));
+
+        app.apply(turn("t1"));
+        press(&mut app, "i");
+        type_text(&mut app, "draft");
+        press(&mut app, "esc");
+        press(&mut app, "s");
+        let stop = Intent::Interrupt {
+            session: "s1".to_string(),
+            agent: "Engineer".to_string(),
+            turn: "t1".to_string(),
+        };
+        assert_eq!(intents.try_recv(), Ok(stop));
+        assert_eq!(app.notice.as_deref(), Some("stopping the turn"));
+        assert_eq!(app.tabs[0].input.text(), "draft");
+    }
+
+    #[test]
+    fn close_from_the_jump_bar_closes_the_tab() {
+        let (mut app, _intents) = connected();
+        app.push_tab(Tab::new_session());
+        assert_eq!(app.tabs.len(), 2);
+        press(&mut app, "esc");
+        press(&mut app, ":");
+        type_text(&mut app, "close");
+        press(&mut app, "enter");
+        assert_eq!(app.tabs.len(), 1);
+    }
+
+    #[test]
+    fn wrapped_rows_follow_a_changed_line_and_width() {
+        let mut tab = Tab::new_session();
+        tab.lines = vec![ChatLine {
+            text: "one two three".to_string(),
+            tone: Tone::Plain,
+            item: None,
+        }];
+        let rows = |tab: &Tab, width| -> Vec<String> {
+            tab.wrapped_rows(width)
+                .into_iter()
+                .map(|(row, _)| row)
+                .collect()
+        };
+        assert_eq!(rows(&tab, 20), ["one two three"]);
+        assert_eq!(rows(&tab, 8), ["one two", "three"]);
+        tab.lines[0].text.push_str(" four");
+        assert_eq!(rows(&tab, 8), ["one two", "three", "four"]);
+        tab.lines[0].tone = Tone::Reply;
+        assert_eq!(tab.wrapped_rows(8)[0].1, Tone::Reply);
+        tab.lines.clear();
+        assert!(rows(&tab, 8).is_empty());
     }
 
     #[test]
@@ -3830,7 +4174,7 @@ mod tests {
     fn opened(session: &str) -> Update {
         Update::Opened {
             session: session.to_string(),
-            lines: sample_chat("Engineer"),
+            lines: sample_chat(),
         }
     }
 
@@ -3841,7 +4185,7 @@ mod tests {
         enter_on_session(&mut app, "flaky");
         type_text(&mut app, "dr");
         app.apply(opened("flaky recovery test"));
-        assert_eq!(app.tabs[0].lines, sample_chat("Engineer"));
+        assert_eq!(app.tabs[0].lines, sample_chat());
         assert_eq!(app.mode, Mode::Input);
         assert_eq!(app.focus, Pane::Agent);
         type_text(&mut app, "aft :");
@@ -3857,7 +4201,7 @@ mod tests {
         enter_on_session(&mut app, "cli ux");
         assert_eq!((app.active, app.mode), (1, Mode::Input));
         app.apply(opened("flaky recovery test"));
-        assert_eq!(app.tabs[0].lines, sample_chat("Engineer"));
+        assert_eq!(app.tabs[0].lines, sample_chat());
         assert_eq!((app.active, app.mode), (1, Mode::Input));
     }
 
@@ -3990,15 +4334,23 @@ mod tests {
     }
 
     #[test]
-    fn prompt_keys_are_not_live() {
+    fn the_sample_prompt_takes_its_keys() {
+        for (key, notice) in [("y", Some("acknowledged")), ("n", None)] {
+            let mut app = with_right_pane(App::new(Vim, 132, 36));
+            enter_on_session(&mut app, "flaky");
+            assert!(find(&screen(&app), "! Allow Reviewer").is_some());
+            press(&mut app, key);
+            assert_eq!(app.notice.as_deref(), notice, "{key}");
+            assert_eq!(find(&screen(&app), "! Allow Reviewer"), None, "{key}");
+        }
         let mut app = with_right_pane(App::new(Vim, 132, 36));
         enter_on_session(&mut app, "flaky");
-        for key in ["y", "n", "a"] {
-            press(&mut app, key);
-            assert_eq!(app.notice.as_deref(), Some("not wired yet"), "{key}");
-            press(&mut app, "x");
-            assert_eq!(app.notice, None);
-        }
+        press(&mut app, "a");
+        assert_eq!(app.notice, None);
+        assert!(
+            find(&screen(&app), "! Allow Reviewer").is_some(),
+            "no always"
+        );
 
         let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc");
@@ -4013,11 +4365,9 @@ mod tests {
         assert_eq!(app.notice, None);
         assert_eq!(app.tabs[0].input.text(), "y");
 
-        for view in [View::Workflows, View::Agents] {
-            let mut app = with_right_pane(App::new(Vim, 132, 36));
-            app.view = view;
-            press(&mut app, "esc ctrl-w l ctrl-w l enter");
-            assert_eq!(app.notice.as_deref(), Some("not wired yet"));
-        }
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
+        app.view = View::Agents;
+        press(&mut app, "esc ctrl-w l ctrl-w l enter");
+        assert_eq!(app.notice.as_deref(), Some("not wired yet"));
     }
 }

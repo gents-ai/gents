@@ -131,6 +131,7 @@ impl InterfaceEndpoint {
 
     async fn open(
         self,
+        home: &Path,
         agent: Option<String>,
         prompt: Option<String>,
         resume: Option<String>,
@@ -142,7 +143,7 @@ impl InterfaceEndpoint {
                     resume.is_none(),
                     "the shell cannot open a session at launch yet. Send the next turn with `gents --continue SESSION_ID -p MESSAGE`, or switch to Codex with `gents config client set codex`."
                 );
-                crate::commands::shell::open(&remote, agent, prompt, runtime).await
+                crate::commands::shell::open(home, &remote, agent, prompt, runtime).await
             }
             Self::Codex { remote } => {
                 open_codex(CodexArgs {
@@ -207,7 +208,7 @@ pub(crate) async fn run(mut args: StartArgs, runtime: Handle) -> Result<()> {
         ensure_an_agent_can_run(endpoint.remote(), &home, agent.is_some(), PUBLISH_WAIT).await?;
         let opened_at = chrono::Utc::now();
         let opened = endpoint
-            .open(agent.clone(), args.prompt, args.continue_session, runtime)
+            .open(&home, agent.clone(), args.prompt, args.continue_session, runtime)
             .await;
         print_continue_hint(
             &home,
@@ -362,7 +363,7 @@ pub(crate) async fn shell(args: ShellArgs, runtime: Handle) -> Result<()> {
         ensure_runtime(&home, &config.node_did, &mut endpoint).await?;
     }
     ensure_an_agent_can_run(endpoint.remote(), &home, false, PUBLISH_WAIT).await?;
-    endpoint.open(None, None, None, runtime).await
+    endpoint.open(&home, None, None, None, runtime).await
 }
 
 /// Setup asks its questions on the terminal, so a home that needs it and has none is refused.

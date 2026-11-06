@@ -2,19 +2,38 @@ use std::cmp::Reverse;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
+use anyhow::Context;
+use chrono::{DateTime, Local};
+use futures_util::stream::BoxStream;
+use futures_util::{Stream, StreamExt};
+use gents::session::mailbox::MailboxItem;
+use gents::store::config_client::SubscribeError;
 use gents_codex_protocol as codex;
 use gents_shell::app::ChatLine;
-use gents_shell::sample::Tone;
-use gents_shell::source::{Connection, Input, Intent, Session, Update};
+use gents_shell::sample::{Opens, RunState, Running, Tone};
+use gents_shell::source::{
+    BackgroundCall, Connection, Input, Intent, Job, Prompt, Session, Update,
+};
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
+use serde_json::Value;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
 use super::client::{Client, ClientEvent};
 use super::items;
+use super::work::{self, Work};
 use crate::commands::codex::relay::agent_route_target;
 use crate::commands::codex::{resolve_endpoint, runtime_identity_at, RemoteEndpoint};
 use crate::commands::codex_shim::RuntimeIdentity;
+use crate::commands::mailbox;
+
+/// What the shell opens with. `work` is why jobs and the mailbox are off when it is `Err`.
+pub(super) struct Opening {
+    pub(super) remote: String,
+    pub(super) agent: Option<String>,
+    pub(super) prompt: Option<String>,
+    pub(super) work: Result<Work, String>,
+}
 
 /// Feeds the shell from the runtime at `remote`, over one connection per agent, waiting
 /// `answer_wait` for each answer. A given `agent` or `prompt` follows the agents.
@@ -23,26 +42,30 @@ use crate::commands::codex_shim::RuntimeIdentity;
 /// updates until `Started` binds its session, and `Opened` replaces a tab's lines, so both
 /// must reach it before any notification that arrived while their request was out.
 pub(super) async fn run(
-    remote: String,
-    agent: Option<String>,
-    prompt: Option<String>,
+    opening: Opening,
     mut intents: mpsc::UnboundedReceiver<Intent>,
     updates: Sender<Input>,
     runtime: Handle,
     answer_wait: Duration,
 ) {
-    let mut source = Source {
-        clients: Vec::new(),
-        updates,
-        open: RapidHashSet::new(),
-        parents: RapidHashMap::new(),
-        resumed: RapidHashSet::new(),
+    let Opening {
+        remote,
+        agent,
+        prompt,
+        work,
+    } = opening;
+    let (work, off) = match work {
+        Ok(work) => (Some(work), None),
+        Err(off) => (None, Some(off)),
     };
+    let (watching, mut watched) = mpsc::unbounded_channel();
+    let mut source = Source::new(updates, work, runtime.clone(), watching);
     let Some(identity) = runtime_identity_at(&remote).await else {
         return source.lost(format!(
             "no runtime: check `gents status`, then reopen the shell (could not read this home's runtime at {remote})"
         ));
     };
+    source.principal = identity.node_did.clone();
     let (events, mut received) = mpsc::unbounded_channel();
     let agents = items::agents(&identity);
     for agent in &agents {
@@ -81,6 +104,14 @@ pub(super) async fn run(
     }
     source.tell(Update::Connection(Connection::Ready));
     source.tell(Update::Sessions(source.sessions().await));
+    match off {
+        Some(off) => {
+            source.tell(Update::Notice(off));
+            source.tell_jobs();
+            source.tell_background();
+        }
+        None => source.reread_work(),
+    }
     loop {
         tokio::select! {
             intent = intents.recv() => match intent {
@@ -91,9 +122,158 @@ pub(super) async fn run(
                 ClientEvent::Notification(note) => source.notified(&agent, *note).await,
                 ClientEvent::Closed(error) => return source.lost(closed(error)),
             },
+            Some(event) = watched.recv() => source.watched(event),
         }
     }
 }
+
+/// The tool calls that are plugin jobs or background calls. Each event is only a hint to
+/// reread: the node drops events when a subscriber falls behind, and a delete reads like an
+/// update.
+pub(super) const WATCHED: &str = r#"subscription { AgentToolCall(filter: { _or: [{ job_pin: { _ne: null } }, { await_mode: { _eq: "background" } }] }) { _docID } }"#;
+
+/// Any change to an item a prompt shows: an item's kind never changes, so one leaving the open
+/// prompts still fires. Each event is only a hint to reread them.
+pub(super) const MAILBOX_WATCHED: &str =
+    r#"subscription { MailboxItem(filter: { kind: { _in: ["ask", "gate"] } }) { _docID } }"#;
+
+type Changes = BoxStream<'static, Result<Value, SubscribeError>>;
+
+/// What a subscription watches: the work views' tool calls, or the mailbox.
+#[derive(Clone, Copy)]
+enum Feed {
+    Work,
+    Mailbox,
+}
+
+enum Watched {
+    Changed(Feed),
+    /// With the error, when the stream broke rather than closed.
+    Ended(Feed, Option<String>),
+    Read(Box<Read>),
+    Asked(Box<Asked>),
+}
+
+/// One reread of the work views, done off the chat loop.
+struct Read {
+    /// The subscription it opened first, when the source was not live.
+    changes: Option<Result<Changes, String>>,
+    jobs: Result<Vec<Job>, String>,
+    background: Result<Vec<BackgroundCall>, String>,
+    at: DateTime<Local>,
+}
+
+/// One reread of this node's open mailbox items, done off the chat loop.
+struct Asked {
+    changes: Option<Result<Changes, String>>,
+    items: Result<Vec<MailboxItem>, String>,
+}
+
+/// The node replays nothing, so a change between a read and the subscription opened after it
+/// would be lost: each read subscribes first when asked.
+async fn watch(work: &Work, document: &str, subscribe: bool) -> Option<Result<Changes, String>> {
+    let changes = match subscribe {
+        true => work.endpoint.subscribe(document).await,
+        false => return None,
+    };
+    Some(
+        changes
+            .map(StreamExt::boxed)
+            .map_err(|error| error.to_string()),
+    )
+}
+
+async fn read_work(work: Work, subscribe: bool) -> Read {
+    let changes = watch(&work, WATCHED, subscribe).await;
+    let at = Local::now();
+    let access = work.access();
+    let jobs = work::jobs(&access)
+        .await
+        .map(|views| views.iter().map(work::job).collect())
+        .map_err(|error| error.to_string());
+    let background = work::background(&access)
+        .await
+        .map(|rows| rows.iter().map(work::background_call).collect())
+        .map_err(|error| format!("{error:#}"));
+    Read {
+        changes,
+        jobs,
+        background,
+        at,
+    }
+}
+
+async fn read_mailbox(work: Work, subscribe: bool) -> Asked {
+    let changes = watch(&work, MAILBOX_WATCHED, subscribe).await;
+    let items = mailbox::served_items(&work.access(), false)
+        .await
+        .map_err(|error| format!("{error:#}"));
+    Asked { changes, items }
+}
+
+/// A view's last good rows, when they were read, and whether the latest read failed.
+struct Shown<T> {
+    rows: Vec<T>,
+    read: Option<DateTime<Local>>,
+    failed: bool,
+}
+
+impl<T> Shown<T> {
+    fn new() -> Self {
+        Shown {
+            rows: Vec::new(),
+            read: None,
+            failed: false,
+        }
+    }
+
+    /// A failed read keeps the last good rows, and returns its error.
+    fn take(&mut self, read: Result<Vec<T>, String>, at: DateTime<Local>) -> Option<String> {
+        match read {
+            Ok(rows) => {
+                (self.rows, self.read, self.failed) = (rows, Some(at), false);
+                None
+            }
+            Err(error) => {
+                self.failed = true;
+                Some(error)
+            }
+        }
+    }
+}
+
+/// Ends when the source does, which drops the stream and its connection.
+async fn forward<S>(changes: S, feed: Feed, watching: mpsc::UnboundedSender<Watched>)
+where
+    S: Stream<Item = Result<Value, SubscribeError>>,
+{
+    let mut changes = std::pin::pin!(changes);
+    let ended = loop {
+        tokio::select! {
+            change = changes.next() => match change {
+                Some(Ok(_)) => {
+                    let _ = watching.send(Watched::Changed(feed));
+                }
+                Some(Err(error)) => break Some(error.to_string()),
+                None => break None,
+            },
+            () = watching.closed() => return,
+        }
+    };
+    let _ = watching.send(Watched::Ended(feed, ended));
+}
+
+fn not_live(error: &str) -> String {
+    format!("jobs are not live: show the Workflows view to read them again ({error})")
+}
+
+/// Prompts have no header to show their age, so the end of their feed is told.
+fn prompts_not_live(error: Option<&str>) -> String {
+    let error = error.map_or(String::new(), |error| format!(" ({error})"));
+    format!("prompts are not live: the next turn, or opening a session, reads them again{error}")
+}
+
+const PICK_AGAIN: &str = "pick this session again to see the answer to your reply";
 
 /// The status bar clips on the right, so the next step leads and the detail ends.
 pub(super) fn closed(error: Option<String>) -> String {
@@ -122,9 +302,62 @@ struct Source {
     parents: RapidHashMap<String, String>,
     /// Threads resumed on their connection, which from then on reports their turns.
     resumed: RapidHashSet<String>,
+    /// Each listed session's subagent rows, which its running rows lead with.
+    children: RapidHashMap<String, Vec<Running>>,
+    work: Option<Work>,
+    runtime: Handle,
+    watching: mpsc::UnboundedSender<Watched>,
+    /// Whether the tool-call subscription is open, so the views need no reread until it says.
+    live: bool,
+    /// A reread is out, and `again` asks for one more when it lands.
+    reading: bool,
+    again: bool,
+    jobs: Shown<Job>,
+    background: Shown<BackgroundCall>,
+    /// This home's node, as the runtime names it: the mailbox's requester and replier.
+    principal: String,
+    /// Whether the mailbox subscription is open, so the prompts need no reread until it says.
+    mailbox_live: bool,
+    /// A mailbox read is out, and `ask_again` asks for one more when it lands.
+    asking: bool,
+    ask_again: bool,
+    /// The prompts each open session was last told.
+    told: RapidHashMap<String, Vec<Prompt>>,
+    /// Listed subagents with an open question or approval, which their parent's row names.
+    waiting: RapidHashSet<String>,
 }
 
 impl Source {
+    fn new(
+        updates: Sender<Input>,
+        work: Option<Work>,
+        runtime: Handle,
+        watching: mpsc::UnboundedSender<Watched>,
+    ) -> Source {
+        Source {
+            clients: Vec::new(),
+            updates,
+            open: RapidHashSet::new(),
+            parents: RapidHashMap::new(),
+            resumed: RapidHashSet::new(),
+            children: RapidHashMap::new(),
+            work,
+            runtime,
+            watching,
+            live: false,
+            reading: false,
+            again: false,
+            jobs: Shown::new(),
+            background: Shown::new(),
+            principal: String::new(),
+            mailbox_live: false,
+            asking: false,
+            ask_again: false,
+            told: RapidHashMap::new(),
+            waiting: RapidHashSet::new(),
+        }
+    }
+
     /// The shell aborts the source when it ends, so an update it no longer reads is dropped.
     fn tell(&self, update: Update) {
         let _ = self.updates.send(Input::Runtime(update));
@@ -143,7 +376,9 @@ impl Source {
 
     async fn handle(&mut self, intent: Intent) {
         match intent {
-            Intent::Open { session, agent } => self.open(session, &agent).await,
+            Intent::Open { session, agent } => {
+                self.open(session, &agent).await;
+            }
             Intent::Send {
                 tab,
                 session,
@@ -155,13 +390,23 @@ impl Source {
                 agent,
                 turn,
             } => self.interrupt(session, &agent, turn).await,
+            Intent::Refresh => self.reread_work(),
+            Intent::Dismiss { item, .. } => self.dismiss(&item).await,
+            Intent::Reply {
+                session,
+                agent,
+                item,
+                text,
+            } => self.reply(session, &agent, &item, &text).await,
         }
     }
 
     /// `agent` names the connection that sent `note`. A spawn or a send on an open session
     /// relists its subagents, and so does a turn ending on it or on one of them.
+    /// After the subscription ends, a turn or subagent change subscribes again.
     async fn notified(&mut self, agent: &str, note: codex::ServerNotification) {
         use codex::ServerNotification as Note;
+        let turned = matches!(note, Note::TurnStarted(_) | Note::TurnCompleted(_));
         let mut relist = Vec::new();
         match &note {
             Note::TurnCompleted(completed) => {
@@ -188,9 +433,196 @@ impl Source {
         if ended {
             self.tell(Update::Sessions(self.sessions().await));
         }
+        let relisted = !relist.is_empty();
         for session in relist {
             self.subagents(&session, agent).await;
         }
+        if !self.live && (turned || relisted) {
+            self.reread_work();
+        }
+        if !self.mailbox_live && turned {
+            self.reread_prompts();
+        }
+    }
+
+    /// One reread at a time, off the chat loop: a change while one is out asks for one more.
+    fn reread_work(&mut self) {
+        let Some(work) = &self.work else {
+            return;
+        };
+        if self.reading {
+            self.again = true;
+            return;
+        }
+        self.reading = true;
+        let (work, subscribe, done) = (work.clone(), !self.live, self.watching.clone());
+        self.runtime.spawn(async move {
+            let read = read_work(work, subscribe).await;
+            let _ = done.send(Watched::Read(Box::new(read)));
+        });
+    }
+
+    /// The open sessions' prompts, read as `reread_work` reads the views.
+    fn reread_prompts(&mut self) {
+        let Some(work) = self.work.clone().filter(|_| !self.open.is_empty()) else {
+            return;
+        };
+        if self.asking {
+            self.ask_again = true;
+            return;
+        }
+        self.asking = true;
+        let subscribe = !self.mailbox_live;
+        let done = self.watching.clone();
+        self.runtime.spawn(async move {
+            let asked = read_mailbox(work, subscribe).await;
+            let _ = done.send(Watched::Asked(Box::new(asked)));
+        });
+    }
+
+    fn watched(&mut self, event: Watched) {
+        match event {
+            Watched::Changed(Feed::Work) => self.reread_work(),
+            Watched::Changed(Feed::Mailbox) => self.reread_prompts(),
+            Watched::Ended(Feed::Work, error) => {
+                self.live = false;
+                if let Some(error) = error {
+                    self.tell(Update::Notice(not_live(&error)));
+                }
+                self.tell_jobs();
+                self.tell_background();
+            }
+            Watched::Ended(Feed::Mailbox, error) => {
+                self.mailbox_live = false;
+                self.tell(Update::Notice(prompts_not_live(error.as_deref())));
+            }
+            Watched::Read(read) => self.landed(*read),
+            Watched::Asked(asked) => self.asked(*asked),
+        }
+    }
+
+    /// A session is told its prompts when they differ from what it was last told.
+    fn asked(&mut self, asked: Asked) {
+        self.asking = false;
+        match asked.changes {
+            Some(Ok(changes)) => {
+                self.mailbox_live = true;
+                let watching = self.watching.clone();
+                self.runtime
+                    .spawn(forward(changes, Feed::Mailbox, watching));
+            }
+            Some(Err(error)) => self.tell(Update::Notice(prompts_not_live(Some(&error)))),
+            None => {}
+        }
+        match asked.items {
+            Ok(items) => {
+                for session in &self.open {
+                    let prompts = work::prompts(&items, &self.principal, session);
+                    let told = self.told.get(session).map_or(&[][..], Vec::as_slice);
+                    if told != prompts.as_slice() {
+                        self.told.insert(session.clone(), prompts.clone());
+                        self.tell(Update::Prompts {
+                            session: session.clone(),
+                            prompts,
+                        });
+                    }
+                }
+                let asking =
+                    |child: &&String| !work::prompts(&items, &self.principal, child).is_empty();
+                let waiting = self.parents.keys().filter(asking).cloned().collect();
+                if waiting != self.waiting {
+                    self.waiting = waiting;
+                    for session in self
+                        .open
+                        .iter()
+                        .filter(|open| self.children.contains_key(*open))
+                    {
+                        self.tell(Update::Running {
+                            session: session.clone(),
+                            rows: self.running(session),
+                        });
+                    }
+                }
+            }
+            Err(error) => self.tell(Update::Notice(format!("mailbox: {error}"))),
+        }
+        if std::mem::take(&mut self.ask_again) {
+            self.reread_prompts();
+        }
+    }
+
+    fn landed(&mut self, read: Read) {
+        self.reading = false;
+        match read.changes {
+            Some(Ok(changes)) => {
+                self.live = true;
+                self.runtime
+                    .spawn(forward(changes, Feed::Work, self.watching.clone()));
+            }
+            Some(Err(error)) => self.tell(Update::Notice(not_live(&error))),
+            None => {}
+        }
+        if let Some(error) = self.jobs.take(read.jobs, read.at) {
+            self.tell(Update::Notice(format!("jobs: {error}")));
+        }
+        self.tell_jobs();
+        if let Some(error) = self.background.take(read.background, read.at) {
+            self.tell(Update::Notice(format!("background calls: {error}")));
+        }
+        self.tell_background();
+        for session in &self.open {
+            self.tell(Update::Running {
+                session: session.clone(),
+                rows: self.running(session),
+            });
+        }
+        if std::mem::take(&mut self.again) {
+            self.reread_work();
+        }
+    }
+
+    /// `live` while subscribed and the view's last read held, else when its rows were read.
+    fn as_of<T>(&self, shown: &Shown<T>) -> String {
+        match shown.read {
+            None => "off".to_string(),
+            Some(_) if self.live && !shown.failed => "live".to_string(),
+            Some(read) => format!("as of {}", work::clock(read)),
+        }
+    }
+
+    fn tell_jobs(&self) {
+        self.tell(Update::Jobs {
+            jobs: self.jobs.rows.clone(),
+            as_of: self.as_of(&self.jobs),
+        });
+    }
+
+    fn tell_background(&self) {
+        self.tell(Update::Background {
+            calls: self.background.rows.clone(),
+            as_of: self.as_of(&self.background),
+        });
+    }
+
+    /// The session's subagents, each waiting on the user saying so, then its jobs.
+    fn running(&self, session: &str) -> Vec<Running> {
+        let children = self.children.get(session).into_iter().flatten();
+        let children = children.map(|row| match &row.opens {
+            Opens::Agent(child) if self.waiting.contains(child) => Running {
+                status: "waiting on you".to_string(),
+                ..row.clone()
+            },
+            _ => row.clone(),
+        });
+        let jobs = self.jobs.rows.iter().filter(|job| job.session == session);
+        let jobs = jobs.map(|job| Running {
+            name: job.name.clone(),
+            job: job.title.clone(),
+            status: job.status.clone(),
+            state: RunState::Working,
+            opens: Opens::Workflow(job.address.clone()),
+        });
+        children.chain(jobs).collect()
     }
 
     /// Every agent's threads, newest first.
@@ -280,9 +712,10 @@ impl Source {
             self.parents.insert(thread.id.clone(), session.to_string());
             rows.push(items::subagent(&thread));
         }
+        self.children.insert(session.to_string(), rows);
         self.tell(Update::Running {
             session: session.to_string(),
-            rows,
+            rows: self.running(session),
         });
     }
 
@@ -301,10 +734,14 @@ impl Source {
             .map_err(|error| error.to_string())
     }
 
-    async fn open(&mut self, session: String, agent: &str) {
+    /// Whether the session has a turn in progress.
+    async fn open(&mut self, session: String, agent: &str) -> bool {
         let thread = match self.resume(agent, &session).await {
             Ok(thread) => thread,
-            Err(message) => return self.tell(Update::Notice(message)),
+            Err(message) => {
+                self.tell(Update::Notice(message));
+                return false;
+            }
         };
         self.open.insert(session.clone());
         self.resumed.insert(session.clone());
@@ -319,26 +756,68 @@ impl Source {
             session: session.clone(),
             lines,
         });
-        if let Some(running) = turns
+        let running = turns
             .iter()
-            .rfind(|turn| turn.status == codex::TurnStatus::InProgress)
-        {
+            .rfind(|turn| turn.status == codex::TurnStatus::InProgress);
+        if let Some(running) = running {
             self.tell(Update::Turn {
                 session: session.clone(),
                 turn: running.id.clone(),
             });
         }
         self.subagents(&session, agent).await;
+        // A new tab shows no prompts until it is told them.
+        self.told.remove(&session);
+        self.reread_prompts();
+        running.is_some()
+    }
+
+    /// Through the served mailbox owner, which refuses a question that needs an answer.
+    async fn dismiss(&mut self, item: &str) {
+        let Some(work) = &self.work else {
+            return;
+        };
+        let dismissed = gents::session::mailbox::dismiss_mailbox_item_on(&work.access(), item).await;
+        if let Err(error) = dismissed {
+            self.tell(Update::Notice(format!("{error:#}")));
+        }
+        self.reread_prompts();
+    }
+
+    /// The reply is a request caused by the item. The endpoint streams no other client's
+    /// request, so the session is resumed once to show the reply, and its answer when it is
+    /// already there.
+    async fn reply(&mut self, session: String, agent: &str, item: &str, text: &str) {
+        let Some(work) = self.work.clone() else {
+            return;
+        };
+        let replied = async {
+            let item = mailbox::load_item(&work.access(), item)
+                .await?
+                .context("MailboxItem not found")?;
+            let reply = work::reply_from_text(text, &item).map_err(anyhow::Error::msg)?;
+            mailbox::reply_to(&work.endpoint, &item, reply).await
+        };
+        match replied.await {
+            Ok(_) => self.replied(session, agent).await,
+            Err(error) => {
+                self.tell(Update::Notice(format!("{error:#}")));
+                self.reread_prompts();
+            }
+        }
+    }
+
+    async fn replied(&mut self, session: String, agent: &str) {
+        if self.open(session, agent).await {
+            self.tell(Update::Notice(PICK_AGAIN.to_string()));
+        }
     }
 
     /// A tab with no session gets one first, and `Started` or `StartFailed` either way.
     async fn send(&mut self, tab: u64, session: Option<String>, agent: &str, text: String) {
         let Some(client) = self.client(agent) else {
             let message = not_connected(agent);
-            return self.tell(match session {
-                None => Update::StartFailed { tab, message },
-                Some(_) => Update::Notice(message),
-            });
+            return self.tell(Update::StartFailed { tab, message });
         };
         let session = match session {
             Some(session) => session,
@@ -380,7 +859,10 @@ impl Source {
                 session,
                 turn: started.turn.id,
             }),
-            Err(error) => self.tell(Update::Notice(error.to_string())),
+            Err(error) => self.tell(Update::StartFailed {
+                tab,
+                message: error.to_string(),
+            }),
         }
     }
 
@@ -432,5 +914,79 @@ fn blank() -> ChatLine {
         text: String::new(),
         tone: Tone::Plain,
         item: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::super::tests::{
+        agents_a_and_b, connect, quiet, resumes_of, thread, thread_answer, turn, user_message,
+        FakeRuntime,
+    };
+    use super::*;
+    use crate::commands::eval::testing::test_runtime_handle;
+
+    /// The source after a reply to `s1` was submitted, on agent `a`, whose resume shows the reply
+    /// as the turn `r9` in `status`.
+    async fn after_a_reply(status: &'static str) -> (FakeRuntime, Vec<Update>) {
+        let fake = FakeRuntime::start(agents_a_and_b(), move |_, method, params| match method {
+            "thread/resume" => {
+                let mut shown = thread(params["threadId"].as_str().unwrap(), 100);
+                let reply = user_message("u9", "Decision on Release channel: Stable (stable)");
+                shown["turns"] = json!([turn("r9", status, json!([reply]))]);
+                Some(Ok(thread_answer(shown)))
+            }
+            _ => quiet(method),
+        })
+        .await;
+        let (events, _received) = mpsc::unbounded_channel();
+        let client = connect(&fake, "a", events).await;
+        let (updates, told) = std::sync::mpsc::channel();
+        let (watching, _watched) = mpsc::unbounded_channel();
+        let mut source = Source::new(updates, None, test_runtime_handle(), watching);
+        source.clients.push(("a".to_string(), client));
+
+        source.replied("s1".to_string(), "a").await;
+
+        let told = told.try_iter().map(|input| match input {
+            Input::Runtime(update) => update,
+            other => panic!("{other:?}"),
+        });
+        (fake, told.collect())
+    }
+
+    #[tokio::test]
+    async fn a_reply_resumes_its_session_once_and_says_to_pick_it_again_while_it_runs() {
+        let (fake, told) = after_a_reply("inProgress").await;
+
+        assert_eq!(resumes_of(&fake, "s1"), 1);
+        assert!(
+            matches!(&told[0], Update::Opened { session, lines } if session == "s1" && lines[0].text.starts_with("Decision on")),
+            "{told:?}"
+        );
+        let running = Update::Turn {
+            session: "s1".to_string(),
+            turn: "r9".to_string(),
+        };
+        assert!(
+            told.contains(&running),
+            "ctrl-c can stop the answer: {told:?}"
+        );
+        let pick = Update::Notice(PICK_AGAIN.to_string());
+        assert_eq!(told.last(), Some(&pick), "{told:?}");
+    }
+
+    #[tokio::test]
+    async fn an_answered_reply_says_nothing_more() {
+        let (_, told) = after_a_reply("completed").await;
+
+        assert!(
+            !told
+                .iter()
+                .any(|update| matches!(update, Update::Notice(_))),
+            "{told:?}"
+        );
     }
 }
