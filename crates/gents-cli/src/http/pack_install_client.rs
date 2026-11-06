@@ -438,20 +438,28 @@ pub(crate) async fn install_remote(
     let preparation = session.preparation().clone();
     let access = gents::store::config_client::ConfigAccess::Graphql(endpoint.clone());
     let requested = crate::commands::pack::parse_inference_slot_bindings(&args.inference_slots)?;
-    let prepared = gents::pack::prepare_hosted_document_pack_archive(
-        &access,
-        owner,
-        pack.archive(),
-        &requested,
-        &dependencies
-            .iter()
-            .map(crate::commands::pack::PackSource::archive)
-            .collect::<Vec<_>>(),
-        &|name| std::env::var(name).ok(),
-        &preparation,
-    )
-    .await?;
-    let graph = gents::pack::hosted_document_graph(pack.archive(), &prepared, explicit)?;
+    let prepared = std::sync::Arc::new(
+        gents::pack::prepare_hosted_document_pack_archive(
+            &access,
+            owner,
+            pack.archive(),
+            &requested,
+            &dependencies
+                .iter()
+                .map(crate::commands::pack::PackSource::archive)
+                .collect::<Vec<_>>(),
+            &|name| std::env::var(name).ok(),
+            &preparation,
+        )
+        .await?,
+    );
+    let graph_archive = pack.shared_archive();
+    let graph_prepared = prepared.clone();
+    let graph = tokio::task::spawn_blocking(move || {
+        gents::pack::hosted_document_graph(&graph_archive, &graph_prepared, explicit)
+    })
+    .await
+    .context("reconstructing the reviewed pack graph")??;
     gents::pack::apply_prepared_dependency_schemas(&access, &prepared).await?;
     let temp = tempfile::tempdir()?;
     let root = pack.shared_archive();
