@@ -214,10 +214,14 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
         .context_id
         .as_ref()
         .expect("selected context");
+    let profile_id = &view.agents[&default_agent_did].value.inference_profile_id;
+    let backend_id = &view.inference_profiles[profile_id].value.backend_id;
+    // The selection carries the inference backend between profile and context,
+    // matching `append_inference_selection` in document_view/snapshot.rs.
     let expected = [
         &view.agents[&default_agent_did].doc_id,
-        &view.inference_profiles[&view.agents[&default_agent_did].value.inference_profile_id]
-            .doc_id,
+        &view.inference_profiles[profile_id].doc_id,
+        &view.backends[backend_id].doc_id,
         &view.contexts[context_id].doc_id,
         &view.tools[&tools_id].doc_id,
     ];
@@ -2129,14 +2133,18 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
     );
     let on_a = format!("{x}:inference");
     let on_b = format!("{x}:inference-b");
-    let y = "agent_config-y".to_string();
+    // Y is a second real Agent: its DID must derive from the runtime root and
+    // its creation nonce, or its identity resolution rejects the configuration.
+    let y_binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+    let y = y_binding.agent_did.clone();
     let reasons = |compaction_on_b: bool| {
         let node = node.clone();
         let did = did.clone();
         let resolve_context = &resolve_context;
-        let (x, y, on_a, on_b, b_backend) = (
+        let (x, y, y_nonce, on_a, on_b, b_backend) = (
             x.clone(),
             y.clone(),
+            y_binding.creation_nonce.clone(),
             on_a.clone(),
             on_b.clone(),
             b_backend.clone(),
@@ -2151,6 +2159,7 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
             view.inference_profiles.insert(on_b.clone(), b_profile);
             let mut y_record = view.agents[&x].clone();
             y_record.value.agent_did = y.clone();
+            y_record.value.creation_nonce = y_nonce;
             view.agents.insert(y.clone(), y_record);
             let x_record = view.agents.get_mut(&x).unwrap();
             if compaction_on_b {
