@@ -26,6 +26,7 @@ ciborium = "0.2"
 graphql-parser = "0.4"
 gents-schemas = { workspace = true }
 reqwest = { workspace = true, optional = true }
+schemars = "1"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = "0.10"

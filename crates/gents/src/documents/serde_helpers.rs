@@ -129,6 +129,80 @@ where
     }
 }
 
+/// Schema for a field these deserializers also accept `null` for: the
+/// field's own schema, or null.
+pub(crate) fn accepts_null(schema: &mut schemars::Schema) {
+    let Some(object) = schema.as_object_mut() else {
+        return;
+    };
+    let null = Value::String("null".into());
+    let constrained = ["$ref", "anyOf", "oneOf", "allOf", "enum", "const", "not"]
+        .iter()
+        .any(|key| object.contains_key(*key));
+    match object.get_mut("type") {
+        Some(Value::Array(types)) if !constrained => {
+            if !types.contains(&null) {
+                types.push(null);
+            }
+        }
+        Some(kind @ Value::String(_)) if !constrained => {
+            if *kind != null {
+                *kind = Value::Array(vec![kind.take(), null]);
+            }
+        }
+        None if !constrained => {}
+        _ => widen_schema(object, serde_json::json!({ "type": "null" })),
+    }
+}
+
+/// The annotation on a schema member that accepts another spelling of the
+/// canonical values: one sentence the reference shows instead of the member.
+const SCHEMA_NOTE: &str = "x-gents-note";
+
+/// `member` annotated with `note` under [`SCHEMA_NOTE`].
+pub(crate) fn noted(mut member: Value, note: &str) -> Value {
+    if let Some(object) = member.as_object_mut() {
+        object.insert(SCHEMA_NOTE.into(), note.into());
+    }
+    member
+}
+
+/// Makes `schema` accept `alternative` as well, keeping its annotations on
+/// the outside so readers still see them.
+pub(crate) fn widen_schema(schema: &mut serde_json::Map<String, Value>, alternative: Value) {
+    const ANNOTATIONS: [&str; 7] = [
+        "title",
+        "description",
+        "default",
+        "deprecated",
+        "examples",
+        "readOnly",
+        "writeOnly",
+    ];
+    let inner: serde_json::Map<String, Value> = schema
+        .iter()
+        .filter(|(key, _)| !ANNOTATIONS.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    schema.retain(|key, _| ANNOTATIONS.contains(&key.as_str()));
+    schema.insert(
+        "anyOf".into(),
+        Value::Array(vec![Value::Object(inner), alternative]),
+    );
+}
+
+/// Schema for [`deserialize_optional_string_vec`] and
+/// [`deserialize_string_vec_or_null`]: a string list, one string, or null.
+pub(crate) fn string_list_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "anyOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "string" },
+            { "type": "null" }
+        ]
+    })
+}
+
 pub(super) fn deserialize_string_vec_or_null<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Vec<String>, D::Error>

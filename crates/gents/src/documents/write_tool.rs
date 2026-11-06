@@ -11,9 +11,10 @@ use anyhow::Result;
 /// `name` is trimmed at deserialization; the field name is interpolated verbatim
 /// as a GraphQL input key, so stray whitespace would otherwise corrupt the
 /// mutation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, schemars::JsonSchema)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(rename_all = "snake_case"))]
+#[schemars(rename_all = "snake_case")]
 pub enum WriteToolFieldFill {
     Correlation,
     SourceField(String),
@@ -106,11 +107,12 @@ impl WriteToolFieldFill {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct WriteToolField {
     pub name: String,
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional))]
+    #[schemars(default)]
     pub required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -149,7 +151,7 @@ impl<'de> serde::Deserialize<'de> for WriteToolField {
 /// Tools.datastore selects the surfaces by their owner-scoped document IDs.
 /// `tool_name` and `collection` are trimmed at deserialization; `description`
 /// is preserved verbatim.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct WriteToolDecl {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -158,18 +160,22 @@ pub struct WriteToolDecl {
     pub tool_name: String,
     pub collection: String,
     #[cfg_attr(feature = "typescript", ts(as = "Option<String>", optional))]
+    #[schemars(default)]
     pub description: String,
     #[cfg_attr(
         feature = "typescript",
         ts(as = "Option<Vec<WriteToolField>>", optional)
     )]
+    #[schemars(default)]
     pub fields: Vec<WriteToolField>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub output_obligation: Option<WriteToolOutputObligation>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum WriteToolOutputObligationScope {
@@ -177,7 +183,7 @@ pub enum WriteToolOutputObligationScope {
     Trigger,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct WriteToolOutputObligation {
     pub scope: WriteToolOutputObligationScope,
