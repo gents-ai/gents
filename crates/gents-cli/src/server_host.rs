@@ -11,9 +11,7 @@ use gents_protocol::enrollment::{
 use crate::cli::{Cli, Command};
 
 pub use crate::cli::args::ToolCeilingArg as ManagedToolCeiling;
-pub use crate::commands::p2p::enrollment_admin::{
-    EnrollmentDecisionRejected, EnrollmentQueryError, EnrollmentQueryRejected,
-};
+pub use crate::commands::p2p::enrollment_admin::EnrollmentDecisionRejected;
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub struct ManagedPendingEnrollment {
@@ -215,7 +213,7 @@ pub async fn pending_managed_enrollments(
 pub async fn managed_enrollment_members(
     home: &Path,
     graphql: &str,
-) -> Result<Vec<ManagedEnrollmentMember>, EnrollmentQueryError> {
+) -> Result<Vec<ManagedEnrollmentMember>> {
     let body = crate::commands::p2p::enrollment_admin::load_enrollment_query(
         home,
         graphql,
@@ -230,7 +228,7 @@ pub async fn managed_enrollment_members(
 pub async fn managed_enrollment_history(
     home: &Path,
     graphql: &str,
-) -> Result<ManagedEnrollmentHistory, EnrollmentQueryError> {
+) -> Result<ManagedEnrollmentHistory> {
     let body = crate::commands::p2p::enrollment_admin::load_enrollment_query(
         home,
         graphql,
