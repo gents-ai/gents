@@ -277,17 +277,23 @@ async fn unbound_pairing_overlay_is_rejected_without_data_changes() {
 #[tokio::test(flavor = "multi_thread")]
 async fn unbound_identity_collections_are_rejected_without_data_changes() {
     use gents_protocol::schemas::{
-        AGENT_OWNERSHIP_POLICY_ID, ENROLLMENT_OPERATOR_NONCE, ENROLLMENT_OPERATOR_NONCE_NAME,
-        FILE_IMAGE_HYDRATION_REQUEST, FILE_IMAGE_HYDRATION_REQUEST_NAME,
-        FILE_INVENTORY_IMAGE_REQUEST, FILE_INVENTORY_IMAGE_REQUEST_NAME, FILE_INVENTORY_REQUEST,
-        FILE_INVENTORY_REQUEST_NAME, NETWORK_ADMIN_PIN, NETWORK_ADMIN_PIN_NAME, NODE_NAME,
-        NODE_RUNTIME, NODE_RUNTIME_NAME, OAUTH_CREDENTIAL, OAUTH_CREDENTIAL_NAME,
-        PEER_PAIRING_APPLIED, PEER_PAIRING_APPLIED_NAME, PEER_PAIRING_DESIRED,
-        PEER_PAIRING_DESIRED_NAME, PROJECTION_ACP_BINDING, PROJECTION_ACP_BINDING_NAME,
-        SESSION_HYDRATION_REQUEST, SESSION_HYDRATION_REQUEST_NAME, TOOL_SERVICE_HEALTH_STATE,
-        TOOL_SERVICE_HEALTH_STATE_NAME,
+        AGENT_OWNERSHIP_POLICY_ID, AGENT_SESSION_INPUT_EDIT, AGENT_SESSION_INPUT_EDIT_NAME,
+        ENROLLMENT_OPERATOR_NONCE, ENROLLMENT_OPERATOR_NONCE_NAME, FILE_IMAGE_HYDRATION_REQUEST,
+        FILE_IMAGE_HYDRATION_REQUEST_NAME, FILE_INVENTORY_IMAGE_REQUEST,
+        FILE_INVENTORY_IMAGE_REQUEST_NAME, FILE_INVENTORY_REQUEST, FILE_INVENTORY_REQUEST_NAME,
+        NETWORK_ADMIN_PIN, NETWORK_ADMIN_PIN_NAME, NODE_NAME, NODE_RUNTIME, NODE_RUNTIME_NAME,
+        OAUTH_CREDENTIAL, OAUTH_CREDENTIAL_NAME, PEER_PAIRING_APPLIED, PEER_PAIRING_APPLIED_NAME,
+        PEER_PAIRING_DESIRED, PEER_PAIRING_DESIRED_NAME, PROJECTION_ACP_BINDING,
+        PROJECTION_ACP_BINDING_NAME, SESSION_HYDRATION_REQUEST, SESSION_HYDRATION_REQUEST_NAME,
+        TOOL_SERVICE_HEALTH_STATE, TOOL_SERVICE_HEALTH_STATE_NAME,
     };
     for (name, sdl, resource, key) in [
+        (
+            AGENT_SESSION_INPUT_EDIT_NAME,
+            AGENT_SESSION_INPUT_EDIT,
+            "goal_controls",
+            "command_id",
+        ),
         (
             PEER_PAIRING_DESIRED_NAME,
             PEER_PAIRING_DESIRED,
@@ -360,7 +366,10 @@ async fn unbound_identity_collections_are_rejected_without_data_changes() {
         let directive =
             format!("@policy(id: \"{AGENT_OWNERSHIP_POLICY_ID}\", resource: \"{resource}\") ");
         let old = sdl.replace(&directive, "");
-        assert_ne!(old, sdl, "{name}: expected policy directive was not removed");
+        assert_ne!(
+            old, sdl,
+            "{name}: expected policy directive was not removed"
+        );
         node.add_collection(&old).await.unwrap();
         let extra = if name == FILE_INVENTORY_IMAGE_REQUEST_NAME {
             ", inventory_reference: {}"

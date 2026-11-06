@@ -326,6 +326,87 @@ mod tests {
     use super::*;
 
     #[test]
+    fn signed_edit_binds_native_author_targets_selection_and_graph() {
+        use crate::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+        let mut replacement = AgentRequestCreate::base(
+            RequestPurpose::Normal,
+            "replacement",
+            "node",
+            "session-user",
+            "agent",
+            "session",
+            "edited",
+            "interactive",
+            "2026-01-01T00:00:00Z",
+            AgentRequestAdmissionRecord::client("author"),
+        );
+        replacement.session_doc_id = Some("session-doc".into());
+        replacement.agent_doc_id = Some("agent-doc".into());
+        replacement.admission.signature = vec![1; 64];
+        let command = SessionInputEdit {
+            version: SESSION_INPUT_EDIT_VERSION,
+            command_id: "command".into(),
+            requester_did: "author".into(),
+            requester_peer_id: None,
+            node_did: "node".into(),
+            session_id: "session".into(),
+            session_doc_id: "session-doc".into(),
+            agent_did: "agent".into(),
+            agent_doc_id: "agent-doc".into(),
+            issued_at: "2026-01-01T00:00:00Z".into(),
+            expires_at: "2026-01-01T00:01:00Z".into(),
+            edit: PendingQueueEdit {
+                expected_request_doc_ids: vec!["selected".into()],
+                selected_request_doc_ids: vec!["selected".into()],
+                messages: vec![PendingMessageEdit {
+                    request_doc_id: "selected".into(),
+                    content: "edited".into(),
+                    authored_input: None,
+                }],
+            },
+            replacements: vec![replacement],
+            replacement_evidence: vec![serde_json::json!({"signature": [1, 2]})],
+            signature: vec![1; 64],
+        };
+        command.validate_shape().unwrap();
+        let payload = command.signing_payload();
+        let original = serde_json::to_value(&command).unwrap();
+        for pointer in [
+            "/requester_did",
+            "/node_did",
+            "/session_id",
+            "/session_doc_id",
+            "/agent_did",
+            "/agent_doc_id",
+            "/edit/selected_request_doc_ids/0",
+            "/replacements/0/admission/signature/0",
+            "/replacement_evidence/0/signature/0",
+        ] {
+            let mut changed = original.clone();
+            let field = changed.pointer_mut(pointer).unwrap();
+            *field = if field.is_number() {
+                serde_json::json!(3)
+            } else {
+                serde_json::json!("different")
+            };
+            let changed: SessionInputEdit = serde_json::from_value(changed).unwrap();
+            assert_ne!(changed.signing_payload(), payload, "{pointer}");
+        }
+        for pointer in ["/session_doc_id", "/agent_did", "/agent_doc_id"] {
+            let mut changed = original.clone();
+            *changed.pointer_mut(pointer).unwrap() = serde_json::json!("different");
+            let changed: SessionInputEdit = serde_json::from_value(changed).unwrap();
+            assert!(
+                matches!(
+                    changed.validate_shape(),
+                    Err(SessionInputEditError::ReplacementTargetsDiffer)
+                ),
+                "{pointer}"
+            );
+        }
+    }
+
+    #[test]
     fn signature_binds_authored_input_to_its_message() {
         let message = |id: &str| PendingMessageEdit {
             request_doc_id: id.into(),
