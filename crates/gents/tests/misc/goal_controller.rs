@@ -4563,7 +4563,7 @@ async fn goal_fixture_request_with_state(
     request_id: &str,
     state: &str,
 ) -> String {
-    goal_fixture_request_with_state_at(db, user, agent, request_id, state, "2026-11-04T00:00:00Z")
+    goal_fixture_request_with_state_at(db, user, agent, request_id, state, "2026-07-15T00:00:00Z")
         .await
 }
 
@@ -4664,7 +4664,7 @@ async fn reserve_goal_session(
             request_id: format!("goal-session-reservation-{session}"),
             content: "reserve session".into(),
             execution_origin: ExecutionOrigin::Interactive,
-            created_at: "2026-11-04T00:00:00Z".into(),
+            created_at: "2026-07-14T00:00:00Z".into(),
         },
         AgentRequestAdmissionRecord::client(user.did()),
     );
