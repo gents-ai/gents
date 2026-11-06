@@ -433,7 +433,12 @@ impl DefraRenderedRequestSink {
                         })
                         .await
                 }
-                _ => Err(create_error),
+                Ok(None) => Err(create_error.context(
+                    "no RenderedRequest matches the capture key to reconcile with the failed create",
+                )),
+                Err(lookup_error) => Err(create_error.context(format!(
+                    "re-reading the RenderedRequest by capture key after the failed create also failed: {lookup_error:#}"
+                ))),
             },
         }
     }
