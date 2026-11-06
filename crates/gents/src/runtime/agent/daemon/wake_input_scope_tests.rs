@@ -619,11 +619,19 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
     );
     assert!(actual[0].physical_header.is_some());
 
-    let other_binding = crate::test_support::install_test_agent_as(
+    let other_binding = crate::store::identity::provision_agent_identity_authorized(
         &node,
         fixture.runtime.as_ref(),
-        fixture.requester_identity.as_ref(),
+        &identity::Did::new(fixture.requester_identity.did()).unwrap(),
+    )
+    .await
+    .unwrap();
+    crate::test_support::install_test_agent_binding_with_access(
+        &node,
+        fixture.runtime.did(),
         "Other Agent",
+        &other_binding,
+        &fixture.client,
     )
     .await;
     let other =
