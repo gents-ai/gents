@@ -1013,7 +1013,7 @@ async fn check_real_inventory_chronology(background: bool, notify: bool) {
     let requester = first.requester_did().unwrap().to_owned();
     let session = ConfigAccess::transact_local_readonly(
         &node,
-        None,
+        Some(identity::Did::new(requester.clone()).unwrap()),
         "test.inventory.chronology_session",
         |txn| {
             let (did, session, requester) = (&fixture.node_did, first.session_id(), &requester);
