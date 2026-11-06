@@ -1747,7 +1747,12 @@ mod actor_read_tests {
 
         let identities: Vec<std::sync::Arc<dyn crate::store::identity::NodeIdentity>> =
             vec![std::sync::Arc::new(
-                admission.tool.managed_agent_signer().unwrap(),
+                admission
+                    .tool
+                    .access()
+                    .unwrap()
+                    .managed_agent_signer()
+                    .unwrap(),
             )];
         let accesses = recovery_accesses(&node, &admission.node_did, &identities).unwrap();
         let rows = load_running_tool_call_rows_for_agent(&admission.node_did, &accesses)

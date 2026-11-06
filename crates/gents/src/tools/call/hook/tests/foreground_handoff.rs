@@ -17,7 +17,12 @@ async fn background_request_observation_uses_selected_agent_authority() {
     .await
     .unwrap();
     let node = admission.node.clone();
-    let signer = admission.tool.managed_agent_signer().unwrap();
+    let signer = admission
+        .tool
+        .access()
+        .unwrap()
+        .managed_agent_signer()
+        .unwrap();
     let access = admission.tool.access().unwrap();
     let doc = admission.tool.doc_id().unwrap();
     let mut hook = DefraSessionHook::with_identity(
