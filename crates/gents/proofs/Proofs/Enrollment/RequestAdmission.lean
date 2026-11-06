@@ -409,6 +409,22 @@ theorem client_goal_claim_requires_physical_binding
     visible = true ∧ matches = true ∧ root = true := by
   simpa [clientGoalClaimBinding, Bool.and_eq_true, and_assoc] using h
 
+/-- Queue selection is only one input to a Client Goal claim. The signed edge,
+canonical physical Goal binding and current native authorization all remain
+necessary at the claim transaction. -/
+def clientGoalClaimAllowed (input : RequestInput) (signatureValid sessionAgentBound
+    nativeAuthorAllowed goalVisible goalMatches rootBound ancestryVerified : Bool) : Bool :=
+  clientClaimQueueCandidate input false && signatureValid && sessionAgentBound &&
+    nativeAuthorAllowed && clientGoalClaimBinding goalVisible goalMatches rootBound &&
+    ancestryVerified
+
+theorem client_goal_claim_requires_current_author_and_ancestry (input : RequestInput)
+    (signature sessionAgent native visible matches root ancestry : Bool)
+    (h : clientGoalClaimAllowed input signature sessionAgent native visible matches root ancestry = true) :
+    native = true ∧ ancestry = true := by
+  simp only [clientGoalClaimAllowed, Bool.and_eq_true] at h
+  aesop
+
 /-- Queue provenance never grants a continuation branch. An explicit client
 resume keeps the client signer and must bind the same canonical goal edge as a
 runtime timer. A goal wake missing its original facts cannot infer them from Goal.
