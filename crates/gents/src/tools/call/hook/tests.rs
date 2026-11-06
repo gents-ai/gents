@@ -1252,7 +1252,26 @@ async fn bind_claimed_hook_request(
     deadline_at: chrono::DateTime<chrono::Utc>,
 ) {
     let request_id = lifecycle.request().request_id.clone();
+    let request_doc_id = lifecycle.request().doc_id.clone();
     let requester_did = lifecycle.request().requester_did.clone();
+    assert!(
+        !request_doc_id.is_empty(),
+        "claimed request has a physical identity"
+    );
+    if hook.actor.is_some() {
+        let access = hook.actor_access().expect("hook's selected Agent access");
+        let observed = crate::request::binding::load_agent_request_by_doc_id_with_access(
+            &access,
+            &request_doc_id,
+        )
+        .await
+        .expect("read claimed request as selected Agent")
+        .expect("selected Agent must see its claimed request");
+        assert_eq!(observed.request_id, request_id);
+        assert_eq!(observed.session_id, lifecycle.request().session_id);
+        assert_eq!(observed.agent_did, lifecycle.request().agent_did);
+        assert_eq!(observed.requester_did, requester_did);
+    }
     let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
         hook.node.clone(),
         &lifecycle,
@@ -1260,9 +1279,12 @@ async fn bind_claimed_hook_request(
     )
     .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
-    hook.set_active_request_lineage(Some(request_id.clone()), requester_did)
-        .await
-        .expect("bind persisted request lineage");
+    hook.set_active_request_binding(
+        Some(request_id.clone()),
+        Some(request_doc_id),
+        requester_did,
+    )
+    .await;
     hook.set_request_deadline_at(Some(deadline_at)).await;
     hook_execution_fixtures().lock().await.insert(
         hook_execution_fixture_key(hook, &request_id),

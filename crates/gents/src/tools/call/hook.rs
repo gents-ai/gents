@@ -1696,6 +1696,7 @@ impl DefraSessionHook {
         self.state.lock().await.session_id.clone()
     }
 
+    #[cfg(test)]
     pub async fn set_active_request_lineage(
         &self,
         request_id: Option<String>,
@@ -1762,6 +1763,7 @@ impl DefraSessionHook {
         Ok(Some(doc_id))
     }
 
+    #[cfg(test)]
     async fn request_doc_id_for_request(&self, request_id: &str) -> anyhow::Result<Option<String>> {
         crate::request::binding::resolve_request_doc_id(self.node.as_ref(), request_id).await
     }
