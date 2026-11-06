@@ -33,7 +33,7 @@ pub async fn session_snapshot(
         let error = BridgeError::classify_transport_error(error);
         if error.code == BridgeErrorCode::PermissionDenied {
             if let Some(node) = node_did.as_deref() {
-                core.store().report_permission_denied(node);
+                core.store().invalidate_node_after_denied_read(node);
             }
         }
         error
@@ -402,7 +402,7 @@ pub async fn session_rows(
     let error = |error| {
         let error = BridgeError::classify_transport_error(error);
         if error.code == BridgeErrorCode::PermissionDenied {
-            core.store().report_permission_denied(&node_did);
+            core.store().invalidate_node_after_denied_read(&node_did);
         }
         error
     };

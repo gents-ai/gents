@@ -144,6 +144,7 @@ export function createSessionReads({
     } catch (error) {
       if (refreshSeq === currentRefresh) {
         const code = error instanceof BridgeInvokeError ? error.code : null;
+        if (code === "permissionDenied") setSession(null);
         const delivery = code ? sessionDeliveryPhase(code) : null;
         const phase = code === "projectionPending" ? "pending" : (delivery ?? "failed");
         const message =

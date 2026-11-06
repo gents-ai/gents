@@ -162,6 +162,20 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
         .add_actor_relationship("Node", &physical, "runtime_reader", &reader)
         .await
         .unwrap();
+    let session = access
+        .write(
+            "test.observer.visible_session",
+            &format!(
+                r#"mutation {{ create_AgentSession(input: {{ node_did: "{did}", session_id: "unrelated-visible", requester_did: "{did}", agent_did: "{did}", created_at: "2026-11-04T00:00:00Z" }}) {{ _docID }} }}"#,
+            ),
+        )
+        .await
+        .unwrap();
+    let session_doc = gents::store::graphql::created_doc_id(&session, "AgentSession").unwrap();
+    owner
+        .add_actor_relationship("AgentSession", &session_doc, "reader", &reader)
+        .await
+        .unwrap();
     ConfigAccess::local(desktop.clone())
         .write("test.observer.stale", &mutation("stale replica"))
         .await
@@ -185,6 +199,42 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
         Default::default(),
     );
     wait_for_name(&store, Some("remote")).await;
+    let mut notices = store.subscribe_changes();
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if store
+                .snapshot()
+                .sessions
+                .iter()
+                .any(|row| row.session_id == "unrelated-visible")
+            {
+                break;
+            }
+            notices.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("authorized session in authenticated snapshot");
+    store.invalidate_node_after_denied_read(runtime_identity.did());
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if store
+                .snapshot()
+                .sessions
+                .iter()
+                .any(|row| row.session_id == "unrelated-visible")
+            {
+                break;
+            }
+            notices.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("authorized session restored by authenticated resync");
+    assert_eq!(
+        store.runtime_connection(runtime_identity.did()),
+        Some(RuntimeConnectionStatus::Connected)
+    );
     let physical_id = physical;
     let physical = gents::store::graphql::escape_graphql_string(&physical_id);
     set_proxy_online(&proxy_commands, false).await;

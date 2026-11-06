@@ -709,17 +709,29 @@ async fn generated_recovery_cases_preserve_scopes_without_self_waking() {
 }
 
 #[test]
-fn explicit_command_denial_clears_scope_and_rejects_pre_denial_snapshot() {
+fn denied_resource_read_invalidates_stale_snapshot_and_allows_fresh_visible_rows() {
     let (store, _) = ObservedStore::new(requests(&["before"]));
     let read = store.capture_read();
     let node = "did:test:reload";
-    store.report_permission_denied(node);
+    store.observe_runtime_connection(node, RuntimeConnectionEvent::SnapshotSucceeded);
+    store.invalidate_node_after_denied_read(node);
     assert_eq!(
         store.runtime_connection(node),
-        Some(RuntimeConnectionStatus::Denied)
+        Some(RuntimeConnectionStatus::Connected)
     );
     assert!(store.snapshot().requests.is_empty());
     assert!(!store.replace_reloaded_snapshot_at_read(&read, Some(node), requests(&["stale"])));
     assert!(store.snapshot().requests.is_empty());
-    assert_eq!(store.take_permission_denials(), vec![node.to_owned()]);
+    assert_eq!(store.take_resync_requests(), (false, vec![node.to_owned()]));
+    let fresh = store.capture_read();
+    assert!(store.replace_reloaded_snapshot_at_read(
+        &fresh,
+        Some(node),
+        requests(&["unrelated-visible"])
+    ));
+    assert_eq!(store.snapshot().requests[0].request_id, "unrelated-visible");
+    assert_eq!(
+        store.runtime_connection(node),
+        Some(RuntimeConnectionStatus::Connected)
+    );
 }
