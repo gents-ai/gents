@@ -113,11 +113,18 @@ pub async fn load_applied_opening_goal_provenance(
                 .map(Hint::Origin),
         )
         .collect::<Vec<_>>();
+    let mut by_doc: BTreeMap<String, Vec<Hint<'_>>> = BTreeMap::new();
+    for hint in hints {
+        if let Some(doc) = hint.doc_id().map(str::to_owned) {
+            by_doc.entry(doc).or_default().push(hint);
+        }
+    }
+    let hints = by_doc.into_iter().collect::<Vec<_>>();
     let mut confirmed = OpeningGoalProvenance::default();
     for page in hints.chunks(PAGE_SIZE) {
         let ids = page
             .iter()
-            .filter_map(Hint::doc_id)
+            .map(|(doc, _)| doc.as_str())
             .map(|doc| format!("\"{}\"", escape_graphql_string(doc)))
             .collect::<Vec<_>>()
             .join(", ");
@@ -134,12 +141,12 @@ pub async fn load_applied_opening_goal_provenance(
         )?;
         let candidates = page
             .iter()
-            .filter_map(|hint| {
+            .filter_map(|(doc, hints)| {
                 let mut rows = requests
                     .iter()
-                    .filter(|row| row.doc_id.as_deref() == hint.doc_id());
+                    .filter(|row| row.doc_id.as_deref() == Some(doc.as_str()));
                 let request = rows.next()?;
-                if rows.next().is_some() || !hint.matches(request) {
+                if rows.next().is_some() || !hints.iter().any(|hint| hint.matches(request)) {
                     return None;
                 }
                 let goal_id = super::super::request_assignment::verified_opening_goal_id(request)?;
@@ -189,10 +196,12 @@ pub async fn load_applied_opening_goal_provenance(
                 continue;
             };
             if applied(candidate, control)? {
-                for hint in page.iter().filter(|hint| {
-                    hint.doc_id() == candidate.request.doc_id.as_deref()
-                        && hint.matches(candidate.request)
-                }) {
+                for hint in page
+                    .iter()
+                    .filter(|(doc, _)| Some(doc.as_str()) == candidate.request.doc_id.as_deref())
+                    .flat_map(|(_, hints)| hints)
+                    .filter(|hint| hint.matches(candidate.request))
+                {
                     match hint {
                         Hint::Request(request) => {
                             if let Some(doc) = request.doc_id.as_ref() {
@@ -280,4 +289,61 @@ fn applied(candidate: &Candidate<'_>, control: &ControlRow) -> Result<bool> {
         matches!(receipt.outcome, GoalControlOutcome::Applied {goal_id: ref goal, request_id: Some(ref id)}
         if goal == candidate.goal_id && id == &request.request_id),
     )
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use gents_protocol::request_input::{GoalAssignmentInput, RequestInput};
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct Reader(Mutex<Vec<Vec<String>>>);
+
+    #[async_trait::async_trait]
+    impl ConfigRead for Reader {
+        async fn execute_read(
+            &self,
+            document: &str,
+        ) -> std::result::Result<serde_json::Value, crate::store::config_client::ConfigClientError>
+        {
+            let (_, suffix) = document.split_once("docIDs: [").unwrap();
+            let (ids, _) = suffix.split_once(']').unwrap();
+            let ids = serde_json::from_str::<Vec<String>>(&format!("[{ids}]"))?;
+            self.0.lock().unwrap().push(ids);
+            Ok(serde_json::json!({"data": {"AgentRequest": []}}))
+        }
+    }
+
+    #[tokio::test]
+    async fn repeated_opening_hints_share_bounded_authoritative_reads() {
+        let reader = Reader::default();
+        let rows = (0..100)
+            .map(|index| AgentRequestRow {
+                doc_id: Some(format!("doc-{}", index % 33)),
+                input: Some(RequestInput {
+                    goal_assignment: Some(GoalAssignmentInput {
+                        goal_id: "goal".into(),
+                        root_request_doc_id: None,
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        let observed = rows.iter().collect::<Vec<_>>();
+        let result = load_applied_opening_goal_provenance(&reader, &observed, &[])
+            .await
+            .unwrap();
+        assert!(result.by_request_doc_id.is_empty());
+        let batches = reader.0.lock().unwrap();
+        assert_eq!(batches.len(), 2);
+        let ids = batches
+            .iter()
+            .flatten()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(ids.len(), 33);
+        assert_eq!(batches.iter().map(Vec::len).sum::<usize>(), 33);
+        assert!(batches.iter().all(|batch| batch.len() <= PAGE_SIZE));
+    }
 }
