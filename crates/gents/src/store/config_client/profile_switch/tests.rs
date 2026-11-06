@@ -21,8 +21,6 @@ use crate::store::config_client::{
 };
 use crate::{Collection, InferenceBackend};
 
-const DID: &str = "did:key:z6MkTestSwitch";
-
 fn claude_sign_in(did: &str, who: &str) -> OAuthCredential {
     crate::inference::auth::claude::credential_from_login_tokens(
         did,
@@ -50,14 +48,18 @@ struct Fixture {
 }
 
 impl Fixture {
-    async fn new(did: &str) -> Self {
-        Self::build(did, &["a", "b", "c", "d"]).await
+    async fn new() -> Self {
+        Self::build(&["a", "b", "c", "d"]).await
     }
 
-    async fn build(did: &str, accounts: &[&'static str]) -> Self {
+    /// The node's held runtime root is the native admin and the Node owner, so
+    /// every fixture document is written by that signed actor.
+    async fn build(accounts: &[&'static str]) -> Self {
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let did_owned = node.node_identity_did().unwrap().to_owned();
+        let did = did_owned.as_str();
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::local(node.clone());
+        let access = ConfigAccess::local_as(node.clone(), identity::Did::new(did).unwrap());
         crate::test_support::bootstrap_signed_test_node(&access, did).await;
         for (provider, name) in [
             (CLAUDE_OAUTH_PROVIDER, "Claude"),
@@ -261,7 +263,7 @@ impl Fixture {
 
 #[tokio::test]
 async fn candidates_list_other_enabled_accounts_with_usage() {
-    let fixture = Fixture::new(DID).await;
+    let fixture = Fixture::new().await;
     let observed_at = Utc::now() - chrono::Duration::minutes(5);
     record_usage(
         &fixture.cache,
@@ -318,7 +320,7 @@ async fn candidates_list_other_enabled_accounts_with_usage() {
 
 #[tokio::test]
 async fn switch_moves_only_the_profile() {
-    let fixture = Fixture::new(DID).await;
+    let fixture = Fixture::new().await;
     let before = fixture.profiles().await;
 
     let receipt = fixture.switch("p", "b", false).await.unwrap();
@@ -347,7 +349,7 @@ async fn switch_moves_only_the_profile() {
 
 #[tokio::test]
 async fn switch_with_companions_moves_both_in_one_transaction() {
-    let fixture = Fixture::new(DID).await;
+    let fixture = Fixture::new().await;
 
     let receipt = fixture.switch("p", "b", true).await.unwrap();
 
@@ -357,7 +359,7 @@ async fn switch_with_companions_moves_both_in_one_transaction() {
     assert_eq!(fixture.backend_of("summ").await, fixture.backends["b"]);
     assert_eq!(fixture.backend_of("q").await, fixture.backends["a"]);
 
-    let fixture = Fixture::new(DID).await;
+    let fixture = Fixture::new().await;
     fixture.catalog("b", &["model-x"]).await;
     let receipt = fixture.switch("p", "b", true).await.unwrap();
     assert!(
@@ -372,13 +374,8 @@ async fn switch_with_companions_moves_both_in_one_transaction() {
 async fn next_turns_use_the_target_credentials() {
     use crate::inference::auth::credential::BearerSource as _;
     use crate::runtime::agent::PendingAgent;
-    use crate::store::identity::{KeyIdentity, NodeIdentity as _};
-    let key = std::env::temp_dir().join(format!("switch-{}.key", uuid::Uuid::new_v4()));
-    let did = KeyIdentity::load_or_create(&key, None)
-        .unwrap()
-        .did()
-        .to_string();
-    let fixture = Fixture::new(&did).await;
+    let fixture = Fixture::new().await;
+    let did = fixture.did.clone();
 
     fixture.switch("p", "b", false).await.unwrap();
 
@@ -399,8 +396,9 @@ async fn next_turns_use_the_target_credentials() {
             Some(fixture.backends["b"].as_str()),
             "{agent_did}"
         );
-        let mut behavior = PendingAgent::new(agent_did)
-            .build_with_identity_for_test(KeyIdentity::load_or_create(&key, None).unwrap());
+        let mut behavior = PendingAgent::new(agent_did).build_with_identity_for_test(
+            crate::test_support::held_runtime_identity(&did),
+        );
         behavior.backend_id = fields.backend_id;
         behavior.backend_provider_kind = fields.backend_provider_kind;
         behavior.openai_wire_api = fields.openai_wire_api;
@@ -432,7 +430,7 @@ async fn next_turns_use_the_target_credentials() {
 
 #[tokio::test]
 async fn companions_are_the_other_profiles_of_the_same_behaviors_on_one_account() {
-    let fixture = Fixture::new(DID).await;
+    let fixture = Fixture::new().await;
     let (a, b) = (&fixture.backends["a"], &fixture.backends["b"]);
     let did = fixture.did.as_str();
     fixture
@@ -497,7 +495,7 @@ async fn companions_are_the_other_profiles_of_the_same_behaviors_on_one_account(
 
 #[tokio::test]
 async fn an_account_without_the_model_is_not_listed() {
-    let fixture = Fixture::new(DID).await;
+    let fixture = Fixture::new().await;
     fixture.catalog("d", &["model-s"]).await;
     let plan = fixture.plan().await.unwrap();
     let labels: Vec<_> = plan
@@ -517,7 +515,7 @@ async fn assert_refused(fixture: &Fixture, to: &str, message: &str) {
 
 #[tokio::test]
 async fn refusals_write_nothing() {
-    let fixture = Fixture::new(DID).await;
+    let fixture = Fixture::new().await;
     assert_refused(
         &fixture,
         "c",
@@ -559,7 +557,7 @@ async fn refusals_write_nothing() {
 
 #[tokio::test]
 async fn no_candidate_says_how_to_add_one() {
-    let fixture = Fixture::build(DID, &["a"]).await;
+    let fixture = Fixture::build(&["a"]).await;
     let error = fixture.plan().await.unwrap_err();
     assert_eq!(
         format!("{error:#}"),
@@ -569,7 +567,7 @@ async fn no_candidate_says_how_to_add_one() {
 
 #[tokio::test]
 async fn the_plan_holds_no_secret() {
-    let fixture = Fixture::new(DID).await;
+    let fixture = Fixture::new().await;
     let plan = serde_json::to_string(&fixture.plan().await.unwrap()).unwrap();
     let receipt = serde_json::to_string(&fixture.switch("p", "b", false).await.unwrap()).unwrap();
     for text in [plan, receipt] {
@@ -587,14 +585,16 @@ async fn the_plan_holds_no_secret() {
 async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
     use crate::plugin::model_calls::{AccessModels, ModelBinding, ModelResolver};
     use crate::plugin::store;
-    let did = "did:key:z6MkTestSwitchSlot";
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let did_owned = node.node_identity_did().unwrap().to_owned();
+    let did = did_owned.as_str();
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::bootstrap_signed_test_node(&ConfigAccess::local(node.clone()), did).await;
+    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(did).unwrap());
+    crate::test_support::bootstrap_signed_test_node(&access, did).await;
     let fixture = Fixture {
         cache: Default::default(),
         node: node.clone(),
-        access: ConfigAccess::local(node),
+        access,
         did: did.to_owned(),
         credentials: BTreeMap::new(),
         backends: BTreeMap::from([("k1", "k1".to_owned()), ("k2", "k2".to_owned())]),
