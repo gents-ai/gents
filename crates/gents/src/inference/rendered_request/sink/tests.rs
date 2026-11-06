@@ -92,7 +92,12 @@ impl CaptureFixture {
     }
 
     fn turn(&self, turn_index: usize, request_json: Value) -> RenderedCompletionRequest {
-        let mut rendered = rendered_turn(turn_index, request_json);
+        let mut rendered = rendered_turn_for(
+            self.db.node_identity.did(),
+            self.agent.did(),
+            turn_index,
+            request_json,
+        );
         let request = self.lifecycle.request();
         rendered.node_did = request.node_did.clone();
         rendered.requester_did = request.requester_did.clone().unwrap();
@@ -276,6 +281,15 @@ fn capture_text(seed: u64, len: usize) -> String {
 
 fn rendered_turn(turn_index: usize, request_json: Value) -> RenderedCompletionRequest {
     let (root, agent) = fixture_identities();
+    rendered_turn_for(root.did(), agent.did(), turn_index, request_json)
+}
+
+fn rendered_turn_for(
+    node_did: &str,
+    agent_did: &str,
+    turn_index: usize,
+    request_json: Value,
+) -> RenderedCompletionRequest {
     let capture_scope = "inference.1".to_string();
     let assembly_trace = super::super::AssemblyTrace::from_effective_messages(
         super::super::AssemblyBuildPath::Budgeted,
@@ -283,7 +297,7 @@ fn rendered_turn(turn_index: usize, request_json: Value) -> RenderedCompletionRe
     );
     RenderedCompletionRequest {
         capture_key: super::super::capture_key(
-            root.did(),
+            node_did,
             "session",
             "",
             &capture_scope,
@@ -298,9 +312,9 @@ fn rendered_turn(turn_index: usize, request_json: Value) -> RenderedCompletionRe
         capture_scope: capture_scope.clone(),
         turn_index,
         attempt: 0,
-        node_did: root.did().into(),
+        node_did: node_did.into(),
         requester_did: String::new(),
-        agent_did: agent.did().to_owned(),
+        agent_did: agent_did.to_owned(),
         session_id: "session".into(),
         model_name: "model".into(),
         source: super::super::RenderedRequestSource::OpenAiChatCompletions,
