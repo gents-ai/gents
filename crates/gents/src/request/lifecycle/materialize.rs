@@ -2172,11 +2172,16 @@ mod task_delivery_tests {
                 Ok::<_, anyhow::Error>((node_doc, agent_doc))
             })
         }).await.unwrap();
-        setup_access
+        // Relationship writes need a signed actor; the node root owns the Agent it created.
+        let node_actor = crate::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(runtime.did()).unwrap(),
+        );
+        node_actor
             .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
             .await
             .unwrap();
-        setup_access
+        node_actor
             .add_actor_relationship(
                 "Agent",
                 &agent_doc,
@@ -2185,7 +2190,7 @@ mod task_delivery_tests {
             )
             .await
             .unwrap();
-        setup_access
+        node_actor
             .add_actor_relationship(
                 "Agent",
                 &agent_doc,
