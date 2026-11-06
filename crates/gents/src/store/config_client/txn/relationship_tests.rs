@@ -661,6 +661,17 @@ async fn http_relationships_and_ownership_use_the_transaction_actor() {
             {"doc_id": "hidden", "visible": false, "is_owner": false, "owner_registered": false}
         ]}))
     }
+    async fn collections(
+        State(requests): State<Requests>,
+        method: Method,
+        headers: HeaderMap,
+    ) -> Json<Value> {
+        requests
+            .lock()
+            .unwrap()
+            .push((method, headers, Value::Null));
+        Json(json!([{"Name":"Parcel", "IsActive":true}]))
+    }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
     let requests: Requests = Arc::default();
@@ -670,6 +681,7 @@ async fn http_relationships_and_ownership_use_the_transaction_actor() {
             post(relationship).delete(relationship),
         )
         .route("/api/v0/acp/document/is-owner", post(ownership))
+        .route("/api/v0/collections", axum::routing::get(collections))
         .with_state(requests.clone());
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let actor = identity::Did::new("did:key:actor").unwrap();
@@ -742,8 +754,12 @@ async fn http_relationships_and_ownership_use_the_transaction_actor() {
         txn.document_owners("Agent", &["malformed".into()]).await,
         Err(super::ConfigClientError::InvalidOwnerObservation)
     ));
+    assert_eq!(
+        txn.collection_version("Parcel").await.unwrap().unwrap()["Name"],
+        "Parcel"
+    );
     let entries = requests.lock().unwrap();
-    assert_eq!(entries.len(), 9);
+    assert_eq!(entries.len(), 10);
     assert_eq!(entries[0].2["target_actor"], "nodes:\"node\"");
     assert_eq!(entries[1].2["target_actor"], other.as_str());
     assert_eq!(entries[2].0, Method::DELETE);
