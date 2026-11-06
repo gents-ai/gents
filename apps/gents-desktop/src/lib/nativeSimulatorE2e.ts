@@ -7,6 +7,7 @@ import { runNativeLocalE2e, type NativeLocalSetup } from "./nativeLocalE2e";
 
 import {
   sessionRowCount,
+  completedReconnectSession,
   findAgentChatButton,
   findAgentDeploymentControl,
   findAssistantResponseMarker,
@@ -31,6 +32,7 @@ type NativeE2eConfig = {
   expectedResponse: string;
   expectEmptySessionSlice: boolean;
   correlationId: string;
+  reconnectRealInference: boolean;
   measurePerformance: boolean;
   localSetup?: NativeLocalSetup | null;
 };
@@ -285,6 +287,10 @@ async function runReconnectScenario(config: NativeE2eConfig) {
     30_000,
     "new-session screen",
   );
+  if (config.reconnectRealInference) {
+    await runReconnectInferenceTurn(config, nodeDid, agent.agent_did, "before");
+    await returnToNewSession(config.agentLabel);
+  }
   const offlineName = `${config.correlationId}-offline`;
   const liveName = `${config.correlationId}-live`;
   const deployment = async () =>
@@ -328,6 +334,110 @@ async function runReconnectScenario(config: NativeE2eConfig) {
       ? true
       : null;
   }, "post-reconnect live change in the snapshot and UI");
+  if (config.reconnectRealInference) {
+    await runReconnectInferenceTurn(config, nodeDid, agent.agent_did, "after");
+  }
+}
+
+async function runReconnectInferenceTurn(
+  config: NativeE2eConfig,
+  nodeDid: string,
+  agentDid: string,
+  phase: "before" | "after",
+) {
+  const initial = await invoke<DesktopClientSnapshot>(
+    bridgeCommand("desktop_client_snapshot"),
+  );
+  const clientDid = initial.client?.clientDid;
+  const deployment = initial.client?.deployments.find((row) => row.nodeDid === nodeDid);
+  if (!clientDid || !deployment)
+    throw new Error("Held client or runtime is unavailable");
+  if (clientDid === nodeDid || clientDid === agentDid)
+    throw new Error("Reconnect inference requires a distinct held client identity");
+  const existingSessions = new Set(
+    deployment.sessions.map((session) => session.sessionId),
+  );
+  const suffix = config.correlationId.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  const marker = `GENTS_RECONNECT_${phase.toUpperCase()}_${suffix}`;
+  const prompt = `Reply with exactly this text and nothing else: ${marker}`;
+  const editor = await waitFor(
+    () => {
+      const field = document.querySelector<HTMLElement>(
+        '[data-testid="composer"] [contenteditable="true"]',
+      );
+      return field && !field.closest("[inert]") ? field : null;
+    },
+    30_000,
+    `${phase} reconnect chat composer`,
+  );
+  editor.focus();
+  const selection = window.getSelection();
+  if (!selection) throw new Error("Cannot select the chat composer");
+  const range = document.createRange();
+  range.selectNodeContents(editor);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  if (!document.execCommand("insertText", false, prompt)) {
+    throw new Error("Could not enter the reconnect inference prompt");
+  }
+  const send = await waitFor(
+    () => {
+      const button = document.querySelector<HTMLButtonElement>(
+        '[data-testid="composer"] button[aria-label="Send"]',
+      );
+      return button && !button.disabled ? button : null;
+    },
+    30_000,
+    `${phase} reconnect send button`,
+  );
+  send.click();
+  const completed = await waitForAsync(async () => {
+    const snapshot = await invoke<DesktopClientSnapshot>(
+      bridgeCommand("desktop_client_snapshot"),
+    );
+    const current = snapshot.client?.deployments.find((row) => row.nodeDid === nodeDid);
+    const session = completedReconnectSession(
+      current?.sessions ?? [],
+      existingSessions,
+      agentDid,
+      clientDid,
+    );
+    if (!session || !findAssistantResponseMarker(document, marker)) return null;
+    return {
+      nodeDid,
+      clientDid,
+      agentDid,
+      sessionId: session.sessionId,
+      requestId: session.latestRequestId,
+    };
+  }, `${phase} reconnect inference completion`);
+  await reportStatus({
+    stage: `reconnect-${phase}-turn`,
+    detail: JSON.stringify(completed),
+  });
+}
+
+async function returnToNewSession(label: string) {
+  const menu = await waitFor(
+    () => document.querySelector<HTMLButtonElement>('button[aria-label="Menu"]'),
+    30_000,
+    "mobile navigation menu",
+  );
+  menu.click();
+  const newSession = await waitFor(
+    () =>
+      Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"] a span'))
+        .find((label) => label.textContent?.trim() === "New session")
+        ?.closest<HTMLAnchorElement>("a") ?? null,
+    30_000,
+    "new-session navigation",
+  );
+  newSession.click();
+  await waitFor(
+    () => findNewSessionScreen(label),
+    30_000,
+    "new-session screen after inference",
+  );
 }
 
 function findNewSessionScreen(label: string): HTMLElement | null {

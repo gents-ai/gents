@@ -58,7 +58,12 @@ function checked(binary, args, env) {
   return result.stdout;
 }
 
-export async function createIosReconnectFixture(binary, artifactRoot, signal) {
+export async function createIosReconnectFixture(
+  binary,
+  artifactRoot,
+  signal,
+  inferenceArgs,
+) {
   const root = await mkdtemp(join(artifactRoot, "reconnect-runtime-"));
   const home = join(root, "node");
   const owner = join(root, "owner");
@@ -104,10 +109,7 @@ export async function createIosReconnectFixture(binary, artifactRoot, signal) {
           "file",
           "--node-name",
           "iOS Reconnect Fixture",
-          "--model-name",
-          "ios-reconnect",
-          "--inference-url",
-          "http://127.0.0.1:9/v1",
+          ...inferenceArgs,
           "--tool-root",
           root,
         ],

@@ -13,6 +13,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createIosReconnectFixture } from "./ios-reconnect-fixture.mjs";
+import { iosReconnectInferenceArgs } from "./ios-reconnect-inference.mjs";
 
 const TESTS_ROOT = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(TESTS_ROOT, "..");
@@ -32,6 +33,13 @@ const skipBuild = args.has("--skip-build");
 const keepData = args.has("--keep-data");
 const measurePerformance = args.has("--measure");
 const reconnect = args.has("--reconnect");
+const realInference = args.has("--real-inference");
+if (realInference && !reconnect) {
+  throw new Error("--real-inference requires --reconnect");
+}
+const reconnectInferenceArgs = reconnect
+  ? iosReconnectInferenceArgs(realInference, process.env)
+  : [];
 const interruption = new AbortController();
 const signalHandlers = new Map();
 if (reconnect) {
@@ -245,6 +253,7 @@ async function waitForScenario({
   runIndex,
   artifactRoot,
   statusPath,
+  eventsPath,
   enrollmentOperator,
   reconnectFixture,
 }) {
@@ -273,7 +282,15 @@ async function waitForScenario({
       process.stdout.write(
         `Native app stage: ${status.stage}${status.detail ? ` · ${status.detail}` : ""}\n`,
       );
-      if (["sent", "passed", "failed"].includes(status.stage)) {
+      if (
+        [
+          "sent",
+          "passed",
+          "failed",
+          "reconnect-before-turn",
+          "reconnect-after-turn",
+        ].includes(status.stage)
+      ) {
         const screenshot = join(artifactRoot, `run-${runIndex}-${status.stage}.png`);
         captureScreenshot({ deviceId, path: screenshot });
       }
@@ -311,6 +328,55 @@ async function waitForScenario({
           throw new Error(
             "The changed Agent document was not observed on its re-armed SSE stream",
           );
+        }
+        if (realInference) {
+          const events = readEvents(eventsPath);
+          const stages = [
+            "reconnect-before-turn",
+            "reconnect-arm",
+            "reconnect-offline",
+            "reconnect-caught-up",
+            "reconnect-after-turn",
+          ];
+          const indices = stages.map((stage) =>
+            events.findIndex((event) => event.stage === stage),
+          );
+          if (
+            indices.some(
+              (index, position) =>
+                index < 0 || (position > 0 && index <= indices[position - 1]),
+            )
+          ) {
+            throw new Error("Reconnect inference evidence is missing or out of order");
+          }
+          const before = events.find(
+            (event) => event.stage === "reconnect-before-turn",
+          );
+          const after = events.find((event) => event.stage === "reconnect-after-turn");
+          if (!before?.detail || !after?.detail)
+            throw new Error("Both real inference turns must complete");
+          const first = JSON.parse(before.detail);
+          const second = JSON.parse(after.detail);
+          if (
+            !first.sessionId ||
+            !first.requestId ||
+            !second.sessionId ||
+            !second.requestId ||
+            first.sessionId === second.sessionId ||
+            first.requestId === second.requestId ||
+            !first.clientDid ||
+            first.clientDid !== second.clientDid ||
+            !first.nodeDid ||
+            first.nodeDid !== second.nodeDid ||
+            !first.agentDid ||
+            first.agentDid !== second.agentDid ||
+            first.clientDid === first.nodeDid ||
+            first.clientDid === first.agentDid
+          ) {
+            throw new Error(
+              "Reconnect inference did not confirm distinct held-client requests on one node",
+            );
+          }
         }
         passedAt ??= Date.now();
       }
@@ -464,7 +530,12 @@ try {
   const eventsPath = join(dataContainer, "tmp", EVENTS_FILENAME);
   const issuer = issuerSettings();
   reconnectFixture = reconnect
-    ? await createIosReconnectFixture(issuer.binary, artifactRoot, interruption.signal)
+    ? await createIosReconnectFixture(
+        issuer.binary,
+        artifactRoot,
+        interruption.signal,
+        reconnectInferenceArgs,
+      )
     : null;
   const enrollmentOperator = reconnectFixture
     ? {
@@ -498,6 +569,7 @@ try {
         SIMCTL_CHILD_GENTS_E2E_CORRELATION_ID:
           reconnectFixture?.correlationId ??
           `ios-${gitRevision().slice(0, 12)}-${index}`,
+        SIMCTL_CHILD_GENTS_E2E_RECONNECT_REAL_INFERENCE: realInference ? "1" : "0",
         SIMCTL_CHILD_GENTS_MOBILE_PERFORMANCE: measurePerformance ? "1" : "0",
         SIMCTL_CHILD_RUST_BACKTRACE: "full",
         SIMCTL_CHILD_RUST_LOG: process.env.RUST_LOG?.trim() || "info",
@@ -520,6 +592,7 @@ try {
         runIndex: index,
         artifactRoot,
         statusPath,
+        eventsPath,
         enrollmentOperator,
         reconnectFixture,
       });

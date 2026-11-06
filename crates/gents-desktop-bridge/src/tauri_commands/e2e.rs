@@ -16,6 +16,7 @@ pub struct NativeE2eConfig {
     expected_response: String,
     expect_empty_session_slice: bool,
     correlation_id: String,
+    reconnect_real_inference: bool,
     measure_performance: bool,
     local_setup: Option<NativeLocalSetup>,
 }
@@ -93,6 +94,10 @@ pub fn desktop_native_e2e_config() -> Result<Option<NativeE2eConfig>, BridgeErro
                 == Some("1"),
             correlation_id: std::env::var("GENTS_E2E_CORRELATION_ID")
                 .unwrap_or_else(|_| "native-e2e".to_owned()),
+            reconnect_real_inference: std::env::var("GENTS_E2E_RECONNECT_REAL_INFERENCE")
+                .ok()
+                .as_deref()
+                == Some("1"),
             measure_performance: std::env::var("GENTS_MOBILE_PERFORMANCE").ok().as_deref()
                 == Some("1"),
         }))
