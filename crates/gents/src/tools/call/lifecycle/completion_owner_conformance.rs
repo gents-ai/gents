@@ -420,7 +420,7 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
     let source = rows(&access, &format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID request_id lifecycle_state created_at }} }}"#,
         escape_graphql_string(&failed_wake)), "AgentRequest").await;
     assert_eq!(source.len(), 1);
-    seed_session_head(&admission.client, session, &source[0]).await;
+    seed_session_head(&access, session, &source[0]).await;
 
     let first = crate::RequestLifecycle::redrive_failed_background_wakeups_with_identities(
         node,
@@ -975,23 +975,25 @@ async fn a_retried_over_bound_wake_is_refused_again() {
     let access = admission.tool.access().unwrap();
     let did = admission.node_did.as_str();
     let agent_did = escape_graphql_string(admission.tool.actor().as_str());
-    let node_row = rows(
-        &admission.client,
-        &format!(
-            r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            escape_graphql_string(did)
-        ),
-        "Node",
-    )
-    .await;
-    assert_eq!(node_row.len(), 1);
-    update(
-        &admission.client,
-        "Node",
-        node_row[0]["_docID"].as_str().unwrap(),
-        "max_request_hop: 8",
-    )
-    .await;
+    let node_input = json!({"node_did": did, "max_request_hop": 8});
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::Node,
+            add: node_input.clone(),
+            update: node_input,
+        },
+    ])
+    .unwrap();
+    admission
+        .client
+        .transact_write("test.completion.configure_hop_bound", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .expect("configure Node hop bound as the signed owning User");
     let session = admission.tool.session_id.as_str();
     let parent_doc = admission.tool.request_doc_id().unwrap();
     let parent = rows(
@@ -1054,7 +1056,7 @@ async fn a_retried_over_bound_wake_is_refused_again() {
     );
     create_failed_wake(&admission, &mutation).await;
     let source = rows(&access, &format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{refused_wake}" }} }}) {{ _docID request_id lifecycle_state created_at }} }}"#), "AgentRequest").await;
-    seed_session_head(&admission.client, session, &source[0]).await;
+    seed_session_head(&access, session, &source[0]).await;
 
     let report = crate::RequestLifecycle::redrive_failed_background_wakeups_with_identities(
         node,
