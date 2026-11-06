@@ -349,7 +349,7 @@ pub async fn result(
             "job row {row_doc_id} is not in this call's scope; read only the results of this session's jobs"
         )
     };
-    let access = caller.caller_access()?;
+    let access = caller.caller_access().map_err(|_| outside())?;
     let response = access
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ tool_call_id session_id node_did requester_did lifecycle_state job_pin job_progress }} }}"#,

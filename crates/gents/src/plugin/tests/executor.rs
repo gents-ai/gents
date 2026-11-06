@@ -2272,11 +2272,7 @@ mod job_calls {
             node_caller,
         )
         .await;
-        assert!(
-            refusal(&call).contains("distinct agent identity"),
-            "{}",
-            refusal(&call)
-        );
+        assert!(refusal(&call).contains("scope"), "{}", refusal(&call));
         finish(ours).await;
 
         let mut theirs = job_row("job-calls-result-theirs", "other/plugin").await;
