@@ -2684,32 +2684,60 @@ async fn removing_agents_with_their_plugin_pack_requires_complete_inventory() {
 
 #[tokio::test]
 async fn plugin_removal_does_not_treat_dangling_scope_as_no_references() {
-    let access = access().await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime);
+    let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
     let removed = BTreeSet::from(["acme/echo".to_owned()]);
-    access.write("test.dangling_plugin_scope", r#"mutation {
-        create_Agent(input: {agent_did: "dangling", node_did: "did:key:zPackInstallOwner", context_id: "missing", inference_profile_id: "profile"}) {_docID}
-    }"#).await.unwrap();
-    let missing_context = ensure_plugins_unreferenced(&access, OWNER, &removed)
+    let input = json!({"agent_did":binding.agent_did, "creation_nonce":binding.creation_nonce,
+        "node_did":owner, "context_id":"missing", "inference_profile_id":"profile"});
+    access
+        .transact_write("test.dangling_plugin_scope", |txn| {
+            let input = &input;
+            Box::pin(async move {
+                txn.execute_client_signed_create(
+                "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) {_docID} }",
+                &json!({"input":input}), gents_protocol::schemas::AGENT,
+            ).await.map(|_| ())
+            })
+        })
+        .await
+        .unwrap();
+    let missing_context = ensure_plugins_unreferenced(&access, owner, &removed)
         .await
         .unwrap_err();
     assert!(missing_context.to_string().contains("missing context"));
-    access.write("test.dangling_plugin_tools", r#"mutation {
-        create_AgentContext(input: {context_id: "missing", node_did: "did:key:zPackInstallOwner", tools_id: "absent"}) {_docID}
-    }"#).await.unwrap();
-    let missing_tools = ensure_plugins_unreferenced(&access, OWNER, &removed)
+    let input = json!({"context_id":"missing", "node_did":owner, "tools_id":"absent"});
+    let created = access.transact_write("test.dangling_plugin_tools", |txn| {
+        let input = &input;
+        Box::pin(async move {
+            txn.execute_client_signed_create(
+                "mutation($input: AgentContextMutationInputArg!) { create_AgentContext(input: $input) {_docID} }",
+                &json!({"input":input}), gents_protocol::schemas::AGENT_CONTEXT,
+            ).await
+        })
+    }).await.unwrap();
+    let doc = crate::store::graphql::created_doc_id(&created, "AgentContext").unwrap();
+    let missing_tools = ensure_plugins_unreferenced(&access, owner, &removed)
         .await
         .unwrap_err();
     assert!(missing_tools.to_string().contains("missing Tools"));
-    access.write("test.no_plugin_scope", r#"mutation {
-        update_AgentContext(filter: {context_id: {_eq: "missing"}}, input: {tools_id: null}) {_docID}
-    }"#).await.unwrap();
-    let error = ensure_plugins_unreferenced(&access, OWNER, &removed)
+    access.transact_write("test.no_plugin_scope", |txn| {
+        let doc = &doc;
+        Box::pin(async move {
+            let mutation = format!("mutation($input: AgentContextMutationInputArg!) {{ update_AgentContext(docID: \"{}\", input: $input) {{_docID}} }}",
+                crate::store::graphql::escape_graphql_string(doc));
+            txn.execute_client_signed_update(&mutation, &json!({"input":{"tools_id":null}}),
+                gents_protocol::schemas::AGENT_CONTEXT).await.map(|_| ())
+        })
+    }).await.unwrap();
+    let error = ensure_plugins_unreferenced(&access, owner, &removed)
         .await
         .unwrap_err();
     assert!(matches!(
         error.downcast_ref::<PackRemovalError>(),
         Some(PackRemovalError::ReferenceInventoryUnavailable)
     ));
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
