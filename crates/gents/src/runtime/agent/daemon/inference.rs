@@ -1304,16 +1304,21 @@ pub(super) mod tests {
     }
 
     fn test_agent_with_identity(identity: Arc<dyn NodeIdentity>) -> Arc<ResolvedAgent> {
+        let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+        test_agent_with_binding(identity, binding)
+    }
+
+    fn test_agent_with_binding(
+        identity: Arc<dyn NodeIdentity>,
+        binding: gents_protocol::agent_identity::AgentIdentityBinding,
+    ) -> Arc<ResolvedAgent> {
         let principal = Arc::new(RuntimeNode {
             node_did: identity.did().to_string(),
             identity,
-            default_agent_did: "general".to_string(),
+            default_agent_did: binding.agent_did.clone(),
             display_name: None,
             enabled: true,
         });
-
-        let binding =
-            crate::store::identity::provision_agent_identity(principal.identity.as_ref()).unwrap();
         let agent_identity =
             crate::store::identity::resolve_agent_identity(principal.identity.as_ref(), &binding)
                 .unwrap();
@@ -1637,22 +1642,71 @@ pub(super) mod tests {
     async fn daemon_request_path_stamps_requester_lineage_on_hook_messages() {
         use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-        let data_path =
-            std::env::temp_dir().join(format!("daemon-requester-lineage-{}", uuid::Uuid::new_v4()));
-        let node = Arc::new(
-            crate::test_support::node_builder()
-                .data_path(&data_path)
-                .build()
+        use crate::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
+        use crate::store::config_client::NodePermission;
+        use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+        let (db, user, access, binding) =
+            crate::test_support::signed_test_node("daemon-requester-lineage").await;
+        let node = db.node.clone();
+        let node_did = db.node_identity.did().to_owned();
+        let agent_config = test_agent_with_binding(db.node_identity.clone(), binding);
+        let admin = crate::ConfigAccess::local_as(node.clone(), node_did.parse().unwrap());
+        let agent_did = identity::Did::new(&agent_config.agent_did).unwrap();
+        for permission in [
+            NodePermission::CollectionGet,
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::DocumentDelete,
+            NodePermission::DacRelationAdd,
+            NodePermission::DacRelationDelete,
+        ] {
+            admin
+                .grant_node_permission(&agent_did, permission)
                 .await
-                .expect("embedded node"),
-        );
-        crate::ensure_runtime_schemas(node.as_ref())
+                .unwrap();
+        }
+        let requester_did = user.did().to_owned();
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let create = crate::request::lifecycle::build_signed_client_request(
+            &access,
+            RequestSpec::new(
+                RequestPurpose::Normal,
+                RequestIdentity {
+                    request_id: request_id.clone(),
+                    node_did: node_did.clone(),
+                    requester_did: Some(requester_did.clone()),
+                    agent_did: agent_config.agent_did.clone(),
+                    session_id: uuid::Uuid::new_v4().to_string(),
+                    content: "route this reply".into(),
+                    execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                },
+                AgentRequestAdmissionRecord::client(&requester_did),
+            ),
+            RequestSigner::Identity(&user),
+        )
+        .await
+        .unwrap();
+        crate::request::lifecycle::submit_client_request(&access, &create)
             .await
-            .expect("runtime schemas");
-
-        let agent_config = test_agent();
-        let requester_did = agent_config.node_did().to_string();
-        let request = create_routed_request(&node, &agent_config, &requester_did).await;
+            .unwrap();
+        let escaped = crate::store::graphql::escape_graphql_string(&request_id);
+        let response = access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{_docID}} }}"#
+            ))
+            .await
+            .unwrap();
+        let doc_id = response["data"]["AgentRequest"][0]["_docID"]
+            .as_str()
+            .unwrap();
+        let request = crate::request::admission::load_request_for_admission_test_as(
+            &node,
+            doc_id,
+            &agent_config.agent_did,
+        )
+        .await
+        .unwrap();
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &agent_config.system_prompt,
             &agent_config.agent_did,
@@ -1700,24 +1754,20 @@ pub(super) mod tests {
             .await
             .unwrap();
 
+        let escaped = crate::store::graphql::escape_graphql_string(&request.doc_id);
+        let result = access.execute(&format!(r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{escaped}"}}}}) {{lifecycle_state}} }}"#)).await.unwrap();
         assert_eq!(
-            persisted_request_state(&node, &request.doc_id).await,
-            RequestLifecycleState::Completed,
-            "successful processing returns only after request completion"
+            result["data"]["AgentRequest"][0]["lifecycle_state"],
+            RequestLifecycleState::Completed.as_str()
         );
         let request_doc_id = crate::store::graphql::escape_graphql_string(&request.doc_id);
         let requester = crate::store::graphql::escape_graphql_string(&requester_did);
-        let authored_prompt = node
+        let authored_prompt = access
             .execute(&format!(
                 r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }}, requester_did: {{ _eq: "{requester}" }}, role: {{ _eq: "user" }} }}) {{ _docID message_key request_doc_id requester_did role }} }}"#
             ))
-            .await;
-        assert!(
-            !authored_prompt.has_errors(),
-            "query completed request's authored prompt failed: {:?}",
-            authored_prompt.errors
-        );
-        let authored_rows = authored_prompt.data.unwrap()["AgentMessage"]
+            .await.unwrap();
+        let authored_rows = authored_prompt["data"]["AgentMessage"]
             .as_array()
             .unwrap()
             .clone();
@@ -1746,19 +1796,10 @@ pub(super) mod tests {
                 }}
             }}"#
         );
-        let response = node.execute(&query).await;
-        assert!(
-            !response.has_errors(),
-            "query routed AgentMessage failed: {:?}",
-            response.errors
-        );
-        let rows = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentMessage"))
-            .and_then(serde_json::Value::as_array)
+        let response = access.execute(&query).await.unwrap();
+        let rows = response["data"]["AgentMessage"]
+            .as_array()
             .expect("AgentMessage rows");
-        let access = crate::store::config_client::ConfigAccess::local(node.clone());
         let mut found_reply = false;
         for row in rows {
             assert_eq!(
@@ -1773,7 +1814,7 @@ pub(super) mod tests {
             let (_, message) = crate::session::load_canonical_message(
                 &access,
                 doc_id,
-                &requester_did,
+                &node_did,
                 Some(&requester_did),
             )
             .await
@@ -1786,14 +1827,13 @@ pub(super) mod tests {
         assert!(
             found_reply,
             "daemon-persisted assistant message must carry requester lineage; rows={rows:?}; request={:?}",
-            node.execute(&format!(
+            access.execute(&format!(
                 "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{}\" }} }}) {{ lifecycle_state failure_reason terminal_output }} }}",
                 crate::store::graphql::escape_graphql_string(&request.doc_id)
             )).await
         );
 
         node.shutdown().await.expect("node shutdown");
-        let _ = std::fs::remove_dir_all(data_path);
     }
 
     #[tokio::test]
