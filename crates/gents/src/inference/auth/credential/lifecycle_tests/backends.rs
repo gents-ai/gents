@@ -173,7 +173,7 @@ async fn a_lost_backend_comes_back_at_the_next_sign_in() {
 }
 
 #[tokio::test]
-async fn an_invalid_config_fails_an_add_with_a_clear_error() {
+async fn an_unrelated_invalid_profile_does_not_block_an_account_backend() {
     let (db, _user, access) = access().await;
     let did = db.node_identity.did();
     store(&access, Product::Claude.sign_in(did, "a", "refresh-a")).await;
@@ -191,16 +191,71 @@ async fn an_invalid_config_fails_an_add_with_a_clear_error() {
         })
     }).await.unwrap();
 
-    let error = store_sign_in(
+    let profiles = || async {
+        access
+            .transact_readonly("test.invalid_profile", |txn| {
+                Box::pin(async move {
+                    crate::store::config_client::list_inference_profiles_in_txn(txn, did).await
+                })
+            })
+            .await
+            .unwrap()
+    };
+    let before = profiles().await;
+    let profile = &before[0];
+    let signed = store_sign_in(
         &access,
         Product::Claude.sign_in(did, "b", "refresh-b"),
         None,
     )
+    .await;
+    let stored = backends(&access, did).await;
+    let backend = stored
+        .first()
+        .expect("account backend to compare with the model");
+    let model_input = json!({
+        "documents": [
+            {"key": format!("Node:{did}"), "required": [], "localValid": true},
+            {"key": format!("InferenceProfile:{}", profile.profile_id),
+             "required": [format!("InferenceBackend:{}", profile.backend_id)], "localValid": true},
+            {"key": format!("InferenceBackend:{}", backend.backend_id), "required": [], "localValid": true},
+        ],
+        "changed": [format!("InferenceBackend:{}", backend.backend_id)],
+    });
+    let expected = tokio::task::spawn_blocking(move || {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let proofs = gents_lean_contract::proofs_dir().unwrap();
+        gents_lean_contract::run_lake_build(&proofs).unwrap();
+        let mut lean = Command::new("lake")
+            .args([
+                "env",
+                "lean",
+                "--run",
+                "Proofs/Conformance/ConfigurationAffected.lean",
+            ])
+            .current_dir(proofs)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        writeln!(lean.stdin.take().unwrap(), "{model_input}").unwrap();
+        let output = lean.wait_with_output().unwrap();
+        assert!(output.status.success(), "Lean affected validation failed");
+        serde_json::from_slice::<bool>(&output.stdout).unwrap()
+    })
     .await
-    .expect_err("an invalid config fails the add");
-    let text = format!("{error:#}");
-    assert!(text.contains("missing-backend"), "{text}");
-    assert!(text.contains("sign in again"), "{text}");
-    assert_eq!(rows(&access, did, CLAUDE_OAUTH_PROVIDER).await.len(), 1);
-    assert!(backends(&access, did).await.is_empty());
+    .unwrap();
+    assert_eq!(
+        signed
+            .as_ref()
+            .is_ok_and(|value| value.result == SignInResult::Added),
+        expected
+    );
+    assert_eq!(stored.len(), usize::from(expected));
+    assert_eq!(rows(&access, did, CLAUDE_OAUTH_PROVIDER).await.len(), 2);
+    assert_eq!(
+        serde_json::to_value(profiles().await).unwrap(),
+        serde_json::to_value(before).unwrap()
+    );
 }
