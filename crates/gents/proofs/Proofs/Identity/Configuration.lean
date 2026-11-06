@@ -1539,4 +1539,18 @@ theorem runtime_reset_retires_cache_and_binding :
      desktopResetRetires false .upgrade] = [true, true, true] := by
   decide
 
+/-- Managed client route approval follows a verified request and the owning
+User's document grant plus native node permissions. Route admission alone is
+not document authority, and the runtime cannot substitute for the User. -/
+def managedClientMayApprove (requestMatches ownerGrant nodeGrant : Bool) : Bool :=
+  requestMatches && ownerGrant && nodeGrant
+
+theorem managed_approval_requires_user_and_node_grants (requestMatches nodeGrant : Bool) :
+    managedClientMayApprove requestMatches false nodeGrant = false := by
+  cases requestMatches <;> cases nodeGrant <;> decide
+
+theorem managed_approval_requires_matching_request (ownerGrant nodeGrant : Bool) :
+    managedClientMayApprove false ownerGrant nodeGrant = false := by
+  decide
+
 end Identity.Configuration

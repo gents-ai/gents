@@ -1596,6 +1596,12 @@ def inferenceSelfConfigCase (phase actor document : String) : Json :=
 
 def json : Json := Json.mkObj
   [("name", toJson "configuration-explicit-grants"),
+   ("managed_client_handoff_cases", toJson (([false, true] : List Bool).flatMap fun request =>
+     ([false, true] : List Bool).flatMap fun owner =>
+     ([false, true] : List Bool).map fun node =>
+       Json.mkObj [("request", toJson request), ("owner", toJson owner),
+         ("node", toJson node),
+         ("approve", toJson (Configuration.managedClientMayApprove request owner node))])),
    ("desktop_reset_cases", toJson (([false, true] : List Bool).flatMap fun full =>
      ([("cache", Configuration.DesktopResetAsset.cache),
        ("binding", .binding), ("upgrade", .upgrade), ("user_key", .userKey),

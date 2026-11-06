@@ -178,9 +178,30 @@ async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {
     crate::commands::init::init(args).await
 }
 
-/// Approve the desktop client enrollment using the identity owned by a
-/// co-hosted managed runtime. The signed durable enrollment documents remain
-/// the route authority; this helper only drives the existing operator API.
+/// Grant the verified pending desktop request through the CLI User that owns
+/// the Node and the co-hosted runtime's native Node permission owner.
+pub async fn grant_managed_client_enrollment(
+    home: &Path,
+    graphql: &str,
+    request_id: &str,
+    node_did: &str,
+    client_did: &str,
+) -> Result<bool> {
+    let endpoint = crate::home_state::home_graphql_endpoint(home, graphql)?;
+    Ok(
+        crate::commands::p2p::enrollment_admin::grant_verified_client(
+            home,
+            endpoint,
+            request_id,
+            Some((node_did, client_did)),
+        )
+        .await?
+        .is_some(),
+    )
+}
+
+/// Approve the already granted desktop enrollment through the runtime's
+/// separately authenticated route-admission service.
 pub async fn approve_managed_client_enrollment(
     home: &Path,
     graphql: &str,

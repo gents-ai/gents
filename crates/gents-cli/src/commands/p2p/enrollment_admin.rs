@@ -186,19 +186,41 @@ pub(crate) async fn load_enrollment_query(
 /// This explicit grant is separate from route admission. Each native operation
 /// commits independently; a failure reports which grants may already exist.
 pub(super) async fn grant_pending_client(args: P2pEnrollmentGrantArgs) -> Result<()> {
-    use gents::store::config_client::{ConfigAccess, NodePermission};
-    let request_id = args.request_id.trim();
-    anyhow::ensure!(!request_id.is_empty(), "request_id must not be empty");
     let endpoint = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let runtime = resolve_home_identity(args.home.as_deref())?;
     let home = resolve_home_dir(args.home.as_deref());
-    let pending = load_pending_enrollments(&home, endpoint.url()).await?;
+    let result = grant_verified_client(&home, endpoint, &args.request_id, None)
+        .await?
+        .context("expected one verified pending enrollment")?;
+    print_json(&result)
+}
+
+/// `expected` binds managed pairing to the target runtime and held desktop User.
+pub(crate) async fn grant_verified_client(
+    home: &std::path::Path,
+    endpoint: gents::store::config_client::GraphqlEndpoint,
+    request_id: &str,
+    expected: Option<(&str, &str)>,
+) -> Result<Option<serde_json::Value>> {
+    use gents::store::config_client::{ConfigAccess, NodePermission};
+    let request_id = request_id.trim();
+    anyhow::ensure!(!request_id.is_empty(), "request_id must not be empty");
+    let runtime = resolve_home_identity(Some(home))?;
+    if let Some((node_did, _)) = expected {
+        anyhow::ensure!(
+            runtime.did() == node_did,
+            "managed Node identity does not match the initialized runtime"
+        );
+    }
+    let pending = load_pending_enrollments(home, endpoint.url()).await?;
     let matches: Vec<_> = pending["pending"]
         .as_array()
         .context("invalid pending enrollment response")?
         .iter()
         .filter(|row| row["request_id"].as_str() == Some(request_id))
         .collect();
+    if matches.is_empty() {
+        return Ok(None);
+    }
     anyhow::ensure!(
         matches.len() == 1,
         "expected one verified pending enrollment for {request_id}"
@@ -246,6 +268,12 @@ pub(super) async fn grant_pending_client(args: P2pEnrollmentGrantArgs) -> Result
         request.owner_node_did == runtime.did(),
         "enrollment belongs to another runtime"
     );
+    if let Some((node_did, client_did)) = expected {
+        anyhow::ensure!(
+            request.owner_node_did == node_did && request.candidate_did == client_did,
+            "managed enrollment request does not match the selected Node and desktop User"
+        );
+    }
     let candidate = identity::Did::new(&request.candidate_did)?;
     let owner = ConfigAccess::Graphql(endpoint.clone());
     let query = format!(
@@ -285,7 +313,7 @@ pub(super) async fn grant_pending_client(args: P2pEnrollmentGrantArgs) -> Result
         runtime_access.grant_node_permission(&candidate, permission).await.with_context(|| format!(
             "Node administrator was granted; node permission {} may have been granted, and earlier permissions were granted", permission.as_str()))?;
     }
-    print_json(
-        &serde_json::json!({"request_id": request_id, "candidate_did": candidate.as_str(), "node_did": runtime.did(), "node_administrator_granted": true}),
-    )
+    Ok(Some(
+        serde_json::json!({"request_id": request_id, "candidate_did": candidate.as_str(), "node_did": runtime.did(), "node_administrator_granted": true}),
+    ))
 }

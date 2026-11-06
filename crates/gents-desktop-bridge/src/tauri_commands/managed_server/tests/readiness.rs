@@ -1,6 +1,55 @@
 use super::*;
 
 #[tokio::test]
+async fn managed_pairing_handoff_matches_user_grant_model() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let contract = snapshot["identity_household_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "configuration-explicit-grants")
+        .unwrap();
+    for case in contract["managed_client_handoff_cases"].as_array().unwrap() {
+        let request = case["request"].as_bool().unwrap();
+        let owner = case["owner"].as_bool().unwrap();
+        let node = case["node"].as_bool().unwrap();
+        let approvals = AtomicUsize::new(0);
+        let result = grant_then_approve_managed(
+            || async move {
+                if !request {
+                    Ok(false)
+                } else if !owner || !node {
+                    Err("native grant failed".to_string())
+                } else {
+                    Ok(true)
+                }
+            },
+            || async {
+                approvals.fetch_add(1, Ordering::SeqCst);
+                Ok(PairingApproval::Committed)
+            },
+        )
+        .await;
+        assert_eq!(
+            approvals.load(Ordering::SeqCst) != 0,
+            case["approve"].as_bool().unwrap(),
+            "{case}"
+        );
+        if request && (!owner || !node) {
+            assert!(result.is_err(), "{case}");
+        }
+        if !request {
+            assert!(
+                matches!(result, Ok(PairingApproval::NotVisibleYet)),
+                "{case}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_slow_booting_runtime_is_waited_on_until_it_publishes_readiness() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
