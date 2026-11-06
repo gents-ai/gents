@@ -245,17 +245,31 @@ impl ScopedWatcherFixture {
             .expect("selected-agent request watcher")
     }
 
+    /// Creates the request as its requesting User through the signed client
+    /// path, then grants the selected Agent `working_agent`. An Agent holds
+    /// no create right on `delivered_requests`, so it cannot create its own rows.
     async fn create_request(&self, input: serde_json::Value) -> String {
-        let input = gents_protocol::graphql::graphql_input_literal(&input).unwrap();
-        let created = self
-            .access
-            .write(
-                "test.watcher.request",
-                &format!("mutation {{ create_AgentRequest(input: {input}) {{ _docID }} }}"),
-            )
+        let agent = identity::Did::new(self.agent.did()).unwrap();
+        self.client_access
+            .transact_write("test.watcher.request", |txn| {
+                let input = &input;
+                let agent = &agent;
+                Box::pin(async move {
+                    let created = txn
+                        .execute_client_signed_create(
+                            "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                            &serde_json::json!({"input": input}),
+                            gents_protocol::schemas::AGENT_REQUEST,
+                        )
+                        .await?;
+                    let doc_id = crate::store::graphql::created_doc_id(&created, "AgentRequest")?;
+                    txn.add_actor_relationship("AgentRequest", &doc_id, "working_agent", agent)
+                        .await?;
+                    Ok::<_, anyhow::Error>(doc_id)
+                })
+            })
             .await
-            .expect("create watcher request as selected agent");
-        crate::store::graphql::created_doc_id(&created, "AgentRequest").unwrap()
+            .expect("create watcher request for selected agent")
     }
 
     fn request_input(&self, request_id: &str, session_id: &str) -> serde_json::Value {
@@ -321,7 +335,9 @@ impl ScopedWatcherFixture {
         let response = self.access.execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, limit: 2) {{ lifecycle_state failure_reason claimed_at terminalized_at terminal_redrive_attempts }} }}"#
         )).await.unwrap();
-        let rows = response["data"]["AgentRequest"].as_array().unwrap();
+        let rows = response["data"]["AgentRequest"]
+            .as_array()
+            .unwrap_or_else(|| panic!("selected agent must read request: {response}"));
         let [row] = rows.as_slice() else {
             panic!("selected agent must see one request: {response}");
         };
@@ -922,13 +938,26 @@ async fn later_request_cannot_overtake_delivered_native_session_head() {
         "session_id": session,
         "created_at": second,
     });
-    let session_input = gents_protocol::graphql::graphql_input_literal(&session_input).unwrap();
+    let agent = identity::Did::new(fixture.agent.did()).unwrap();
     fixture
-        .access
-        .write(
-            "test.watcher.session",
-            &format!("mutation {{ create_AgentSession(input: {session_input}) {{ _docID }} }}"),
-        )
+        .client_access
+        .transact_write("test.watcher.session", |txn| {
+            let session_input = &session_input;
+            let agent = &agent;
+            Box::pin(async move {
+                let created = txn
+                    .execute_client_signed_create(
+                        "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+                        &serde_json::json!({"input": session_input}),
+                        gents_protocol::schemas::AGENT_SESSION,
+                    )
+                    .await?;
+                let doc_id = crate::store::graphql::created_doc_id(&created, "AgentSession")?;
+                txn.add_actor_relationship("AgentSession", &doc_id, "working_agent", agent)
+                    .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
         .await
         .expect("create agent-owned session");
     let mut continuation_input = fixture.request_input(continuation_id, session);
