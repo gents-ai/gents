@@ -8,6 +8,27 @@ use gents_protocol::request_admission::{
 };
 use gents_protocol::request_input::GoalAssignmentInput;
 
+async fn update_goal_root(access: &ConfigAccess, doc_id: &str, root: Option<&str>) {
+    let mutation = format!(
+        r#"mutation($input: GoalMutationInputArg!) {{ update_Goal(docID: "{}", input: $input) {{ _docID }} }}"#,
+        escape_graphql_string(doc_id),
+    );
+    let variables = serde_json::json!({"input": {"assignment_root_request_doc_id": root}});
+    let response = access
+        .transact_write("test.goal.update_root", |txn| {
+            let mutation = &mutation;
+            let variables = &variables;
+            Box::pin(async move {
+                txn.execute_client_signed_update(mutation, variables, gents_protocol::schemas::GOAL)
+                    .await
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(response["data"]["update_Goal"].as_array().unwrap().len(), 1);
+    assert_eq!(response["data"]["update_Goal"][0]["_docID"], doc_id);
+}
+
 #[tokio::test]
 async fn user_goal_continuation_claim_fences_current_physical_binding() {
     let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
@@ -95,27 +116,18 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
 
         if scenario == "rootless" || scenario == "dangling-root" {
             let root = if scenario == "rootless" {
-                "null"
+                None
             } else {
-                "\"missing-root-document\""
+                Some("missing-root-document")
             };
-            let updated = user.write("test.goal.remove_root", &format!(
-                r#"mutation {{ update_Goal(docID: "{}", input: {{ assignment_root_request_doc_id: {root} }}) {{ _docID }} }}"#,
-                escape_graphql_string(&f.goal.doc_id),
-            )).await.unwrap();
-            assert_eq!(updated["data"]["update_Goal"].as_array().unwrap().len(), 1);
+            update_goal_root(&user, &f.goal.doc_id, root).await;
         } else if scenario == "missing" {
-            let deleted = user
-                .write(
-                    "test.goal.delete",
-                    &format!(
-                        r#"mutation {{ delete_Goal(docID: "{}") {{ _docID }} }}"#,
-                        escape_graphql_string(&f.goal.doc_id),
-                    ),
-                )
-                .await
-                .unwrap();
-            assert_eq!(deleted["data"]["delete_Goal"].as_array().unwrap().len(), 1);
+            let goal_doc = &f.goal.doc_id;
+            user.transact_write("test.goal.delete", |txn| {
+                Box::pin(async move { txn.delete_configuration_document("Goal", goal_doc).await })
+            })
+            .await
+            .unwrap();
         } else if scenario == "hidden" {
             user.delete_resource_relationship(
                 "Goal",
@@ -174,11 +186,7 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
                 .unwrap()
                 .doc_id
                 .unwrap();
-            let updated = user.write("test.goal.replace_root", &format!(
-                r#"mutation {{ update_Goal(docID: "{}", input: {{ assignment_root_request_doc_id: "{}" }}) {{ _docID }} }}"#,
-                escape_graphql_string(&f.goal.doc_id), escape_graphql_string(&new_root),
-            )).await.unwrap();
-            assert_eq!(updated["data"]["update_Goal"].as_array().unwrap().len(), 1);
+            update_goal_root(&user, &f.goal.doc_id, Some(&new_root)).await;
         }
 
         let mut lifecycle = RequestLifecycle::new_with_node_did(
