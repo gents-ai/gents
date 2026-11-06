@@ -50,6 +50,7 @@ pub(crate) enum TransactionOutcome<T> {
 #[derive(Debug, Clone, Copy)]
 pub(super) enum TransactionMode {
     ConflictRetry,
+    SignedConflictRebuild,
     SingleAttempt,
     Idempotent(IdempotentTransactionRetry),
     #[cfg(test)]
@@ -59,7 +60,9 @@ pub(super) enum TransactionMode {
 impl TransactionMode {
     const fn max_attempts(self) -> u32 {
         match self {
-            Self::ConflictRetry => retry::TRANSACT_CONFLICT_MAX_RETRIES + 1,
+            Self::ConflictRetry | Self::SignedConflictRebuild => {
+                retry::TRANSACT_CONFLICT_MAX_RETRIES + 1
+            }
             Self::SingleAttempt => 1,
             Self::Idempotent(policy) => policy.max_attempts(),
             #[cfg(test)]
@@ -70,7 +73,9 @@ impl TransactionMode {
     const fn retry_owner(self) -> RetryOwner {
         match self {
             Self::Idempotent(_) => RetryOwner::GentsIdempotentTransaction,
-            Self::ConflictRetry | Self::SingleAttempt => RetryOwner::GentsTransaction,
+            Self::ConflictRetry | Self::SignedConflictRebuild | Self::SingleAttempt => {
+                RetryOwner::GentsTransaction
+            }
             #[cfg(test)]
             Self::ObserveConflict => RetryOwner::GentsTransaction,
         }
@@ -99,7 +104,10 @@ impl TransactionMode {
         match self {
             #[cfg(test)]
             Self::ObserveConflict => true,
-            Self::ConflictRetry | Self::SingleAttempt | Self::Idempotent(_) => false,
+            Self::ConflictRetry
+            | Self::SignedConflictRebuild
+            | Self::SingleAttempt
+            | Self::Idempotent(_) => false,
         }
     }
 }
@@ -109,10 +117,15 @@ struct TransactionAttemptFailure<E> {
     conflict_source: Option<ConflictSource>,
     rollback: RollbackStatus,
     retry_generic: bool,
+    confirmed_abort: bool,
 }
 
-pub(crate) fn client_signed_write_may_retry(dispatched: bool) -> bool {
-    !dispatched
+pub(crate) fn client_signed_write_may_retry(
+    dispatched: bool,
+    confirmed_abort: bool,
+    replay_authorized: bool,
+) -> bool {
+    !dispatched || (confirmed_abort && replay_authorized)
 }
 
 enum FailureDisposition {
@@ -328,6 +341,8 @@ where
                                 conflict_source: retry::classified_transaction_conflict(&error),
                                 error: E::from(error),
                                 rollback,
+                                confirmed_abort: definitely_not_committed
+                                    || discarded_before_commit,
                             })
                         }
                     }
@@ -344,6 +359,7 @@ where
                         error,
                         rollback,
                         retry_generic,
+                        confirmed_abort: matches!(rollback, RollbackStatus::Succeeded),
                     })
                 }
             };
@@ -356,6 +372,7 @@ where
                 conflict_source,
                 rollback,
                 retry_generic,
+                confirmed_abort,
             } = failure;
             if txn.embedded_poisoned() {
                 telemetry.record(AttemptReport {
@@ -375,6 +392,8 @@ where
             }
             if !client_signed_write_may_retry(
                 txn.client_signed_write_dispatched.load(Ordering::Acquire),
+                confirmed_abort && conflict_source.is_some(),
+                matches!(mode, TransactionMode::SignedConflictRebuild),
             ) {
                 max_attempts = attempt;
             }

@@ -179,6 +179,8 @@ pub(super) enum TxnCommitError {
     /// DefraDB returned a commit response. Its pinned transaction registry
     /// consumes the handle before attempting the storage commit.
     TransactionConsumed(ConfigClientError),
+    /// DefraDB's commit-conflict response confirms no transaction writes committed.
+    ConfirmedConflict(ConfigClientError),
 }
 
 pub(super) async fn txn_commit(
@@ -216,6 +218,11 @@ pub(super) async fn txn_commit(
             },
         ));
     }
+    if status == reqwest::StatusCode::CONFLICT && is_confirmed_commit_conflict(&bytes) {
+        return Err(TxnCommitError::ConfirmedConflict(
+            retry::transaction_conflict(ConflictSource::HttpStatusTextFallback),
+        ));
+    }
     if status == reqwest::StatusCode::CONFLICT && retry::is_transaction_conflict_text(&body) {
         return Err(TxnCommitError::TransactionConsumed(
             retry::transaction_conflict(ConflictSource::HttpStatusTextFallback),
@@ -228,6 +235,18 @@ pub(super) async fn txn_commit(
             body: body.into_owned(),
         },
     ))
+}
+
+/// The pinned DefraDB commit endpoint emits this exact JSON error only when
+/// its transaction owner reports a conflict before the Regolith commit record.
+fn is_confirmed_commit_conflict(bytes: &[u8]) -> bool {
+    serde_json::from_slice::<Value>(bytes).is_ok_and(|value| {
+        value.as_object().is_some_and(|body| {
+            body.len() == 1
+                && body.get("error").and_then(Value::as_str)
+                    == Some(query::executor::TXN_CONFLICT_MESSAGE)
+        })
+    })
 }
 
 pub(super) async fn txn_discard(
@@ -310,6 +329,25 @@ fn storage_full_response(bytes: &[u8]) -> Option<gents_protocol::database_error:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn confirmed_commit_conflict_requires_the_pinned_error_body() {
+        assert!(is_confirmed_commit_conflict(
+            br#"{"error":"transaction conflict. Please retry"}"#
+        ));
+        assert!(!is_confirmed_commit_conflict(
+            br#"{"error":"unrelated transaction conflict; please retry"}"#
+        ));
+        assert!(!is_confirmed_commit_conflict(
+            b"transaction conflict. Please retry"
+        ));
+        assert!(!is_confirmed_commit_conflict(
+            br#"{"error":"transaction conflict. Please retry","other":true}"#
+        ));
+        assert!(!is_confirmed_commit_conflict(
+            br#"{"error":"transaction conflict. please retry"}"#
+        ));
+    }
 
     #[tokio::test]
     async fn transaction_http_preserves_variables_and_transaction_header() {

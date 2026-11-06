@@ -108,6 +108,40 @@ impl ConfigAccess {
         .map(expect_committed)
     }
 
+    /// Rebuild an explicitly authorized, transaction-only signed operation
+    /// after a confirmed conflict. The callback must re-read its inputs and
+    /// have no effects outside its transaction; every attempt signs afresh.
+    pub(crate) async fn transact_signed_conflict_rebuild<'a, T, E, F>(
+        &'a self,
+        operation: &'static str,
+        callback: F,
+    ) -> Result<T, E>
+    where
+        T: Send + 'a,
+        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
+    {
+        let mode = match self {
+            Self::Graphql(endpoint) if endpoint.pack_replay.is_none() => {
+                endpoint.held_client_signing_capability().map_err(E::from)?;
+                TransactionMode::SignedConflictRebuild
+            }
+            Self::Graphql(_) => TransactionMode::SingleAttempt,
+            Self::Local(_) => TransactionMode::ConflictRetry,
+        };
+        transact_owned(
+            operation,
+            backend_for_access(self),
+            mode,
+            move |operation, rollback| {
+                Box::pin(async move { self.begin_apply_txn(operation, rollback).await })
+            },
+            callback,
+        )
+        .await
+        .map(expect_committed)
+    }
+
     pub(crate) async fn transact_write_with_finality<'a, T, E, F>(
         &'a self,
         operation: &'static str,

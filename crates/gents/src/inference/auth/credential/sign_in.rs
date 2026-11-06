@@ -60,7 +60,7 @@ pub async fn store_sign_in(
         credential.provider
     );
     access
-        .transact_write("oauth_credential.sign_in", |txn| {
+        .transact_signed_conflict_rebuild("oauth_credential.sign_in", |txn| {
             let credential = credential.clone();
             let label = label.clone();
             Box::pin(async move { store_sign_in_in_txn(txn, credential, label).await })

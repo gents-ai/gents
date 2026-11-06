@@ -57,6 +57,11 @@ impl ConfigApplyTxn<'_> {
                         cleanup: CommitCleanup::NotNeeded,
                         definitely_not_committed: false,
                     },
+                    graphql::TxnCommitError::ConfirmedConflict(error) => CommitFailure {
+                        error,
+                        cleanup: CommitCleanup::NotNeeded,
+                        definitely_not_committed: true,
+                    },
                 }),
             TxnBackend::Embedded { node, handle, .. } => {
                 if self.embedded_poisoned() {

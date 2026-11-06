@@ -2251,6 +2251,7 @@ async fn readonly_transaction_preserves_snapshot_and_rejects_native_mutation() {
 #[derive(Clone, Copy)]
 enum FirstCommit {
     Conflict,
+    ConfirmedConflict,
     ServerError,
     Succeed,
 }
@@ -2317,6 +2318,12 @@ async fn commit_transaction(
                 return (
                     StatusCode::CONFLICT,
                     "transaction conflict; please retry the transaction",
+                );
+            }
+            FirstCommit::ConfirmedConflict => {
+                return (
+                    StatusCode::CONFLICT,
+                    r#"{"error":"transaction conflict. Please retry"}"#,
                 );
             }
             FirstCommit::ServerError => {
@@ -2401,14 +2408,85 @@ async fn signed_update_commit_conflict_does_not_replay_callback() {
     let access = ConfigAccess::graphql(endpoint);
     let attempts = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&attempts);
-    let result = access.transact_write("test.signed_update_no_replay", move |txn| {
-        observed.fetch_add(1, Ordering::SeqCst);
-        txn.client_signed_write_dispatched.store(true, Ordering::Release);
-        Box::pin(async { Ok::<_, TestError>(()) })
-    }).await;
+    let result = access
+        .transact_write("test.signed_update_no_replay", move |txn| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            txn.client_signed_write_dispatched
+                .store(true, Ordering::Release);
+            Box::pin(async { Ok::<_, TestError>(()) })
+        })
+        .await;
     assert!(result.is_err());
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
     assert_eq!(state.next_id.load(Ordering::SeqCst), 1);
+    server.abort();
+}
+
+async fn held_fake_access(endpoint: String) -> ConfigAccess {
+    let identity =
+        tokio::task::spawn_blocking(|| crate::support::fixtures::test_identity("signed-conflict"))
+            .await
+            .unwrap();
+    let endpoint = super::GraphqlEndpoint::as_principal(endpoint, identity.did())
+        .with_client_signing_capability(identity.client_signing_capability().unwrap())
+        .unwrap();
+    ConfigAccess::Graphql(endpoint)
+}
+
+#[tokio::test]
+async fn confirmed_signed_conflict_rebuilds_on_a_fresh_transaction() {
+    let (endpoint, state, server) = fake_transaction_server(FirstCommit::ConfirmedConflict).await;
+    let access = held_fake_access(endpoint).await;
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let captured = attempts.clone();
+    let result = access
+        .transact_signed_conflict_rebuild("test.signed_confirmed_conflict", move |txn| {
+            lock(&captured).push(transaction_id(txn));
+            txn.client_signed_write_dispatched
+                .store(true, Ordering::Release);
+            Box::pin(async { Ok::<_, TestError>(()) })
+        })
+        .await;
+    result.unwrap();
+    assert_eq!(&*lock(&attempts), &["0", "1"]);
+    assert_eq!(state.next_id.load(Ordering::SeqCst), 2);
+    server.abort();
+}
+
+#[tokio::test]
+async fn ambiguous_signed_conflict_does_not_rebuild() {
+    let (endpoint, state, server) = fake_transaction_server(FirstCommit::Conflict).await;
+    let access = held_fake_access(endpoint).await;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let captured = attempts.clone();
+    let result = access
+        .transact_signed_conflict_rebuild("test.signed_ambiguous_conflict", move |txn| {
+            captured.fetch_add(1, Ordering::SeqCst);
+            txn.client_signed_write_dispatched
+                .store(true, Ordering::Release);
+            Box::pin(async { Ok::<_, TestError>(()) })
+        })
+        .await;
+    assert!(result.is_err());
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(state.next_id.load(Ordering::SeqCst), 1);
+    server.abort();
+}
+
+#[tokio::test]
+async fn confirmed_signed_commit_conflict_reports_known_finality() {
+    let (endpoint, _state, server) = fake_transaction_server(FirstCommit::ConfirmedConflict).await;
+    let access = held_fake_access(endpoint).await;
+    let error = access
+        .transact_write_with_finality("test.signed_conflict_finality", |txn| {
+            txn.client_signed_write_dispatched
+                .store(true, Ordering::Release);
+            Box::pin(async { Ok::<_, TestError>(()) })
+        })
+        .await
+        .unwrap_err();
+    assert!(!error.unconfirmed);
+    assert!(super::is_classified_transaction_conflict(&error.error));
     server.abort();
 }
 
