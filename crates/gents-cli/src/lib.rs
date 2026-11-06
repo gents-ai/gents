@@ -439,6 +439,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         }
         command => command,
     };
+    gents::enable_self_runner();
     if let Command::Eval { command } = &command {
         if let Some(message) = commands::eval::usage_error(command) {
             use clap::CommandFactory;
