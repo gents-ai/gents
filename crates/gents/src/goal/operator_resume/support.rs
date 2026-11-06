@@ -549,27 +549,47 @@ impl Fixture {
         failure: &str,
         at: &str,
     ) {
-        let did = self.identity.did();
-        let failure = escape_graphql_string(failure);
-        let agent_did = escape_graphql_string(&self.parent.agent_did);
-        execute(
-            &self.agent_access(),
-            &format!(
-                r#"mutation {{
-                    update_AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, input: {{
-                        lifecycle_state: "failed" failure_reason: "{failure}"
-                    }}) {{ _docID }}
-                    create_InferenceCall(input: {{
-                        call_id: "call-{request_id}" request_id: "{request_id}" call_seq: 1
-                        backend_id: "{backend}" agent_did: "{agent_did}" node_did: "{did}"
-                        call_kind: "{kind}" attempt: 1 call_state: "failed"
-                        failure_reason: "{failure}"
-                        queued_at: "{at}" started_at: "{at}" ended_at: "{at}"
-                    }}) {{ _docID }}
-                }}"#
-            ),
-        )
-        .await;
+        let access = self.agent_access();
+        let rows = request_rows(&access).await;
+        let matches = rows
+            .iter()
+            .filter(|row| row.request_id == request_id)
+            .collect::<Vec<_>>();
+        let [request] = matches.as_slice() else {
+            panic!("failed call must have exactly one physical request");
+        };
+        let request_doc = request.doc_id.as_deref().expect("failed request document");
+        let update = format!(
+            r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "failed", failure_reason: "{}" }}) {{ _docID }} }}"#,
+            escape_graphql_string(request_doc),
+            escape_graphql_string(failure),
+        );
+        let input = json!({
+            "call_id": format!("call-{request_id}"), "request_id": request_id,
+            "request_doc_id": request_doc, "session_id": SESSION,
+            "call_seq": 1, "backend_id": backend, "agent_did": self.agent.did(),
+            "node_did": self.identity.did(), "call_kind": kind, "attempt": 1,
+            "call_state": "failed", "failure_reason": failure,
+            "queued_at": at, "started_at": at, "ended_at": at,
+        });
+        access.transact_write("test.goal.failed_call", |txn| {
+            let update = &update;
+            let input = &input;
+            let session_doc = &self.session_doc_id;
+            Box::pin(async move {
+                let changed = txn.execute(update).await?;
+                let updates = crate::store::graphql::mutation_documents(&changed, "update_AgentRequest")?
+                    .context("failed request update omitted result")?;
+                anyhow::ensure!(updates.len() == 1, "failed request update lost its physical identity");
+                let response = txn.execute_with_variables(
+                    "mutation($input: InferenceCallMutationInputArg!) { create_InferenceCall(input: $input) { _docID } }",
+                    &json!({"input": input}),
+                ).await?;
+                let call_doc = crate::store::graphql::created_doc_id(&response, "InferenceCall")?;
+                txn.add_resource_relationship("InferenceCall", &call_doc, "parent", "sessions", session_doc).await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        }).await.unwrap();
     }
 
     pub async fn observe(&self) -> Value {

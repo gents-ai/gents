@@ -643,7 +643,7 @@ async fn embedded() -> (
         agent.as_ref(),
     )
     .unwrap();
-    let at = Utc::now().to_rfc3339();
+    let at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let create = crate::request::lifecycle::build_signed_client_request(
         &access,
         RequestSpec::new(
