@@ -488,6 +488,10 @@ pub(crate) struct LeanIdentityHouseholdCase {
     pub(crate) relations: Vec<LeanIdentityRelation>,
     pub(crate) enrolled: Vec<String>,
     pub(crate) policy_registrations: Vec<LeanIdentityPolicyRegistration>,
+    #[serde(rename = "managed_client_handoff_cases")]
+    pub(crate) _managed_client_handoff_cases: Vec<serde_json::Value>,
+    #[serde(rename = "desktop_reset_cases")]
+    pub(crate) _desktop_reset_cases: Vec<serde_json::Value>,
     #[serde(default)]
     pub(crate) task_checkpoint_cases: Vec<LeanTaskCheckpointCase>,
     pub(crate) self_config_actions: Vec<LeanIdentityAction>,
