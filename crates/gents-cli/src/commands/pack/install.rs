@@ -117,7 +117,11 @@ pub(crate) async fn install_documents_pack_resolved(
     .await?;
     let inference = prepared.inference.clone();
     let dependency_inference = prepared.dependency_inference.clone();
-    let origin_tag = gents::pack::pack_origin_tag(&pack.manifest().name)?;
+    let origin_tag = gents::pack::pack_origin_tag(&format!(
+        "{}/{}",
+        pack.manifest().metadata.namespace,
+        pack.manifest().name
+    ))?;
     if args.preview {
         return Ok(json!({
             "pack": pack.manifest().name,

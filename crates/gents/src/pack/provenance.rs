@@ -7,12 +7,49 @@ use crate::Collection;
 
 const PACK_ORIGIN_PREFIX: &str = "gents:pack:";
 
-pub fn pack_origin_tag(pack_name: &str) -> Result<String> {
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn document_ownership_matches_executable_model() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().pack_document_ownership_cases;
+        assert_eq!(cases.len(), 12);
+        for case in cases {
+            let coordinate = case["coordinate"].as_str().unwrap();
+            let origin = case["origin"].as_str();
+            let mut desired = json!({ "tags": [format!("gents:pack:{coordinate}")] });
+            let live = json!({ "tags": origin.map(|value| vec![format!("gents:pack:{value}")]).unwrap_or_default() });
+            assert_eq!(
+                merge_tags(&mut desired, &live).is_ok(),
+                case["allowed"].as_bool().unwrap(),
+                "{case}"
+            );
+            let tags: Vec<String> = origin
+                .map(|value| vec![format!("gents:pack:{value}")])
+                .unwrap_or_default();
+            assert_eq!(
+                ensure_origin_owned(&tags, coordinate).is_ok(),
+                case["removal_allowed"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+    }
+}
+
+fn is_coordinate(value: &str) -> bool {
+    value.split_once('/').is_some_and(|(namespace, name)| {
+        super::is_valid_pack_name(namespace) && super::is_valid_pack_name(name)
+    })
+}
+
+pub fn pack_origin_tag(coordinate: &str) -> Result<String> {
     anyhow::ensure!(
-        super::is_valid_pack_name(pack_name),
-        "pack origin requires a snake_case pack name"
+        is_coordinate(coordinate),
+        "pack origin requires a namespace/name coordinate"
     );
-    Ok(format!("{PACK_ORIGIN_PREFIX}{pack_name}"))
+    Ok(format!("{PACK_ORIGIN_PREFIX}{coordinate}"))
 }
 
 pub fn pack_origin_from_tags(tags: &[String]) -> Result<Option<&str>> {
@@ -26,11 +63,25 @@ pub fn pack_origin_from_tags(tags: &[String]) -> Result<Option<&str>> {
     );
     if let Some(origin) = origin {
         anyhow::ensure!(
-            super::is_valid_pack_name(origin),
+            is_coordinate(origin) || super::is_valid_pack_name(origin),
             "configuration document carries invalid pack origin {origin:?}"
         );
     }
     Ok(origin)
+}
+
+pub(super) fn ensure_origin_owned(tags: &[String], coordinate: &str) -> Result<()> {
+    if let Some(origin) = pack_origin_from_tags(tags)? {
+        anyhow::ensure!(
+            origin.contains('/'),
+            "configuration document has an ambiguous unqualified pack origin {origin:?}; resolve its ownership before retrying"
+        );
+        anyhow::ensure!(
+            origin == coordinate,
+            "configuration document belongs to pack {origin:?}, not {coordinate:?}"
+        );
+    }
+    Ok(())
 }
 
 pub(super) async fn apply_pack_documents(
@@ -150,12 +201,7 @@ fn merge_tags(desired: &mut serde_json::Value, live: &serde_json::Value) -> Resu
                 .context("live document tag must be a string")
         })
         .collect::<Result<Vec<_>>>()?;
-    if let Some(live_origin) = pack_origin_from_tags(&live_strings)? {
-        anyhow::ensure!(
-            live_origin == desired_origin,
-            "configuration document belongs to pack {live_origin:?}, not {desired_origin:?}"
-        );
-    }
+    ensure_origin_owned(&live_strings, desired_origin)?;
     for tag in live
         .get("tags")
         .and_then(serde_json::Value::as_array)
@@ -175,7 +221,8 @@ pub(super) fn stamp_pack_origin(
     manifest: &PackManifest,
     config: &PackConfig,
 ) -> Result<PackConfig> {
-    let origin = pack_origin_tag(&manifest.name)?;
+    let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
+    let origin = pack_origin_tag(&coordinate)?;
     let mut value = serde_json::to_value(config)?;
     let root = value
         .as_object_mut()
@@ -217,9 +264,9 @@ pub(super) fn stamp_pack_origin(
                 .unwrap_or_default();
             if let Some(authored_origin) = pack_origin_from_tags(&tags)? {
                 anyhow::ensure!(
-                    authored_origin == manifest.name,
+                    authored_origin == coordinate,
                     "pack {} document carries origin for another pack {authored_origin:?}",
-                    manifest.name
+                    coordinate
                 );
             }
             if !tags.iter().any(|tag| tag == &origin) {

@@ -222,6 +222,41 @@ async fn live_digests<'a>(
     Ok(out)
 }
 
+async fn ensure_removal_origin(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    coordinate: &str,
+    removals: &[(Collection, String, String)],
+) -> Result<()> {
+    let mut grouped: BTreeMap<Collection, BTreeSet<&str>> = BTreeMap::new();
+    for (collection, _, id) in removals {
+        grouped.entry(*collection).or_default().insert(id);
+    }
+    for (collection, ids) in grouped {
+        let ids: Vec<&str> = ids.into_iter().collect();
+        let records = crate::store::config_client::read_desired_state_records_in_txn(
+            txn, collection, owner, &ids,
+        )
+        .await?;
+        for (id, (_, live)) in records {
+            let tags = live
+                .get("tags")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|tag| {
+                    tag.as_str()
+                        .map(str::to_owned)
+                        .context("live document tag must be a string")
+                })
+                .collect::<Result<Vec<_>>>()?;
+            super::provenance::ensure_origin_owned(&tags, coordinate)
+                .with_context(|| format!("cannot remove {} {id}", collection.graphql_type()))?;
+        }
+    }
+    Ok(())
+}
+
 fn edited_error(coordinate: &str, edited: &[String]) -> anyhow::Error {
     anyhow::anyhow!(
         "{} of {coordinate}'s documents were edited since it was installed: {}; \
@@ -418,6 +453,8 @@ pub(crate) async fn install_in_txn(
     if !edited.is_empty() {
         return Err(edited_error(&pack.coordinate, &edited));
     }
+
+    ensure_removal_origin(txn, owner, &pack.coordinate, &removals).await?;
 
     let applied: Vec<_> = documents
         .into_iter()
@@ -743,6 +780,7 @@ async fn remove_record_in_txn(
     if !edited.is_empty() {
         return Err(edited_error(coordinate, &edited));
     }
+    ensure_removal_origin(txn, owner, coordinate, &removals).await?;
 
     let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(removals)?;
     crate::store::config_client::validate_desired_state_plan(txn, &plan).await?;
