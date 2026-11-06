@@ -2271,6 +2271,13 @@ async fn retry_frontier_matches_lean_admission() {
                 Some(retry),
             )
             .await;
+            let second_writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+                node.clone(),
+                &second,
+                std::time::Duration::ZERO,
+            )
+            .unwrap();
+            second.begin_owned_execution(&second_writer).await.unwrap();
             second
                 .terminalize_owned(
                     crate::request::lifecycle::RequestTerminalOutcome::Failed,

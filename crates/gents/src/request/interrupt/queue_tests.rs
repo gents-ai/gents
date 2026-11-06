@@ -161,6 +161,13 @@ async fn fixture(case: &LeanInterruptQueueCase) -> QueueFixture {
         lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
     );
+    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+        db.node.clone(),
+        &lifecycle,
+        Duration::ZERO,
+    )
+    .unwrap();
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
     let parent = lifecycle.request().clone();
     QueueFixture {
         db,
