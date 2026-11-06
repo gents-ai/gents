@@ -716,7 +716,7 @@ async fn create_pending_request_with_input(
     let request_id = crate::store::graphql::escape_graphql_string(request_id);
     let session_id = crate::store::graphql::escape_graphql_string(session_id);
     let created_at = crate::store::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    let agent_did = crate::store::graphql::escape_graphql_string(&{A});
+    let agent_did = crate::store::graphql::escape_graphql_string(&crate::triggers::callback::test_agent_did());
     let input =
         gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(input).unwrap())
             .unwrap();

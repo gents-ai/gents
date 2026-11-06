@@ -64,6 +64,7 @@ async fn cancelled_worker_keeps_running_row_when_process_exit_is_unverified() {
         .reserve(call_id.clone(), doc_id.clone(), CancellationToken::new())
         .unwrap();
     tokio::time::pause();
+    let tool_actor = tool.actor().clone();
     let finishing = tokio::spawn(finish_background_execution(
         tool,
         node.clone(),
@@ -78,7 +79,7 @@ async fn cancelled_worker_keeps_running_row_when_process_exit_is_unverified() {
     tokio::time::resume();
     let row = ToolCallLifecycle::load_by_doc_id_as(
         node.clone(),
-        tool.actor().clone(),
+        tool_actor.clone(),
         &doc_id,
         &admission.node_did,
         &session,
@@ -136,6 +137,7 @@ async fn later_stop_preserves_first_timeout_or_failure_and_projects_completion()
             .reserve(call.clone(), doc.clone(), CancellationToken::new())
             .unwrap();
         let process = OwnedTestProcess::spawn(Some(registry.process_recorder(&call, &doc))).await;
+        let tool_actor = tool.actor().clone();
         finish_background_execution(
             tool,
             node.clone(),
@@ -148,7 +150,7 @@ async fn later_stop_preserves_first_timeout_or_failure_and_projects_completion()
         assert!(registry.contains(&call, &doc).await);
         let lifecycle = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
-            tool.actor().clone(),
+            tool_actor.clone(),
             &doc,
             &admission.node_did,
             &session,
@@ -170,7 +172,7 @@ async fn later_stop_preserves_first_timeout_or_failure_and_projects_completion()
         );
         let row = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
-            tool.actor().clone(),
+            tool_actor.clone(),
             &doc,
             &admission.node_did,
             &session,
@@ -226,6 +228,7 @@ async fn confirmed_background_stop_survives_terminal_write_failure() {
         .unwrap();
     let _recorder = registry.process_recorder(&call, &doc);
     registry.set_cancellation_reason(&call, &doc, "explicit stop", false);
+    let tool_actor = tool.actor().clone();
     let (_, count) =
         crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
             Some(1),
@@ -243,7 +246,7 @@ async fn confirmed_background_stop_survives_terminal_write_failure() {
     assert!(registry.contains(&call, &doc).await);
     let before_retry = ToolCallLifecycle::load_by_doc_id_as(
         node.clone(),
-        tool.actor().clone(),
+        tool_actor.clone(),
         &doc,
         &admission.node_did,
         &session,
@@ -285,7 +288,7 @@ async fn confirmed_background_stop_survives_terminal_write_failure() {
     );
     let row = ToolCallLifecycle::load_by_doc_id_as(
         node.clone(),
-        tool.actor().clone(),
+        tool_actor.clone(),
         &doc,
         &admission.node_did,
         &session,
@@ -429,6 +432,7 @@ async fn native_failure_decision_precedes_cancel_during_cleanup() {
         model.pending_failure_resolves
     );
     reservation.retain_stopped_worker(lifecycle.clone(), false);
+    let lifecycle_actor = lifecycle.actor().clone();
     let _ = crate::tools::call::control::cancel_loaded_background_tool_call(
         node.clone(),
         &registry,
@@ -439,7 +443,7 @@ async fn native_failure_decision_precedes_cancel_during_cleanup() {
     .unwrap();
     let row = ToolCallLifecycle::load_by_doc_id_as(
         node.clone(),
-        lifecycle.actor().clone(),
+        lifecycle_actor.clone(),
         &doc,
         &admission.node_did,
         &session,

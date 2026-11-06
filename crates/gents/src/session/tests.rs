@@ -969,7 +969,6 @@ async fn fork_reader_node(
             .await
             .unwrap();
     crate::test_support::install_test_agent_binding_with_access(
-        &db.node,
         runtime.did(),
         "Default fixture agent",
         &binding,
