@@ -401,26 +401,26 @@ example : clientClaimQueueCandidate
 /-- A Client Goal continuation needs the current visible physical Goal and
 its physical assignment opening. These facts are read in the selected Agent's
 claim transaction; a missing or hidden Goal does not grant authority. -/
-def clientGoalClaimBinding (goalVisible goalMatches rootBound : Bool) : Bool :=
-  goalVisible && goalMatches && rootBound
+def clientGoalClaimBinding (goalVisible goalMatches rootBound openingAgentMatches : Bool) : Bool :=
+  goalVisible && goalMatches && rootBound && openingAgentMatches
 
 theorem client_goal_claim_requires_physical_binding
-    (visible goalMatches root : Bool) (h : clientGoalClaimBinding visible goalMatches root = true) :
-    visible = true ∧ goalMatches = true ∧ root = true := by
+    (visible goalMatches root agent : Bool) (h : clientGoalClaimBinding visible goalMatches root agent = true) :
+    visible = true ∧ goalMatches = true ∧ root = true ∧ agent = true := by
   simpa [clientGoalClaimBinding, Bool.and_eq_true, and_assoc] using h
 
 /-- Queue selection is only one input to a Client Goal claim. The signed edge,
 canonical physical Goal binding and current native authorization all remain
 necessary at the claim transaction. -/
 def clientGoalClaimAllowed (input : RequestInput) (signatureValid sessionAgentBound
-    nativeAuthorAllowed goalVisible goalMatches rootBound ancestryVerified : Bool) : Bool :=
+    nativeAuthorAllowed goalVisible goalMatches rootBound openingAgentMatches ancestryVerified : Bool) : Bool :=
   input.goalContinuation.isSome && clientClaimQueueCandidate input false && signatureValid && sessionAgentBound &&
-    nativeAuthorAllowed && clientGoalClaimBinding goalVisible goalMatches rootBound &&
+    nativeAuthorAllowed && clientGoalClaimBinding goalVisible goalMatches rootBound openingAgentMatches &&
     ancestryVerified
 
 theorem client_goal_claim_requires_current_author_and_ancestry (input : RequestInput)
-    (signature sessionAgent nativeAccess visible goalMatches root ancestry : Bool)
-    (h : clientGoalClaimAllowed input signature sessionAgent nativeAccess visible goalMatches root ancestry = true) :
+    (signature sessionAgent nativeAccess visible goalMatches root agent ancestry : Bool)
+    (h : clientGoalClaimAllowed input signature sessionAgent nativeAccess visible goalMatches root agent ancestry = true) :
     nativeAccess = true ∧ ancestry = true := by
   simp only [clientGoalClaimAllowed, Bool.and_eq_true] at h
   aesop
