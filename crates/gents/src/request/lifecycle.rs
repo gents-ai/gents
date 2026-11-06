@@ -79,8 +79,8 @@ pub(crate) use materialize::{
 pub use queue::enqueue_local_steering_request;
 pub use queue::validate_position as validate_queue_position;
 pub use queue::{
-    pending_steer_edit, submit_pending_user_edit, submit_pending_user_steer, PendingMessageEdit,
-    PendingQueueEdit, PendingQueueReceipt,
+    pending_steer_edit, publish_edit_command, submit_pending_user_edit, submit_pending_user_steer,
+    PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt,
 };
 pub use queue::{
     pending_user_queue, pending_user_queue_projection, PendingQueueEntry, PendingQueueProjection,

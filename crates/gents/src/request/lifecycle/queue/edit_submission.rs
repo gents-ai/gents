@@ -183,7 +183,8 @@ async fn submit_prepared_edit(
     }
 }
 
-pub(crate) async fn publish_edit_command(
+/// Publish the exact signed edit and its native session and Agent relationships atomically.
+pub async fn publish_edit_command(
     access: &ConfigAccess,
     command: &SessionInputEdit,
 ) -> Result<String> {

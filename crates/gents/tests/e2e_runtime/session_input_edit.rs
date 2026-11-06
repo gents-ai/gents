@@ -717,25 +717,48 @@ impl RemoteEdit<'_> {
 
 #[tokio::test]
 async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempotent() {
+    use gents::NodeIdentity as _;
     let mut db = support::test_db("input-edit-reopen").await;
     let did = db.node_identity.did().to_owned();
-    gents::documents::ensure_node(&db.node, &did).await.unwrap();
+    let agent = support::managed_agent(&db).await;
+    let user =
+        gents::KeyIdentity::load_or_create(db.data_path().join("edit-user.key"), None).unwrap();
+    let owner = ConfigAccess::local_as(db.node.clone(), ::identity::Did::new(&did).unwrap());
+    let agents = owner
+        .execute("{ Agent { _docID agent_did } }")
+        .await
+        .unwrap();
+    let agent_doc = agents["data"]["Agent"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["agent_did"] == agent.did())
+        .unwrap()["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    owner
+        .add_actor_relationship(
+            "Agent",
+            &agent_doc,
+            "session_writer",
+            &::identity::Did::new(user.did()).unwrap(),
+        )
+        .await
+        .unwrap();
     let session = "edit-reopen-session";
-    ConfigAccess::local_as(db.node.clone(), ::identity::Did::new(db.node_identity.did().to_owned()).unwrap()).write("test.edit_reopen.session", &format!(
-        r#"mutation {{ create_AgentSession(input: {{ session_id: "{}", node_did: "{}", requester_did: "{}", agent_did: "general", created_at: "2026-10-10T00:00:00Z" }}) {{ _docID }} }}"#,
-        escape_graphql_string(session), escape_graphql_string(&did), escape_graphql_string(&did)
-    )).await.unwrap();
+    let mut client = db.client_access(&user);
     let mut original = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "reopen-original",
         &did,
-        &did,
-        "general",
+        user.did(),
+        agent.did(),
         session,
         "original durable message",
         "interactive",
         "2026-10-10T00:00:00Z",
-        AgentRequestAdmissionRecord::client(&did),
+        AgentRequestAdmissionRecord::client(user.did()),
     );
     original.input.queue = Some(RequestQueue {
         delivery: QueueDelivery::Steer,
@@ -747,20 +770,26 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         interrupted_request_id: None,
         background_completion_wake_version: None,
     });
-    gents::sign_agent_request_create(db.node_identity.as_ref(), &mut original)
+    original.session_doc_id = Some(
+        gents::request::lifecycle::reserve_goal_session(&client, &original)
+            .await
+            .unwrap(),
+    );
+    original.agent_doc_id = Some(agent_doc);
+    gents::sign_agent_request_create(&user, &mut original)
         .await
         .unwrap();
-    let response = ConfigAccess::local_as(
-        db.node.clone(),
-        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-    )
-    .write(
-        "test.edit_reopen.original",
-        &original.graphql_mutation().unwrap(),
-    )
-    .await
-    .unwrap();
-    let original_doc = gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    gents::request::lifecycle::submit_client_request(&client, &original)
+        .await
+        .unwrap();
+    let created = client
+        .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "reopen-original"}}) {_docID} }"#)
+        .await
+        .unwrap();
+    let original_doc = created["data"]["AgentRequest"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let edit = PendingQueueEdit {
         expected_request_doc_ids: vec![original_doc.clone()],
         selected_request_doc_ids: vec![original_doc.clone()],
@@ -771,26 +800,23 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         }],
     };
     let replacements = prepare_pending_user_edit(
-        &ConfigAccess::local_as(
-            db.node.clone(),
-            ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-        ),
-        db.node_identity.as_ref(),
-        AgentRequestAdmissionRecord::client(&did),
+        &client,
+        &user,
+        AgentRequestAdmissionRecord::client(user.did()),
         &did,
         session,
-        &did,
+        user.did(),
         &edit,
     )
     .await
     .unwrap();
-    let now = chrono::Utc::now();
     let (session_doc_id, agent_did, agent_doc_id, replacement_evidence) =
-        signed_edit_targets(&db, db.node_identity.as_ref(), &did, session, &replacements).await;
+        signed_edit_targets(&db, &user, &did, session, &replacements).await;
+    let now = chrono::Utc::now();
     let mut command = SessionInputEdit {
         version: SESSION_INPUT_EDIT_VERSION,
         command_id: "edit-before-reopen".into(),
-        requester_did: did.clone(),
+        requester_did: user.did().into(),
         requester_peer_id: None,
         node_did: did.clone(),
         session_id: session.into(),
@@ -804,12 +830,10 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         replacement_evidence,
         signature: vec![],
     };
-    command.signature = db
-        .node_identity
-        .sign(&command.signing_payload())
+    command.signature = user.sign(&command.signing_payload()).await.unwrap();
+    gents::request::lifecycle::publish_edit_command(&client, &command)
         .await
         .unwrap();
-    write_command(&db, &command).await;
     db.simulate_process_crash().await.unwrap();
     assert_eq!(db.node_identity.did(), did);
     let cancel = CancellationToken::new();
@@ -844,13 +868,8 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     );
     cancel.cancel();
     task.await.unwrap().unwrap();
-    let before = rows(
-        &db,
-        "AgentRequest",
-        "{}",
-        "_docID request_id content lifecycle_state superseded_by_request_doc_id",
-    )
-    .await;
+    let fields = "_docID request_id content lifecycle_state superseded_by_request_doc_id";
+    let before = rows(&db, "AgentRequest", "{}", fields).await;
     assert_eq!(before.len(), 2);
     let old = before
         .iter()
@@ -868,20 +887,16 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         .unwrap();
     assert_eq!(replacement["content"], "replacement durable message");
     db.simulate_process_crash().await.unwrap();
-    let cancel = CancellationToken::new();
-    let _stop = Stop(cancel.clone());
+    client = db.client_access(&user);
     let mut stale = command.clone();
     stale.command_id = "edit-after-reopen-stale".into();
     stale.replacements = prepare_pending_user_edit(
-        &ConfigAccess::local_as(
-            db.node.clone(),
-            ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-        ),
-        db.node_identity.as_ref(),
-        AgentRequestAdmissionRecord::client(&did),
+        &client,
+        &user,
+        AgentRequestAdmissionRecord::client(user.did()),
         &did,
         session,
-        &did,
+        user.did(),
         &PendingQueueEdit {
             expected_request_doc_ids: receipt.request_doc_ids.clone(),
             selected_request_doc_ids: receipt.request_doc_ids.clone(),
@@ -894,12 +909,16 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     )
     .await
     .unwrap();
-    stale.signature = db
-        .node_identity
-        .sign(&stale.signing_payload())
+    stale.replacement_evidence =
+        signed_edit_targets(&db, &user, &did, session, &stale.replacements)
+            .await
+            .3;
+    stale.signature = user.sign(&stale.signing_payload()).await.unwrap();
+    gents::request::lifecycle::publish_edit_command(&client, &stale)
         .await
         .unwrap();
-    write_command(&db, &stale).await;
+    let cancel = CancellationToken::new();
+    let _stop = Stop(cancel.clone());
     let task = tokio::spawn(run_session_command_reconciler(
         db.node.clone(),
         db.node_identity.clone(),
@@ -924,13 +943,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         .await
         .unwrap());
     assert_eq!(rejected.outcome, SessionInputEditOutcome::Rejected);
-    let after = rows(
-        &db,
-        "AgentRequest",
-        "{}",
-        "_docID request_id content lifecycle_state superseded_by_request_doc_id",
-    )
-    .await;
+    let after = rows(&db, "AgentRequest", "{}", fields).await;
     assert_eq!(after, before);
     let replay = wait_row(
         &db,
@@ -944,16 +957,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     assert_eq!(replay["receipt_json"], receipt_json);
     cancel.cancel();
     task.await.unwrap().unwrap();
-    assert_eq!(
-        rows(
-            &db,
-            "AgentRequest",
-            "{}",
-            "_docID request_id content lifecycle_state superseded_by_request_doc_id"
-        )
-        .await,
-        before
-    );
+    assert_eq!(rows(&db, "AgentRequest", "{}", fields).await, before);
 }
 
 async fn local_edit_command(db: &TestDb, suffix: &str) -> (SessionInputEdit, String) {
