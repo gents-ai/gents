@@ -125,21 +125,25 @@ theorem active_steer_and_idle_use_same_claim (intent : Intent) (observation : Ob
 source witness binds its actual parent request and tool call; descriptive IDs
 alone do not establish that edge. Cross-runtime delivery requires the separate
 authenticated HTTP and distributed receipt owner, which is not assumed here. -/
-def decideLocalAgentMessage (local sourceVerified : Bool) (intent : Intent)
+def decideLocalAgentMessage (local sourceVerified sessionVisible : Bool) (intent : Intent)
     (observation : Observation) (commit : NativeCommit) : Decision :=
-  if !local || !sourceVerified then .unavailable else decideClaim intent observation commit
+  if !local || !sourceVerified || !sessionVisible then .unavailable else decideClaim intent observation commit
 
 theorem unverified_agent_message_cannot_claim (intent : Intent) (observation : Observation)
     (commit : NativeCommit) :
-    decideLocalAgentMessage true false intent observation commit = .unavailable := by rfl
+    decideLocalAgentMessage true false true intent observation commit = .unavailable := by rfl
+
+theorem hidden_existing_session_cannot_claim (intent : Intent) (observation : Observation)
+    (commit : NativeCommit) :
+    decideLocalAgentMessage true true false intent observation commit = .unavailable := by rfl
 
 theorem verified_local_message_uses_immediate_author_claim (intent : Intent)
     (observation : Observation) (commit : NativeCommit) :
-    decideLocalAgentMessage true true intent observation commit = decideClaim intent observation commit := by rfl
+    decideLocalAgentMessage true true true intent observation commit = decideClaim intent observation commit := by rfl
 
 theorem remote_agent_message_waits_for_http_owner (intent : Intent)
-    (observation : Observation) (commit : NativeCommit) (sourceVerified : Bool) :
-    decideLocalAgentMessage false sourceVerified intent observation commit = .unavailable := by rfl
+    (observation : Observation) (commit : NativeCommit) (sourceVerified sessionVisible : Bool) :
+    decideLocalAgentMessage false sourceVerified sessionVisible intent observation commit = .unavailable := by rfl
 
 /-- A pending request changes only with the native commit. Rejection uses the
 existing failed lifecycle and no-message terminal selection, and never exposes
