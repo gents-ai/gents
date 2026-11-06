@@ -52,6 +52,7 @@ mod schema_install;
 mod schema_management;
 mod self_config_permission;
 mod subscription;
+pub(crate) mod transport_publication;
 mod txn;
 pub use acp::nac::NodePermission;
 pub use subscription::GraphqlSubscription;

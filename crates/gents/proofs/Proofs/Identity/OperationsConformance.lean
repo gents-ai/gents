@@ -274,4 +274,68 @@ def replayProducerCasesJson : String := (toJson
       ("native_manager", toJson manager), ("committed", toJson committed),
       ("deliverable", toJson (Identity.RelationshipReplay.producerMayDeliver held manager committed))])).compress
 
+def enrollmentPolicyCasesJson : String :=
+  let revoked := apply enrollmentRequestWithParent (.revokeAs "candidate"
+    ⟨"enrollment_records", "request", "reader", .actor "admin"⟩)
+  let cases : List (String × State × DID × String × String) :=
+    [("candidate-request-write", enrollmentRequestFixture, "candidate", "request", "update"),
+     ("admin-request-read", enrollmentRequestFixture, "admin", "request", "read"),
+     ("admin-request-write", enrollmentRequestFixture, "admin", "request", "update"),
+     ("user-request-before-parent", enrollmentRequestFixture, "user", "request", "read"),
+     ("user-request-after-parent", enrollmentRequestWithParent, "user", "request", "read"),
+     ("outsider-request", enrollmentRequestWithParent, "outsider", "request", "read"),
+     ("revoked-admin", revoked, "admin", "request", "read"),
+     ("admin-terminal-write", enrollmentTerminalFixture, "admin", "terminal", "update"),
+     ("candidate-terminal-read", enrollmentTerminalFixture, "candidate", "terminal", "read"),
+     ("candidate-terminal-write", enrollmentTerminalFixture, "candidate", "terminal", "update"),
+     ("user-terminal-read", enrollmentTerminalFixture, "user", "terminal", "read"),
+     ("outsider-terminal", enrollmentTerminalFixture, "outsider", "terminal", "read")]
+  (toJson (cases.map fun (name, state, actor, id, permission) =>
+    Json.mkObj [("name", toJson name), ("actor", toJson actor), ("document", toJson id),
+      ("permission", toJson permission),
+      ("allowed", toJson (allowed 5 state actor "enrollment_records" id permission))])).compress
+
+def networkProtocolCasesJson : String :=
+  let collections := ["Network", "NetworkEnrollmentRequest", "NetworkEnrollmentDecision",
+    "NetworkEnrollmentRouteReceipt", "NetworkAuthorizationRevision", "NodeDirectoryEntry",
+    "PeerRegistry", "AgentSession"]
+  (toJson (collections.map fun name => Json.mkObj [
+    ("collection", toJson name), ("resource", toJson (networkProtocolResource name))])).compress
+
+def replicaGrantCasesJson : String :=
+  let before := privateReplicaFixture
+  let pending := replicaGrant before "enrollment_records" "remote" "runtime" "local-node" "user"
+    true true true false false
+  let linked := replicaLinkPending pending "enrollment_records" "remote" "runtime" "local-node" "user"
+    true true true
+  let revoked := apply linked (.revoke ⟨"enrollment_records", "remote", "parent", .object "nodes" "local-node"⟩)
+  let repaired := replicaLinkPending revoked "enrollment_records" "remote" "runtime" "local-node" "user"
+    true true true
+  let cases : List (String × State) := [("before", before), ("pending", pending),
+    ("linked", linked), ("revoked", revoked), ("after-repair", repaired)]
+  (toJson (cases.map fun (name, state) => Json.mkObj [("name", toJson name),
+    ("runtime_read", toJson (allowed 5 state "runtime" "enrollment_records" "remote" "read")),
+    ("user_read", toJson (allowed 5 state "user" "enrollment_records" "remote" "read")),
+    ("user_write", toJson (allowed 5 state "user" "enrollment_records" "remote" "update")),
+    ("agent_read", toJson (allowed 5 state "agent" "enrollment_records" "remote" "read")),
+    ("outsider_read", toJson (allowed 5 state "outsider" "enrollment_records" "remote" "read")),
+    ("app_read", toJson (allowed 5 state "runtime" "children" "application" "read")),
+    ("pending", toJson (state.relations.contains ⟨"enrollment_records", "remote", "pending_parent", .actor "runtime"⟩))])).compress
+
+def discoveryPolicyCasesJson : String :=
+  let cases : List (String × State × String × String × String) :=
+    [("outsider-read", publicDiscoveryFixture, "outsider", "directory", "read"),
+     ("outsider-write", publicDiscoveryFixture, "outsider", "directory", "update"),
+     ("local-user-write", localRegistryWriterFixture, "user", "self", "update"),
+     ("revoked-user-write", localRegistryWriterRevoked, "user", "self", "update")]
+  (toJson (cases.map fun (name, state, actor, id, permission) => Json.mkObj [("name", toJson name),
+    ("allowed", toJson (allowed 5 state actor "discovery" id permission))])).compress
+
+def localRegistryWriterCasesJson : String :=
+  let cases := [("runtime-owner", "runtime", true), ("user-owner", "user", true),
+    ("foreign-owner", "foreign", true), ("other-node", "user", false)]
+  (toJson (cases.map fun (name, creator, namesRuntime) => Json.mkObj [("name", toJson name),
+    ("creator", toJson creator), ("names_runtime", toJson namesRuntime),
+    ("writer", toJson (localRegistryWriter creator "runtime" "user" namesRuntime))])).compress
+
 end Identity.OperationsConformance

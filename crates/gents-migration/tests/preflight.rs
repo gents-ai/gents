@@ -81,3 +81,97 @@ async fn startup_refuses_existing_unbound_provider_collections_before_changes() 
         node.shutdown().await.expect("shut down test node");
     }
 }
+
+#[tokio::test]
+async fn branchable_identity_collections_have_private_local_fallback_objects() {
+    let node = fresh_node().await;
+    ensure_migrations(node.as_ref()).await.unwrap();
+    let runtime = identity::Did::new(node.node_identity_did().unwrap()).unwrap();
+    for (name, resource) in schemas::IDENTITY_POLICY_BINDINGS
+        .iter()
+        .filter(|(name, _)| schemas::is_replicated_protocol_collection(name))
+    {
+        let collection = node.get_collection(name).unwrap().unwrap();
+        assert!(collection.is_branchable);
+        let acp = node.document_acp();
+        assert!(acp
+            .is_doc_registered(
+                schemas::AGENT_OWNERSHIP_POLICY_ID,
+                resource,
+                &collection.collection_id
+            )
+            .await
+            .unwrap());
+        assert_eq!(
+            acp.get_doc_owner(
+                schemas::AGENT_OWNERSHIP_POLICY_ID,
+                resource,
+                &collection.collection_id
+            )
+            .await
+            .unwrap(),
+            Some(runtime.clone())
+        );
+    }
+    node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn startup_refuses_unbound_transport_collections_before_mutation() {
+    for (name, resource, schema) in [
+        (
+            schemas::NETWORK_NAME,
+            "enrollment_records",
+            schemas::NETWORK,
+        ),
+        (
+            schemas::NETWORK_ENROLLMENT_REQUEST_NAME,
+            "enrollment_records",
+            schemas::NETWORK_ENROLLMENT_REQUEST,
+        ),
+        (
+            schemas::NETWORK_ENROLLMENT_DECISION_NAME,
+            "enrollment_records",
+            schemas::NETWORK_ENROLLMENT_DECISION,
+        ),
+        (
+            schemas::NETWORK_AUTHORIZATION_REVISION_NAME,
+            "enrollment_records",
+            schemas::NETWORK_AUTHORIZATION_REVISION,
+        ),
+        (
+            schemas::NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
+            "enrollment_records",
+            schemas::NETWORK_ENROLLMENT_ROUTE_RECEIPT,
+        ),
+        (
+            schemas::PEER_REGISTRY_NAME,
+            "discovery",
+            schemas::PEER_REGISTRY,
+        ),
+        (
+            schemas::NODE_DIRECTORY_ENTRY_NAME,
+            "scoped_discovery",
+            schemas::NODE_DIRECTORY_ENTRY,
+        ),
+    ] {
+        let directive = format!(
+            " @policy(id: \"{}\", resource: \"{resource}\")",
+            schemas::AGENT_OWNERSHIP_POLICY_ID
+        );
+        assert!(schema.contains(&directive));
+        let node = fresh_node().await;
+        node.add_collection(&schema.replacen(&directive, "", 1))
+            .await
+            .unwrap();
+        let before = node.get_all_collection_versions().await.unwrap();
+        assert!(
+            matches!(ensure_migrations(node.as_ref()).await, Err(Error::IncompatibleIdentityPolicy { collection }) if collection == name)
+        );
+        assert_eq!(
+            serde_json::to_value(&before).unwrap(),
+            serde_json::to_value(node.get_all_collection_versions().await.unwrap()).unwrap()
+        );
+        node.shutdown().await.unwrap();
+    }
+}

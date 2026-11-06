@@ -123,6 +123,215 @@ theorem raw_tool_disable_alone_does_not_revoke_reader :
      allowed 5 after.acp "agent" "pairing_observations" "route" "read") = (false, true) := by
   native_decide
 
+/-- Enrollment requests contain the signed offer token and client nonce. The
+candidate runtime is their native owner; the exact admin runtime is an explicit
+reader. A parent is a native relationship to a physical Node, not a DID field
+or a consequence of enrollment. Foreign relationships are not assumed to
+replicate. Terminal decisions, revisions and receipts reverse the creator and
+reader roles. A candidate User is a separate identity and must be authenticated
+independently before it is granted access to a decision. -/
+def enrollmentRequestFixture : State :=
+  { objects := [⟨"nodes", "candidate-node", "user"⟩,
+      ⟨"enrollment_records", "request", "candidate"⟩],
+    relations := [⟨"enrollment_records", "request", "reader", .actor "admin"⟩],
+    enrolled := [] }
+
+def enrollmentRequestWithParent : State :=
+  apply enrollmentRequestFixture (.grantAs "candidate"
+    ⟨"enrollment_records", "request", "parent", .object "nodes" "candidate-node"⟩)
+
+theorem request_reader_is_exact_and_read_only :
+    (allowed 5 enrollmentRequestFixture "candidate" "enrollment_records" "request" "update",
+     allowed 5 enrollmentRequestFixture "admin" "enrollment_records" "request" "read",
+     allowed 5 enrollmentRequestFixture "admin" "enrollment_records" "request" "update",
+     allowed 5 enrollmentRequestFixture "user" "enrollment_records" "request" "read",
+     allowed 5 enrollmentRequestFixture "sibling" "enrollment_records" "request" "read",
+     allowed 5 enrollmentRequestFixture "outsider" "enrollment_records" "request" "read") =
+      (true, true, false, false, false, false) := by native_decide
+
+theorem user_reaches_request_only_after_exact_node_parent :
+    (allowed 5 enrollmentRequestFixture "user" "enrollment_records" "request" "read",
+     allowed 5 enrollmentRequestWithParent "user" "enrollment_records" "request" "read") =
+      (false, true) := by native_decide
+
+theorem enrollment_does_not_reconstruct_revoked_request_reader :
+    let revoked := apply enrollmentRequestWithParent (.revokeAs "candidate"
+      ⟨"enrollment_records", "request", "reader", .actor "admin"⟩)
+    allowed 5 revoked "admin" "enrollment_records" "request" "read" = false := by native_decide
+
+def enrollmentTerminalFixture : State :=
+  { objects := [⟨"nodes", "admin-node", "user"⟩,
+      ⟨"enrollment_records", "terminal", "admin"⟩],
+    relations := [⟨"enrollment_records", "terminal", "reader", .actor "candidate"⟩,
+      ⟨"enrollment_records", "terminal", "parent", .object "nodes" "admin-node"⟩],
+    enrolled := [] }
+
+theorem terminal_reads_are_scoped_to_candidate_and_node_owner :
+    (allowed 5 enrollmentTerminalFixture "admin" "enrollment_records" "terminal" "update",
+     allowed 5 enrollmentTerminalFixture "candidate" "enrollment_records" "terminal" "read",
+     allowed 5 enrollmentTerminalFixture "candidate" "enrollment_records" "terminal" "update",
+     allowed 5 enrollmentTerminalFixture "user" "enrollment_records" "terminal" "read",
+     allowed 5 enrollmentTerminalFixture "sibling" "enrollment_records" "terminal" "read",
+     allowed 5 enrollmentTerminalFixture "outsider" "enrollment_records" "terminal" "read") =
+      (true, true, false, true, false, false) := by native_decide
+
+/-- Enrollment records are private; registry and directory metadata are separately published.
+A native reader grant is per physical document and does not imply permission on
+any application document. This classification does not publish a binding: each
+writer and receiver still needs the authenticated publication path. -/
+def networkProtocolResource : String → Option String
+  | "Network" => some "enrollment_records"
+  | "NetworkEnrollmentRequest" => some "enrollment_records"
+  | "NetworkEnrollmentDecision" => some "enrollment_records"
+  | "NetworkEnrollmentRouteReceipt" => some "enrollment_records"
+  | "NetworkAuthorizationRevision" => some "enrollment_records"
+  | "NodeDirectoryEntry" => some "scoped_discovery"
+  | "PeerRegistry" => some "discovery"
+  | _ => none
+
+/-- PeerRegistry visibility is an explicit wildcard relationship on each published
+registry document, not an automated wildcard grant on an enrollment record.
+NodeDirectoryEntry is scoped to attached clients rather than assumed public.
+An authorized native owner or reader manager may intentionally share a private
+record with the wildcard; ordinary ungranted actors cannot. Native ACP
+relationships are store-local, so a receiver cannot infer this tuple from a
+replicated document; publication on each store needs native Node authority. -/
+def publicDiscoveryFixture : State :=
+  { objects := [⟨"discovery", "directory", "runtime"⟩,
+      ⟨"enrollment_records", "request", "runtime"⟩],
+    relations := [⟨"discovery", "directory", "reader", .wildcard⟩], enrolled := [] }
+
+theorem public_discovery_does_not_publish_enrollment :
+    (allowed 5 publicDiscoveryFixture "outsider" "discovery" "directory" "read",
+     allowed 5 publicDiscoveryFixture "outsider" "discovery" "directory" "update",
+     allowed 5 publicDiscoveryFixture "outsider" "enrollment_records" "request" "read") =
+      (true, false, false) := by native_decide
+
+/-- PeerRegistry has two actual local writers: the held runtime's heartbeat and
+the Node-owning User's registration. Only a row naming that runtime whose
+registered creator is one of those two may grant the other writer. A foreign
+creator or a row naming another Node cannot grant a local writer. -/
+def localRegistryWriter (creator runtime user : DID) (namesRuntime : Bool) : Option DID :=
+  if !namesRuntime then none else if creator == runtime then some user
+  else if creator == user then some runtime else none
+
+theorem local_registry_writer_is_bound_to_creator_and_node :
+    [localRegistryWriter "runtime" "runtime" "user" true,
+     localRegistryWriter "user" "runtime" "user" true,
+     localRegistryWriter "foreign" "runtime" "user" true,
+     localRegistryWriter "user" "runtime" "user" false] =
+      [some "user", some "runtime", none, none] := by decide
+
+/-- Native node-administrator publication is local to the receiving store. Its
+actor is the configured Node, and native NAC bypass plus relation-add authority,
+the bound schema and a verified registered document must all hold in the same
+transaction. These grants are specific to the document and do not grant access
+on application records or follow merely from peer admission. The local marker
+is an ACP relationship, not a replicated document field. -/
+def replicaGrant (state : State) (resource id runtime node user : String)
+    (authorized registered committed nodeExists publicRegistry : Bool) : State :=
+  let marker : Relation := ⟨resource, id, "local_publication", .actor runtime⟩
+  if !(authorized && registered && committed) || state.relations.contains marker then state
+  else
+    let marked := apply state (.grant marker)
+    let reader := apply marked (.grant ⟨resource, id, "reader", .actor runtime⟩)
+    let visible := if publicRegistry && resource == "discovery" then
+      apply reader (.grant ⟨resource, id, "reader", .wildcard⟩) else reader
+    if nodeExists then
+      let linked := apply visible (.grant ⟨resource, id, "parent", .object "nodes" node⟩)
+      apply linked (.grant ⟨resource, id, "reader_manager", .actor user⟩)
+    else apply visible (.grant ⟨resource, id, "pending_parent", .actor runtime⟩)
+
+/-- The pending marker is consumed with the Node parent and reader manager in
+the same native transaction. Once consumed, reconciliation cannot restore a
+relation that was later revoked. The attachment names the physical Node document;
+a replacement Node requires an explicit administrator reattachment. -/
+def replicaLinkPending (state : State) (resource id runtime node user : String)
+    (authorized nodeExists committed : Bool) : State :=
+  let marker : Relation := ⟨resource, id, "local_publication", .actor runtime⟩
+  let pending : Relation := ⟨resource, id, "pending_parent", .actor runtime⟩
+  if authorized && nodeExists && committed && state.relations.contains marker &&
+      state.relations.contains pending then
+    let linked := apply state (.grant ⟨resource, id, "parent", .object "nodes" node⟩)
+    let managed := apply linked (.grant ⟨resource, id, "reader_manager", .actor user⟩)
+    apply managed (.revoke pending)
+  else state
+
+def privateReplicaFixture : State :=
+  { objects := [⟨"nodes", "local-node", "user"⟩,
+      ⟨"enrollment_records", "remote", "foreign"⟩,
+      ⟨"children", "application", "foreign"⟩], relations := [], enrolled := [] }
+
+theorem native_local_replica_grant_is_narrow :
+    let state := replicaGrant privateReplicaFixture "enrollment_records" "remote" "runtime"
+      "local-node" "user" true true true true false
+    (allowed 5 state "runtime" "enrollment_records" "remote" "read",
+     allowed 5 state "user" "enrollment_records" "remote" "read",
+     allowed 5 state "user" "enrollment_records" "remote" "update",
+     allowed 5 state "agent" "enrollment_records" "remote" "read",
+     allowed 5 state "runtime" "children" "application" "read") =
+      (true, true, false, false, false) := by native_decide
+
+theorem replica_parent_repair_does_not_restore_revocation :
+    let pending := replicaGrant privateReplicaFixture "enrollment_records" "remote" "runtime"
+      "local-node" "user" true true true false false
+    let linked := replicaLinkPending pending "enrollment_records" "remote" "runtime"
+      "local-node" "user" true true true
+    let revoked := apply linked (.revoke ⟨"enrollment_records", "remote", "parent",
+      .object "nodes" "local-node"⟩)
+    allowed 5 (replicaLinkPending revoked "enrollment_records" "remote" "runtime"
+      "local-node" "user" true true true) "user" "enrollment_records" "remote" "read" = false := by
+  native_decide
+
+theorem native_replica_requires_authority_and_registration :
+    (replicaGrant privateReplicaFixture "enrollment_records" "remote" "runtime"
+      "local-node" "user" false true true true false,
+     replicaGrant privateReplicaFixture "enrollment_records" "remote" "runtime"
+      "local-node" "user" true false true true false) =
+      (privateReplicaFixture, privateReplicaFixture) := by simp [replicaGrant]
+
+/-- Document creation and all requested native grants commit together. The
+recipient DID must come from the authenticated protocol; naming an enrolled
+peer alone neither creates nor restores a reader grant. -/
+def publishNetworkRecord (state : State) (creator recipient : DID) (id node : String)
+    (created parentGranted readerGranted committed : Bool) : State :=
+  if created && parentGranted && readerGranted && committed then
+    let created := directCreate state creator "enrollment_records" id true true
+    let parent := apply created
+      (.grantAs creator ⟨"enrollment_records", id, "parent", .object "nodes" node⟩)
+    apply parent (.grantAs creator ⟨"enrollment_records", id, "reader", .actor recipient⟩)
+  else state
+
+theorem failed_network_reader_grant_aborts_publication (state : State)
+    (creator recipient : DID) (id node : String) (created parent committed : Bool) :
+    publishNetworkRecord state creator recipient id node created parent false committed = state := by
+  simp [publishNetworkRecord]
+
+theorem enrollment_grant_does_not_authorize_application_documents :
+    let state : State := { objects := [⟨"nodes", "home", "user"⟩,
+      ⟨"children", "application", "runtime"⟩], relations := [], enrolled := ["candidate"] }
+    let published := publishNetworkRecord state "runtime" "candidate" "decision" "home"
+      true true true true
+    (allowed 5 published "candidate" "enrollment_records" "decision" "read",
+     allowed 5 published "candidate" "children" "application" "read") = (true, false) := by
+  native_decide
+
+def localRegistryWriterFixture : State :=
+  { objects := [⟨"nodes", "local-node", "user"⟩, ⟨"discovery", "self", "runtime"⟩],
+    relations := [⟨"discovery", "self", "local_publication", .actor "runtime"⟩,
+      ⟨"discovery", "self", "parent", .object "nodes" "local-node"⟩,
+      ⟨"discovery", "self", "writer", .actor "user"⟩], enrolled := [] }
+
+def localRegistryWriterRevoked : State :=
+  apply localRegistryWriterFixture (.revokeAs "runtime"
+    ⟨"discovery", "self", "writer", .actor "user"⟩)
+
+theorem local_registry_writer_revocation_is_not_republished :
+    let after := replicaGrant localRegistryWriterRevoked "discovery" "self" "runtime"
+      "local-node" "user" true true true true true
+    (allowed 5 localRegistryWriterFixture "user" "discovery" "self" "update",
+     allowed 5 after "user" "discovery" "self" "update") = (true, false) := by native_decide
+
 /-- A user-created secret configuration and both native relationships share
 the transaction. Failure to resolve its Node or stage either grant aborts the
 creation; a later update does not reinstall relationships. -/

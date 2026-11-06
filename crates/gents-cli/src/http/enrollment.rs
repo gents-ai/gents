@@ -411,6 +411,10 @@ pub async fn ensure_enrollment_network(
                     }}) {{ _docID }}
                 }}"#
             );
+            anyhow::ensure!(
+                node.node_identity_did() == Some(identity.did()),
+                "enrollment Network author must be the local runtime Node"
+            );
             gents::store::config_client::ConfigAccess::write_local(
                 node,
                 "cli.enrollment.create_agent_network",

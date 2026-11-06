@@ -394,16 +394,64 @@ async fn persisted_request(
     Ok(Some((request, row.doc_id.clone())))
 }
 
-pub async fn write_enrollment_request(
+async fn write_enrollment_request(
     node: &Arc<EmbeddedNode>,
     request: &EnrollmentRequestRecord,
 ) -> Result<String> {
+    anyhow::ensure!(
+        node.node_identity_did() == Some(request.candidate_did.as_str()),
+        "enrollment request author must be the local runtime Node"
+    );
+    let runtime = identity::Did::new(&request.candidate_did)?;
+    let admin = identity::Did::new(&request.admin_did)?;
+    let access = ConfigAccess::local_as(node.clone(), runtime.clone());
     let input = enrollment_request_input(request);
     let mutation =
         format!("mutation {{ create_NetworkEnrollmentRequest(input: {input}) {{ _docID }} }}");
-    let response = ConfigAccess::write_local(node, "enrollment.create_request", &mutation).await?;
-    gents_protocol::graphql::extract_mutation_doc_id(&response, "NetworkEnrollmentRequest")
-        .context("enrollment request mutation returned no document ID")
+    access
+        .transact_write("enrollment.create_request", |txn| {
+            let runtime = &runtime;
+            let admin = &admin;
+            let mutation = &mutation;
+            Box::pin(async move {
+                txn.validate_runtime_actor(runtime)?;
+                let query = format!(
+                    r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
+                    escape_graphql_string(runtime.as_str())
+                );
+                let nodes = txn.execute(&query).await?;
+                let nodes = gents_protocol::graphql::graphql_rows_from_response(&nodes, "Node");
+                let [parent] = nodes.as_slice() else {
+                    anyhow::bail!("enrollment request requires exactly one visible local Node");
+                };
+                let parent = parent["_docID"]
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .context("enrollment request Node has no document ID")?;
+                let owners = txn.document_owners("Node", &[parent.to_owned()]).await?;
+                anyhow::ensure!(
+                    owners.len() == 1 && owners[0].visible && owners[0].owner.is_some(),
+                    "enrollment request Node has no visible native owner"
+                );
+                let response = txn.execute(mutation).await?;
+                let doc = gents_protocol::graphql::extract_mutation_doc_id(
+                    &response,
+                    "NetworkEnrollmentRequest",
+                )?;
+                txn.add_resource_relationship(
+                    "NetworkEnrollmentRequest",
+                    &doc,
+                    "parent",
+                    "nodes",
+                    parent,
+                )
+                .await?;
+                txn.add_actor_relationship("NetworkEnrollmentRequest", &doc, "reader", admin)
+                    .await?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        })
+        .await
 }
 
 pub fn enrollment_request_input(request: &EnrollmentRequestRecord) -> String {

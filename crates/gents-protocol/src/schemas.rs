@@ -53,6 +53,13 @@ pub use gents_schemas::{
 /// catalog separately from schema lineage because policy bindings are outside
 /// DefraDB's schema version identity.
 pub const IDENTITY_POLICY_BINDINGS: &[(&str, &str)] = &[
+    (NETWORK_NAME, "enrollment_records"),
+    (NETWORK_ENROLLMENT_REQUEST_NAME, "enrollment_records"),
+    (NETWORK_ENROLLMENT_DECISION_NAME, "enrollment_records"),
+    (NETWORK_AUTHORIZATION_REVISION_NAME, "enrollment_records"),
+    (NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME, "enrollment_records"),
+    (PEER_REGISTRY_NAME, "discovery"),
+    (NODE_DIRECTORY_ENTRY_NAME, "scoped_discovery"),
     (NODE_NAME, "nodes"),
     (NODE_READINESS_NAME, "operations"),
     (NODE_RUNTIME_NAME, "operations"),

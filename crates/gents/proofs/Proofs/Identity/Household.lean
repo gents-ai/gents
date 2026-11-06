@@ -64,6 +64,24 @@ def policy : List ResourceDefinition :=
         ⟨"reader_manager", ["actor"], ["route_reader", "tool_reader"]⟩]
       permissions := [permission "read" ["route_reader", "tool_reader"] [("parent", "read")],
         permission "update" [] [], permission "delete" [] []] }
+  , { name := "discovery"
+      relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
+        ⟨"reader_manager", ["actor"], ["reader"]⟩, ⟨"writer", ["actor"], []⟩,
+        ⟨"local_publication", ["actor"], []⟩, ⟨"pending_parent", ["actor"], []⟩]
+      permissions := [permission "read" ["reader", "writer"] [("parent", "read")],
+        permission "update" ["writer"] [], permission "delete" [] []] }
+  , { name := "scoped_discovery"
+      relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
+        ⟨"reader_manager", ["actor"], ["reader"]⟩,
+        ⟨"local_publication", ["actor"], []⟩, ⟨"pending_parent", ["actor"], []⟩]
+      permissions := [permission "read" ["reader"] [("parent", "read")],
+        permission "update" [] [], permission "delete" [] []] }
+  , { name := "enrollment_records"
+      relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
+        ⟨"reader_manager", ["actor"], ["reader"]⟩,
+        ⟨"local_publication", ["actor"], []⟩, ⟨"pending_parent", ["actor"], []⟩]
+      permissions := [permission "read" ["reader"] [("parent", "read")],
+        permission "update" [] [], permission "delete" [] []] }
   , { name := "configuration"
       relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
         ⟨"selected_by", ["agents->executor", "configuration->selected_by"], []⟩,
@@ -146,6 +164,7 @@ structure Object where
   deriving Repr
 
 inductive Subject where
+  | wildcard
   | actor (did : DID)
   | object (resource id : String)
   | entitySet (resource id relation : String)
@@ -330,6 +349,7 @@ def allowedIn : List ResourceDefinition → Nat → State → DID → String →
         state.relations.any (fun fact => fact.resource == resource && fact.id == id &&
           fact.relation == relation && match fact.subject with
           | .actor did => did == actor
+          | .wildcard => true
           | .object .. => false
           | .entitySet target targetId targetRelation =>
             allowedIn definitions fuel state actor target targetId targetRelation)) ||
@@ -337,6 +357,7 @@ def allowedIn : List ResourceDefinition → Nat → State → DID → String →
         fact.resource == resource && fact.id == id && fact.relation == relation &&
         match fact.subject with
         | .actor _ => false
+        | .wildcard => false
         | .entitySet .. => false
         | .object parentResource parentId =>
           allowedIn definitions fuel state actor parentResource parentId inherited))
@@ -346,6 +367,7 @@ def allowedIn : List ResourceDefinition → Nat → State → DID → String →
         state.relations.any (fun fact => fact.resource == resource && fact.id == id &&
           fact.relation == permission && match fact.subject with
           | .actor did => did == actor
+          | .wildcard => true
           | .object .. => false
           | .entitySet target targetId targetRelation =>
             allowedIn definitions fuel state actor target targetId targetRelation)
@@ -800,6 +822,7 @@ def relationJson (relation : Relation) : Json := Json.mkObj
    ("relation", toJson relation.relation),
    ("subject", match relation.subject with
      | .actor did => Json.mkObj [("actor", toJson did)]
+     | .wildcard => Json.mkObj [("wildcard", toJson true)]
      | .object resource id => Json.mkObj [("resource", toJson resource), ("id", toJson id)]
      | .entitySet resource id targetRelation => Json.mkObj
        [("resource", toJson resource), ("id", toJson id), ("target_relation", toJson targetRelation)])]

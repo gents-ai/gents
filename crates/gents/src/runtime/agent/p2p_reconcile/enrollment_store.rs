@@ -17,7 +17,7 @@ use gents_protocol::enrollment::{
 use gents_protocol::network_token::NetworkRecord;
 use p2p::iroh::parse_public_peer_addr;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
@@ -231,6 +231,65 @@ impl GraphqlEnrollmentStore {
         }
     }
 
+    async fn publish_records(
+        &self,
+        operation: &'static str,
+        mutation: &str,
+        collections: &[&str],
+        recipient: &str,
+    ) -> Result<Value> {
+        use crate::store::config_client::ConfigAccess;
+        use crate::store::graphql::escape_graphql_string;
+
+        anyhow::ensure!(
+            self.node.node_identity_did() == Some(self.identity.did()),
+            "enrollment publication requires the local runtime identity"
+        );
+        let runtime = identity::Did::new(self.identity.did())?;
+        let reader = identity::Did::new(recipient)?;
+        let access = ConfigAccess::local_as(self.node.clone(), runtime.clone());
+        access
+            .transact_write(operation, |txn| {
+                let runtime = &runtime;
+                let reader = &reader;
+                Box::pin(async move {
+                    txn.validate_runtime_actor(runtime)?;
+                    let query = format!(
+                        r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
+                        escape_graphql_string(runtime.as_str())
+                    );
+                    let nodes = txn.execute(&query).await?;
+                    let nodes = gents_protocol::graphql::graphql_rows_from_response(&nodes, "Node");
+                    let [parent] = nodes.as_slice() else {
+                        anyhow::bail!(
+                            "enrollment publication requires exactly one visible local Node"
+                        );
+                    };
+                    let parent = parent["_docID"]
+                        .as_str()
+                        .filter(|id| !id.is_empty())
+                        .context("enrollment publication Node has no document ID")?;
+                    let owners = txn.document_owners("Node", &[parent.to_owned()]).await?;
+                    anyhow::ensure!(
+                        owners.len() == 1 && owners[0].visible && owners[0].owner.is_some(),
+                        "enrollment publication Node has no visible native owner"
+                    );
+                    let response = txn.execute(mutation).await?;
+                    for collection in collections {
+                        let doc = gents_protocol::graphql::extract_mutation_doc_id(
+                            &response, collection,
+                        )?;
+                        txn.add_resource_relationship(collection, &doc, "parent", "nodes", parent)
+                            .await?;
+                        txn.add_actor_relationship(collection, &doc, "reader", reader)
+                            .await?;
+                    }
+                    Ok::<_, anyhow::Error>(response)
+                })
+            })
+            .await
+    }
+
     pub async fn decide_request(
         &self,
         request_id: &str,
@@ -391,13 +450,18 @@ impl GraphqlEnrollmentStore {
 
         let mutation = decision_mutation(&decision, revision.as_ref());
         let committed = async {
-            let response = crate::store::config_client::ConfigAccess::write_local_response(
-                &self.node,
-                "p2p.write_enrollment_decision",
-                &mutation,
-            )
-            .await?;
-            let response = json!({ "data": response.data.unwrap_or_default() });
+            let mut collections = vec!["NetworkEnrollmentDecision"];
+            if revision.is_some() {
+                collections.push("NetworkAuthorizationRevision");
+            }
+            let response = self
+                .publish_records(
+                    "p2p.write_enrollment_decision",
+                    &mutation,
+                    &collections,
+                    &pending.request.candidate_did,
+                )
+                .await?;
             let decision_doc_id = gents_protocol::graphql::extract_mutation_doc_id(
                 &response,
                 "NetworkEnrollmentDecision",
@@ -531,20 +595,19 @@ impl GraphqlEnrollmentStore {
         revision.admin_sig = self.identity.sign(&revision.signing_payload()).await?;
         revision.validate_against_approval(&active.request, &active.decision)?;
         let mutation = revision_mutation(&revision);
-        let response = crate::store::config_client::ConfigAccess::write_local_response(
-            &self.node,
-            "p2p.write_enrollment_revocation",
-            &mutation,
-        )
-        .await;
+        let response = self
+            .publish_records(
+                "p2p.write_enrollment_revocation",
+                &mutation,
+                &["NetworkAuthorizationRevision"],
+                &active.request.candidate_did,
+            )
+            .await;
         let revision_doc_id = match response {
-            Ok(response) => {
-                let response = json!({ "data": response.data.unwrap_or_default() });
-                gents_protocol::graphql::extract_mutation_doc_id(
-                    &response,
-                    "NetworkAuthorizationRevision",
-                )?
-            }
+            Ok(response) => gents_protocol::graphql::extract_mutation_doc_id(
+                &response,
+                "NetworkAuthorizationRevision",
+            )?,
             Err(commit_error) => {
                 let recovered = self.load_projection().await?;
                 recovered
@@ -697,20 +760,28 @@ impl GraphqlEnrollmentStore {
         receipt.admin_sig = self.identity.sign(&receipt.signing_payload()).await?;
         receipt.validate_against_approval(&active.request, &active.decision)?;
         let mutation = route_receipt_mutation(&receipt);
-        let committed = crate::store::config_client::ConfigAccess::write_local_response(
-            &self.node,
-            "p2p.write_enrollment_route_receipt",
-            &mutation,
-        )
-        .await;
+        let recipient = if self.identity.did() == active.request.admin_did {
+            &active.request.candidate_did
+        } else {
+            anyhow::ensure!(
+                self.identity.did() == active.request.candidate_did,
+                "route receipt author is not an enrollment participant"
+            );
+            &active.request.admin_did
+        };
+        let committed = self
+            .publish_records(
+                "p2p.write_enrollment_route_receipt",
+                &mutation,
+                &["NetworkEnrollmentRouteReceipt"],
+                recipient,
+            )
+            .await;
         match committed {
-            Ok(response) => {
-                let response = json!({ "data": response.data.unwrap_or_default() });
-                Ok(gents_protocol::graphql::extract_mutation_doc_id(
-                    &response,
-                    "NetworkEnrollmentRouteReceipt",
-                )?)
-            }
+            Ok(response) => Ok(gents_protocol::graphql::extract_mutation_doc_id(
+                &response,
+                "NetworkEnrollmentRouteReceipt",
+            )?),
             Err(commit_error) => {
                 let projection = self.load_projection().await?;
                 projection
