@@ -651,6 +651,36 @@ async fn mailbox_help_states_the_identity_choice() {
 }
 
 #[tokio::test]
+async fn unsupported_surface_mutations_point_to_scoped_tools_help() {
+    let (_fixture, tools) = authenticated_setup("surface-mutation-help", &["tools"]).await;
+    for kind in ["update", "delete"] {
+        let failure = structured_failure(
+            &tools,
+            json!({"argv":["datastore","preview","create"],"target_id":"shipments",
+                "set":{"entries":[{"kind":kind,"tool_name":"change_shipment",
+                    "collection":"Shipment","fields":[]}]}}),
+        )
+        .await;
+        assert_eq!(failure["config_execution"]["mutation_entered"], false);
+        let recovery = failure["recovery"]["next_call"].clone();
+        let help = ok(&tools, recovery).await;
+        let help = help.as_str().unwrap();
+        assert!(
+            help.contains("Named surface entries support create and query only"),
+            "{help}"
+        );
+        assert!(
+            help.contains(r#"{"argv":["tools","update","--help"]}"#),
+            "{help}"
+        );
+    }
+    let tools_help = ok(&tools, json!({"argv":["tools","update","--help"]})).await;
+    let tools_help = tools_help.as_str().unwrap();
+    assert!(tools_help.contains("enable_defra_query"), "{tools_help}");
+    assert!(tools_help.contains("write_collections"), "{tools_help}");
+}
+
+#[tokio::test]
 async fn datastore_help_says_what_fill_means() {
     let (_fixture, tools) = authenticated_setup("fill-help", &["tools"]).await;
     let page = ok(&tools, json!({"argv":["help","datastore"]})).await;
