@@ -207,7 +207,6 @@ const MACHINE_RULES: &[CollectionRule] = &[CollectionRule {
 
 pub const AGENT_TARGET_CALLER_TEMPLATE: &str = "agent-target-caller";
 pub const AGENT_TARGET_HOST_TEMPLATE: &str = "agent-target-host";
-pub const APP_COLLECTIONS_TEMPLATE: &str = "app-collections";
 pub const MACHINE_TEMPLATE: &str = "machine";
 pub const CLIENT_INDEX_TEMPLATE: &str = "client-index";
 pub const CLIENT_TEMPLATE: &str = "client";
