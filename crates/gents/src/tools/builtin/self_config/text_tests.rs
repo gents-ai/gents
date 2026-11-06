@@ -68,7 +68,10 @@ async fn agent_selection_requires_exact_did_and_suggests_display_name() {
     .await;
     assert!(missing.contains("next_call"), "{missing}");
     let error = refused(&tools, json!({"argv": ["agent", "create"], "options": {"id": "x", "display-name": "X", "system-prompt": "p", "preset": "readonly", "profile": format!("{}:inference", fixture.agent_did())}})).await;
-    assert!(error.contains("takes no id"), "{error}");
+    assert!(
+        error.contains("provisions a fresh agent DID"),
+        "{error}"
+    );
 }
 
 #[tokio::test]
@@ -628,7 +631,7 @@ async fn target_id_fills_a_positional_id() {
         json!({"argv":["tools","get"],"options":{"agent":agent_did}}),
     )
     .await;
-    assert_eq!(recovered["document"]["tools_id"], "beh-test:tools");
+    assert_eq!(recovered["document"]["tools_id"], format!("{agent_did}:tools"));
 }
 
 #[tokio::test]

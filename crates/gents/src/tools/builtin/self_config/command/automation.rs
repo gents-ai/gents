@@ -52,12 +52,12 @@ impl ConfigCommandTool {
                     rest.is_empty(),
                     "automation get accepts KIND, ID, and --agent AGENT_DID"
                 );
-                let core = self.read_target_core(agent_did.as_deref()).await?;
+                let core = self.target_core(agent_did.as_deref()).await?;
                 self.automation_read(&core, target, id).await
             }
             "preview" | "edit" => {
                 let (agent_did, rest) = extract_agent_target(&argv[3..])?;
-                let core = self.target_core(agent_did.as_deref(), "automation").await?;
+                let core = self.target_core(agent_did.as_deref()).await?;
                 let patch = parse_patch(&rest, target)?;
                 anyhow::ensure!(
                     target != SelfConfigTarget::EventSource
