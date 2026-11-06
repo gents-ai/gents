@@ -588,17 +588,19 @@ struct GoalBackgroundHandoff {
 
 async fn boot_goal_background_handoff_with_plans(
     db: &TestDb,
-    agent_identity: Arc<dyn NodeIdentity>,
+    fixture: &crate::support::ManagedAgentFixture,
     request_id: &str,
     entered_path: &std::path::Path,
     release_path: &std::path::Path,
     child_plans: Vec<crate::support::streaming_backend::StreamPlan>,
 ) -> GoalBackgroundHandoff {
     let did = db.node_identity.did();
+    let agent_identity = fixture.agent.clone();
     let behavior = agent_identity.did();
     let prompt = "start late background handoff";
-    let prepared = crate::support::accepted_turn::prepare_accepted_turn(
+    let prepared = crate::support::accepted_turn::prepare_managed_accepted_turn(
         db,
+        fixture,
         crate::support::accepted_turn::AcceptedTurnSpec {
             backend_id: "goal-background-backend",
             model: "test-model",
@@ -633,8 +635,8 @@ async fn boot_goal_background_handoff_with_plans(
     )
     .await;
     prepared.backend.enable_dynamic_followups(prompt);
-    crate::support::fixtures::configure_agent_tools(
-        &db.node,
+    crate::support::fixtures::configure_agent_tools_as(
+        &fixture.access,
         did,
         behavior,
         None,
@@ -669,17 +671,21 @@ async fn boot_goal_background_handoff_with_plans(
     let background_executions = agent.background_execution_registry();
     let runtime =
         crate::support::accepted_turn::boot_prepared_accepted_turn(db, prepared, agent).await;
-    let parent_doc = crate::support::exact_request_doc_id(db.node.as_ref(), request_id).await;
+    let request = escape_graphql_string(request_id);
+    let response = fixture
+        .access
+        .execute(&format!(
+            r#"{{AgentRequest(filter: {{request_id: {{_eq: "{request}"}}}}, limit: 2) {{_docID}}}}"#
+        ))
+        .await
+        .unwrap();
+    let rows = response["data"]["AgentRequest"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    let parent_doc = rows[0]["_docID"].as_str().unwrap().to_owned();
     for _ in 0..200 {
-        let response = db.node.execute(&format!(r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "bash" }}, lifecycle_state: {{ _eq: "running" }} }}, limit: 1) {{ _docID tool_call_id }} }}"#, gents::store::graphql::escape_graphql_string(&parent_doc))).await;
-        assert!(
-            !response.has_errors(),
-            "query running background process: {:?}",
-            response.errors
-        );
+        let response = fixture.access.execute(&format!(r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "bash" }}, lifecycle_state: {{ _eq: "running" }} }}, limit: 1) {{ _docID tool_call_id }} }}"#, gents::store::graphql::escape_graphql_string(&parent_doc))).await.unwrap();
         if let Some(row) = response
-            .data
-            .as_ref()
+            .get("data")
             .and_then(|data| data["AgentToolCall"].as_array())
             .and_then(|rows| rows.first())
         {
@@ -709,8 +715,15 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     use gents::inference::llm::message::{Message, Text, ToolResultContent, UserContent};
 
     let db = test_db("goal-real-process-wait-wake").await;
-    let agent_identity = crate::support::managed_agent(&db).await;
-    create_goal_session_for_agent(&db, &agent_identity).await;
+    let fixture = crate::support::managed_agent_fixture(&db).await;
+    let agent_identity = fixture.agent.clone();
+    let access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent_identity.did().parse().unwrap(),
+        agent_identity.as_ref(),
+    )
+    .unwrap();
+    reserve_goal_session(&db, &fixture.user, &agent_identity, SESSION).await;
     let parent_request_id = "goal-real-process-parent";
     let objective = "goal-real-process-wake-1973";
     struct ReleaseOnDrop {
@@ -749,7 +762,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
         ..
     } = boot_goal_background_handoff_with_plans(
         &db,
-        agent_identity,
+        &fixture,
         parent_request_id,
         &entered_path,
         &release_path,
@@ -760,12 +773,11 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
         entered_path.exists(),
         "real child did not enter its held process body"
     );
-    let process = db.node.execute(&format!(
+    let process = access.execute(&format!(
         r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "bash" }} }}, limit: 1) {{ _docID tool_call_id lifecycle_state await_mode }} }}"#,
         gents::store::graphql::escape_graphql_string(&parent_doc_id)
-    )).await;
-    assert!(!process.has_errors(), "process query: {:?}", process.errors);
-    let process = &process.data.as_ref().unwrap()["AgentToolCall"][0];
+    )).await.unwrap();
+    let process = &process["data"]["AgentToolCall"][0];
     let process_doc_id = process["_docID"].as_str().unwrap().to_owned();
     let process_handle = process["tool_call_id"].as_str().unwrap().to_owned();
     assert_eq!(process["lifecycle_state"], "running");
@@ -789,24 +801,19 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
         StreamResponse::completes(prompt, ["parent completed after bounded wait"]),
     );
     assert_eq!(
-        crate::support::live_inference::wait_for_request_terminal(
-            db.node.as_ref(),
-            parent_request_id,
-            Duration::from_secs(15),
-        )
-        .await,
+        wait_for_request_terminal_as(&fixture.access, parent_request_id, Duration::from_secs(15),)
+            .await,
         "completed"
     );
     let wait_result = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let history = gents::load_history(
-                db.node.as_ref(),
-                SESSION,
+            let history = load_history_as(
+                &fixture.access,
                 db.node_identity.did(),
-                Some(db.node_identity.did()),
+                fixture.user.did(),
+                SESSION,
             )
-            .await
-            .unwrap();
+            .await;
             if let Some(result) = history.iter().find_map(|message| match message {
                 Message::User { content } => content.iter().find_map(|part| match part {
                     UserContent::ToolResult(result)
@@ -836,22 +843,20 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     assert_eq!(wait_result["error"]["reason"], "wait_timeout");
     assert!(!release_path.exists());
 
-    set_goal(
-        &db.node,
+    set_goal_from_access(
+        &access,
         db.node_identity.did(),
         SESSION,
         Some(objective),
         Some(GoalStatus::Active),
         Some(Some(10_000)),
+        None,
     )
     .await
     .unwrap();
     let claimed = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
-            let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
-                .await
-                .unwrap()
-                .unwrap();
+            let goal = load_goal_as(&access, db.node_identity.did()).await.unwrap();
             if goal.last_continued_from_request_id.as_deref() == Some(parent_request_id) {
                 break goal;
             }
@@ -865,27 +870,19 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     let held_until = tokio::time::Instant::now() + Duration::from_secs(3);
     loop {
         assert!(entered_path.exists() && !release_path.exists());
-        let process = db.node.execute(&format!(
+        let process = access.execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state }} }}"#,
             gents::store::graphql::escape_graphql_string(&process_doc_id)
-        )).await;
-        assert!(
-            !process.has_errors(),
-            "held process query: {:?}",
-            process.errors
-        );
+        )).await.unwrap();
         assert_eq!(
-            process.data.as_ref().unwrap()["AgentToolCall"][0]["lifecycle_state"],
+            process["data"]["AgentToolCall"][0]["lifecycle_state"],
             "running"
         );
         assert!(
-            goal_children(&db).await.is_empty(),
+            goal_children_from_access(&access).await.is_empty(),
             "held process must defer the claimed Goal child"
         );
-        let still_claimed = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
-            .await
-            .unwrap()
-            .unwrap();
+        let still_claimed = load_goal_as(&access, db.node_identity.did()).await.unwrap();
         assert_eq!(
             still_claimed.continuation_sequence,
             claimed.continuation_sequence
@@ -908,12 +905,11 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     let notification_key = format!("background-completion-notification:{process_doc_id}:tool");
     let notification = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            let response = db.node.execute(&format!(
+            let response = fixture.access.execute(&format!(
                 r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}" }} }}, limit: 2) {{ _docID message_key node_did requester_did request_doc_id }} }}"#,
                 gents::store::graphql::escape_graphql_string(&notification_key)
-            )).await;
-            assert!(!response.has_errors(), "notification query: {:?}", response.errors);
-            let rows = response.data.as_ref().unwrap()["AgentMessage"].as_array().unwrap();
+            )).await.unwrap();
+            let rows = response["data"]["AgentMessage"].as_array().unwrap();
             assert!(rows.len() <= 1, "ambiguous process completion notification");
             if let Some(row) = rows.first() {
                 break row.clone();
@@ -924,8 +920,8 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     let wake_doc_id = notification["request_doc_id"]
         .as_str()
         .expect("notification wake binding");
-    let (header, reconstructed) = gents::session::load_canonical_message_from_node(
-        db.node.as_ref(),
+    let (header, reconstructed) = gents::session::load_canonical_message(
+        &fixture.access,
         notification["_docID"].as_str().unwrap(),
         notification["node_did"].as_str().unwrap(),
         notification["requester_did"].as_str(),
@@ -952,35 +948,23 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
         notification_text.contains("tool-completion")
             && notification_text.contains(&process_handle)
     );
-    let wake_response = db.node.execute(&format!(
+    let wake_response = fixture.access.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_id lifecycle_state execution_origin }} }}"#,
         gents::store::graphql::escape_graphql_string(wake_doc_id)
-    )).await;
-    assert!(
-        !wake_response.has_errors(),
-        "bound wake query: {:?}",
-        wake_response.errors
-    );
-    let wakes = wake_response.data.as_ref().unwrap()["AgentRequest"]
-        .as_array()
-        .unwrap();
+    )).await.unwrap();
+    let wakes = wake_response["data"]["AgentRequest"].as_array().unwrap();
     assert_eq!(wakes.len(), 1, "the exact notification must bind one wake");
     let wake = &wakes[0];
     let wake_id = wake["request_id"].as_str().unwrap();
     assert!(wake_id.starts_with("background-completion-"));
     assert_eq!(wake["execution_origin"], "scheduled");
     assert_eq!(
-        crate::support::live_inference::wait_for_request_terminal(
-            db.node.as_ref(),
-            wake_id,
-            Duration::from_secs(15)
-        )
-        .await,
+        wait_for_request_terminal_as(&fixture.access, wake_id, Duration::from_secs(15)).await,
         "completed"
     );
     let child = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
-            let children = goal_children(&db).await;
+            let children = goal_children_from_access(&access).await;
             if children.len() == 1 {
                 break children.into_iter().next().unwrap();
             }
@@ -993,6 +977,9 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     })
     .await
     .expect("GoalSource did not continue from the terminal wake");
+    let user_children = goal_children_from_access(&fixture.access).await;
+    assert_eq!(user_children.len(), 1);
+    assert_eq!(user_children[0].doc_id, child.doc_id);
     assert_eq!(child.caused_by_parent_request_id.as_deref(), Some(wake_id));
     assert_eq!(
         child.caused_by_parent_request_doc_id.as_deref(),
@@ -1002,10 +989,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
         child.caused_by_parent_request_id.as_deref(),
         Some(parent_request_id)
     );
-    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
-        .await
-        .unwrap()
-        .unwrap();
+    let goal = load_goal_as(&access, db.node_identity.did()).await.unwrap();
     assert_eq!(
         goal.last_continued_from_request_id.as_deref(),
         Some(wake_id)
@@ -1015,21 +999,16 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
         claimed.continuation_sequence() + 1
     );
     assert_eq!(goal.infrastructure_retry_count.unwrap_or_default(), 0);
-    let process = db.node.execute(&format!(
+    let process = access.execute(&format!(
         r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state completion_notification_delivered_at }} }}"#,
         gents::store::graphql::escape_graphql_string(&process_handle)
-    )).await;
-    assert!(
-        !process.has_errors(),
-        "completed process query: {:?}",
-        process.errors
-    );
-    let process = &process.data.as_ref().unwrap()["AgentToolCall"][0];
+    )).await.unwrap();
+    let process = &process["data"]["AgentToolCall"][0];
     assert_eq!(process["lifecycle_state"], "completed");
     assert!(process["completion_notification_delivered_at"].is_string());
     barrier.settled = true;
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let children = goal_children(&db).await;
+    let children = goal_children_from_access(&access).await;
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].doc_id, child.doc_id);
     runtime.shutdown().await;
@@ -2790,15 +2769,23 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
     let objective = "Respect the budget even when execution fails";
     for terminal in ["failed", "dead"] {
         let db = test_db(&format!("goal-budget-after-{terminal}")).await;
-        let agent_identity = crate::support::managed_agent(&db).await;
-        create_goal_session_for_agent(&db, &agent_identity).await;
-        set_goal(
-            &db.node,
+        let fixture = crate::support::managed_agent_fixture(&db).await;
+        let agent_identity = fixture.agent.clone();
+        let access = ConfigAccess::local_managed_agent(
+            db.node.clone(),
+            agent_identity.did().parse().unwrap(),
+            agent_identity.as_ref(),
+        )
+        .unwrap();
+        reserve_goal_session(&db, &fixture.user, &agent_identity, SESSION).await;
+        set_goal_from_access(
+            &access,
             db.node_identity.did(),
             SESSION,
             Some(objective),
             Some(GoalStatus::Active),
             Some(Some(100)),
+            None,
         )
         .await
         .unwrap();
@@ -2821,7 +2808,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             process_tool_call_id,
         } = boot_goal_background_handoff_with_plans(
             &db,
-            agent_identity,
+            &fixture,
             parent,
             &entered_path,
             &release_path,
@@ -2830,7 +2817,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         .await;
         let prior_usage = session_token_usage(
             &db.node,
-            &identity::Did::new(db.node_identity.did()).unwrap(),
+            &agent_identity.did().parse().unwrap(),
             db.node_identity.did(),
             SESSION,
         )
@@ -2841,34 +2828,19 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             "the held parent has not exhausted the Goal budget"
         );
         let expected_usage = prior_usage + 105;
-        let usage = format!(
-            r#"mutation {{
-            update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "{terminal}" }}) {{ _docID }}
-            add_InferenceCall(input: {{
-                call_id: "over-budget-failed-call",
-                request_id: "{parent}",
-                request_doc_id: "{}",
-                backend_id: "backend-test",
-                node_did: "{}",
-                call_seq: 1,
-                attempt: 1,
-                call_state: "failed",
-                failure_reason: "provider stream interrupted after reporting usage",
-                prompt_tokens: 100,
-                completion_tokens: 5
-            }}) {{ _docID }} }}"#,
-            escape_graphql_string(&parent_doc),
-            escape_graphql_string(&parent_doc),
-            gents::store::graphql::escape_graphql_string(db.node_identity.did()),
-        );
-        ConfigAccess::local(db.node.clone())
-            .write("test.goal_failure_and_budget_usage", &usage)
-            .await
-            .unwrap();
+        fail_request_with_usage(
+            &access,
+            &agent_identity,
+            db.node_identity.did(),
+            parent,
+            &parent_doc,
+            terminal,
+        )
+        .await;
         assert_eq!(
             session_token_usage(
                 &db.node,
-                &identity::Did::new(db.node_identity.did()).unwrap(),
+                &agent_identity.did().parse().unwrap(),
                 db.node_identity.did(),
                 SESSION
             )
@@ -2878,7 +2850,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         );
 
         for _ in 0..200 {
-            if goal_children(&db).await.len() == 1
+            if goal_children_from_access(&access).await.len() == 1
                 && runtime.backend.observed_requests(objective) > 0
             {
                 break;
@@ -2886,7 +2858,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
         assert_eq!(
-            goal_children(&db).await.len(),
+            goal_children_from_access(&access).await.len(),
             1,
             "the Goal wrapup is published"
         );
@@ -2901,16 +2873,11 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             background_executions.wait_for_completion(&process_tool_call_id),
         )
         .await;
-        let observed = db.node.execute(&format!(
+        let observed = fixture.access.execute(&format!(
             r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{}" }} }}) {{ _docID lifecycle_state status completion_notification_delivered_at }} }}"#,
             gents::store::graphql::escape_graphql_string(&process_tool_call_id),
-        )).await;
-        assert!(
-            !observed.has_errors(),
-            "completion query: {:?}",
-            observed.errors
-        );
-        let delivery = observed.data.expect("background completion response");
+        )).await.unwrap();
+        let delivery = observed["data"].clone();
         assert!(
             completion.is_ok(),
             "background process {process_tool_call_id} did not finish its completion side effects after {terminal}; observed={delivery}"
@@ -2928,11 +2895,10 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         )
         .await
         .unwrap();
-        let observed = db.node.execute(
+        let observed = fixture.access.execute(
             "{ AgentRequest { _docID request_id created_at lifecycle_state execution_origin caused_by_trigger_kind caused_by_parent_request_id } AgentMessage { _docID node_did requester_did request_doc_id } AgentToolCall { _docID tool_name lifecycle_state completion_notification_delivered_at } }",
-        ).await;
-        assert!(!observed.has_errors(), "{:?}", observed.errors);
-        let data = observed.data.unwrap();
+        ).await.unwrap();
+        let data = observed["data"].clone();
         assert_eq!(
             data["AgentRequest"].as_array().unwrap().len(),
             3,
@@ -2968,8 +2934,8 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         let messages = data["AgentMessage"].as_array().unwrap();
         let mut completions = Vec::new();
         for header in messages {
-            let (_, message) = gents::session::load_canonical_message_from_node(
-                db.node.as_ref(),
+            let (_, message) = gents::session::load_canonical_message(
+                &fixture.access,
                 header["_docID"].as_str().unwrap(),
                 header["node_did"].as_str().unwrap(),
                 header["requester_did"].as_str(),
@@ -3000,10 +2966,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             "the physical background row must durably account its notification delivery: {}",
             data["AgentToolCall"]
         );
-        let goal = load_canonical_goal(&db.node, db.node_identity.did(), SESSION)
-            .await
-            .unwrap()
-            .unwrap();
+        let goal = load_goal_as(&access, db.node_identity.did()).await.unwrap();
         assert_eq!(
             goal.parsed_status(),
             Some(GoalStatus::BudgetLimited),
@@ -3018,22 +2981,24 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             0,
             "{terminal}"
         );
-        let children = goal_children(&db).await;
+        let children = goal_children_from_access(&access).await;
         assert_eq!(children.len(), 1, "{terminal}");
+        let visible = goal_children_from_access(&fixture.access).await;
+        assert_eq!(visible.len(), 1, "User must see the Goal wrapup");
+        assert_eq!(visible[0].doc_id, children[0].doc_id);
         assert_eq!(
             children[0].caused_by_parent_request_id.as_deref(),
             Some(parent)
         );
         let input = children[0].input.as_ref().unwrap();
         assert_eq!(input["goal_continuation"]["wrapup"], true, "{terminal}");
-        let history = gents::load_history(
-            &db.node,
-            &children[0].session_id,
+        let history = load_history_as(
+            &fixture.access,
             &children[0].node_did,
-            children[0].requester_did.as_deref(),
+            fixture.user.did(),
+            &children[0].session_id,
         )
-        .await
-        .unwrap();
+        .await;
         assert!(
             serde_json::to_string(&history)
                 .unwrap()
@@ -3051,15 +3016,12 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
                 .as_ref()
                 .map(|intent| &intent.pre_materialized_request_id))
         );
-        let current = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
-            .await
-            .unwrap()
-            .unwrap();
+        let current = load_goal_as(&access, db.node_identity.did()).await.unwrap();
         assert_eq!(current.parsed_status(), Some(GoalStatus::BudgetLimited));
         assert_eq!(current.tokens_used, Some(expected_usage));
         assert_eq!(current.continuation_sequence, goal.continuation_sequence);
         assert_eq!(current.infrastructure_retry_count.unwrap_or_default(), 0);
-        let persisted = goal_children(&db).await;
+        let persisted = goal_children_from_access(&access).await;
         assert_eq!(persisted.len(), 1);
         assert_eq!(persisted[0].doc_id, children[0].doc_id);
         drop(restarted);
@@ -5634,4 +5596,72 @@ async fn seed_foreign_goal_usage(
         observed["data"]["InferenceCall"][0]["request_doc_id"],
         request_doc
     );
+}
+
+async fn wait_for_request_terminal_as(
+    access: &ConfigAccess,
+    request_id: &str,
+    timeout: Duration,
+) -> String {
+    let request = escape_graphql_string(request_id);
+    tokio::time::timeout(timeout, async {
+        loop {
+            let response = access.execute(&format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{request}"}}}}, limit: 2) {{_docID lifecycle_state}}}}"#)).await.unwrap();
+            let rows = response["data"]["AgentRequest"].as_array().unwrap();
+            assert!(rows.len() <= 1, "ambiguous request identity");
+            if let Some(state) = rows.first().and_then(|row| row["lifecycle_state"].as_str()) {
+                if gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(Some(state)) { break state.to_owned(); }
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }).await.expect("request did not terminalize")
+}
+
+async fn load_history_as(
+    access: &ConfigAccess,
+    node_did: &str,
+    requester_did: &str,
+    session_id: &str,
+) -> Vec<gents::inference::llm::message::Message> {
+    let node = escape_graphql_string(node_did);
+    let requester = escape_graphql_string(requester_did);
+    let session = escape_graphql_string(session_id);
+    let response = access.execute(&format!(r#"{{AgentMessage(filter: {{node_did: {{_eq: "{node}"}}, requester_did: {{_eq: "{requester}"}}, session_id: {{_eq: "{session}"}}}}, order: {{sequence: ASC}}) {{_docID}}}}"#)).await.unwrap();
+    let mut messages = Vec::new();
+    for row in response["data"]["AgentMessage"].as_array().unwrap() {
+        let doc = row["_docID"].as_str().unwrap();
+        let (_, message) =
+            gents::session::load_canonical_message(access, doc, node_did, Some(requester_did))
+                .await
+                .unwrap();
+        messages.push(message);
+    }
+    messages
+}
+
+async fn fail_request_with_usage(
+    access: &ConfigAccess,
+    agent: &Arc<dyn NodeIdentity>,
+    node_did: &str,
+    request_id: &str,
+    request_doc: &str,
+    terminal: &str,
+) {
+    access.transact_write("test.goal_failure_and_budget_usage", |txn| {
+        Box::pin(async move {
+            let request = txn.execute(&format!(r#"{{AgentRequest(docID: "{}") {{session_doc_id}}}}"#, escape_graphql_string(request_doc))).await?;
+            let session_doc = request["data"]["AgentRequest"][0]["session_doc_id"].as_str().expect("physical session");
+            let changed = txn.execute(&format!(r#"mutation {{update_AgentRequest(docID: "{}", input: {{lifecycle_state: "{}"}}) {{_docID}}}}"#, escape_graphql_string(request_doc), escape_graphql_string(terminal))).await?;
+            anyhow::ensure!(changed["data"]["update_AgentRequest"].as_array().is_some_and(|rows| rows.len()==1), "parent was not terminalized");
+            let input = serde_json::json!({"call_id":"over-budget-failed-call", "node_did":node_did,
+                "agent_did":agent.did(), "session_id":SESSION, "request_id":request_id, "request_doc_id":request_doc,
+                "backend_id":"goal-background-backend", "call_seq":1, "attempt":1, "call_kind":"inference",
+                "call_state":"failed", "failure_reason":"provider stream interrupted after reporting usage",
+                "prompt_tokens":100, "completion_tokens":5});
+            let created = txn.execute_with_variables("mutation($input: InferenceCallMutationInputArg!) {add_InferenceCall(input:$input) {_docID}}", &serde_json::json!({"input":input})).await?;
+            let doc = gents::store::graphql::created_doc_id(&created, "InferenceCall")?;
+            txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc).await?;
+            Ok::<_, anyhow::Error>(())
+        })
+    }).await.unwrap();
 }
