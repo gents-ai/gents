@@ -54,6 +54,9 @@ structure Facts where
   firstRequestValid : Bool
   unfinishedRequest : Bool
   currentSessionDocument : Option String
+  /-- A signed physical target that native ACP cannot read may be absent or
+  denied. The runtime leaves that command unanswered; this model establishes
+  nonpublication and does not infer a rejection receipt from invisibility. -/
   expectedSessionDocument : Option String
   existingClaim : Option Fingerprint := none
   firstGoalId : Option String := some "initial-assignment"
