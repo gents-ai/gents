@@ -5,7 +5,9 @@ use anyhow::Result;
 use serde_json::Value;
 
 use crate::defra_node::Node as EmbeddedNode;
-use crate::eval::runner::embedded::executor::capture::documents_capture_query;
+use crate::eval::runner::embedded::executor::capture::{
+    capture_documents_with_access, documents_capture_query,
+};
 use crate::eval::runner::embedded::executor::evidence::usage_of;
 use crate::eval::runner::embedded::observe::request_evidence_from_query_data;
 use crate::eval::runner::executor::{Capture, StageSpec};
@@ -80,28 +82,57 @@ impl<'a> LiveObserver<'a> {
             .map(|collection| collection.graphql_type())
             .chain(self.captures.iter().map(|(_, collection, _)| *collection))
             .chain(schemas.iter().map(String::as_str))
-            .filter(|collection| registered.contains(*collection))
+            .filter(|collection| capture_collection_registered(&registered, collection))
             .collect();
         for collection in counted {
-            let query = format!("{{ {collection} {{ _docID }} }}");
-            if let Some(rows) = count(self.access, &query, collection).await {
+            let rows = if collection == gents_protocol::schemas::INFERENCE_BACKEND_NAME {
+                capture_documents_with_access(
+                    self.access,
+                    collection,
+                    &serde_json::json!({}),
+                    &[],
+                    self.trial_did,
+                )
+                .await
+                .ok()
+                .map(|rows| rows.len() as u64)
+            } else {
+                let query = format!("{{ {collection} {{ _docID }} }}");
+                count(self.access, &query, collection).await
+            };
+            if let Some(rows) = rows {
                 snapshot.documents.insert(collection.to_owned(), rows);
             }
         }
         for (name, collection, filter) in &self.captures {
-            if !registered.contains(*collection) {
+            if !capture_collection_registered(&registered, collection) {
                 continue;
             }
-            let Ok(query) = documents_capture_query(collection, filter, &[], self.trial_did) else {
-                continue;
+            let rows = if *collection == gents_protocol::schemas::INFERENCE_BACKEND_NAME {
+                capture_documents_with_access(self.access, collection, filter, &[], self.trial_did)
+                    .await
+                    .ok()
+                    .map(|rows| rows.len() as u64)
+            } else {
+                let Ok(query) = documents_capture_query(collection, filter, &[], self.trial_did)
+                else {
+                    continue;
+                };
+                count(self.access, &query, collection).await
             };
-            if let Some(rows) = count(self.access, &query, collection).await {
+            if let Some(rows) = rows {
                 snapshot.captures.insert((*name).to_owned(), rows);
             }
         }
         snapshot.schemas = schemas;
         Ok(snapshot)
     }
+}
+
+fn capture_collection_registered(registered: &BTreeSet<String>, collection: &str) -> bool {
+    registered.contains(collection)
+        || (collection == gents_protocol::schemas::INFERENCE_BACKEND_NAME
+            && registered.contains(gents_protocol::schemas::INFERENCE_BACKEND_METADATA_NAME))
 }
 
 async fn collection_names(node: &std::sync::Arc<EmbeddedNode>) -> Result<BTreeSet<String>> {

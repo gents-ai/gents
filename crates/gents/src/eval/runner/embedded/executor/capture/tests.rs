@@ -561,3 +561,103 @@ fn capture_request_binding_requires_the_current_stage_request() {
         bind_capture_subject(&filter, "s", CaptureBindings::default(), &BTreeMap::new()).is_err()
     );
 }
+
+#[tokio::test]
+async fn logical_backend_capture_and_live_counts_use_held_user_metadata() {
+    use crate::eval::runner::embedded::executor::install::install;
+    use crate::eval::runner::embedded::executor::tests::{
+        frozen_binding, materialized_digest, write_slot_pack,
+    };
+    use crate::eval::runner::embedded::live::LiveObserver;
+    use crate::eval::runner::executor::{StageSpec, TrialSpec};
+
+    let dir = tempfile::tempdir().unwrap();
+    let pack = dir.path().join("pack");
+    write_slot_pack(&pack, "gents:inference-slot:primary");
+    let mut home = EmbeddedHome::create_trial_temp("backend-capture")
+        .await
+        .unwrap();
+    let evaluator = Arc::new(
+        crate::KeyIdentity::load_or_create(dir.path().join("evaluator.key"), None).unwrap(),
+    );
+    let evaluator_did = crate::NodeIdentity::did(evaluator.as_ref()).to_owned();
+    let capability = evaluator.client_signing_capability().unwrap();
+    home.set_evaluator(evaluator, capability);
+    let spec = TrialSpec {
+        pack_digest: materialized_digest(&pack),
+        pack_dir: pack,
+        inference: frozen_binding(json!("frozen-profile")),
+        agent_slot: "subject".into(),
+        evaluator_did: evaluator_did.clone(),
+        ..TrialSpec::empty_for_tests("backend-capture")
+    };
+    install(&spec, &home, &dir.path().join("workspace"))
+        .await
+        .unwrap();
+    let access = home.client_access(&evaluator_did).unwrap();
+    let fields = vec!["backend_id".into(), "endpoint".into(), "enabled".into()];
+    let filter = json!({"_and": [
+        {"node_did": {"_eq": "$trial"}},
+        {"backend_id": {"_eq": "frozen-backend"}}
+    ]});
+    let rows =
+        capture_documents_with_access(&access, "InferenceBackend", &filter, &fields, home.did())
+            .await
+            .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["backend_id"], "frozen-backend");
+    assert_eq!(rows[0]["endpoint"], "http://127.0.0.1:1/v1");
+    assert_eq!(rows[0]["enabled"], true);
+    assert!(rows[0]["_docID"].as_str().is_some_and(|id| !id.is_empty()));
+    assert_eq!(rows[0].as_object().unwrap().len(), 4);
+    let absent = json!({"node_did": {"_eq": "$trial"}, "backend_id": {"_eq": "other"}});
+    assert!(capture_documents_with_access(
+        &access,
+        "InferenceBackend",
+        &absent,
+        &fields,
+        home.did()
+    )
+    .await
+    .unwrap()
+    .is_empty());
+    for (filter, fields) in [
+        (json!({}), vec!["auth".to_owned()]),
+        (json!({"auth": {"_eq": "secret"}}), Vec::new()),
+        (json!({"credential_id": {"_eq": "secret"}}), Vec::new()),
+        (json!({}), vec!["credential_id".to_owned()]),
+    ] {
+        assert!(capture_documents_with_access(
+            &access,
+            "InferenceBackend",
+            &filter,
+            &fields,
+            home.did()
+        )
+        .await
+        .is_err());
+    }
+    let stages = vec![StageSpec {
+        stage_id: "check".into(),
+        prompt: String::new(),
+        seed: None,
+        deadline_secs: None,
+        settle: false,
+        continuation: None,
+        review_previous: false,
+        captures: vec![Capture::Documents {
+            name: "backends".into(),
+            collection: "InferenceBackend".into(),
+            filter,
+            fields,
+        }],
+    }];
+    let live = LiveObserver::new(&home.node, &access, home.did(), &stages)
+        .await
+        .snapshot()
+        .await
+        .unwrap();
+    assert_eq!(live.documents.get("InferenceBackend"), Some(&1));
+    assert_eq!(live.captures.get("backends"), Some(&1));
+    home.node.shutdown().await.unwrap();
+}

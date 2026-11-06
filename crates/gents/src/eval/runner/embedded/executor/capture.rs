@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 #[cfg(test)]
 use std::sync::Arc;
@@ -279,7 +279,7 @@ pub(super) async fn capture_documents(
         .unwrap_or_default())
 }
 
-pub(super) async fn capture_documents_with_access(
+pub(in crate::eval::runner::embedded) async fn capture_documents_with_access(
     access: &crate::ConfigAccess,
     collection: &str,
     filter: &Value,
@@ -287,6 +287,9 @@ pub(super) async fn capture_documents_with_access(
     trial_did: &str,
 ) -> Result<Vec<Value>> {
     let query = documents_capture_query(collection, filter, fields, trial_did)?;
+    if collection == gents_protocol::schemas::INFERENCE_BACKEND_NAME {
+        return capture_inference_backends(access, filter, fields, trial_did).await;
+    }
     let response = access.execute(&query).await?;
     Ok(response
         .get("data")
@@ -294,6 +297,106 @@ pub(super) async fn capture_documents_with_access(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default())
+}
+
+async fn capture_inference_backends(
+    access: &crate::ConfigAccess,
+    filter: &Value,
+    fields: &[String],
+    trial_did: &str,
+) -> Result<Vec<Value>> {
+    let (allowed, _) =
+        crate::store::config_client::config_projection(crate::Collection::InferenceBackend, None)?;
+    let mut filter_fields = Vec::new();
+    crate::tools::builtin::defra_query::query::collect_filter_field_keys(
+        filter,
+        &mut filter_fields,
+    );
+    for field in fields.iter().chain(filter_fields.iter()) {
+        anyhow::ensure!(
+            field == "_docID" || allowed.contains(&field.as_str()),
+            "field {field:?} is not part of the logical InferenceBackend"
+        );
+    }
+    let query = documents_capture_query(
+        gents_protocol::schemas::INFERENCE_BACKEND_METADATA_NAME,
+        filter,
+        &["node_did".into()],
+        trial_did,
+    )?;
+    let mut selected = vec!["_docID".to_owned()];
+    for field in fields.iter().cloned().chain(
+        filter
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(key, _)| !key.starts_with('_'))
+            .map(|(key, _)| key.clone()),
+    ) {
+        if !selected.contains(&field) {
+            selected.push(field);
+        }
+    }
+    access
+        .transact_readonly("eval.capture.inference_backends", |txn| {
+            let query = &query;
+            let selected = &selected;
+            Box::pin(async move {
+                let response = txn.execute(query).await?;
+                let rows = response["data"]
+                    [gents_protocol::schemas::INFERENCE_BACKEND_METADATA_NAME]
+                    .as_array()
+                    .context("backend metadata capture returned no rows array")?;
+                let mut nodes = BTreeSet::new();
+                for row in rows {
+                    nodes.insert(
+                        row["node_did"]
+                            .as_str()
+                            .context("backend metadata lacks node_did")?
+                            .to_owned(),
+                    );
+                }
+                let mut by_doc = BTreeMap::new();
+                for node in nodes {
+                    for backend in
+                        crate::store::config_client::list_inference_backends_in_txn(txn, &node)
+                            .await?
+                    {
+                        let doc = backend
+                            .physical_doc_id
+                            .clone()
+                            .context("backend metadata lacks physical identity")?;
+                        let enabled = backend.enabled;
+                        let mut value = serde_json::to_value(backend)?;
+                        let object = value
+                            .as_object_mut()
+                            .context("backend projection is not an object")?;
+                        object.insert("_docID".into(), Value::String(doc.clone()));
+                        object.insert("enabled".into(), Value::Bool(enabled));
+                        by_doc.insert(doc, value);
+                    }
+                }
+                rows.iter()
+                    .map(|row| {
+                        let doc = row["_docID"]
+                            .as_str()
+                            .context("backend metadata lacks physical identity")?;
+                        let backend = by_doc
+                            .get(doc)
+                            .context("matching backend is unavailable to the same actor")?;
+                        let mut projected = serde_json::Map::new();
+                        for field in selected {
+                            projected.insert(
+                                field.clone(),
+                                backend.get(field).cloned().unwrap_or(Value::Null),
+                            );
+                        }
+                        Ok(Value::Object(projected))
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+        })
+        .await
 }
 
 pub(in crate::eval::runner::embedded) fn documents_capture_query(
