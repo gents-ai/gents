@@ -3339,22 +3339,62 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
 
 #[tokio::test]
 async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
-    let node = build_agent_node().await;
-    let identity = node_identity("config-cleanup");
-    let owner = identity.did().to_string();
-    for agent in ["beh-test", "orphan"] {
-        crate::test_support::install_test_agent(&node, &owner, agent).await;
-    }
+    let fixture = SelfConfigFixture::new("config-cleanup").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    fixture.grant_agent_delete().await;
+    fixture.grant_agent_relation_delete().await;
     let mut tool_config = config(&["node", "tools", "profile", "backend"]);
+    tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let tools = fixture.tools_with_config(&tool_config);
+    call_config_tool(
+        &tools,
+        vec![
+            "backend".into(),
+            "create".into(),
+            "orphan-backend".into(),
+            "--set".into(),
+            "endpoint=\"http://127.0.0.1:1/v1\"".into(),
+        ],
+    )
+    .await
+    .expect("Agent creates the removable backend");
+    call_config_tool(
+        &tools,
+        vec![
+            "profile".into(),
+            "create".into(),
+            "orphan-profile".into(),
+            "--set".into(),
+            "backend_id=\"orphan-backend\"".into(),
+            "--set".into(),
+            "model_name=\"test-model\"".into(),
+        ],
+    )
+    .await
+    .expect("Agent creates the removable profile");
+    let created: Value = serde_json::from_str(
+        &call_config_tool(
+            &tools,
+            vec![
+                "agent".into(),
+                "create".into(),
+                "--display-name".into(),
+                "Orphan".into(),
+                "--system-prompt".into(),
+                "Orphan fixture".into(),
+                "--preset".into(),
+                "readonly".into(),
+                "--profile".into(),
+                "orphan-profile".into(),
+            ],
+        )
+        .await
+        .expect("Agent creates the removable agent and configuration"),
+    )
+    .unwrap();
+    let orphan = created["agent_did"].as_str().unwrap().to_owned();
 
     let referenced = call_config_tool(
         &tools,
@@ -3362,7 +3402,7 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
             "cleanup".into(),
             "preview".into(),
             "--target".into(),
-            "backend=orphan:backend".into(),
+            "backend=orphan-backend".into(),
         ],
     )
     .await
@@ -3373,17 +3413,17 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
     );
 
     let targets = [
-        "agent=orphan",
-        "context=orphan:context",
-        "tools=orphan:tools",
-        "profile=orphan:inference",
-        "backend=orphan:backend",
+        format!("agent={orphan}"),
+        format!("context={orphan}:context"),
+        format!("tools={orphan}:tools"),
+        "profile=orphan-profile".to_owned(),
+        "backend=orphan-backend".to_owned(),
     ];
     let argv = |verb: &str| {
         let mut argv = vec!["cleanup".to_owned(), verb.to_owned()];
-        for target in targets {
+        for target in &targets {
             argv.push("--target".to_owned());
-            argv.push(target.to_owned());
+            argv.push(target.clone());
         }
         argv
     };
@@ -3395,7 +3435,7 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
     .unwrap();
     assert_eq!(preview["committed"], false);
     assert_eq!(preview["targets"].as_array().unwrap().len(), targets.len());
-    call_config_tool(&tools, vec!["agent".into(), "get".into(), "orphan".into()])
+    call_config_tool(&tools, vec!["agent".into(), "get".into(), orphan.clone()])
         .await
         .expect("preview performs no writes");
 
@@ -3405,7 +3445,7 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
             "backend".into(),
             "edit".into(),
             "--agent".into(),
-            "orphan".into(),
+            orphan.clone(),
             "--set".into(),
             "name=\"Changed after preview\"".into(),
         ],
@@ -3436,7 +3476,7 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
     )
     .unwrap();
     assert_eq!(removed["committed"], true);
-    let missing = call_config_tool(&tools, vec!["agent".into(), "get".into(), "orphan".into()])
+    let missing = call_config_tool(&tools, vec!["agent".into(), "get".into(), orphan.clone()])
         .await
         .expect_err("removed agent is no longer inspectable");
     assert!(
@@ -3448,7 +3488,11 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
 
     call_config_tool(
         &tools,
-        vec!["get".into(), "--agent".into(), "beh-test".into()],
+        vec![
+            "get".into(),
+            "--agent".into(),
+            fixture.agent_did().to_owned(),
+        ],
     )
     .await
     .expect("cleanup preserves unrelated configuration");
