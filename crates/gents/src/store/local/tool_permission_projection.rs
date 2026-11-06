@@ -1072,7 +1072,9 @@ mod tests {
     #[tokio::test]
     async fn reviewed_plugin_delete_source_tracks_selection_and_reinstall() -> anyhow::Result<()> {
         use gents_protocol::job::PluginDataDeclaration;
-        let (_directory, runtime, node) = projection_node().await?;
+        let (directory, runtime, node) = projection_node().await?;
+        let outsider = crate::KeyIdentity::load_or_create(directory.path().join("outsider"), None)?;
+        let outsider_did = identity::Did::new(outsider.did())?;
         let binding = crate::store::identity::provision_agent_identity(&runtime)?;
         let agent = identity::Did::new(&binding.agent_did)?;
         let owner = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
@@ -1115,6 +1117,10 @@ mod tests {
             format!(
                 r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{agent_value}",creation_nonce:"{nonce}",context_id:"plugin-context",enabled:true}}) {{_docID}} }}"#
             ),
+            format!(
+                r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{}",creation_nonce:"{nonce}",context_id:"plugin-context",enabled:true}}) {{_docID}} }}"#,
+                escape_graphql_string(outsider.did())
+            ),
         ] {
             owner.write("test.plugin_delete.create", &mutation).await?;
         }
@@ -1152,6 +1158,12 @@ mod tests {
                 .check_permission(&agent, NodePermission::DocumentDelete)
                 .await?,
             expected("selected-installed")
+        );
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&outsider_did, NodePermission::DocumentDelete)
+                .await?,
+            expected("foreign-actor")
         );
         let mut replacement = record.clone();
         replacement.digest = format!("sha256:{}", "b".repeat(64));
