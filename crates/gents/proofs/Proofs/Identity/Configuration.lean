@@ -81,6 +81,80 @@ def toolOperationSources (surface : ToolPolicy.Surface) (packInstall : Bool) : L
   emit "pack-install" (surface.selfConfig && selfConfigScopeEnabled surface.selfConfigCategories && packInstall)
     ["delete-dac-relation", "delete-document"]
 
+/-- Plugin roots are installed only by the trusted host from its reviewed,
+  digest-bound local plugin declaration, in the same transaction as the
+  installation. User-writable configuration cannot assert an installed root. -/
+structure PluginDeleteRoot where
+  coordinate : String
+  digest : String
+  deriving BEq, DecidableEq, Repr
+
+structure PluginDeleteSelection where
+  toolsDoc : String
+  contextDoc : String
+  coordinate : String
+  pin : Option String
+  agent : String
+  derived : String
+  enabled : Bool
+  deriving BEq, DecidableEq, Repr
+
+structure PluginDeleteProjection where
+  roots : List PluginDeleteRoot := []
+  selections : List PluginDeleteSelection := []
+  direct : List (String × String) := []
+  deriving DecidableEq, Repr
+
+/-- Native source membership requires a currently installed delete-capable
+  root and a selected, ceiling-permitted plugin bound to a managed Agent.
+  The exact digest is part of the source, so an upgrade replaces that path.
+  Reconciliation computes membership from current facts, including after a
+  root was absent, preventing a reinstall from restoring a stale selection. -/
+def pluginDeleteSources (state : PluginDeleteProjection) : List ToolGrantSource :=
+  state.selections.flatMap fun selection =>
+    state.roots.filterMap fun root =>
+      if selection.enabled && !selection.toolsDoc.isEmpty && !selection.contextDoc.isEmpty &&
+          !root.coordinate.isEmpty && selection.coordinate == root.coordinate && !root.digest.isEmpty &&
+          (selection.pin.isNone || selection.pin == some root.digest) &&
+          managedToolSourceMatches selection.agent selection.derived then
+        some ⟨selection.toolsDoc, selection.agent,
+          "plugin:" ++ selection.contextDoc ++ ":" ++ root.coordinate ++ ":" ++ root.digest,
+          "delete-document"⟩
+      else none
+
+/-- Host review, native source-administration authorization, and transaction
+  finality are supplied by their existing owners; an abort changes no roots. -/
+def replaceInstalledPluginRoot (state : PluginDeleteProjection) (coordinate : String)
+    (next : Option PluginDeleteRoot) (reviewed authorized committed : Bool) : PluginDeleteProjection :=
+  let valid := match next with
+    | some root => root.coordinate == coordinate && !root.digest.isEmpty
+    | none => true
+  if !coordinate.isEmpty && valid && reviewed && authorized && committed then
+    { state with roots := (match next with | some root => [root] | none => []) ++
+        state.roots.filter (fun root => root.coordinate != coordinate) }
+  else state
+
+def replacePluginSelections (state : PluginDeleteProjection) (next : List PluginDeleteSelection)
+    (authorized committed : Bool) : PluginDeleteProjection :=
+  if authorized && committed then { state with selections := next } else state
+
+theorem aborted_plugin_install_unchanged (state : PluginDeleteProjection) (coordinate : String)
+    (next : Option PluginDeleteRoot) (reviewed authorized : Bool) :
+    replaceInstalledPluginRoot state coordinate next reviewed authorized false = state := by
+  simp [replaceInstalledPluginRoot]
+
+theorem plugin_install_preserves_direct (state : PluginDeleteProjection) (coordinate : String)
+    (next : Option PluginDeleteRoot) (reviewed authorized committed : Bool) :
+    (replaceInstalledPluginRoot state coordinate next reviewed authorized committed).direct = state.direct := by
+  unfold replaceInstalledPluginRoot
+  split <;> simp
+
+theorem plugin_selection_preserves_direct (state : PluginDeleteProjection)
+    (next : List PluginDeleteSelection) (authorized committed : Bool) :
+    (replacePluginSelections state next authorized committed).direct = state.direct := by
+  unfold replacePluginSelections
+  split <;> simp
+
 /-- Tool selections and their source-scoped native grants change together.
 Direct grants and ownership are separate native paths. The authorization and
 commit observations are supplied by the native transaction, not an application
