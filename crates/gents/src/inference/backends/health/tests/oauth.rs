@@ -48,8 +48,10 @@ fn oauth_backend(
 #[tokio::test]
 async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
     use crate::NodeIdentity;
-    let (db, user, user_access, _binding) =
-        crate::test_support::signed_test_node("health-runtime-owner").await;
+    // No default agent: its fixture backend is also enabled on this node and
+    // would make the runtime listing non-singular.
+    let (db, user, user_access) =
+        crate::test_support::signed_test_node_without_agent("health-runtime-owner").await;
     let other = crate::support::test_db("health-foreign-owner").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
