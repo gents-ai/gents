@@ -741,7 +741,7 @@ mod tests {
         let doc_id = admission.tool.doc_id().unwrap().to_owned();
         let mut pin = crate::tools::call::lifecycle::admission_fixture::fixture_job_pin();
         pin.chain_root_doc_id = doc_id.clone();
-        ConfigAccess::transact_local_write(&admission.node, None, "test.control.physical_pin", |txn| {
+        admission.tool.access().unwrap().transact_write("test.control.physical_pin", |txn| {
             let doc_id = doc_id.clone();
             let pin = pin.clone();
             Box::pin(async move {
@@ -766,7 +766,7 @@ mod tests {
     }
 
     fn access(admission: &PublishedAdmission) -> ConfigAccess {
-        ConfigAccess::local(admission.node.clone())
+        admission.tool.access().expect("admission tool carries its agent-scoped access")
     }
 
     /// The request a job child `slot` caused, owned by `node_did`.
@@ -788,7 +788,7 @@ mod tests {
             "created_at": "2026-01-01T00:00:00Z",
             "caused_by_parent_tool_call_doc_id": admission.tool.doc_id().unwrap(),
         });
-        ConfigAccess::transact_local_write(&admission.node, None, "test.control.caused", |txn| {
+        admission.tool.access().unwrap().transact_write("test.control.caused", |txn| {
             let value = &value;
             Box::pin(async move {
                 let response = txn
@@ -1190,7 +1190,7 @@ mod tests {
             verdict: PluginExecutionVerdict::Success,
         };
         let doc_id = admission.tool.doc_id().unwrap().to_owned();
-        ConfigAccess::transact_local_write(&admission.node, None, "test.control.step", |txn| {
+        admission.tool.access().unwrap().transact_write("test.control.step", |txn| {
             let (doc_id, evidence) = (doc_id.clone(), evidence.clone());
             Box::pin(async move {
                 crate::tools::background::job::records::write_step_state_in_txn(

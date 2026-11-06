@@ -347,10 +347,12 @@ mod tests {
         doc_id: &str,
         pin: &JobPin,
     ) -> anyhow::Result<()> {
-        ConfigAccess::transact_local_write(&admission.node, None, "test.records.pin", |txn| {
-            Box::pin(async move { write_pin_in_txn(txn, doc_id, pin).await })
-        })
-        .await
+        let access = admission.tool.access()?;
+        access
+            .transact_write("test.records.pin", |txn| {
+                Box::pin(async move { write_pin_in_txn(txn, doc_id, pin).await })
+            })
+            .await
     }
 
     async fn write_progress(
@@ -360,15 +362,22 @@ mod tests {
         guest: JobProgress,
         host: HostProgressFacts,
     ) -> anyhow::Result<JobProgress> {
-        ConfigAccess::transact_local_write(&admission.node, None, "test.records.progress", |txn| {
-            let (guest, host) = (guest.clone(), host.clone());
-            Box::pin(async move { write_progress_in_txn(txn, doc_id, expected, guest, host).await })
-        })
-        .await
+        let access = admission.tool.access()?;
+        access
+            .transact_write("test.records.progress", |txn| {
+                let (guest, host) = (guest.clone(), host.clone());
+                Box::pin(async move { write_progress_in_txn(txn, doc_id, expected, guest, host).await })
+            })
+            .await
     }
 
+    /// The row owner's access: the job row is owned by its Agent, so the
+    /// node identity cannot read it.
     fn access(admission: &PublishedAdmission) -> ConfigAccess {
-        ConfigAccess::local(admission.node.clone())
+        admission
+            .tool
+            .access()
+            .expect("admission tool carries its agent-scoped access")
     }
 
     #[tokio::test]
@@ -540,12 +549,14 @@ mod tests {
         evidence: &PluginExecutionReceipt,
         resume: Option<&JobResume>,
     ) -> anyhow::Result<()> {
-        ConfigAccess::transact_local_write(&admission.node, None, "test.records.step", |txn| {
-            Box::pin(
-                async move { write_step_state_in_txn(txn, doc_id, evidence, resume, None).await },
-            )
-        })
-        .await
+        let access = admission.tool.access()?;
+        access
+            .transact_write("test.records.step", |txn| {
+                Box::pin(async move {
+                    write_step_state_in_txn(txn, doc_id, evidence, resume, None).await
+                })
+            })
+            .await
     }
 
     #[tokio::test]
