@@ -60,11 +60,24 @@ def workspaceRootAfterWriterRevocation : Household.State :=
   Household.apply workspaceRootFixture (.revoke
     ⟨"workspace_roots", "root", "reader", .actor "writer"⟩)
 
+/-- Host execution uses the selected Agent's current native root visibility.
+The runtime's separate Node read cannot authorize that Agent, and a revoked
+reader grant remains revoked until an explicit grant. -/
+def workspaceRootExecutionAllowed (selected actor : String) (state : Household.State) : Bool :=
+  selected == actor && Household.allowed 6 state actor "workspace_roots" "root" "read"
+
+theorem root_execution_uses_selected_agent :
+    workspaceRootExecutionAllowed "writer" "writer" workspaceRootFixture = true ∧
+    workspaceRootExecutionAllowed "writer" "runtime" workspaceRootFixture = false ∧
+    workspaceRootExecutionAllowed "writer" "writer" workspaceRootAfterWriterRevocation = false := by native_decide
+
 def workspaceRootAccessCasesJson : String :=
   (Lean.toJson (["user", "runtime", "writer", "integrator", "other"].flatMap fun actor =>
     ["read", "update", "delete"].map fun permission => Lean.Json.mkObj
       [("actor", Lean.toJson actor), ("permission", Lean.toJson permission),
        ("expected", Lean.toJson (workspaceRootPermission actor permission)),
+       ("writer_execution", Lean.toJson (workspaceRootExecutionAllowed "writer" actor workspaceRootFixture)),
+       ("writer_execution_after_revocation", Lean.toJson (workspaceRootExecutionAllowed "writer" actor workspaceRootAfterWriterRevocation)),
        ("may_publish", Lean.toJson (workspaceRootPublicationAllowed actor)),
        ("after_parent_revocation", Lean.toJson (Household.allowed 6 workspaceRootAfterRevocation actor "workspace_roots" "root" permission)),
        ("after_integrator_revocation", Lean.toJson (Household.allowed 6 workspaceRootAfterIntegratorRevocation actor "workspace_roots" "root" permission)),
