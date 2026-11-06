@@ -299,7 +299,6 @@ pub(crate) mod test_support {
         crate::store::config_client::ConfigAccess,
         gents_protocol::agent_identity::AgentIdentityBinding,
     ) {
-        use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         use crate::store::identity::NodeIdentity;
 
         let (db, user, access) = signed_test_node_without_agent_from_db(db, name).await;
@@ -318,23 +317,7 @@ pub(crate) mod test_support {
             &access,
         )
         .await;
-        let node_input =
-            serde_json::json!({"node_did": runtime.did(), "default_agent_did": binding.agent_did});
-        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-            collection: crate::Collection::Node,
-            add: node_input.clone(),
-            update: node_input,
-        }])
-        .unwrap();
-        access
-            .transact_write("test.signed_default_agent", |txn| {
-                let plan = &plan;
-                Box::pin(async move {
-                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
-                })
-            })
-            .await
-            .unwrap();
+        set_test_default_agent_as(&access, runtime.did(), &binding.agent_did).await;
         (db, user, access, binding)
     }
 
