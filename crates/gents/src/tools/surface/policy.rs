@@ -242,9 +242,9 @@ pub struct ToolNodeOperationSource {
 impl ToolPolicySurface {
     /// Project the native operations required by configured tools after the
     /// stable ceiling is applied.
-    /// For self-config and pack this covers only selection-replacement DAC
-    /// removal; their other operations need separate mappings. Transient service
-    /// availability does not revoke standing native authority.
+    /// For self-config and pack this covers selection-replacement DAC removal
+    /// and document deletion; other operations need separate mappings.
+    /// Transient service availability does not revoke standing native authority.
     pub fn covered_node_operation_sources(
         &self,
         pack_install: bool,
@@ -308,8 +308,26 @@ impl ToolPolicySurface {
                     emit(purpose, &[NodePermission::DacRelationDelete]);
                 }
             }
+            for (purpose, category) in [
+                ("self-config:node", "node"),
+                ("self-config:tools", "tools"),
+                ("self-config:profile", "profile"),
+                ("self-config:backend", "backend"),
+                ("self-config:mcp-service", "mcp_service"),
+                ("self-config:automation", "automation"),
+            ] {
+                if self.self_config_categories.permits(&category.to_owned()) {
+                    emit(purpose, &[NodePermission::DocumentDelete]);
+                }
+            }
             if pack_install {
-                emit("pack-install", &[NodePermission::DacRelationDelete]);
+                emit(
+                    "pack-install",
+                    &[
+                        NodePermission::DacRelationDelete,
+                        NodePermission::DocumentDelete,
+                    ],
+                );
             }
         }
         sources

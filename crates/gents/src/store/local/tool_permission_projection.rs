@@ -14,6 +14,7 @@ const PERMISSIONS: &[NodePermission] = &[
     NodePermission::ViewAdd,
     NodePermission::DocumentRead,
     NodePermission::DocumentUpdate,
+    NodePermission::DocumentDelete,
     NodePermission::DacRelationAdd,
     NodePermission::DacRelationDelete,
 ];
