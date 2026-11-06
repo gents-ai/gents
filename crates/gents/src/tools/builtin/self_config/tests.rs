@@ -2952,6 +2952,7 @@ async fn config_creates_and_discovers_an_unauthenticated_local_backend() {
 
     let fixture = SelfConfigFixture::new("local-backend-create").await;
     fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
     let tools = fixture.tools(&["backend", "profile"]);
     let endpoint = format!("http://{address}/v1");
     let profiles_before: Value = serde_json::from_str(

@@ -1344,7 +1344,8 @@ async fn shared_option_rejects_other_values_and_other_resources() {
 
 #[tokio::test]
 async fn crud_backend_creation_preserves_auth_boundary() {
-    let (_fixture, tools) = authenticated_setup("crud-backend", &["backend"]).await;
+    let (fixture, tools) = authenticated_setup("crud-backend", &["backend"]).await;
+    fixture.grant_node_reader().await;
     ok(
         &tools,
         json!({"argv":["backend","create","local"],"set":{"endpoint":"http://127.0.0.1:8000/v1"}}),
