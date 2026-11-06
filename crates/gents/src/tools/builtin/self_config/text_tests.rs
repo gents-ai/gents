@@ -1811,10 +1811,11 @@ async fn composition_help_and_field_placement_match_the_accepted_calls() {
         ok(&tools, error["recovery"]["next_call"].clone()).await;
     }
     for verb in ["create", "clone"] {
-        let help = ok(&tools, json!({"argv":["agent",verb,"--help"]}))
-            .await
-            .to_string();
+        let help = ok(&tools, json!({"argv":["agent",verb,"--help"]})).await;
+        let help = help.as_str().unwrap();
         assert!(help.contains("ID is allocated"), "{help}");
+        assert!(help.contains("WorkspaceRoot access"), "{help}");
+        assert!(help.contains(r#"["help","tools"]"#), "{help}");
         assert!(
             !help.contains("Agent fields") && !help.contains("AgentContext fields"),
             "{help}"
@@ -1827,6 +1828,21 @@ async fn composition_help_and_field_placement_match_the_accepted_calls() {
         let help = ok(&tools, json!({"argv":argv})).await.to_string();
         assert!(help.contains("Do not combine them"), "{help}");
     }
+    let root_help = ok(&tools, json!({"argv":["help","tools"]})).await;
+    let root_help = root_help.as_str().unwrap();
+    assert!(
+        root_help.contains("Node owner or administrator"),
+        "{root_help}"
+    );
+    assert!(
+        root_help.contains("own authenticated client"),
+        "{root_help}"
+    );
+    assert!(root_help.contains("gents config workspace-root grant-reader --graphql GRAPHQL_URL --path PUBLISHED_ROOT --agent-did AGENT_DID"), "{root_help}");
+    assert!(
+        root_help.contains("config tool cannot grant"),
+        "{root_help}"
+    );
     let error = structured_failure(&tools, json!({"argv":["execution","create"],"target_id":"limits","options":{"display_name":"Limits"}})).await;
     assert!(
         error["error"]
