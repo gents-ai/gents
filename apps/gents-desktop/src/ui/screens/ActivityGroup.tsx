@@ -212,10 +212,13 @@ export function ActivityGroup({
   const state = useContext(GroupStateContext)!;
   const single = entry.members.length === 1 && entry.members[0]!.kind === "tool";
   const chosen = state.folded[entry.key];
-  const openStep = state.openStep[entry.key] ?? null;
-
   const failed = groupFailures(entry.members) > 0;
-  const folded = !single && (chosen ?? !openStep);
+  const firstFailed = entry.members.find(
+    (member) => member.kind === "tool" && stepStatus(member.tool) === "failed",
+  );
+  const chosenStep = state.openStep[entry.key];
+  const openStep = chosenStep === undefined ? (firstFailed?.key ?? null) : chosenStep;
+  const folded = !single && (chosen ?? (!failed && !openStep));
 
   const live = (!entry.settled && liveGroupLabel(entry.members)) || null;
   const last = entry.members[entry.members.length - 1];
