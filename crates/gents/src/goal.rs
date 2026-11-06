@@ -36,9 +36,9 @@ pub(crate) use claimed_publication::{
     publish_claimed_continuation_with_identity,
     stop_claimed_continuation_for_unavailable_agent_from_access,
 };
-#[cfg(test)]
-pub(crate) use client_control::agent_document_for_test;
-pub(crate) use client_control::{attach_client_goal_graphs, prepare_goal_control, stage_goal_control};
+pub(crate) use client_control::{
+    attach_client_goal_graphs, prepare_goal_control, stage_goal_control,
+};
 pub use client_submission::{
     load_applied_opening_goal_id, load_applied_opening_goal_ids,
     load_applied_opening_goal_provenance, prepare_session_goal_control,

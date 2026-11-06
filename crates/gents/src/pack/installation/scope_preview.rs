@@ -106,6 +106,8 @@ mod tests {
         }))
         .unwrap();
         let identity = super::super::PackIdentity {
+            installation_doc_id: None,
+            agent_bindings: BTreeMap::new(),
             coordinate: coordinate.into(),
             version: stored.header.version.clone(),
             digest: stored.header.digest.clone(),
@@ -189,6 +191,8 @@ mod tests {
         }))
         .unwrap();
         let identity = super::super::PackIdentity {
+            installation_doc_id: None,
+            agent_bindings: BTreeMap::new(),
             coordinate: coordinate.into(),
             version: stored.header.version.clone(),
             digest: stored.header.digest.clone(),

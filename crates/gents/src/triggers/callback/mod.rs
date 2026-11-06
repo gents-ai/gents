@@ -27,8 +27,6 @@ pub(crate) use documents::{
     create_callback_result, create_pending_invocation, flush_workspace_docs, update_invocation,
     CallbackInvocationDoc, CallbackResultDoc,
 };
-#[cfg(test)]
-pub(crate) use documents::load_invocation;
 pub(crate) use documents::{idempotency_key, load_invocation_with_access};
 pub(crate) use run::recover_local_invocations;
 
