@@ -661,7 +661,36 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
             node.shutdown().await.expect("node shutdown");
             continue;
         }
-        if case.commit {
+        if case.commit && (!case.signature_valid || !case.first_request_valid) {
+            assert!(!case.published, "{}", case.name);
+            assert_eq!(
+                process_command(&node, &identity, &doc_id, selected_identity)
+                    .await
+                    .unwrap(),
+                None,
+                "{}",
+                case.name
+            );
+            assert!(receipt(&access, &doc_id).await.is_none(), "{}", case.name);
+            let agent_access = ConfigAccess::local_managed_agent(
+                node.clone(),
+                ::identity::Did::new(&command.agent_did).unwrap(),
+                selected_identity,
+            )
+            .unwrap();
+            let claims = agent_access
+                .execute("{ GoalCreationClaim { _docID } }")
+                .await
+                .unwrap();
+            assert!(
+                claims["data"]["GoalCreationClaim"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty(),
+                "{}",
+                case.name
+            );
+        } else if case.commit {
             assert_eq!(
                 process_command(&node, &identity, &doc_id, selected_identity)
                     .await
