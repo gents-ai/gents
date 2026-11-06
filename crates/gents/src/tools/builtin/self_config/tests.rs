@@ -5932,13 +5932,18 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
         "OpenAiCompatible",
         json!({"kind": "api_key", "key": SECRET}),
     );
+    let unobserved = backend(
+        "unobserved",
+        "OpenAiCompatible",
+        json!({"kind": "unauthenticated"}),
+    );
     let models: Vec<crate::documents::AdvertisedModel> = serde_json::from_value(json!([{
         "model_name": "claude-opus-5-5", "display_name": "Claude Opus 5.5",
         "context_window": 1_000_000, "max_context_window": null, "max_output_tokens": 128_000,
         "reasoning_efforts": ["low", "high"],
     }]))
     .unwrap();
-    for document in [&claude, &keyed] {
+    for document in [&claude, &keyed, &unobserved] {
         crate::store::config_client::write_inference_backend_document(access, document)
             .await
             .unwrap();
@@ -5980,6 +5985,10 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
 
     let list = call(&["list"]).await;
     let items = list["items"].as_array().unwrap();
+    let page = call(&["list", "--limit", "1"]).await;
+    assert_eq!(page["items"][0], items[0]);
+    assert_eq!(page["page"]["total"], items.len());
+    assert_eq!(page["page"]["truncated"], true);
     for id in ["claude", "keyed"] {
         let item = items.iter().find(|item| item["backend_id"] == id).unwrap();
         assert_eq!(
@@ -5990,6 +5999,10 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
     }
     for id in ["claude", "keyed"] {
         let get = call(&["get", id]).await;
+        let listed = items.iter().find(|item| item["backend_id"] == id).unwrap();
+        for field in ["catalog", "probe_status", "last_probe"] {
+            assert_eq!(listed[field], get["observation"][field], "{id}: {field}");
+        }
         let model = &get["observation"]["catalog"]["models"][0];
         assert_eq!(model["context_window"], 1_000_000);
         assert_eq!(model["reasoning_efforts"], json!(["low", "high"]));
@@ -6000,6 +6013,13 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
             "claude-opus-5-5"
         );
     }
+    let item = items
+        .iter()
+        .find(|item| item["backend_id"] == "unobserved")
+        .unwrap();
+    assert!(item["catalog"].is_null());
+    assert!(item["probe_status"].is_null());
+    assert!(item["last_probe"].is_null());
     let bound = call(&["get"]).await;
     assert!(bound["observation"].get("catalog").is_some(), "{bound}");
 }

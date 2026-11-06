@@ -132,7 +132,7 @@ impl ConfigCommandTool {
             SelfConfigTarget::InferenceBackend => (
                 "InferenceBackendMetadata",
                 "backend_id",
-                "backend_id name provider_kind openai_wire_api endpoint claude_platform connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled catalogs catalog_freshness probe_status last_probe",
+                "backend_id name provider_kind openai_wire_api endpoint claude_platform connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled",
             ),
             _ => (
                 target.collection_name(),
@@ -181,63 +181,66 @@ impl ConfigCommandTool {
         let owner = escape_graphql_string(&self.node_did);
         let query =
             format!("{{ {collection}(filter: {{node_did: {{_eq: \"{owner}\"}}}}) {{{fields}}} }}");
-        let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
+        let (mut selected, total, truncated) = crate::store::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.inference_inventory",
             |txn| {
                 let query = query.clone();
-                Box::pin(async move { txn.execute(&query).await })
+                Box::pin(async move {
+                    let response = txn.execute(&query).await?;
+                    let mut rows = response
+                        .get("data")
+                        .and_then(|data| data.get(collection))
+                        .and_then(Value::as_array)
+                        .context("inventory query returned no rows array")?
+                        .clone();
+                    rows.sort_by(|left, right| {
+                        left.get(id_field)
+                            .and_then(Value::as_str)
+                            .cmp(&right.get(id_field).and_then(Value::as_str))
+                    });
+                    let total = rows.len();
+                    let mut selected = rows
+                        .into_iter()
+                        .filter(|row| {
+                            row.get(id_field)
+                                .and_then(Value::as_str)
+                                .is_some_and(|id| cursor.is_none_or(|cursor| id > cursor))
+                        })
+                        .take(limit + 1)
+                        .collect::<Vec<_>>();
+                    let truncated = selected.len() > limit;
+                    selected.truncate(limit);
+                    if target == SelfConfigTarget::InferenceBackend {
+                        for row in &mut selected {
+                            let backend_id = row.get("backend_id").and_then(Value::as_str)
+                                .context("backend row has no backend_id")?;
+                            let observation = crate::inference::backends::registry::lookup_backend_observation_in_txn(
+                                txn, &self.node_did, backend_id,
+                            ).await?;
+                            let provider_kind = serde_json::from_value(
+                                row.get("provider_kind")
+                                    .cloned()
+                                    .context("backend row has no provider_kind")?,
+                            )
+                            .context("decoding backend provider_kind")?;
+                            let view = crate::inference::backends::registry::scoped_observation_view(
+                                observation.as_ref(),
+                                &self.node_did,
+                                provider_kind,
+                            )?;
+                            let object = row.as_object_mut().context("backend row must be an object")?;
+                            for field in ["catalog", "probe_status", "last_probe"] {
+                                object.insert(field.into(), view[field].clone());
+                            }
+                        }
+                    }
+                    Ok::<_, anyhow::Error>((selected, total, truncated))
+                })
             },
         )
         .await?;
-        let mut rows = response
-            .get("data")
-            .and_then(|data| data.get(collection))
-            .and_then(Value::as_array)
-            .context("inventory query returned no rows array")?
-            .clone();
-        if target == SelfConfigTarget::InferenceBackend {
-            for row in &mut rows {
-                let observation: crate::documents::InferenceBackendObservation =
-                    crate::inference::backends::registry::decode_backend_observation(row.clone())
-                        .context("decoding backend observation")?;
-                let provider_kind = serde_json::from_value(
-                    row.get("provider_kind")
-                        .cloned()
-                        .context("backend row has no provider_kind")?,
-                )
-                .context("decoding backend provider_kind")?;
-                let view = crate::inference::backends::registry::scoped_observation_view(
-                    Some(&observation),
-                    &self.node_did,
-                    provider_kind,
-                )?;
-                let object = row
-                    .as_object_mut()
-                    .context("backend row must be an object")?;
-                object.remove("catalogs");
-                object.remove("catalog_freshness");
-                object.insert("catalog".into(), view["catalog"].clone());
-            }
-        }
-        rows.sort_by(|left, right| {
-            left.get(id_field)
-                .and_then(Value::as_str)
-                .cmp(&right.get(id_field).and_then(Value::as_str))
-        });
-        let total = rows.len();
-        let mut selected = rows
-            .into_iter()
-            .filter(|row| {
-                row.get(id_field)
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| cursor.is_none_or(|cursor| id > cursor))
-            })
-            .take(limit + 1)
-            .collect::<Vec<_>>();
-        let truncated = selected.len() > limit;
-        selected.truncate(limit);
         if target == SelfConfigTarget::InferenceExecution {
             for row in &mut selected {
                 let effective = super::read::execution_settings(Some(row))?;
