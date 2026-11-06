@@ -1375,6 +1375,33 @@ theorem agent_cannot_resolve_runtime_secret (access : BackendCredentialAccess)
     runtimeMayUseBackendCredential access currentSecret historicalSecret = false := by
   simp [runtimeMayUseBackendCredential, notRuntime]
 
+/-- The runtime's account-selection service reads only resolver metadata under
+native ACP in the Agent write's transaction. Its input is the runtime-visible
+credential set: a filtered empty set is absence, not evidence about hidden
+documents. The Agent receives no credential document or token. The configured
+runtime identity, same-Node binding, snapshot, and native read are premises. -/
+structure RuntimeDefaultAccountRead where
+  runtimeActor : Bool
+  sameNode : Bool
+  sameSnapshot : Bool
+  nativeRead : Bool
+  deriving BEq, Repr
+
+def runtimeMayReadDefaultAccount (access : RuntimeDefaultAccountRead) : Bool :=
+  access.runtimeActor && access.sameNode && access.sameSnapshot && access.nativeRead
+
+theorem foreign_default_account_refused (access : RuntimeDefaultAccountRead)
+    (foreign : access.sameNode = false) : runtimeMayReadDefaultAccount access = false := by
+  simp [runtimeMayReadDefaultAccount, foreign]
+
+theorem agent_cannot_read_runtime_default (access : RuntimeDefaultAccountRead)
+    (notRuntime : access.runtimeActor = false) : runtimeMayReadDefaultAccount access = false := by
+  simp [runtimeMayReadDefaultAccount, notRuntime]
+
+theorem default_account_requires_native_read (access : RuntimeDefaultAccountRead)
+    (denied : access.nativeRead = false) : runtimeMayReadDefaultAccount access = false := by
+  simp [runtimeMayReadDefaultAccount, denied]
+
 /-- The runtime never sends a credential to an unapproved provider destination. -/
 theorem unapproved_destination_refused (access : BackendCredentialAccess)
     (currentSecret historicalSecret : Bool)

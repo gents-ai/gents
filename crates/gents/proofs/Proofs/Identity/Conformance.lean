@@ -1511,6 +1511,22 @@ def backendCredentialCases : List Json := Id.run do
     backendCredentialCaseJson "inline-secret" allowed true true,
     backendCredentialCaseJson "redacted-history" allowed false true]
 
+def runtimeDefaultAccountCase (name : String) (access : Configuration.RuntimeDefaultAccountRead)
+    (visibleDefault : Option String) : Json :=
+  Json.mkObj [("name", toJson name), ("runtime_actor", toJson access.runtimeActor),
+    ("same_node", toJson access.sameNode), ("same_snapshot", toJson access.sameSnapshot),
+    ("native_read", toJson access.nativeRead), ("visible_default", toJson visibleDefault),
+    ("allowed", toJson (Configuration.runtimeMayReadDefaultAccount access))]
+
+def runtimeDefaultAccountCases : List Json := Id.run do
+  let allowed : Configuration.RuntimeDefaultAccountRead := ⟨true, true, true, true⟩
+  return [runtimeDefaultAccountCase "visible-named" allowed (some "named"),
+    runtimeDefaultAccountCase "visible-empty" allowed none,
+    runtimeDefaultAccountCase "foreign-node" { allowed with sameNode := false } (some "named"),
+    runtimeDefaultAccountCase "agent-actor" { allowed with runtimeActor := false } (some "named"),
+    runtimeDefaultAccountCase "other-snapshot" { allowed with sameSnapshot := false } (some "named"),
+    runtimeDefaultAccountCase "read-failed" { allowed with nativeRead := false } (some "named")]
+
 def backendCredentialNativeCase (revoked : Bool) : Json :=
   let initial := Configuration.backendCredentialFixture
   let state := if revoked then Household.apply initial
@@ -1560,6 +1576,7 @@ def inferenceSelfConfigCase (phase actor document : String) : Json :=
 def json : Json := Json.mkObj
   [("name", toJson "configuration-explicit-grants"),
    ("backend_credential_cases", toJson backendCredentialCases),
+   ("runtime_default_account_cases", toJson runtimeDefaultAccountCases),
    ("configuration_plugin_backend_cases", toJson [
       pluginBackendCase "selected" (some "agent") "",
       pluginBackendCase "sibling" (some "sibling") "",
