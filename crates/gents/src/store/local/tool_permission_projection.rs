@@ -1839,6 +1839,103 @@ mod tests {
                 })
             })
             .await?;
+        let txn = node.database().new_txn(false).await?;
+        let store = Arc::new(acp::zanzibar::store::TransactionZanzibarStore::new(
+            txn.datastore()?.sibling(Namespace::Acpstore),
+        ));
+        let pinned_root = super::super::plugin_delete_source::root(
+            runtime.did(),
+            "team/worker",
+            Some(&record.digest),
+        );
+        let children = store
+            .get_relation_subjects(
+                acp::NODE_POLICY_ID,
+                acp::NODE_RESOURCE_NAME,
+                &super::super::plugin_delete_source::object(&pinned_root),
+                NodePermission::DocumentDelete.as_str(),
+            )
+            .await?;
+        let member = children
+            .into_iter()
+            .filter_map(|subject| match subject {
+                Subject::EntitySet {
+                    resource,
+                    object_id,
+                    relation,
+                } if resource == acp::NODE_RESOURCE_NAME
+                    && relation == NodePermission::DocumentDelete.as_str() =>
+                {
+                    decode_source(&object_id).filter(|source| {
+                        source.starts_with(&super::super::plugin_delete_source::member_prefix(
+                            runtime.did(),
+                        ))
+                    })
+                }
+                _ => None,
+            })
+            .next()
+            .expect("selected plugin membership");
+        let nac = acp::NodeACP::new(store.clone());
+        nac.load().await?;
+        nac.change_source_permission(
+            &identity::Did::new(runtime.did())?,
+            NodePermission::DocumentDelete,
+            Some(&member),
+            "actor",
+            agent.as_str(),
+            true,
+        )
+        .await?;
+        drop(nac);
+        drop(store);
+        txn.commit().await?;
+        assert!(
+            !node
+                .nac_manager()
+                .check_permission(&agent, NodePermission::DocumentDelete)
+                .await?
+        );
+        let missing_member = non_admin
+            .transact_write("test.plugin_delete.missing_member", |txn| {
+                let record = &record;
+                Box::pin(async move {
+                    txn.stage_plugin_delete_roots(
+                        std::slice::from_ref(record),
+                        std::slice::from_ref(record),
+                    )
+                    .await
+                })
+            })
+            .await;
+        assert_eq!(
+            missing_member.is_ok(),
+            expected_change("add-denied"),
+            "{missing_member:?}"
+        );
+        assert!(
+            !node
+                .nac_manager()
+                .check_permission(&agent, NodePermission::DocumentDelete)
+                .await?
+        );
+        owner
+            .transact_write("test.plugin_delete.repair_member", |txn| {
+                let record = &record;
+                Box::pin(async move {
+                    txn.stage_plugin_delete_roots(
+                        std::slice::from_ref(record),
+                        std::slice::from_ref(record),
+                    )
+                    .await
+                })
+            })
+            .await?;
+        assert!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::DocumentDelete)
+                .await?
+        );
         observe_plugin_permission(
             &mut observations,
             &owner,
