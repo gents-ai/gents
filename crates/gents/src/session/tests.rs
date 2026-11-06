@@ -1913,7 +1913,7 @@ async fn signed_claimed_authored_request_with_retry(
             session_id: session_id.into(),
             content: "race".into(),
             execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
-            created_at: chrono::Utc::now().to_rfc3339(),
+            created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         },
         gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
     );
