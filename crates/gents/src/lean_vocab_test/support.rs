@@ -2549,6 +2549,7 @@ pub(crate) struct LeanCausalHopContract {
     pub(crate) call_cases: Vec<LeanCausalHopCallCase>,
     pub(crate) interrupt_cases: Vec<LeanAgentInterruptCase>,
     pub(crate) creation_cases: Vec<LeanSessionCreationCase>,
+    pub(crate) creation_signer_cases: Vec<LeanSessionCreationSignerCase>,
     pub(crate) job_creation_cases: Vec<LeanJobCreationCase>,
     pub(crate) deferred_creation_cases: Vec<LeanDeferredCreationCase>,
     pub(crate) write_cases: Vec<LeanSessionMessageWriteCase>,
@@ -2624,6 +2625,15 @@ pub(crate) struct LeanSessionCreationCase {
     pub(crate) scope_matches: bool,
     pub(crate) physical_matches: bool,
     pub(crate) cause_matches: bool,
+    pub(crate) expected: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanSessionCreationSignerCase {
+    pub(crate) agent_new: bool,
+    pub(crate) has_requester: bool,
+    pub(crate) signer: String,
     pub(crate) expected: bool,
 }
 

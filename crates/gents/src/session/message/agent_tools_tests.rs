@@ -1769,7 +1769,7 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
         .unwrap();
     let session = escape_graphql_string(&receipt.session_id);
     let rows = caller_access.execute(&format!(r#"{{
-        AgentSession(filter: {{session_id: {{_eq: "{session}"}}}}) {{_docID agent_did requester_did}}
+        AgentSession(filter: {{session_id: {{_eq: "{session}"}}}}) {{_docID agent_did requester_did provenance}}
         AgentRequest(filter: {{session_id: {{_eq: "{session}"}}}}) {{_docID lifecycle_state agent_did}}
         Goal(filter: {{session_id: {{_eq: "{session}"}}}}) {{_docID session_doc_id agent_did creator_did parent_linked assignment_root_request_doc_id}}
         GoalCreationClaim(filter: {{session_id: {{_eq: "{session}"}}}}) {{_docID session_doc_id agent_did creator_did parent_linked}}
@@ -1798,6 +1798,62 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
         target.as_ref(),
     )
     .unwrap();
+    let publication = tokio::task::spawn_blocking(|| {
+        crate::lean_vocab_test::lean_contract_snapshot()
+            .delegated_publication_cases
+            .iter()
+            .find(|case| case["name"] == "published")
+            .unwrap()
+            .clone()
+    })
+    .await
+    .unwrap();
+    let creation: gents_protocol::session::SessionProvenance =
+        serde_json::from_value(sessions[0]["provenance"].clone()).unwrap();
+    let creation = creation.creation_receipt.unwrap();
+    assert!(crate::store::identity::verify_did_signature(
+        &caller.agent_did,
+        &creation.signing_payload(),
+        &creation.signature
+    )
+    .unwrap());
+    assert!(!crate::store::identity::verify_did_signature(
+        target.did(),
+        &creation.signing_payload(),
+        &creation.signature
+    )
+    .unwrap());
+    for (collection, row) in [
+        ("AgentSession", &sessions[0]),
+        ("AgentRequest", &requests[0]),
+    ] {
+        let doc = row["_docID"].as_str().unwrap().to_owned();
+        let owners = caller_access
+            .transact_readonly("test.delegation_owner", |txn| {
+                let doc = &doc;
+                Box::pin(async move {
+                    txn.document_owners(collection, std::slice::from_ref(doc))
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            owners[0].owner.as_ref().map(|owner| owner.as_str()),
+            Some(caller.agent_did.as_str())
+        );
+        let doc = escape_graphql_string(&doc);
+        let view = target_access
+            .execute(&format!(
+                r#"{{ {collection}(filter: {{_docID: {{_eq: "{doc}"}}}}) {{_docID}} }}"#
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            !view["data"][collection].as_array().unwrap().is_empty(),
+            publication["expected_target_read"].as_bool().unwrap()
+        );
+    }
     let goal_links = tokio::task::spawn_blocking(|| {
         crate::lean_vocab_test::lean_contract_snapshot()
             .goal_link_cases

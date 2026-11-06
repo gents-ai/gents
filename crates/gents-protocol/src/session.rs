@@ -88,7 +88,7 @@ pub enum SessionTitleSource {
 
 /// These origins can coexist: a task runs, and that work can start another
 /// session with `agent_new`. Descriptive references do not confer authority;
-/// the creation receipt is evidence only after its node signature and bindings are verified.
+/// the creation receipt is evidence only after its creator signature and bindings are verified.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -122,7 +122,7 @@ pub struct SessionProvenance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub opening_request_doc_id: Option<String>,
-    /// Node-signed evidence that this opening request created this exact session.
+    /// Creator-signed evidence that this opening request created this exact session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub creation_receipt: Option<SessionCreationReceipt>,

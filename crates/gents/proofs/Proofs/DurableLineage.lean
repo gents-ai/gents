@@ -453,7 +453,7 @@ theorem two_job_requests_have_no_single_projection (call : String) (a b : Reques
   simp [singleRequestProjection, callRequests, jobRows]
 
 /-- Mutable provenance is an observation; creation authority requires the
-node signature and exact receipt, request and scope bindings. -/
+creator's signature and exact receipt, request and scope bindings. -/
 def verifiedCreation (signatureValid scopeMatches openingMatches causeMatches : Bool) : Bool :=
   signatureValid && scopeMatches && openingMatches && causeMatches
 

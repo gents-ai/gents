@@ -11,7 +11,7 @@ async fn verified_receipt_cannot_authorize_a_different_opening_request() {
         node_did: "did:example:node".into(),
         session_id: "same-session".into(),
         session_doc_id: "physical-session".into(),
-        requester_did: Some("did:example:requester".into()),
+        requester_did: Some(agent.did().into()),
         agent_did: agent.did().into(),
         opening_request_doc_id: "first-opening".into(),
         cause: SessionCreationCause::AgentNew,
@@ -99,7 +99,7 @@ async fn receipt_verification_matches_executable_creation_model() {
             starter: None,
             signature: Vec::new(),
         };
-        receipt.signature = agent.sign(&receipt.signing_payload()).await.unwrap();
+        receipt.signature = user.sign(&receipt.signing_payload()).await.unwrap();
         if !case.signature_valid {
             receipt.signature[0] ^= 1;
         }
@@ -117,7 +117,7 @@ async fn receipt_verification_matches_executable_creation_model() {
             case.name
         );
         if !case.signature_valid {
-            for signer in [&node, &user] {
+            for signer in [&node, &agent] {
                 let mut forged = session.clone();
                 let receipt = forged
                     .provenance
@@ -156,5 +156,52 @@ async fn receipt_verification_matches_executable_creation_model() {
                 );
             }
         }
+    }
+}
+
+#[tokio::test]
+async fn receipt_signer_matches_creation_model() {
+    let directory = tempfile::tempdir().unwrap();
+    let creator =
+        crate::KeyIdentity::load_or_create(directory.path().join("creator.key"), None).unwrap();
+    let worker =
+        crate::KeyIdentity::load_or_create(directory.path().join("worker.key"), None).unwrap();
+    let other =
+        crate::KeyIdentity::load_or_create(directory.path().join("other.key"), None).unwrap();
+    for case in &crate::lean_vocab_test::lean_causal_hop_contract().creation_signer_cases {
+        let cause = if case.agent_new {
+            SessionCreationCause::AgentNew
+        } else {
+            SessionCreationCause::TaskTrigger
+        };
+        let mut receipt = SessionCreationReceipt {
+            node_did: "node".into(),
+            session_id: "session".into(),
+            session_doc_id: "physical".into(),
+            requester_did: case.has_requester.then(|| creator.did().to_owned()),
+            agent_did: worker.did().into(),
+            opening_request_doc_id: "opening".into(),
+            cause,
+            cause_binding: "binding".into(),
+            starter: None,
+            signature: Vec::new(),
+        };
+        let signer = match case.signer.as_str() {
+            "creator" => &creator,
+            "worker" => &worker,
+            _ => &other,
+        };
+        receipt.signature = signer.sign(&receipt.signing_payload()).await.unwrap();
+        let session: AgentSession = serde_json::from_value(serde_json::json!({
+            "node_did": receipt.node_did, "session_id": receipt.session_id,
+            "requester_did": receipt.requester_did, "agent_did": receipt.agent_did,
+            "created_at": "2026-01-01T00:00:00Z", "provenance": {"creation_receipt": receipt}
+        }))
+        .unwrap();
+        assert_eq!(
+            verified_creation_receipt(&session, "physical", cause).is_some(),
+            case.expected,
+            "{case:?}"
+        );
     }
 }

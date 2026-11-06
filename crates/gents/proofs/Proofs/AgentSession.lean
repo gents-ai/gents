@@ -33,8 +33,10 @@ structure StarterEvidence where
   parentRequestDoc : Nat
   deriving DecidableEq, Repr
 
-/-- A receipt signed by the selected Agent DID is issued only in the transaction
-that creates a session. The node identifier is routing data, not the signer. Its request and causal kind bind the verified opening evidence; a
+/-- A receipt is signed by the creating Agent in the transaction that creates
+the session. For agent_new that is the requester; the selected Agent is the
+worker and may differ. The node identifier is routing data, not the signer. Its
+request and causal kind bind the verified opening evidence; a
 pre-existing session never receives one from a later request. -/
 structure CreationReceipt where
   scope : Scope
@@ -45,6 +47,16 @@ structure CreationReceipt where
   causeBinding : Nat
   starter : Option StarterEvidence := none
   deriving DecidableEq, Repr
+
+def creationReceiptSigner (agentNew : Bool) (requester : Option AgentDid)
+    (selected : AgentDid) : Option AgentDid :=
+  if agentNew then requester else some selected
+
+theorem agent_new_receipt_uses_creator (creator worker : AgentDid) :
+    creationReceiptSigner true (some creator) worker = some creator := rfl
+
+theorem agent_new_receipt_requires_creator (worker : AgentDid) :
+    creationReceiptSigner true none worker = none := rfl
 
 def creationReceiptAtEnsure (existing : Bool) (receipt : CreationReceipt) : Option CreationReceipt :=
   if existing then none else some receipt

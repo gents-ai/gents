@@ -1,5 +1,6 @@
 import Proofs.Request.CausalHop
 import Proofs.DurableLineage
+import Proofs.AgentSession
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.CausalHopContracts
@@ -163,6 +164,18 @@ def creationCaseJson (c : CreationCase) : String :=
     ++ ",\"expected\":" ++ toString (DurableLineage.verifiedCreation
       c.signatureValid (c.scopeMatches && c.physicalMatches) true c.causeMatches) ++ "}"
 
+def creationSignerCases : List (Bool × Bool × String) :=
+  [(true, true, "creator"), (true, true, "worker"), (true, true, "other"),
+   (true, false, "creator"), (false, true, "creator"), (false, true, "worker")]
+
+def creationSignerCaseJson (c : Bool × Bool × String) : String :=
+  let (agentNew, hasRequester, signer) := c
+  let requester := if hasRequester then some 1 else none
+  let signerDid := if signer == "creator" then 1 else if signer == "worker" then 2 else 3
+  "{\"agent_new\":" ++ toString agentNew ++ ",\"has_requester\":" ++ toString hasRequester
+    ++ ",\"signer\":" ++ jsonString signer ++ ",\"expected\":"
+    ++ toString (AgentSession.creationReceiptSigner agentNew requester 2 == some signerDid) ++ "}"
+
 def jobCreationCases : List (Bool × Bool × Bool × Bool) :=
   [(true, true, true, true), (false, true, true, true),
    (true, false, true, true), (true, true, false, true),
@@ -270,6 +283,7 @@ def contractJson : String :=
     ++ ",\"call_cases\":" ++ jsonArray (callCases.map callCaseJson)
     ++ ",\"interrupt_cases\":" ++ jsonArray (interruptCases.map interruptCaseJson)
     ++ ",\"creation_cases\":" ++ jsonArray (creationCases.map creationCaseJson)
+    ++ ",\"creation_signer_cases\":" ++ jsonArray (creationSignerCases.map creationSignerCaseJson)
     ++ ",\"job_creation_cases\":" ++ jsonArray (jobCreationCases.map jobCreationCaseJson)
     ++ ",\"deferred_creation_cases\":" ++ jsonArray (jobCreationCases.map deferredCreationCaseJson)
     ++ ",\"write_cases\":" ++ jsonArray (writeCases.map writeCaseJson)

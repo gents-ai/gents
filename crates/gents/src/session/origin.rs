@@ -897,7 +897,10 @@ pub(crate) async fn issue_creation_receipt_in_txn(
     let Some(identity) = txn.managed_agent_signer() else {
         return Ok(None);
     };
-    if identity.did() != agent_did {
+    let Some(creator) = creation_receipt_signer(cause, requester_did, agent_did) else {
+        return Ok(None);
+    };
+    if identity.did() != creator || txn.actor_did() != Some(creator) {
         return Ok(None);
     }
     let mut receipt = SessionCreationReceipt {
@@ -936,6 +939,8 @@ fn verified_creation_receipt<'a>(
     cause: gents_protocol::session::SessionCreationCause,
 ) -> Option<&'a gents_protocol::session::SessionCreationReceipt> {
     let receipt = session.provenance.as_ref()?.creation_receipt.as_ref()?;
+    let signer =
+        creation_receipt_signer(cause, session.requester_did.as_deref(), &session.agent_did)?;
     if receipt.node_did != session.node_did
         || receipt.session_id != session.session_id
         || receipt.session_doc_id != session_doc_id
@@ -943,7 +948,7 @@ fn verified_creation_receipt<'a>(
         || receipt.agent_did != session.agent_did
         || receipt.cause != cause
         || !crate::store::identity::verify_did_signature(
-            &session.agent_did,
+            signer,
             &receipt.signing_payload(),
             &receipt.signature,
         )
@@ -952,6 +957,20 @@ fn verified_creation_receipt<'a>(
         return None;
     }
     Some(receipt)
+}
+
+fn creation_receipt_signer<'a>(
+    cause: gents_protocol::session::SessionCreationCause,
+    requester: Option<&'a str>,
+    agent: &'a str,
+) -> Option<&'a str> {
+    match cause {
+        gents_protocol::session::SessionCreationCause::AgentNew => {
+            requester.filter(|did| !did.is_empty())
+        }
+        gents_protocol::session::SessionCreationCause::TaskTrigger
+        | gents_protocol::session::SessionCreationCause::PluginJob => Some(agent),
+    }
 }
 
 pub async fn verified_agent_new_creation(
