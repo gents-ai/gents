@@ -1199,6 +1199,13 @@ pub fn hosted_document_graph(
     explicit: bool,
 ) -> Result<HostedDocumentGraph> {
     let stages = document_graph_stages(archive, prepared, explicit)?;
+    hosted_document_graph_from_stages(&stages, prepared)
+}
+
+pub(super) fn hosted_document_graph_from_stages(
+    stages: &[DocumentPackStage],
+    prepared: &PreparedDocumentPackInstall,
+) -> Result<HostedDocumentGraph> {
     let mut identities = Vec::new();
     let mut documents = Vec::new();
     for stage in stages {
@@ -1214,9 +1221,9 @@ pub fn hosted_document_graph(
             });
         }
         let mut identity = PackIdentity::new(&stage.manifest, &stage.digest, plugins);
-        identity.installation_doc_id = stage.installation_doc_id;
-        identity.agent_bindings = stage.agent_bindings;
-        identity.dependencies = stage.dependencies;
+        identity.installation_doc_id = stage.installation_doc_id.clone();
+        identity.agent_bindings = stage.agent_bindings.clone();
+        identity.dependencies = stage.dependencies.clone();
         identity.explicit = stage.explicit;
         identities.push(identity);
         documents.push(super::installable_documents(&stage.config)?);

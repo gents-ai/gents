@@ -188,8 +188,8 @@ pub(crate) async fn encode_install_request(
         args.force_rebind_concrete_did,
         args.grant_authority,
     );
-    let body = tokio::task::spawn_blocking(move || {
-        encode_request(&root, &dependencies, |root, dependencies| InstallRequest {
+    tokio::task::spawn_blocking(move || {
+        let body = encode_request(&root, &dependencies, |root, dependencies| InstallRequest {
             node_did,
             root,
             dependencies,
@@ -201,11 +201,11 @@ pub(crate) async fn encode_install_request(
             grant_authority,
             explicit,
             wire,
-        })
+        })?;
+        Ok::<_, anyhow::Error>(serde_json::from_slice(&body)?)
     })
     .await
-    .context("packing remote document archives")??;
-    Ok(serde_json::from_slice(&body)?)
+    .context("packing remote document archives")?
 }
 
 fn refused(status: StatusCode, error: impl std::fmt::Display) -> Response {

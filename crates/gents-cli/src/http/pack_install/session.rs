@@ -89,7 +89,11 @@ pub(crate) async fn install_session(
 async fn receive(socket: &mut WebSocket) -> Result<ClientMessage> {
     loop {
         match socket.next().await {
-            Some(Ok(Message::Text(text))) => return Ok(serde_json::from_str(&text)?),
+            Some(Ok(Message::Text(text))) => {
+                return Ok(
+                    tokio::task::spawn_blocking(move || serde_json::from_str(&text)).await??,
+                );
+            }
             Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
             Some(Ok(_)) | None => anyhow::bail!("pack session closed"),
             Some(Err(error)) => return Err(error.into()),
@@ -98,9 +102,8 @@ async fn receive(socket: &mut WebSocket) -> Result<ClientMessage> {
 }
 
 async fn send(socket: &mut WebSocket, value: Value) -> Result<()> {
-    socket
-        .send(Message::Text(serde_json::to_string(&value)?.into()))
-        .await?;
+    let encoded = tokio::task::spawn_blocking(move || serde_json::to_string(&value)).await??;
+    socket.send(Message::Text(encoded.into())).await?;
     Ok(())
 }
 
@@ -326,7 +329,10 @@ async fn run_inner(
             !request.preview && request.wire.is_empty(),
             "hosted pack session cannot preview or wire plugins"
         );
-        let received = decode_install_request(request, &state.node_did)?;
+        let node_did = state.node_did.clone();
+        let received =
+            tokio::task::spawn_blocking(move || decode_install_request(request, &node_did))
+                .await??;
         let requested = crate::commands::pack::parse_inference_slot_bindings(
             &received.request.inference_slots,
         )?;
@@ -350,7 +356,7 @@ async fn run_inner(
         let stage = gents::pack::stage_hosted_pack(
             &state.node_did,
             &home,
-            received.root.archive(),
+            received.root.shared_archive(),
             prepared.clone(),
             received.request.grant_authority,
             received.request.explicit,

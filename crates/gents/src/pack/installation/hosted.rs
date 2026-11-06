@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use super::documents::{
-    document_graph_stages, ensure_plugin_references_resolve, hosted_document_graph,
+    document_graph_stages, ensure_plugin_references_resolve, hosted_document_graph_from_stages,
     stage_document_plugins, HostedDocumentGraph, HostedPackPreparation,
     PreparedDocumentPackInstall,
 };
@@ -33,7 +33,7 @@ pub enum HostedPackStageError {
 pub async fn stage_hosted_pack(
     owner: &str,
     home: &Path,
-    archive: &PackArchive,
+    archive: Arc<PackArchive>,
     prepared: Arc<PreparedDocumentPackInstall>,
     consent: bool,
     explicit: bool,
@@ -46,8 +46,15 @@ pub async fn stage_hosted_pack(
                 .map(|dependency| dependency.digest.clone()),
         )
         .collect();
-    let stages = document_graph_stages(archive, &prepared, explicit)?;
-    let graph = Arc::new(hosted_document_graph(archive, &prepared, explicit)?);
+    let manifest = archive.manifest().clone();
+    let graph_archive = archive.clone();
+    let graph_prepared = prepared.clone();
+    let (stages, graph) = tokio::task::spawn_blocking(move || {
+        let stages = document_graph_stages(&graph_archive, &graph_prepared, explicit)?;
+        let graph = Arc::new(hosted_document_graph_from_stages(&stages, &graph_prepared)?);
+        Ok::<_, anyhow::Error>((stages, graph))
+    })
+    .await??;
     let stage = stage_document_plugins(&stages, Some(home), consent, owner).await?;
     let installed = stage
         .as_ref()
@@ -67,7 +74,6 @@ pub async fn stage_hosted_pack(
         })
         .collect();
     let home = home.to_owned();
-    let manifest = archive.manifest().clone();
     let preparation = tokio::task::spawn_blocking(move || {
         let refs = references
             .iter()
