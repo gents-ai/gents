@@ -1336,6 +1336,31 @@ mod invoke_session_isolation_tests {
             applied,
             expected(caller_model, "sessions", "sibling-session", "update")
         );
+        let unchanged = owner
+            .execute(&format!(
+                "{{ AgentSession(filter: {{_docID: {{_eq: \"{}\"}}}}) {{archived_at}} }}",
+                crate::store::graphql::escape_graphql_string(&existing),
+            ))
+            .await?;
+        let rows = unchanged["data"]["AgentSession"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("owner session query omitted rows"))?;
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0]["archived_at"].is_null());
+        let existing_owner = owner
+            .transact_readonly("test.invoke.existing_owner", |txn| {
+                let existing = &existing;
+                Box::pin(async move {
+                    txn.document_owners("AgentSession", std::slice::from_ref(existing))
+                        .await
+                        .map_err(anyhow::Error::from)
+                })
+            })
+            .await?;
+        assert_eq!(
+            existing_owner[0].owner.as_ref().map(|did| did.as_str()),
+            Some(root.did())
+        );
         let owners = caller_access
             .transact_readonly("test.invoke.child_owner", |txn| {
                 let child = &child;
