@@ -722,7 +722,13 @@ async fn deleted_blocks_never_publish_dangling_references() {
         .await
         .unwrap();
     let id = escape_graphql_string(&leaves[0].doc_id);
-    let deleted = access
+    // Blocks are Agent-written; the runtime owner (the node identity, a NAC
+    // administrator) performs the deletion, while the Agent lacks DocumentDelete.
+    let runtime = crate::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(fixture.db.node_identity.did()).unwrap(),
+    );
+    let deleted = runtime
         .write(
             "test.delete_capture_block",
             &format!(r#"mutation {{ delete_RenderedRequestBlock(docID: "{id}") {{ _docID }} }}"#),
