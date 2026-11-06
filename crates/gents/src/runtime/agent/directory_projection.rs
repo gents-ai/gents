@@ -447,6 +447,7 @@ mod tests {
         for case in cases.iter().filter(|case| case["name"] != "failed-delete") {
             checked += 1;
             let node = Arc::new(crate::test_support::node_builder().build().await?);
+            crate::test_support::acp_policies::install_identity_acp_policies(&node).await?;
             node.add_collection(gents_protocol::schemas::NODE_DIRECTORY_ENTRY)
                 .await?;
             let store = GraphqlDirectoryStore::new(node.clone());

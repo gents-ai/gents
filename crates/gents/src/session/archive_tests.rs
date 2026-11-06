@@ -264,8 +264,11 @@ resources:
         .await
         .unwrap();
     let schema = gents_protocol::schemas::AGENT_SESSION.replace(
-        "type AgentSession ",
-        &format!("type AgentSession @policy(id: \"{policy}\", resource: \"sessions\") "),
+        &format!(
+            "@policy(id: \"{}\", resource: \"sessions\")",
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
+        ),
+        &format!("@policy(id: \"{policy}\", resource: \"sessions\")"),
     );
     ConfigAccess::local(Arc::clone(&node))
         .add_collection(&schema)
@@ -319,7 +322,8 @@ resources:
 async fn concurrent_archive_calls_commit_one_revision() {
     let home = tempfile::tempdir().unwrap();
     let actor = key(home.path(), "owner").await;
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    crate::test_support::acp_policies::install_identity_acp_policies(&node).await.unwrap();
     node.add_collection(gents_protocol::schemas::AGENT_SESSION)
         .await
         .unwrap();

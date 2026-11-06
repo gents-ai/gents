@@ -784,7 +784,8 @@ mod tests {
     #[tokio::test]
     async fn diagnostics_reads_actual_scoped_head_across_requesters_without_session_cache(
     ) -> Result<()> {
-        let node = std::sync::Arc::new(defra_node::Node::builder().build().await?);
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
+        crate::test_support::acp_policies::install_identity_acp_policies(&node).await?;
         node.add_collection(gents_protocol::schemas::AGENT_REQUEST)
             .await?;
         node.add_collection(gents_protocol::schemas::AGENT_MESSAGE)
