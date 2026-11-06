@@ -168,6 +168,38 @@ impl SelfConfigFixture {
             .unwrap();
     }
 
+    async fn grant_pack_install(&self) {
+        use crate::store::config_client::{
+            apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
+            DesiredStateApplyPlan,
+        };
+        let tools_id = format!("{}:tools", self.agent_did);
+        self.user_access
+            .transact_write("test.self_config.grant_pack_install", |txn| {
+                let tools_id = &tools_id;
+                let owner = self.db.node_identity.did();
+                Box::pin(async move {
+                    let (_, mut tools) = read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Tools,
+                        owner,
+                        tools_id,
+                    )
+                    .await?
+                    .expect("selected Tools exists");
+                    tools["self_config"] = json!({"enable_pack_install": true});
+                    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                        collection: crate::Collection::Tools,
+                        add: tools.clone(),
+                        update: tools,
+                    }])?;
+                    apply_desired_state_plan(txn, &plan).await
+                })
+            })
+            .await
+            .unwrap();
+    }
+
     pub(super) fn agent_did(&self) -> &str {
         &self.agent_did
     }
@@ -202,6 +234,14 @@ impl SelfConfigFixture {
     }
 
     fn tools_with_config(&self, grants: &SelfConfigToolConfig) -> Vec<Box<dyn ToolDyn>> {
+        self.tools_with_plugins(grants, test_plugins())
+    }
+
+    fn tools_with_plugins(
+        &self,
+        grants: &SelfConfigToolConfig,
+        plugins: Arc<crate::plugin::executor::PluginExecutor>,
+    ) -> Vec<Box<dyn ToolDyn>> {
         assert_eq!(grants.agent_did, self.agent_did);
         build_self_config_tools_with_runtime(
             Arc::default(),
@@ -210,7 +250,7 @@ impl SelfConfigFixture {
             Some(self.agent.clone()),
             Some(self.db.node_identity.clone()),
             grants,
-            test_plugins(),
+            plugins,
             Some(self.node_binding.clone()),
         )
     }
@@ -825,6 +865,20 @@ async fn pack_tool(
     (node, node_did, tools)
 }
 
+async fn signed_pack_tool(
+    label: &str,
+    plugins: Arc<crate::plugin::executor::PluginExecutor>,
+) -> (SelfConfigFixture, Vec<Box<dyn ToolDyn>>) {
+    let fixture = SelfConfigFixture::new(label).await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_pack_install().await;
+    let mut tool_config = config(&[]);
+    tool_config.agent_did = fixture.agent_did().to_owned();
+    tool_config.enable_pack_install = true;
+    let tools = fixture.tools_with_plugins(&tool_config, plugins);
+    (fixture, tools)
+}
+
 async fn config_call(
     tools: &[Box<dyn ToolDyn>],
     argv: &[&str],
@@ -840,7 +894,7 @@ async fn config_call(
 #[tokio::test]
 async fn pack_list_pages_the_packs_the_home_store_holds() {
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
-    let (_node, _did, tools) = pack_tool("pack-list", plugins).await;
+    let (_fixture, tools) = signed_pack_tool("pack-list", plugins).await;
     let page: Value =
         serde_json::from_str(&config_call(&tools, &["pack", "list"]).await.unwrap()).unwrap();
     assert_eq!(page["source"], "store_and_installations");
@@ -872,7 +926,7 @@ async fn pack_list_pages_the_packs_the_home_store_holds() {
         .unwrap_err();
     assert!(error.to_string().contains("between 1 and 50"), "{error}");
 
-    let (_node, _did, homeless) = pack_tool("pack-list-homeless", test_plugins()).await;
+    let (_fixture, homeless) = signed_pack_tool("pack-list-homeless", test_plugins()).await;
     let page: Value =
         serde_json::from_str(&config_call(&homeless, &["pack", "list"]).await.unwrap()).unwrap();
     assert_eq!(page["page"]["total"], 0);
@@ -882,7 +936,7 @@ async fn pack_list_pages_the_packs_the_home_store_holds() {
 #[tokio::test]
 async fn pack_list_reports_a_damaged_archive_as_an_error_row() {
     let (home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
-    let (_node, _did, tools) = pack_tool("pack-list-damaged", plugins).await;
+    let (_fixture, tools) = signed_pack_tool("pack-list-damaged", plugins).await;
     let page: Value =
         serde_json::from_str(&config_call(&tools, &["pack", "list"]).await.unwrap()).unwrap();
     let digest = page["items"][0]["artifact_digest"].as_str().unwrap();
@@ -910,7 +964,7 @@ async fn pack_update_without_a_version_asks_the_registry_and_fails_loudly_offlin
     let _registry_lock = PACK_REGISTRY_ENV.lock().await;
     let _registry = crate::test_support::EnvVarGuard::set("GENTS_REGISTRY", "http://127.0.0.1:9");
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
-    let (_node, _did, tools) = pack_tool("pack-update-offline", plugins).await;
+    let (_fixture, tools) = signed_pack_tool("pack-update-offline", plugins).await;
     let error = config_call(
         &tools,
         &["pack", "preview", "update", "fixture/documents_fixture"],
@@ -948,7 +1002,8 @@ async fn pack_install_refuses_a_pack_shipped_job_block() {
     pack_config["agent_targets"] = json!([{"target_id": "wf-run", "target_node_did": "did:key:foreign", "agent_did": "fixture-worker", "name": "wf-run"}]);
     std::fs::write(&config_path, serde_json::to_vec(&pack_config).unwrap()).unwrap();
     let (_home, plugins) = crate::test_support::home_with_pack_dir(&dir);
-    let (_node, _did, tools) = pack_tool("pack-job-block", plugins).await;
+    let (fixture, tools) = signed_pack_tool("pack-job-block", plugins).await;
+    let slot = format!("worker={}:inference", fixture.agent_did());
     let error = format!(
         "{:#}",
         config_call(
@@ -959,7 +1014,7 @@ async fn pack_install_refuses_a_pack_shipped_job_block() {
                 "install",
                 "fixture/documents_fixture",
                 "--inference-slot",
-                "worker=setup:inference",
+                &slot,
             ],
         )
         .await
@@ -977,7 +1032,8 @@ async fn pack_install_refuses_tools_naming_an_unresolved_plugin() {
     pack_config["tools"][0]["integrations"] = json!({"plugins": [{"plugin": "acme/missing"}]});
     std::fs::write(&config_path, serde_json::to_vec(&pack_config).unwrap()).unwrap();
     let (_home, plugins) = crate::test_support::home_with_pack_dir(&dir);
-    let (node, _did, tools) = pack_tool("pack-unresolved-plugin", plugins).await;
+    let (fixture, tools) = signed_pack_tool("pack-unresolved-plugin", plugins).await;
+    let slot = format!("worker={}:inference", fixture.agent_did());
     let error = format!(
         "{:#}",
         config_call(
@@ -988,7 +1044,7 @@ async fn pack_install_refuses_tools_naming_an_unresolved_plugin() {
                 "install",
                 "fixture/documents_fixture",
                 "--inference-slot",
-                "worker=setup:inference",
+                &slot,
             ],
         )
         .await
@@ -998,32 +1054,19 @@ async fn pack_install_refuses_tools_naming_an_unresolved_plugin() {
         error.contains("acme/missing") && error.contains("fixture-worker-tools"),
         "{error}"
     );
-    let written = node
+    let written = fixture
+        .user_access
         .execute(r#"{ Tools(filter: {tools_id: {_eq: "fixture-worker-tools"}}) { tools_id } }"#)
-        .await;
-    assert!(written.data.unwrap()["Tools"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+        .await
+        .unwrap();
+    assert!(written["data"]["Tools"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn config_tools_cannot_self_grant_pack_install() {
-    let node = build_agent_node().await;
-    let identity = node_identity("pack-self-grant");
-    let node_did = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
-
-    let mut tool_config = config(&["tools"]);
-    tool_config.agent_did = "setup".to_string();
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        node_did,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("pack-self-grant").await;
+    fixture.grant_selected_configuration().await;
+    let tools = fixture.tools(&["tools"]);
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -5643,7 +5686,7 @@ async fn pack_search_uses_registry_pagination_without_installing() {
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let _registry =
         crate::test_support::EnvVarGuard::set("GENTS_REGISTRY", format!("http://{address}"));
-    let (node, did, tools) = pack_tool("registry-search", test_plugins()).await;
+    let (fixture, tools) = signed_pack_tool("registry-search", test_plugins()).await;
     let tool = tools.iter().find(|t| t.name() == CONFIG_TOOL_NAME).unwrap();
     let first: Value = serde_json::from_str(
         &tool
@@ -5670,13 +5713,14 @@ async fn pack_search_uses_registry_pagination_without_installing() {
             .await
             .is_err());
     }
-    let access = crate::store::config_client::ConfigAccess::local(node);
-    assert!(
-        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(crate::pack::read_installed_pack(
+        &fixture.user_access,
+        fixture.db.node_identity.did(),
+        "fixture/documents_fixture",
+    )
+    .await
+    .unwrap()
+    .is_none());
     server.abort();
 }
 
