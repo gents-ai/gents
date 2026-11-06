@@ -2005,15 +2005,12 @@ mod job_calls {
     use crate::plugin::job_calls::JobCaller;
     use crate::plugin::PluginVerdict;
     use crate::tools::background::job::driver::{settle_plugin_job, Settlement};
-    use crate::tools::background::job::input::tests::{completed_request, open};
     use crate::tools::background::job::keys::{job_session_id, job_spawn_key};
     use crate::tools::background::status::ProcessControlScope;
     use crate::tools::call::lifecycle::admission_fixture::{
         fixture_job_pin, published_admission, PublishedAdmission, PublishedAdmissionOptions,
     };
     use crate::tools::call::lifecycle::AwaitMode;
-
-    const CHAIN: &str = "chain-row";
 
     fn tool_output() -> StampContext {
         StampContext::ToolOutput {
@@ -2070,18 +2067,88 @@ mod job_calls {
         json!({"id": id, "result": {"row_doc_id": row_doc_id, "offset": offset, "limit": limit}})
     }
 
-    async fn child_node(text: &str) -> Arc<crate::defra_node::Node> {
-        let node = open().await;
-        completed_request(
-            &node,
-            CHAIN,
-            "done",
-            &job_session_id("root", "slot-a", 0),
-            &job_spawn_key("root", "slot-a", 0),
+    async fn completed_child(admission: &PublishedAdmission, text: &str) -> String {
+        use crate::request::lifecycle::{SessionMessageCause, SessionMessageTarget};
+        use crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified;
+
+        let tool = &admission.tool;
+        let access = tool.access().unwrap();
+        let agent_did = tool.actor().as_str();
+        let chain = tool.doc_id().unwrap().to_owned();
+        let cause = SessionMessageCause {
+            caller_node_did: admission.node_did.clone(),
+            caller_agent_did: agent_did.to_owned(),
+            caller_session_id: tool.session_id().to_owned(),
+            caller_requester_did: tool.requester_did().map(str::to_owned),
+            caller_request_id: tool.request_id().to_owned(),
+            caller_request_doc_id: tool.request_doc_id().unwrap().to_owned(),
+            caller_hop: 0,
+            tool_call_id: tool.tool_call_id().to_owned(),
+            tool_call_doc_id: chain.clone(),
+            correlation: None,
+        };
+        let session = job_session_id(&chain, "slot-a", 0);
+        let target = SessionMessageTarget {
+            node_did: admission.node_did.clone(),
+            agent_did: agent_did.to_owned(),
+            session_id: session.clone(),
+        };
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let create =
+            crate::request::lifecycle::materialize::build_session_message_request_with_input(
+                &cause,
+                &target,
+                "child work",
+                Some("child"),
+                &request_id,
+                Some(job_spawn_key(&chain, "slot-a", 0)),
+                1,
+                gents_protocol::request_input::RequestInput {
+                    session_creation: Some(
+                        gents_protocol::request_input::SessionCreationIntent::PluginJob,
+                    ),
+                    ..Default::default()
+                },
+                &access.managed_agent_signer().unwrap(),
+            )
+            .await
+            .unwrap();
+        let plan = crate::session::message::Plan::request(session, 1, create);
+        access
+            .transact_write("test.job_calls.child", |txn| {
+                let (cause, plan) = (&cause, &plan);
+                Box::pin(async move {
+                    crate::session::message::stage_planned_write_in_txn(txn, cause, plan).await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
+
+        let response = admission.client.execute(&format!(
+            r#"{{ Agent(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 2) {{ agent_did creation_nonce }} }}"#,
+            crate::store::graphql::escape_graphql_string(agent_did)
+        )).await.unwrap();
+        let [row] = response["data"]["Agent"].as_array().unwrap().as_slice() else {
+            panic!("expected one held Agent binding");
+        };
+        let binding = gents_protocol::agent_identity::AgentIdentityBinding {
+            agent_did: row["agent_did"].as_str().unwrap().to_owned(),
+            creation_nonce: row["creation_nonce"].as_str().unwrap().to_owned(),
+        };
+        let agent =
+            crate::store::identity::resolve_agent_identity(admission.runtime.as_ref(), &binding)
+                .unwrap();
+        complete_child_managed_verified(
+            &admission.node,
+            &request_id,
+            &admission.node_did,
             text,
+            agent.as_ref(),
+            admission.runtime.clone(),
         )
         .await;
-        node
+        chain
     }
 
     /// A background job row pinned to `plugin_ref`.
@@ -2133,11 +2200,12 @@ mod job_calls {
     }
 
     fn tool_output_for(admission: &PublishedAdmission) -> StampContext {
-        let mut stamp = tool_output();
-        if let StampContext::ToolOutput { caller_did, .. } = &mut stamp {
-            *caller_did = admission.tool.actor().as_str().to_owned();
+        StampContext::ToolOutput {
+            caller_did: admission.tool.actor().as_str().to_owned(),
+            session_id: admission.tool.session_id().to_owned(),
+            request_doc_id: admission.tool.request_doc_id().unwrap().to_owned(),
+            tool_call_doc_id: admission.tool.doc_id().unwrap().to_owned(),
         }
-        stamp
     }
 
     fn row_scope(admission: &PublishedAdmission) -> ProcessControlScope {
@@ -2165,9 +2233,15 @@ mod job_calls {
 
     #[tokio::test]
     async fn job_calls_child_output_pages_terminal_text_capped_at_result_bytes() {
-        let node = child_node("twelve bytes").await;
-        let caller = JobCaller::new(node.clone(), scope("session"), tool_output())
-            .with_children(vec![CHAIN.into()], 5);
+        let admission = job_row("job-calls-child-pages", "team/plugin").await;
+        let chain = completed_child(&admission, "twelve bytes").await;
+        let caller = JobCaller::new(
+            admission.node.clone(),
+            row_scope(&admission),
+            tool_output_for(&admission),
+        )
+        .with_agent_access(admission.tool.access().unwrap())
+        .with_children(vec![chain], 5);
         let call = run(
             json!([
                 child_output("head", &["slot-a"], 0, 100),
@@ -2204,7 +2278,7 @@ mod job_calls {
         assert!(
             matches!(&answers["missing"], RoundResult::Error { error } if error.contains("nope"))
         );
-        node.shutdown().await.expect("node shutdown");
+        finish(admission).await;
     }
 
     #[tokio::test]
@@ -2364,24 +2438,16 @@ mod job_calls {
     #[tokio::test]
     async fn job_calls_answers_are_keyed_by_id_in_job_results() {
         let mut admission = job_row("job-calls-keyed", "team/plugin").await;
+        let chain = completed_child(&admission, "child text").await;
         settle(&mut admission, "stored").await;
         let row = admission.tool.doc_id().unwrap().to_owned();
-        completed_request(
-            &admission.node,
-            CHAIN,
-            "done",
-            &job_session_id("root", "slot-a", 0),
-            &job_spawn_key("root", "slot-a", 0),
-            "child text",
-        )
-        .await;
         let caller = JobCaller::new(
             admission.node.clone(),
             row_scope(&admission),
             tool_output_for(&admission),
         )
         .with_agent_access(admission.tool.access().unwrap())
-        .with_children(vec![CHAIN.into()], 64);
+        .with_children(vec![chain], 64);
         let call = run(
             json!([
                 child_output("c", &["slot-a"], 0, 100),
