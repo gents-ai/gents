@@ -56,16 +56,26 @@ fn context_info(
     )
 }
 
+/// The model a session is reported against.
+pub(super) struct SessionModel<'a> {
+    pub(super) id: &'a str,
+    pub(super) display_name: &'a str,
+    pub(super) context_window: u64,
+}
+
 pub(super) async fn session_info(
     node: &std::sync::Arc<EmbeddedNode>,
     access: &gents::ConfigAccess,
     node_did: &str,
     agent_did: &str,
     session: &str,
-    model: &str,
-    model_name: &str,
-    context_window: u64,
+    model: SessionModel<'_>,
 ) -> Result<Value> {
+    let SessionModel {
+        id: model,
+        display_name: model_name,
+        context_window,
+    } = model;
     let requests = super::sessions::load(node, node_did, agent_did, session).await?;
     let observation =
         load_session_inference_observation(access, node_did, Some(node_did), session).await?;

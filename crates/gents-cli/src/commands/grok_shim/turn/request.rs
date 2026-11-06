@@ -74,7 +74,7 @@ impl TurnManager {
                     .await?,
             );
             let prepared = crate::request_helpers::prepare_agent_request_with_input(
-                &graphql,
+                graphql,
                 &self.config.node_did,
                 &content,
                 Some(&request.session_id),
@@ -84,12 +84,12 @@ impl TurnManager {
             )
             .await?;
             let result = crate::request_helpers::submit_prepared_agent_request_committed(
-                &graphql, &prepared,
+                graphql, &prepared,
             )
             .await;
             if result.is_err() {
                 if let Ok(Some(row)) =
-                    crate::request_helpers::matching_prepared_receipt(&graphql, &prepared.create)
+                    crate::request_helpers::matching_prepared_receipt(graphql, &prepared.create)
                         .await
                 {
                     self.interrupt_submitted(&row).await;

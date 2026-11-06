@@ -16,7 +16,7 @@ use crate::cli::EvalWatchArgs;
 
 pub(crate) enum Documents<'a> {
     Open(&'a EvalContext),
-    Reopened(EvalContext),
+    Reopened(Box<EvalContext>),
     Locked(String),
 }
 
@@ -41,7 +41,7 @@ where
     Fut: Future<Output = Result<EvalContext>>,
 {
     match resolve().await {
-        Ok(ctx) => Ok(Documents::Reopened(ctx)),
+        Ok(ctx) => Ok(Documents::Reopened(Box::new(ctx))),
         Err(error) if store_locked(&error) => Ok(Documents::Locked(format!("{error:#}"))),
         Err(error) => Err(error),
     }
@@ -197,7 +197,7 @@ where
             }
             let ctx = match &documents {
                 Documents::Open(ctx) => *ctx,
-                Documents::Reopened(ctx) => ctx,
+                Documents::Reopened(ctx) => &**ctx,
                 Documents::Locked(reason) => {
                     anyhow::bail!("stopped: report unavailable: {reason}")
                 }
