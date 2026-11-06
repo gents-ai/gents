@@ -386,7 +386,7 @@ fn generated_task_goal_recovery_cases_fence_request_witness() {
 #[test]
 fn generated_goal_submission_cases_fence_atomic_visibility() {
     let cases = lean_goal_submission_cases();
-    assert_eq!(cases.len(), 5, "the goal submission matrix drifted");
+    assert_eq!(cases.len(), 6, "the goal submission matrix drifted");
     for case in cases {
         let action = match case.action.as_str() {
             "stage_goal" => GoalSubmissionAction::StageGoal,
