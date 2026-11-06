@@ -157,6 +157,7 @@ async fn workspace_agent_selection_binds_visible_physical_targets() -> anyhow::R
         defra_node::Node::builder()
             .enable_signing()
             .with_node_identity_did(runtime.did())
+            .with_node_acp_owner(runtime.did().to_owned())
             .build()
             .await?,
     );
@@ -858,8 +859,9 @@ async fn test_node() -> Arc<defra_node::Node> {
 #[tokio::test]
 async fn workspace_reads_keep_the_held_agent_actor() {
     let node = test_node().await;
-    let agent_did = super::test_agent_did();
     let node_did = crate::request::lifecycle::test_support::PIN_FIXED_DID;
+    super::seed_test_agent(&node, node_did).await;
+    let agent_did = super::test_agent_did();
     let agent_access = super::test_agent_access(&node);
     let node_access =
         crate::ConfigAccess::local_as(node.clone(), identity::Did::new(node_did).unwrap());
@@ -3135,8 +3137,9 @@ async fn retired_reserved_bindings_do_not_scan() {
 async fn callback_result_never_falls_back_when_agent_key_is_unavailable() {
     use identity::Identity as _;
     let node = test_node().await;
+    let keypair = crypto::ed25519_key_from_seed(&[93_u8; 32][..]).unwrap();
     let unavailable =
-        identity::RawIdentity::from_bytes(crypto::KeyType::Ed25519, &[93; 32]).unwrap();
+        identity::RawIdentity::from_bytes(crypto::KeyType::Ed25519, keypair.as_slice()).unwrap();
     let result = CallbackResultDoc {
         result_id: "unavailable-agent-result".into(),
         invocation_id: "unavailable-agent-invocation".into(),

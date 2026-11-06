@@ -847,7 +847,7 @@ mod tests {
             (root.did(), agent.did(), &binding_identity.creation_nonce),
             ("owner-b", other_agent.did(), &other_binding.creation_nonce),
         ] {
-            let created = owner_access.write("test.event_group.agent", &format!("mutation {{create_Agent(input:{{node_did:\"{}\",agent_did:\"{}\",creation_nonce:\"{}\"}}){{_docID}}}}", escape_graphql_string(owner), escape_graphql_string(identity), escape_graphql_string(nonce))).await.unwrap();
+            let created = owner_access.write("test.event_group.agent", &format!("mutation {{create_Agent(input:{{node_did:\"{}\",agent_did:\"{}\",creation_nonce:\"{}\",inference_profile_id:\"{}\"}}){{_docID}}}}", escape_graphql_string(owner), escape_graphql_string(identity), escape_graphql_string(nonce), escape_graphql_string(&format!("{identity}:inference")))).await.unwrap();
             let doc = crate::store::graphql::created_doc_id(&created, "Agent").unwrap();
             owner_access
                 .add_actor_relationship(

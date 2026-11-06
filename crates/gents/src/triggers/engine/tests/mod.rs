@@ -436,7 +436,7 @@ fn resolved_task(prompt_template: &str) -> ResolvedTask {
         emit_outcome: false,
         task_id: "t1".to_string(),
         name: None,
-        agent_did: "general".to_string(),
+        agent_did: spy_test_agent().agent_did.clone(),
         prompt_template: prompt_template.to_string(),
         goal_objective_template: None,
         goal_token_budget: None,

@@ -84,7 +84,7 @@ fn receipt(fire: &Fire, index: usize) -> TriggerFire {
 }
 
 fn request_mutation(receipt: &TriggerFire) -> String {
-    request_mutation_as(receipt, "did:test:agent")
+    request_mutation_as(receipt, &spy_test_agent().agent_did)
 }
 
 fn request_mutation_as(receipt: &TriggerFire, agent_did: &str) -> String {
@@ -226,7 +226,7 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
         ] {
             let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
             ensure_runtime_schemas(&node).await.unwrap();
-            let behavior = integration_test_agent("general");
+            let behavior = spy_test_agent();
             let owner = behavior.node_did().to_owned();
             let pre: State = decode(&case["pre"]);
             let next: Fire = decode(&case["fire"]);
@@ -237,7 +237,7 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
                     &node,
                     &next.session,
                     &owner,
-                    "general",
+                    spy_test_agent().agent_did.as_str(),
                     Some(&owner),
                 )
                 .await
@@ -260,7 +260,7 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
                             &serde_json::json!({"input": {
                                 "request_id": fire.request_id, "node_did": owner,
                                 "requester_did": owner, "session_id": fire.session_id,
-                                "agent_did": "general", "purpose": "normal", "content": "prior work",
+                                "agent_did": spy_test_agent().agent_did.clone(), "purpose": "normal", "content": "prior work",
                                 "lifecycle_state": pending_state.as_str(), "caused_by_trigger_id": fire.identity.trigger_id,
                                 "caused_by_trigger_kind": "schedule", "created_at": fire.created_at
                             }}),
@@ -488,7 +488,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                         crate::request::watcher::AgentRequest::try_from(row.clone()).unwrap();
                     let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
                         node.clone(),
-                        "general",
+                        spy_test_agent().agent_did.as_str(),
                         &identity.owner_did,
                         request,
                         60,
@@ -538,7 +538,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                 }
                 OutcomeAction::Recover { commit } => {
                     if commit {
-                        durable::recover_outcomes(&node, "owner-a", "did:test:agent")
+                        durable::recover_outcomes(&node, "owner-a", &spy_test_agent().agent_did)
                             .await
                             .unwrap();
                     } else {

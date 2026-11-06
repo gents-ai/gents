@@ -32,7 +32,7 @@ async fn materializer_with_node() -> (Arc<defra_node::Node>, ProductionMateriali
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot =
-        snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
+        snapshot_with_agent_and_schedules(spy_test_agent(), RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     (node, materializer)
@@ -41,7 +41,7 @@ async fn materializer_with_node() -> (Arc<defra_node::Node>, ProductionMateriali
 #[tokio::test]
 async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
     let snapshot =
-        snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
+        snapshot_with_agent_and_schedules(spy_test_agent(), RapidHashMap::new());
     let owner = snapshot.local_did.clone();
     let node = Arc::new(
         defra_node::Node::builder()
@@ -380,7 +380,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
                         txn,
                         &session,
                         &node_did,
-                        "general",
+                        spy_test_agent().agent_did.as_str(),
                         requester.as_deref(),
                         None,
                         Some(gents_protocol::session::SessionProvenance {
@@ -1131,6 +1131,7 @@ async fn create_request(
 ) {
     let request_id = escape_graphql_string(request_id);
     let node_did = escape_graphql_string(node_did);
+    let agent_did = escape_graphql_string(&spy_test_agent().agent_did);
     let lifecycle_state = escape_graphql_string(lifecycle_state);
     let trigger_id = escape_graphql_string(trigger_id);
     let correlation = escape_graphql_string(correlation);
@@ -1141,7 +1142,7 @@ async fn create_request(
                 request_id: "{request_id}",
                 purpose: "normal",
                 node_did: "{node_did}",
-                agent_did: "general",
+                agent_did: "{agent_did}",
                 session_id: "{request_id}",
                 content: "production marker test",
                 lifecycle_state: "{lifecycle_state}",
@@ -1180,29 +1181,14 @@ async fn group_marker_is_read_by_selected_held_agent_without_node_visibility() {
     )
     .await
     .unwrap();
-    let input = serde_json::json!({
-        "node_did": db.node_identity.did(),
-        "agent_did": binding.agent_did,
-        "creation_nonce": binding.creation_nonce,
-        "display_name": "other group Agent",
-    });
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-        crate::store::config_client::DesiredStateApplyDocument {
-            collection: crate::Collection::Agent,
-            add: input.clone(),
-            update: input,
-        },
-    ])
-    .unwrap();
-    client_access
-        .transact_write("test.group_sibling_agent", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
-            })
-        })
-        .await
-        .expect("the held User publishes the sibling Agent");
+    let owner = db.node_identity.did().to_owned();
+    crate::test_support::install_test_agent_binding_with_access(
+        &owner,
+        "other group Agent",
+        &binding,
+        &client_access,
+    )
+    .await;
     let mut sibling = (*agent).clone();
     sibling.agent_did = binding.agent_did.clone();
     sibling.agent_identity =
@@ -2063,7 +2049,7 @@ async fn claimed_trigger_request(
             .unwrap();
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
-        "general",
+        spy_test_agent().agent_did.as_str(),
         node_did,
         row.try_into().unwrap(),
         60,
@@ -2217,7 +2203,7 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot =
-        snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
+        snapshot_with_agent_and_schedules(spy_test_agent(), RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot.clone());
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let identity = gents_protocol::trigger_delivery::FireIdentity {
@@ -2251,7 +2237,7 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
             assert!(crate::triggers::engine::durable::stage_fire_receipt(txn, &fire).await?);
             txn.execute_with_variables("mutation($input: AgentRequestMutationInputArg!) {create_AgentRequest(input: $input) {_docID}}", &serde_json::json!({"input": {
                 "request_id": fire.request_id, "node_did": fire.identity.owner_did,
-                "session_id": fire.session_id, "agent_did": "general", "purpose": "normal",
+                "session_id": fire.session_id, "agent_did": spy_test_agent().agent_did.clone(), "purpose": "normal",
                 "lifecycle_state": "processing", "caused_by_trigger_id": "replay-trigger",
                 "created_at": fire.created_at
             }})).await?;
@@ -2262,7 +2248,7 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
     let engine = TriggerEngine::new(rx, Arc::new(materializer));
     let mut task = resolved_task("{{ doc.field_added_after_admission }}");
     task.task_id = "replay-task".into();
-    task.agent_did = "general".into();
+    task.agent_did = spy_test_agent().agent_did.clone();
     let result = engine.dispatch(FireIntent {
         trigger_id: Some("replay-trigger".into()), trigger_kind: TriggerKind::Event,
         task, concurrency: ConcurrencyMode::LatestOnly,
@@ -2296,7 +2282,7 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot =
-        snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
+        snapshot_with_agent_and_schedules(spy_test_agent(), RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot.clone());
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let identity = gents_protocol::trigger_delivery::FireIdentity {
@@ -2330,7 +2316,7 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
             assert!(crate::triggers::engine::durable::stage_fire_receipt(txn, &fire).await?);
             txn.execute_with_variables("mutation($input: AgentRequestMutationInputArg!) {create_AgentRequest(input: $input) {_docID}}", &serde_json::json!({"input": {
                 "request_id": fire.request_id, "node_did": fire.identity.owner_did,
-                "session_id": fire.session_id, "agent_did": "general", "purpose": "normal",
+                "session_id": fire.session_id, "agent_did": spy_test_agent().agent_did.clone(), "purpose": "normal",
                 "lifecycle_state": "processing", "caused_by_trigger_id": "replay-trigger",
                 "created_at": fire.created_at
             }})).await?;
@@ -2341,7 +2327,7 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
     let engine = TriggerEngine::new(rx, Arc::new(materializer));
     let mut task = resolved_task("{{ doc.field_added_after_admission }}");
     task.task_id = "replay-task".into();
-    task.agent_did = "general".into();
+    task.agent_did = spy_test_agent().agent_did.clone();
     let result = engine.dispatch(FireIntent {
         trigger_id: Some("replay-trigger".into()), trigger_kind: TriggerKind::Schedule,
         task, concurrency: ConcurrencyMode::LatestOnly,
@@ -2374,13 +2360,14 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
 async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let behavior = integration_test_agent("general");
+    let behavior = spy_test_agent();
     let owner = behavior.node_did().to_string();
+    let held_agent = behavior.agent_did.clone();
     for (target, agent, closed) in [
-        ("captain", "general", false),
+        ("captain", held_agent.as_str(), false),
         ("wrong-agent", "other", false),
-        ("closed", "general", true),
-        ("foreign-owner", "general", false),
+        ("closed", held_agent.as_str(), true),
+        ("foreign-owner", held_agent.as_str(), false),
     ] {
         crate::session::ensure_session_with_agent_did_and_requester_did(
             &node,
@@ -2485,7 +2472,7 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
                 let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();
                 let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
                     node.clone(),
-                    "general",
+                    spy_test_agent().agent_did.as_str(),
                     &owner,
                     request,
                     60,

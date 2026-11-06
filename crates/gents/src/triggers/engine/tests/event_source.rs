@@ -487,12 +487,21 @@ fn event_test_behavior() -> Arc<ResolvedAgent> {
         .clone()
 }
 
+/// Event-source tasks run as the event behavior's signed Agent; its snapshot
+/// only holds that Agent, so the task must name its DID.
+fn resolved_task(prompt_template: &str) -> ResolvedTask {
+    ResolvedTask {
+        agent_did: event_test_behavior().agent_did.clone(),
+        ..super::resolved_task(prompt_template)
+    }
+}
+
 fn snapshot_with_event_triggers(
     generation: u64,
     triggers: RapidHashMap<String, ResolvedEventTrigger>,
 ) -> Arc<ActiveRuntimeSnapshot> {
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-        "general".to_string(),
+        event_test_behavior().agent_did.clone(),
         vec![event_test_behavior()],
         RapidHashMap::new(),
         RapidHashMap::new(),
@@ -1777,14 +1786,14 @@ async fn concurrent_trigger_fire_count_updates_are_not_lost() {
         }
     }
     assert!(committed > 0, "at least one concurrent update commits");
-    let trigger = observed_trigger(node.as_ref(), trigger_id).await;
+    let trigger = observed_trigger(node.as_ref(), event_test_behavior().node_did(), trigger_id).await;
     assert_eq!(trigger["fire_count"].as_i64(), Some(committed));
 }
 
-async fn observed_trigger(node: &defra_node::Node, id: &str) -> serde_json::Value {
+async fn observed_trigger(node: &defra_node::Node, owner_did: &str, id: &str) -> serde_json::Value {
     let query = format!(
         "{{Trigger(filter:{{node_did:{{_eq:\"{}\"}},trigger_id:{{_eq:\"{}\"}}}},limit:2){{task_id source enabled concurrency last_status last_error last_attempt_at last_fired_source_doc_id fire_count}}}}",
-        escape_graphql_string(event_test_behavior().node_did()),
+        escape_graphql_string(owner_did),
         escape_graphql_string(id)
     );
     let response = node.execute(&query).await;
@@ -1862,7 +1871,7 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
     let mut fired_trigger = None;
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let trig = observed_trigger(node.as_ref(), "trigger-fired").await;
+        let trig = observed_trigger(node.as_ref(), event_test_behavior().node_did(), "trigger-fired").await;
         if trig["last_status"].as_str() == Some("fired") {
             fired_trigger = Some(trig);
             break;
@@ -1959,7 +1968,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
     let mut skipped_trigger = None;
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let trig = observed_trigger(node.as_ref(), "trigger-skip-err").await;
+        let trig = observed_trigger(node.as_ref(), event_test_behavior().node_did(), "trigger-skip-err").await;
         if trig["last_status"].as_str() == Some("skipped") {
             skipped_trigger = Some(trig);
             break;
@@ -1994,7 +2003,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
     let mut errored_trigger = None;
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let trig = observed_trigger(node.as_ref(), "trigger-skip-err").await;
+        let trig = observed_trigger(node.as_ref(), event_test_behavior().node_did(), "trigger-skip-err").await;
         if trig["last_status"].as_str() == Some("error") {
             errored_trigger = Some(trig);
             break;
