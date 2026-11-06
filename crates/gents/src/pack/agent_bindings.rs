@@ -598,4 +598,4 @@ pub(super) fn resolve_dependency_binding<'a>(
 }
 
 #[cfg(test)]
-mod tests;
+pub(in crate::pack) mod tests;

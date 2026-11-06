@@ -155,7 +155,7 @@ async fn install(
     .await
 }
 
-async fn fixture() -> (
+pub(in crate::pack) async fn fixture() -> (
     tempfile::TempDir,
     KeyIdentity,
     Arc<defra_node::Node>,

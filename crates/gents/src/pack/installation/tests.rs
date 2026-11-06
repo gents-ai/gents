@@ -88,11 +88,15 @@ async fn seed_pack_node(access: &ConfigAccess, owner: &str) -> Result<()> {
 }
 
 fn config(tools: &[(&str, &str)]) -> PackConfig {
+    config_owned(OWNER, tools)
+}
+
+fn config_owned(owner: &str, tools: &[(&str, &str)]) -> PackConfig {
     serde_json::from_value(json!({
-        "node": {"node_did": OWNER},
+        "node": {"node_did": owner},
         "tools": tools
             .iter()
-            .map(|(id, name)| json!({"tools_id": id, "display_name": name, "node_did": OWNER, "tags": ["gents:pack:demo"]}))
+            .map(|(id, name)| json!({"tools_id": id, "display_name": name, "node_did": owner, "tags": ["gents:pack:demo"]}))
             .collect::<Vec<_>>(),
     }))
     .unwrap()
@@ -685,18 +689,26 @@ async fn corrupt_installation_field(
     let mut input = serde_json::Map::new();
     input.insert(field.to_owned(), value);
     let variables = json!({ "input": Value::Object(input) });
-    let variables = &variables;
+    let document = format!(
+        r#"mutation($input: {RECORD}MutationInputArg!) {{ update_{RECORD}(docID: "{}", input: $input) {{ _docID }} }}"#,
+        doc_id
+    );
+    let signed = matches!(access, ConfigAccess::Graphql(_));
     let response = access
         .transact_write("test.corrupt_installation_field", |txn| {
+            let document = &document;
+            let variables = &variables;
             Box::pin(async move {
-                txn.execute_with_variables(
-                    &format!(
-                        r#"mutation($input: {RECORD}MutationInputArg!) {{ update_{RECORD}(docID: "{}", input: $input) {{ _docID }} }}"#,
-                        doc_id
-                    ),
-                    variables,
-                )
-                .await
+                if signed {
+                    txn.execute_client_signed_update(
+                        document,
+                        variables,
+                        gents_protocol::schemas::PACK_INSTALLATION,
+                    )
+                    .await
+                } else {
+                    txn.execute_with_variables(document, variables).await
+                }
             })
         })
         .await
@@ -843,50 +855,43 @@ async fn dependency_fixture() -> (Arc<defra_node::Node>, ConfigAccess) {
     (node, access)
 }
 
-/// Installs `dependee_fixture` the way a front-end installs a documents pack.
-async fn install_dependee(access: &ConfigAccess, explicit: bool) {
+/// Installs `dependee_fixture` through the authored slot and graph owners.
+async fn install_dependee(
+    access: &ConfigAccess,
+    node: &Arc<defra_node::Node>,
+    runtime: &crate::KeyIdentity,
+    explicit: bool,
+) {
+    use crate::NodeIdentity as _;
     let (_guard, dir) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
     let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
     let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
-    let authored = crate::pack::load_pack_config(
-        archive.manifest(),
-        &crate::pack::PackInstallOptions {
-            node_did: OWNER.into(),
-        },
-        &|path| Ok(archive.asset(path)?.to_vec()),
-        &|_| None,
-    )
-    .unwrap();
-    let requested = BTreeMap::from([("worker".to_owned(), "glm:inference".to_owned())]);
-    let prepared = prepare_document_pack_install(
-        access,
-        OWNER,
-        archive.manifest(),
-        &authored,
+    let local = ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(access.actor_did().unwrap()).unwrap(),
+    );
+    let requested = BTreeMap::from([("worker".to_owned(), "profile".to_owned())]);
+    let prepared = super::super::prepare_document_pack_archive_with_runtime(
+        &local,
+        runtime.did(),
+        &archive,
         &requested,
         &[],
-        crate::pack::InstalledVia::Operator,
-        None,
         None,
         &|_| None,
+        runtime,
     )
     .await
     .unwrap();
-    super::super::install_pack_documents(
+    super::super::install_prepared_document_graph(
         access,
-        OWNER,
-        &PackIdentity {
-            installation_doc_id: None,
-            agent_bindings: BTreeMap::new(),
-            coordinate: "fixture/dependee_fixture".into(),
-            version: archive.manifest().version.clone(),
-            digest: archive.digest().to_owned(),
-            plugins: vec![],
-            dependencies: vec![],
-            explicit,
-        },
-        &prepared.config,
+        runtime.did(),
+        &archive,
+        &prepared,
         DriftPolicy::Refuse,
+        None,
+        false,
+        explicit,
     )
     .await
     .unwrap();
@@ -907,14 +912,15 @@ fn demo_identity(dependencies: Vec<String>) -> PackIdentity {
 
 #[tokio::test]
 async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
-    let (_node, access) = dependency_fixture().await;
-    install_dependee(&access, false).await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime);
+    install_dependee(&access, &node, &runtime, false).await;
 
     super::super::install_pack_documents(
         &access,
-        OWNER,
+        owner,
         &demo_identity(vec!["fixture/dependee_fixture".into()]),
-        &config(&[("alpha", "Alpha")]),
+        &config_owned(owner, &[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
     )
     .await
@@ -922,7 +928,7 @@ async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
 
     let error = remove_pack(
         &access,
-        OWNER,
+        owner,
         "fixture/dependee_fixture",
         DriftPolicy::Refuse,
     )
@@ -930,7 +936,7 @@ async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
     .unwrap_err();
     assert!(format!("{error:#}").contains("acme/demo"), "{error:#}");
 
-    let report = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+    let report = remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
         .await
         .unwrap();
     assert_eq!(report.dependencies.len(), 1);
@@ -950,20 +956,21 @@ async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
 
 #[tokio::test]
 async fn an_explicit_dependency_survives_its_dependent() {
-    let (_node, access) = dependency_fixture().await;
-    install_dependee(&access, true).await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime);
+    install_dependee(&access, &node, &runtime, true).await;
 
     super::super::install_pack_documents(
         &access,
-        OWNER,
+        owner,
         &demo_identity(vec!["fixture/dependee_fixture".into()]),
-        &config(&[("alpha", "Alpha")]),
+        &config_owned(owner, &[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
     )
     .await
     .unwrap();
 
-    let report = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+    let report = remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
         .await
         .unwrap();
     assert!(
@@ -986,7 +993,7 @@ async fn an_explicit_dependency_survives_its_dependent() {
 
     remove_pack(
         &access,
-        OWNER,
+        owner,
         "fixture/dependee_fixture",
         DriftPolicy::Refuse,
     )
@@ -996,14 +1003,15 @@ async fn an_explicit_dependency_survives_its_dependent() {
 
 #[tokio::test]
 async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
-    let (_node, access) = dependency_fixture().await;
-    install_dependee(&access, false).await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime);
+    install_dependee(&access, &node, &runtime, false).await;
 
     super::super::install_pack_documents(
         &access,
-        OWNER,
+        owner,
         &demo_identity(vec!["fixture/dependee_fixture".into()]),
-        &config(&[("alpha", "Alpha")]),
+        &config_owned(owner, &[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
     )
     .await
@@ -1021,9 +1029,9 @@ async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
 
     super::super::install_pack_documents(
         &access,
-        OWNER,
+        owner,
         &demo_identity(vec![]),
-        &config(&[("alpha", "Alpha 2")]),
+        &config_owned(owner, &[("alpha", "Alpha 2")]),
         DriftPolicy::Refuse,
     )
     .await
@@ -1046,8 +1054,9 @@ async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
 
 #[tokio::test]
 async fn an_upgrade_keeps_a_plugin_dependency_without_complete_inventory() {
-    let (_node, access) = dependency_fixture().await;
-    install_dependee(&access, false).await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime);
+    install_dependee(&access, &node, &runtime, false).await;
     let dependency_doc = installation_doc_id(&access).await;
     corrupt_installation_field(
         &access,
@@ -1060,9 +1069,9 @@ async fn an_upgrade_keeps_a_plugin_dependency_without_complete_inventory() {
     .await;
     super::super::install_pack_documents(
         &access,
-        OWNER,
+        owner,
         &demo_identity(vec!["fixture/dependee_fixture".into()]),
-        &config(&[("alpha", "Alpha")]),
+        &config_owned(owner, &[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
     )
     .await
@@ -1073,9 +1082,9 @@ async fn an_upgrade_keeps_a_plugin_dependency_without_complete_inventory() {
         .unwrap();
     let error = super::super::install_pack_documents(
         &access,
-        OWNER,
+        owner,
         &demo_identity(vec![]),
-        &config(&[("alpha", "Changed")]),
+        &config_owned(owner, &[("alpha", "Changed")]),
         DriftPolicy::Refuse,
     )
     .await
@@ -1095,22 +1104,23 @@ async fn an_upgrade_keeps_a_plugin_dependency_without_complete_inventory() {
 
 #[tokio::test]
 async fn a_legacy_record_without_dependency_fields_reads_as_explicit() {
-    let (_node, access) = dependency_fixture().await;
-    install_dependee(&access, false).await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime);
+    install_dependee(&access, &node, &runtime, false).await;
 
     let doc_id = installation_doc_id(&access).await;
     corrupt_installation_field(&access, &doc_id, "explicit", Value::Null).await;
 
     super::super::install_pack_documents(
         &access,
-        OWNER,
+        owner,
         &demo_identity(vec!["fixture/dependee_fixture".into()]),
-        &config(&[("alpha", "Alpha")]),
+        &config_owned(owner, &[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
     )
     .await
     .unwrap();
-    remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+    remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
         .await
         .unwrap();
 
@@ -1128,21 +1138,22 @@ async fn a_legacy_record_without_dependency_fields_reads_as_explicit() {
 
 #[tokio::test]
 async fn an_explicitly_installed_documents_dependency_survives_its_dependent() {
-    let (_node, access) = dependency_fixture().await;
-    install_dependee(&access, false).await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime);
+    install_dependee(&access, &node, &runtime, false).await;
     super::super::install_pack_documents(
         &access,
-        OWNER,
+        owner,
         &demo_identity(vec!["fixture/dependee_fixture".into()]),
-        &config(&[("alpha", "Alpha")]),
+        &config_owned(owner, &[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
     )
     .await
     .unwrap();
 
-    install_dependee(&access, true).await;
+    install_dependee(&access, &node, &runtime, true).await;
 
-    let report = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+    let report = remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
         .await
         .unwrap();
     assert!(
