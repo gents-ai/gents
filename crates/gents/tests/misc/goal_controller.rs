@@ -43,26 +43,12 @@ async fn atomic_goal_link_case(actor: &'static str, collection: &'static str) ->
 }
 
 async fn goal_creation_actors(db: &TestDb) -> (gents::KeyIdentity, Arc<dyn NodeIdentity>) {
-    use gents::request::lifecycle::{
-        build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
-    };
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
-
-    let directory = tempfile::tempdir().expect("goal actor key directory");
-    let user = gents::KeyIdentity::load_or_create(directory.path().join("user.key"), None)
-        .expect("goal client identity");
-    let binding = gents::store::identity::provision_agent_identity(db.node_identity.as_ref())
-        .expect("goal agent binding");
-    let agent = gents::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
-        .expect("goal agent identity");
+    let fixture = crate::support::managed_agent_fixture(db).await;
     let admin = ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
-    for actor in [user.did(), agent.did()] {
+    for actor in [fixture.user.did(), fixture.agent.did()] {
         for permission in [
-            gents::store::config_client::NodePermission::DocumentRead,
-            gents::store::config_client::NodePermission::DocumentUpdate,
             gents::store::config_client::NodePermission::DocumentDelete,
             gents::store::config_client::NodePermission::CollectionGet,
-            gents::store::config_client::NodePermission::DacRelationAdd,
             gents::store::config_client::NodePermission::DacRelationDelete,
         ] {
             admin
@@ -71,76 +57,8 @@ async fn goal_creation_actors(db: &TestDb) -> (gents::KeyIdentity, Arc<dyn NodeI
                 .unwrap();
         }
     }
-    let access = db.client_access(&user);
-    let docs = [
-        (
-            gents::Collection::Node,
-            serde_json::json!({"node_did": db.node_identity.did()}),
-        ),
-        (
-            gents::Collection::Agent,
-            serde_json::json!({
-                "node_did": db.node_identity.did(), "agent_did": binding.agent_did,
-                "creation_nonce": binding.creation_nonce, "display_name": "Goal fixture Agent",
-                "inference_profile_id": "goal-fixture-profile", "enabled": true,
-            }),
-        ),
-        (
-            gents::Collection::InferenceBackend,
-            serde_json::json!({
-                "node_did": db.node_identity.did(), "backend_id": "goal-fixture-backend",
-                "name": "Goal fixture", "provider_kind": "OpenAiCompatible",
-                "openai_wire_api": "chat_completions", "auth": {"kind": "unauthenticated"},
-                "endpoint": "http://127.0.0.1:1", "enabled": true,
-            }),
-        ),
-        (
-            gents::Collection::InferenceProfile,
-            serde_json::json!({
-                "node_did": db.node_identity.did(), "profile_id": "goal-fixture-profile",
-                "backend_id": "goal-fixture-backend", "model_name": "goal-fixture-model",
-            }),
-        ),
-    ];
-    let plan = gents::store::config_client::DesiredStateApplyPlan::new(
-        docs.into_iter()
-            .map(
-                |(collection, value)| gents::store::config_client::DesiredStateApplyDocument {
-                    collection,
-                    add: value.clone(),
-                    update: value,
-                },
-            )
-            .collect(),
-    )
-    .unwrap();
-    access
-        .transact_write("test.goal_creation_configuration", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                gents::store::config_client::apply_desired_state_plan(txn, plan).await
-            })
-        })
-        .await
-        .expect("publish client-owned Node and Agent");
-    let spec = RequestSpec::new(
-        RequestPurpose::Normal,
-        RequestIdentity {
-            node_did: db.node_identity.did().into(),
-            requester_did: Some(user.did().into()),
-            agent_did: agent.did().into(),
-            session_id: SESSION.into(),
-            request_id: "goal-session-reservation".into(),
-            content: "reserve session".into(),
-            execution_origin: ExecutionOrigin::Interactive,
-            created_at: "2026-11-04T00:00:00Z".into(),
-        },
-        AgentRequestAdmissionRecord::client(user.did()),
-    );
-    build_signed_client_request(&access, spec, RequestSigner::Identity(&user))
-        .await
-        .expect("reserve user-owned goal session");
-    (user, agent)
+    reserve_goal_session(db, &fixture.user, &fixture.agent, SESSION).await;
+    (fixture.user, fixture.agent)
 }
 
 async fn goal_fixture_request(
@@ -4954,7 +4872,7 @@ async fn seed_failed_call_from_access(
                 "mutation($input: InferenceCallMutationInputArg!) {add_InferenceCall(input: $input) {_docID}}",
                 &serde_json::json!({"input": {"call_id": call_id, "node_did": node_did,
                     "request_id": "usage-limited-request", "request_doc_id": request_doc,
-                    "session_id": SESSION, "agent_did": agent.did(), "backend_id": "goal-fixture-backend",
+                    "session_id": SESSION, "agent_did": agent.did(), "backend_id": format!("{}:backend", agent.did()),
                     "call_seq": 1, "call_kind": call_kind, "attempt": attempt, "call_state": "failed",
                     "queued_at": "2026-07-15T00:00:00Z", "started_at": "2026-07-15T00:00:00Z",
                     "ended_at": ended_at, "failure_reason": failure_reason}}),
