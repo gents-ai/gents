@@ -1366,15 +1366,42 @@ async fn history_reads_exact_node_and_requester_scope() {
 
 #[tokio::test]
 async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    for (owner, text) in [("did:key:owner", "local"), ("did:key:other", "foreign")] {
-        let mut lifecycle = claimed_authored_request(&node, owner, owner, "same").await;
-        let writer = crate::request::streaming::DefraStreamWriter::new(
-            node.clone(),
-            owner,
+    use crate::store::identity::NodeIdentity;
+    let (first_db, first_user, first_client, first_binding) =
+        crate::test_support::signed_test_node("authored-local").await;
+    let (second_db, second_user, second_client, second_binding) =
+        crate::test_support::signed_test_node("authored-foreign").await;
+    let first_node = first_db.node_identity.did();
+    let second_node = second_db.node_identity.did();
+    assert_ne!(first_node, second_node);
+    for (db, user, client, binding, foreign_node, text) in [
+        (
+            &first_db,
+            &first_user,
+            &first_client,
+            &first_binding,
+            second_node,
+            "local",
+        ),
+        (
+            &second_db,
+            &second_user,
+            &second_client,
+            &second_binding,
+            first_node,
+            "foreign",
+        ),
+    ] {
+        let node_did = db.node_identity.did();
+        let mut lifecycle =
+            signed_claimed_authored_request(db, user, client, binding, "same-request", "same")
+                .await;
+        let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+            db.node.clone(),
+            &lifecycle,
             std::time::Duration::ZERO,
-        );
+        )
+        .unwrap();
         lifecycle.begin_owned_execution(&writer).await.unwrap();
         let message = Message::user(text);
         let first = writer
@@ -1395,14 +1422,24 @@ async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
                 .is_err(),
             "an existing canonical key cannot overwrite immutable content"
         );
-        let (header, native) = load_canonical_message_from_node(&node, &first, owner, None)
-            .await
-            .unwrap();
+        let (header, native) =
+            load_canonical_message_from_node(&db.node, &first, node_did, Some(user.did()))
+                .await
+                .unwrap();
         assert_eq!(header.sequence, 1);
         assert_eq!(native, message);
         assert_eq!(
-            load_history(&node, "same", owner, None).await.unwrap(),
+            load_history(&db.node, "same", node_did, Some(user.did()))
+                .await
+                .unwrap(),
             vec![message]
+        );
+        assert!(
+            load_history(&db.node, "same", foreign_node, Some(user.did()))
+                .await
+                .unwrap()
+                .is_empty(),
+            "another runtime's Node scope must not resolve local history"
         );
         lifecycle
             .terminalize_owned(
@@ -1414,12 +1451,21 @@ async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
             .unwrap();
     }
     assert!(
-        load_history(&node, "same", "did:key:owner", Some("did:key:requester"))
+        load_history(&first_db.node, "same", first_node, Some(second_user.did()))
             .await
             .unwrap()
             .is_empty()
     );
-    node.shutdown().await.expect("shut down test node");
+    first_db
+        .node
+        .shutdown()
+        .await
+        .expect("shut down first test node");
+    second_db
+        .node
+        .shutdown()
+        .await
+        .expect("shut down second test node");
 }
 
 #[tokio::test]
@@ -1623,49 +1669,6 @@ async fn signed_claimed_authored_request(
         lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
     );
-    lifecycle
-}
-
-async fn claimed_authored_request(
-    node: &std::sync::Arc<defra_node::Node>,
-    request_id: &str,
-    node_did: &str,
-    session_id: &str,
-) -> crate::request::lifecycle::RequestLifecycle {
-    use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
-    let request_id = crate::store::graphql::escape_graphql_string(request_id);
-    let escaped_agent = crate::store::graphql::escape_graphql_string(node_did);
-    let session_id = crate::store::graphql::escape_graphql_string(session_id);
-    let now = crate::store::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    let created = node
-        .execute(&format!(
-            r#"mutation {{ create_AgentRequest(input: {{
-        request_id: "{request_id}", purpose: "normal", node_did: "{escaped_agent}",
-        agent_did: "general", session_id: "{session_id}", content: "race",
-        lifecycle_state: "pending", execution_origin: "interactive", created_at: "{now}",
-        retry_count: 0, max_retries: 3, request_hop: 0
-    }}) {{ _docID }} }}"#
-        ))
-        .await;
-    assert!(!created.has_errors(), "{:?}", created.errors);
-    let response = node
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{request_id}"}}}}) {{ {} }} }}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
-        ))
-        .await;
-    let request: gents_protocol::row::AgentRequestRow =
-        crate::store::graphql::first_row(&response, "AgentRequest")
-            .unwrap()
-            .unwrap();
-    let mut lifecycle = RequestLifecycle::new_with_node_did(
-        node.clone(),
-        "general",
-        node_did,
-        request.try_into().unwrap(),
-        60,
-    );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     lifecycle
 }
 
