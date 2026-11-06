@@ -296,6 +296,7 @@ def capObservationCaseJson (c : CapObservationCase) : String :=
     ++ ",\"visible\":" ++ toString visible
     ++ ",\"cap\":" ++ optionalNatJson cap
     ++ ",\"hop\":" ++ toString c.hop
+    ++ ",\"expected_bound\":" ++ optionalNatJson (CausalHop.observedHopBound c.observation)
     ++ ",\"expected\":" ++ (match expected with
       | none => "null"
       | some value => toString value) ++ "}"
