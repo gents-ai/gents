@@ -70,6 +70,9 @@ fn normalize_generated_types(dir: &Path) -> Result<(), String> {
                 if trimmed.starts_with("import type ")
                     && trimmed.ends_with("\";")
                     && !trimmed.ends_with(".js\";")
+                    && trimmed.rsplit_once(" from \"").is_some_and(|(_, module)| {
+                        module.starts_with("./") || module.starts_with("../")
+                    })
                 {
                     format!("{}.js\";", trimmed.trim_end_matches("\";"))
                 } else {
@@ -496,6 +499,7 @@ fn ts_rs_exports_tagged_enum_and_camel_case_structs() {
         std::fs::read_to_string(tmp.path().join("DesktopCommands.ts")).expect("DesktopCommands.ts");
     assert!(
         commands.contains("import type { Channel } from \"@tauri-apps/api/core\";")
+            && !commands.contains("@tauri-apps/api/core.js")
             && commands.contains("channel: Channel<UxDataWatchEvent>"),
         "the watch command must carry its typed Tauri event channel: {commands}"
     );
@@ -638,6 +642,22 @@ fn bigint_normalization_only_rewrites_typescript_identifier_tokens() {
     assert_eq!(
         replace_typescript_identifier(source, "bigint", "number"),
         "type Wire = number | Array<number>; type bigintCounter = string;\n"
+    );
+}
+
+#[test]
+fn generated_imports_keep_package_specifiers_and_suffix_relative_modules() {
+    let dir = tempfile::tempdir().expect("generated directory");
+    let path = dir.path().join("Example.ts");
+    std::fs::write(
+        &path,
+        "import type { Channel } from \"@tauri-apps/api/core\";\nimport type { A } from \"./A\";\nimport type { B } from \"../B\";\nimport type { C } from \"./C.js\";\n",
+    )
+    .unwrap();
+    normalize_generated_types(dir.path()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "import type { Channel } from \"@tauri-apps/api/core\";\nimport type { A } from \"./A.js\";\nimport type { B } from \"../B.js\";\nimport type { C } from \"./C.js\";\n"
     );
 }
 
