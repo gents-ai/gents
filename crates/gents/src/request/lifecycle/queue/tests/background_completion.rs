@@ -90,17 +90,27 @@ async fn desktop_owned_session(
     crate::sign_agent_request_create(&desktop, &mut create)
         .await
         .unwrap();
-    let response = db.node.execute(&create.graphql_mutation().unwrap()).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let parent = crate::request::binding::load_agent_request(&db.node, "desktop-parent")
+    let desktop_mutation = create.graphql_mutation().unwrap();
+    db.agent_access
+        .transact_write("test.desktop_parent", |txn| {
+            let desktop_mutation = &desktop_mutation;
+            Box::pin(async move { Ok::<_, anyhow::Error>(txn.execute(desktop_mutation).await?) })
+        })
         .await
-        .unwrap()
         .unwrap();
-    let writer = crate::request::streaming::DefraStreamWriter::new(
+    let parent = crate::request::binding::load_agent_request_with_access(
+        &db.agent_access,
+        "desktop-parent",
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         db.node.clone(),
-        db.agent_did(),
+        db.agent_identity.as_ref(),
         std::time::Duration::ZERO,
-    );
+    )
+    .unwrap();
     let mut parent_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         db.agent_did(),
@@ -110,6 +120,9 @@ async fn desktop_owned_session(
         ExecutionOrigin::Interactive,
         "backend-test",
     );
+    parent_lifecycle
+        .bind_managed_agent(db.agent_identity.as_ref())
+        .unwrap();
     assert_eq!(
         parent_lifecycle.claim_with_identity().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed
@@ -181,6 +194,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
                     created_at: "2030-01-01T00:00:01Z",
                     retry_key: None,
                 },
+            &db.agent_identity.managed_agent_signer().unwrap(),
             )
             .await
             .unwrap()
@@ -240,6 +254,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
                 created_at: "2030-01-01T00:00:02Z",
                 retry_key: None,
             },
+        &db.agent_identity.managed_agent_signer().unwrap(),
         )
         .await
         .unwrap();
@@ -290,6 +305,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
                 created_at: "2030-01-01T00:00:03Z",
                 retry_key: None,
             },
+        &db.agent_identity.managed_agent_signer().unwrap(),
         )
         .await
         .unwrap()
@@ -376,6 +392,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
                 created_at: "2030-01-01T00:00:02Z",
                 retry_key: None,
             },
+        &db.agent_identity.managed_agent_signer().unwrap(),
         )
         .await
         .unwrap();
@@ -1099,7 +1116,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         )
         .await
         .unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let access = admission.tool.access().unwrap();
     let response = access
         .execute(&format!(
             "{{ AgentRequest(filter: {{ session_id: {{ _eq: \"{}\" }} }}) {{ retry_key }} }}",
@@ -1423,7 +1440,7 @@ async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
 #[tokio::test]
 async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() {
     let db = test_db("wake-hop-refusal").await;
-    db.user_access.write("test.max_request_hop", &format!(
+    crate::store::config_client::ConfigAccess::write_local(&db.node, "test.max_request_hop", &format!(
         r#"mutation {{ update_Node(filter: {{ node_did: {{ _eq: "{}" }} }}, input: {{ max_request_hop: 8 }}) {{ _docID }} }}"#,
         escape_graphql_string(db.node_did()),
     )).await.unwrap();

@@ -94,7 +94,7 @@ use management::{replace_pending_user_messages, PendingEditActor};
 pub use management::{PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt};
 #[cfg(test)]
 use mutation::session_request_create_mutation;
-use mutation::session_request_create_mutation_at_hop;
+use mutation::session_request_create_mutation_at_hop_with_signer;
 use mutation::SessionRequestFields;
 pub use position::validate_position;
 pub(crate) use position::{effective_slots, InvalidQueuePosition};

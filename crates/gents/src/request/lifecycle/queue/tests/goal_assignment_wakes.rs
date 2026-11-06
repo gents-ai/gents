@@ -118,8 +118,10 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
         let second_notice = "background-completion-notification:scope-second:tool";
         let publish = |parent: AgentRequest, key: u64, notice: &'static str| {
             let node = db.node.clone();
+            let access = db.agent_access.clone();
             async move {
-                persist_background_completion_with_message(
+                persist_background_completion_with_message_waking_with_access(
+                    &access,
                     &node,
                     &parent,
                     notice,
@@ -127,6 +129,7 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
                     "review notifications",
                     queue(&parent, key),
                     None,
+                    crate::request::lifecycle::RequestHopCause::Continuation,
                 )
                 .await
             }
