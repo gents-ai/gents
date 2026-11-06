@@ -25,7 +25,7 @@ pub(super) enum TxnBackend<'a> {
         node: Arc<EmbeddedNode>,
         handle: TransactionHandle,
         identity: Option<Did>,
-        agent_signer: Option<crate::store::identity::ManagedAgentSigner>,
+        agent_signer: Option<Box<crate::store::identity::ManagedAgentSigner>>,
         native_operations: Arc<NativeOperationTracker>,
     },
 }
@@ -68,7 +68,7 @@ impl<'a> ConfigApplyTxn<'a> {
         &self,
     ) -> Option<crate::store::identity::ManagedAgentSigner> {
         match &self.backend {
-            TxnBackend::Embedded { agent_signer, .. } => agent_signer.clone(),
+            TxnBackend::Embedded { agent_signer, .. } => agent_signer.as_deref().cloned(),
             TxnBackend::Http { .. } => None,
         }
     }
@@ -169,7 +169,7 @@ impl<'a> ConfigApplyTxn<'a> {
                 node: Arc::clone(node),
                 handle: handle.clone(),
                 identity,
-                agent_signer,
+                agent_signer: agent_signer.map(Box::new),
                 native_operations,
             },
             rollback_on_drop: Some(rollback_on_drop),
@@ -312,7 +312,7 @@ impl<'a> ConfigApplyTxn<'a> {
             } => super::ConfigAccess::local_with_optional_agent_signer(
                 Arc::clone(node),
                 actor.clone(),
-                agent_signer.clone(),
+                agent_signer.as_deref().cloned(),
             )?,
             TxnBackend::Embedded { identity: None, .. } => {
                 return Err(ConfigClientError::RelationshipActorRequired)

@@ -195,10 +195,12 @@ impl ConfigApplyTxn<'_> {
             id,
             document,
             variables,
-            trusted_schema.to_owned(),
-            collection,
-            doc_id,
-            snapshot,
+            super::super::client_signed_agent::SignedUpdateTarget {
+                schema: trusted_schema.to_owned(),
+                collection,
+                doc_id,
+                snapshot,
+            },
         )
         .await?;
         self.affected_documents
@@ -516,7 +518,7 @@ impl ConfigApplyTxn<'_> {
                     .with_variables(variables.clone())
                     .with_identity(identity.clone());
                 let handle = handle.clone();
-                let agent_signer = agent_signer.clone();
+                let agent_signer = agent_signer.as_deref().cloned();
                 let result = execute_owned_native(
                     async move {
                         match agent_signer {
@@ -795,7 +797,7 @@ impl ConfigApplyTxn<'_> {
         let node = Arc::clone(node);
         let request = QueryRequest::new(document).with_identity(identity.clone());
         let handle = handle.clone();
-        let agent_signer = agent_signer.clone();
+        let agent_signer = agent_signer.as_deref().cloned();
         let result = execute_owned_native(
             async move {
                 match agent_signer {

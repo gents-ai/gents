@@ -77,29 +77,30 @@ async fn local_node(
     Ok(Some((doc, owner)))
 }
 
-async fn change(
-    view: &DocumentMutationView,
-    provider: &dyn DocumentACP,
-    runtime: &Did,
-    resource: &str,
-    doc: &str,
-    relation: &str,
-    target: Subject,
-    delete: bool,
-) -> Result<bool> {
-    provider
-        .change_node_admin_relationship(
-            view.sibling(Namespace::Acpstore),
-            runtime,
-            target,
-            AGENT_OWNERSHIP_POLICY_ID,
-            resource,
-            doc,
-            relation,
-            delete,
-        )
-        .await
-        .map_err(failure)
+struct PublicationGrant<'a> {
+    view: &'a DocumentMutationView,
+    provider: &'a dyn DocumentACP,
+    runtime: &'a Did,
+    resource: &'a str,
+    doc: &'a str,
+}
+
+impl PublicationGrant<'_> {
+    async fn change(&self, relation: &str, target: Subject, delete: bool) -> Result<bool> {
+        self.provider
+            .change_node_admin_relationship(
+                self.view.sibling(Namespace::Acpstore),
+                self.runtime,
+                target,
+                AGENT_OWNERSHIP_POLICY_ID,
+                self.resource,
+                self.doc,
+                relation,
+                delete,
+            )
+            .await
+            .map_err(failure)
+    }
 }
 
 /// Stage the receiving runtime's document-scoped native grants in the accepted
@@ -156,6 +157,13 @@ pub(crate) async fn project_transport_document(
     }
     let tuples = acp::zanzibar::store::TransactionZanzibarStore::new(acp_view);
     let mut changed = false;
+    let grant = PublicationGrant {
+        view,
+        provider,
+        runtime,
+        resource,
+        doc: doc_id,
+    };
     let actor = Subject::entity(runtime.clone());
     let marked = tuples
         .has_relationship(
@@ -168,52 +176,14 @@ pub(crate) async fn project_transport_document(
         .await
         .map_err(failure)?;
     if !marked {
-        changed |= change(
-            view,
-            provider,
-            runtime,
-            resource,
-            doc_id,
-            "reader",
-            actor.clone(),
-            false,
-        )
-        .await?;
+        changed |= grant.change("reader", actor.clone(), false).await?;
         if collection_name == PEER_REGISTRY_NAME {
-            changed |= change(
-                view,
-                provider,
-                runtime,
-                resource,
-                doc_id,
-                "reader",
-                Subject::Wildcard,
-                false,
-            )
-            .await?;
+            changed |= grant.change("reader", Subject::Wildcard, false).await?;
         }
-        changed |= change(
-            view,
-            provider,
-            runtime,
-            resource,
-            doc_id,
-            "local_publication",
-            actor.clone(),
-            false,
-        )
-        .await?;
-        changed |= change(
-            view,
-            provider,
-            runtime,
-            resource,
-            doc_id,
-            "pending_parent",
-            actor.clone(),
-            false,
-        )
-        .await?;
+        changed |= grant
+            .change("local_publication", actor.clone(), false)
+            .await?;
+        changed |= grant.change("pending_parent", actor.clone(), false).await?;
     }
     let pending = tuples
         .has_relationship(
@@ -231,17 +201,9 @@ pub(crate) async fn project_transport_document(
     let Some((node, owner)) = local_node(view, provider, runtime).await? else {
         return Ok(changed);
     };
-    changed |= change(
-        view,
-        provider,
-        runtime,
-        resource,
-        doc_id,
-        "parent",
-        Subject::entity_set("nodes", node, ""),
-        false,
-    )
-    .await?;
+    changed |= grant
+        .change("parent", Subject::entity_set("nodes", node, ""), false)
+        .await?;
     if collection_name == PEER_REGISTRY_NAME
         && document.get("node_did").and_then(|value| value.as_str()) == Some(runtime.as_str())
     {
@@ -258,41 +220,15 @@ pub(crate) async fn project_transport_document(
             None
         };
         if let Some(writer) = writer {
-            changed |= change(
-                view,
-                provider,
-                runtime,
-                resource,
-                doc_id,
-                "writer",
-                Subject::entity(writer),
-                false,
-            )
-            .await?;
+            changed |= grant
+                .change("writer", Subject::entity(writer), false)
+                .await?;
         }
     }
-    changed |= change(
-        view,
-        provider,
-        runtime,
-        resource,
-        doc_id,
-        "reader_manager",
-        Subject::entity(owner),
-        false,
-    )
-    .await?;
-    changed |= change(
-        view,
-        provider,
-        runtime,
-        resource,
-        doc_id,
-        "pending_parent",
-        actor,
-        true,
-    )
-    .await?;
+    changed |= grant
+        .change("reader_manager", Subject::entity(owner), false)
+        .await?;
+    changed |= grant.change("pending_parent", actor, true).await?;
     Ok(changed)
 }
 

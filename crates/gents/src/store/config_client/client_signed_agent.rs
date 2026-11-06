@@ -193,7 +193,7 @@ pub(super) fn signing_schema(sdl: &str, collection: &str) -> Result<::schema::Co
         .find(|item| item.graphql_type() == collection)
         .and_then(trusted_create_schema)
         .or_else(|| trusted_delete_schema(collection))
-        .or_else(|| match collection {
+        .or(match collection {
             gents_protocol::schemas::AGENT_REQUEST_NAME => {
                 Some(gents_protocol::schemas::AGENT_REQUEST)
             }
@@ -377,16 +377,20 @@ pub(super) async fn execute(
     graphql::validate_txn_response(serde_json::to_value(response)?)
 }
 
+pub(super) struct SignedUpdateTarget {
+    pub schema: String,
+    pub collection: String,
+    pub doc_id: String,
+    pub snapshot: db::block::builder::ClientUpdateSnapshot,
+}
+
 /// Execute one client-approved update in the caller's existing transaction.
 pub(super) async fn execute_update(
     endpoint: &GraphqlEndpoint,
     txn_id: &str,
     mutation: &str,
     variables: &Value,
-    schema: String,
-    collection: String,
-    doc_id: String,
-    snapshot: db::block::builder::ClientUpdateSnapshot,
+    target: SignedUpdateTarget,
 ) -> Result<Value> {
     let signer = client_signer(endpoint)?;
     let input = variables
@@ -394,6 +398,12 @@ pub(super) async fn execute_update(
         .cloned()
         .ok_or(ConfigClientError::VariablesNotObject)?;
     let mut graph = tokio::task::spawn_blocking(move || {
+        let SignedUpdateTarget {
+            schema,
+            collection,
+            doc_id,
+            snapshot,
+        } = target;
         let schema = signing_schema(&schema, &collection)?;
         db::block::builder::ClientUpdateSignatures::from_input(
             &storage::Crdts::default(),
