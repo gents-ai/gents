@@ -328,6 +328,7 @@ async fn mailbox_sweep_uses_held_targets() -> anyhow::Result<()> {
         EmbeddedNode::builder()
             .enable_signing()
             .with_node_identity_did(runtime.did())
+            .with_node_acp_owner(runtime.did().to_owned())
             .build()
             .await?,
     );

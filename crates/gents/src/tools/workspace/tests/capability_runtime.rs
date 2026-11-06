@@ -48,6 +48,7 @@ async fn workspace_completion_reads_keep_selected_agent_visibility() -> anyhow::
         defra_node::Node::builder()
             .enable_signing()
             .with_node_identity_did(runtime.did())
+            .with_node_acp_owner(runtime.did().to_owned())
             .build()
             .await?,
     );
@@ -519,6 +520,7 @@ async fn invisible_workspace_request_cannot_release_exclusive_binding() -> anyho
         defra_node::Node::builder()
             .enable_signing()
             .with_node_identity_did(runtime.did())
+            .with_node_acp_owner(runtime.did().to_owned())
             .build()
             .await?,
     );
@@ -614,6 +616,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         defra_node::Node::builder()
             .enable_signing()
             .with_node_identity_did(user.did())
+            .with_node_acp_owner(user.did().to_owned())
             .build()
             .await?,
     );
