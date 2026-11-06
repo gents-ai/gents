@@ -110,6 +110,13 @@ theorem idle_queue_and_steer_use_same_native_claim
     decideIdleClientClaim .queue intent observation commit =
       decideIdleClientClaim .steer intent observation commit := by rfl
 
+/-- A later steering input is a separate authored request. Its publication
+and consumption require its own native claim decision at that transaction;
+the earlier turn's requester is not reauthorized here. -/
+def decideActiveSteer (intent : Intent) (observation : Observation)
+    (commit : NativeCommit) : Decision :=
+  decideClaim intent observation commit
+
 /-- A pending request changes only with the native commit. Rejection uses the
 existing failed lifecycle and no-message terminal selection, and never exposes
 which authorization fact was absent. Existing terminal work is unchanged. -/
@@ -140,6 +147,11 @@ theorem failed_binding_cannot_claim (intent : Intent) (observation : Observation
   all_goals split <;> simp_all
   all_goals split <;> simp_all
   all_goals split <;> simp_all
+
+theorem active_steer_denial_has_no_claim (intent : Intent) (observation : Observation)
+    (commit : NativeCommit) (unbound : bound intent observation = false) :
+    decideActiveSteer intent observation commit ≠ .claimed := by
+  exact failed_binding_cannot_claim intent observation commit unbound
 
 theorem uncommitted_agent_effect_cannot_claim (intent : Intent) (observation : Observation)
     (commit : NativeCommit) (failed : commit.committed = false) :
