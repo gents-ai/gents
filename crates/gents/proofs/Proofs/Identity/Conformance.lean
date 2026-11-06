@@ -1746,9 +1746,16 @@ def json : Json := Json.mkObj
    ("configuration_immutable_cases", toJson ([("before", "before"), ("before", "after")].map fun (observed, proposed) =>
       Json.mkObj [("observed", toJson observed), ("proposed", toJson proposed),
         ("allowed", toJson (Configuration.immutableReplacementAllowed observed proposed))])),
-   ("configuration_signed_write_retry_cases", toJson ([false, true].map fun dispatched =>
-      Json.mkObj [("dispatched", toJson dispatched),
-        ("may_retry", toJson (Configuration.clientSignedWriteMayRetry dispatched))])),
+   ("configuration_signed_write_retry_cases", toJson (Id.run do
+      let mut cases : List Json := []
+      for dispatched in [false, true] do
+        for confirmedAbort in [false, true] do
+          for replayAuthorized in [false, true] do
+            cases := cases ++ [Json.mkObj [("dispatched", toJson dispatched),
+              ("confirmed_abort", toJson confirmedAbort),
+              ("replay_authorized", toJson replayAuthorized),
+              ("may_retry", toJson (Configuration.clientSignedWriteMayRetry dispatched confirmedAbort replayAuthorized))]]
+      return cases)),
    ("configuration_atomic_cases", toJson ([false, true].map atomicCaseJson)),
    ("configuration_node_binding_cases", toJson ([(true, true, true), (false, true, true),
       (true, false, true), (true, true, false)].map fun (sameNode, hasDoc, visible) =>

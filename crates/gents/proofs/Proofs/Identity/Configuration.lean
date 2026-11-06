@@ -481,12 +481,22 @@ def immutableReplacementAllowed (observed proposed : String) : Bool := observed 
 
 theorem changed_immutable_is_rejected : immutableReplacementAllowed "before" "after" = false := by decide
 
-/-- Once a client-signed write conversation starts, a transaction failure cannot silently
-reconstruct and sign a new graph. The caller must explicitly initiate another
-operation after observing the outcome. -/
-def clientSignedWriteMayRetry (dispatched : Bool) : Bool := !dispatched
+/-- A dispatched client-signed graph may be rebuilt only when the native
+transaction owner confirms that the attempt did not commit and the caller has
+explicitly authorized replay of a transaction with no external effects. The
+new attempt re-reads its inputs and signs a fresh graph with the held actor;
+unknown finality never authorizes a second graph. -/
+def clientSignedWriteMayRetry (dispatched confirmedAbort replayAuthorized : Bool) : Bool :=
+  !dispatched || (confirmedAbort && replayAuthorized)
 
-theorem dispatched_write_never_retries : clientSignedWriteMayRetry true = false := by decide
+theorem dispatched_unknown_never_retries (authorized : Bool) :
+    clientSignedWriteMayRetry true false authorized = false := by cases authorized <;> decide
+
+theorem dispatched_without_replay_authority_never_retries (confirmed : Bool) :
+    clientSignedWriteMayRetry true confirmed false = false := by cases confirmed <;> decide
+
+theorem confirmed_authorized_attempt_may_rebuild :
+    clientSignedWriteMayRetry true true true = true := by decide
 
 def packPresent (state : State) (record : String) : Bool :=
   state.objects.any fun object => object.resource == "configuration" && object.id == record
