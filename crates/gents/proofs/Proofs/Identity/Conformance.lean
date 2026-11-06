@@ -1518,6 +1518,14 @@ def pluginBackendCase (name : String) (actor : Option String) (revoked : String)
   Json.mkObj [("name", toJson name), ("actor", toJson actor), ("revoked", toJson revoked),
     ("expected", toJson (Configuration.pluginBackendMayUse state actor))]
 
+def inferenceSelfConfigCase (phase actor document : String) : Json :=
+  let state := if phase == "before" then Configuration.inferenceUsersetFixture
+    else if phase == "revoked" then Household.apply Configuration.inferenceSelfConfigFixture
+      (.revoke ⟨"configuration", "execution", "writer", .actor "agent"⟩)
+    else Configuration.inferenceSelfConfigFixture
+  Json.mkObj [("phase", toJson phase), ("actor", toJson actor), ("document", toJson document),
+    ("expected", toJson (Household.allowed 8 state actor "configuration" document "update"))]
+
 def json : Json := Json.mkObj
   [("name", toJson "configuration-explicit-grants"),
    ("backend_credential_cases", toJson backendCredentialCases),
@@ -1656,6 +1664,13 @@ def json : Json := Json.mkObj
        retryUsersetCaseJson "retry-selected" "agent" false,
        retryUsersetCaseJson "retry-sibling" "sibling" false,
        retryUsersetCaseJson "retry-revoked" "agent" true]),
+   ("configuration_inference_self_config_cases", toJson
+      [inferenceSelfConfigCase "before" "agent" "execution",
+       inferenceSelfConfigCase "granted" "agent" "profile",
+       inferenceSelfConfigCase "granted" "agent" "execution",
+       inferenceSelfConfigCase "granted" "sibling" "execution",
+       inferenceSelfConfigCase "granted" "agent" "backend-metadata",
+       inferenceSelfConfigCase "revoked" "agent" "execution"]),
    ("configuration_skill_cases", toJson
       [skillUsersetCaseJson "selected" "selected" false,
        skillUsersetCaseJson "sibling" "sibling" false,

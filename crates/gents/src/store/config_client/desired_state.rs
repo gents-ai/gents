@@ -4,6 +4,7 @@ pub(super) mod projection;
 pub(super) mod read;
 pub(super) mod schema_fields;
 pub(super) mod selection;
+mod self_config_inference;
 pub(super) mod task_selection;
 pub(super) mod validate;
 mod workspace_selection;
@@ -82,6 +83,7 @@ pub async fn grant_selected_self_configuration(
                 .await?;
         }
     }
+    self_config_inference::grant_selected_inference(txn, node_did, &target, &agent).await?;
     Ok(())
 }
 

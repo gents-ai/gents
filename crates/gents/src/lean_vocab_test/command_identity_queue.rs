@@ -549,6 +549,8 @@ pub(crate) struct LeanIdentityHouseholdCase {
     #[serde(default)]
     pub(crate) configuration_userset_cases: Vec<serde_json::Value>,
     #[serde(default)]
+    pub(crate) configuration_inference_self_config_cases: Vec<serde_json::Value>,
+    #[serde(default)]
     pub(crate) configuration_skill_cases: Vec<serde_json::Value>,
     #[serde(default)]
     pub(crate) configuration_compaction_cases: Vec<serde_json::Value>,

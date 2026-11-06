@@ -695,6 +695,46 @@ def inferenceUsersetFixture : State :=
       ⟨"configuration", "retry", "selected_by", .entitySet "configuration" "execution" "selected_by"⟩],
     enrolled := [] }
 
+/-- An explicit User transaction grants the selected physical inference
+documents separately. Native relation management is needed to detach their
+selection edges. These grants persist until explicitly revoked; a later
+selection or reconciliation neither removes nor recreates them. -/
+def grantInferenceSelfConfiguration (state : State) (agent : String)
+    (documents : List String) (authorized committed : Bool) : State :=
+  if authorized && committed then
+    documents.foldl (fun state id =>
+      apply (apply state (.grant ⟨"configuration", id, "writer", .actor agent⟩))
+        (.grant ⟨"configuration", id, "selection_manager", .actor agent⟩)) state
+  else state
+
+def inferenceSelfConfigFixture : State :=
+  grantInferenceSelfConfiguration inferenceUsersetFixture "agent"
+    ["profile", "sampling", "execution", "retry"] true true
+
+theorem inference_self_config_is_explicit_and_scoped :
+    [allowed 8 inferenceUsersetFixture "agent" "configuration" "execution" "update",
+     allowed 8 inferenceSelfConfigFixture "agent" "configuration" "execution" "update",
+     allowed 8 inferenceSelfConfigFixture "sibling" "configuration" "execution" "update",
+     allowed 8 inferenceSelfConfigFixture "agent" "configuration" "backend-metadata" "update"] =
+      [false, true, false, false] := by native_decide
+
+theorem revoked_inference_writer_is_not_recreated :
+    let revoked := apply inferenceSelfConfigFixture
+      (.revoke ⟨"configuration", "execution", "writer", .actor "agent"⟩)
+    allowed 8 revoked "agent" "configuration" "execution" "update" = false := by native_decide
+
+theorem selected_inference_manager_can_rebind_its_sources :
+    let edge : Relation := ⟨"configuration", "execution", "selected_by",
+      .entitySet "configuration" "profile" "selected_by"⟩
+    [mayManage inferenceUsersetFixture "agent" edge,
+     mayManage inferenceSelfConfigFixture "agent" edge,
+     mayManage inferenceSelfConfigFixture "sibling" edge] = [false, true, false] := by native_decide
+
+theorem failed_inference_grant_is_atomic (state : State) (agent : String)
+    (documents : List String) (authorized : Bool) :
+    grantInferenceSelfConfiguration state agent documents authorized false = state := by
+  simp [grantInferenceSelfConfiguration]
+
 /-- Backend observations are independently writable by the runtime. The
 runtime's observation grant must not allow it to change the User-owned
 provider, endpoint, or credential reference. Selected Agents can read both. -/

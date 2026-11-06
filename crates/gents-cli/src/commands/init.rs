@@ -1178,19 +1178,21 @@ async fn initialize_runtime_home(
         documents,
     )
     .await?;
-    access
-        .transact_write("init.grant_self_configuration", |txn| {
-            let default_agent_did = &default_agent_did;
-            Box::pin(async move {
-                gents::store::config_client::grant_selected_self_configuration(
-                    txn,
-                    node_did,
-                    default_agent_did,
-                )
-                .await
+    if existing_default_agent.is_none() {
+        access
+            .transact_write("init.grant_self_configuration", |txn| {
+                let default_agent_did = &default_agent_did;
+                Box::pin(async move {
+                    gents::store::config_client::grant_selected_self_configuration(
+                        txn,
+                        node_did,
+                        default_agent_did,
+                    )
+                    .await
+                })
             })
-        })
-        .await?;
+            .await?;
+    }
 
     Ok(InitSummary {
         backend_id,
