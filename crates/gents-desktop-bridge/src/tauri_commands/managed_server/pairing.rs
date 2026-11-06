@@ -109,8 +109,8 @@ pub(super) async fn enroll_managed_runtime(
     core.refresh_local_standard_peer(&node_home, &target.node_name)
         .await
         .map_err(|error| PairingFailure::Transient(error.to_string()))?;
-    let cancel = tokio_util::sync::CancellationToken::new();
-    let task_cancel = cancel.clone();
+    let cancel = Arc::new(tokio_util::sync::CancellationToken::new());
+    let task_cancel = Arc::clone(&cancel);
     let (result_tx, result_rx) = tokio::sync::oneshot::channel();
     let mut managed = state.managed_server.lock().await;
     if managed
@@ -132,7 +132,7 @@ pub(super) async fn enroll_managed_runtime(
         .await;
         let _ = result_tx.send(result);
     });
-    managed.pairing_cancel = Some(cancel);
+    managed.pairing_cancel = Some(Arc::clone(&cancel));
     managed.pairing_task = Some(task);
     drop(managed);
     let result = result_rx.await.unwrap_or_else(|_| {
@@ -141,9 +141,22 @@ pub(super) async fn enroll_managed_runtime(
         ))
     });
     let mut managed = state.managed_server.lock().await;
-    managed.pairing_cancel = None;
-    managed.pairing_task = None;
+    clear_finished_enrollment(&mut managed, &cancel);
     result
+}
+
+fn clear_finished_enrollment(
+    managed: &mut crate::state::ManagedServerState,
+    cancel: &Arc<tokio_util::sync::CancellationToken>,
+) {
+    if managed
+        .pairing_cancel
+        .as_ref()
+        .is_some_and(|current| Arc::ptr_eq(current, cancel))
+    {
+        managed.pairing_cancel = None;
+        managed.pairing_task = None;
+    }
 }
 
 pub(super) fn pairing_target(status: &ManagedServerStatus) -> Option<ManagedPairingTarget> {
