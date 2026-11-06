@@ -1,4 +1,5 @@
 import Proofs.Identity.Household
+import Proofs.Identity.GrantSets
 import Proofs.ToolPolicy.Types
 
 namespace Identity.Configuration
@@ -247,10 +248,18 @@ def changeToolGrantGroup (state : ToolGrantProjection) (sources : List ToolGrant
       grants := (if enable then sources ++ grants else grants) }
   else state
 
-/-- The pinned native node policy lets its owner or an administrator manage
-permission relations. Tool document write access does not confer this role. -/
-def nativeToolGrantManager (state : ToolGrantProjection) (actor : String) : Bool :=
-  state.owners.contains actor || state.admins.contains actor
+/-- Native relation management follows the held-bounded rule
+(`GrantSets.admits`): the owner or an administrator manages any permission
+relation; another actor manages one only while it holds that permission and
+the matching NAC relation operation, outside the admin class. Tool document
+write access does not confer this. -/
+def nativeToolGrantManager (state : ToolGrantProjection) (actor permission : String)
+    (delete : Bool) : Bool :=
+  GrantSets.admits
+    { admin := state.owners.contains actor || state.admins.contains actor
+      held := (state.direct.filter (·.1 == actor)).map (·.2) ++
+        (state.grants.filter (·.agent == actor)).map (·.permission) }
+    ⟨.permission permission, delete, true, false⟩
 
 /-- A projection checks native source authority only for a relationship that
 would actually change. An origin without that authority cannot repair a
@@ -272,7 +281,8 @@ def configureToolGrantGroup (state : ToolGrantProjection) (household : State)
     | some source => Household.allowed 5 household grantor "configuration" source.toolsDoc "update"
     | none => false
   changeToolGrantGroup state sources enable
-    (writable && nativeToolGrantManager state grantor) committed
+    (writable && sources.all (fun source =>
+      nativeToolGrantManager state grantor source.permission (!enable))) committed
 
 /-- Native usersets represent shared selections without scanning Agents. A
 permission edge names the physical Tools/purpose group, a context edge names

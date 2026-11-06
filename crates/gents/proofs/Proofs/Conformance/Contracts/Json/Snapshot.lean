@@ -25,6 +25,7 @@ import Proofs.Identity.OptimizationPromotion
 import Proofs.Identity.DirectoryPublication
 import Proofs.Identity.StartupReadiness
 import Proofs.Identity.NodeProvisioningConformance
+import Proofs.Identity.GrantSetsConformance
 import Proofs.Identity.ClientAgentCreation
 import Proofs.Identity.AgentBlockSigning
 import Proofs.Identity.ClientAgentJournal
@@ -613,8 +614,14 @@ def snapshotIdentityCasesJson : String :=
   ""
     ++ "\"identity_publication_cases\":"
       ++ Identity.PublicationConformance.casesJson ++ ","
-    ++ "\"identity_node_provisioning_cases\":"
-      ++ Identity.NodeProvisioningConformance.casesJson ++ ","
+    ++ "\"identity_grant_set_cases\":"
+      ++ Identity.GrantSetsConformance.setCasesJson ++ ","
+    ++ "\"identity_grant_recipient_cases\":"
+      ++ Identity.GrantSetsConformance.recipientCasesJson ++ ","
+    ++ "\"identity_delegation_cases\":"
+      ++ Identity.GrantSetsConformance.delegationCasesJson ++ ","
+    ++ "\"identity_agent_baseline_cases\":"
+      ++ Identity.GrantSetsConformance.baselineCasesJson ++ ","
     ++ "\"identity_agent_creation_exposure_cases\":"
       ++ Identity.NodeProvisioningConformance.agentCreationExposureCasesJson ++ ","
     ++ "\"identity_created_agent_access_cases\":"

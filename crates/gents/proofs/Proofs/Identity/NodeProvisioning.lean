@@ -9,10 +9,10 @@ def requiredPermissions : List String := ["read-document", "update-document", "a
 
 /-- An executing Agent carries its own signer. Native NAC decides whether that
 actor may create documents and manage the new document relationships; the
-runtime alone derives keys and grants the new identity its node capabilities.
-The identity may be allocated before native creation, but its node capabilities
-are granted only after the document and relationships have been published.
-These observations do not fence a concurrent revocation. -/
+runtime alone derives keys. The identity may be allocated before native
+creation; its node capabilities are projected from the published Agent
+document as the publishing actor (`GrantSets.projectBaseline`), never granted
+by the runtime on that actor's behalf. -/
 structure AgentCreatorObservation where
   runtimeMatches : Bool
   signerHeld : Bool
@@ -42,79 +42,13 @@ theorem agent_category_exposes_commands (nodeCategory : Bool) :
     agentCommandExposed nodeCategory true = true := by
   cases nodeCategory <;> rfl
 
-structure State where
-  target : DID
-  authorized : Bool
-  fresh : Bool
-  attempted : List String := []
-  granted : List String := []
-  closed : Bool := false
-  revealed : Bool := false
-  deriving Repr
-
-/-- Authorization, local derivation and freshness are validated by the
-caller. A positive response means the native relation is present. A failed or
-ambiguous response may still have applied it, so the attempt closes without
-returning a binding and the creation identifier is not reused. Detached native
-grants do not atomically fence a concurrent authorization revocation. -/
-def attempt (s : State) (permission : String) (applied succeeded : Bool) : State :=
-  if s.authorized && s.fresh && !s.target.isEmpty && !s.closed &&
-      requiredPermissions.contains permission && !s.attempted.contains permission then
-    { s with
-      attempted := permission :: s.attempted
-      granted := if applied || succeeded then permission :: s.granted else s.granted
-      closed := !succeeded }
-  else s
-
-def finish (s : State) : State :=
-  if s.authorized && s.fresh && !s.target.isEmpty && !s.closed &&
-      requiredPermissions.all (s.attempted.contains ·) then
-    { s with closed := true, revealed := true }
-  else s
-
-def revoke (s : State) (permission : String) : State :=
-  { s with granted := s.granted.filter (· != permission) }
-
-/-- Identity resolution and configuration reconciliation are observations;
-they do not infer a new node grant from a missing one. Existing identities
-need an explicit authorized adoption, not implicit replay of this operation. -/
-def reopen (s : State) : State := s
-
-theorem reopen_preserves_revocation (s : State) (permission : String) :
-    reopen (revoke s permission) = revoke s permission := by rfl
-
-theorem closed_attempt_is_unchanged (s : State) (permission : String)
-    (applied succeeded : Bool) (closed : s.closed = true) :
-    attempt s permission applied succeeded = s := by
-  simp [attempt, closed]
-
-theorem absent_authority_cannot_grant (s : State) (permission : String)
-    (applied succeeded : Bool) (unauthorized : s.authorized = false) :
-    attempt s permission applied succeeded = s := by
-  simp [attempt, unauthorized]
-
-theorem failed_grant_can_have_applied :
-    let initial : State := { target := "agent", authorized := true, fresh := true }
-    let failed := attempt initial "read-document" true false
-    failed.closed = true ∧ failed.revealed = false ∧ failed.granted.contains "read-document" = true := by
-  decide
-
-/-- This witness exposes the race in any detached grant: an administrator can
-revoke after an earlier observation and an already-started grant can restore it.
-Preventing that needs native conflict validation or additional ordering. -/
-theorem detached_grant_may_follow_revocation :
-    let initial : State := { target := "agent", authorized := true, fresh := true, granted := ["read-document"] }
-    let revoked := revoke initial "read-document"
-    let late := attempt revoked "read-document" true true
-    revoked.granted.contains "read-document" = false ∧ late.granted.contains "read-document" = true := by
-  decide
-
 /-- Before any bootstrap NAC grant, exclusive local initialization durably
 consumes a one-shot marker for a verified fresh store. The authenticated client
 and matching runtime principal are separately required. An absent Node means an
-authoritative absence, not an empty actor-filtered read. Configuration is
-published after the grants. A lost or ambiguous reservation response grants
-nothing; after a crash, a durable reservation cannot authorize replay. -/
+authoritative absence, not an empty actor-filtered read. The bootstrap grants
+are the direct sets `GrantSets.directSets` names for the init User and the
+default Agent; configuration is published after them. A lost or ambiguous
+reservation response grants nothing; after a crash, a durable reservation cannot authorize replay. -/
 structure BootstrapObservation where
   exclusive : Bool
   matchingRuntime : Bool
