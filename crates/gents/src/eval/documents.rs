@@ -673,16 +673,26 @@ mod tests {
                     .await?;
             }
         }
-        for schema in [
-            gents_protocol::schemas::NODE,
-            gents_protocol::schemas::EVAL_DEFINITION,
-            gents_protocol::schemas::EVAL_RUN,
-            gents_protocol::schemas::EVAL_TRIAL,
-            gents_protocol::schemas::EVAL_VERDICT,
-            gents_protocol::schemas::OPTIMIZATION_JOB,
-        ] {
-            node.add_collection(schema).await?;
-        }
+        let mut required: Vec<_> = crate::Collection::ALL
+            .iter()
+            .map(|collection| collection.graphql_type())
+            .collect();
+        required.extend(["EvalRun", "EvalTrial", "EvalVerdict", "OptimizationJob"]);
+        let schemas = required
+            .iter()
+            .map(|name| {
+                let declaration = format!("type {name} ");
+                gents_protocol::schemas::ALL
+                    .iter()
+                    .chain(gents_protocol::schemas::RUNTIME_ALL.iter())
+                    .find(|schema| schema.lines().any(|line| line.starts_with(&declaration)))
+                    .copied()
+                    .with_context(|| format!("missing fixture schema {name}"))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        ConfigAccess::local_as(node.clone(), identity::Did::new(user.did())?)
+            .add_collection(&schemas.join("\n"))
+            .await?;
         let endpoint = |actor: &crate::KeyIdentity| -> anyhow::Result<ConfigAccess> {
             Ok(ConfigAccess::Graphql(
                 GraphqlEndpoint::as_principal(
@@ -812,7 +822,15 @@ mod tests {
                 .is_some(),
             foreign_model["expected_created"].as_bool().unwrap()
         );
-        let definition = json!({"node_did":runtime.did(),"definition_id":"definition","comparability_version":1,"title":"private","subject":{},"fixtures":[],"cases":[],"tags":null});
+        let definition = json!({
+            "node_did":runtime.did(), "definition_id":"definition",
+            "comparability_version":1, "title":"private",
+            "subject":{"kind":"agent"},
+            "cases":[{"case_id":"case", "split":"train", "stages":[{
+                "stage_id":"stage", "prompt":"Respond with ok.",
+                "checks":[{"check":"final_message_matches", "params":{"all":["ok"]}, "tier":"acceptance"}]
+            }]}],
+        });
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
             collection: crate::Collection::EvalDefinition,
             add: definition.clone(),
