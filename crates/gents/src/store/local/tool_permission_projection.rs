@@ -366,6 +366,36 @@ impl ToolPermissionProjection {
                     }
                 }
             }
+            // Native admission reads the actor's current effective permissions,
+            // so every addition is staged before any removal: a re-keyed source
+            // is admitted through the path it replaces (Lean
+            // `Identity.GrantSets.projectBaseline` judges the pre-mutation actor).
+            for (source, agent) in &wanted {
+                apply_source_change(
+                    ctx,
+                    &store,
+                    SourceChange {
+                        permission: *permission,
+                        parent: Some(source),
+                        subject_kind: "actor",
+                        subject: agent,
+                        delete: false,
+                    },
+                )
+                .await?;
+                apply_source_change(
+                    ctx,
+                    &store,
+                    SourceChange {
+                        permission: *permission,
+                        parent: None,
+                        subject_kind: "source",
+                        subject: source,
+                        delete: false,
+                    },
+                )
+                .await?;
+            }
             for source in installed.difference(&wanted.keys().cloned().collect()) {
                 apply_source_change(
                     ctx,
@@ -376,32 +406,6 @@ impl ToolPermissionProjection {
                         subject_kind: "source",
                         subject: source,
                         delete: true,
-                    },
-                )
-                .await?;
-            }
-            for (source, agent) in wanted {
-                apply_source_change(
-                    ctx,
-                    &store,
-                    SourceChange {
-                        permission: *permission,
-                        parent: Some(&source),
-                        subject_kind: "actor",
-                        subject: &agent,
-                        delete: false,
-                    },
-                )
-                .await?;
-                apply_source_change(
-                    ctx,
-                    &store,
-                    SourceChange {
-                        permission: *permission,
-                        parent: None,
-                        subject_kind: "source",
-                        subject: &source,
-                        delete: false,
                     },
                 )
                 .await?;
@@ -463,6 +467,32 @@ impl ToolPermissionProjection {
             } else {
                 BTreeMap::new()
             };
+            for (member, agent) in &wanted {
+                apply_source_change(
+                    ctx,
+                    store,
+                    SourceChange {
+                        permission,
+                        parent: Some(member),
+                        subject_kind: "actor",
+                        subject: agent,
+                        delete: false,
+                    },
+                )
+                .await?;
+                apply_source_change(
+                    ctx,
+                    store,
+                    SourceChange {
+                        permission,
+                        parent: Some(&root),
+                        subject_kind: "source",
+                        subject: member,
+                        delete: false,
+                    },
+                )
+                .await?;
+            }
             let children = store
                 .get_relation_subjects(
                     acp::NODE_POLICY_ID,
@@ -528,32 +558,6 @@ impl ToolPermissionProjection {
                     )
                     .await?;
                 }
-            }
-            for (member, agent) in wanted {
-                apply_source_change(
-                    ctx,
-                    store,
-                    SourceChange {
-                        permission,
-                        parent: Some(&member),
-                        subject_kind: "actor",
-                        subject: &agent,
-                        delete: false,
-                    },
-                )
-                .await?;
-                apply_source_change(
-                    ctx,
-                    store,
-                    SourceChange {
-                        permission,
-                        parent: Some(&root),
-                        subject_kind: "source",
-                        subject: &member,
-                        delete: false,
-                    },
-                )
-                .await?;
             }
         }
         Ok(())
