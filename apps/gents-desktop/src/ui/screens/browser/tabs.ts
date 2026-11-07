@@ -2,9 +2,15 @@
    (browser.rs) that stays alive while another tab shows; the tabs outlive
    the panel, which unmounts whenever another panel tab is chosen. */
 import { useSyncExternalStore } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { inNativeShell } from "../../../lib/nativeShell";
+import {
+  browserClose,
+  browserCloseTab,
+  browserGo,
+  browserOpen,
+  browserSelect,
+  inNativeShell,
+  listenToWindow,
+} from "../../../lib/nativeShell";
 import { keyEventOf, type HandedKey } from "./handedKeys";
 import { nextSeq } from "./order";
 
@@ -62,13 +68,10 @@ export const useBrowser = () => useSyncExternalStore(subscribe, () => browser);
 export const activeTab = (state: Browser = browser) =>
   state.tabs.find((tab) => tab.id === state.active) ?? state.tabs[0]!;
 
-const call = (command: string, args: Record<string, unknown>) =>
-  invoke(command, { ...args, seq: nextSeq() });
-
 /* the native side shows the active tab's page, or none for a new tab */
 function showActive() {
   const tab = activeTab();
-  void call("browser_select", { tab: tab.opened ? tab.id : null }).catch(() => {});
+  void browserSelect(tab.opened ? tab.id : null, nextSeq()).catch(() => {});
 }
 
 export function selectTab(id: string) {
@@ -95,7 +98,7 @@ export function newTab(url?: string) {
 export function open(url: string) {
   const id = browser.active;
   update(id, { opened: true, url, loading: true, error: undefined });
-  invoke("browser_open", { tab: id, url })
+  browserOpen(id, url)
     .then(showActive)
     .catch((error: unknown) =>
       update(id, { opened: false, loading: false, error: String(error) }),
@@ -110,12 +113,12 @@ export function closeTab(id: string) {
   const active =
     browser.active === id ? tabs[Math.min(at, tabs.length - 1)]!.id : browser.active;
   set({ tabs, active });
-  void call("browser_close_tab", { tab: id }).catch(() => {});
+  void browserCloseTab(id, nextSeq()).catch(() => {});
   showActive();
 }
 
 export function go(action: "back" | "forward" | "reload" | "stop") {
-  void invoke("browser_go", { tab: browser.active, action }).catch(() => {});
+  void browserGo(browser.active, action).catch(() => {});
 }
 
 /* ---- what the native side reports ---- */
@@ -167,19 +170,19 @@ let following = false;
 export function follow() {
   if (following || !inNativeShell()) return;
   following = true;
-  void listen<PageState>("browser-state", ({ payload: { tab: id, ...page } }) => {
+  void listenToWindow<PageState>("browser-state", ({ tab: id, ...page }) => {
     const tab = browser.tabs.find((t) => t.id === id);
     if (!tab) return;
     if (tab.loading && !page.loading && page.url) remember(page.url, page.title);
     update(id, page);
   });
-  void listen<{ url: string }>("browser-new-tab", ({ payload }) => newTab(payload.url));
-  void listen<HandedKey>("browser-key", ({ payload }) => handOver(payload));
+  void listenToWindow<{ url: string }>("browser-new-tab", ({ url }) => newTab(url));
+  void listenToWindow<HandedKey>("browser-key", handOver);
 }
 
 /** Drops pages a previous load of this window left behind: the native views
     outlive a reload of the app's page, which starts with one new tab. */
 export function resetBrowser() {
-  void call("browser_close", {}).catch(() => {});
+  void browserClose(nextSeq()).catch(() => {});
   follow();
 }
