@@ -14,6 +14,27 @@ use crate::client::schema::ensure_runtime_schemas;
 use defra_node::EventName;
 use std::sync::Arc;
 
+#[tokio::test]
+async fn reduction_display_change_notifies_live_session_without_retaining_private_rows() {
+    let (_tempdir, node, store, handle) = build_observer_fixture().await;
+    let mut changes = store.subscribe_changes();
+    let before = store.projection_revision();
+    gents::store::config_client::ConfigAccess::write_local(
+        &node,
+        "test.reduction_display_event",
+        r#"mutation { create_ProviderReductionDisplay(input: { reduction_key: "one", node_did: "node", requester_did: "requester", session_id: "session", request_doc_id: "request", canonical_through_sequence: 1 }) { _docID } }"#,
+    ).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), changes.changed())
+        .await
+        .unwrap()
+        .unwrap();
+    let after = *changes.borrow_and_update();
+    assert!(after.revision.store_version > before.store_version);
+    assert_eq!(after.revision.provenance_version, before.provenance_version);
+    assert_eq!(store.snapshot().row_count(), 0);
+    handle.shutdown().await;
+}
+
 async fn build_observer_fixture() -> (
     tempfile::TempDir,
     Arc<EmbeddedNode>,

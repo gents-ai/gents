@@ -219,6 +219,15 @@ fn client_route_filters(
             ),
         );
     }
+    if direction == PairingDirection::RuntimeToClient {
+        filters.insert(
+            "ProviderReductionDisplay".to_string(),
+            combine_filters(
+                equality_filter("requester_did", requester_did),
+                equality_filter("node_did", owner_node_did),
+            ),
+        );
+    }
     let endpoint_did = match direction {
         PairingDirection::ClientToRuntime => requester_did,
         PairingDirection::RuntimeToClient => owner_node_did,
@@ -310,6 +319,67 @@ mod tests {
                 .contains(&"InferenceBackend"),
             "raw inference credentials must never replicate to clients"
         );
+    }
+
+    #[test]
+    fn modeled_display_scopes_match_runtime_route_filters() {
+        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        let cases = snapshot["display_observation_cases"]
+            .as_array()
+            .expect("display cases");
+        assert!(!cases.is_empty());
+        for case in cases {
+            if !matches!(case["outcome"].as_str(), Some("fresh" | "idempotent")) {
+                continue;
+            }
+            let node = case["reader_node"].as_u64().unwrap().to_string();
+            let reader = case["reader"].as_u64().unwrap().to_string();
+            let owner_node = case["owner_node"].as_u64().unwrap().to_string();
+            let owner = case["owner"].as_u64().unwrap().to_string();
+            let filters = client_route_filters(PairingDirection::RuntimeToClient, &reader, &node);
+            let filter = filters.get("ProviderReductionDisplay").unwrap();
+            let visible = super::super::templates::conjunctive_string_eq(filter, "node_did")
+                == Some(owner_node.as_str())
+                && super::super::templates::conjunctive_string_eq(filter, "requester_did")
+                    == Some(owner.as_str());
+            assert_eq!(
+                visible,
+                case["visible"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
+    }
+
+    #[test]
+    fn reduction_display_only_returns_on_its_requester_and_node_route() {
+        let template = resolve_template(CLIENT_TEMPLATE).unwrap();
+        let incoming = resolve_template_filters(
+            template,
+            PairingDirection::RuntimeToClient,
+            "requester",
+            "owner",
+        );
+        let outgoing = resolve_template_filters(
+            template,
+            PairingDirection::ClientToRuntime,
+            "requester",
+            "owner",
+        );
+        assert_eq!(
+            incoming.get("ProviderReductionDisplay"),
+            Some(&combine_filters(
+                equality_filter("requester_did", "requester"),
+                equality_filter("node_did", "owner"),
+            ))
+        );
+        assert!(!outgoing.contains_key("ProviderReductionDisplay"));
+        assert!(!client_route_collections(PairingDirection::ClientToRuntime)
+            .contains(&"ProviderReductionDisplay"));
+        assert!(client_route_collections(PairingDirection::RuntimeToClient)
+            .contains(&"ProviderReductionDisplay"));
+        assert!(!client_route_collections(PairingDirection::RuntimeToClient)
+            .contains(&"ProviderContextReduction"));
     }
 
     #[test]

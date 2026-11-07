@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use defra_node::EmbeddedNode;
 use events::DocumentChangeSubscription;
-use gents_protocol::schemas::AGENT_TOOL_CALL_NAME;
+use gents_protocol::schemas::{AGENT_TOOL_CALL_NAME, PROVIDER_REDUCTION_DISPLAY_NAME};
 use tokio::sync::watch;
 use tokio::time::Instant;
 
@@ -403,6 +403,11 @@ async fn accumulate_dirty(
         return;
     }
     match resolver.resolve(node, collection_id).await {
+        Ok(Some(PROVIDER_REDUCTION_DISPLAY_NAME)) => {
+            // The session snapshot reads these rows directly rather than
+            // retaining them in the desktop's shared transcript store.
+            store.invalidate_projection(false);
+        }
         Ok(Some(name))
             if supports_doc_patch_collection(name) || name == SESSION_HYDRATION_REQUEST =>
         {

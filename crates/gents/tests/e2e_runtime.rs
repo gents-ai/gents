@@ -57,6 +57,8 @@ mod queue_management;
 #[path = "e2e_runtime/steering_delivery.rs"]
 mod steering_delivery;
 
+#[path = "e2e_runtime/reduction_display.rs"]
+mod reduction_display;
 #[path = "e2e_runtime/session_input_edit.rs"]
 mod session_input_edit;
 

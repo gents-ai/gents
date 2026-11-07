@@ -75,6 +75,7 @@ import Proofs.Conformance.TitleText
 import Proofs.Conformance.Contracts.Json.PromptAssembly
 import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.Conformance.Contracts.Json.DurableReduction
+import Proofs.Conformance.Contracts.Json.DisplayObservation
 import Proofs.Conformance.Contracts.Json.BackgroundWakeRows
 import Proofs.Conformance.Contracts.Json.SessionDocuments
 import Proofs.Conformance.Contracts.Json.RequestInput
@@ -201,6 +202,10 @@ def snapshotJsonTail : String :=
       ++ renderedCaptureStorageCasesJson ++ ","
     ++ "\"durable_reduction_cases\":"
       ++ durableReductionCasesJson ++ ","
+    ++ "\"display_observation_cases\":"
+      ++ displayObservationCasesJson ++ ","
+    ++ "\"display_schema_cases\":"
+      ++ displaySchemaCasesJson ++ ","
     ++ "\"rolling_compaction_cases\":"
       ++ rollingCompactionCasesJson ++ ","
     ++ "\"reduction_engine_cases\":"
