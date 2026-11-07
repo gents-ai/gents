@@ -121,8 +121,7 @@ pub(super) async fn resend_member_intent(
         &approval.server_peer,
         &approval.admin_did,
         "EnrollmentRenewalIntent",
-        "intent_id",
-        &intent.intent_id(),
+        ("intent_id", &intent.intent_id()),
         doc_id,
     )
     .await
