@@ -720,7 +720,17 @@ async fn resolve_config_access_inner(
         "the initialized data directory {} is unavailable",
         data_dir.display()
     );
-    let claim = gents::store::local::home::lock_store(&home_dir, &data_dir)?;
+    let claim = gents::store::local::home::lock_store(&home_dir, &data_dir).map_err(|error| {
+        let held = error.lock_held().is_some();
+        let error = anyhow::Error::from(error);
+        if held {
+            error.context(
+                "the home's store is in use; to act through the running runtime, rerun with --graphql",
+            )
+        } else {
+            error
+        }
+    })?;
     let store_key =
         gents::store::local::store_key::open_home_store_key(&home_dir, &data_dir).await?;
     let protected = gents::store::local::backend_protection::ProtectedBackendStore::open(

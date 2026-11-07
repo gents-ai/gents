@@ -688,6 +688,9 @@ async fn serve_foreground(
         .transpose()?;
     let home_dir = resolve_home_dir(args.home.as_deref());
     tokio::fs::create_dir_all(&home_dir).await?;
+    // A home whose identity can never own the node is refused from its
+    // configuration alone, before any store is reserved or opened.
+    gents::store::local::home::ensure_home_identity_can_serve(&home_dir)?;
     let data_dir = args
         .data_dir
         .clone()
@@ -763,7 +766,6 @@ async fn serve_foreground(
         .clone()
         .or_else(|| init_config.as_ref().map(|config| config.node_name.clone()))
         .unwrap_or_else(|| DEFAULT_NODE_NAME.to_string());
-    gents::store::local::home::ensure_home_identity_can_serve(&home_dir)?;
     let server_identity =
         resolve_server_identity(&args, init_config.as_ref(), &home_dir, &node_name)?;
     let identity = server_identity.identity;

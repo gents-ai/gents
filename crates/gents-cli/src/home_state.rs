@@ -258,6 +258,21 @@ fn cli_identity_paths_under(
     gents_desktop_core::client::DesktopPaths::from_root(desktop.root().join("cli"))
 }
 
+/// The CLI's held User key signs every client-authored command; a registry
+/// lookup by DID cannot present the key to owners that need its capability.
+pub(crate) fn held_client_identity(
+    actor_did: &str,
+) -> Result<std::sync::Arc<dyn gents::NodeIdentity>> {
+    let identity =
+        gents_desktop_core::client::PrincipalIdentity::load_existing(&cli_identity_paths()?)
+            .context("CLI client identity is unavailable; initialize the CLI client first")?;
+    anyhow::ensure!(
+        identity.did() == actor_did,
+        "the GraphQL endpoint is not authenticated as this CLI's client identity"
+    );
+    Ok(std::sync::Arc::new(identity))
+}
+
 pub(crate) async fn load_client_identity() -> Result<gents_desktop_core::client::PrincipalIdentity>
 {
     let paths = cli_identity_paths()?;

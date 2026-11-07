@@ -25,9 +25,7 @@ async fn pending_scope(
     let actor = access
         .actor_did()
         .context("Pending messages require an authenticated client identity")?;
-    let signer = std::sync::Arc::new(
-        gents::store::identity::RegisteredIdentity::from_registered_did(actor, None)?,
-    );
+    let signer = crate::home_state::held_client_identity(&actor)?;
     Ok((access, node, signer))
 }
 
