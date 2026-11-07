@@ -10,6 +10,7 @@ use gents::{request::watcher::AgentRequest, NodeIdentity};
 use serde::Deserialize;
 
 pub mod accepted_turn;
+pub mod agent_requests;
 pub mod conformance_consumers;
 pub mod enrollment;
 pub mod fixtures;

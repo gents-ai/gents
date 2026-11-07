@@ -517,7 +517,7 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
     let desktop =
         gents::KeyIdentity::load_or_create(root.path().join("supervisor.key"), None).unwrap();
     let supervisor_session = "workspace-cycle-lead";
-    let created_at = chrono::Utc::now().to_rfc3339();
+    let created_at = support::agent_requests::canonical_now();
     access
         .write(
             "workspace_cycle.create_supervisor_session",

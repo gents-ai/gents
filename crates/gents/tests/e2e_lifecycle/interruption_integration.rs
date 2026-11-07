@@ -59,7 +59,7 @@ async fn fetch_terminal_request(
 async fn offline_replay_of_stale_requests_does_not_call_backend() {
     let db = test_db("offline-replay-stale").await;
     let past = (chrono::Utc::now() - chrono::Duration::seconds(10)).to_rfc3339();
-    let created_at = chrono::Utc::now().to_rfc3339();
+    let created_at = support::agent_requests::canonical_now();
 
     const BATCH: usize = 20;
     let mut request_doc_ids = Vec::with_capacity(BATCH);
@@ -111,7 +111,7 @@ async fn offline_replay_of_stale_requests_does_not_call_backend() {
 async fn resend_from_stale_populates_retry_chain() {
     let db = test_db("resend-chain").await;
 
-    let created_at = chrono::Utc::now().to_rfc3339();
+    let created_at = support::agent_requests::canonical_now();
     let past = (chrono::Utc::now() - chrono::Duration::seconds(10)).to_rfc3339();
 
     let original_request_id = uuid::Uuid::new_v4().to_string();

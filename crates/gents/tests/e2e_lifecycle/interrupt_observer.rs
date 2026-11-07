@@ -10,7 +10,7 @@ async fn observer_sends_intent_when_field_becomes_non_null() {
     let db = test_db("observer-sends-intent").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
+    let created_at = support::agent_requests::canonical_now();
     let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
 
     let (interrupt_tx, interrupt_rx) = watch::channel::<Option<InterruptIntent>>(None);
@@ -57,7 +57,7 @@ async fn observer_exits_on_shutdown_signal() {
     let db = test_db("observer-shutdown").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
+    let created_at = support::agent_requests::canonical_now();
     let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
 
     let (interrupt_tx, _interrupt_rx) = watch::channel::<Option<InterruptIntent>>(None);
@@ -91,7 +91,7 @@ async fn observer_survives_malformed_interrupt_timestamp() {
     let db = test_db("observer-malformed").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
+    let created_at = support::agent_requests::canonical_now();
     let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
 
     let (interrupt_tx, interrupt_rx) = watch::channel::<Option<InterruptIntent>>(None);
@@ -136,7 +136,7 @@ async fn observer_picks_up_already_set_interrupt_on_first_poll() {
     let db = test_db("observer-initial-poll").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
+    let created_at = support::agent_requests::canonical_now();
     let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
 
     let at = chrono::Utc::now().to_rfc3339();
@@ -172,7 +172,7 @@ async fn observer_exits_on_abort() {
     let db = test_db("observer-abort").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
+    let created_at = support::agent_requests::canonical_now();
     let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
 
     let (interrupt_tx, _interrupt_rx) = watch::channel::<Option<InterruptIntent>>(None);
