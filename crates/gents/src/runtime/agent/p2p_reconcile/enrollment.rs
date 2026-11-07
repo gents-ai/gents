@@ -47,6 +47,7 @@ pub struct EnrollmentRequest {
     pub server_peer: String,
     pub candidate_did: String,
     pub candidate_peer: String,
+    pub candidate_name: Option<String>,
     pub observed_candidate_peer: String,
     pub resolved_candidate_did: String,
     pub candidate_ticket_peer: String,
@@ -60,8 +61,8 @@ pub struct EnrollmentRequest {
 }
 
 impl EnrollmentRequest {
-    pub fn canonical_text_fields(&self) -> [&str; 13] {
-        [
+    pub fn canonical_text_fields(&self) -> Vec<&str> {
+        let mut fields: Vec<&str> = vec![
             &self.request_id,
             &self.offer_id,
             &self.challenge,
@@ -75,7 +76,11 @@ impl EnrollmentRequest {
             &self.client_nonce,
             &self.issued_at,
             &self.expires_at,
-        ]
+        ];
+        fields.extend(gents_protocol::enrollment::candidate_name_fields(
+            self.candidate_name.as_deref(),
+        ));
+        fields
     }
 }
 

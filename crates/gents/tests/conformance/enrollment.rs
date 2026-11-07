@@ -213,6 +213,7 @@ fn request(step: &LeanEnrollmentTraceStep) -> EnrollmentRequest {
         server_peer: step.server_peer.clone(),
         candidate_did: step.candidate_did.clone(),
         candidate_peer: step.candidate_peer.clone(),
+        candidate_name: None,
         observed_candidate_peer: step.observed_candidate_peer.clone(),
         resolved_candidate_did: step.resolved_candidate_did.clone(),
         candidate_ticket_peer: step.candidate_ticket_peer.clone(),

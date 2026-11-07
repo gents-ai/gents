@@ -69,6 +69,9 @@ pub struct PeerStatusFetchRequest {
 #[serde(rename_all = "camelCase")]
 pub struct EnrollmentStatusRequest {
     pub server_address: String,
+    #[serde(default)]
+    #[ts(optional)]
+    pub candidate_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

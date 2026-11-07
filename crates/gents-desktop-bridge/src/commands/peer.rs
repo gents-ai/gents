@@ -43,12 +43,16 @@ pub async fn request_status_enrollment(
         .map(str::trim)
         .filter(|label| !label.is_empty())
         .map(str::to_owned);
-    core.request_status_enrollment_with_label(&status, server_label.as_deref())
-        .await
-        .map(|result| {
-            let mut view = EnrollmentRequestView::from(result);
-            view.server_label = server_label;
-            view
-        })
-        .map_err(|error| BridgeError::untyped(format!("{error:#}")))
+    core.request_status_enrollment_with_names(
+        &status,
+        server_label.as_deref(),
+        request.candidate_name.as_deref(),
+    )
+    .await
+    .map(|result| {
+        let mut view = EnrollmentRequestView::from(result);
+        view.server_label = server_label;
+        view
+    })
+    .map_err(|error| BridgeError::untyped(format!("{error:#}")))
 }

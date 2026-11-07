@@ -60,9 +60,9 @@ export function createDesktopApiAdapter(
       invokeDesktop("desktop_peer_status_fetch", {
         request: { peerId },
       }),
-    requestStatusEnrollment: (serverAddress) =>
+    requestStatusEnrollment: (serverAddress, candidateName) =>
       invokeDesktop("desktop_peer_enroll_status", {
-        request: { serverAddress },
+        request: { serverAddress, ...(candidateName ? { candidateName } : {}) },
       }),
     listWorkspace: (subpath) =>
       invokeDesktop("desktop_workspace_list", {

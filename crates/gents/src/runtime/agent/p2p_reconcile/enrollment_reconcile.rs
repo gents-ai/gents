@@ -1368,6 +1368,7 @@ mod tests {
             server_peer: "server-peer".into(),
             candidate_did: "did:key:member-placeholder".into(),
             candidate_peer: "member-peer".into(),
+            candidate_name: None,
             candidate_ticket: "member-ticket".into(),
             owner_agent: "did:key:owner-placeholder".into(),
             profile: "client".into(),
