@@ -61,31 +61,6 @@ pub const PROVIDER_REDUCTION_DISPLAY_NAME: &str = "ProviderReductionDisplay";
 pub const PROVIDER_REDUCTION_DISPLAY: &str =
     include_str!("../schemas/agent/provider_reduction_display.graphql");
 
-#[cfg(test)]
-mod provider_reduction_display_tests {
-    use super::*;
-
-    #[test]
-    fn replicated_display_schema_omits_private_replay_fields() {
-        for private_field in [
-            "compacted_prefix_json",
-            "retained_suffix_json",
-            "checkpoint_messages_json",
-            "replay_associations_json",
-            "request_commit_cid",
-        ] {
-            assert!(
-                !PROVIDER_REDUCTION_DISPLAY.contains(private_field),
-                "{private_field}"
-            );
-        }
-        assert!(PROVIDER_REDUCTION_DISPLAY.contains("requester_did: String @index @immutable"));
-        assert!(PROVIDER_REDUCTION_DISPLAY.contains("node_did: String @index @immutable"));
-        assert!(is_local_audit_collection(PROVIDER_CONTEXT_REDUCTION_NAME));
-        assert!(!is_local_audit_collection(PROVIDER_REDUCTION_DISPLAY_NAME));
-        assert!(BRANCHABLE_COLLECTION_NAMES.contains(&PROVIDER_REDUCTION_DISPLAY_NAME));
-    }
-}
 pub const PROJECTION_ACP_BINDING_NAME: &str = "ProjectionAcpBinding";
 pub const PROJECTION_ACP_BINDING: &str =
     include_str!("../schemas/agent/projection_acp_binding.graphql");
@@ -441,4 +416,30 @@ pub fn is_local_audit_collection(name: &str) -> bool {
 
 pub fn is_local_only_collection(name: &str) -> bool {
     LOCAL_ONLY_COLLECTION_NAMES.contains(&name)
+}
+
+#[cfg(test)]
+mod provider_reduction_display_tests {
+    use super::*;
+
+    #[test]
+    fn replicated_display_schema_omits_private_replay_fields() {
+        for private_field in [
+            "compacted_prefix_json",
+            "retained_suffix_json",
+            "checkpoint_messages_json",
+            "replay_associations_json",
+            "request_commit_cid",
+        ] {
+            assert!(
+                !PROVIDER_REDUCTION_DISPLAY.contains(private_field),
+                "{private_field}"
+            );
+        }
+        assert!(PROVIDER_REDUCTION_DISPLAY.contains("requester_did: String @index @immutable"));
+        assert!(PROVIDER_REDUCTION_DISPLAY.contains("node_did: String @index @immutable"));
+        assert!(is_local_audit_collection(PROVIDER_CONTEXT_REDUCTION_NAME));
+        assert!(!is_local_audit_collection(PROVIDER_REDUCTION_DISPLAY_NAME));
+        assert!(BRANCHABLE_COLLECTION_NAMES.contains(&PROVIDER_REDUCTION_DISPLAY_NAME));
+    }
 }

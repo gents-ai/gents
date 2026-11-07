@@ -566,15 +566,7 @@ pub fn compare_client_replicated_schema(
     local: &ReplicatedSchema,
     remote: Option<&ReplicatedSchema>,
 ) -> Result<(), ReplicatedSchemaSkew> {
-    let expected: Vec<_> = CLIENT_COLLECTIONS
-        .iter()
-        .copied()
-        .filter(|name| {
-            *name != "ProviderReductionDisplay"
-                || remote.is_none_or(|schema| schema.contains_key(*name))
-        })
-        .collect();
-    compare_replicated_schema(&expected, local, remote).map_err(|mut skew| {
+    compare_replicated_schema(CLIENT_COLLECTIONS, local, remote).map_err(|mut skew| {
         // Name the side that is off the canonical lineage, so the fix offered is re-creating
         // that store rather than "update to the same version", which cannot help.
         fn off_lineage(collections: &[String], schema: &ReplicatedSchema) -> Vec<String> {
@@ -642,10 +634,7 @@ mod tests {
 
     #[test]
     fn generated_display_schema_cases_drive_client_compatibility() {
-        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = snapshot["display_schema_cases"]
-            .as_array()
-            .expect("display schema cases");
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().display_schema_cases;
         assert!(!cases.is_empty());
         for case in cases {
             let identity = ReplicatedCollectionIdentity {
@@ -680,7 +669,7 @@ mod tests {
     }
 
     #[test]
-    fn old_runtime_can_omit_display_collection_but_not_other_or_mismatched_schemas() {
+    fn runtime_requires_the_display_collection_and_matching_schemas() {
         let identity = ReplicatedCollectionIdentity {
             version_id: "version".into(),
             branchable: true,
@@ -692,7 +681,7 @@ mod tests {
             .collect();
         let mut remote = local.clone();
         remote.remove("ProviderReductionDisplay");
-        assert!(compare_client_replicated_schema(&local, Some(&remote)).is_ok());
+        assert!(compare_client_replicated_schema(&local, Some(&remote)).is_err());
         remote.remove("AgentMessage");
         assert!(compare_client_replicated_schema(&local, Some(&remote)).is_err());
         remote = local.clone();

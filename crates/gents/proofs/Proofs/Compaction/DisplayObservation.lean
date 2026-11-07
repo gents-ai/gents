@@ -31,17 +31,15 @@ def project (outcome : PersistOutcome) (key : ReductionKey) (metadata : Metadata
 def visible (display : Display) (node : NodeDid) (requester : RequesterDid) : Bool :=
   decide (display.key.nodeDid = node ∧ display.metadata.requester = requester)
 
-/-- An older runtime can omit the display collection. When it advertises the
-collection, its schema must match before replication can use it. -/
 def displaySchemaCompatible (localVersion : Option Nat) (remoteVersion : Option Nat) : Bool :=
-  match remoteVersion with
-  | none => true
-  | some version => decide (localVersion = some version)
+  match localVersion, remoteVersion with
+  | some localSchema, some remoteSchema => decide (localSchema = remoteSchema)
+  | _, _ => false
 
 theorem advertised_display_requires_same_schema (localVersion : Option Nat) (version : Nat)
     (h : displaySchemaCompatible localVersion (some version) = true) :
     localVersion = some version := by
-  simpa [displaySchemaCompatible] using h
+  cases localVersion <;> simp_all [displaySchemaCompatible]
 
 structure SchemaCase where
   localVersion : Option Nat
@@ -50,7 +48,7 @@ structure SchemaCase where
   deriving Repr
 
 def schemaCases : List SchemaCase :=
-  [(some 1, none), (some 1, some 1), (some 1, some 2), (none, some 1)].map
+  [(some 1, none), (some 1, some 1), (some 1, some 2), (none, some 1), (none, none)].map
     (fun (localVersion, remoteVersion) =>
       ⟨localVersion, remoteVersion, displaySchemaCompatible localVersion remoteVersion⟩)
 

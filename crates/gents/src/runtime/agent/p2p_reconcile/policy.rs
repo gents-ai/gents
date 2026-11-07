@@ -323,10 +323,7 @@ mod tests {
 
     #[test]
     fn modeled_display_scopes_match_runtime_route_filters() {
-        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = snapshot["display_observation_cases"]
-            .as_array()
-            .expect("display cases");
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().display_observation_cases;
         assert!(!cases.is_empty());
         for case in cases {
             if !matches!(case["outcome"].as_str(), Some("fresh" | "idempotent")) {
