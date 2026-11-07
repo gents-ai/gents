@@ -7,37 +7,6 @@ use crate::Collection;
 
 const PACK_ORIGIN_PREFIX: &str = "gents:pack:";
 
-#[cfg(test)]
-mod ownership_tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn document_ownership_matches_executable_model() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().pack_document_ownership_cases;
-        assert_eq!(cases.len(), 12);
-        for case in cases {
-            let coordinate = case["coordinate"].as_str().unwrap();
-            let origin = case["origin"].as_str();
-            let mut desired = json!({ "tags": [format!("gents:pack:{coordinate}")] });
-            let live = json!({ "tags": origin.map(|value| vec![format!("gents:pack:{value}")]).unwrap_or_default() });
-            assert_eq!(
-                merge_tags(&mut desired, &live).is_ok(),
-                case["allowed"].as_bool().unwrap(),
-                "{case}"
-            );
-            let tags: Vec<String> = origin
-                .map(|value| vec![format!("gents:pack:{value}")])
-                .unwrap_or_default();
-            assert_eq!(
-                ensure_origin_owned(&tags, coordinate).is_ok(),
-                case["removal_allowed"].as_bool().unwrap(),
-                "{case}"
-            );
-        }
-    }
-}
-
 fn is_coordinate(value: &str) -> bool {
     value.split_once('/').is_some_and(|(namespace, name)| {
         super::is_valid_pack_name(namespace) && super::is_valid_pack_name(name)
@@ -278,4 +247,35 @@ pub(super) fn stamp_pack_origin(
         }
     }
     serde_json::from_value(value).context("decoding provenance-stamped pack configuration")
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn document_ownership_matches_executable_model() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().pack_document_ownership_cases;
+        assert_eq!(cases.len(), 12);
+        for case in cases {
+            let coordinate = case["coordinate"].as_str().unwrap();
+            let origin = case["origin"].as_str();
+            let mut desired = json!({ "tags": [format!("gents:pack:{coordinate}")] });
+            let live = json!({ "tags": origin.map(|value| vec![format!("gents:pack:{value}")]).unwrap_or_default() });
+            assert_eq!(
+                merge_tags(&mut desired, &live).is_ok(),
+                case["allowed"].as_bool().unwrap(),
+                "{case}"
+            );
+            let tags: Vec<String> = origin
+                .map(|value| vec![format!("gents:pack:{value}")])
+                .unwrap_or_default();
+            assert_eq!(
+                ensure_origin_owned(&tags, coordinate).is_ok(),
+                case["removal_allowed"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+    }
 }
