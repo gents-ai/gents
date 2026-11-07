@@ -185,6 +185,10 @@ impl PairingStateStore for GraphqlPairingStateStore {
                     template
                     source
                 }}
+                DataPlanePairingFilter(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
+                    node_did
+                    filters
+                }}
             }}"#
         );
         let response =
@@ -204,13 +208,106 @@ impl PairingStateStore for GraphqlPairingStateStore {
             })
             .transpose()?
             .flatten();
-        let data_plane = first_row::<PairingStateRow>(&response, "DataPlanePairingDesired")?
-            .and_then(|row| local_data_plane_row(row, &entry, self.identity.did()))
-            .map(|row| {
-                data_plane_desired_from_pairing_row(row, &entry.endpoint, self.identity.did())
-            })
-            .transpose()?
-            .flatten();
+        let filter_rows = rows::<serde_json::Value>(&response, "DataPlanePairingFilter")?;
+        let data_plane_row = first_row::<PairingStateRow>(&response, "DataPlanePairingDesired")?
+            .and_then(|row| local_data_plane_row(row, &entry, self.identity.did()));
+        let data_plane = match data_plane_row {
+            Some(mut row) => {
+                let filtered = row.template.as_deref() == Some("app-collections-filtered");
+                if filtered {
+                    row.template = Some("app-collections".into());
+                }
+                let parsed = if filter_rows.len() == 1
+                    && filter_rows[0]["node_did"].as_str() == Some(self.identity.did())
+                {
+                    filter_rows[0]["filters"].as_str().and_then(|raw| {
+                        serde_json::from_str::<Vec<gents_protocol::peer_schema::AppPairingFilter>>(
+                            raw,
+                        )
+                        .ok()
+                    })
+                } else {
+                    None
+                };
+                let collections: BTreeSet<String> = row
+                    .collections
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect();
+                let mut immutable = BTreeSet::new();
+                let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
+                if let Some(filters) = &parsed {
+                    for filter in filters {
+                        let version = match access.collection_version(&filter.collection).await {
+                            Ok(Some(version)) => version,
+                            Ok(None) => continue,
+                            Err(error) => {
+                                tracing::warn!(collection = %filter.collection, %error, "cannot verify application pairing field");
+                                continue;
+                            }
+                        };
+                        if version.get("VersionID").and_then(serde_json::Value::as_str)
+                            == Some(filter.version.as_str())
+                            && version
+                                .get("Fields")
+                                .and_then(serde_json::Value::as_array)
+                                .is_some_and(|fields| {
+                                    fields.iter().any(|field| {
+                                        field.get("Name").and_then(serde_json::Value::as_str)
+                                            == Some(filter.field.as_str())
+                                            && field
+                                                .get("Immutable")
+                                                .and_then(serde_json::Value::as_bool)
+                                                == Some(true)
+                                    })
+                                })
+                        {
+                            immutable.insert((
+                                filter.collection.clone(),
+                                filter.field.clone(),
+                                filter.version.clone(),
+                            ));
+                        }
+                    }
+                }
+                let state = if filter_rows.len() > 1 || (!filtered && !filter_rows.is_empty()) {
+                    None
+                } else {
+                    gents_protocol::peer_schema::resolve_app_pairing_filters(
+                        filtered,
+                        &collections,
+                        &immutable,
+                        parsed.as_deref(),
+                    )
+                };
+                if let Some(filters) = state {
+                    let mut desired = data_plane_desired_from_pairing_row(
+                        row,
+                        &entry.endpoint,
+                        self.identity.did(),
+                    )?;
+                    if let Some(desired) = &mut desired {
+                        desired.collections =
+                            gents_protocol::peer_schema::app_pairing_subscriptions(
+                                &desired.collections,
+                                &filters,
+                            );
+                        for filter in filters {
+                            desired.replicator_filter.insert(
+                                filter.collection,
+                                p2p::ReplicationFilter::eq(filter.field, filter.value),
+                            );
+                        }
+                    }
+                    desired
+                } else {
+                    tracing::warn!(peer_id = %raw_peer_id, "invalid application pairing filters; removing the data-plane route");
+                    None
+                }
+            }
+            None => None,
+        };
         Ok(LoadedPairingDesired {
             state: merge_layered_desired(
                 self.identity.did(),

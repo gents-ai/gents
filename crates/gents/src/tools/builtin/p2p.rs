@@ -17,6 +17,7 @@ use crate::store::graphql::{escape_graphql_string, validate_collection_identifie
 use crate::tools::surface::EndpointScope;
 use crate::NodeIdentity;
 use gents_protocol::enrollment::{AuthorizationLease, EnrollmentDecisionKind};
+use gents_protocol::peer_schema::{admit_app_pairing_filters, AppPairingFilter};
 
 #[cfg(test)]
 mod tests;
@@ -45,6 +46,8 @@ pub struct P2pParams {
     pub peer_did: Option<Value>,
     #[serde(default)]
     pub collections: Option<Value>,
+    #[serde(default)]
+    pub filters: Option<Value>,
     #[serde(default)]
     pub collection: Option<Value>,
     #[serde(default)]
@@ -98,6 +101,7 @@ impl P2pParams {
             ("peer_id", self.peer_id),
             ("peer_did", self.peer_did),
             ("collections", self.collections),
+            ("filters", self.filters),
             ("collection", self.collection),
             ("doc_ids", self.doc_ids),
             ("request_id", self.request_id),
@@ -267,6 +271,8 @@ impl P2pTool {
         peer: &str,
         desired: Option<Value>,
         fields: Option<String>,
+        filters: Option<Vec<AppPairingFilter>>,
+        filters_specified: bool,
     ) -> Result<bool> {
         let actor = self.actor()?.did().to_owned();
         let identity = actor.parse()?;
@@ -277,14 +283,22 @@ impl P2pTool {
             let peer = peer.clone();
             let desired = desired.clone();
             let fields = fields.clone();
+            let filters = filters.clone();
             let collections_scope = collections_scope.clone();
             Box::pin(async move {
-                let response = txn.execute(&format!("{{DataPlanePairingDesired(filter: {{peer_id: {{_eq: {}}}}}, limit: 2) {{_docID peer_id node_did collections replicator_addresses template source}}}}", quoted(&peer))).await?;
+                let response = txn.execute(&format!("{{DataPlanePairingDesired(filter: {{peer_id: {{_eq: {}}}}}, limit: 2) {{_docID peer_id node_did collections replicator_addresses template source}} DataPlanePairingFilter(filter: {{peer_id: {{_eq: {}}}}}, limit: 2) {{_docID peer_id node_did filters}}}}", quoted(&peer), quoted(&peer))).await?;
                 let rows = response["data"]["DataPlanePairingDesired"].as_array().context("missing pairing documents")?;
+                let filter_rows = response["data"]["DataPlanePairingFilter"].as_array().context("missing pairing filter documents")?;
                 ensure!(rows.len() <= 1, "ambiguous pairing document");
+                ensure!(filter_rows.len() <= 1, "ambiguous pairing filter document");
+                let previous_filter = filter_rows.first();
+                if let Some(row) = previous_filter {
+                    ensure!(row["node_did"].as_str() == Some(actor.as_str()), "pairing filter is managed by another owner");
+                }
                 let before = rows.first();
                 if let Some(row) = before {
                     ensure!(row["node_did"].as_str() == Some(actor.as_str()) && row["source"].as_str() == Some(OVERLAY_SOURCE), "pairing overlay is managed by another owner; do not change its policy");
+                    ensure!(fields.is_none() || row["template"] != "app-collections-filtered" || filters_specified, "filters must be supplied when changing a filtered pairing; use an empty object to remove them explicitly");
                     let before_collections: Vec<String> = if row["collections"].is_null() {Vec::new()} else {serde_json::from_value(row["collections"].clone()).context("malformed existing collection scope")?};
                     ensure!(collections_scope.permits_all(before_collections.iter()), "existing pairing contains collections outside the P2P grant; next call: p2p {{\"action\":\"pairings_list\"}}");
                     if !before_collections.is_empty() {
@@ -296,12 +310,30 @@ impl P2pTool {
                     (Some(desired), Some(before)) => desired.as_object().context("invalid desired pairing")?.iter().all(|(key, value)| before.get(key) == Some(value)),
                     _ => false,
                 };
-                if unchanged { return Ok(true); }
+                let encoded = filters.as_ref().filter(|f| !f.is_empty()).map(serde_json::to_string).transpose()?;
+                let same_filter = match (&encoded, previous_filter) {
+                    (None, None) => true,
+                    (Some(encoded), Some(row)) => row["filters"].as_str() == Some(encoded),
+                    _ => false,
+                };
+                if unchanged && same_filter { return Ok(true); }
+                match (&encoded, previous_filter) {
+                    (Some(encoded), Some(row)) => {
+                        txn.execute(&format!("mutation {{update_DataPlanePairingFilter(filter: {{_docID: {{_eq: {}}}}}, input: {{filters: {}}}) {{_docID}}}}", quoted(row["_docID"].as_str().context("pairing filter identity missing")?), quoted(encoded))).await?;
+                    }
+                    (Some(encoded), None) => {
+                        txn.execute(&format!("mutation {{create_DataPlanePairingFilter(input: {{peer_id: {}, node_did: {}, filters: {}}}) {{_docID}}}}", quoted(&peer), quoted(&actor), quoted(encoded))).await?;
+                    }
+                    (None, Some(row)) => {
+                        txn.execute(&format!("mutation {{delete_DataPlanePairingFilter(filter: {{_docID: {{_eq: {}}}}}) {{_docID}}}}", quoted(row["_docID"].as_str().context("pairing filter identity missing")?))).await?;
+                    }
+                    (None, None) => {}
+                }
                 let mutation = match (fields, before) {
                     (Some(fields), Some(row)) => format!("mutation {{update_DataPlanePairingDesired(filter: {{_docID: {{_eq: {}}}}}, input: {fields}) {{_docID}}}}", quoted(row["_docID"].as_str().context("overlay identity missing")?)),
                     (Some(fields), None) => format!("mutation {{create_DataPlanePairingDesired(input: {fields}) {{_docID}}}}"),
                     (None, Some(row)) => format!("mutation {{delete_DataPlanePairingDesired(filter: {{_docID: {{_eq: {}}}}}) {{_docID}}}}", quoted(row["_docID"].as_str().context("overlay identity missing")?)),
-                    (None, None) => unreachable!(),
+                    (None, None) => return Ok(false),
                 };
                 txn.execute(&mutation).await?;
                 Ok(false)
@@ -330,6 +362,68 @@ impl P2pTool {
                 .with_context(|| format!("collection {name} is unavailable on this node"))?;
         }
         Ok(collections)
+    }
+
+    async fn checked_filters(
+        &self,
+        options: &Map<String, Value>,
+        collections: &BTreeSet<String>,
+    ) -> Result<Vec<AppPairingFilter>> {
+        let Some(raw) = options.get("filters") else {
+            return Ok(Vec::new());
+        };
+        let mapping = raw
+            .as_object()
+            .context("filters must map collections to fields")?;
+        let access = ConfigAccess::local(self.node.clone());
+        let mut filters = Vec::with_capacity(mapping.len());
+        let mut immutable = BTreeSet::new();
+        for (collection, value) in mapping {
+            ensure!(
+                collections.contains(collection),
+                "filter collection {collection} is not selected"
+            );
+            let fields = value
+                .as_object()
+                .context("each collection filter must map one field to a value")?;
+            ensure!(
+                fields.len() == 1,
+                "each collection filter must name exactly one field"
+            );
+            let (field, value) = fields.iter().next().expect("one field");
+            let version = access
+                .collection_version(collection)
+                .await?
+                .with_context(|| format!("collection {collection} is unavailable"))?;
+            let version_id = version
+                .get("VersionID")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .context("collection has no schema version")?;
+            let schema_fields = version
+                .get("Fields")
+                .and_then(Value::as_array)
+                .with_context(|| {
+                    format!("collection {collection} has no readable field metadata")
+                })?;
+            if schema_fields.iter().any(|candidate| {
+                candidate.get("Name").and_then(Value::as_str) == Some(field.as_str())
+                    && candidate.get("Immutable").and_then(Value::as_bool) == Some(true)
+            }) {
+                immutable.insert((collection.clone(), field.clone(), version_id.to_owned()));
+            }
+            filters.push(AppPairingFilter {
+                collection: collection.clone(),
+                field: field.clone(),
+                value: value.clone(),
+                version: version_id.to_owned(),
+            });
+        }
+        ensure!(
+            admit_app_pairing_filters(collections, &immutable, &filters),
+            "pairing filters must name immutable fields on selected collections"
+        );
+        Ok(filters)
     }
 
     async fn call_one(&self, argv: Vec<String>, options: Map<String, Value>) -> Result<Reply> {
@@ -463,6 +557,19 @@ impl P2pTool {
                         "peer_id node_did collections source template",
                     )
                     .await?;
+                let mut desired_filters = self
+                    .rows(
+                        "DataPlanePairingFilter",
+                        filter.as_deref(),
+                        "peer_id node_did filters",
+                    )
+                    .await?;
+                for row in &mut desired_filters {
+                    let parsed = row["filters"]
+                        .as_str()
+                        .and_then(|raw| serde_json::from_str::<Vec<AppPairingFilter>>(raw).ok());
+                    row["filters"] = parsed.map_or(Value::Null, |filters| json!(filters));
+                }
                 let applied = self
                     .rows(
                         "PeerPairingApplied",
@@ -511,7 +618,7 @@ impl P2pTool {
                     detail_options["peer_id"] = json!(peer);
                 }
                 Ok(reply(
-                    json!({"desired":desired,"applied":applied}),
+                    json!({"desired":desired,"desired_filters":desired_filters,"applied":applied}),
                     None,
                     json!({"enrolled_peers":enrolled,"connected_peers":bounded_observation(connected),"replicators":replicators,"limit":50,"details_call":action_call(&words, detail_options)}),
                 ))
@@ -637,6 +744,7 @@ impl P2pTool {
                 let peer = text("peer_id")?;
                 let active = self.enrollment(peer, Some(text("peer_did")?)).await?;
                 let collections = self.checked_collections(options).await?;
+                let filters = self.checked_filters(options, &collections).await?;
                 let names = collections.iter().map(String::as_str).collect::<Vec<_>>();
                 let local_schema = crate::runtime::agent::p2p_reconcile::read_replicated_schema(
                     self.node.clone(),
@@ -647,22 +755,40 @@ impl P2pTool {
                 if let Some(row) = &before {
                     self.owned_overlay(row, actor.did())?;
                 }
-                let desired = json!({"peer_id":peer,"node_did":actor.did(),"collections":collections,"replicator_addresses":[active.request.candidate_ticket],"template":"app-collections","source":OVERLAY_SOURCE});
+                if before
+                    .as_ref()
+                    .is_some_and(|row| row["template"] == "app-collections-filtered")
+                    && !options.contains_key("filters")
+                {
+                    bail!("filters must be supplied when changing a filtered pairing; use an empty object to remove them explicitly");
+                }
+                let template = if filters.is_empty() {
+                    "app-collections"
+                } else {
+                    "app-collections-filtered"
+                };
+                let desired = json!({"peer_id":peer,"node_did":actor.did(),"collections":collections,"replicator_addresses":[active.request.candidate_ticket],"template":template,"source":OVERLAY_SOURCE});
                 if *operation == "preview" {
                     return Ok(reply(
-                        json!({"proposed":desired,"current":before,"local_schema":local_schema,"peer_schema_compatibility":"not_checked"}),
+                        json!({"proposed":desired,"filters":filters,"current":before,"local_schema":local_schema,"peer_schema_compatibility":"not_checked","filter_scope":"push selectivity; other subscriptions and ACP are independent"}),
                         None,
                         json!({"enrollment_request_id":active.request.request_id}),
                     ));
                 }
                 ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
-                let fields = format!("{{peer_id: {}, node_did: {}, collections: {}, replicator_addresses: {}, template: \"app-collections\", source: {}}}",
-                    quoted(peer), quoted(actor.did()), crate::store::graphql::graphql_string_list_literal(collections.iter().map(String::as_str)), crate::store::graphql::graphql_string_list_literal([active.request.candidate_ticket.as_str()]), quoted(OVERLAY_SOURCE));
+                let fields = format!("{{peer_id: {}, node_did: {}, collections: {}, replicator_addresses: {}, template: {}, source: {}}}",
+                    quoted(peer), quoted(actor.did()), crate::store::graphql::graphql_string_list_literal(collections.iter().map(String::as_str)), crate::store::graphql::graphql_string_list_literal([active.request.candidate_ticket.as_str()]), quoted(template), quoted(OVERLAY_SOURCE));
                 let unchanged = self
-                    .mutate_overlay(peer, Some(desired.clone()), Some(fields))
+                    .mutate_overlay(
+                        peer,
+                        Some(desired.clone()),
+                        Some(fields),
+                        Some(filters),
+                        options.contains_key("filters"),
+                    )
                     .await?;
                 Ok(reply(
-                    json!({"desired":desired,"unchanged":unchanged,"applied":"observe_existing_reconciler","local_schema":local_schema,"peer_schema_compatibility":"not_checked"}),
+                    json!({"desired":desired,"unchanged":unchanged,"applied":"observe_existing_reconciler","local_schema":local_schema,"peer_schema_compatibility":"not_checked","filter_scope":"push selectivity; other subscriptions and ACP are independent"}),
                     Some(json!({"action":"pairings_get","peer_id":peer})),
                     Value::Null,
                 ))
@@ -670,7 +796,7 @@ impl P2pTool {
             ["pairings", "revoke"] => {
                 ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
                 let peer = text("peer_id")?;
-                let unchanged = self.mutate_overlay(peer, None, None).await?;
+                let unchanged = self.mutate_overlay(peer, None, None, None, false).await?;
                 Ok(reply(
                     json!({"managed_overlay_removed":peer,"unchanged":unchanged}),
                     Some(json!({"action":"pairings_get","peer_id":peer})),
@@ -781,6 +907,7 @@ impl Tool for P2pTool {
                     "peer_id": text("Remote node's transport peer ID (hex), from enrollment_pending, pairings_list enrolled_peers or network_list. network_get, pairings_get/preview/apply/revoke, sync_documents."),
                     "peer_did": text("Remote node's DID from its signed enrollment (enrollment_pending peer_did). pairings_preview/apply."),
                     "collections": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 16, "description": "Application collection names to replicate to the peer, e.g. [\"DeploymentNote\"]; they must be in this tool's P2P grant. pairings_preview/apply."},
+                    "filters": {"type": "object", "description": "pairings_preview/apply: map selected collections to one immutable field and its equality value. An empty object explicitly removes existing filters."},
                     "collection": text("One application collection name. sync_documents."),
                     "doc_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 16, "description": "Document IDs to fetch from the peer. sync_documents."},
                     "request_id": text("Enrollment request ID (enroll-...) from enrollment_pending or the joining node's enrollment_request. enrollment_approve/deny/revoke."),

@@ -1,0 +1,5 @@
+type DataPlanePairingFilter {
+    peer_id: String @index(unique: true)
+    node_did: String @index
+    filters: String!
+}

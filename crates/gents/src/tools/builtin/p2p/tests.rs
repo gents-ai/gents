@@ -14,6 +14,190 @@ async fn call(tool: &P2pTool, value: Value) -> Value {
 }
 
 #[tokio::test]
+async fn pairing_filters_require_immutable_selected_fields() {
+    let db = crate::support::test_p2p_db("pairing-filter-schema").await;
+    ConfigAccess::local(db.node.clone())
+        .add_collection("type FilteredPost @branchable { to_host: String @immutable text: String }")
+        .await
+        .unwrap();
+    let tool = P2pTool::new(
+        db.node.clone(),
+        Some(db.node_identity.clone()),
+        true,
+        EndpointScope::all(),
+    );
+    let collections = BTreeSet::from(["FilteredPost".to_string()]);
+    let parse = |value: Value| value.as_object().unwrap().clone();
+    let valid = tool
+        .checked_filters(
+            &parse(json!({"filters":{"FilteredPost":{"to_host":"host"}}})),
+            &collections,
+        )
+        .await
+        .unwrap();
+    assert_eq!(valid.len(), 1);
+    assert_eq!(valid[0].field, "to_host");
+    assert_eq!(valid[0].value, "host");
+    for filters in [
+        json!({"FilteredPost":{"text":"x"}}),
+        json!({"FilteredPost":{"missing":"x"}}),
+        json!({"Other":{"to_host":"x"}}),
+        json!({"FilteredPost":{"to_host":"x","text":"y"}}),
+    ] {
+        let error = tool
+            .checked_filters(&parse(json!({"filters":filters})), &collections)
+            .await;
+        assert!(error.is_err(), "invalid filter was accepted");
+    }
+}
+
+#[tokio::test]
+async fn replacing_a_filtered_overlay_requires_explicit_filter_choice() {
+    let db = crate::support::test_p2p_db("pairing-filter-replace").await;
+    let actor = db.node_identity.did();
+    let access = ConfigAccess::local(db.node.clone());
+    access.write("test.p2p.filtered-overlay", &format!(
+        "mutation {{create_DataPlanePairingDesired(input: {{peer_id: \"peer-filter\", node_did: {}, source: \"engineer\", collections: [\"FilteredPost\"], replicator_addresses: null, template: \"app-collections-filtered\"}}) {{_docID}}}}", quoted(actor)
+    )).await.unwrap();
+    let tool = P2pTool::new(
+        db.node.clone(),
+        Some(db.node_identity.clone()),
+        true,
+        EndpointScope::all(),
+    );
+    let desired = json!({"peer_id":"peer-filter", "node_did":actor,
+        "collections":["FilteredPost"], "template":"app-collections", "source":"engineer"});
+    let error = tool
+        .mutate_overlay(
+            "peer-filter",
+            Some(desired),
+            Some("{}".into()),
+            Some(vec![]),
+            false,
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("filters must be supplied"));
+    assert_eq!(
+        tool.overlay("peer-filter").await.unwrap().unwrap()["template"],
+        "app-collections-filtered"
+    );
+}
+
+#[tokio::test]
+async fn revoking_an_orphaned_filter_removes_it_without_panicking() {
+    let db = crate::support::test_p2p_db("pairing-filter-orphan").await;
+    let actor = db.node_identity.did();
+    let access = ConfigAccess::local(db.node.clone());
+    access.write("test.p2p.orphaned-filter", &format!(
+        "mutation {{create_DataPlanePairingFilter(input: {{peer_id: \"peer-orphan\", node_did: {}, filters: \"[]\"}}) {{_docID}}}}", quoted(actor)
+    )).await.unwrap();
+    let tool = P2pTool::new(
+        db.node.clone(),
+        Some(db.node_identity.clone()),
+        true,
+        EndpointScope::all(),
+    );
+    assert!(!tool
+        .mutate_overlay("peer-orphan", None, None, None, false)
+        .await
+        .unwrap());
+    let rows = tool
+        .rows(
+            "DataPlanePairingFilter",
+            Some("{peer_id: {_eq: \"peer-orphan\"}}"),
+            "peer_id",
+        )
+        .await
+        .unwrap();
+    assert!(rows.is_empty());
+}
+
+#[tokio::test]
+async fn filtered_pairing_survives_reload_and_refuses_missing_filter() {
+    let local = crate::support::test_p2p_db("filtered-pairing-local").await;
+    let remote = crate::support::test_p2p_db("filtered-pairing-remote").await;
+    for node in [&local.node, &remote.node] {
+        ConfigAccess::local(node.clone())
+            .add_collection(
+                "type ScopedPost @branchable { recipient: String @immutable body: String }",
+            )
+            .await
+            .unwrap();
+    }
+    let (peer, address) = wait_for_peer_identity(&remote.node).await;
+    let identity = local.node_identity.clone();
+    let enrollment = authorize_enrollment_peer(
+        local.node.clone(),
+        "filtered-pairing",
+        "Filtered pairing",
+        identity.clone(),
+        remote.node_identity.clone(),
+        &peer,
+        &address,
+    )
+    .await;
+    let tool = P2pTool::new(
+        local.node.clone(),
+        Some(identity.clone()),
+        true,
+        EndpointScope::<String, ()>::only_units(["ScopedPost".into()]),
+    );
+    let options = json!({"peer_id": peer, "peer_did": remote.node_identity.did(), "collections": ["ScopedPost"], "filters": {"ScopedPost": {"recipient": "node-a"}}});
+    let applied = call(
+        &tool,
+        json!({"argv":["pairings","apply"], "options":options}),
+    )
+    .await;
+    assert_eq!(applied["outcome"]["unchanged"], false);
+    let projection = GraphqlEnrollmentStore::new(local.node.clone(), identity.clone())
+        .load_projection()
+        .await
+        .unwrap();
+    let active = projection
+        .active
+        .iter()
+        .find(|item| item.request.request_id == enrollment.request_id)
+        .unwrap();
+    let entry = EnrollmentEndpointEntry {
+        desired_id: peer.clone(),
+        peer_id: peer.clone(),
+        node_did: remote.node_identity.did().into(),
+        address,
+        request_digest: active.request.request_digest.clone(),
+        authorization_sequence: active.revision.sequence,
+        authorization_expires_at: active.revision.authorization_expires_at.clone(),
+    };
+    let store = GraphqlPairingStateStore::for_enrollment_materialization(
+        local.node.clone(),
+        identity.clone(),
+        entry,
+    );
+    let desired = store.load_desired(&peer).await.unwrap().unwrap();
+    assert!(
+        !desired.collections.contains("ScopedPost"),
+        "collection-wide gossip bypasses the filtered push route"
+    );
+    assert!(desired.replicator_collections.contains("ScopedPost"));
+    assert_eq!(
+        crate::runtime::agent::p2p_reconcile::single_string_eq(
+            desired.replicator_filter.get("ScopedPost").unwrap()
+        ),
+        Some(("recipient", "node-a"))
+    );
+    let retry = call(
+        &tool,
+        json!({"argv":["pairings","apply"], "options":options}),
+    )
+    .await;
+    assert_eq!(retry["outcome"]["unchanged"], true);
+    let access = ConfigAccess::local(local.node.clone());
+    access.write("test.remove.filter", &format!("mutation {{delete_DataPlanePairingFilter(filter: {{peer_id: {{_eq: {}}}}}) {{_docID}}}}", quoted(&peer))).await.unwrap();
+    let desired = store.load_desired(&peer).await.unwrap();
+    assert!(desired.is_none_or(|route| !route.replicator_collections.contains("ScopedPost")));
+}
+
+#[tokio::test]
 async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
     let local = crate::support::test_p2p_db("engineer-p2p-local").await;
     let remote = crate::support::test_p2p_db("engineer-p2p-remote").await;

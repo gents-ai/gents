@@ -39,28 +39,29 @@ private def caseJson (value : String × List String × List FieldFilter) : Strin
 
 def casesJson : String := jsonArray (cases.map caseJson)
 
-private def routeCases : List (String × PairingMode × Option (List FieldFilter)) :=
-  [ ("unfiltered", .unfiltered, none)
-  , ("missing", .filtered, none)
-  , ("empty", .filtered, some [])
-  , ("valid", .filtered, some [{ collection := "Post", field := "to_host", value := "node" }])
-  , ("mutable", .filtered, some [{ collection := "Post", field := "message", value := "node" }])
-  , ("unexpected", .unfiltered, some [{ collection := "Post", field := "to_host", value := "node" }]) ]
+private def routeCases : List (String × List String × PairingMode × Option (List FieldFilter)) :=
+  [ ("unfiltered", ["Post"], .unfiltered, none)
+  , ("missing", ["Post"], .filtered, none)
+  , ("empty", ["Post"], .filtered, some [])
+  , ("valid", ["Post"], .filtered, some [{ collection := "Post", field := "to_host", value := "node" }])
+  , ("mixed", ["Post", "Other"], .filtered, some [{ collection := "Post", field := "to_host", value := "node" }])
+  , ("mutable", ["Post"], .filtered, some [{ collection := "Post", field := "message", value := "node" }])
+  , ("unexpected", ["Post"], .unfiltered, some [{ collection := "Post", field := "to_host", value := "node" }]) ]
 
-private def routeCaseJson (value : String × PairingMode × Option (List FieldFilter)) : String :=
-  let (label, mode, filters) := value
+private def routeCaseJson (value : String × List String × PairingMode × Option (List FieldFilter)) : String :=
+  let (label, collections, mode, filters) := value
   "{\"label\":" ++ jsonString label ++ ",\"mode\":" ++
     jsonString (if mode == .filtered then "filtered" else "unfiltered") ++
     ",\"filters\":" ++ (match filters with
       | none => "null"
       | some values => jsonArray (values.map filterJson)) ++
-    ",\"collections\":" ++ jsonStringArray ["Post"] ++
+    ",\"collections\":" ++ jsonStringArray collections ++
     ",\"authority\":" ++ jsonArray (authority.map authorityJson) ++
-    ",\"subscriptions\":" ++ (match resolve mode ["Post"] authority filters with
+    ",\"subscriptions\":" ++ (match resolve mode collections authority filters with
       | none => "null"
-      | some values => jsonStringArray (subscriptions ["Post"] values)) ++
+      | some values => jsonStringArray (subscriptions collections values)) ++
     ",\"accepted\":" ++
-    (if (resolve mode ["Post"] authority filters).isSome then "true" else "false") ++ "}"
+    (if (resolve mode collections authority filters).isSome then "true" else "false") ++ "}"
 
 def routeCasesJson : String := jsonArray (routeCases.map routeCaseJson)
 
