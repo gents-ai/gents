@@ -1,4 +1,4 @@
 [[permission]]
 identifier = "native-browser"
-description = "Allow the app's own view to open, place, hide, navigate and close the browser beneath it."
-commands.allow = ["browser_open", "browser_place", "browser_hide", "browser_go", "browser_close"]
+description = "Allow the app's own view to open, switch, place, hide, navigate and close the browser's tabs beneath it."
+commands.allow = ["browser_open", "browser_select", "browser_place", "browser_hide", "browser_go", "browser_close_tab", "browser_close"]

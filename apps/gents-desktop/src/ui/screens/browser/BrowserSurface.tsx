@@ -1,137 +1,51 @@
-/* A browser in the panel. The page is a native view beneath the app
-   (browser.rs); this surface draws its toolbar and holds the page's place,
-   which seeThrough keeps open to the page. */
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+/* A browser in the panel. Each tab's page is a native view beneath the app
+   (browser.rs); this surface draws the tabs and the toolbar and holds the
+   page's place, which seeThrough keeps open to the page. */
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
   FolderOpen,
   Globe,
+  Plus,
   RotateCw,
   Search,
   X,
 } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
+import { cn } from "@gents/ui/lib/utils";
 import { inNativeShell } from "../../../lib/nativeShell";
 import type { SurfaceContext } from "@/app/surfaces";
-import { keyEventOf, type HandedKey } from "./handedKeys";
-import { nextSeq } from "./order";
 import { seeThrough } from "./seeThrough";
+import {
+  activeTab,
+  closeTab,
+  follow,
+  go,
+  newTab,
+  onFocusAddress,
+  open,
+  readRecents,
+  selectTab,
+  useBrowser,
+  type Tab,
+} from "./tabs";
 
-const RECENTS_KEY = "gents-browser-recents";
+export { resetBrowser } from "./tabs";
 
-type Recent = { url: string; title: string };
-
-function readRecents(): Recent[] {
-  try {
-    return JSON.parse(localStorage.getItem(RECENTS_KEY) ?? "[]") as Recent[];
-  } catch {
-    return [];
-  }
-}
-
-function remember(url: string, title: string) {
-  try {
-    const next = [
-      { url, title: title || new URL(url).host },
-      ...readRecents().filter((r) => r.url !== url),
-    ].slice(0, 8);
-    localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
-  } catch {
-    /* recents are a convenience */
-  }
-}
-
-/* an address, or else a search */
+/* an address, a file on this machine, or else a search */
 function destination(text: string) {
   const value = text.trim();
   if (!value) return null;
   if (/^https?:\/\//i.test(value)) return value;
-  /* a file on this machine: the native side resolves and checks it */
+  /* the native side resolves and checks a file */
   if (/^file:\/\//i.test(value) || value.startsWith("/") || value.startsWith("~/"))
     return value;
   if (/^localhost(:\d+)?(\/.*)?$/.test(value)) return `http://${value}`;
   if (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/.*)?$/.test(value)) return `https://${value}`;
   return `https://duckduckgo.com/?q=${encodeURIComponent(value)}`;
-}
-
-/* the page the native view holds; it outlives this surface, which unmounts
-   whenever another panel tab is chosen */
-type Page = {
-  opened: boolean;
-  url: string;
-  title: string;
-  loading: boolean;
-  canGoBack: boolean;
-  canGoForward: boolean;
-};
-
-let page: Page = {
-  opened: false,
-  url: "",
-  title: "",
-  loading: false,
-  canGoBack: false,
-  canGoForward: false,
-};
-const listeners = new Set<() => void>();
-let following = false;
-
-/* the shown surface's address field, for ⌘L from the page */
-let focusAddress: (() => void) | null = null;
-
-/* A command key from the page: the browser's own (⌘L the address, ⌘R
-   reload, ⌘[ and ⌘] back and forward), or else replayed to the app's
-   shortcuts, which now have the keyboard back. */
-function handOver(handed: HandedKey) {
-  const init = keyEventOf(handed);
-  const plain = !handed.shift && !handed.alt && !handed.ctrl;
-  const own: Record<string, () => void> = {
-    KeyL: () => focusAddress?.(),
-    KeyR: () => void invoke("browser_go", { action: "reload" }).catch(() => {}),
-    BracketLeft: () => void invoke("browser_go", { action: "back" }).catch(() => {}),
-    BracketRight: () =>
-      void invoke("browser_go", { action: "forward" }).catch(() => {}),
-  };
-  const mine = plain ? own[init.code ?? ""] : undefined;
-  if (mine) return mine();
-  document.body.dispatchEvent(new KeyboardEvent("keydown", init));
-}
-
-function follow() {
-  if (following || !inNativeShell()) return;
-  following = true;
-  void listen<Omit<Page, "opened">>("browser-state", ({ payload }) => {
-    const finished = page.loading && !payload.loading;
-    page = { ...page, ...payload };
-    if (finished && payload.url) remember(payload.url, payload.title);
-    for (const notify of listeners) notify();
-  });
-  void listen<HandedKey>("browser-key", ({ payload }) => handOver(payload));
-}
-
-/** Drops a page a previous load of this window left behind: the native view
-    outlives a reload of the app's page, which starts with none open. */
-export function resetBrowser() {
-  void invoke("browser_close", { seq: nextSeq() }).catch(() => {});
-  follow();
-}
-
-const subscribe = (notify: () => void) => {
-  listeners.add(notify);
-  return () => {
-    listeners.delete(notify);
-  };
-};
-
-function open(url: string) {
-  page = { ...page, opened: true, url, loading: true };
-  for (const notify of listeners) notify();
-  void invoke("browser_open", { url, seq: nextSeq() }).catch(() => {});
 }
 
 /* a page from this machine, picked in the system's own dialog */
@@ -142,39 +56,86 @@ async function openFile() {
   if (typeof picked === "string") open(picked);
 }
 
-function closePage() {
-  page = {
-    opened: false,
-    url: "",
-    title: "",
-    loading: false,
-    canGoBack: false,
-    canGoForward: false,
-  };
-  for (const notify of listeners) notify();
-  void invoke("browser_close", { seq: nextSeq() }).catch(() => {});
+function tabName(tab: Tab) {
+  if (tab.title) return tab.title;
+  if (!tab.opened) return "New tab";
+  try {
+    const url = new URL(tab.url);
+    return url.protocol === "file:"
+      ? decodeURIComponent(url.pathname.split("/").pop() ?? "")
+      : url.host;
+  } catch {
+    return tab.url;
+  }
+}
+
+function Tabs({ tabs, active }: { tabs: Tab[]; active: string }) {
+  return (
+    <div
+      role="tablist"
+      aria-label="Browser tabs"
+      className="flex h-8 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border/60 px-1.5"
+    >
+      {tabs.map((tab) => {
+        const current = tab.id === active;
+        return (
+          <div
+            key={tab.id}
+            className={cn(
+              "group flex h-6 max-w-44 min-w-0 shrink-0 items-center rounded-md text-xs",
+              current
+                ? "bg-muted text-foreground"
+                : "text-muted-foreground hover:bg-muted/50",
+            )}
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={current}
+              onClick={() => selectTab(tab.id)}
+              className="min-w-0 flex-1 cursor-pointer truncate py-0.5 pr-1 pl-2 text-left"
+            >
+              {tabName(tab)}
+            </button>
+            <button
+              type="button"
+              aria-label={`Close ${tabName(tab)}`}
+              onClick={() => closeTab(tab.id)}
+              className={cn(
+                "mr-0.5 grid size-5 shrink-0 cursor-pointer place-items-center rounded hover:bg-muted",
+                !current &&
+                  "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+              )}
+            >
+              <X className="size-3" />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export function BrowserSurface(_: SurfaceContext) {
-  const current = useSyncExternalStore(subscribe, () => page);
+  const browser = useBrowser();
+  const current = activeTab(browser);
   const [address, setAddress] = useState(current.url);
   const [editing, setEditing] = useState(false);
   const [recents, setRecents] = useState(readRecents);
   const place = useRef<HTMLDivElement>(null);
   const addressField = useRef<HTMLInputElement>(null);
+  const startField = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     follow();
-    focusAddress = () => addressField.current?.focus();
-    return () => {
-      focusAddress = null;
-    };
+    onFocusAddress(() => (startField.current ?? addressField.current)?.focus());
+    return () => onFocusAddress(null);
   }, []);
 
-  /* the address follows the page unless it's being typed into */
+  /* the address follows the tab and its page unless it's being typed into */
   useEffect(() => {
     if (!editing) setAddress(current.url);
-  }, [current.url, editing]);
+  }, [current.id, current.url, editing]);
 
   useEffect(() => {
     if (!current.loading) setRecents(readRecents());
@@ -186,7 +147,7 @@ export function BrowserSurface(_: SurfaceContext) {
     return seeThrough(el);
   }, [current.opened]);
 
-  const go = (text: string) => {
+  const submit = (text: string) => {
     const next = destination(text);
     if (!next) return;
     setEditing(false);
@@ -196,13 +157,14 @@ export function BrowserSurface(_: SurfaceContext) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      {browser.tabs.length > 1 && <Tabs tabs={browser.tabs} active={browser.active} />}
       <div className="flex h-9 shrink-0 items-center gap-0.5 border-b border-border/60 px-1.5">
         <Button
           variant="ghost"
           size="icon-sm"
           aria-label="Back"
           disabled={!current.canGoBack}
-          onClick={() => void invoke("browser_go", { action: "back" })}
+          onClick={() => go("back")}
         >
           <ArrowLeft />
         </Button>
@@ -211,7 +173,7 @@ export function BrowserSurface(_: SurfaceContext) {
           size="icon-sm"
           aria-label="Forward"
           disabled={!current.canGoForward}
-          onClick={() => void invoke("browser_go", { action: "forward" })}
+          onClick={() => go("forward")}
         >
           <ArrowRight />
         </Button>
@@ -220,9 +182,7 @@ export function BrowserSurface(_: SurfaceContext) {
           size="icon-sm"
           aria-label={current.loading ? "Stop" : "Reload"}
           disabled={!current.opened}
-          onClick={() =>
-            void invoke("browser_go", { action: current.loading ? "stop" : "reload" })
-          }
+          onClick={() => go(current.loading ? "stop" : "reload")}
         >
           {current.loading ? <X /> : <RotateCw />}
         </Button>
@@ -230,7 +190,7 @@ export function BrowserSurface(_: SurfaceContext) {
           className="min-w-0 flex-1"
           onSubmit={(e) => {
             e.preventDefault();
-            go(address);
+            submit(address);
           }}
         >
           <Input
@@ -255,12 +215,20 @@ export function BrowserSurface(_: SurfaceContext) {
         >
           <FolderOpen />
         </Button>
-        {current.opened && (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="New tab"
+          onClick={() => newTab()}
+        >
+          <Plus />
+        </Button>
+        {browser.tabs.length === 1 && current.opened && (
           <Button
             variant="ghost"
             size="icon-sm"
             aria-label="Close page"
-            onClick={closePage}
+            onClick={() => closeTab(current.id)}
           >
             <X />
           </Button>
@@ -273,12 +241,13 @@ export function BrowserSurface(_: SurfaceContext) {
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              go(address);
+              submit(address);
             }}
             className="relative"
           >
             <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
+              ref={startField}
               autoFocus
               aria-label="Search or enter address"
               value={address}
@@ -287,6 +256,11 @@ export function BrowserSurface(_: SurfaceContext) {
               className="h-8 pl-8 text-xs"
             />
           </form>
+          {current.error && (
+            <p role="alert" className="mt-2 px-1 text-xs text-destructive">
+              {current.error}
+            </p>
+          )}
           <button
             type="button"
             onClick={() => void openFile()}
@@ -303,7 +277,7 @@ export function BrowserSurface(_: SurfaceContext) {
                   <li key={r.url}>
                     <button
                       type="button"
-                      onClick={() => go(r.url)}
+                      onClick={() => submit(r.url)}
                       className="flex w-full cursor-pointer items-center gap-2 rounded px-1 py-1 text-left text-sm hover:bg-muted"
                     >
                       <Globe className="size-3.5 shrink-0 text-muted-foreground" />
