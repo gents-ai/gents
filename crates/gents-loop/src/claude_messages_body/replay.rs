@@ -399,7 +399,7 @@ impl<'a> Selection<'a> {
                 if evidence.origin == ReplayOrigin::RecoveredProvider && !evidence.complete)
             });
         !group.candidates.is_empty()
-            && (self.wire == ReplayWire::Responses || group.ordinary || recovered)
+            && (self.wire == ReplayWire::Responses || group.ordinary)
             && (!recovered || group.source_prefix)
             && group
                 .candidates
