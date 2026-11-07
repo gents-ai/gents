@@ -163,10 +163,21 @@ impl Harness {
                 value["agent_did"] = json!(self.binding.agent_did);
             }
         }
+        // EvalDefinition rows are created by the evaluator in `Launching`, and
+        // the owner holds no update grant on rows another actor created, so
+        // redefinitions are written through the evaluator's access.
         // Agent and other source-projected documents are refused for the
         // evaluator's client access, so the Node owner writes them.
-        let owner_access = self.launching.owner_access().unwrap();
-        self.launching.install_as(&owner_access, documents).await;
+        let (definitions, others): (Vec<_>, Vec<_>) = documents
+            .into_iter()
+            .partition(|(collection, _)| *collection == Collection::EvalDefinition);
+        if !definitions.is_empty() {
+            self.launching.install(definitions).await;
+        }
+        if !others.is_empty() {
+            let owner_access = self.launching.owner_access().unwrap();
+            self.launching.install_as(&owner_access, others).await;
+        }
     }
 
     pub(crate) async fn grant_node_permissions(
