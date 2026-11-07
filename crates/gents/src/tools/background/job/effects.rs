@@ -326,6 +326,10 @@ async fn stage_request(
     cwd: Option<String>,
     existing_destination: bool,
 ) -> Result<AgentRequestCreate> {
+    anyhow::ensure!(
+        node_did == cause.caller_node_did,
+        "cross-runtime agent delivery is not supported; a job stages requests only on its own runtime"
+    );
     let existing = one_request(txn, &retry_key).await?;
     let mut input = gents_protocol::request_input::RequestInput {
         cwd,
@@ -338,7 +342,7 @@ async fn stage_request(
             .input
             .as_ref()
             .and_then(|input| input.goal_assignment.clone());
-    } else if existing_destination && node_did == cause.caller_node_did {
+    } else if existing_destination {
         // The staged request is requested by the job's Agent, so the
         // destination session is scoped by that Agent, not the caller node.
         input = crate::goal::prepare_goal_input_in_txn(
@@ -350,20 +354,6 @@ async fn stage_request(
             input,
         )
         .await?;
-    } else if existing_destination {
-        let verifier = crate::store::identity::RegisteredIdentity::from_registered_did(
-            cause.caller_node_did.clone(),
-            None,
-        )?;
-        let state = crate::goal::load_session_goal_observation_state_in_txn(
-            txn,
-            &verifier,
-            node_did,
-            &session_id,
-            Some(&cause.caller_node_did),
-        )
-        .await?;
-        input = crate::goal::bind_goal_input(input, state)?;
     }
     let request_id = uuid::Uuid::new_v4().to_string();
     let signer = txn

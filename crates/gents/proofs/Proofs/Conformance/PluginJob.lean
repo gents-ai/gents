@@ -675,14 +675,14 @@ def keyCasesJson : String := (toJson (keyCases.map renderKey)).compress
 private def foreignChild : Child :=
   { child "1:x" .live with key := { root := "row-0", slot := "1:x", attempt := 0 } }
 
-/-- A running row with a local and a remote live own child, a completed own
-child and a live foreign child. -/
+/-- A running row with a live own child on this runtime, a live own child whose
+caused request is unresolved, a completed own child and a live foreign child. -/
 private def killJob : Job :=
   pinned [child "1:a" .live, child "2:b" .live, child "3:c" .completed, foreignChild] 3 1
 
 private def killObservation (k : SpawnKey) : Recovery.KillObservation :=
   if k.slot == "1:a" then .causedLiveLocal
-  else if k.slot == "2:b" then .causedLiveRemote
+  else if k.slot == "2:b" then .unresolved
   else .causedTerminal
 
 structure KillCase where
@@ -845,9 +845,9 @@ private def stepFailureVerdict (c : StepFailureCase) : StepFailureVerdict :=
 
 theorem control_regressions :
     killCases.map killVerdict =
-      [ ⟨.cancelled, .cancelled, [("1:a", .interruptCaused), ("2:b", .interruptAndCancelRow)]⟩
-      , ⟨.completed, .paused, [("1:a", .interruptCaused), ("2:b", .interruptAndCancelRow)]⟩
-      , ⟨.timedOut, .timedOut, [("1:a", .interruptCaused), ("2:b", .interruptAndCancelRow)]⟩
+      [ ⟨.cancelled, .cancelled, [("1:a", .interruptCaused), ("2:b", .cancelRow)]⟩
+      , ⟨.completed, .paused, [("1:a", .interruptCaused), ("2:b", .cancelRow)]⟩
+      , ⟨.timedOut, .timedOut, [("1:a", .interruptCaused), ("2:b", .cancelRow)]⟩
       , ⟨.failed, .failed, []⟩
       , ⟨.cancelled, .cancelled, []⟩ ] ∧
     resumeCases.map resumeVerdict =
@@ -865,7 +865,7 @@ theorem control_regressions :
     resultOfferCases.map (fun c => resultOffered c.2) = [true, true, false] ∧
     stepFailureCases.map stepFailureVerdict =
       [ ⟨.running, 1, [], none⟩, ⟨.running, 2, [], none⟩
-      , ⟨.failed, 3, [("1:a", .interruptCaused), ("2:b", .interruptAndCancelRow)],
+      , ⟨.failed, 3, [("1:a", .interruptCaused), ("2:b", .cancelRow)],
           some "plugin_job_step_failed"⟩ ] := by
   native_decide
 

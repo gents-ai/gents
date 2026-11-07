@@ -63,6 +63,13 @@ pub(crate) async fn observe_caused_request(
             "the receipt names a request that does not carry this call's lineage",
         ));
     }
+    if caused.node_did.as_deref() != Some(lifecycle.node_did()) {
+        // Lean `Recovery.observeCaused`: a session message causes requests
+        // only on its calling runtime, so another runtime's binding fails closed.
+        return Ok(CausedObservation::Unbound(
+            "the receipt names a request bound to another runtime",
+        ));
+    }
     Ok(CausedObservation::Bound(Box::new(caused)))
 }
 
@@ -73,78 +80,45 @@ pub(crate) enum KillOutcome {
     Cancelled,
 }
 
-/// The caused-request step of a kill: `Some` when this step decides the kill
-/// (the terminal request settled the row, or the live local request was
-/// interrupted). `None` when the caller must cancel the row directly: a
-/// terminal request this step did not settle, or a live remote request
-/// (interrupted; a failed peer interrupt is only logged).
-pub(crate) async fn kill_caused_request(
-    node: &std::sync::Arc<EmbeddedNode>,
-    lifecycle: &mut crate::tools::call::lifecycle::ToolCallLifecycle,
-    caused: &gents_protocol::row::AgentRequestRow,
-) -> Result<Option<KillOutcome>> {
-    let terminal = caused
-        .lifecycle_state
-        .is_some_and(gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal);
-    if terminal
-        && crate::tools::background::completion::settle_session_message_row(node, lifecycle).await?
-    {
-        return Ok(Some(KillOutcome::Settled));
-    }
-    let doc_id = caused
-        .doc_id
-        .as_deref()
-        .context("caused request lacks physical identity")?;
-    let node_did = caused
-        .node_did
-        .as_deref()
-        .context("caused request lacks node_did")?;
-    let local = node_did == lifecycle.node_did();
-    if !terminal {
-        let access = lifecycle.access()?;
-        let interrupted = if local {
-            crate::request::interrupt::interrupt_request_by_doc_id_with_access(
-                &access,
-                doc_id,
-                node_did,
-                caused.requester_did.as_deref(),
-            )
-            .await
-        } else {
-            Err(anyhow::anyhow!(
-                "remote caused-request interruption requires an authenticated target runtime route"
-            ))
-        };
-        match interrupted {
-            Ok(_) if local => {
-                return Ok(Some(KillOutcome::Interrupting {
-                    request_id: caused.request_id.clone(),
-                }))
-            }
-            Ok(_) => {}
-            Err(error) if local => return Err(error),
-            Err(error) => tracing::warn!(
-                caused_request_doc_id = doc_id,
-                error = %format!("{error:#}"),
-                "peer interrupt of a killed session message was not written"
-            ),
-        }
-    }
-    Ok(None)
-}
-
 pub(crate) async fn kill(
     node: &std::sync::Arc<EmbeddedNode>,
     lifecycle: &mut crate::tools::call::lifecycle::ToolCallLifecycle,
 ) -> Result<KillOutcome> {
+    use crate::tools::background::job::control::{CausedFacts, KillAction, KillObservation};
     let caused = match observe_caused_request(node, lifecycle).await? {
         CausedObservation::Bound(caused) => Some(caused),
         CausedObservation::NotVisible | CausedObservation::Unbound(_) => None,
     };
-    if let Some(caused) = &caused {
-        if let Some(outcome) = kill_caused_request(node, lifecycle, caused).await? {
-            return Ok(outcome);
+    let observation = KillObservation::observe(caused.as_deref().map(|caused| CausedFacts {
+        terminal: caused
+            .lifecycle_state
+            .is_some_and(gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal),
+        this_runtime: caused.node_did.as_deref() == Some(lifecycle.node_did()),
+    }));
+    match (observation.action(), caused.as_deref()) {
+        (KillAction::Settle, _) => {
+            if crate::tools::background::completion::settle_session_message_row(node, lifecycle)
+                .await?
+            {
+                return Ok(KillOutcome::Settled);
+            }
         }
+        (KillAction::InterruptCaused, Some(caused)) => {
+            crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+                &lifecycle.access()?,
+                caused
+                    .doc_id
+                    .as_deref()
+                    .context("caused request lacks physical identity")?,
+                lifecycle.node_did(),
+                caused.requester_did.as_deref(),
+            )
+            .await?;
+            return Ok(KillOutcome::Interrupting {
+                request_id: caused.request_id.clone(),
+            });
+        }
+        (KillAction::InterruptCaused, None) | (KillAction::CancelRow, _) => {}
     }
     if lifecycle
         .cancel_during_run_owned(

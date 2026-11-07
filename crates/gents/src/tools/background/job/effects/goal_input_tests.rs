@@ -2,7 +2,6 @@ use super::*;
 use crate::goal::operator_resume_test_support::Fixture;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
-use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -178,131 +177,17 @@ async fn deliver(
     Ok((admitted.request.doc_id, admitted.request.request_id))
 }
 
-async fn foreign_source(root: &KeyIdentity) -> (Arc<EmbeddedNode>, Arc<dyn NodeIdentity>, String) {
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(root.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
-    let access = ConfigAccess::local(node.clone());
-    let node_did = escape_graphql_string(root.did());
-    access
-        .write(
-            "test.remote_job_source.node",
-            &format!(r#"mutation {{ create_Node(input: {{node_did: "{node_did}"}}) {{_docID}} }}"#),
-        )
-        .await
-        .unwrap();
-    let binding = crate::store::identity::provision_agent_identity(root).unwrap();
-    crate::test_support::install_test_agent_binding(
-        &node,
-        root.did(),
-        "foreign job caller",
-        &binding,
-    )
-    .await;
-    let agent = crate::store::identity::resolve_agent_identity(root, &binding).unwrap();
-    let mut create = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        "delivery-caller",
-        root.did(),
-        agent.did(),
-        agent.did(),
-        "caller-session",
-        "Send destination work",
-        "interactive",
-        "2026-10-21T00:00:00Z",
-        AgentRequestAdmissionRecord::local_self(agent.did()),
-    );
-    create.input.goal_assignment = Some(GoalAssignmentInput {
-        goal_id: "caller-goal".into(),
-        root_request_doc_id: Some("caller-root".into()),
-    });
-    crate::sign_agent_request_create(agent.as_ref(), &mut create)
-        .await
-        .unwrap();
-    let created = access
-        .write(
-            "test.remote_job_source.request",
-            &create.graphql_mutation().unwrap(),
-        )
-        .await
-        .unwrap();
-    let doc_id = crate::store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
-    (node, agent, doc_id)
-}
-
-async fn deliver_remote(
-    access: &ConfigAccess,
-    cause: &SessionMessageCause,
-    target_node: &str,
-    target_agent: &str,
-    case: &Value,
-    session: &str,
-) -> Result<(String, String)> {
-    let name = case["name"].as_str().unwrap();
-    assert_eq!(case["plugin"], true, "remote delivery is a plugin message");
-    let retry_key = job_message_key(name, "worker", 1, 1);
-    let create = access
-        .transact_write("test.remote_plugin_delivery", |txn| {
-            let retry_key = retry_key.clone();
-            Box::pin(async move {
-                stage_request(
-                    txn,
-                    cause,
-                    target_node,
-                    target_agent,
-                    session.into(),
-                    "Delivery work",
-                    None,
-                    retry_key,
-                    1,
-                    None,
-                    true,
-                )
-                .await
-            })
-        })
-        .await?;
-    let response = access
-        .execute(&format!(
-            r#"{{AgentRequest(filter: {{retry_key: {{_eq: "{}"}}}}) {{_docID request_id}}}}"#,
-            escape_graphql_string(&retry_key)
-        ))
-        .await?;
-    let row = &response["data"]["AgentRequest"][0];
-    assert_eq!(
-        create.input.goal_assignment,
-        stored(access, row["request_id"].as_str().unwrap())
-            .await
-            .input
-            .and_then(|input| input.goal_assignment)
-    );
-    Ok((
-        row["_docID"].as_str().unwrap().into(),
-        row["request_id"].as_str().unwrap().into(),
-    ))
-}
-
 #[tokio::test]
 async fn generated_deliveries_capture_destination_goal_in_the_admission_transaction() {
     let contracts: Value = gents_lean_contract::load_contract_snapshot().unwrap();
     let cases = contracts["goal_delivery_input_cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 20);
+    assert_eq!(cases.len(), 14);
     let before = json!({"status":"active","sequence":0,"last_continued_from":null,
         "latest_request":10,"children":[],"blocked_audits":0,"wrapup_requested":false,
         "wrapup_completed":false,"tokens_used":37,"token_budget":1000});
     for case in cases {
         let name = case["name"].as_str().unwrap();
         let f = Fixture::new(&before).await;
-        let temp = tempfile::tempdir().unwrap();
-        let caller = KeyIdentity::load_or_create(temp.path().join("caller"), None).unwrap();
-        let remote = case["remote"] == true;
         let identity = FireIdentity {
             owner_did: f.identity.did().into(),
             trigger_id: "manual:delivery".into(),
@@ -326,14 +211,9 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
             f.node.shutdown().await.unwrap();
             continue;
         }
-        let foreign_source = if remote {
-            Some(foreign_source(&caller).await)
-        } else {
-            None
-        };
-        // A local job child's session is requested by the job's own Agent,
-        // which signs the delivered request, as a staged spawn records it.
-        let requester = if remote { caller.did() } else { f.agent.did() };
+        // A job child's session is requested by the job's own Agent, which
+        // signs the delivered request, as a staged spawn records it.
+        let requester = f.agent.did();
         let access = f.agent_access();
         if case["existing"] == true {
             access
@@ -391,17 +271,6 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
                 })
                 .await
                 .unwrap();
-            if remote {
-                access
-                    .add_actor_relationship(
-                        "AgentSession",
-                        &session_doc,
-                        "reader",
-                        &identity::Did::new(caller.did()).unwrap(),
-                    )
-                    .await
-                    .unwrap();
-            }
         }
         let mut roots = [String::new(), String::new()];
         for (index, root) in roots.iter_mut().enumerate() {
@@ -444,11 +313,9 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
                 escape_graphql_string(&orphan.goal_id), escape_graphql_string(f.identity.did()),
                 escape_graphql_string(f.agent.did()), escape_graphql_string(&session))).await.unwrap();
         }
-        // A local delivery's source is the caller's pinned job row in its own
+        // A delivery's source is the caller's pinned job row in its own
         // session; the delivered request's provenance and job keys name it.
-        let tool_call_doc_id = if remote {
-            "delivery-call-doc".to_owned()
-        } else {
+        let tool_call_doc_id = {
             let mut pin = crate::tools::call::lifecycle::admission_fixture::fixture_job_pin();
             pin.chain_root_doc_id = name.to_owned();
             crate::tools::background::job::input::tests::insert_as(
@@ -470,190 +337,17 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
             .await
         };
         let cause = SessionMessageCause {
-            caller_node_did: if remote {
-                caller.did().into()
-            } else {
-                f.identity.did().into()
-            },
-            caller_agent_did: foreign_source.as_ref().map_or_else(
-                || f.agent.did().to_owned(),
-                |(_, agent, _)| agent.did().to_owned(),
-            ),
-            caller_session_id: if remote {
-                "caller-session".into()
-            } else {
-                f.parent.session_id.clone()
-            },
-            caller_requester_did: foreign_source.as_ref().map_or_else(
-                || f.parent.requester_did.clone(),
-                |(_, agent, _)| Some(agent.did().into()),
-            ),
-            caller_request_id: if remote {
-                "delivery-caller".into()
-            } else {
-                f.parent.request_id.clone()
-            },
-            caller_request_doc_id: foreign_source
-                .as_ref()
-                .map_or_else(|| f.parent.doc_id.clone(), |(_, _, doc)| doc.clone()),
+            caller_node_did: f.identity.did().into(),
+            caller_agent_did: f.agent.did().to_owned(),
+            caller_session_id: f.parent.session_id.clone(),
+            caller_requester_did: f.parent.requester_did.clone(),
+            caller_request_id: f.parent.request_id.clone(),
+            caller_request_doc_id: f.parent.doc_id.clone(),
             caller_hop: 0,
             tool_call_id: "delivery-call".into(),
             tool_call_doc_id,
             correlation: None,
         };
-        if remote {
-            if case["observation_present"] == true {
-                let runtime: Arc<dyn NodeIdentity> = f.identity.clone();
-                crate::goal::project_session_goal(
-                    &f.node,
-                    &runtime,
-                    &f.agent,
-                    &session,
-                    Some(requester),
-                )
-                .await
-                .unwrap();
-                let response = access.execute(&format!(r#"{{GoalObservation(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{_docID observation_json}}}}"#,
-                    escape_graphql_string(f.identity.did()), escape_graphql_string(&session))).await.unwrap();
-                let row = &response["data"]["GoalObservation"][0];
-                let mut observation: gents_protocol::goal_control::SessionGoalObservation =
-                    serde_json::from_str(row["observation_json"].as_str().unwrap()).unwrap();
-                if let Some(goal) = &mut observation.goal {
-                    if case["foreign_owner"] == true {
-                        goal.snapshot.node_did = caller.did().into();
-                    }
-                    if case["foreign_session"] == true {
-                        goal.snapshot.session_id = "foreign-session".into();
-                    }
-                }
-                observation.signature = f
-                    .agent
-                    .sign(&observation.signing_payload().unwrap())
-                    .await
-                    .unwrap();
-                if case["observation_verified"] == false {
-                    observation.signature[0] ^= 1;
-                }
-                access.write("test.delivery.observation", &format!(r#"mutation {{update_GoalObservation(docID: "{}", input: {{observation_json: "{}"}}) {{_docID}}}}"#,
-                    escape_graphql_string(row["_docID"].as_str().unwrap()), escape_graphql_string(&serde_json::to_string(&observation).unwrap()))).await.unwrap();
-            }
-            let caller_access =
-                ConfigAccess::local_as(f.node.clone(), identity::Did::new(caller.did()).unwrap());
-            let state = crate::goal::load_session_goal_observation_state(
-                &caller_access,
-                &caller,
-                f.identity.did(),
-                &session,
-                Some(requester),
-            )
-            .await
-            .unwrap();
-            let result = crate::goal::bind_goal_input(Default::default(), state);
-            if case["expected"]["kind"] == "pending" {
-                assert!(result.is_err(), "{name}");
-                let retry_key = job_message_key(name, "worker", 1, 1);
-                let response = access
-                    .execute(&format!(
-                        r#"{{AgentRequest(filter: {{retry_key: {{_eq: "{}"}}}}) {{_docID}}}}"#,
-                        escape_graphql_string(&retry_key),
-                    ))
-                    .await
-                    .unwrap();
-                assert!(
-                    response["data"]["AgentRequest"]
-                        .as_array()
-                        .unwrap()
-                        .is_empty(),
-                    "{name}: refused input must not leak a request"
-                );
-            } else {
-                assert_eq!(
-                    result.unwrap().goal_assignment,
-                    reference(&case["expected"]["reference"], name, &roots),
-                    "{name}"
-                );
-            }
-            let (source_node, source_agent, _) = foreign_source.as_ref().unwrap();
-            let source_access = ConfigAccess::local_managed_agent(
-                source_node.clone(),
-                identity::Did::new(source_agent.did()).unwrap(),
-                source_agent.as_ref(),
-            )
-            .unwrap();
-            let first = deliver_remote(
-                &source_access,
-                &cause,
-                f.identity.did(),
-                f.agent.did(),
-                case,
-                &session,
-            )
-            .await;
-            if case["expected"]["kind"] == "pending" {
-                assert!(
-                    first.is_err(),
-                    "{name}: unverified destination input must not publish"
-                );
-                let retry_key = job_message_key(name, "worker", 1, 1);
-                let rows = source_access
-                    .execute(&format!(
-                        r#"{{AgentRequest(filter: {{retry_key: {{_eq: "{}"}}}}) {{_docID}}}}"#,
-                        escape_graphql_string(&retry_key)
-                    ))
-                    .await
-                    .unwrap();
-                assert!(
-                    rows["data"]["AgentRequest"].as_array().unwrap().is_empty(),
-                    "{name}: refused input must not leak a request"
-                );
-            } else {
-                let first = first.unwrap_or_else(|error| panic!("{name}: modeled publication requires authenticated cross-runtime delivery: {error:#}"));
-                let initial_row = stored(&source_access, &first.1).await;
-                if case["admitted"] == true {
-                    observe_goal(&f, &session, observed.as_ref()).await;
-                }
-                let second = deliver_remote(
-                    &source_access,
-                    &cause,
-                    f.identity.did(),
-                    f.agent.did(),
-                    case,
-                    &session,
-                )
-                .await
-                .unwrap();
-                assert_eq!(
-                    first, second,
-                    "{name}: duplicate keeps exact physical request"
-                );
-                let row = stored(&source_access, &second.1).await;
-                assert_eq!(
-                    row.admission_signature, initial_row.admission_signature,
-                    "{name}: duplicate keeps signed receipt"
-                );
-                assert_eq!(
-                    row.input, initial_row.input,
-                    "{name}: duplicate keeps signed input"
-                );
-                let actual = row
-                    .input
-                    .as_ref()
-                    .and_then(|input| input.goal_assignment.clone());
-                assert_eq!(
-                    actual,
-                    reference(&case["expected"]["reference"], name, &roots),
-                    "{name}"
-                );
-                assert_ne!(
-                    actual.as_ref().map(|goal| goal.goal_id.as_str()),
-                    Some("caller-goal"),
-                    "{name}"
-                );
-            }
-            source_node.shutdown().await.unwrap();
-            f.node.shutdown().await.unwrap();
-            continue;
-        }
         let first = deliver(&f, &cause, case, &session, captured.clone())
             .await
             .unwrap();
@@ -689,4 +383,65 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
         );
         f.node.shutdown().await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn staging_into_another_runtime_is_refused_before_any_write() {
+    let before = json!({"status":"active","sequence":0,"last_continued_from":null,
+        "latest_request":10,"children":[],"blocked_audits":0,"wrapup_requested":false,
+        "wrapup_completed":false,"tokens_used":37,"token_budget":1000});
+    let f = Fixture::new(&before).await;
+    let cause = SessionMessageCause {
+        caller_node_did: f.identity.did().into(),
+        caller_agent_did: f.agent.did().to_owned(),
+        caller_session_id: f.parent.session_id.clone(),
+        caller_requester_did: f.parent.requester_did.clone(),
+        caller_request_id: f.parent.request_id.clone(),
+        caller_request_doc_id: f.parent.doc_id.clone(),
+        caller_hop: 0,
+        tool_call_id: "remote-call".into(),
+        tool_call_doc_id: "remote-call-doc".into(),
+        correlation: None,
+    };
+    let retry_key = job_message_key("remote-staging", "worker", 1, 1);
+    for existing in [false, true] {
+        let access = f.agent_access();
+        let refused = access
+            .transact_write("test.remote_staging", |txn| {
+                let retry_key = retry_key.clone();
+                let cause = &cause;
+                let agent = f.agent.did();
+                Box::pin(async move {
+                    stage_request(
+                        txn,
+                        cause,
+                        "did:key:z6MkpeerRuntimeThatIsNotThisOne",
+                        agent,
+                        job_session_id("remote-staging", "worker", 1),
+                        "Delivery work",
+                        None,
+                        retry_key,
+                        1,
+                        None,
+                        existing,
+                    )
+                    .await
+                })
+            })
+            .await;
+        let error = refused.expect_err("cross-runtime staging must be refused");
+        assert!(
+            format!("{error:#}").contains("cross-runtime agent delivery is not supported"),
+            "{error:#}"
+        );
+        let rows = access
+            .execute(&format!(
+                r#"{{AgentRequest(filter: {{retry_key: {{_eq: "{}"}}}}) {{_docID}}}}"#,
+                escape_graphql_string(&retry_key)
+            ))
+            .await
+            .unwrap();
+        assert!(rows["data"]["AgentRequest"].as_array().unwrap().is_empty());
+    }
+    f.node.shutdown().await.unwrap();
 }
