@@ -6,8 +6,8 @@ open ToolExecution
 
 /-! A session-message row settles on its caused request's terminal, or fails
 closed when it cannot name that request (`ToolRecoveryCause.causedRequestUnbound`).
-Accepted premise: a peer that never replicates its caused request's terminal
-back leaves the row running; only a kill ends it (`killAction`). -/
+A caused request lives on the calling runtime (`observeCaused`), so its terminal
+is read in that runtime's own store; no peer replication is awaited. -/
 
 def sessionMessageRecoverySweep : RecoverySweep :=
   toolCallRecoverySweepFor .sessionMessage
@@ -21,36 +21,80 @@ theorem session_message_sweep_never_selects_plugin_job
     ¬ toolCallRecoveryStale .sessionMessage row := by
   simp [toolCallRecoveryStale, RowClass.of, h_job]
 
+/-- What a kill reads about the request a session-message row (or a plugin-job
+child) caused.
+
+Decision (supported topology, 2026-11-07): P2P carries only discovery and
+enrollment. Session messages and plugin-job children cause requests only on
+the calling runtime; cross-runtime delivery is refused at planning
+(`session::message::plan`) and at staging, and an Agent that works on another
+node submits there as its own requester rather than through a caused row. A
+live caused request is therefore always on this runtime, and there is no
+remote observation: a kill never routes an interrupt to a peer and never waits
+for a peer to replicate a terminal back. Transitive cross-node ownership of
+caused work is deferred to gents-ai/gents#3591; until it is modeled, a caused
+request bound to another runtime is not a supported binding and is observed as
+`unresolved` (`observeCaused`). -/
 inductive KillObservation where
   | causedTerminal
   | causedLiveLocal
-  | causedLiveRemote
   | unresolved
   deriving DecidableEq, Repr
 
 inductive KillAction where
   | settle
   | interruptCaused
-  | interruptAndCancelRow
   | cancelRow
   deriving DecidableEq, Repr
 
 def KillObservation.toContract : KillObservation → String
   | .causedTerminal => "causedTerminal"
   | .causedLiveLocal => "causedLiveLocal"
-  | .causedLiveRemote => "causedLiveRemote"
   | .unresolved => "unresolved"
 
 def KillAction.toContract : KillAction → String
   | .settle => "settle"
   | .interruptCaused => "interruptCaused"
-  | .interruptAndCancelRow => "interruptAndCancelRow"
   | .cancelRow => "cancelRow"
+
+/-- The facts a kill reads from the caused request it resolved: whether its
+lifecycle is terminal and whether it is bound to this runtime. -/
+structure CausedFacts where
+  terminal : Bool
+  thisRuntime : Bool
+  deriving DecidableEq, Repr
+
+/-- A caused request on another runtime fails closed as `unresolved` before
+its lifecycle is consulted: under the supported topology (see
+`KillObservation`) such a binding cannot arise from this runtime's own
+delivery, so it is neither settled from replicated state nor interrupted.
+Cross-node ownership is deferred to gents-ai/gents#3591. -/
+def observeCaused : Option CausedFacts → KillObservation
+  | none => .unresolved
+  | some facts =>
+      if !facts.thisRuntime then .unresolved
+      else if facts.terminal then .causedTerminal
+      else .causedLiveLocal
+
+theorem foreign_caused_request_is_unresolved (terminal : Bool) :
+    observeCaused (some ⟨terminal, false⟩) = .unresolved := by
+  cases terminal <;> rfl
+
+/-- A kill acts on a caused request (settles from it or interrupts it) only
+when that request is bound to this runtime. -/
+theorem kill_acts_only_on_this_runtime (caused : Option CausedFacts)
+    (h : observeCaused caused ≠ .unresolved) :
+    ∃ facts, caused = some facts ∧ facts.thisRuntime = true := by
+  match caused with
+  | none => exact absurd rfl h
+  | some ⟨terminal, thisRuntime⟩ =>
+      cases thisRuntime
+      · cases terminal <;> exact absurd rfl h
+      · exact ⟨_, rfl, rfl⟩
 
 def killAction : KillObservation → KillAction
   | .causedTerminal => .settle
   | .causedLiveLocal => .interruptCaused
-  | .causedLiveRemote => .interruptAndCancelRow
   | .unresolved => .cancelRow
 
 def KillAction.endsRowNow : KillAction → Bool
@@ -62,8 +106,15 @@ theorem kill_waits_only_on_a_local_terminal (obs : KillObservation) :
   cases obs <;> simp [killAction, KillAction.endsRowNow]
 
 def killCases : List (KillObservation × KillAction) :=
-  [.causedTerminal, .causedLiveLocal, .causedLiveRemote, .unresolved].map
+  [.causedTerminal, .causedLiveLocal, .unresolved].map
     fun obs => (obs, killAction obs)
+
+/-- Every resolved-fact shape, including a caused request bound to another
+runtime, with the observation `observeCaused` derives for it. -/
+def killObservationCases : List (Option CausedFacts × KillObservation) :=
+  ([none] ++ [false, true].flatMap fun thisRuntime =>
+      [false, true].map fun terminal => some ({ terminal, thisRuntime } : CausedFacts)).map
+    fun caused => (caused, observeCaused caused)
 
 /-! Session-message settlement records the assignment handoff in the row's
 persisted `completionPending:<reason>` suffix, and the completion redrive

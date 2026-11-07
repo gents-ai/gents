@@ -938,6 +938,13 @@ def snapshotRecoveryCasesJson : String :=
       ++ jsonArray (Recovery.killCases.map fun (observation, action) =>
         "{\"observation\":" ++ jsonString observation.toContract
           ++ ",\"action\":" ++ jsonString action.toContract ++ "}") ++ ","
+    ++ "\"session_message_kill_observation_cases\":"
+      ++ jsonArray (Recovery.killObservationCases.map fun (caused, observation) =>
+        "{\"caused\":" ++ (match caused with
+          | none => "null"
+          | some facts => "{\"terminal\":" ++ toString facts.terminal
+              ++ ",\"this_runtime\":" ++ toString facts.thisRuntime ++ "}")
+          ++ ",\"observation\":" ++ jsonString observation.toContract ++ "}") ++ ","
     ++ "\"restart_disposition_cases\":"
       ++ jsonArray
         (Recovery.restartDispositionCases.map restartDispositionCaseJson) ++ ","

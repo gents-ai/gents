@@ -98,8 +98,12 @@ theorem fresh_resubmission_preserves_authored_payload (input : ResubmissionInput
     (freshSessionInput input).authored = input.authored := by rfl
 
 /-- Session-message input belongs to the destination session. Its caller's
-Goal is not input capture. A source read is either the destination runtime's
-canonical transaction or its verified session-scoped observation. -/
+Goal is not input capture. Session messages are delivered only within the
+calling runtime (cross-runtime delivery is refused; P2P carries only discovery
+and enrollment), so the source read is that runtime's canonical transaction,
+scoped to the destination's owner and session. Reading a peer's replicated
+Goal observation for delivery is not modeled; cross-node ownership is deferred
+to gents-ai/gents#3591. -/
 structure MessageInputFacts where
   owner : Nat
   session : Nat
