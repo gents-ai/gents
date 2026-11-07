@@ -551,27 +551,33 @@ theorem backend_negative_queue_rejected (queue : Int) (h : queue < 0) :
 /-- An existing dependency retains its own install variable, including an
 explicitly unset value. Only a per-pack override may replace that value;
 ambient variables are consulted for a root install or a first installation. -/
-def resolvePackInstallVariable (dependency : Bool)
-    (previous override : Option (Option String)) (ambient : Option String) : Option String :=
+def resolvePackInstallVariable (dependency installed : Bool)
+    (previous override : Option (Option String)) (ambient : Option String) : Option (Option String) :=
   match override with
-  | some value => value
-  | none => if dependency then previous.getD ambient else ambient
+  | some value => some value
+  | none => if dependency && installed then previous else some ambient
 
 theorem dependency_variable_preserved (previous ambient : Option String) :
-    resolvePackInstallVariable true (some previous) none ambient = previous := by
+    resolvePackInstallVariable true true (some previous) none ambient = some previous := by
   rfl
 
-theorem explicit_pack_variable_wins (dependency : Bool) (previous : Option (Option String))
+theorem explicit_pack_variable_wins (dependency installed : Bool) (previous : Option (Option String))
     (override ambient : Option String) :
-    resolvePackInstallVariable dependency previous (some override) ambient = override := by
+    resolvePackInstallVariable dependency installed previous (some override) ambient = some override := by
   rfl
 
 theorem first_dependency_uses_ambient (ambient : Option String) :
-    resolvePackInstallVariable true none none ambient = ambient := by
+    resolvePackInstallVariable true false none none ambient = some ambient := by
   rfl
 
-theorem root_uses_current_environment (previous : Option (Option String)) (ambient : Option String) :
-    resolvePackInstallVariable false previous none ambient = ambient := by
+theorem root_uses_current_environment (installed : Bool) (previous : Option (Option String)) (ambient : Option String) :
+    resolvePackInstallVariable false installed previous none ambient = some ambient := by
+  rfl
+
+/-- Older records without an observed binding do not authorize substituting
+the current caller's environment for an installed dependency. -/
+theorem unknown_dependency_binding_fails_closed (ambient : Option String) :
+    resolvePackInstallVariable true true none none ambient = none := by
   rfl
 
 /-- Local pack preparation has the root and declared dependency manifests and
