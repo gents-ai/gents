@@ -560,11 +560,19 @@ async fn inline_lens_migration_transforms_existing_rows_through_native_owner() {
         .to_owned();
     let patch=apply(&tool,json!({"argv":["collection","update"],"target_id":"FixtureDoc","options":{"patch":[{"op":"add","path":"/FixtureDoc/Fields/-","value":{"Name":"label","Kind":"String"}},{"op":"replace","path":"/FixtureDoc/IsActive","value":false}]}})).await;
     assert!(patch["committed"].as_bool().unwrap_or(false), "{patch}");
-    let dest = access
-        .collection_version("FixtureDoc")
-        .await
+    // The patch publishes an inactive version; collection_version names the
+    // active one, so the destination is discovered through version list.
+    let versions = call(
+        &tool,
+        json!({"argv":["version","list"],"target_id":"FixtureDoc"}),
+    )
+    .await;
+    let dest = versions["versions"]
+        .as_array()
         .unwrap()
-        .unwrap()["VersionID"]
+        .iter()
+        .find(|version| version["IsActive"] == false && version["VersionID"] != source.as_str())
+        .unwrap_or_else(|| panic!("patched inactive FixtureDoc version: {versions}"))["VersionID"]
         .as_str()
         .unwrap()
         .to_owned();
