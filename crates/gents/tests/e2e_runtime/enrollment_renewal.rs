@@ -66,6 +66,18 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         load_status_enrollment_approvals, EnrollmentAuthorityOutcome,
     };
 
+    let snapshot: serde_json::Value =
+        serde_json::from_str(&gents_lean_contract::load_contract_json().unwrap()).unwrap();
+    let modeled = |name: &str| {
+        snapshot["enrollment_renewal_intent_cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == name)
+            .unwrap()["allowed"]
+            .as_bool()
+            .unwrap()
+    };
     let server = support::test_p2p_db("automatic-renewal-server").await;
     let member = support::test_p2p_db("automatic-renewal-member").await;
     gents::documents::ensure_node(&server.node, server.node_identity.did())
@@ -128,7 +140,9 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         nonce: "invalid-signature".into(),
         member_sig: vec![0; 64],
     };
-    let disabled = store.issue_renewal_offer(&forged).await.unwrap_err();
+    let disabled_result = store.issue_renewal_offer(&forged).await;
+    assert_eq!(disabled_result.is_ok(), modeled("disabled"));
+    let disabled = disabled_result.unwrap_err();
     assert!(disabled
         .to_string()
         .contains("automatic enrollment renewal is disabled"));
@@ -139,7 +153,9 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         })
         .await
         .unwrap();
-    let invalid_signature = store.issue_renewal_offer(&forged).await.unwrap_err();
+    let signature_result = store.issue_renewal_offer(&forged).await;
+    assert_eq!(signature_result.is_ok(), modeled("unsigned"));
+    let invalid_signature = signature_result.unwrap_err();
     assert!(format!("{invalid_signature:#}").contains("signature verification failed"));
     forged.member_sig = member
         .node_identity
@@ -147,7 +163,10 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         .await
         .unwrap();
     forged.member_peer = "another-peer".into();
-    assert!(store.issue_renewal_offer(&forged).await.is_err());
+    assert_eq!(
+        store.issue_renewal_offer(&forged).await.is_ok(),
+        modeled("wrong_peer")
+    );
     let cancel = CancellationToken::new();
     let _stop = Stop(cancel.clone());
     let (server_owner, server_authority) = enrollment_authority_channel();
@@ -198,6 +217,7 @@ async fn opted_in_members_renew_over_authenticated_routes() {
             entry.request.candidate_did == member.node_identity.did()
                 && entry.revision.sequence == 2
         }) {
+            assert!(modeled("valid"));
             assert_ne!(active.request.request_id, first.request_id);
             assert_eq!(active.request.candidate_peer, member_peer);
             let lease =
