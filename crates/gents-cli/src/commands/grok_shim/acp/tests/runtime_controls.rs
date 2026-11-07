@@ -83,6 +83,7 @@ async fn runtime_control_fixture_with_plan_builder(
             graphql: gents::store::config_client::GraphqlEndpoint::as_principal(graphql, &node_did)
                 .with_client_signing_capability(identity.client_signing_capability().unwrap())
                 .unwrap(),
+            agent_signer: config.agent_signer.clone(),
         },
     ));
     let runtime_identity: Arc<dyn gents::NodeIdentity> = identity;
