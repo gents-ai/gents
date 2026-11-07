@@ -121,8 +121,7 @@ pub async fn request_renewal_offer(
         server_peer,
         admin_did,
         "EnrollmentRenewalIntent",
-        "intent_id",
-        &intent_id,
+        ("intent_id", &intent_id),
         &doc_id,
     )
     .await?;
@@ -505,8 +504,7 @@ pub async fn push_enrollment_request(
         &offer.server_peer,
         &offer.admin_did,
         "NetworkEnrollmentRequest",
-        "request_id",
-        request_id,
+        ("request_id", request_id),
         document_id,
     )
     .await
@@ -518,8 +516,7 @@ pub(super) async fn push_enrollment_document(
     server_peer: &str,
     admin_did: &str,
     collection: &str,
-    filter_field: &str,
-    filter_value: &str,
+    filter: (&str, &str),
     document_id: &str,
 ) -> Result<()> {
     // Before approval there is no authority-backed data route, so install the
@@ -528,7 +525,7 @@ pub(super) async fn push_enrollment_document(
     // returns; the signed enrollment reconciler owns every durable route
     // after approval.
     let mut conditions = Map::new();
-    conditions.insert(filter_field.to_string(), json!({ "_eq": filter_value }));
+    conditions.insert(filter.0.to_string(), json!({ "_eq": filter.1 }));
     let filters = BTreeMap::from([(
         collection.to_string(),
         ReplicationFilter::predicate(conditions),

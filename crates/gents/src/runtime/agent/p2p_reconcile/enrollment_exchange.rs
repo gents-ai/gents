@@ -212,8 +212,7 @@ pub(super) async fn respond_to_renewal_intent(
         &intent.member_peer,
         &intent.member_did,
         "EnrollmentRenewalOffer",
-        "intent_id",
-        &intent.intent_id(),
+        ("intent_id", &intent.intent_id()),
         &doc_id,
     )
     .await

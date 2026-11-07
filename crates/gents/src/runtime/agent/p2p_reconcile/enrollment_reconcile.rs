@@ -416,9 +416,11 @@ pub async fn run_enrollment_reconciler(
             &pairing_admin,
             &owner.sender,
             &mut delivered,
-            &mut renewal_notices,
-            &mut renewal_intent_cursor,
-            &mut member_renewal,
+            (
+                &mut renewal_notices,
+                &mut renewal_intent_cursor,
+                &mut member_renewal,
+            ),
         );
         if !serve_authority_during_sweep(sweep, &store, &owner.sender, &mut owner.commands, &cancel)
             .await
@@ -647,10 +649,13 @@ async fn sweep_enrollment(
     pairing_admin: &EmbeddedRemoteP2pAdmin,
     sender: &watch::Sender<EnrollmentAuthorityState>,
     delivered: &mut BTreeSet<String>,
-    renewal_notices: &mut super::enrollment_renewal::RenewalNotices,
-    renewal_intent_cursor: &mut Option<String>,
-    member_renewal: &mut super::enrollment_member_renewal::MemberRenewalState,
+    renewal: (
+        &mut super::enrollment_renewal::RenewalNotices,
+        &mut Option<String>,
+        &mut super::enrollment_member_renewal::MemberRenewalState,
+    ),
 ) {
+    let (renewal_notices, renewal_intent_cursor, member_renewal) = renewal;
     let projection = match store.load_projection().await {
         Ok(projection) => projection,
         Err(error) => {
