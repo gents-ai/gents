@@ -213,7 +213,7 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         .iter()
         .filter(|case| case.group == "budget_batch")
         .collect::<Vec<_>>();
-    assert!(!batch.is_empty(), "modeled concurrent admission schedule");
+    assert!(!batch.is_empty(), "modeled admission schedule");
     let ids = (0..batch.len())
         .map(|index| format!("concurrent-budget-{index}"))
         .collect::<Vec<_>>();
@@ -240,16 +240,19 @@ async fn generated_background_budget_uses_accepted_dispatch() {
             .collect(),
     };
     publish_and_adopt_tool_turns(&hook, &calls, message).await;
-    let results = tokio::time::timeout(
-        std::time::Duration::from_secs(60),
-        futures::future::join_all(
-            ids.iter()
-                .zip(&batch)
-                .map(|(id, case)| hook.on_tool_call(&case.action, None, id, args)),
-        ),
-    )
+    // The owned loop admits a turn's calls one at a time: `spawn_process` is
+    // not a read footprint, so it is dispatched alone, and even a read batch
+    // (`run_batch`) awaits each admission. Concurrent sibling admissions are
+    // outside the attempt bound (tla/BackgroundAdmissionContention).
+    let results = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        let mut results = Vec::with_capacity(ids.len());
+        for (id, case) in ids.iter().zip(&batch) {
+            results.push(hook.on_tool_call(&case.action, None, id, args).await);
+        }
+        results
+    })
     .await
-    .expect("concurrent admissions must settle while their children remain running");
+    .expect("ordered admissions must settle while their children remain running");
     let mut admitted = Vec::new();
     let mut rejected = 0;
     for result in results {
