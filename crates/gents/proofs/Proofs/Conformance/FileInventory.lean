@@ -124,7 +124,8 @@ private def sourceJson (value : SourceInput) : String := object
         ("requester", jsonString scope.requester), ("node", jsonString scope.node),
         ("session", jsonString scope.session), ("native_session", toString scope.nativeSession)]
     | _ => "null"),
-   ("boundary", jsonString (boundaryName value.boundary))]
+   ("boundary", jsonString (boundaryName value.boundary)),
+   ("session_owner", jsonString value.sessionOwner)]
 
 private def captureJson : Capture → String
   | .pending => tagged "pending"

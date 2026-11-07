@@ -216,14 +216,20 @@ def forkDelivery : CanonicalOutput.MessageEnvelope :=
   { originDelivery with
     header := CanonicalOutput.forkHeader originDelivery.header 221 3
     key := "fork-delivery" }
+/-- The fork's destination-owned copy of the delivered closure, under the
+logical closing identity its header names. -/
+def forkOutputCopy : CanonicalOutput.Segment :=
+  let output := CanonicalOutput.Hydration.Examples.parentOutput
+  { output with id := 3301, coordinate := { output.coordinate with request := output.id } }
+/-- A self-contained fork's closure: its own header and copies, never the
+origin message, request, tool or closure. -/
 def forkInput : ClosureInput :=
   { input [] with
     request := forkRequest
     roots := [221]
-    messages := [originDelivery, forkDelivery]
-    segments := [CanonicalOutput.Hydration.Examples.parentOutput]
-    access := [⟨.agentRequest, 10⟩, ⟨.agentMessage, 220⟩, ⟨.agentMessage, 221⟩,
-      ⟨.agentToolCall, 300⟩, ⟨.agentOutputSegment, 301⟩].map fun key =>
+    messages := [forkDelivery]
+    segments := [forkOutputCopy]
+    access := [⟨.agentMessage, 221⟩, ⟨.agentOutputSegment, 3301⟩].map fun key =>
         ⟨forkRequest.authorizationScope, key, .authorized⟩ }
 def forkScope : FileImages.Scope := { scope with session := forkRequest.session }
 def forkOwner : String := "fork-creator"
@@ -247,27 +253,35 @@ theorem fork_retains_only_authorized_physical_origin :
 
 theorem fork_entries_are_scoped_to_the_fork :
     (snapshot forkSource.model forkRequest).toOption.any (fun value =>
-      value.entries.all (fun entry => entry.scope == forkScope && entry.projection == forkCopy.id) &&
-        !value.entries.isEmpty) = true := by native_decide
+      value.entries.all (fun entry => entry.scope == forkScope && entry.projection == forkCopy.id &&
+        entry.tool == 300) && !value.entries.isEmpty) = true := by native_decide
 
-/-- Deleting the origin's projections does not change the fork's inventory. -/
-theorem fork_copy_is_retained_without_its_source_projection :
-    (snapshot {forkSource with projections := [forkCopy]}.model forkRequest).toOption =
+/-- Deleting the origin's tools and projections does not change the fork's
+inventory. -/
+theorem fork_copy_is_retained_without_its_source :
+    (snapshot {forkSource with tools := [], projections := [forkCopy]}.model forkRequest).toOption =
       (snapshot forkSource.model forkRequest).toOption := by native_decide
 
 theorem fork_does_not_read_its_source_projection :
     summary {forkSource with projections := [originProjection, projection 99]} forkRequest =
-      .selected 0 0 1 false := by native_decide
+      .selected 0 0 0 true := by native_decide
 
 theorem fork_copy_requires_the_fork_owner :
     summary {forkSource with projections := [{forkCopy with owner := "agent-1"}]} forkRequest =
-      .rejected ∧
-    summary {forkSource with sessionOwner := ""} forkRequest = .rejected := by native_decide
+      .selected 0 0 0 true ∧
+    summary {forkSource with sessionOwner := ""} forkRequest = .selected 0 0 0 true := by
+  native_decide
 
-theorem fork_copy_cannot_cross_requester :
+theorem fork_copy_cannot_cross_requester_or_duplicate :
     summary {forkSource with projections :=
       [{forkCopy with scope := {forkScope with requester := "foreign"}}]} forkRequest =
+      .rejected ∧
+    summary {forkSource with projections := [forkCopy, {forkCopy with id := 3601}]} forkRequest =
       .rejected := by native_decide
+
+theorem fork_copy_of_an_unnamed_tool_is_not_selected :
+    summary {forkSource with projections := [{forkCopy with tool := 301}]} forkRequest =
+      .selected 0 0 0 true := by native_decide
 
 theorem fork_copies_in_other_sessions_do_not_conflict :
     summary {forkSource with projections :=

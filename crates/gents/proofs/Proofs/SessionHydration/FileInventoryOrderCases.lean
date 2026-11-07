@@ -66,24 +66,57 @@ theorem result_before_admission_does_not_supply_a_window :
     window (snapshot [call 10 5, delivered 11 3]) (input [call 10 5, delivered 11 3]) tool =
       none := by native_decide
 
+def forkRequest : Request := { admission with session := "fork-session", nativeSession := 2 }
+
+/-- A self-contained fork's copy of an inherited tool: the fork's scope and
+creator, as `Projection.copyTool` presents it. -/
+def forkTool (selectedTool : Tool := tool) : Tool :=
+  let forkScope : FileImages.Scope := { selectedTool.scope with session := forkRequest.session }
+  { selectedTool with scope := forkScope, agentDid := "fork-creator" }
+
+/-- Destination-owned copies of a tool's terminal records, under the logical
+closing identity its delivery names. -/
+def copiedRecords (selectedTool : Tool) : List Segment :=
+  (terminalRecords selectedTool).map fun segment =>
+    let logical : Coordinate := { segment.coordinate with request := 4000 + selectedTool.id }
+    { segment with id := segment.id + 10000, coordinate := logical }
+
+/-- The copied argument closure every modeled invocation names. -/
+def argumentsCopy : Segment := ⟨21000, ⟨1000, .tool 0⟩, .tool 0, none, none, 0⟩
+
+def copiedHeaders (headers : List MessageEnvelope) (offset : Nat) : List MessageEnvelope :=
+  headers.map fun message =>
+    { message with header := forkHeader message.header (message.header.id + offset) 2 }
+
+/-- The fork's closure holds only its own headers and copies. -/
+def forkClosure (forked : List MessageEnvelope) (tools : List Tool) : ClosureInput :=
+  let segments := argumentsCopy :: tools.flatMap copiedRecords
+  { input forked with request := forkRequest, segments }
+
 theorem a_selected_fork_preserves_its_canonical_window :
-    let first := call 10 3
-    let last := delivered 11 5
-    let forkedFirst := { first with header := forkHeader first.header 20 2 }
-    let forkedLast := { last with header := forkHeader last.header 21 2 }
-    let request := { admission with nativeSession := 2 }
-    let selected := { snapshot [forkedFirst, forkedLast] with admission := request }
-    let closure := { input [first, last, forkedFirst, forkedLast] with request }
-    window selected closure tool = some ⟨90, 3, 5⟩ := by native_decide
+    let forked := copiedHeaders [call 10 3, delivered 11 5] 10
+    let selected := { snapshot forked with admission := forkRequest, tools := [⟨forkTool, .unknown⟩] }
+    window selected (forkClosure forked [tool]) forkTool = some ⟨90, 3, 5⟩ := by native_decide
 
 theorem a_fork_cut_before_delivery_stays_unresolved :
-    let first := call 10 3
-    let last := delivered 11 5
-    let forked := { first with header := forkHeader first.header 20 2 }
-    let request := { admission with nativeSession := 2 }
-    let selected := { snapshot [forked] with admission := request }
-    let closure := { input [first, last, forked] with request }
-    window selected closure tool = none := by native_decide
+    let forked := copiedHeaders [call 10 3] 10
+    let selected := { snapshot forked with admission := forkRequest, tools := [⟨forkTool, .unknown⟩] }
+    window selected (forkClosure forked [tool]) forkTool = none := by native_decide
+
+theorem a_fork_delivery_without_its_copy_stays_unresolved :
+    let forked := copiedHeaders [call 10 3, delivered 11 5] 10
+    let selected := { snapshot forked with admission := forkRequest, tools := [⟨forkTool, .unknown⟩] }
+    window selected { forkClosure forked [] with segments := [argumentsCopy] } forkTool = none := by
+  native_decide
+
+theorem a_fork_delivery_cannot_borrow_another_tools_copy :
+    let forked := copiedHeaders [call 10 3, delivered 11 5] 10
+    let selected := { snapshot forked with admission := forkRequest, tools := [⟨forkTool, .unknown⟩] }
+    window selected { forkClosure forked [] with
+      segments := argumentsCopy :: (copiedRecords { tool with id := 2 }).map fun segment =>
+        let borrowed : Coordinate := { segment.coordinate with request := 4090 }
+        { segment with coordinate := borrowed } }
+      forkTool = none := by native_decide
 
 theorem physical_id_order_does_not_determine_edit_order :
     resolve [⟨2, 5, 7⟩, ⟨90, 1, 3⟩, ⟨1, 8, 10⟩] = some [90, 2, 1] := by native_decide
@@ -141,14 +174,9 @@ theorem missing_intermediate_delivery_keeps_the_comparison_unresolved :
   native_decide
 
 def forkInput (includeDelivery : Bool) : Snapshot × ClosureInput :=
-  let first := call 10 3
-  let last := delivered 11 5
-  let forkedFirst := { first with header := forkHeader first.header 20 2 }
-  let forkedLast := { last with header := forkHeader last.header 21 2 }
-  let request := { admission with nativeSession := 2 }
-  let selected := if includeDelivery then [forkedFirst, forkedLast] else [forkedFirst]
-  ({ snapshot selected with admission := request },
-    { input (first :: last :: selected) with request })
+  let forked := copiedHeaders (if includeDelivery then [call 10 3, delivered 11 5] else [call 10 3]) 10
+  ({ snapshot forked with admission := forkRequest, tools := [⟨forkTool, .unknown⟩] },
+    forkClosure forked [tool])
 
 def wrongStreamInput (headers : List MessageEnvelope) : ClosureInput :=
   { input headers with segments := (terminalRecords tool).map fun segment =>
@@ -189,8 +217,8 @@ def windowCases : List (String × Snapshot × ClosureInput × Tool) :=
       input [call 10 3, delivered 11 3], tool)
   , ("reversed_sequence", snapshot [call 10 5, delivered 11 3],
       input [call 10 5, delivered 11 3], tool)
-  , ("forked_pair", completeFork.1, completeFork.2, tool)
-  , ("fork_cut_before_delivery", cutFork.1, cutFork.2, tool)
+  , ("forked_pair", completeFork.1, completeFork.2, forkTool)
+  , ("fork_cut_before_delivery", cutFork.1, cutFork.2, forkTool)
   , ("foreign_closure", snapshot valid,
       { input valid with request := { admission with requester := "other-reader" } }, tool) ]
 
@@ -203,28 +231,24 @@ def resolutionCases : List (String × List Window) :=
   , ("duplicate_tool", [⟨90, 1, 3⟩, ⟨90, 5, 7⟩])
   , ("reversed_window", [⟨90, 3, 1⟩]) ]
 
-def forkRequest : Request := { admission with session := "fork-session", nativeSession := 2 }
-
 /-- A fork's inventory facts are its own projection copies in the fork
 session, owned by the fork's creator; the inherited tools keep their origin
 scope and their canonical windows come from the fork's selected headers. -/
 def forkCopy : ToolFact → ToolFact
-  | ⟨selectedTool, .observed projection⟩ =>
+  | ⟨_, .observed projection⟩ =>
       let copyScope : FileImages.Scope := { projection.scope with session := forkRequest.session }
       let copy : Projection :=
         { projection with id := projection.id + 100, owner := "fork-creator", scope := copyScope }
-      ⟨selectedTool, .observed copy⟩
+      ⟨copy.copyTool, .observed copy⟩
   | fact => fact
 
 def repeatedFork (includeSecond includeDelivery : Bool) : Snapshot × ClosureInput :=
   let selectedHeaders := sequentialHeaders.filter fun message =>
     message.header.id < 12 || (includeSecond && (includeDelivery || message.header.id != 13))
-  let replayed : List MessageEnvelope := selectedHeaders.map fun message =>
-    { message with header := forkHeader message.header (message.header.id + 20) 2 }
-  let request := forkRequest
-  let closure := { input (sequentialHeaders ++ replayed) with request }
+  let replayed := copiedHeaders selectedHeaders 20
+  let closure := forkClosure replayed [tool, secondTool]
   let selected : Snapshot := { capturedSnapshot with
-    admission := request
+    admission := forkRequest
     documents := (replayed.map fun message => ⟨.agentMessage, message.header.id⟩)
     tools := (capturedSnapshot.tools.filter fun fact =>
       includeSecond || fact.tool.id == tool.id).map forkCopy }
