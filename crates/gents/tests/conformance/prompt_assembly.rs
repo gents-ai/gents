@@ -1253,6 +1253,7 @@ fn generated_reasoning_suffix_cases_bind_native_selection() {
                 .map(|(_, evidence)| evidence.clone())
                 .collect::<Vec<_>>()
         };
+        let rows = gents_loop::claude_messages_body::project_recovered_prefix(&rows, resolve);
         let stage = replay_stage(&rows, &issuer, wire, resolve);
         let expected_stage = case
             .stage
