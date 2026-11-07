@@ -247,7 +247,7 @@ async fn signed_compaction_selection_and_revocation_follow_native_usersets() -> 
         .as_array()
         .and_then(|rows| {
             rows.iter()
-                .filter(|row| row["fieldName"] == "threshold")
+                .filter(|row| row["fieldName"] == "_C")
                 .max_by_key(|row| row["height"].as_i64().unwrap_or_default())
         })
         .and_then(|row| row["cid"].as_str())
