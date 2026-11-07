@@ -11,6 +11,79 @@ use crate::store::config_client::{
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use crate::Collection;
 
+/// The User publishes a signed client request for `agent`, which verifies and
+/// claims it as itself; the claim's tool context carries the admitted client.
+async fn claimed_client_tool_context(
+    node: &Arc<defra_node::Node>,
+    runtime: Arc<KeyIdentity>,
+    user: &KeyIdentity,
+    user_access: &ConfigAccess,
+    agent: &dyn NodeIdentity,
+    request_id: &str,
+) -> Result<(
+    crate::request::lifecycle::RequestLifecycle,
+    crate::inference::llm::tool::ToolRequestContext,
+)> {
+    use crate::request::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
+    let spec = crate::request::lifecycle::RequestSpec::new(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        crate::request::lifecycle::RequestIdentity {
+            requester_did: Some(user.did().to_owned()),
+            request_id: request_id.to_owned(),
+            node_did: runtime.did().to_owned(),
+            agent_did: agent.did().to_owned(),
+            session_id: format!("{request_id}-session"),
+            content: "File a notice".to_owned(),
+            execution_origin: ExecutionOrigin::Interactive,
+            created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        },
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+    );
+    let create = crate::request::lifecycle::build_signed_client_request(
+        user_access,
+        spec,
+        crate::request::lifecycle::RequestSigner::Identity(user),
+    )
+    .await?;
+    crate::request::lifecycle::submit_client_request(user_access, &create).await?;
+    let agent_access = ConfigAccess::local_managed_agent(node.clone(), agent.did().parse()?, agent)?;
+    let response = agent_access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ {} }} }}"#,
+            crate::store::graphql::escape_graphql_string(request_id),
+            crate::SIGNED_REQUEST_FIELDS
+        ))
+        .await?;
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone())?;
+    let request = crate::request::watcher::AgentRequest::try_from(row)?;
+    let (_authority_owner, authority) =
+        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        runtime.clone(),
+        authority,
+    );
+    let (request, admission) = verifier.verify_fresh_for_claim(&request, agent.did()).await?;
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        agent.did(),
+        runtime.did(),
+        request,
+        60,
+        ExecutionOrigin::Interactive,
+        String::new(),
+    );
+    lifecycle.bind_managed_agent(agent)?;
+    lifecycle.set_client_claim_admission(admission);
+    anyhow::ensure!(
+        matches!(lifecycle.claim_with_identity().await?, ClaimOutcome::Claimed),
+        "the selected Agent claims the User's request"
+    );
+    let context = lifecycle.claimed_tool_context()?;
+    Ok((lifecycle, context))
+}
+
 async fn cached_surface_usable(
     access: &ConfigAccess,
     owner: &str,
@@ -178,10 +251,16 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     let user = KeyIdentity::load_or_create(home.path().join("user"), None)?;
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let address = listener.local_addr()?;
+    // The production runtime projector derives each live Agent's baseline
+    // node grants from its document; the creator reads its own row through it.
     let node = Arc::new(
         defra_node::Node::builder()
             .with_node_identity_did(runtime.did())
             .with_node_acp_enabled()
+            .with_document_projector(crate::store::local::document_projector(
+                runtime.clone(),
+                crate::tools::surface::ToolCeiling::meta_only(),
+            )?)
             .with_http(defra_node::HttpConfig::with_listener(listener)?)
             .build()
             .await?,
@@ -214,6 +293,13 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         &user_did,
     )
     .await?;
+    // The creator is the Node's default Agent: as `gents init` does, the
+    // runtime issues it `policyDelegate`, which is what lets its creates
+    // project the new Agent's baseline (`Identity.GrantSets`
+    // `default_agent_publishes_agent`, `baseline_agent_cannot_publish_agent`).
+    crate::store::identity::GrantSet::PolicyDelegate
+        .grant(&admin, &identity::Did::new(&creator.agent_did)?)
+        .await?;
     let sibling = crate::store::identity::provision_agent_identity_authorized(
         &node,
         runtime.as_ref(),
@@ -239,10 +325,17 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     for binding in [&creator, &sibling] {
         let context = format!("{}:context", binding.agent_did);
         let tools = format!("{}:tools", binding.agent_did);
-        add(
-            Collection::Tools,
-            json!({"node_did":runtime.did(),"tools_id":tools}),
-        );
+        // The creator's Tools select the config tool it runs, so the runtime
+        // projection holds that tool's native operations (pack removal).
+        let mut tools_document = json!({"node_did":runtime.did(),"tools_id":tools});
+        if binding.agent_did == creator.agent_did {
+            tools_document["self_config"] = json!({
+                "enable_self_config": true,
+                "self_config_categories": ["agent", "tools", "node"],
+                "enable_pack_install": true
+            });
+        }
+        add(Collection::Tools, tools_document);
         add(
             Collection::AgentContext,
             json!({"node_did":runtime.did(),"context_id":context,"tools_id":tools}),
@@ -286,7 +379,8 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     .with_runtime_identity(Some(runtime.clone()))
     .with_agent_signer(signer.managed_agent_signer())
     .with_node_binding(Some(node_binding.clone()));
-    let mut tool_config = super::tests::config(&["agent", "tools"]);
+    // Creating an Agent needs the agent catalog grant (`SelfConfig.mayCreateAgent`).
+    let mut tool_config = super::tests::config(&["agent", "tools", "node"]);
     tool_config.agent_did = creator.agent_did.clone();
     let tools = super::build_self_config_tools_with_runtime(
         Arc::default(),
@@ -959,13 +1053,15 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         .await
         .map_err(|error| anyhow::anyhow!("cached query failed: {error}"))?;
     assert!(found.contains("selected-agent-write"));
-    let request = admin.write("test.surface.mailbox_request", &format!(
-        "mutation {{ create_AgentRequest(input: {{request_id: \"surface-mailbox-request\", purpose: \"normal\", node_did: \"{}\", requester_did: \"{}\", agent_did: \"{}\"}}) {{ _docID }} }}",
-        crate::store::graphql::escape_graphql_string(runtime.did()),
-        crate::store::graphql::escape_graphql_string(runtime.did()),
-        crate::store::graphql::escape_graphql_string(&sibling.agent_did),
-    )).await?;
-    crate::store::graphql::created_doc_id(&request, "AgentRequest")?;
+    let (_mailbox_owner, mailbox_context) = claimed_client_tool_context(
+        &node,
+        runtime.clone(),
+        &user,
+        &user_access,
+        sibling_signer.as_ref(),
+        "surface-mailbox-request",
+    )
+    .await?;
     let cached_mailbox = crate::session::mailbox::MailboxCreateTool::new(
         node.clone(),
         mailbox_decl
@@ -979,23 +1075,17 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         surface_id: "fixture/surface".into(),
         declaration: crate::documents::SurfaceToolDecl::Create(mailbox_decl.clone()),
     });
-    let mailbox = crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
-        Some(runtime.did().to_owned()),
-        Some(runtime.did().to_owned()),
-        Some(sibling.agent_did.clone()),
-        Some("surface-mailbox-request".into()),
-        crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
-            None,
-            tokio_util::sync::CancellationToken::new(),
-            cached_mailbox.call(crate::session::mailbox::MailboxContentArgs {
+    let mailbox = cached_mailbox
+        .call_with_request(
+            crate::session::mailbox::MailboxContentArgs {
                 title: "Selected Agent notice".into(),
                 summary: None,
                 payload: None,
                 question: None,
-            }),
-        ),
-    )
-    .await
+            },
+            &mailbox_context,
+        )
+        .await
     .map_err(|error| anyhow::anyhow!("cached mailbox failed: {error}"))?;
     assert!(mailbox.contains("Selected Agent notice"));
     let mailbox: Value = serde_json::from_str(&mailbox)?;
@@ -1021,34 +1111,29 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             .map(|signature| signature.identity.as_str()),
         Some(write_signer.as_str())
     );
-    let rollback_request = admin.write("test.surface.mailbox_rollback_request", &format!(
-        "mutation {{ create_AgentRequest(input: {{request_id: \"surface-mailbox-rollback\", purpose: \"normal\", node_did: \"{}\", requester_did: \"{}\", agent_did: \"{}\"}}) {{ _docID }} }}",
-        crate::store::graphql::escape_graphql_string(runtime.did()),
-        crate::store::graphql::escape_graphql_string(runtime.did()),
-        crate::store::graphql::escape_graphql_string(&sibling.agent_did),
-    )).await?;
-    crate::store::graphql::created_doc_id(&rollback_request, "AgentRequest")?;
+    let (_rollback_owner, rollback_context) = claimed_client_tool_context(
+        &node,
+        runtime.clone(),
+        &user,
+        &user_access,
+        sibling_signer.as_ref(),
+        "surface-mailbox-rollback",
+    )
+    .await?;
     let before_failed_mailbox = sibling_writer
         .execute("{ MailboxItem { _docID title } }")
         .await?;
     let (failed_mailbox, mutations) =
         crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
             Some(1),
-            crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
-                Some(runtime.did().to_owned()),
-                Some(runtime.did().to_owned()),
-                Some(sibling.agent_did.clone()),
-                Some("surface-mailbox-rollback".into()),
-                crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
-                    None,
-                    tokio_util::sync::CancellationToken::new(),
-                    cached_mailbox.call(crate::session::mailbox::MailboxContentArgs {
-                        title: "Rolled back notice".into(),
-                        summary: None,
-                        payload: None,
-                        question: None,
-                    }),
-                ),
+            cached_mailbox.call_with_request(
+                crate::session::mailbox::MailboxContentArgs {
+                    title: "Rolled back notice".into(),
+                    summary: None,
+                    payload: None,
+                    question: None,
+                },
+                &rollback_context,
             ),
         )
         .await;
@@ -1254,24 +1339,18 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             .contains("missing same-agent DatastoreToolSurface"),
         "{denied}"
     );
-    let denied = crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
-        Some(runtime.did().to_owned()),
-        Some(runtime.did().to_owned()),
-        Some(sibling.agent_did.clone()),
-        Some("surface-mailbox-request".into()),
-        crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
-            None,
-            tokio_util::sync::CancellationToken::new(),
-            cached_mailbox.call(crate::session::mailbox::MailboxContentArgs {
+    let denied = cached_mailbox
+        .call_with_request(
+            crate::session::mailbox::MailboxContentArgs {
                 title: "Denied notice".into(),
                 summary: None,
                 payload: None,
                 question: None,
-            }),
-        ),
-    )
-    .await
-    .unwrap_err();
+            },
+            &mailbox_context,
+        )
+        .await
+        .unwrap_err();
     assert!(
         denied
             .to_string()
@@ -1334,6 +1413,9 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         )
         .await?;
     }
+    // The Agent installed a plugin-only pack, which `remove_pack` refuses for
+    // every actor before any write: its plugins are removed through plugin
+    // remove. The User's attempt leaves the record unchanged.
     let user_delete = crate::pack::remove_pack(
         &user_access,
         runtime.did(),
@@ -1343,12 +1425,17 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     .await
     .unwrap_err();
     assert!(
-        gents_protocol::error_chain::find_map_source(user_delete.as_ref(), |cause| {
-            matches!(cause.downcast_ref::<crate::store::config_client::ConfigClientError>(),
-            Some(crate::store::config_client::ConfigClientError::ClientUnsignedMutationUnsupported))
-            .then_some(())
-        })
-        .is_some()
+        format!("{user_delete:#}").contains("only its plugins are"),
+        "{user_delete:#}"
+    );
+    assert_eq!(
+        user_access
+            .execute(&format!(
+                "{{ PackInstallation(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ _docID version }} }}",
+                crate::store::graphql::escape_graphql_string(record_doc),
+            ))
+            .await?,
+        before_denied
     );
     admin
         .grant_node_permission(&sibling_did, NodePermission::DocumentDelete)
@@ -1488,14 +1575,26 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         None,
     )
     .await?;
-    let agent_commits =
-        crate::store::graphql::composite_commits(&node, record_doc, "test agent pack upgrade")
-            .await?;
+    // The record's parent edge is gone, so its history is read by its owner.
+    let agent_history = creator_access
+        .execute(&format!(
+            "{{ _commits(docID: \"{}\") {{ cid height fieldName signature {{ identity type }} }} }}",
+            crate::store::graphql::escape_graphql_string(record_doc),
+        ))
+        .await?;
+    let agent_commits = crate::store::graphql::composite_commits_at(
+        agent_history["data"].get("_commits"),
+        "_commits",
+    )?;
+    let record_genesis = agent_commits
+        .iter()
+        .min_by_key(|commit| commit.height)
+        .context("agent pack genesis missing")?;
     let latest = agent_commits
         .iter()
         .max_by_key(|commit| commit.height)
         .context("agent pack update missing")?;
-    assert!(latest.height > genesis.height);
+    assert!(latest.height > record_genesis.height);
     assert_eq!(
         latest
             .signature

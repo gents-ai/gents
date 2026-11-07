@@ -345,7 +345,11 @@ mod tests {
                 Ok::<_, anyhow::Error>(())
             })).await?;
         }
-        let path = directory.path().join("one").to_string_lossy().into_owned();
+        // The execution guard admits a persisted root only when it is already
+        // its own canonical resolution (macOS temp paths are symlinked).
+        let path = std::fs::canonicalize(directory.path())?.join("one");
+        std::fs::create_dir(&path)?;
+        let path = path.to_string_lossy().into_owned();
         let readers = vec![writer.did().to_owned(), integrator.did().to_owned()];
         let root_doc = set_workspace_root_with_readers(
             &owner,

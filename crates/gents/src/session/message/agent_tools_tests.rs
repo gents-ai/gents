@@ -83,7 +83,13 @@ async fn canonical_goal(
 /// `commit` already materializes the caused session; this is the idempotent
 /// re-check, which must read the session through its owning Agent.
 async fn materialize_session(access: &ConfigAccess, caused: &crate::AgentRequest) {
-    materialize_session_at(access, caused, &chrono::Utc::now().to_rfc3339()).await;
+    // Sessions record created_at in the canonical second-precision UTC form.
+    materialize_session_at(
+        access,
+        caused,
+        &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    )
+    .await;
 }
 
 async fn materialize_session_at(

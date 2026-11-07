@@ -47,10 +47,20 @@ tokio::task_local! {
     pub(super) static SUCCESSFUL_MUTATION_FAULT: Arc<SuccessfulMutationFault>;
 }
 
-pub(super) async fn after_successful_mutation_for_test() -> Result<()> {
+tokio::task_local! {
+    static SUCCESSFUL_MUTATION_TRACE: Arc<std::sync::Mutex<Vec<Option<&'static str>>>>;
+}
+
+pub(super) async fn after_successful_mutation_for_test(operation: Option<&'static str>) -> Result<()> {
     let Ok(fault) = SUCCESSFUL_MUTATION_FAULT.try_with(Arc::clone) else {
         return Ok(());
     };
+    let _ = SUCCESSFUL_MUTATION_TRACE.try_with(|trace| {
+        trace
+            .lock()
+            .expect("mutation trace lock is never poisoned")
+            .push(operation)
+    });
     let count = fault.count.fetch_add(1, Ordering::Relaxed) + 1;
     if fault.fail_after == Some(count) {
         return Err(ConfigClientError::InjectedMutationFailure { count });
@@ -209,6 +219,30 @@ impl ConfigApplyTxn<'_> {
                 future,
             )
             .await
+    }
+
+    /// Like [`Self::with_successful_mutation_failure_at`], also returning the
+    /// transaction operation of each successful mutation in order, so a test
+    /// can target a mutation by the owner that issued it.
+    pub(crate) async fn with_successful_mutation_failure_and_trace<F>(
+        fail_after: Option<usize>,
+        future: F,
+    ) -> (F::Output, Vec<Option<&'static str>>)
+    where
+        F: Future,
+    {
+        let trace = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (output, _) = SUCCESSFUL_MUTATION_TRACE
+            .scope(
+                Arc::clone(&trace),
+                Self::with_successful_mutation_failure_at(fail_after, future),
+            )
+            .await;
+        let trace = trace
+            .lock()
+            .expect("mutation trace lock is never poisoned")
+            .clone();
+        (output, trace)
     }
 
     pub(crate) async fn with_successful_mutation_failure_at<F>(
