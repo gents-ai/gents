@@ -49,15 +49,23 @@ impl ProductionMaterializer {
                     .map(|schedule| &schedule.task)
             })
             .with_context(|| format!("trigger {trigger_id} has no configured agent"))?;
+        Self::agent_access(&self.node, &snapshot, &task.agent_did)
+    }
+
+    fn agent_access(
+        node: &Arc<EmbeddedNode>,
+        snapshot: &ActiveRuntimeSnapshot,
+        agent_did: &str,
+    ) -> Result<crate::ConfigAccess> {
         let agent = snapshot
-            .agent(&task.agent_did)
-            .with_context(|| format!("trigger agent {} is not loaded", task.agent_did))?;
+            .agent(agent_did)
+            .with_context(|| format!("trigger agent {agent_did} is not loaded"))?;
         anyhow::ensure!(
             agent.agent_identity.did() == agent.agent_did,
             "trigger agent identity is inconsistent"
         );
         Ok(crate::ConfigAccess::local_managed_agent(
-            self.node.clone(),
+            node.clone(),
             ::identity::Did::new(agent.agent_did.clone())
                 .context("trigger agent DID is invalid")?,
             agent.agent_identity.as_ref(),
@@ -564,11 +572,13 @@ impl MaterializerHandle for ProductionMaterializer {
     fn recover_admitted_fire(
         &self,
         identity: &gents_protocol::trigger_delivery::FireIdentity,
+        task: &ResolvedTask,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + '_>> {
         let identity = identity.clone();
+        let access = Self::agent_access(&self.node, &self.snapshot_rx.borrow(), &task.agent_did);
         Box::pin(async move {
             let key = crate::triggers::engine::durable::fire_key(&identity);
-            self.trigger_access(&identity.trigger_id)?.transact_readonly(
+            access?.transact_readonly(
                 "trigger.recover_admitted_fire",
                 |txn| { let key = key.clone(); let identity = identity.clone(); Box::pin(async move {
                     let result = txn.execute(&format!(
