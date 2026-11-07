@@ -359,6 +359,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             &deployment.node_did,
         );
     }
+    super::runtime_tasks::apply_scoped_originating_tasks(&mut deployments);
     deployments.sort_by(|left, right| left.label.cmp(&right.label));
 
     DesktopRuntimeSnapshot {
@@ -764,6 +765,7 @@ mod agent_environment_tests {
             latest_request_id: None,
             task_id: None,
             task_name: None,
+            task_origin: None,
             trigger_id: None,
             trigger_kind: None,
             created_at: None,
