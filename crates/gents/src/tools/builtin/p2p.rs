@@ -551,10 +551,16 @@ impl P2pTool {
                     },
                 )?;
                 let did = actor.did().to_owned();
-                let offer =
-                    EnrollmentOfferIssuer::new(actor, p2p, network_id, did, "client".into())
-                        .mint_valid_for(validity)
-                        .await?;
+                let offer = EnrollmentOfferIssuer::new(
+                    self.node.clone(),
+                    actor,
+                    p2p,
+                    network_id,
+                    did,
+                    "client".into(),
+                )
+                .mint_valid_for(validity)
+                .await?;
                 Ok(reply(
                     json!({"offer_token":offer.token,"expires_at":offer.offer.expires_at,"peer_id":offer.offer.server_peer,"peer_did":offer.offer.admin_did}),
                     Some(json!({"action":"enrollment_pending"})),

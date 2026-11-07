@@ -24,6 +24,7 @@ import Proofs.Conformance.ConfigurationScope
 import Proofs.Conformance.Initialization
 import Proofs.Conformance.EnrollmentHydrationRoutes
 import Proofs.Conformance.EnrollmentPendingRequests
+import Proofs.Conformance.EnrollmentInvite
 import Proofs.Conformance.ClientObservationAdmission
 import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
@@ -447,6 +448,12 @@ def snapshotJson : String :=
       ++ Conformance.EnrollmentHydrationRoutes.casesJson ++ ","
     ++ "\"enrollment_pending_request_cases\":"
       ++ Conformance.EnrollmentPendingRequests.casesJson ++ ","
+    ++ "\"enrollment_invite_length_cases\":"
+      ++ Conformance.EnrollmentInvite.casesJson ++ ","
+    ++ "\"enrollment_invite_schema_cases\":"
+      ++ Conformance.EnrollmentInvite.schemaCasesJson ++ ","
+    ++ "\"enrollment_invite_window_cases\":"
+      ++ Conformance.EnrollmentInvite.windowCasesJson ++ ","
     ++ "\"client_observation_admission_cases\":"
       ++ Conformance.ClientObservationAdmission.casesJson ++ ","
     ++ "\"enrollment_encoding_cases\":"

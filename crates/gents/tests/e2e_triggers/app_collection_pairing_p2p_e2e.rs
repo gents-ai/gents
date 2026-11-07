@@ -24,6 +24,93 @@ const NETWORK_NAME: &str = "App Collection Pairing Net";
 const HYDRATION_NETWORK_ID: &str = "net-enrollment-session-hydration";
 const HYDRATION_SESSION_ID: &str = "session-enrollment-hydration";
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn signed_invitation_delivers_request_without_http() {
+    use gents::runtime::agent::p2p_reconcile::enrollment_candidate::request_enrollment;
+    use gents::runtime::agent::p2p_reconcile::enrollment_offer::EnrollmentOfferIssuer;
+    use gents_protocol::enrollment::EnrollmentDecisionKind;
+
+    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
+    let host = test_p2p_db("invite-host").await;
+    let guest = test_p2p_db("invite-guest").await;
+    wait_for_peer_identity(&host.node).await;
+    wait_for_peer_identity(&guest.node).await;
+    crate::support::enrollment::signed_enrollment_offer(
+        &host.node,
+        NETWORK_ID,
+        NETWORK_NAME,
+        host.node_identity.as_ref(),
+        "setup-challenge".to_owned(),
+    )
+    .await;
+
+    let issuer = EnrollmentOfferIssuer::new(
+        host.node.clone(),
+        host.node_identity.clone(),
+        gents::store::identity::node_p2p(&host.node).unwrap(),
+        NETWORK_ID.to_owned(),
+        host.node_identity.did().to_owned(),
+        "client".to_owned(),
+    );
+    let invite = issuer.mint().await.unwrap();
+    assert!(invite.token.len() <= gents_protocol::enrollment::MAX_LINKABLE_OFFER_CHARACTERS);
+    let request = request_enrollment(&guest.node, guest.node_identity.as_ref(), &invite.token)
+        .await
+        .unwrap();
+    let store = GraphqlEnrollmentStore::new(host.node.clone(), host.node_identity.clone());
+    let delivered = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let projection = store.load_projection().await.unwrap();
+            if projection
+                .pending
+                .iter()
+                .any(|item| item.request.request_id == request.request_id)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await;
+    if delivered.is_err() {
+        panic!(
+            "invitation request did not become pending: {:?}",
+            store.load_projection().await.unwrap()
+        );
+    }
+    let approval = store
+        .decide_request(&request.request_id, EnrollmentDecisionKind::Approved)
+        .await
+        .unwrap();
+    assert_eq!(approval.state, "approved");
+    let request_id = escape_graphql_string(&request.request_id);
+    let query = format!(
+        r#"{{ NetworkEnrollmentDecision(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ decision }} }}"#
+    );
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let response = gents::store::graphql::graphql_with_transaction_retry(
+                &guest.node,
+                &query,
+                "observe invitation approval",
+            )
+            .await
+            .unwrap();
+            let rows = gents::store::graphql::rows::<Value>(&response, "NetworkEnrollmentDecision")
+                .unwrap();
+            if rows
+                .iter()
+                .any(|row| row.get("decision").and_then(Value::as_str) == Some("approved"))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("approved invitation did not reach the guest");
+}
+
 async fn register_change_proposed_schema(node: &EmbeddedNode) {
     // @branchable is REQUIRED — DefraDB only P2P-syncs branchable collections.
     let sdl = r#"

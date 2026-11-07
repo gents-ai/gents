@@ -358,7 +358,8 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
         <DialogHeader>
           <DialogTitle>Add node</DialogTitle>
           <DialogDescription>
-            Connect to a Gents server. Its admin approves the enrolment.
+            Enter an invitation or connect to a Gents server. Its admin approves the
+            enrolment.
           </DialogDescription>
         </DialogHeader>
         <form
@@ -369,7 +370,7 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
           }}
         >
           <label htmlFor="enrol-address" className="text-sm">
-            Node server
+            Invitation or node server
           </label>
           <Input
             id="enrol-address"
@@ -378,7 +379,7 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
             autoCorrect="off"
             value={address}
             onChange={(e) => setAddress(e.target.value)}
-            placeholder="100.69.4.79:9191"
+            placeholder="Paste an invitation or enter a server address"
             className="font-mono"
             disabled={busy}
             autoFocus

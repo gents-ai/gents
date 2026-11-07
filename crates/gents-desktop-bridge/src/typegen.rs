@@ -224,6 +224,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ManagedServerRootValidationRequest,
         PeerStatusFetchRequest,
         EnrollmentStatusRequest,
+        EnrollmentInviteRequest,
         ChatSendRequest,
         gents_protocol::request_input::AuthoredRequestInput,
         PendingMessageEditRequest,

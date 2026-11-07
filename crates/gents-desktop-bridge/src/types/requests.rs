@@ -71,6 +71,12 @@ pub struct EnrollmentStatusRequest {
     pub server_address: String,
 }
 
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EnrollmentInviteRequest {
+    pub invite: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChatSubmissionQuery {

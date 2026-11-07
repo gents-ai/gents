@@ -1,5 +1,7 @@
 #[derive(Debug, thiserror::Error)]
 pub enum EnrollmentError {
+    #[error("invalid live replicated-schema digest in enrollment offer")]
+    InvalidLiveSchemaDigest,
     #[error("unsupported enrollment request version {version}")]
     UnsupportedRequestVersion { version: u8 },
     #[error("request offer_id mismatch")]

@@ -41,6 +41,7 @@ pub async fn request_enrollment(
     let p2p = crate::store::identity::node_p2p(node).context("this node has no P2P transport")?;
     let offer = decode_offer(offer_token).context("decoding server enrollment offer")?;
     verify_enrollment_offer(&p2p, identity, &offer).await?;
+    verify_offer_live_schema(node, &offer, false).await?;
     confirm_network_admin_pin(node, &offer).await?;
     let candidate_peer = p2p.local_peer_id().await.map_err(anyhow::Error::msg)?;
     let candidate_ticket = local_enrollment_ticket(&p2p, &candidate_peer).await?;
@@ -78,6 +79,28 @@ pub async fn request_enrollment(
     };
     push_enrollment_request(&p2p, &offer, &request.request_id, &document_id).await?;
     Ok(request)
+}
+
+pub async fn verify_offer_live_schema(
+    node: &Arc<EmbeddedNode>,
+    offer: &EnrollmentOfferRecord,
+    required: bool,
+) -> Result<()> {
+    let Some(expected) = offer.live_schema_digest.as_deref() else {
+        anyhow::ensure!(
+            !required,
+            "invite does not contain signed live schema evidence"
+        );
+        return Ok(());
+    };
+    let local = super::read_client_replicated_schema(Arc::clone(node)).await?;
+    let actual =
+        gents_protocol::peer_schema::replicated_schema_digest(super::CLIENT_COLLECTIONS, &local)?;
+    anyhow::ensure!(
+        gents_protocol::peer_schema::signed_schema_evidence_matches(Some(expected), Some(&actual)),
+        "invite's replicated schema does not match this node"
+    );
+    Ok(())
 }
 
 /// Accept only a fresh offer whose ticket, authenticated transport identity
@@ -142,9 +165,12 @@ pub fn validate_authenticated_server_did(
 }
 
 fn validate_fresh_window(issued_at: &str, expires_at: &str) -> Result<()> {
+    validate_fresh_window_at(issued_at, expires_at, Utc::now())
+}
+
+fn validate_fresh_window_at(issued_at: &str, expires_at: &str, now: DateTime<Utc>) -> Result<()> {
     let issued = DateTime::parse_from_rfc3339(issued_at).context("parsing offer issued_at")?;
     let expires = DateTime::parse_from_rfc3339(expires_at).context("parsing offer expires_at")?;
-    let now = Utc::now();
     anyhow::ensure!(
         issued <= now + chrono::Duration::seconds(30),
         "enrollment offer is from the future"
@@ -159,6 +185,34 @@ fn validate_fresh_window(issued_at: &str, expires_at: &str) -> Result<()> {
         "enrollment offer validity window is too long"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod invite_window_tests {
+    use super::*;
+
+    #[test]
+    fn freshness_matches_the_executable_model() {
+        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        let cases = snapshot["enrollment_invite_window_cases"]
+            .as_array()
+            .unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let timestamp =
+                |key: &str| DateTime::from_timestamp(case[key].as_i64().unwrap(), 0).unwrap();
+            let result = validate_fresh_window_at(
+                &timestamp("issued").to_rfc3339(),
+                &timestamp("expires").to_rfc3339(),
+                timestamp("now"),
+            );
+            assert_eq!(
+                result.is_ok(),
+                case["admissible"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+    }
 }
 
 pub async fn local_enrollment_ticket(

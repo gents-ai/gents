@@ -52,3 +52,17 @@ pub async fn request_status_enrollment(
         })
         .map_err(|error| BridgeError::untyped(format!("{error:#}")))
 }
+
+pub async fn request_invite_enrollment(
+    core: &ClientCore,
+    request: crate::types::EnrollmentInviteRequest,
+) -> Result<crate::types::EnrollmentRequestView, crate::error::BridgeError> {
+    let token = request
+        .invite
+        .strip_prefix("gents://invite/")
+        .unwrap_or(&request.invite);
+    core.request_invite_enrollment(token)
+        .await
+        .map(crate::types::EnrollmentRequestView::from)
+        .map_err(|error| crate::error::BridgeError::untyped(format!("{error:#}")))
+}

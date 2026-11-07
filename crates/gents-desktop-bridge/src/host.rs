@@ -604,6 +604,9 @@ impl ClientHost {
             ClientCommand::Enroll { request } => {
                 encode(crate::commands::request_status_enrollment(&self.core, request).await?)
             }
+            ClientCommand::EnrollInvite { request } => {
+                encode(crate::commands::request_invite_enrollment(&self.core, request).await?)
+            }
             ClientCommand::SessionSnapshot(args) => encode(
                 crate::commands::session_snapshot(
                     &self.core,

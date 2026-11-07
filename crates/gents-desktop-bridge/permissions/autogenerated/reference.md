@@ -2078,6 +2078,32 @@ Denies the desktop_pack_wire_sources command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-peer-enroll-invite`
+
+</td>
+<td>
+
+Enables the desktop_peer_enroll_invite command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-peer-enroll-invite`
+
+</td>
+<td>
+
+Denies the desktop_peer_enroll_invite command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-peer-enroll-status`
 
 </td>

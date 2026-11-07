@@ -498,7 +498,7 @@ export function OnboardingWizard({
           <div className="mb-6 grid min-w-0 gap-2">
             <p className="text-sm text-muted-foreground">
               Saved access requests. If the administrator cannot find your request,
-              enter the node’s status address below to send it again.
+              enter the invitation or node address below to send it again.
             </p>
             {enrollmentRequests.map((request) => (
               <Button
@@ -631,7 +631,7 @@ export function OnboardingWizard({
                   if (!busy && address.trim()) void enrol();
                 }}
               >
-                <Field label="Server address">
+                <Field label="Invitation or server address">
                   <Input
                     inputMode="url"
                     disabled={busy}
@@ -640,12 +640,12 @@ export function OnboardingWizard({
                     autoCorrect="off"
                     value={address}
                     onChange={(event) => setAddress(event.target.value)}
-                    placeholder="https://gents.example.net:8787"
+                    placeholder="Paste an invitation or enter a server address"
                   />
                 </Field>
                 <p className="text-xs text-muted-foreground">
-                  Enter the node’s status address, reachable from this device. The
-                  node’s administrator must approve this device’s access request.
+                  Paste an invitation or enter the node’s status address. The node’s
+                  administrator must approve this device’s access request.
                 </p>
               </form>
             </Option>
