@@ -15,6 +15,33 @@ struct LocalPackAccess {
     runtime: std::sync::Arc<dyn gents::NodeIdentity>,
 }
 
+pub(super) fn parse_dependency_variables(
+    values: &[String],
+) -> Result<gents::pack::DependencyVariableOverrides> {
+    let mut result = gents::pack::DependencyVariableOverrides::new();
+    for item in values {
+        let (key, value) = item
+            .split_once('=')
+            .context("dependency variable must be NAMESPACE/PACK:NAME=VALUE")?;
+        let (coordinate, name) = key
+            .rsplit_once(':')
+            .context("dependency variable must include its pack coordinate and name")?;
+        anyhow::ensure!(
+            !coordinate.is_empty() && !name.is_empty(),
+            "dependency variable needs a pack coordinate and name"
+        );
+        anyhow::ensure!(
+            result
+                .entry(coordinate.to_owned())
+                .or_default()
+                .insert(name.to_owned(), Some(value.to_owned()))
+                .is_none(),
+            "dependency variable {key:?} was provided more than once"
+        );
+    }
+    Ok(result)
+}
+
 pub(super) fn reused_variable_preview(
     pack: &PackSource,
     config: &gents::documents::PackConfig,
@@ -59,6 +86,14 @@ pub(super) fn install_variable_preview(
     pack: &PackSource,
     owner: &str,
 ) -> Result<serde_json::Value> {
+    install_variable_preview_with(pack, owner, &|name| std::env::var(name).ok())
+}
+
+fn install_variable_preview_with(
+    pack: &PackSource,
+    owner: &str,
+    lookup: &dyn Fn(&str) -> Option<String>,
+) -> Result<serde_json::Value> {
     let path = pack
         .manifest()
         .config
@@ -70,7 +105,7 @@ pub(super) fn install_variable_preview(
         if name == "GENTS_PACK_NODE_DID" {
             Some(owner.to_owned())
         } else {
-            std::env::var(name).ok()
+            lookup(name)
         }
     };
     let uses = gents::pack::interpolate::inspect_install_variables(&authored, &environment)
@@ -245,44 +280,7 @@ async fn install_documents_pack_resolved_inner(
     let requested = parse_inference_slot_bindings(&args.inference_slots)?;
     let temp = tempfile::tempdir()?;
     gents::pack::materialize::materialize(pack.archive(), temp.path())?;
-    let origin_tag = gents::pack::pack_origin_tag(&format!(
-        "{}/{}",
-        pack.manifest().metadata.namespace,
-        pack.manifest().name
-    ))?;
-    let shared_collections = if args.preview {
-        super::review::shared_collections(access, pack.manifest(), |path| {
-            Ok(pack.asset(path)?.to_vec())
-        })
-        .await
-    } else {
-        None
-    };
-    let review = |documents: Vec<serde_json::Value>, needs: serde_json::Value| {
-        let mut preview = json!({
-            "pack": pack.manifest().name,
-            "source": pack.label(),
-            "digest": pack.digest(),
-            "owner": owner,
-            "origin_tag": origin_tag,
-            "dependencies": pack.manifest().metadata.dependencies,
-            "kind": pack.manifest().metadata.kind,
-            "declared_access": super::review::declared_access(&documents),
-            "documents": documents,
-            "collections": super::review::collections(pack.manifest(), |path| {
-                Ok(pack.asset(path)?.to_vec())
-            })?,
-            "shared_collections": shared_collections,
-            "inference_needs": needs,
-            "would_write": false,
-        });
-        let dependency_manifests: Vec<_> = dependencies.iter().map(PackSource::manifest).collect();
-        merge(
-            &mut preview,
-            super::review::identity_and_authority(pack.manifest(), &dependency_manifests)?,
-        );
-        Ok::<_, anyhow::Error>(preview)
-    };
+    let overrides = parse_dependency_variables(&args.dependency_variables)?;
     let dependency_archives = dependencies
         .iter()
         .map(PackSource::archive)
@@ -297,6 +295,7 @@ async fn install_documents_pack_resolved_inner(
             Some(home.as_path()),
             &|name| std::env::var(name).ok(),
             local.runtime.as_ref(),
+            &overrides,
         )
         .await
     } else {
@@ -309,6 +308,7 @@ async fn install_documents_pack_resolved_inner(
             gents::pack::InstalledVia::Operator,
             args.scope.graphql.is_none().then_some(home.as_path()),
             &|name| std::env::var(name).ok(),
+            &overrides,
         )
         .await
     };
@@ -358,6 +358,13 @@ async fn install_documents_pack_resolved_inner(
                 );
                 if let Some(config) = prepared.reused_dependency_config(&coordinate) {
                     reused_variable_preview(source, config)
+                } else if let Some(values) = overrides.get(&coordinate) {
+                    install_variable_preview_with(source, owner, &|name| {
+                        values
+                            .get(name)
+                            .cloned()
+                            .unwrap_or_else(|| std::env::var(name).ok())
+                    })
                 } else {
                     install_variable_preview(source, owner)
                 }

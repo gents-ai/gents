@@ -25,6 +25,7 @@ async fn install(home: &Path, package: String) -> anyhow::Result<Value> {
     crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
         package,
         inference_slots: Vec::new(),
+        dependency_variables: Vec::new(),
         preview: false,
         scope: scope(home),
         output: OutputFormat::Json,

@@ -633,6 +633,7 @@ async fn prepare_document_pack_archive_inputs(
     )
     .await
 }
+pub type DependencyVariableOverrides = BTreeMap<String, BTreeMap<String, Option<String>>>;
 
 #[expect(
     clippy::too_many_arguments,
@@ -654,6 +655,7 @@ async fn prepare_document_pack_install_inner(
     root_archive: Option<&PackArchive>,
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
     hosted: Option<&HostedPackPreparation>,
+    overrides: &DependencyVariableOverrides,
 ) -> Result<PreparedDocumentPackInstall> {
     if let Some(archive) = root_archive {
         anyhow::ensure!(
@@ -688,6 +690,16 @@ async fn prepare_document_pack_install_inner(
             )?;
         }
         require_documents_dependency(dependency.manifest())?;
+    }
+    for coordinate in overrides.keys() {
+        anyhow::ensure!(
+            dependencies.iter().any(|archive| format!(
+                "{}/{}",
+                archive.manifest().metadata.namespace,
+                archive.manifest().name
+            ) == *coordinate),
+            "variable override names undeclared dependency {coordinate:?}"
+        );
     }
     for slot in requested.keys() {
         anyhow::ensure!(
@@ -735,17 +747,24 @@ async fn prepare_document_pack_install_inner(
             archive.manifest().metadata.namespace,
             archive.manifest().name
         );
-        let snapshot = access
+        let selected_variables = overrides.get(&coordinate);
+        let (snapshot, installed) = access
             .transact_readonly("pack.dependency.snapshot", |txn| {
                 let coordinate = &coordinate;
                 Box::pin(async move {
                     let record = super::read_record(txn, owner, coordinate).await?;
-                    anyhow::ensure!(record.doc_id.is_none() || record.digest.as_deref() == Some(archive.digest()),
+                    anyhow::ensure!(record.doc_id.is_none() || record.digest.as_deref() == Some(archive.digest()) || selected_variables.is_some(),
                         "installed dependency {coordinate} has a different artifact; update it explicitly before installing its dependent");
-                    super::dependency_snapshot_in_txn(txn, owner, coordinate, archive.digest()).await
+                    let snapshot = super::dependency_snapshot_in_txn(txn, owner, coordinate, archive.digest()).await?;
+                    Ok::<_, anyhow::Error>((snapshot, record.doc_id.is_some()))
                 })
             })
             .await?;
+        let snapshot = if selected_variables.is_some() {
+            None
+        } else {
+            snapshot
+        };
         let requested_dependency = selected(archive.manifest());
         let preview = if let Some(snapshot) = &snapshot {
             let bindings = installed_dependency_bindings(

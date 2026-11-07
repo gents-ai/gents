@@ -131,6 +131,7 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
         let install_args = PackInstallArgs {
             package: format!("{coordinate}@{latest}"),
             inference_slots: args.inference_slots.clone(),
+            dependency_variables: Vec::new(),
             preview: false,
             scope: args.scope.clone(),
             output: OutputFormat::Json,
@@ -243,6 +244,7 @@ mod tests {
         crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
             package: "demo_pack".to_owned(),
             inference_slots: Vec::new(),
+            dependency_variables: Vec::new(),
             preview: false,
             scope: scope.clone(),
             output: OutputFormat::Json,
@@ -370,6 +372,7 @@ mod tests {
             crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
                 package,
                 inference_slots: vec![slot.clone()],
+                dependency_variables: Vec::new(),
                 preview: false,
                 scope: scope.clone(),
                 output: OutputFormat::Json,
@@ -415,6 +418,7 @@ mod tests {
         crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
             package: fixture.to_str().unwrap().to_owned(),
             inference_slots: Vec::new(),
+            dependency_variables: Vec::new(),
             preview: false,
             scope: scope.clone(),
             output: OutputFormat::Json,
