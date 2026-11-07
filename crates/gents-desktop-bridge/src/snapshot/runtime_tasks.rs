@@ -214,6 +214,7 @@ pub(crate) fn session_summaries(
                     .or_else(|| indexed.map(|indexed| indexed.request_id.clone())),
                 task_id,
                 task_name,
+                task_origin: None,
                 trigger_id,
                 trigger_kind,
                 created_at: Some(session.created_at.clone()),
@@ -576,5 +577,132 @@ pub(super) fn apply_originating_tasks(
                 .find(|candidate| candidate.task_id == task)
                 .and_then(|candidate| candidate.name.clone());
         }
+    }
+}
+
+pub(super) fn apply_scoped_originating_tasks(
+    deployments: &mut [super::super::types::DeploymentView],
+) {
+    use super::task_lineage::{LineageIndex, Row, Scope};
+    use std::collections::BTreeMap;
+
+    let scope_of = |summary: &SessionSummary| Scope {
+        node: summary.node_did.clone(),
+        session: summary.session_id.clone(),
+        requester: summary.requester_did.clone(),
+    };
+    let rows = deployments
+        .iter()
+        .flat_map(|deployment| deployment.sessions.iter())
+        .map(|summary| Row {
+            scope: scope_of(summary),
+            task: summary
+                .provenance
+                .as_ref()
+                .and_then(|provenance| provenance.task_id.clone())
+                .or_else(|| summary.trigger_id.as_ref().and(summary.task_id.clone())),
+            starter: summary.started_by.as_ref().map(|starter| Scope {
+                node: starter.node_did.clone(),
+                session: starter.session_id.clone(),
+                requester: starter.requester_did.clone(),
+            }),
+        })
+        .collect();
+    let mut tasks = BTreeMap::new();
+    for deployment in deployments.iter() {
+        for task in &deployment.tasks {
+            tasks
+                .entry((deployment.node_did.clone(), task.task_id.clone()))
+                .and_modify(|entry: &mut Option<Option<String>>| *entry = None)
+                .or_insert(Some(task.name.clone()));
+        }
+    }
+    let mut index = LineageIndex::new(rows);
+    for summary in deployments
+        .iter_mut()
+        .flat_map(|deployment| deployment.sessions.iter_mut())
+    {
+        summary.task_origin = scoped_task_origin(&mut index, &scope_of(summary), &tasks);
+    }
+}
+
+fn scoped_task_origin(
+    index: &mut super::task_lineage::LineageIndex,
+    scope: &super::task_lineage::Scope,
+    tasks: &std::collections::BTreeMap<(String, String), Option<Option<String>>>,
+) -> Option<super::super::types::TaskOriginView> {
+    let origin = index.originating_scoped_task(scope)?;
+    let name = tasks
+        .get(&(origin.node.clone(), origin.task.clone()))?
+        .as_ref()?;
+    Some(super::super::types::TaskOriginView {
+        node_did: origin.node,
+        task_id: origin.task,
+        task_name: name.clone(),
+    })
+}
+
+#[cfg(test)]
+mod scoped_origin_tests {
+    use super::super::task_lineage::{LineageIndex, Row, Scope};
+    use super::scoped_task_origin;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn cross_node_task_requires_visible_unambiguous_task_and_parent() {
+        let parent = Scope {
+            node: "origin".into(),
+            session: "parent".into(),
+            requester: Some("person".into()),
+        };
+        let child = Scope {
+            node: "worker".into(),
+            session: "child".into(),
+            requester: Some("person".into()),
+        };
+        let rows = vec![
+            Row {
+                scope: parent.clone(),
+                task: Some("task".into()),
+                starter: None,
+            },
+            Row {
+                scope: child.clone(),
+                task: None,
+                starter: Some(parent.clone()),
+            },
+        ];
+        let mut index = LineageIndex::new(rows);
+        let mut visible = BTreeMap::new();
+        assert!(scoped_task_origin(&mut index, &child, &visible).is_none());
+        visible.insert(
+            ("origin".into(), "task".into()),
+            Some(Some("Review".into())),
+        );
+        let origin = scoped_task_origin(&mut index, &child, &visible).unwrap();
+        assert_eq!(
+            (
+                origin.node_did.as_str(),
+                origin.task_id.as_str(),
+                origin.task_name.as_deref()
+            ),
+            ("origin", "task", Some("Review"))
+        );
+        visible.insert(("origin".into(), "task".into()), None);
+        assert!(scoped_task_origin(&mut index, &child, &visible).is_none());
+        visible.insert(
+            ("origin".into(), "task".into()),
+            Some(Some("Review".into())),
+        );
+        let wrong_parent = Scope {
+            requester: None,
+            ..parent
+        };
+        let mut mismatched = LineageIndex::new(vec![Row {
+            scope: child.clone(),
+            task: None,
+            starter: Some(wrong_parent),
+        }]);
+        assert!(scoped_task_origin(&mut mismatched, &child, &visible).is_none());
     }
 }

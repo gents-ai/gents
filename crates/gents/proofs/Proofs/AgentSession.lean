@@ -135,6 +135,49 @@ theorem repeated_task_lineage_is_not_attributed (owner : Nat) (scope : Scope)
     originatingTask owner scope rows visited (fuel + 1) = none := by
   simp [originatingTask, seen]
 
+/-- The task identity includes its node; session and task rows are limited to
+those the authenticated reader can see, and starter edges have been verified. -/
+structure ScopedTask where
+  node : Nat
+  task : Nat
+  deriving DecidableEq, Repr
+
+def originatingScopedTask (scope : Scope) (rows : List TaskLineageRow)
+    (visited : List Scope) : Nat → Option ScopedTask
+  | 0 => none
+  | fuel + 1 =>
+      if visited.contains scope then none
+      else
+        match rows.filter (fun row => row.scope == scope) with
+        | [row] =>
+            match row.task with
+            | some task => some ⟨scope.node, task⟩
+            | none => match row.starter with
+              | some parent => originatingScopedTask parent rows (scope :: visited) fuel
+              | none => none
+        | _ => none
+
+theorem scoped_repeated_lineage_is_not_attributed (scope : Scope)
+    (rows : List TaskLineageRow) (visited : List Scope) (fuel : Nat)
+    (seen : scope ∈ visited) :
+    originatingScopedTask scope rows visited (fuel + 1) = none := by
+  simp [originatingScopedTask, seen]
+
+theorem scoped_ambiguous_lineage_is_not_attributed (scope : Scope)
+    (rows : List TaskLineageRow) (visited : List Scope) (fuel : Nat)
+    (ambiguous : (rows.filter (fun row => row.scope == scope)).length ≠ 1) :
+    originatingScopedTask scope rows visited (fuel + 1) = none := by
+  simp only [originatingScopedTask]
+  split
+  · rfl
+  · generalize found : rows.filter (fun row => row.scope == scope) = foundRows
+    cases foundRows with
+    | nil => rfl
+    | cons row tail =>
+      cases tail with
+      | nil => simp [found] at ambiguous
+      | cons _ _ => rfl
+
 def openingRequestAtCreation (request : Nat) (toolCall taskTrigger : Bool) : Option Nat :=
   if toolCall || taskTrigger then some request else none
 

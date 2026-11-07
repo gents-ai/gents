@@ -15,6 +15,7 @@ export type {
   AgentUnavailableReasonView,
   AgentView,
   SessionSummary,
+  TaskOriginView,
   SessionProvenance,
   SessionFork,
   DeploymentView,

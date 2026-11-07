@@ -234,6 +234,14 @@ pub struct TriggerView {
     pub fire_count: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskOriginView {
+    pub node_did: String,
+    pub task_id: String,
+    pub task_name: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionSummary {
@@ -259,6 +267,9 @@ pub struct SessionSummary {
     pub latest_request_id: Option<String>,
     pub task_id: Option<String>,
     pub task_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub task_origin: Option<TaskOriginView>,
     pub trigger_id: Option<String>,
     pub trigger_kind: Option<String>,
     pub created_at: Option<String>,

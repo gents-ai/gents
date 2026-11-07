@@ -21,7 +21,7 @@ def cases : List Json :=
   let rootRow : AgentSession.TaskLineageRow := ⟨root, some 42, none⟩
   let childRow : AgentSession.TaskLineageRow := ⟨child, none, some root⟩
   let grandchildRow : AgentSession.TaskLineageRow := ⟨grandchild, none, some child⟩
-  [ ("direct", root, [rootRow]),
+  ([ ("direct", root, [rootRow]),
     ("child", child, [rootRow, childRow]),
     ("grandchild", grandchild, [rootRow, childRow, grandchildRow]),
     ("missing_parent", child, [childRow]),
@@ -35,7 +35,20 @@ def cases : List Json :=
       [("name", toJson name), ("operation", toJson "task_lineage"),
        ("owner", toJson (1 : Nat)), ("scope", scopeJson scope),
        ("rows", toJson (rows.map rowJson)),
-       ("task", toJson (AgentSession.originatingTask 1 scope rows [] (rows.length + 1)))]
+       ("task", toJson (AgentSession.originatingTask 1 scope rows [] (rows.length + 1)))])
+  ++
+  ([ ("same_node", child, [rootRow, childRow]),
+    ("cross_node", child, [{ childRow with starter := some foreign }, ⟨foreign, some 43, none⟩]),
+    ("unreadable_parent", child, [{ childRow with starter := some foreign }]),
+    ("ambiguous_parent", child, [{ childRow with starter := some foreign }, ⟨foreign, some 43, none⟩, ⟨foreign, some 44, none⟩]),
+    ("requester_mismatch", child, [rootRow, { childRow with starter := some wrongRequester }]),
+    ("cycle", child, [{ childRow with starter := some grandchild }, grandchildRow]),
+    ("direct_task_wins", child, [{ childRow with task := some 44 }]) ].map
+    fun (name, scope, rows) =>
+      let result := AgentSession.originatingScopedTask scope rows [] (rows.length + 1)
+      Json.mkObj [("name", toJson name), ("operation", toJson "task_lineage_scoped"),
+        ("scope", scopeJson scope), ("rows", toJson (rows.map rowJson)),
+        ("task_node", toJson (result.map (·.node))), ("task", toJson (result.map (·.task)))])
 
 example : AgentSession.originatingTask 1 ⟨1, 11, some 7⟩
     [⟨⟨1, 10, some 7⟩, some 42, none⟩,
