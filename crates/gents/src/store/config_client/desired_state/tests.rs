@@ -643,7 +643,9 @@ fn config(collection: Collection, value: Value) -> DesiredStateApplyDocument {
     }
 }
 
-fn cyclic_configuration(owner: &str) -> Vec<DesiredStateApplyDocument> {
+/// Agent DIDs are globally unique (`Agent.agent_did` is a unique index), so each
+/// owner's cycle names its own Agent.
+fn cyclic_configuration(owner: &str, agent_did: &str) -> Vec<DesiredStateApplyDocument> {
     vec![
         document(backend(owner, "backend")),
         config(
@@ -652,7 +654,7 @@ fn cyclic_configuration(owner: &str) -> Vec<DesiredStateApplyDocument> {
         ),
         config(
             Collection::Agent,
-            json!({"node_did":owner,"agent_did":"did:key:z6MkwUZdxNwTrfGMmUBJxWHoG7KjwfKHSimZMXYhJHCYtRAU","creation_nonce":"nonce","inference_profile_id":"profile","context_id":"context"}),
+            json!({"node_did":owner,"agent_did":agent_did,"creation_nonce":"nonce","inference_profile_id":"profile","context_id":"context"}),
         ),
         config(
             Collection::AgentContext,
@@ -664,7 +666,7 @@ fn cyclic_configuration(owner: &str) -> Vec<DesiredStateApplyDocument> {
         ),
         config(
             Collection::AgentTarget,
-            json!({"node_did":owner,"target_id":"target","target_node_did":owner,"agent_did":"did:key:z6MkwUZdxNwTrfGMmUBJxWHoG7KjwfKHSimZMXYhJHCYtRAU","name":"worker"}),
+            json!({"node_did":owner,"target_id":"target","target_node_did":owner,"agent_did":agent_did,"name":"worker"}),
         ),
     ]
 }
@@ -676,9 +678,6 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
         .as_array()
         .expect("Lean default replacement cases");
     assert_eq!(cases.len(), 6);
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
-    register_config_schemas(&node).await?;
-    let access = runtime_access(&node)?;
     // The Lean cases name agents by label; Agent and Node identities are DIDs.
     let agent_did = |label: &Value| -> Value {
         match label.as_str() {
@@ -689,6 +688,10 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
         }
     };
     for (index, case) in cases.iter().enumerate() {
+        // Agent DIDs are globally unique, so each case gets its own store.
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
+        register_config_schemas(&node).await?;
+        let access = runtime_access(&node)?;
         let owner = DEFAULT_REPLACEMENT_OWNER_DIDS[index];
         let principal = |default: &Value, name: &str| {
             config(
@@ -762,8 +765,8 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             assert!(message.contains("default_agent_did"), "{message}");
             assert!(message.contains(CODING_AGENT_DID), "{message}");
         }
+        node.shutdown().await.expect("node shutdown");
     }
-    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -773,16 +776,22 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
     register_config_schemas(&node).await?;
     let access = runtime_access(&node)?;
     let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
-    let mut documents = cyclic_configuration(owner);
-    documents.extend(cyclic_configuration("did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR"));
+    let mut documents = cyclic_configuration(owner, CODING_AGENT_DID);
+    documents.extend(cyclic_configuration(
+        "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR",
+        REVIEW_AGENT_DID,
+    ));
     let seeded = apply_with_counts(&access, documents).await?;
-    for collection in cyclic_configuration(owner).iter().map(|doc| doc.collection) {
+    for collection in cyclic_configuration(owner, CODING_AGENT_DID)
+        .iter()
+        .map(|doc| doc.collection)
+    {
         assert_eq!(seeded.get(collection), 2, "{collection:?}");
     }
     access.write("test.observe", r#"mutation { update_InferenceBackend(filter:{node_did:{_eq:"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"}},input:{probe_status:"healthy"}){_docID} }"#).await?;
     let before = node.execute("{InferenceBackend{_docID node_did name probe_status} AgentContext{_docID node_did context_id}}").await.data;
 
-    let mut drifted_replacement = cyclic_configuration(owner)
+    let mut drifted_replacement = cyclic_configuration(owner, CODING_AGENT_DID)
         .into_iter()
         .find(|doc| doc.collection == Collection::Agent)
         .unwrap();
@@ -847,7 +856,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         "failed publication preserves desired fields and observations"
     );
 
-    let removals = cyclic_configuration(owner)
+    let removals = cyclic_configuration(owner, CODING_AGENT_DID)
         .iter()
         .map(|doc| {
             (
@@ -887,8 +896,8 @@ async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Resu
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::AgentContext]).await?;
     let access = runtime_access(&node)?;
     let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
-    apply(&access, cyclic_configuration(owner)).await?;
-    let mut replacement = cyclic_configuration(owner)
+    apply(&access, cyclic_configuration(owner, CODING_AGENT_DID)).await?;
+    let mut replacement = cyclic_configuration(owner, CODING_AGENT_DID)
         .into_iter()
         .find(|doc| doc.collection == Collection::Agent)
         .unwrap();
@@ -2107,7 +2116,7 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     .await?;
     let access = runtime_access(&node)?;
     let owner = "did:key:outcome-owner";
-    apply(&access, cyclic_configuration(owner)).await?;
+    apply(&access, cyclic_configuration(owner, CODING_AGENT_DID)).await?;
     let source = |collection: &str| {
         config(
             Collection::EventSource,
@@ -2289,7 +2298,7 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
     crate::ensure_runtime_schemas(&node).await?;
     let access = runtime_access(&node)?;
     let owner = "did:key:native-route-owner";
-    apply(&access, cyclic_configuration(owner)).await?;
+    apply(&access, cyclic_configuration(owner, CODING_AGENT_DID)).await?;
     let documents = vec![
         config(
             Collection::EventSource,
