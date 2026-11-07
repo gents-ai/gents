@@ -686,6 +686,7 @@ def promptAssemblyClaudeReplayCasesJson : String :=
 private def claudeReplayOriginJson : PromptAssembly.ClaudeMap.ReplayOrigin → String
   | .claudeSubscription => jsonString "claudeSubscription"
   | .acceptedProvider => jsonString "acceptedProvider"
+  | .recoveredProvider => jsonString "recoveredProvider"
   | .foreign => jsonString "foreign"
   | .missing => jsonString "missing"
   | .ambiguous => jsonString "ambiguous"

@@ -624,6 +624,7 @@ theorem replayBlocks_mapM_equiv
 inductive ReplayOrigin where
   | claudeSubscription
   | acceptedProvider
+  | recoveredProvider
   | foreign
   | missing
   | ambiguous
@@ -674,6 +675,8 @@ abbrev ReplayFlatItem := ReplayFrontier.FlatItem (List UInt8) (List UInt8)
 
 structure ResolvedReplayEvidence where
   origin : ReplayOrigin
+  /-- Recovered witnesses contain only blocks whose physical source carries a
+  validated provider block-stop marker. -/
   reasoning : ReasoningWitness
   issuer : ReplayIssuer
   wire : ReplayWire
@@ -745,10 +748,10 @@ def validReasoningCandidate (issuer : ReplayIssuer) (wire : ReplayWire)
       if !providerReplayTag tag then false
       else match resolve tag with
         | [evidence] =>
-            evidence.origin == .acceptedProvider &&
+            ((evidence.origin == .acceptedProvider && evidence.complete) ||
+             (evidence.origin == .recoveredProvider && !evidence.complete)) &&
             evidence.issuer == issuer && evidence.wire == wire &&
             evidence.physicalHeader == header &&
-            evidence.complete &&
             candidate.indicesComplete &&
             candidate.blockIndex.any (fun index =>
               (index, candidate.parts) ∈ evidence.reasoning) &&

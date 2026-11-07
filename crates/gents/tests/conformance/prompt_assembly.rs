@@ -1002,6 +1002,7 @@ fn native_replay_origin(
     match origin {
         Lean::ClaudeSubscription => Native::ClaudeSubscription,
         Lean::AcceptedProvider => Native::AcceptedProvider,
+        Lean::RecoveredProvider => Native::RecoveredProvider,
         Lean::Foreign => Native::Foreign,
         Lean::Missing => Native::Missing,
         Lean::Ambiguous => Native::Ambiguous,

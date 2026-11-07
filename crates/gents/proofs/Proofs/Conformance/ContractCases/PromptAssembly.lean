@@ -1810,6 +1810,18 @@ def promptAssemblyReasoningSuffixCases : List PromptAssemblyReasoningSuffixCase 
   let second := checkpointRow (some (checkpointTag 2)) "second"
   let third := checkpointRow (some (checkpointTag 3)) "third"
   let unknown := checkpointRow none "unknown"
+  let recovered : PromptAssembly.ClaudeMap.TaggedReplayRow :=
+    { source := some (checkpointTag 5), physicalHeader := some "header",
+      blockIndices := [2, 3],
+      blocks := [.reasoning none [.text (utf8Bytes "finished") (some "sig-finished")],
+        .text (utf8Bytes "partial answer")] }
+  let recoveredWitness : PromptAssembly.ClaudeMap.ResolvedReplayEvidence :=
+    { origin := .recoveredProvider,
+      reasoning := PromptAssembly.ClaudeMap.originalReasoningWitness recovered,
+      issuer := claude, wire := .claudeMessages, physicalHeader := "header",
+      complete := false, captured := some (replayCaseAssemble .claudeMessages context []) }
+  let recoveredEvidence : PromptAssemblyClaudeCheckpointResolution :=
+    { tag := checkpointTag 5, evidence := recoveredWitness }
   let laterBlock : PromptAssembly.ClaudeMap.TaggedReplayRow :=
     { source := shapeTwoBlockRow.source, physicalHeader := shapeTwoBlockRow.physicalHeader,
       blockIndices := [1],
@@ -1827,7 +1839,13 @@ def promptAssemblyReasoningSuffixCases : List PromptAssemblyReasoningSuffixCase 
     { tag := checkpointTag turn,
       evidence := change { (checkpointEvidence turn value).evidence with
         captured := some (replayCaseAssemble .claudeMessages context prior) } }
-  [ reasoningSuffixCase "middle-unknown-cuts-leading-run" context claude .claudeMessages
+  [ reasoningSuffixCase "recovered-stopped-block-with-original-index" context claude .claudeMessages
+      [recovered] [recoveredEvidence]
+  , reasoningSuffixCase "recovered-block-without-stop-witness" context claude .claudeMessages
+      [recovered] [{ recoveredEvidence with evidence := { recoveredEvidence.evidence with reasoning := [] } }]
+  , reasoningSuffixCase "recovered-origin-cannot-claim-complete" context claude .claudeMessages
+      [recovered] [{ recoveredEvidence with evidence := { recoveredEvidence.evidence with complete := true } }]
+  , reasoningSuffixCase "middle-unknown-cuts-leading-run" context claude .claudeMessages
       [first, unknown, third]
       [accepted 1 "first" [], accepted 3 "third" [first, unknown]]
   , reasoningSuffixCase "missing-capture-cuts-run" context claude .claudeMessages

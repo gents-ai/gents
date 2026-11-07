@@ -508,6 +508,7 @@ pub(crate) struct LeanPromptAssemblyClaudeReplayCase {
 pub(crate) enum LeanClaudeReplayOrigin {
     ClaudeSubscription,
     AcceptedProvider,
+    RecoveredProvider,
     Foreign,
     Missing,
     Ambiguous,
