@@ -2290,7 +2290,7 @@ pub(super) mod tests {
     }
 
     #[tokio::test]
-    async fn daemon_final_claim_rechecks_revocation_and_accepts_exact_replacement() {
+    async fn daemon_final_claim_leaves_cross_actor_enrollment_requests_blocked() {
         let (db, member, member_access, agent_config) =
             held_daemon_fixture("daemon-enrollment-final-claim").await;
         let node = db.node.clone();
@@ -2367,6 +2367,22 @@ pub(super) mod tests {
         .unwrap();
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
+        // A member-signed enrollment request is cross-actor work for the
+        // target Agent. Without atomic requester authorization in the claim
+        // transaction, Request.CrossActorAuthorization.decideClaim is blocked:
+        // neither denied nor claimed. Revoking the enrollment fence or
+        // replacing it with an exact new generation leaves that decision
+        // unchanged, and no generation reaches the provider.
+        let assert_blocked = |doc_id: String| {
+            let member_access = &member_access;
+            async move {
+                let observed = member_access.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state claimed_at }} }}"#,
+                    crate::store::graphql::escape_graphql_string(&doc_id))).await.unwrap();
+                let row = &observed["data"]["AgentRequest"][0];
+                assert_eq!(row["lifecycle_state"], "pending", "{doc_id}");
+                assert!(row["claimed_at"].is_null(), "{doc_id}");
+            }
+        };
         authority.replace(None).await;
         daemon
             .process_request(revoked.clone(), shutdown_rx.clone())
@@ -2377,11 +2393,7 @@ pub(super) mod tests {
             0,
             "revoked work reached provider"
         );
-        let rejected = member_access.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state claimed_at }} }}"#,
-            crate::store::graphql::escape_graphql_string(&revoked.doc_id))).await.unwrap();
-        let row = &rejected["data"]["AgentRequest"][0];
-        assert_eq!(row["lifecycle_state"], "failed");
-        assert!(row["claimed_at"].is_null());
+        assert_blocked(revoked.doc_id.clone()).await;
 
         let generation_two = fence(2, "enrollment-2");
         authority.replace(Some(generation_two.clone())).await;
@@ -2395,13 +2407,15 @@ pub(super) mod tests {
         )
         .await;
         daemon
-            .process_request(replacement, shutdown_rx)
+            .process_request(replacement.clone(), shutdown_rx)
             .await
             .unwrap();
-        assert!(
-            calls.load(Ordering::SeqCst) > 0,
-            "exact replacement did not reach provider"
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "cross-actor replacement reached provider without atomic requester authorization"
         );
+        assert_blocked(replacement.doc_id.clone()).await;
 
         node.shutdown().await.expect("node shutdown");
     }
