@@ -74,7 +74,7 @@ const historyOf = (overrides: Partial<JoinHistoryView> = {}): JoinHistoryView =>
   ...overrides,
 });
 
-const TOO_OLD = "This node's runtime is too old to say who has access.";
+const CANT_ANSWER = "This node can't say who has access.";
 
 function binding(list: JoinRequestView[] = [pending()]) {
   const api = {
@@ -166,10 +166,10 @@ describe("the runtime's join requests as sharing", () => {
     });
   });
 
-  it("offers requests alone from a runtime too old to list the rest", async () => {
+  it("offers requests alone when the bridge can't answer the rest", async () => {
     const { api, sharing } = binding();
-    api.listJoinMembers.mockRejectedValueOnce(refusal("unsupported", TOO_OLD));
-    api.readJoinHistory.mockRejectedValueOnce(refusal("unsupported", TOO_OLD));
+    api.listJoinMembers.mockRejectedValueOnce(refusal("unsupported", CANT_ANSWER));
+    api.readJoinHistory.mockRejectedValueOnce(refusal("unsupported", CANT_ANSWER));
     const state = (await sharing.read(OWN))!;
     expect(state.requests).toHaveLength(1);
     expect(state.members).toEqual([]);

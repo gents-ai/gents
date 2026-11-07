@@ -30,9 +30,11 @@ export const JOIN_REQUESTS_REFRESH_MS = 15_000;
 
 /** Sharing as the runtime this desktop runs offers it: requests to join,
     approved with a lease or denied, who has access, revoked by their request,
-    and what was decided. A runtime too old to list members and history offers
-    requests alone. Another node's sharing isn't reachable from here, so it
-    reads as unavailable and its actions are refused. */
+    and what was decided. Members or history the bridge says it can't answer
+    read as unavailable, and the requests are still offered; any other failure
+    fails the read with the runtime's error. Another node's sharing isn't
+    reachable from here, so it reads as unavailable and its actions are
+    refused. */
 export function createJoinRequestSharing({
   api,
   ownNodeDid,
@@ -111,8 +113,7 @@ export function createJoinRequestSharing({
   };
 }
 
-/* null when the bridge says this can't be answered: another node, or a
-   runtime too old for the query */
+/* null when the bridge says this can't be answered here */
 async function answered<T>(read: Promise<T>): Promise<T | null> {
   try {
     return await read;
