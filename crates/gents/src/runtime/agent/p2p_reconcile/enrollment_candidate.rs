@@ -29,7 +29,7 @@ use super::enrollment_store::RequestRow;
 /// cannot keep the request or its replicator cleanup waiting indefinitely.
 pub const ENROLLMENT_P2P_TIMEOUT: Duration = Duration::from_secs(10);
 
-const REQUEST_FIELDS: &str = "_docID protocol_version request_id request_digest offer_id offer_token challenge network_id admin_did server_peer candidate_did candidate_peer candidate_ticket owner_agent profile client_nonce issued_at expires_at candidate_sig";
+const REQUEST_FIELDS: &str = "_docID protocol_version request_id request_digest offer_id offer_token challenge network_id admin_did server_peer candidate_did candidate_peer candidate_name candidate_ticket owner_agent profile client_nonce issued_at expires_at candidate_sig";
 
 /// Author (or reuse) this node's request for `offer_token` and deliver it to
 /// the offering server, whose operator then decides it.
@@ -186,6 +186,25 @@ pub async fn sign_enrollment_request(
     candidate_peer: String,
     candidate_ticket: String,
 ) -> Result<EnrollmentRequestRecord> {
+    sign_enrollment_request_with_name(
+        identity,
+        offer,
+        offer_token,
+        candidate_peer,
+        candidate_ticket,
+        None,
+    )
+    .await
+}
+
+pub async fn sign_enrollment_request_with_name(
+    identity: &dyn NodeIdentity,
+    offer: &EnrollmentOfferRecord,
+    offer_token: &str,
+    candidate_peer: String,
+    candidate_ticket: String,
+    candidate_name: Option<String>,
+) -> Result<EnrollmentRequestRecord> {
     let client_nonce = Uuid::new_v4().simple().to_string();
     let request_id = format!(
         "enroll-{}",
@@ -211,6 +230,7 @@ pub async fn sign_enrollment_request(
         server_peer: offer.server_peer.clone(),
         candidate_did: identity.did().to_string(),
         candidate_peer,
+        candidate_name,
         candidate_ticket,
         owner_agent: offer.owner_agent.clone(),
         profile: offer.profile.clone(),
@@ -351,6 +371,11 @@ pub async fn write_enrollment_request(
 pub fn enrollment_request_input(request: &EnrollmentRequestRecord) -> String {
     let field = |value: &str| escape_graphql_string(value);
     let candidate_sig = bs58::encode(&request.candidate_sig).into_string();
+    let candidate_name = request
+        .candidate_name
+        .as_deref()
+        .map(|name| format!("\"{}\"", field(name)))
+        .unwrap_or_else(|| "null".to_owned());
     format!(
         r#"{{
             protocol_version: {},
@@ -364,6 +389,7 @@ pub fn enrollment_request_input(request: &EnrollmentRequestRecord) -> String {
             server_peer: "{}",
             candidate_did: "{}",
             candidate_peer: "{}",
+            candidate_name: {},
             candidate_ticket: "{}",
             owner_agent: "{}",
             profile: "{}",
@@ -383,6 +409,7 @@ pub fn enrollment_request_input(request: &EnrollmentRequestRecord) -> String {
         field(&request.server_peer),
         field(&request.candidate_did),
         field(&request.candidate_peer),
+        candidate_name,
         field(&request.candidate_ticket),
         field(&request.owner_agent),
         field(&request.profile),

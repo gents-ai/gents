@@ -8,6 +8,75 @@ use super::error::{EnrollmentError, Result};
 use super::offer::EnrollmentOfferRecord;
 use super::{ENROLLMENT_PROTOCOL_VERSION, REQUEST_SIGNATURE_DOMAIN};
 
+pub fn candidate_name_fields(name: Option<&str>) -> Vec<&str> {
+    match name {
+        None => Vec::new(),
+        Some(name) => vec!["candidate-name-v1", name],
+    }
+}
+
+#[cfg(test)]
+mod candidate_name_conformance {
+    use super::{candidate_name_fields, EnrollmentRequestRecord};
+
+    #[test]
+    fn fields_match_the_executable_model() {
+        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        let cases = snapshot["enrollment_candidate_name_cases"]
+            .as_array()
+            .unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let expected = case["fields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|field| field.as_str().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                candidate_name_fields(case["name"].as_str()),
+                expected,
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn name_changes_bind_both_the_digest_and_signature_payload() {
+        let mut request = EnrollmentRequestRecord {
+            protocol_version: 2,
+            request_id: "request".into(),
+            request_digest: "digest".into(),
+            offer_id: "offer".into(),
+            offer_token: "token".into(),
+            challenge: "challenge".into(),
+            network_id: "network".into(),
+            admin_did: "admin".into(),
+            server_peer: "server".into(),
+            candidate_did: "candidate".into(),
+            candidate_peer: "peer".into(),
+            candidate_name: None,
+            candidate_ticket: "ticket".into(),
+            owner_agent: "owner".into(),
+            profile: "client".into(),
+            client_nonce: "nonce".into(),
+            issued_at: "issued".into(),
+            expires_at: "expires".into(),
+            candidate_sig: Vec::new(),
+        };
+        let unnamed_digest = request.computed_digest();
+        let unnamed_payload = request.signing_payload();
+        request.candidate_name = Some("Ivan".into());
+        assert_ne!(request.computed_digest(), unnamed_digest);
+        assert_ne!(request.signing_payload(), unnamed_payload);
+        let named_digest = request.computed_digest();
+        let named_payload = request.signing_payload();
+        request.candidate_name = Some("Other".into());
+        assert_ne!(request.computed_digest(), named_digest);
+        assert_ne!(request.signing_payload(), named_payload);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnrollmentRequestRecord {
     pub protocol_version: u8,
@@ -21,6 +90,8 @@ pub struct EnrollmentRequestRecord {
     pub server_peer: String,
     pub candidate_did: String,
     pub candidate_peer: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_name: Option<String>,
     pub candidate_ticket: String,
     pub owner_agent: String,
     pub profile: String,
@@ -31,8 +102,8 @@ pub struct EnrollmentRequestRecord {
 }
 
 impl EnrollmentRequestRecord {
-    pub fn canonical_text_fields(&self) -> [&str; 13] {
-        [
+    pub fn canonical_text_fields(&self) -> Vec<&str> {
+        let mut fields: Vec<&str> = vec![
             &self.request_id,
             &self.offer_id,
             &self.challenge,
@@ -46,7 +117,9 @@ impl EnrollmentRequestRecord {
             &self.client_nonce,
             &self.issued_at,
             &self.expires_at,
-        ]
+        ];
+        fields.extend(candidate_name_fields(self.candidate_name.as_deref()));
+        fields
     }
 
     pub fn computed_digest(&self) -> String {
@@ -121,6 +194,9 @@ impl EnrollmentRequestRecord {
         ] {
             validate_exact_field(name, value)?;
         }
+        if let Some(name) = &self.candidate_name {
+            validate_exact_field("candidate_name", name)?;
+        }
         if self.candidate_sig.len() != 64 {
             return Err(EnrollmentError::RequestSignatureLength);
         }
@@ -137,27 +213,26 @@ impl EnrollmentRequestRecord {
 impl EnrollmentRequestRecord {
     pub fn signing_payload(&self) -> Vec<u8> {
         let version = self.protocol_version.to_string();
-        canonical_domain_payload(
-            REQUEST_SIGNATURE_DOMAIN,
-            [
-                version.as_str(),
-                &self.request_id,
-                &self.request_digest,
-                &self.offer_id,
-                &self.offer_token,
-                &self.challenge,
-                &self.network_id,
-                &self.admin_did,
-                &self.server_peer,
-                &self.candidate_did,
-                &self.candidate_peer,
-                &self.candidate_ticket,
-                &self.owner_agent,
-                &self.profile,
-                &self.client_nonce,
-                &self.issued_at,
-                &self.expires_at,
-            ],
-        )
+        let mut fields: Vec<&str> = vec![
+            version.as_str(),
+            &self.request_id,
+            &self.request_digest,
+            &self.offer_id,
+            &self.offer_token,
+            &self.challenge,
+            &self.network_id,
+            &self.admin_did,
+            &self.server_peer,
+            &self.candidate_did,
+            &self.candidate_peer,
+            &self.candidate_ticket,
+            &self.owner_agent,
+            &self.profile,
+            &self.client_nonce,
+            &self.issued_at,
+            &self.expires_at,
+        ];
+        fields.extend(candidate_name_fields(self.candidate_name.as_deref()));
+        canonical_domain_payload(REQUEST_SIGNATURE_DOMAIN, fields)
     }
 }

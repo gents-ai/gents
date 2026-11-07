@@ -41,7 +41,7 @@ pub use operator::{
     EnrollmentOperatorAction, EnrollmentOperatorDecisionCommand, EnrollmentOperatorQuery,
     EnrollmentOperatorQueryCommand,
 };
-pub use request::EnrollmentRequestRecord;
+pub use request::{candidate_name_fields, EnrollmentRequestRecord};
 pub use revision::{derive_revision_id, AuthorizationRevisionKind, AuthorizationRevisionRecord};
 pub use route_receipt::{
     derive_route_receipt_id, EnrollmentRouteReceiptDirection, EnrollmentRouteReceiptRecord,

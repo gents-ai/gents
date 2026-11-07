@@ -184,6 +184,7 @@ export function OnboardingWizard({
     allowLocal ? "local" : "remote",
   );
   const [address, setAddress] = useState("");
+  const [candidateName, setCandidateName] = useState("");
   const enrollmentRequests = useEnrollmentRequests();
   const snapshot = useStore(stores.client, (state) => state.snapshot);
   const [enrollment, setEnrollment] = useState<EnrollmentRequestView | null>(null);
@@ -346,7 +347,9 @@ export function OnboardingWizard({
   const enrol = async () => {
     dispatch({ type: "requesting" });
     try {
-      const request = await actions.requestStatusEnrollment(address.trim());
+      const request = candidateName.trim()
+        ? await actions.requestStatusEnrollment(address.trim(), candidateName.trim())
+        : await actions.requestStatusEnrollment(address.trim());
       setEnrollment(request);
       dispatch({ type: "requested" });
     } catch (e) {
@@ -641,6 +644,13 @@ export function OnboardingWizard({
                     value={address}
                     onChange={(event) => setAddress(event.target.value)}
                     placeholder="https://gents.example.net:8787"
+                  />
+                </Field>
+                <Field label="Your name (optional)">
+                  <Input
+                    disabled={busy}
+                    value={candidateName}
+                    onChange={(event) => setCandidateName(event.target.value)}
                   />
                 </Field>
                 <p className="text-xs text-muted-foreground">

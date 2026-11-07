@@ -17,7 +17,7 @@ pub(super) const STATUS_ENROLLMENT_QUERY: &str = r#"{
   NetworkAdminPin { network_id admin_did }
   NetworkEnrollmentRequest {
     _docID protocol_version request_id request_digest offer_id offer_token challenge network_id
-    admin_did server_peer candidate_did candidate_peer candidate_ticket owner_agent profile
+    admin_did server_peer candidate_did candidate_peer candidate_name candidate_ticket owner_agent profile
     client_nonce issued_at expires_at candidate_sig
   }
   NetworkEnrollmentDecision {
@@ -58,6 +58,8 @@ pub(super) struct EnrollmentRequestRow {
     pub(super) server_peer: String,
     pub(super) candidate_did: String,
     pub(super) candidate_peer: String,
+    #[serde(default)]
+    pub(super) candidate_name: Option<String>,
     pub(super) candidate_ticket: String,
     pub(super) owner_agent: String,
     pub(super) profile: String,
@@ -81,6 +83,7 @@ impl EnrollmentRequestRow {
             server_peer: self.server_peer.clone(),
             candidate_did: self.candidate_did.clone(),
             candidate_peer: self.candidate_peer.clone(),
+            candidate_name: self.candidate_name.clone(),
             candidate_ticket: self.candidate_ticket.clone(),
             owner_agent: self.owner_agent.clone(),
             profile: self.profile.clone(),
@@ -270,6 +273,7 @@ pub(super) fn to_pure_request(
         server_peer: request.server_peer.clone(),
         candidate_did: request.candidate_did.clone(),
         candidate_peer: request.candidate_peer.clone(),
+        candidate_name: request.candidate_name.clone(),
         observed_candidate_peer: if verified {
             request.candidate_peer.clone()
         } else {

@@ -9,7 +9,7 @@ use gents::runtime::agent::p2p_reconcile::enrollment::{
 };
 use gents::runtime::agent::p2p_reconcile::enrollment_candidate::{
     confirm_network_admin_pin, local_enrollment_ticket, push_enrollment_request,
-    sign_enrollment_request, verify_enrollment_offer, write_enrollment_request,
+    sign_enrollment_request_with_name, verify_enrollment_offer, write_enrollment_request,
 };
 use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use gents::NodeIdentity;
@@ -111,6 +111,19 @@ impl ClientCore {
         status: &Value,
         advertised_label: Option<&str>,
     ) -> Result<EnrollmentRequestResult> {
+        self.request_status_enrollment_with_names(status, advertised_label, None)
+            .await
+    }
+
+    pub async fn request_status_enrollment_with_names(
+        &self,
+        status: &Value,
+        advertised_label: Option<&str>,
+        candidate_name: Option<&str>,
+    ) -> Result<EnrollmentRequestResult> {
+        let candidate_name = candidate_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
         let offer_token = status
             .pointer("/enrollment/token")
             .and_then(Value::as_str)
@@ -132,14 +145,21 @@ impl ClientCore {
             .existing_request_for_offer(&offer, offer_token, &candidate_peer)
             .await?
         {
-            Some(existing) => existing,
+            Some(existing) => {
+                anyhow::ensure!(
+                    existing.0.candidate_name.as_deref() == candidate_name,
+                    "an enrollment request for this invitation already uses a different name"
+                );
+                existing
+            }
             None => {
-                let request = sign_enrollment_request(
+                let request = sign_enrollment_request_with_name(
                     &self.node_identity,
                     &offer,
                     offer_token,
                     candidate_peer,
                     candidate_ticket,
+                    candidate_name.map(str::to_owned),
                 )
                 .await?;
                 let document_id = match write_enrollment_request(&self.node, &request).await {
@@ -393,7 +413,7 @@ impl ClientCore {
         let query = format!(
             r#"{{ NetworkEnrollmentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}) {{
                 _docID protocol_version request_id request_digest offer_id offer_token challenge
-                network_id admin_did server_peer candidate_did candidate_peer candidate_ticket
+                network_id admin_did server_peer candidate_did candidate_peer candidate_name candidate_ticket
                 owner_agent profile client_nonce issued_at expires_at candidate_sig
             }} }}"#
         );
@@ -434,7 +454,7 @@ impl ClientCore {
         let query = format!(
             r#"{{ NetworkEnrollmentRequest(filter: {{ offer_id: {{ _eq: "{offer_id}" }} }}) {{
                 _docID protocol_version request_id request_digest offer_id offer_token challenge
-                network_id admin_did server_peer candidate_did candidate_peer candidate_ticket
+                network_id admin_did server_peer candidate_did candidate_peer candidate_name candidate_ticket
                 owner_agent profile client_nonce issued_at expires_at candidate_sig
             }} }}"#
         );

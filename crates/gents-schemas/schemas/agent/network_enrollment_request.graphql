@@ -12,6 +12,7 @@ type NetworkEnrollmentRequest @branchable {
     server_peer: String @immutable
     candidate_did: String @index @immutable
     candidate_peer: String @index @immutable
+    candidate_name: String @immutable
     candidate_ticket: String @immutable
     owner_agent: String @index @immutable
     profile: String @immutable

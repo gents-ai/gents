@@ -211,6 +211,7 @@ export type DesktopApiAdapter = {
   fetchPeerStatus: (peerId: string) => Promise<unknown>;
   requestStatusEnrollment: (
     serverAddress: string,
+    candidateName?: string,
   ) => Promise<EnrollmentRequestView>;
   listWorkspace: (subpath?: string | null) => Promise<WorkspaceListingView>;
   fetchRequestTimeline: (
