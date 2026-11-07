@@ -25,7 +25,10 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
     let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
-        gents::DocumentRuntimeOptions::default(),
+        gents::DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
+            ..Default::default()
+        },
     )
     .await
     .unwrap();
@@ -198,7 +201,10 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
     let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
-        gents::DocumentRuntimeOptions::default(),
+        gents::DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
+            ..Default::default()
+        },
     )
     .await
     .unwrap();
@@ -345,7 +351,10 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
     let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
-        gents::DocumentRuntimeOptions::default(),
+        gents::DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
+            ..Default::default()
+        },
     )
     .await
     .unwrap();

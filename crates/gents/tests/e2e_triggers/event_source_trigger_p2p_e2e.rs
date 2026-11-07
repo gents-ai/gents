@@ -367,6 +367,7 @@ async fn p2p_replicated_doc_fires_event_trigger() {
         db_agent.node.clone(),
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db_agent.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },

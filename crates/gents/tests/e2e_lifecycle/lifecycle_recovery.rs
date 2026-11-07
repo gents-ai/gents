@@ -198,6 +198,7 @@ async fn boot_running_recovery_bash(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: gents::ToolCeiling::readonly(),
             ..Default::default()
         },
@@ -684,6 +685,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: gents::ToolCeiling::readonly(),
             ..Default::default()
         },
@@ -1963,6 +1965,7 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: gents::ToolCeiling::readonly(),
             ..Default::default()
         },

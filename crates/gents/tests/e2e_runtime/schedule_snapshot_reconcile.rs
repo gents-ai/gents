@@ -198,6 +198,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -307,6 +308,7 @@ async fn scheduled_fire_persists_task_content_and_trigger_writeback() {
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -417,6 +419,7 @@ async fn event_source_trigger_insert_bumps_active_generation() {
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },

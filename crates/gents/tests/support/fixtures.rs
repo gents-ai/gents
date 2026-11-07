@@ -396,6 +396,31 @@ pub async fn configure_agent_tools_as(
     use gents::Collection;
 
     assert_eq!(tools.node_did, node_did);
+    let mut tools = tools;
+    if let Some(host) = tools.host.as_mut() {
+        // Under document ACP the WorkspaceRoot policy is always explicit: host
+        // tools run only under a User-published root their Agent may read. An
+        // unset root keeps its former meaning, the runtime cwd, made explicit.
+        let root = match host.root.as_deref() {
+            Some(root) => std::path::PathBuf::from(root),
+            None => std::env::current_dir().expect("runtime cwd"),
+        };
+        let root = std::fs::canonicalize(&root)
+            .expect("canonical tool root")
+            .to_string_lossy()
+            .into_owned();
+        gents::tools::surface::set_workspace_root_with_readers(
+            access,
+            node_did,
+            &root,
+            None,
+            true,
+            &[agent_did.to_owned()],
+        )
+        .await
+        .expect("publish the Agent's tool root");
+        host.root = Some(root);
+    }
     access
         .transact_write("test.configure_agent_tools", |txn| {
             let tools = tools.clone();

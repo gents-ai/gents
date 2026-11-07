@@ -209,6 +209,7 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
         db.node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::readwrite(&repo),
             ..Default::default()
         },

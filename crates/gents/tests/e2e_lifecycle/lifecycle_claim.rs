@@ -300,7 +300,7 @@ async fn claim_synthesizes_deadline_when_request_deadline_is_invalid() {
     let db = test_db("lifecycle-invalid-deadline").await;
     let request_id = "req-invalid-deadline";
     let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = support::agent_requests::canonical_now();
+    let created_at = crate::support::agent_requests::canonical_now();
     let invalid_deadline = "not-a-deadline";
     let escaped_session_id = gents::store::graphql::escape_graphql_string(&session_id);
     let mutation = format!(

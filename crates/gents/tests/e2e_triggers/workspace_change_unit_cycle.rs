@@ -82,6 +82,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
         db.node.clone(),
         db.node_identity.clone(),
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::readwrite(root.path()),
             ..Default::default()
         },
@@ -358,6 +359,7 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
         db.node.clone(),
         db.node_identity.clone(),
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::readwrite(root.path()),
             ..Default::default()
         },
@@ -517,7 +519,7 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
     let desktop =
         gents::KeyIdentity::load_or_create(root.path().join("supervisor.key"), None).unwrap();
     let supervisor_session = "workspace-cycle-lead";
-    let created_at = support::agent_requests::canonical_now();
+    let created_at = crate::support::agent_requests::canonical_now();
     access
         .write(
             "workspace_cycle.create_supervisor_session",
@@ -538,6 +540,7 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
         db.node.clone(),
         db.node_identity.clone(),
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::readwrite(root.path()),
             ..Default::default()
         },

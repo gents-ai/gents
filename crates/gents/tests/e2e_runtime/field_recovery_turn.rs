@@ -110,7 +110,10 @@ async fn writer_recovers_complete_large_task_contract_in_provider_input() {
     let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
-        gents::DocumentRuntimeOptions::default(),
+        gents::DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
+            ..Default::default()
+        },
     )
     .await
     .unwrap();

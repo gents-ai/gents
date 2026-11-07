@@ -34,7 +34,10 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
     let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
-        gents::DocumentRuntimeOptions::default(),
+        gents::DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
+            ..Default::default()
+        },
     )
     .await
     .unwrap();

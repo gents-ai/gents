@@ -22,38 +22,7 @@ use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse,
 };
 
-struct TestDb {
-    _directory: tempfile::TempDir,
-    node: Arc<gents::defra_node::Node>,
-    node_identity: Arc<dyn NodeIdentity>,
-}
-
-async fn test_db(name: &str) -> TestDb {
-    if let Ok(filter) = tracing_subscriber::EnvFilter::try_from_default_env() {
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_test_writer()
-            .try_init();
-    }
-    let directory = tempfile::Builder::new().prefix(name).tempdir().unwrap();
-    let identity: Arc<dyn NodeIdentity> = Arc::new(
-        gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap(),
-    );
-    let node = Arc::new(
-        gents::defra_node::Node::builder()
-            .with_node_identity_did(identity.did())
-            .with_node_acp_enabled()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents::ensure_runtime_schemas(&node).await.unwrap();
-    TestDb {
-        _directory: directory,
-        node,
-        node_identity: identity,
-    }
-}
+use crate::support::{test_db, TestDb};
 
 const CHILD_NAME: &str = "e2e-session-limit-child";
 const BACKEND_ID: &str = "e2e-session-limit-backend";
@@ -409,6 +378,7 @@ async fn start_child_session(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },

@@ -452,7 +452,10 @@ async fn signed_request_cannot_forge_another_requests_queue_slot() {
     let agent = Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
-        gents::DocumentRuntimeOptions::default(),
+        gents::DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
+            ..Default::default()
+        },
     )
     .await
     .unwrap();

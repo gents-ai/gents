@@ -267,6 +267,7 @@ async fn lsp_live_model_uses_rust_analyzer() {
         db.node.clone(),
         Arc::clone(&identity),
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::readonly_at(&workspace),
             ..Default::default()
         },

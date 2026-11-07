@@ -97,7 +97,19 @@ impl TestDb {
     }
 }
 
+/// Installs a test-writer subscriber when `RUST_LOG` names a filter, so owner
+/// diagnostics are visible for a failing test; absent the variable it is inert.
+pub fn init_test_tracing() {
+    if let Ok(filter) = tracing_subscriber::EnvFilter::try_from_default_env() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_test_writer()
+            .try_init();
+    }
+}
+
 pub fn test_db_from_home(home: EmbeddedHome) -> TestDb {
+    init_test_tracing();
     let node = home.node.clone();
     let node_identity = home.identity.clone();
     TestDb {
@@ -1222,7 +1234,10 @@ pub async fn complete_pending_request_with_canonical_output(
     let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
-        gents::DocumentRuntimeOptions::default(),
+        gents::DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
+            ..Default::default()
+        },
     )
     .await?;
     let prepared = accepted_turn::PreparedAcceptedTurn { backend };

@@ -150,6 +150,7 @@ async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -188,6 +189,7 @@ async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },

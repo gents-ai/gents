@@ -52,6 +52,7 @@ async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
         db.node.clone(),
         Arc::clone(&identity),
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::readwrite(workspace.path()),
             ..Default::default()
         },

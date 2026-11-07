@@ -82,6 +82,25 @@ impl Drop for BootedAgent {
     }
 }
 
+/// Waits for readiness while the runtime task runs; a runtime that exits first
+/// fails the wait with its own error instead of the readiness timeout.
+pub async fn wait_for_runtime_ready_or_exit(
+    node: &EmbeddedNode,
+    node_did: &str,
+    handle: &mut tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
+    tokio::select! {
+        ready = gents::eval::runner::embedded::wait_for_runtime_ready(node, node_did) => {
+            ready.expect("runtime ready");
+        }
+        exited = &mut *handle => match exited {
+            Ok(Ok(())) => panic!("runtime exited cleanly before readiness"),
+            Ok(Err(error)) => panic!("runtime exited before readiness: {error:#}"),
+            Err(error) => panic!("runtime task failed before readiness: {error}"),
+        },
+    }
+}
+
 pub async fn wait_for_runtime_ready(node: &EmbeddedNode, node_did: &str) {
     gents::eval::runner::embedded::wait_for_runtime_ready(node, node_did)
         .await

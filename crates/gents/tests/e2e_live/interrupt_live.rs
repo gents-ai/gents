@@ -467,6 +467,7 @@ async fn boot_interrupt_agent(db: &TestDb, target: &InferenceTarget) -> Result<B
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },

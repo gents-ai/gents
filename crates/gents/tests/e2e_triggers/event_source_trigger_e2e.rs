@@ -260,6 +260,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },

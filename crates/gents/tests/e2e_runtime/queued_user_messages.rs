@@ -59,7 +59,10 @@ async fn messages_queued_behind_a_busy_turn_are_answered_by_one_inference() {
     let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
-        gents::DocumentRuntimeOptions::default(),
+        gents::DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
+            ..Default::default()
+        },
     )
     .await
     .unwrap();

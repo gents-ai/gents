@@ -273,6 +273,7 @@ async fn boot_runtime(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             plugin_home: Some(plugin_home.to_path_buf()),
             ..Default::default()
         },

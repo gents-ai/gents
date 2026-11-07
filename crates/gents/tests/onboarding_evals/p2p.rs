@@ -415,6 +415,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             local.node.clone(),
             local.node_identity.clone(),
             DocumentRuntimeOptions {
+                backend_admission: Some(local.home.backend_admission()),
                 tool_ceiling: ToolCeiling::meta_only().with_policy(policy),
                 backend_health: Some(agent.backend_health()),
                 ..Default::default()
