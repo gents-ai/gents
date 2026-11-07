@@ -24,24 +24,18 @@ pub(super) enum Source {
 
 impl PackSource {
     /// A verified archive the runtime received from its operator.
-    pub(crate) fn received(
-        archive: PackArchive,
-        source: Option<gents::pack::PackSource>,
-    ) -> Result<Self> {
-        if let Some(source) = &source {
-            source.validate()?;
-        }
+    pub(crate) fn received(archive: PackArchive, source: gents::pack::PackSource) -> Result<Self> {
+        source.validate()?;
         let (from, file_name) = match source {
-            None => (Source::Local, None),
-            Some(gents::pack::PackSource::Local { file_name }) => (Source::Local, file_name),
-            Some(gents::pack::PackSource::Installed) => (Source::Installed, None),
-            Some(gents::pack::PackSource::Store) => (Source::Store, None),
-            Some(gents::pack::PackSource::Registry {
+            gents::pack::PackSource::Local { file_name } => (Source::Local, file_name),
+            gents::pack::PackSource::Installed => (Source::Installed, None),
+            gents::pack::PackSource::Store => (Source::Store, None),
+            gents::pack::PackSource::Registry {
                 namespace,
                 name,
                 version,
                 artifact_digest,
-            }) => {
+            } => {
                 anyhow::ensure!(
                     namespace == archive.manifest().metadata.namespace
                         && name == archive.manifest().name

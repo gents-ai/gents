@@ -67,10 +67,8 @@ struct InstallRequest {
     node_did: String,
     root: Archive,
     dependencies: Vec<Archive>,
-    #[serde(default)]
-    root_source: Option<gents::pack::PackSource>,
-    #[serde(default)]
-    dependency_sources: Vec<Option<gents::pack::PackSource>>,
+    root_source: gents::pack::PackSource,
+    dependency_sources: Vec<gents::pack::PackSource>,
     inference_slots: Vec<String>,
     overwrite: bool,
     keep: bool,
@@ -141,10 +139,10 @@ pub(crate) async fn install_remote(
         .context("remote pack install requires a Gents runtime GraphQL endpoint")?;
     url.set_path(&format!("{prefix}{PATH}"));
     let root = pack.shared_archive();
-    let root_source = Some(pack.provenance());
+    let root_source = pack.provenance();
     let dependency_sources = dependencies
         .iter()
-        .map(|source| Some(source.provenance()))
+        .map(|source| source.provenance())
         .collect();
     let dependencies = dependencies
         .iter()
@@ -296,21 +294,15 @@ fn decode_request(body: &[u8], node_did: &str) -> Result<Received> {
                 .sum::<usize>(),
     )?;
     anyhow::ensure!(
-        request.dependency_sources.is_empty()
-            || request.dependency_sources.len() == request.dependencies.len(),
+        request.dependency_sources.len() == request.dependencies.len(),
         "dependency source count does not match archives"
     );
-    if request.dependency_sources.is_empty() {
-        request
-            .dependency_sources
-            .resize(request.dependencies.len(), None);
-    }
     let open = |archive: Archive, source| -> Result<PackSource> {
         PackSource::received(PackArchive::from_bytes(&archive.0)?, source)
     };
     let root = open(
         std::mem::replace(&mut request.root, Archive(Vec::new())),
-        request.root_source.take(),
+        request.root_source.clone(),
     )?;
     let dependencies = std::mem::take(&mut request.dependencies)
         .into_iter()

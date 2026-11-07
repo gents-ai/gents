@@ -40,10 +40,16 @@ pub struct HomePackInstall {
     /// [`recorded_provenance`].
     #[serde(default)]
     pub installed_via: Option<InstalledVia>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "deserialize_required_source")]
     pub source: Option<PackSource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_history: Vec<PackSourceHistory>,
+}
+
+fn deserialize_required_source<'de, D>(deserializer: D) -> Result<Option<PackSource>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde::Deserialize::deserialize(deserializer)
 }
 
 /// Lean `provenanceOf`. `record` is `None` without a record, `Some(None)` for
@@ -313,6 +319,17 @@ pub fn list_home_installs(home: &Path) -> Result<Vec<HomePackInstall>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_fields_are_required_in_install_records() {
+        let record = sample("acme/tools");
+        let serialized = serde_json::to_value(record).unwrap();
+        for field in ["source", "source_history"] {
+            let mut missing = serialized.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(serde_json::from_value::<HomePackInstall>(missing).is_err());
+        }
+    }
 
     fn sample(coordinate: &str) -> HomePackInstall {
         HomePackInstall {
