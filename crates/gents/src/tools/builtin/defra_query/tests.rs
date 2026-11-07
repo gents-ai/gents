@@ -697,7 +697,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
             node.clone(),
             CollectionScope::restricted(vec!["PrivateRecord".into()]),
         )
-        .with_actor(::identity::Did::new(did).unwrap());
+        .with_actor(::identity::Did::new(did.clone()).unwrap());
         let find: QueryParams = serde_json::from_value(
             json!({"argv":["find"],"collection":"PrivateRecord","options":{"fields":["label"]}}),
         )
