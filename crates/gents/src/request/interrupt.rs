@@ -261,19 +261,6 @@ pub(crate) async fn interrupt_active_session_in_txn(
     Ok(Some(request_id))
 }
 
-#[cfg(test)]
-pub(crate) async fn active_session_request(
-    node: &EmbeddedNode,
-    session_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-) -> Result<Option<gents_protocol::row::AgentRequestRow>> {
-    let query = active_session_request_query(session_id, node_did, requester_did);
-    let response = graphql_with_transaction_retry(node, &query, "active request lookup").await?;
-    let data = response.data.context("active request query omitted data")?;
-    active_session_request_rows(&data)
-}
-
 pub(crate) async fn active_session_request_with_access(
     access: &crate::ConfigAccess,
     session_id: &str,
