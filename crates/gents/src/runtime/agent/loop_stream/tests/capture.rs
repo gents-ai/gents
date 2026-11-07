@@ -583,15 +583,35 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
         )
         .await;
         let session_id = format!("session-{}", case.session_id);
-        crate::session::ensure_session_with_agent_did_and_requester_did(
-            &node,
-            &session_id,
-            &node_did,
-            &agent_did,
-            None,
+        // The Agent creates the session it later captures into, so its own
+        // reads see the physical row (a node-created row is not visible to it).
+        let agent_access = crate::store::config_client::ConfigAccess::local_managed_agent(
+            node.clone(),
+            ::identity::Did::new(&agent_did).unwrap(),
+            agent.as_ref(),
         )
-        .await
         .unwrap();
+        let session_created_at =
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        agent_access
+            .transact_write("test.capture.session", |txn| {
+                Box::pin(async {
+                    crate::session::ensure_session_in_txn(
+                        txn,
+                        &session_id,
+                        &node_did,
+                        &agent_did,
+                        None,
+                        None,
+                        None,
+                        &session_created_at,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
         let sink = DefraRenderedRequestSink::new_managed(node.clone(), agent.as_ref()).unwrap();
 
         let rendered_for_witness =

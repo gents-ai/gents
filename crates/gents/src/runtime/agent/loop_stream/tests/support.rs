@@ -770,15 +770,30 @@ async fn owned_test_hook_with_identity_policy(
     .unwrap();
     let session_id = uuid::Uuid::new_v4().to_string();
     let request_id = uuid::Uuid::new_v4().to_string();
-    crate::session::ensure_session_with_agent_did_and_requester_did(
-        &node,
-        &session_id,
-        node_did,
-        &agent_did,
-        requester_did,
-    )
-    .await
-    .unwrap();
+    let session_created_at =
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    // The claimed Agent reads the session it is admitted into, so the Agent
+    // creates the row; a node-created row is not visible to its claim, which
+    // then creates a second row and violates the (node_did, session_id) index.
+    agent_access
+        .transact_write("test.owned_loop.session", |txn| {
+            Box::pin(async {
+                crate::session::ensure_session_in_txn(
+                    txn,
+                    &session_id,
+                    node_did,
+                    &agent_did,
+                    requester_did,
+                    None,
+                    None,
+                    &session_created_at,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let create = crate::request::lifecycle::build_signed_request(
         crate::request::lifecycle::RequestSpec::new(
