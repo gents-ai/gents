@@ -156,7 +156,11 @@ pub(super) async fn install(
     )
     .await
     .context("installing the trial inference binding")?;
-    install_pack_documents(&access, &node_did, &identity, &config, DriftPolicy::Refuse)
+    // The native source projection refuses Agent, Tools and AgentContext writes
+    // from a client principal, so the pack's configuration is written as the
+    // trial Node owner, as the schema installs above are.
+    let owner_access = ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(&node_did)?);
+    install_pack_documents(&owner_access, &node_did, &identity, &config, DriftPolicy::Refuse)
         .await
         .context("installing the trial pack")?;
     access
