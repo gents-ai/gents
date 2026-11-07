@@ -57,6 +57,40 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         })
         .await
         .unwrap();
+    // The session's creator publishes its relationships, as client and goal
+    // sessions do, before runtime successors may target it.
+    let (session_doc, agent_doc) = access
+        .transact_readonly("test.workspace_recovery_targets", |txn| {
+            Box::pin(async move {
+                let session = crate::session::load_agent_session_owner_in_txn(
+                    txn,
+                    did,
+                    "workspace-recovery-session",
+                )
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("fixture session is missing"))?
+                .doc_id;
+                let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Agent,
+                    did,
+                    agent_did,
+                )
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("fixture Agent is missing"))?;
+                Ok::<_, anyhow::Error>((session, agent_doc))
+            })
+        })
+        .await
+        .unwrap();
+    crate::session::grant_created_session_relationships(
+        &access,
+        &session_doc,
+        &agent_doc,
+        agent_did,
+    )
+    .await
+    .unwrap();
     let workspace_path = dir.path().join("existing-workspace");
     std::fs::create_dir(&workspace_path).unwrap();
     std::fs::write(
