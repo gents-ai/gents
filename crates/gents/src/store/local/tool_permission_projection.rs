@@ -255,9 +255,7 @@ impl ToolPermissionProjection {
             {
                 continue;
             }
-            let (Some(agent), Some(context_id)) =
-                (field(&value, "agent_did"), field(&value, "context_id"))
-            else {
+            let Some(agent) = field(&value, "agent_did") else {
                 continue;
             };
             let Some(nonce) = field(&value, "creation_nonce") else {
@@ -284,6 +282,11 @@ impl ToolPermissionProjection {
                     .or_default()
                     .insert(baseline.clone(), agent.to_owned());
             }
+            // The baseline follows the live Agent alone (Lean
+            // `Identity.GrantSets.baselineWanted`); a Context is optional.
+            let Some(context_id) = field(&value, "context_id") else {
+                continue;
+            };
             let Some((context_doc, context)) = context_by_id.get(context_id) else {
                 continue;
             };
