@@ -49,6 +49,7 @@ import Proofs.Conformance.CountCarrier
 import Proofs.Conformance.ConfigurationScope
 import Proofs.Conformance.Initialization
 import Proofs.Conformance.EnrollmentPendingRequests
+import Proofs.Conformance.EnrollmentCandidateName
 import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
 import Proofs.Conformance.InvalidToolProgress
@@ -553,6 +554,8 @@ def snapshotSessionCasesJson : String :=
       ++ Conformance.EnrollmentPendingRequests.routeCasesJson ++ ","
     ++ "\"enrollment_startup_cases\":"
       ++ Conformance.EnrollmentPendingRequests.startupCasesJson ++ ","
+    ++ "\"enrollment_candidate_name_cases\":"
+      ++ Conformance.EnrollmentCandidateName.casesJson ++ ","
     ++ "\"enrollment_encoding_cases\":"
       ++ enrollmentEncodingCasesJson ++ ","
     ++ "\"enrollment_digest_cases\":"

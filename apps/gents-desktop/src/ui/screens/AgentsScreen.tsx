@@ -337,6 +337,7 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
     actions: { requestStatusEnrollment },
   } = useApp();
   const [address, setAddress] = useState("");
+  const [candidateName, setCandidateName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const close = () => {
@@ -348,9 +349,13 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
     setBusy(true);
     setError(null);
     try {
-      const r = await requestStatusEnrollment(address.trim());
+      const r = await requestStatusEnrollment(
+        address.trim(),
+        candidateName.trim() || undefined,
+      );
       toast(`Enrolment request ${r.requestId} sent · waiting for acceptance`);
       setAddress("");
+      setCandidateName("");
       close();
     } catch (e) {
       const reason = errorText(e);
@@ -390,6 +395,15 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
             disabled={busy}
             autoFocus
             data-testid="fleet-add-server-address"
+          />
+          <label htmlFor="enrol-name" className="text-sm">
+            Your name (optional)
+          </label>
+          <Input
+            id="enrol-name"
+            value={candidateName}
+            onChange={(e) => setCandidateName(e.target.value)}
+            disabled={busy}
           />
         </form>
         {error ? (

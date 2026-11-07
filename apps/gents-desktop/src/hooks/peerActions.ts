@@ -67,12 +67,17 @@ export function createPeerActions({
     }
   }
 
-  async function requestStatusEnrollment(serverAddress: string) {
+  async function requestStatusEnrollment(
+    serverAddress: string,
+    candidateName?: string,
+  ) {
     try {
       if (!clientRuns()) {
         await ensureDesktopClientStarted();
       }
-      const request = await api.requestStatusEnrollment(serverAddress);
+      const request = candidateName
+        ? await api.requestStatusEnrollment(serverAddress, candidateName)
+        : await api.requestStatusEnrollment(serverAddress);
       await refreshSnapshot();
       return request;
     } catch (err) {
