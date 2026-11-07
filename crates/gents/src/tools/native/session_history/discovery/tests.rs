@@ -30,7 +30,15 @@ async fn sessions_reads_cross_agent_documents_only_when_acp_allows_the_caller() 
     let owner = pin_fixed_signing_identity(identities.path());
     let reader = KeyIdentity::load_or_create(identities.path().join("reader.key"), None).unwrap();
     let denied = KeyIdentity::load_or_create(identities.path().join("denied.key"), None).unwrap();
-    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
+    // The owner is the runtime: a document it creates is signed by its real
+    // actor, and ACP alone decides who else may read it.
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(owner.did())
+            .build()
+            .await
+            .unwrap(),
+    );
     let policy = node
         .add_dac_policy_as(
             &defra_core::RequestContext::default().with_identity(Some(owner.did().to_owned())),
@@ -51,8 +59,11 @@ resources:
         .unwrap();
     ConfigAccess::local(node.clone())
         .add_collection(&crate::store::schema::AGENT_SESSION_SCHEMA.replace(
-            "type AgentSession ",
-            &format!("type AgentSession @policy(id: \"{policy}\", resource: \"sessions\") "),
+            &format!(
+                "@policy(id: \"{}\", resource: \"sessions\")",
+                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
+            ),
+            &format!("@policy(id: \"{policy}\", resource: \"sessions\")"),
         ))
         .await
         .unwrap();
@@ -303,7 +314,12 @@ async fn output_pages_the_full_stored_tool_output_behind_a_bounded_view() {
         json!({"action":"output","session_id":"foreign-output","call_id":"spawn-provider-call"}),
     )
     .await;
-    assert!(error.contains("no tool call"), "{error}");
+    // The runtime signed the foreign session and grants the calling Agent no
+    // read, so ACP hides it before any tool-call lookup.
+    assert!(
+        error.contains("unavailable or ambiguous under ACP"),
+        "{error}"
+    );
 
     let help = call(&tool, json!({"action":"help","topic":"output"})).await;
     assert!(help["help"].as_str().unwrap().contains("next_call"));
@@ -316,7 +332,14 @@ async fn discovery_counts_and_pages_canonical_sessions_without_requests() {
     let identities = tempfile::tempdir().unwrap();
     let owner = pin_fixed_signing_identity(identities.path());
     let foreign = KeyIdentity::load_or_create(identities.path().join("foreign.key"), None).unwrap();
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    // The fixture writes as the runtime, so the caller is that runtime.
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(owner.did())
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     seed(&node, owner.did(), None, "atlas-a", "Atlas original", true).await;
     seed(&node, owner.did(), None, "atlas-b", "Atlas followup", true).await;
@@ -415,7 +438,14 @@ fn search_recovery_preserves_literal_text_and_requires_a_query_when_none_was_sup
 async fn transcript_search_reconstructs_canonical_text_and_pages_hits() {
     let identities = tempfile::tempdir().unwrap();
     let owner = pin_fixed_signing_identity(identities.path());
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    // The fixture writes as the runtime, so the caller is that runtime.
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(owner.did())
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     seed(&node, owner.did(), None, "work", "Investigation", false).await;
     for (sequence, text) in [

@@ -7,11 +7,18 @@ async fn sessions_marks_only_the_callers_own_session_in_concurrent_tool_scopes()
         scope_request_tool_execution_with_session, scope_tool_request_identity,
     };
 
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identities = tempfile::tempdir().unwrap();
     let owner = pin_fixed_signing_identity(identities.path());
     let other = KeyIdentity::load_or_create(identities.path().join("other.key"), None).unwrap();
+    // The fixture writes as the runtime, so the caller is that runtime.
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(owner.did())
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
     for (identity, session_id, request_id) in [
         (&owner, "session-a", "latest-request-a"),
         (&owner, "session-b", "latest-request-b"),
