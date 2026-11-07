@@ -771,12 +771,14 @@ impl AgentRequestAdmissionVerifier {
         if row.purpose.is_some_and(RequestPurpose::is_auxiliary) {
             verify_auxiliary_request_shape(&row, &admission)?;
         }
+        // A default RequestInput is persisted as an absent field, so an absent
+        // input is the canonical empty input, not a session creation.
         let local_agent_message = admission.kind == AgentRequestAdmissionKind::Client
             && row.caused_by_parent_tool_call_doc_id.is_some()
             && row
                 .input
                 .as_ref()
-                .is_some_and(|input| input.session_creation.is_none());
+                .is_none_or(|input| input.session_creation.is_none());
         let mut denied = None;
         if admission.kind == AgentRequestAdmissionKind::Peer
             || (matches!(
@@ -1894,8 +1896,7 @@ mod tests {
                 crate::test_support::signed_test_node_from_db(db, name).await;
             let runtime = db.node_identity.clone();
             let agent =
-                crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding)
-                    .unwrap();
+                crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
             let admin = crate::store::config_client::ConfigAccess::local_as(
                 db.node.clone(),
                 identity::Did::new(runtime.did()).unwrap(),
@@ -2035,8 +2036,7 @@ mod tests {
                     let mutation = &mutation;
                     Box::pin(async move {
                         let response = txn.execute(mutation).await?;
-                        let doc_id =
-                            crate::store::graphql::created_doc_id(&response, collection)?;
+                        let doc_id = crate::store::graphql::created_doc_id(&response, collection)?;
                         Ok::<_, anyhow::Error>(doc_id)
                     })
                 })
@@ -2235,7 +2235,10 @@ mod tests {
                 .unwrap()
                 .session;
             if session_id == "session" {
-                assert_eq!(session.requester_did.as_deref(), Some(fixture.runtime.did()));
+                assert_eq!(
+                    session.requester_did.as_deref(),
+                    Some(fixture.runtime.did())
+                );
                 let latest = session
                     .observation
                     .expect("refused request advances the session observation")
@@ -2682,12 +2685,8 @@ mod tests {
         let agent_did = fixture.agent.did().to_owned();
         let request_id = uuid::Uuid::new_v4().to_string();
         let session_id = uuid::Uuid::new_v4().to_string();
-        let create = fixture.agent_self_create(
-            &request_id,
-            &session_id,
-            "durable signed content",
-            None,
-        );
+        let create =
+            fixture.agent_self_create(&request_id, &session_id, "durable signed content", None);
         let doc_id = fixture.create_agent_signed_request(create).await;
 
         let row = super::load_signed_request(fixture.node().as_ref(), &doc_id)
@@ -2735,7 +2734,10 @@ mod tests {
             )
             .await
             .unwrap();
-        let error = verifier.verify_fresh(&queued, &agent_did).await.unwrap_err();
+        let error = verifier
+            .verify_fresh(&queued, &agent_did)
+            .await
+            .unwrap_err();
         assert!(error
             .to_string()
             .contains("caller-authored execution deadline"));
