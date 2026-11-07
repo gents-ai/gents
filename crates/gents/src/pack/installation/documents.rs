@@ -219,6 +219,10 @@ fn override_dependency_config(
     serde_json::from_value(installed).context("decode overridden dependency configuration")
 }
 
+pub(super) fn upgrade_identity_allowed(supplied: bool, matches_installed: bool) -> bool {
+    supplied || matches_installed
+}
+
 fn preserve_root_upgrade_config(
     archive: &PackArchive,
     snapshot: &super::InstalledDependencySnapshot,
@@ -249,7 +253,26 @@ fn preserve_root_upgrade_config(
             .find(|c| c.dir_name() == Some(field))
         {
             if suffix == collection.unique_field() {
-                anyhow::ensure!(entry.variables.keys().all(|name| name == "GENTS_PACK_NODE_DID" || environment(name).is_some_and(|value| !value.is_empty())),
+                let supplied = entry.variables.keys().all(|name| {
+                    name == "GENTS_PACK_NODE_DID"
+                        || environment(name).is_some_and(|value| !value.is_empty())
+                });
+                let id = next
+                    .pointer(&entry.path)
+                    .and_then(serde_json::Value::as_str);
+                let matches_installed = id.is_some_and(|id| {
+                    previous
+                        .get(field)
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|rows| {
+                            rows.iter().any(|row| {
+                                row.get(collection.unique_field())
+                                    .and_then(serde_json::Value::as_str)
+                                    == Some(id)
+                            })
+                        })
+                });
+                anyhow::ensure!(upgrade_identity_allowed(supplied, matches_installed),
                     "document identity {} uses an omitted install variable; supply it explicitly before upgrading", entry.path);
             }
         }

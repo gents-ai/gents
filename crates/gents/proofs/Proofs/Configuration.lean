@@ -598,6 +598,12 @@ def resolvePackUpgradeField (previous : Option String) (supplied : Bool)
     (rendered : String) : String :=
   if supplied then rendered else previous.getD rendered
 
+def packUpgradeIdentityAllowed (supplied matchesInstalled : Bool) : Bool :=
+  supplied || matchesInstalled
+
+theorem matching_default_identity_is_allowed :
+    packUpgradeIdentityAllowed false true = true := by rfl
+
 theorem omitted_upgrade_value_preserved (previous rendered : String) :
     resolvePackUpgradeField (some previous) false rendered = previous := by rfl
 

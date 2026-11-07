@@ -6,6 +6,28 @@ use crate::pack::InstalledVia;
 const OWNER: &str = "did:key:zPackInstallOwner";
 
 #[test]
+fn pack_upgrade_identity_matches_model() {
+    let raw = gents_lean_contract::run_prepared_generator(
+        &gents_lean_contract::proofs_dir().unwrap(),
+        "Proofs.Conformance.PackUpgradeIdentity:olean",
+        "Proofs/Conformance/PackUpgradeIdentity.lean",
+    )
+    .unwrap();
+    let cases: Vec<Value> = serde_json::from_str(&raw).unwrap();
+    assert_eq!(cases.len(), 4);
+    for case in cases {
+        assert_eq!(
+            documents::upgrade_identity_allowed(
+                case["supplied"].as_bool().unwrap(),
+                case["matches_installed"].as_bool().unwrap()
+            ),
+            case["allowed"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
+}
+
+#[test]
 fn edited_pack_error_identifies_the_operator_cli() {
     let error = edited_error("acme/demo", &["Tools/t1".to_owned()]).to_string();
     assert!(error.contains("Tools/t1"));
@@ -2159,6 +2181,7 @@ async fn upgrading_a_pack_preserves_omitted_install_values() {
     let (_guard, dir) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
     let config_path = dir.join("pack_config.json");
     let mut source: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    source["agents"][0]["agent_id"] = json!("${UPGRADE_ID:-fixture-dependee}");
     source["agents"][0]["description"] = json!("${UPGRADE_LABEL}");
     std::fs::write(&config_path, serde_json::to_vec(&source).unwrap()).unwrap();
     let pack = || {
