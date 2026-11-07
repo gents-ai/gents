@@ -728,9 +728,7 @@ mod turn_assignment_tests {
                 .await
                 .is_empty()
         );
-        // The head is a raw fixture row rather than an admitted request, so it
-        // completes without claim-admission verification.
-        crate::tools::call::lifecycle::admission_fixture::complete_child_managed(
+        crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
             node,
             &head_id,
             did,
@@ -741,6 +739,7 @@ mod turn_assignment_tests {
                 .unwrap()
                 .managed_agent_signer()
                 .unwrap(),
+            admission.runtime.clone(),
         )
         .await;
         assert_eq!(
