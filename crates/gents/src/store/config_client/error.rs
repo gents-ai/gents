@@ -120,8 +120,6 @@ pub enum ConfigClientError {
     BearerHeader(#[source] reqwest::header::InvalidHeaderValue),
     #[error("owned native operation requires local access")]
     LocalAccessRequired,
-    #[error("invalid native transaction for host plugin source publication")]
-    InvalidHostSourceTransaction,
     #[error("plugin data actor does not match the transaction actor")]
     TransactionActorMismatch,
     #[error("validated managed Agent signing capability is required")]

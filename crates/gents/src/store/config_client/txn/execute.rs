@@ -432,13 +432,10 @@ impl ConfigApplyTxn<'_> {
         let node_did = node
             .node_identity_did()
             .ok_or(ConfigClientError::LocalAccessRequired)?;
-        let txn = handle
-            .as_str()
-            .parse()
-            .map_err(|_| ConfigClientError::InvalidHostSourceTransaction)?;
-        let context = defra_core::RequestContext::default()
-            .with_identity(Some(actor.to_string()))
-            .with_txn(Some(txn));
+        // The node owns the transaction; native NAC judges each changing
+        // edge against the explicit actor and admits an unchanged one without
+        // authority (Lean `Configuration.sourceChangeAllowed`).
+        let context = defra_core::RequestContext::default().with_identity(Some(actor.to_string()));
         let roots = |records: &[crate::plugin::store::InstalledPlugin]| {
             let mut roots = std::collections::BTreeSet::new();
             for record in records {
@@ -486,10 +483,11 @@ impl ConfigApplyTxn<'_> {
             });
         }
         let node = std::sync::Arc::clone(node);
+        let handle = handle.clone();
         execute_owned_native(
             async move {
                 for edge in edges {
-                    node.change_host_nac_source_permission_in_txn(&context, &edge)
+                    node.change_nac_source_permission_for_in_txn(&handle, &context, &edge)
                         .await?;
                 }
                 Ok::<_, defra_node::Error>(())
