@@ -124,7 +124,8 @@ private def sourceJson (value : SourceInput) : String := object
         ("requester", jsonString scope.requester), ("node", jsonString scope.node),
         ("session", jsonString scope.session), ("native_session", toString scope.nativeSession)]
     | _ => "null"),
-   ("boundary", jsonString (boundaryName value.boundary))]
+   ("boundary", jsonString (boundaryName value.boundary)),
+   ("session_owner", jsonString value.sessionOwner)]
 
 private def captureJson : Capture → String
   | .pending => tagged "pending"
@@ -236,7 +237,7 @@ def sourceProjectionCasesJson : String :=
      "unchanged_claim_cannot_retain_image_identity", "unchanged_claim_cannot_precede_terminal",
      "accepted_terminal_capture", "legacy_missing_capture_is_unknown",
      "active_missing_capture_is_pending", "uncommitted_capture_before_terminal",
-     "projection_wrong_request", "projection_wrong_actual_session",
+     "projection_wrong_request", "projection_in_another_session_is_not_this_inventory",
      "projection_wrong_actual_requester", "projection_wrong_actual_node",
      "projection_foreign_stored_owner", "invalid_empty_capture_not_empty_inventory",
      "duplicate_paths_in_capture"].contains value.name

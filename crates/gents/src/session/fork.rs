@@ -515,6 +515,143 @@ fn fork_closure_records<'a>(
         .collect())
 }
 
+/// The physical tools a header names, as hydration selects them, refining
+/// `FileInventory.messageTools`.
+pub(crate) fn message_tool_references(message: &TranscriptMessage) -> impl Iterator<Item = String> + '_ {
+    let delivery = match &message.publication {
+        MessagePublication::ToolDelivery { tool_call_doc_id } => Some(tool_call_doc_id.clone()),
+        _ => None,
+    };
+    delivery
+        .into_iter()
+        .chain(message.blocks.iter().filter_map(|block| match block {
+            MessageBlock::ToolCall {
+                tool_call_doc_id, ..
+            }
+            | MessageBlock::ToolResult {
+                tool_call_doc_id, ..
+            } => Some(tool_call_doc_id.clone()),
+            _ => None,
+        }))
+}
+
+struct ForkInventorySource<'a> {
+    params: &'a ForkParams<'a>,
+    session_doc_id: &'a str,
+    agent_did: &'a str,
+    tools: &'a BTreeSet<String>,
+}
+
+const FORK_INVENTORY_FIELDS: &str = "_docID tool_call_doc_id observation_doc_id request_doc_id node_did session_id requester_did changes verified_unchanged";
+
+/// A fork is self-contained: the copied transcript's inventory projections are
+/// copied into the fork session in its creating transaction, owned by that
+/// creator and readable by the fork's Agent, and never resolved through the
+/// source afterwards. Only projections the forking actor can read are copied;
+/// a hidden or missing one leaves that tool's coverage unknown in the fork.
+/// A copied source projection must be visible to the forking actor. Where the
+/// backend observes its owner, that owner must be the source session's Agent
+/// (native capture) or the source session's owner (an earlier fork's copy).
+/// DefraDB's HTTP owner observation only answers whether the caller itself
+/// owns a document, so an Agent-owned projection's owner is unobservable to a
+/// client fork; the destination owner is the trust root for its own copies.
+async fn copy_fork_inventory(
+    txn: &ConfigApplyTxn<'_>,
+    source: ForkInventorySource<'_>,
+    child: &str,
+    agent_did: &str,
+) -> Result<()> {
+    let params = source.params;
+    let Some(requester) = params.caller_requester_did else {
+        return Ok(());
+    };
+    if source.tools.is_empty() {
+        return Ok(());
+    }
+    let escape = crate::store::graphql::escape_graphql_string;
+    let response = txn
+        .execute(&format!(
+            r#"{{ ToolFileInventory(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}) {{ {FORK_INVENTORY_FIELDS} }} }}"#,
+            escape(params.caller_node_did),
+            escape(params.source_session_id),
+            escape(requester),
+        ))
+        .await?;
+    let mut selected = Vec::new();
+    let mut seen = BTreeSet::new();
+    for row in rows(&response, "ToolFileInventory")? {
+        let tool = text(&row, "tool_call_doc_id")?;
+        if !source.tools.contains(tool) {
+            continue;
+        }
+        anyhow::ensure!(
+            seen.insert(tool.to_owned()),
+            "fork source has ambiguous file inventory projections"
+        );
+        anyhow::ensure!(
+            text(&row, "node_did")? == params.caller_node_did
+                && text(&row, "session_id")? == params.source_session_id
+                && text(&row, "requester_did")? == requester,
+            "fork inventory projection crossed exact source scope"
+        );
+        selected.push(row);
+    }
+    if selected.is_empty() {
+        return Ok(());
+    }
+    let session_owner = txn
+        .document_owners("AgentSession", &[source.session_doc_id.to_owned()])
+        .await?
+        .into_iter()
+        .find(|row| row.doc_id == source.session_doc_id)
+        .and_then(|row| row.owner)
+        .map(|owner| owner.as_str().to_owned());
+    let ids = selected
+        .iter()
+        .map(|row| text(row, "_docID").map(str::to_owned))
+        .collect::<Result<Vec<_>>>()?;
+    for chunk in ids.chunks(::query::owners::MAX_OWNER_OBSERVATIONS) {
+        let owners = txn.document_owners("ToolFileInventory", chunk).await?;
+        anyhow::ensure!(
+            owners.len() == chunk.len()
+                && owners.iter().zip(chunk).all(|(row, id)| {
+                    row.doc_id == *id
+                        && row.visible
+                        && row.owner.as_ref().is_none_or(|owner| {
+                            owner.as_str() == source.agent_did
+                                || session_owner.as_deref() == Some(owner.as_str())
+                        })
+                }),
+            "fork inventory projection is not owned by its source session"
+        );
+    }
+    let reader = identity::Did::new(agent_did)?;
+    for mut row in selected {
+        let object = row
+            .as_object_mut()
+            .context("fork inventory projection is not an object")?;
+        object.remove("_docID");
+        anyhow::ensure!(
+            object
+                .get("changes")
+                .is_none_or(|changes| changes.as_array().is_none_or(|rows| !rows.is_empty())),
+            "fork inventory projection has an empty capture"
+        );
+        object.insert("session_id".into(), json!(child));
+        let response = txn
+            .execute_client_signed_create(
+                "mutation($input: ToolFileInventoryMutationInputArg!) { create_ToolFileInventory(input: $input) { _docID } }",
+                &json!({ "input": row }),
+                gents_protocol::schemas::TOOL_FILE_INVENTORY,
+            )
+            .await?;
+        let doc_id = crate::store::graphql::created_doc_id(&response, "ToolFileInventory")?;
+        txn.add_actor_relationship("ToolFileInventory", &doc_id, "reader", &reader)
+            .await?;
+    }
+    Ok(())
+}
+
 fn fork_compaction(origin: &Value, child: &str, params: &ForkParams<'_>) -> Result<Value> {
     anyhow::ensure!(
         text(origin, "session_id")? == params.source_session_id
@@ -575,15 +712,16 @@ async fn fork_in_txn(
     child: &str,
     edit_client_did: Option<&str>,
 ) -> Result<ForkPublication> {
-    let parent = load_agent_session_row_in_txn(
+    let parent_row = load_agent_session_row_in_txn(
         txn,
         params.caller_node_did,
         params.source_session_id,
         params.caller_requester_did,
     )
     .await?
-    .ok_or_else(|| ForkError::ForkSourceNotFound(params.source_session_id.to_owned()))?
-    .session;
+    .ok_or_else(|| ForkError::ForkSourceNotFound(params.source_session_id.to_owned()))?;
+    let parent_session_doc_id = parent_row.doc_id;
+    let parent = parent_row.session;
     anyhow::ensure!(
         parent.node_did == params.caller_node_did
             && parent.requester_did.as_deref() == params.caller_requester_did,
@@ -741,8 +879,10 @@ async fn fork_in_txn(
     let mut message_doc_ids = Vec::with_capacity(retained.len());
     let mut segment_doc_ids = Vec::new();
     let mut copied_closures = BTreeSet::new();
+    let mut copied_tools = BTreeSet::new();
 
     for origin in &retained {
+        copied_tools.extend(message_tool_references(&origin.message));
         let (resolved, segments) = load_canonical_message_segments_in_txn(
             txn,
             &origin.doc_id,
@@ -783,6 +923,11 @@ async fn fork_in_txn(
                 continue;
             }
             for record in fork_closure_records(&segments, logical)? {
+                if let gents_protocol::output::OutputSource::ToolCall { tool_call_doc_id } =
+                    &record.segment.source
+                {
+                    copied_tools.insert(tool_call_doc_id.clone());
+                }
                 let mut copy = record.segment.clone();
                 copy.session_id = child.to_owned();
                 copy.request_doc_id.clone_from(logical);
@@ -803,6 +948,19 @@ async fn fork_in_txn(
             }
         }
     }
+
+    copy_fork_inventory(
+        txn,
+        ForkInventorySource {
+            params,
+            session_doc_id: &parent_session_doc_id,
+            agent_did: &parent.agent_did,
+            tools: &copied_tools,
+        },
+        child,
+        agent,
+    )
+    .await?;
 
     let mut copied_compactions = 0u32;
     let mut child_compactions = Vec::new();

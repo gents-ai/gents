@@ -94,8 +94,10 @@ def Observation.wellFormed (observation : Observation) : Bool :=
 
 /-- `accepted` is supplied by the existing physical tool acceptance owner,
 including its coordinator block and direct/spawn/plugin provenance checks.
-The actual scope is retained for origins; it is not rewritten to the fork's
-target session. Canonical closure authorization decides origin membership. -/
+A fork does not copy physical tools: the actual scope is retained for origins
+and is not rewritten to the fork's target session. Canonical closure
+authorization decides origin membership; the fork's own projection copies,
+not the origin's projections, supply its inventory facts. -/
 structure Tool where
   id : DocId
   request : DocId
@@ -268,10 +270,42 @@ private def delivers (input : ClosureInput) (tool : Tool) (message : MessageEnve
           match block with | .text _ => true | _ => false)) &&
     (message.blocks.flatMap blockRefs).any (terminalReference input tool)
 
+/-- A copied fork header retains its origin's role, sequence and blocks but not
+its request or publication kind, so the admission is the assistant header that
+invokes this physical tool. The fork's creating transaction copied it from the
+validated origin. -/
+private def copyCalls (tool : Tool) (message : MessageEnvelope) : Bool :=
+  message.header.role == .assistant &&
+    message.blocks.any (fun block => match block with
+      | .toolCall id _ _ _ _ _ _ => id == tool.id
+      | _ => false)
+
+/-- A copied delivery is a sole ToolResult for this tool whose payload resolves,
+in the fork's own copies, to that tool's owned output closure. A copied text
+notification loses the publication that bound it to the tool and stays
+unresolved. -/
+private def copyDelivers (copies : List Segment) (tool : Tool) (message : MessageEnvelope) : Bool :=
+  let records := copies.map Hydration.presentCopy
+  message.header.role == .user &&
+    (match message.blocks with
+      | [.toolResult id _ _ _] => id == tool.id
+      | _ => false) &&
+    (message.blocks.flatMap blockRefs).any fun reference =>
+      match resolveClose records [] reference with
+      | .error _ => false
+      | .ok closing => CanonicalOutput.ToolDelivery.closedRecordValid
+          records closing.coordinate.request tool.id closing
+
+/-- A fork header with destination-owned copies is read from those copies,
+refining `Hydration.forkCopies`; a fork published before copies follows its
+origin. -/
 private def uniquePosition (input : ClosureInput) (messages : List MessageEnvelope)
-    (predicate : MessageEnvelope → Bool) : Option Nat :=
+    (predicate : MessageEnvelope → Bool) (copied : List Segment → MessageEnvelope → Bool) :
+    Option Nat :=
   match messages.filter (fun message =>
-    (origin input (input.messages.length + 1) message).any predicate) with
+    match Hydration.forkCopies message.header input.segments with
+    | some copies => copied copies message
+    | none => (origin input (input.messages.length + 1) message).any predicate) with
   | [message] => some message.sequence
   | _ => none
 
@@ -289,8 +323,8 @@ def window (snapshot : Snapshot) (input : ClosureInput) (tool : Tool) : Option W
   let messages ← ids.mapM fun id => (Hydration.lookupMessage input.messages input.deniedHeaders id).toOption
   let selected := messages.filter (fun message =>
     message.header.session == snapshot.admission.nativeSession)
-  let admitted ← uniquePosition input selected (calls tool)
-  let delivered ← uniquePosition input selected (delivers input tool)
+  let admitted ← uniquePosition input selected (calls tool) (fun _ => copyCalls tool)
+  let delivered ← uniquePosition input selected (delivers input tool) (copyDelivers · tool)
   if admitted < delivered then some ⟨tool.id, admitted, delivered⟩ else none
 
 end Order
@@ -312,6 +346,11 @@ structure Source where
   tools : List Tool
   projections : List Projection
   boundary : ReadBoundary
+  /-- DefraDB's current authenticated owner of the admission's physical session
+  document, observed in the same read as the projections. It is not an authored
+  session field; empty means unobserved. A fork's creating actor owns the fork
+  session and the projection copies it published in the same transaction. -/
+  sessionOwner : String := ""
   deriving DecidableEq
 
 /-- An independent reader cannot reuse the source's privileged observations.
@@ -333,28 +372,55 @@ inductive Error where
 def validScope (scope : FileImages.Scope) : Bool :=
   [scope.requester, scope.node, scope.session].all (fun value => !value.isEmpty)
 
-def Projection.matches (projection : Projection) (tool : Tool) : Bool :=
+/-- A published fork is self-contained (user decision): it carries copies of
+the file-inventory projections of the selected tools it inherits, published in
+the fork's creating transaction, scoped to the fork session and owned by the
+fork's destination owner. It never reads its source session's projections, so
+a copy is retained when the source's projections or session are deleted, and
+the desktop keeps listing the files a forked conversation touched. Physical
+tool, request and observation IDs remain identities, not session references.
+
+A session's own native tool keeps its producing Agent as projection owner.
+An inherited tool's fact is the copy in the admission's session, with the
+origin's node and requester (forks never cross them), owned by the observed
+`sessionOwner`. Copy contents are the fork writer's obligation: it copies the
+exact source-scope projection its signed actor can read in that transaction,
+and rejects one whose observed owner is neither the source's Agent nor the
+source session's owner. DefraDB's HTTP owner observation only reports whether
+the caller owns a document, so an Agent's ownership is unobservable to a
+client fork; the destination owner is the trust root for its own copies, and
+the reader cannot re-check a deleted source. A copy is metadata only and grants no image read:
+retained images stay bound to the producing tool's scope. -/
+def Projection.matches (projection : Projection) (tool : Tool) (session sessionOwner : String) :
+    Bool :=
   projection.tool == tool.id && projection.request == tool.request &&
-    projection.scope == tool.scope && !tool.agentDid.isEmpty && projection.owner == tool.agentDid &&
+    projection.scope == { tool.scope with session := session } && !tool.agentDid.isEmpty &&
+    (if tool.scope.session == session then projection.owner == tool.agentDid
+     else !sessionOwner.isEmpty && projection.owner == sessionOwner) &&
     (if projection.verifiedUnchanged then
       projection.observation.isNone && projection.changes.isEmpty
      else projection.observation.isSome && !projection.changes.isEmpty) &&
     projection.changes.all (fun change => !change.root.isEmpty && !change.path.isEmpty) &&
     (projection.changes.map (fun change => (change.root, change.path))).Nodup
 
-def toolFact (source : Source) (id : DocId) : Except Error ToolFact := do
+/-- Only projections in the admission's own session are its facts. Another
+session's projection of the same tool, such as a fork's copy or the origin of
+an inherited tool, belongs to that session's inventory and is neither evidence
+nor a conflict here. -/
+def toolFact (source : Source) (session : String) (id : DocId) : Except Error ToolFact := do
   let tool ← match source.tools.filter (fun tool => tool.id == id) with
     | [] => .error .unknown
     | [tool] => .ok tool
     | _ => .error .rejected
   if !tool.accepted || !validScope tool.scope then .error .rejected else pure ()
-  let projections := source.projections.filter (fun projection => projection.tool == id)
+  let projections := source.projections.filter (fun projection =>
+    projection.tool == id && projection.scope.session == session)
   if !decide (HasTerminal.isTerminal tool.state) then
     if projections.isEmpty then .ok ⟨tool, .pending⟩ else .error .rejected
   else match projections with
     | [] => .ok ⟨tool, .unknown⟩
     | [projection] =>
-      if projection.matches tool then .ok ⟨tool, .observed projection⟩ else .error .rejected
+      if projection.matches tool session source.sessionOwner then .ok ⟨tool, .observed projection⟩ else .error .rejected
     | _ => .error .rejected
 
 def selectedManifest (catalog : Catalog) (admission : Request) :
@@ -388,6 +454,48 @@ theorem selected_manifest_uses_canonical_closure (catalog : Catalog) (admission 
       simp [selectedDocuments, hi, buildDocuments, hb, Bind.bind, Except.bind,
         Except.toOption, pure, Except.pure]
 
+/-- The tool facts a fork copy carries. A copy exists only for a terminal
+accepted capture, so its terminal kind is not inventory data; its scope is the
+fork's and its owner the fork's creator. -/
+def Projection.copyTool (projection : Projection) : Tool :=
+  ⟨projection.tool, projection.request, projection.scope, projection.owner, true, .completed⟩
+
+/-- Physical tools a selected header names, as hydration selects them. -/
+def messageTools (message : CanonicalOutput.MessageEnvelope) : List DocId :=
+  (match message.header.publication with
+    | .toolDelivery id => [id]
+    | _ => []) ++
+  message.blocks.filterMap fun block => match block with
+    | .toolCall id _ _ _ _ _ _ => some id
+    | .toolResult id _ _ _ => some id
+    | _ => none
+
+/-- A self-contained fork's inherited facts: projections in the admission's
+session, owned by its observed `sessionOwner`, for tools named by its selected
+headers but absent from its canonical closure. A projection of an unselected
+tool owned by anyone else is unselected work, not this inventory. -/
+def copiedFacts (source : Source) (admission : Request) (input : ClosureInput)
+    (selected : List CanonicalOutput.Hydration.DocumentKey) (native : List DocId) :
+    Except Error (List ToolFact) := do
+  if source.sessionOwner.isEmpty then return []
+  let headers := (selected.filter (fun key => key.collection == .agentMessage)).filterMap fun key =>
+    (CanonicalOutput.Hydration.lookupMessage input.messages input.deniedHeaders key.id).toOption
+  let named := (headers.filter (·.header.session == admission.nativeSession)).flatMap messageTools
+  let copies := source.projections.filter fun projection =>
+    projection.scope.session == admission.session && projection.owner == source.sessionOwner &&
+      !native.contains projection.tool && named.contains projection.tool
+  copies.mapM fun projection =>
+    let owners := source.catalog.sessions.filter fun session =>
+      session.node == admission.node && session.session == admission.session &&
+        session.requester == projection.scope.requester
+    let tool := projection.copyTool
+    if (copies.filter (·.tool == projection.tool)).length == 1 && validScope projection.scope &&
+        projection.scope.node == admission.node &&
+        owners.card == 1 &&
+        projection.matches tool admission.session source.sessionOwner then
+      .ok ⟨tool, .observed projection⟩
+    else .error .rejected
+
 /-- Enumeration starts from the whole authorized session closure, not a
 visible transcript window or request-turn closure. Unselected parent-session
 tools do not enter a fork's inventory. Physical sorting is only a stable page
@@ -396,16 +504,18 @@ private def assembleSnapshot (source : Source) (admission : Request) : Except Er
   if !source.completeRead admission then .error .unknown else pure ()
   let selected ← selectedManifest source.catalog admission
   let toolIds := (selected.filter (fun key => key.collection == .agentToolCall)).map (·.id)
-  let tools ← toolIds.mapM (toolFact source)
+  let native ← toolIds.mapM (toolFact source admission.session)
+  let input ← match closureInputFor source.catalog.closureInputs admission with
+    | none => .error .unknown
+    | some input => .ok input
+  let copied ← copiedFacts source admission input selected toolIds
+  let tools := (native ++ copied).mergeSort fun left right => left.tool.id ≤ right.tool.id
   let observed := tools.filterMap fun fact => match fact.capture with
     | .observed projection => some projection
     | _ => none
   if !(observed.map (·.id)).Nodup || !(observed.filterMap (·.observation)).Nodup then
     .error .rejected
   else
-    let input ← match closureInputFor source.catalog.closureInputs admission with
-      | none => .error .unknown
-      | some input => .ok input
     let initial : Snapshot := ⟨admission, selected, tools, []⟩
     .ok { initial with ordering := tools.map fun fact => Order.window initial input fact.tool }
 
@@ -456,6 +566,8 @@ def Snapshot.requestCoverage (value : Snapshot) (scope : FileImages.Scope)
 structure Entry where
   tool : DocId
   request : DocId
+  /-- The scope of the selected projection: the admission's own session, also
+  for a fork's inherited tool. -/
   scope : FileImages.Scope
   projection : DocId
   observation : DocId
@@ -469,7 +581,7 @@ def Snapshot.rawEntries (value : Snapshot) : List Entry :=
     | .observed projection => match projection.observation with
         | none => []
         | some observation => projection.changes.map fun change =>
-            ⟨fact.tool.id, fact.tool.request, fact.tool.scope,
+            ⟨fact.tool.id, fact.tool.request, projection.scope,
               projection.id, observation, change, .unresolved,
               some (value.requestCoverage fact.tool.scope fact.tool.request)⟩
     | _ => []

@@ -539,6 +539,8 @@ async fn retain_fork_fixture_capture(
                 &json!({"input": input})).await?;
             let projection = crate::store::graphql::created_doc_id(&response, "ToolFileInventory")?;
             txn.add_actor_relationship("ToolFileInventory", &projection, "reader", &identity::Did::new(tool.node_did())?).await?;
+            // The fork's creating requester reads the source projection it copies.
+            txn.add_actor_relationship("ToolFileInventory", &projection, "reader", &identity::Did::new(tool.requester_did().unwrap())?).await?;
             Ok::<_, anyhow::Error>(())
         })
     }).await.unwrap();
@@ -616,6 +618,13 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
         .await
         .unwrap();
         grant_session_reader(&fixture.client, &did, &child.session_id, &did).await;
+        crate::tools::call::lifecycle::admission_fixture::grant_runtime_projection_readers(
+            &fixture.client,
+            &did,
+            &child.session_id,
+        )
+        .await
+        .unwrap();
         let load_admission = |session_id: String| {
             let (node, did, requester) = (node.clone(), did.clone(), requester.clone());
             async move {
@@ -731,20 +740,29 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             .sum::<usize>();
         assert_eq!(snapshot.entries.len(), expected_entries);
         assert!(!snapshot.entries.is_empty());
+        let source_projections = case["source"]["projections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|projection| {
+                case["source"]["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|tool| tool["scope"]["session"] == projection["scope"]["session"])
+            })
+            .count();
         for entry in &snapshot.entries {
             assert_eq!(entry.tool_call_doc_id, origin_tool.doc_id().unwrap());
-            assert_eq!(entry.scope.session_id, parent);
-            assert_ne!(entry.scope.session_id, child.session_id);
+            assert_eq!(entry.scope.session_id, child.session_id);
+            assert_ne!(entry.scope.session_id, parent);
             assert_eq!(entry.change.path, "selected.rs");
         }
         let parent_snapshot =
             FileInventorySnapshot::load(&node, &load_admission(parent.clone()).await)
                 .await
                 .unwrap();
-        assert_eq!(
-            parent_snapshot.entries.len(),
-            case["source"]["projections"].as_array().unwrap().len()
-        );
+        assert_eq!(parent_snapshot.entries.len(), source_projections);
         assert!(parent_snapshot
             .entries
             .iter()
@@ -795,6 +813,13 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
         .await
         .unwrap();
         grant_session_reader(&fixture.client, &did, &complete_child.session_id, &did).await;
+        crate::tools::call::lifecycle::admission_fixture::grant_runtime_projection_readers(
+            &fixture.client,
+            &did,
+            &complete_child.session_id,
+        )
+        .await
+        .unwrap();
         let complete = FileInventorySnapshot::load(
             &node,
             &load_admission(complete_child.session_id.clone()).await,
@@ -808,7 +833,7 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             &physical_tools,
         );
         assert!(complete.entries.iter().all(|entry| {
-            entry.scope.session_id == parent && entry.scope.session_id != complete_child.session_id
+            entry.scope.session_id == complete_child.session_id && entry.scope.session_id != parent
         }));
         let mut unknown_request = pending_client_fixture_request(
             &node,
@@ -865,6 +890,54 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
                 Some(serde_json::from_value(expected["coverage"].clone()).unwrap())
             );
         }
+        assert_eq!(
+            FileInventorySnapshot::load(&node, &child_admission)
+                .await
+                .unwrap()
+                .binding,
+            snapshot.binding
+        );
+        // The fork's copies are retained when the source's projection is deleted.
+        let origin_projection = parent_snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.tool_call_doc_id == origin_tool.doc_id().unwrap())
+            .unwrap()
+            .projection_doc_id
+            .clone();
+        let agent = origin_tool.access().unwrap();
+        ConfigAccess::local_as(node.clone(), identity::Did::new(&did).unwrap())
+            .grant_node_permission(
+                &identity::Did::new(agent.actor_did().unwrap()).unwrap(),
+                crate::store::config_client::NodePermission::DocumentDelete,
+            )
+            .await
+            .unwrap();
+        let deleted = agent
+            .write(
+                "test.inventory.delete_source_projection",
+                &format!(
+                    r#"mutation {{ delete_ToolFileInventory(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                    crate::store::graphql::escape_graphql_string(&origin_projection),
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            deleted["data"]["delete_ToolFileInventory"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let source_after_delete =
+            FileInventorySnapshot::load(&node, &load_admission(parent.clone()).await)
+                .await
+                .unwrap();
+        assert!(source_after_delete
+            .entries
+            .iter()
+            .all(|entry| entry.tool_call_doc_id != origin_tool.doc_id().unwrap()));
         assert_eq!(
             FileInventorySnapshot::load(&node, &child_admission)
                 .await
@@ -1130,8 +1203,8 @@ fn generated_request_coverage_uses_only_selected_physical_scope() {
                 request_doc_id: document(&tool["request"]),
                 scope,
                 state: tool["state"].as_str().unwrap().into(),
-                accepted_header_doc_id: "accepted".into(),
-                execution_generation: "generation".into(),
+                accepted_header_doc_id: Some("accepted".into()),
+                execution_generation: Some("generation".into()),
                 capture,
                 order: None,
             });

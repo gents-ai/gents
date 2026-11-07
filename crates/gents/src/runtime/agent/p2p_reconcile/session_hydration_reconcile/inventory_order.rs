@@ -98,6 +98,16 @@ impl<'a> Publications<'a> {
             let Some(message) = headers.get(publication.origin_doc_id.as_str()) else {
                 return Self::default();
             };
+            if publication.origin_doc_id == publication.header_doc_id {
+                if let Some(copies) =
+                    gents_protocol::output::reconstruction::fork_copy_observations(
+                        message, &segments,
+                    )
+                {
+                    result.observe_copy(message, &copies, publication.sequence);
+                    continue;
+                }
+            }
             let Some(request) = message.request_doc_id.as_deref() else {
                 continue;
             };
@@ -165,6 +175,57 @@ impl<'a> Publications<'a> {
             }
         }
         result
+    }
+
+    /// Refines `Order.copyCalls`/`copyDelivers`: a copied fork header keeps its
+    /// origin's role, sequence and blocks but not its request or publication
+    /// kind, so its admission is the assistant header invoking the tool and its
+    /// delivery a sole ToolResult resolving, within the fork's own copies, to
+    /// that tool's owned output closure.
+    fn observe_copy(
+        &mut self,
+        message: &gents_protocol::output::TranscriptMessage,
+        copies: &[gents_protocol::output::reconstruction::ObservedSegment<'_>],
+        sequence: u32,
+    ) {
+        if message.role == MessageRole::Assistant {
+            let mut seen = RapidHashSet::new();
+            for block in &message.blocks {
+                let MessageBlock::ToolCall {
+                    tool_call_doc_id, ..
+                } = block
+                else {
+                    continue;
+                };
+                if !seen.insert(tool_call_doc_id) {
+                    continue;
+                }
+                for tool in self.tools.get(tool_call_doc_id.as_str()).into_iter().flatten() {
+                    observe(&mut self.calls, tool_call_doc_id, &tool.request, sequence);
+                }
+            }
+        }
+        if let (
+            MessageRole::User,
+            [MessageBlock::ToolResult {
+                tool_call_doc_id, ..
+            }],
+        ) = (&message.role, message.blocks.as_slice())
+        {
+            let owned = message.payload_references().iter().any(|reference| {
+                gents_protocol::output::reconstruction::tool_output_reference_owned(
+                    copies,
+                    reference,
+                    &reference.close_doc_id,
+                    tool_call_doc_id,
+                )
+            });
+            if owned {
+                for tool in self.tools.get(tool_call_doc_id.as_str()).into_iter().flatten() {
+                    observe(&mut self.deliveries, tool_call_doc_id, &tool.request, sequence);
+                }
+            }
+        }
     }
 
     pub fn window(&self, tool: &Admission) -> Option<Window> {
