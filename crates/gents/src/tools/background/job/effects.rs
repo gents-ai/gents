@@ -333,12 +333,14 @@ async fn stage_request(
             .as_ref()
             .and_then(|input| input.goal_assignment.clone());
     } else if existing_destination && node_did == cause.caller_node_did {
+        // The staged request is requested by the job's Agent, so the
+        // destination session is scoped by that Agent, not the caller node.
         input = crate::goal::prepare_goal_input_in_txn(
             txn,
             node_did,
             &session_id,
             agent_did,
-            Some(&cause.caller_node_did),
+            Some(&cause.caller_agent_did),
             input,
         )
         .await?;

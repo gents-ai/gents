@@ -444,6 +444,31 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
                 escape_graphql_string(&orphan.goal_id), escape_graphql_string(f.identity.did()),
                 escape_graphql_string(f.agent.did()), escape_graphql_string(&session))).await.unwrap();
         }
+        // A local delivery's source is the caller's pinned job row in its own
+        // session; the delivered request's provenance and job keys name it.
+        let tool_call_doc_id = if remote {
+            "delivery-call-doc".to_owned()
+        } else {
+            let mut pin = crate::tools::call::lifecycle::admission_fixture::fixture_job_pin();
+            pin.chain_root_doc_id = name.to_owned();
+            crate::tools::background::job::input::tests::insert_as(
+                &access,
+                "AgentToolCall",
+                json!({
+                    "request_id": f.parent.request_id,
+                    "request_doc_id": f.parent.doc_id,
+                    "node_did": f.identity.did(),
+                    "requester_did": f.parent.requester_did,
+                    "session_id": f.parent.session_id,
+                    "tool_call_id": "delivery-call",
+                    "tool_name": "workflow",
+                    "lifecycle_state": "running",
+                    "started_at": "2026-10-21T00:00:00Z",
+                    "job_pin": pin,
+                }),
+            )
+            .await
+        };
         let cause = SessionMessageCause {
             caller_node_did: if remote {
                 caller.did().into()
@@ -473,7 +498,7 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
                 .map_or_else(|| f.parent.doc_id.clone(), |(_, _, doc)| doc.clone()),
             caller_hop: 0,
             tool_call_id: "delivery-call".into(),
-            tool_call_doc_id: "delivery-call-doc".into(),
+            tool_call_doc_id,
             correlation: None,
         };
         if remote {
