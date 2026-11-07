@@ -101,6 +101,7 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
 
     interrupt_request_by_doc_id(
         &db.node,
+        None,
         &request_doc_id,
         &node_did,
         observed_row.requester_did.as_deref(),

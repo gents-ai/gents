@@ -51,10 +51,16 @@ async fn exercise_readiness(same_agent: bool) {
     let runtime: Arc<dyn NodeIdentity> =
         Arc::new(KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap());
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
+    // The user's Node and Agent are client-signed over HTTP; embedded access
+    // refuses non-runtime writes without a managed Agent signer by design.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
     let node = Arc::new(
         defra_node::Node::builder()
+            .enable_signing()
             .with_node_identity_did(runtime.did())
             .with_node_acp_enabled()
+            .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
             .build()
             .await
             .unwrap(),
@@ -62,39 +68,61 @@ async fn exercise_readiness(same_agent: bool) {
     crate::store::schema::ensure_runtime_schemas(&node)
         .await
         .unwrap();
+    let endpoint = format!("http://{address}/api/v0/graphql");
     let binding = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
     let selected_identity =
         crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
     let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
-    for did in [user.did(), binding.agent_did.as_str()] {
-        for permission in [
-            NodePermission::DocumentRead,
-            NodePermission::DocumentUpdate,
-            NodePermission::DacRelationAdd,
-        ] {
-            admin
-                .grant_node_permission(&did.parse().unwrap(), permission)
-                .await
-                .unwrap();
-        }
-    }
-    let user_access = ConfigAccess::local_as(node.clone(), user.did().parse().unwrap());
-    let response = user_access
-        .write(
-            "test.readiness.node",
-            &format!(
-                r#"mutation {{ create_Node(input: {{ node_did: "{}" }}) {{ _docID }} }}"#,
-                runtime.did()
-            ),
-        )
+    crate::store::identity::GrantSet::OperatorUser
+        .grant(&admin, &user.did().parse().unwrap())
         .await
         .unwrap();
-    let node_doc = crate::store::graphql::created_doc_id(&response, "Node").unwrap();
-    let response = user_access.write("test.readiness.agent", &format!(
-        r#"mutation {{ create_Agent(input: {{ node_did: "{}", agent_did: "{}", creation_nonce: "{}", inference_profile_id: "fixture", enabled: true }}) {{ _docID }} }}"#,
-        runtime.did(), binding.agent_did, binding.creation_nonce,
-    )).await.unwrap();
-    let agent_doc = crate::store::graphql::created_doc_id(&response, "Agent").unwrap();
+    for permission in [
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::DacRelationAdd,
+    ] {
+        admin
+            .grant_node_permission(&binding.agent_did.parse().unwrap(), permission)
+            .await
+            .unwrap();
+    }
+    let user_access = ConfigAccess::Graphql(
+        crate::store::config_client::GraphqlEndpoint::as_principal(&endpoint, user.did())
+            .with_client_signing_capability(user.client_signing_capability().unwrap())
+            .unwrap(),
+    );
+    let (node_doc, agent_doc) = user_access
+        .transact_write("test.readiness.owner", |txn| {
+            let (runtime_did, binding) = (runtime.did(), &binding);
+            Box::pin(async move {
+                let created = txn
+                    .execute_client_signed_create(
+                        "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                        &serde_json::json!({"input": {"node_did": runtime_did}}),
+                        gents_protocol::schemas::NODE,
+                    )
+                    .await?;
+                let node_doc = crate::store::graphql::created_doc_id(&created, "Node")?;
+                let created = txn
+                    .execute_client_signed_create(
+                        "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                        &serde_json::json!({"input": {
+                            "node_did": runtime_did,
+                            "agent_did": binding.agent_did,
+                            "creation_nonce": binding.creation_nonce,
+                            "inference_profile_id": "fixture",
+                            "enabled": true,
+                        }}),
+                        gents_protocol::schemas::AGENT,
+                    )
+                    .await?;
+                let agent_doc = crate::store::graphql::created_doc_id(&created, "Agent")?;
+                Ok::<_, anyhow::Error>((node_doc, agent_doc))
+            })
+        })
+        .await
+        .unwrap();
     user_access
         .add_actor_relationship(
             "Node",
@@ -122,7 +150,20 @@ async fn exercise_readiness(same_agent: bool) {
     } else {
         &user
     };
-    let author_access = ConfigAccess::local_as(node.clone(), signer.did().parse().unwrap());
+    let author_access = if same_agent {
+        ConfigAccess::local_managed_agent(
+            node.clone(),
+            signer.did().parse().unwrap(),
+            selected_identity.as_ref(),
+        )
+        .unwrap()
+    } else {
+        ConfigAccess::Graphql(
+            crate::store::config_client::GraphqlEndpoint::as_principal(&endpoint, user.did())
+                .with_client_signing_capability(user.client_signing_capability().unwrap())
+                .unwrap(),
+        )
+    };
     let create = build_signed_client_request(
         &author_access,
         RequestSpec::new(
@@ -195,6 +236,9 @@ async fn exercise_readiness(same_agent: bool) {
             ExecutionOrigin::Interactive,
             String::new(),
         );
+        without_admission
+            .bind_managed_agent(selected_identity.as_ref())
+            .unwrap();
         assert!(matches!(
             without_admission.claim_with_identity().await.unwrap(),
             ClaimOutcome::Queued
@@ -209,6 +253,9 @@ async fn exercise_readiness(same_agent: bool) {
         ExecutionOrigin::Interactive,
         String::new(),
     );
+    lifecycle
+        .bind_managed_agent(selected_identity.as_ref())
+        .unwrap();
     lifecycle.set_client_claim_admission(Some(admission.clone()));
     let cases = &snapshot.mailbox_claimed_recipient_cases;
     let before = cases

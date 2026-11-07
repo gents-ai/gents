@@ -110,6 +110,7 @@ impl TurnManager {
         if row.is_err() {
             if let Err(error) = gents::interrupt_request_by_doc_id(
                 &self.node,
+                self.config.agent_signer.as_ref(),
                 &submitted.request_doc_id,
                 &submitted.node_did,
                 submitted.requester_did.as_deref(),

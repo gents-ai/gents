@@ -440,6 +440,7 @@ impl TurnManager {
         };
         if let Err(error) = gents::interrupt_request_by_doc_id(
             &self.node,
+            self.config.agent_signer.as_ref(),
             physical,
             owner,
             request.requester_did.as_deref(),

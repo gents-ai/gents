@@ -334,7 +334,6 @@ mod tests {
             let child_doc = child.doc_id().unwrap().to_owned();
             let generation = parent.execution_generation().unwrap().to_owned();
             let request_doc = parent.request_doc_id().unwrap().to_owned();
-            let agent = request_owner.actor_did().unwrap().as_str().to_owned();
             let session = parent.session_id().to_owned();
             let normal = name.ends_with("_normal");
             if normal {
@@ -354,7 +353,6 @@ mod tests {
                 |txn| {
                     let request_doc = request_doc.clone();
                     let session = session.clone();
-                    let agent = agent.clone();
                     let generation = generation.clone();
                     Box::pin(async move {
                         let response = txn
@@ -366,15 +364,26 @@ mod tests {
                             .await?;
                         let request: AgentRequestRow =
                             serde_json::from_value(response["data"]["AgentRequest"][0].clone())?;
+                        // Transcript rows are scoped by the request's node and
+                        // requester, not by the Agent that reads them.
+                        let node_did = request
+                            .node_did
+                            .clone()
+                            .ok_or_else(|| anyhow::anyhow!("request has no node"))?;
+                        let requester = request.requester_did.clone();
                         let headers = crate::session::load_request_headers_in_txn(
                             txn,
                             &session,
-                            &agent,
-                            None,
+                            &node_did,
+                            requester.as_deref(),
                             &request_doc,
                         )
                         .await?;
-                        let mut reader = crate::session::TxnCanonicalReader::new(txn, &agent, None);
+                        let mut reader = crate::session::TxnCanonicalReader::new(
+                            txn,
+                            &node_did,
+                            requester.as_deref(),
+                        );
                         reader.observe_headers(&headers);
                         account_tools_in_txn(
                             txn,

@@ -42,6 +42,7 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
         .unwrap();
     let node_doc = crate::store::graphql::created_doc_id(&node_response, "Node").unwrap();
     let mut agent_doc = None;
+    let mut context_doc = None;
     for mutation in [
         format!(
             r#"mutation {{ create_AgentContext(input: {{ context_id: "context", node_did: "{owner}" }}) {{ _docID }} }}"#
@@ -53,9 +54,13 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
         let response = access.write("test.capture.setup", &mutation).await.unwrap();
         if mutation.contains("create_Agent(input:") {
             agent_doc = Some(crate::store::graphql::created_doc_id(&response, "Agent").unwrap());
+        } else {
+            context_doc =
+                Some(crate::store::graphql::created_doc_id(&response, "AgentContext").unwrap());
         }
     }
     let agent_doc = agent_doc.unwrap();
+    let context_doc = context_doc.unwrap();
     access
         .add_actor_relationship(
             "Node",
@@ -76,6 +81,25 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
             "executor",
             &identity::Did::new(&binding.agent_did).unwrap(),
         )
+        .await
+        .unwrap();
+    // Desired-state publication grants an Agent's selected context to its
+    // executor; admission reads that context as the Agent.
+    access
+        .transact_write("test.capture.context_selection", |txn| {
+            let (context_doc, agent_doc) = (&context_doc, &agent_doc);
+            Box::pin(async move {
+                txn.add_entity_set_relationship(
+                    "AgentContext",
+                    context_doc,
+                    "selected_by",
+                    "agents",
+                    agent_doc,
+                    "executor",
+                )
+                .await
+            })
+        })
         .await
         .unwrap();
     access

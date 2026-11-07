@@ -245,6 +245,20 @@ async fn claim_request(
         60,
     );
     lifecycle.bind_managed_agent(db.agent_identity.as_ref()).unwrap();
+    // As the daemon does, signed folded input is re-verified by the held Agent
+    // when its publication consumes it; unsigned fixture rows carry no admission.
+    if client_claim.is_some() {
+        let (_authority_owner, authority) =
+            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+        lifecycle.set_steering_admission(
+            crate::request::admission::AgentRequestAdmissionVerifier::new(
+                db.node.clone(),
+                db.identity.clone(),
+                authority,
+            ),
+            db.agent_identity.clone(),
+        );
+    }
     lifecycle.set_client_claim_admission(client_claim);
     lifecycle.set_fold_admitted(admitted.iter().map(|id| bound[id].clone()).collect());
     assert_eq!(
@@ -654,8 +668,8 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                 Step::Recover { expected, fresh } => {
                     let mut request = generations[expected].lifecycle.request().clone();
                     request.deadline = None;
-                    crate::store::config_client::ConfigAccess::write_local_response(
-                        &db.node,
+                    // The expired head is the Agent's own row; recovery resets it as the Agent.
+                    db.agent_access.write(
                         "test.fold_publication_reclaim",
                         &format!(
                             r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "pending", deadline: null }}) {{ _docID }} }}"#,

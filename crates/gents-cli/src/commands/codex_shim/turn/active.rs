@@ -131,9 +131,11 @@ pub(super) fn cancel_abandoned_steering_request(
     let node = state.node.clone();
     let request = request.clone();
     let node_did = state.node_did.clone();
+    let signer = state.agent_signer.clone();
     tokio::spawn(async move {
         if let Err(error) = gents::interrupt_request_by_doc_id(
             &node,
+            signer.as_ref(),
             &request.doc_id,
             node_did.as_ref(),
             Some(node_did.as_ref()),
@@ -339,6 +341,7 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
     let request_id = active.interrupt_request_id.clone();
     if let Err(error) = gents::interrupt_request_by_doc_id(
         &state.node,
+        state.agent_signer.as_ref(),
         &active.interrupt_request_doc_id,
         &state.node_did,
         Some(state.local_requester_did()),
@@ -387,6 +390,7 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
         connection.take_steering_input(&request_id).await;
         if let Err(error) = gents::interrupt_request_by_doc_id(
             &state.node,
+            state.agent_signer.as_ref(),
             &request_doc_id,
             &state.node_did,
             Some(state.local_requester_did()),
@@ -692,6 +696,7 @@ mod tests {
         assert_eq!(active.current_request_id, "normal-turn");
         gents::interrupt_request_by_doc_id(
             &node,
+            state.agent_signer.as_ref(),
             &active.interrupt_request_doc_id,
             state.node_did.as_ref(),
             Some(state.node_did.as_ref()),

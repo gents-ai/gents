@@ -370,11 +370,27 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
         crate::store::graphql::escape_graphql_string(&request_id),
         crate::store::graphql::escape_graphql_string(&now),
     );
-    let access = ConfigAccess::local(node.clone());
-    access
-        .write("test.auxiliary_request", &mutation)
+    // The runtime root creates the row and grants its working Agent; every
+    // later lifecycle and output write is the Agent's own signed write.
+    ConfigAccess::local_as(node.clone(), node_did.parse().unwrap())
+        .transact_write("test.auxiliary_request", |txn| {
+            let (mutation, agent_did) = (&mutation, &agent_did);
+            Box::pin(async move {
+                let response = txn.execute(mutation).await?;
+                let doc = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                txn.add_actor_relationship(
+                    "AgentRequest",
+                    &doc,
+                    "working_agent",
+                    &::identity::Did::new(agent_did)?,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
         .await
         .unwrap();
+    let access = crate::triggers::callback::test_agent_access(node);
     let query = format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
         crate::store::graphql::escape_graphql_string(&request_id),
@@ -390,6 +406,9 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
         row.try_into().unwrap(),
         60,
     );
+    lifecycle
+        .bind_managed_agent(crate::triggers::callback::test_agent_identity().as_ref())
+        .unwrap();
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     lifecycle
 }
@@ -469,7 +488,7 @@ fn native_raw(
 
 async fn output_state(node: &Arc<EmbeddedNode>, request_doc_id: &str) -> serde_json::Value {
     let request_doc_id = crate::store::graphql::escape_graphql_string(request_doc_id);
-    let response = ConfigAccess::local(node.clone())
+    let response = crate::triggers::callback::test_agent_access(node)
         .execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }} }}"#,
         ))
@@ -496,7 +515,7 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             uuid::Uuid::new_v4()
         ));
         let node = Arc::new(
-            crate::test_support::node_builder()
+            crate::triggers::callback::test_node_builder()
                 .data_path(&path)
                 .build()
                 .await
@@ -505,6 +524,11 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         crate::store::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();
+        crate::triggers::callback::seed_test_agent(
+            &node,
+            crate::request::lifecycle::test_support::PIN_FIXED_DID,
+        )
+        .await;
         let mut lifecycle = claimed(&node, &case.name).await;
         assert_eq!(
             case.authority.claimed_request_state, "claimed",
@@ -531,14 +555,10 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         let empty_state = output_state(&node, &request_doc_id).await;
         assert_eq!(output_counts(&empty_state), (0, 0), "{}", case.name);
         let before = native_raw(case, &lifecycle, &generation);
-        let claimed_append = canonical::append_provider_segment(
+        let claimed_append = canonical::append_provider_segment_with_signer(
             &node,
-            identity::Did::new(
-                node.node_identity_did()
-                    .expect("fixture node identity")
-                    .to_owned(),
-            )
-            .unwrap(),
+            identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
+            lifecycle.managed_agent_signer(),
             &generation,
             &before,
         )
@@ -573,14 +593,10 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         begin.unwrap();
         assert_eq!(lifecycle.execution_generation().unwrap(), generation);
         let raw = native_raw(case, &lifecycle, &generation);
-        let append = canonical::append_provider_segment(
+        let append = canonical::append_provider_segment_with_signer(
             &node,
-            identity::Did::new(
-                node.node_identity_did()
-                    .expect("fixture node identity")
-                    .to_owned(),
-            )
-            .unwrap(),
+            identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
+            lifecycle.managed_agent_signer(),
             &generation,
             &raw,
         )
@@ -755,14 +771,10 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             segments: u32::try_from(*segments).unwrap(),
             stream_bytes: stream_bytes.clone(),
         });
-        let publication = canonical::publish_provider_turn(
+        let publication = canonical::publish_provider_turn_with_signer(
             &node,
-            identity::Did::new(
-                node.node_identity_did()
-                    .expect("fixture node identity")
-                    .to_owned(),
-            )
-            .unwrap(),
+            identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
+            lifecycle.managed_agent_signer(),
             &generation,
             canonical::ProviderPublicationPlan {
                 final_flush: Some(publication_closing),
@@ -808,14 +820,10 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             } => canonical::ProviderAttemptClose::Partial,
             _ => panic!("{}: unsupported modeled close", case.name),
         };
-        let close = canonical::close_provider_attempt(
+        let close = canonical::close_provider_attempt_with_signer(
             &node,
-            identity::Did::new(
-                node.node_identity_did()
-                    .expect("fixture node identity")
-                    .to_owned(),
-            )
-            .unwrap(),
+            identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
+            lifecycle.managed_agent_signer(),
             &generation,
             &raw,
             close_kind,
@@ -841,14 +849,10 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         stale.writer = OutputWriter::RequestExecution {
             execution_generation: stale_generation.clone(),
         };
-        let stale_replay = canonical::close_provider_attempt(
+        let stale_replay = canonical::close_provider_attempt_with_signer(
             &node,
-            identity::Did::new(
-                node.node_identity_did()
-                    .expect("fixture node identity")
-                    .to_owned(),
-            )
-            .unwrap(),
+            identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
+            lifecycle.managed_agent_signer(),
             &stale_generation,
             &stale,
             close_kind,
@@ -909,7 +913,7 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
             uuid::Uuid::new_v4()
         ));
         let node = Arc::new(
-            crate::test_support::node_builder()
+            crate::triggers::callback::test_node_builder()
                 .data_path(&path)
                 .build()
                 .await
@@ -918,6 +922,11 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
         crate::store::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();
+        crate::triggers::callback::seed_test_agent(
+            &node,
+            crate::request::lifecycle::test_support::PIN_FIXED_DID,
+        )
+        .await;
         let mut lifecycle = claimed(&node, &case.name).await;
         let writer =
             DefraStreamWriter::new_for_lifecycle(node.clone(), &lifecycle, Duration::from_millis(1))
@@ -947,7 +956,7 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
             generation,
             ProviderInputProfile::OpenAiChatCompletions,
             Duration::from_millis(1),
-            None,
+            lifecycle.managed_agent_signer(),
         );
         for event in [
             AuxiliaryOutputEvent::AttemptStarted,
@@ -979,7 +988,7 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
         .unwrap();
 
         let request_doc_id = crate::store::graphql::escape_graphql_string(&request.doc_id);
-        let response = ConfigAccess::local(node.clone()).execute(&format!(
+        let response = crate::triggers::callback::test_agent_access(&node).execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }} }}"#,
         )).await.unwrap();
         let data = &response["data"];

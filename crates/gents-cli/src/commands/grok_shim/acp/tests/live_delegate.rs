@@ -38,6 +38,7 @@ async fn test_service_with_graphql(node: Arc<EmbeddedNode>, graphql: String) -> 
             graphql: gents::store::config_client::GraphqlEndpoint::as_principal(graphql, &node_did)
                 .with_client_signing_capability(identity.client_signing_capability().unwrap())
                 .unwrap(),
+            agent_signer: config.agent_signer.clone(),
         },
     ));
     let projections = Arc::new(ProjectionEngine::new_for_test(

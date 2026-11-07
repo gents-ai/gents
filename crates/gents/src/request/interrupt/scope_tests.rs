@@ -12,13 +12,18 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
     assert_eq!(case.preserved_foreign_owner_request_ids.len(), 1);
     let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        crate::test_support::node_builder()
+        crate::triggers::callback::test_node_builder()
             .data_path(dir.path().join("db"))
             .build()
             .await
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
+    let root_did = crate::request::lifecycle::test_support::PIN_FIXED_DID;
+    crate::triggers::callback::seed_test_agent(&node, root_did).await;
+    let agent = crate::triggers::callback::test_agent_identity();
+    let signer = agent.managed_agent_signer().unwrap();
+    let signer = Some(&signer);
     let session = case.session_id.to_string();
     use crate::store::identity::NodeIdentity as _;
     let root = crate::triggers::callback::test_root_identity();
@@ -34,6 +39,8 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
     let owner = owner_did.as_str();
     let foreign_owner = foreign_owner_did.as_str();
     let requester = requester_did.as_str();
+    /// The runtime root creates each row for the fixture Agent and grants it
+    /// as working Agent; only the node and requester scopes differ.
     async fn create(
         node: &Arc<EmbeddedNode>,
         id: &str,
@@ -42,24 +49,31 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
         session: &str,
         source: Option<&str>,
     ) -> String {
+        let agent = crate::triggers::callback::test_agent_did();
         let input=source.map(|source|json!({"queue":{"source":source,"policy":if source=="background_completion" {"coalesce"} else {"append"},"key":if source=="background_completion" {Some(format!("background_completion:{session}"))}else{None}}}));
         let value = json!({"request_id":id,"purpose":"normal","node_did":owner,"requester_did":requester,"session_id":session,
-            "agent_did":owner,"lifecycle_state":"pending","execution_origin":if source.is_some(){"scheduled"}else{"interactive"},"input":input,"created_at":"2026-09-01T00:00:00Z"});
+            "agent_did":agent,"lifecycle_state":"pending","execution_origin":if source.is_some(){"scheduled"}else{"interactive"},"input":input,"created_at":"2026-09-01T00:00:00Z"});
+        let root =
+            ::identity::Did::new(crate::request::lifecycle::test_support::PIN_FIXED_DID).unwrap();
         crate::store::config_client::ConfigAccess::transact_local_write(
-            node, None, "test.interrupt.scope_fixture", |txn| { let value = value.clone(); Box::pin(async move {
+            node, Some(root), "test.interrupt.scope_fixture", |txn| { let (value, agent) = (value.clone(), agent.clone()); Box::pin(async move {
                 let response = txn.execute_with_variables(
                     "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
                     &json!({"input": value}),
                 ).await?;
-                Ok::<_, anyhow::Error>(gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentRequest")?)
+                let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentRequest")?;
+                txn.add_actor_relationship("AgentRequest", &doc, "working_agent", &::identity::Did::new(&agent)?).await?;
+                Ok::<_, anyhow::Error>(doc)
             }) },
         ).await.unwrap()
     }
-    async fn row(node: &EmbeddedNode, doc: &str) -> Value {
+    async fn row(node: &Arc<EmbeddedNode>, doc: &str) -> Value {
         let doc = escape_graphql_string(doc);
-        let response=node.execute(&format!("{{AgentRequest(filter:{{_docID:{{_eq:\"{doc}\"}}}}){{lifecycle_state interrupt_requested_at}}}}")).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        response.data.unwrap()["AgentRequest"][0].clone()
+        let response = crate::triggers::callback::test_agent_access(node)
+            .execute(&format!("{{AgentRequest(filter:{{_docID:{{_eq:\"{doc}\"}}}}){{lifecycle_state interrupt_requested_at}}}}"))
+            .await
+            .unwrap();
+        response["data"]["AgentRequest"][0].clone()
     }
     let parent = create(&node, "same-parent-label", owner, None, &session, None).await;
     let foreign_parent = create(
@@ -109,17 +123,26 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
     .await;
     assert!(interrupt_request(&node, "same-parent-label").await.is_err());
     assert!(
-        interrupt_request_by_doc_id(&node, &parent, foreign_owner, None)
+        interrupt_request_by_doc_id(&node, signer, &parent, foreign_owner, None)
             .await
             .is_err()
     );
     assert!(
-        interrupt_request_by_doc_id(&node, &parent, owner, Some(requester))
+        interrupt_request_by_doc_id(&node, signer, &parent, owner, Some(requester))
             .await
             .is_err()
     );
+    // Without the working Agent's managed signer the latch is refused rather
+    // than attempted as another actor.
+    let unsigned = interrupt_request_by_doc_id(&node, None, &parent, owner, None).await;
+    assert!(matches!(
+        unsigned
+            .unwrap_err()
+            .downcast_ref::<crate::store::config_client::ConfigClientError>(),
+        Some(crate::store::config_client::ConfigClientError::ManagedAgentSignerRequired)
+    ));
     assert!(row(&node, &parent).await["interrupt_requested_at"].is_null());
-    interrupt_request_by_doc_id(&node, &parent, owner, None)
+    interrupt_request_by_doc_id(&node, signer, &parent, owner, None)
         .await
         .unwrap();
     assert_eq!(row(&node, &own).await["lifecycle_state"], "interrupted");
@@ -129,7 +152,7 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
         assert!(row["interrupt_requested_at"].is_null());
     }
     let first = row(&node, &parent).await["interrupt_requested_at"].clone();
-    interrupt_request_by_doc_id(&node, &parent, owner, None)
+    interrupt_request_by_doc_id(&node, signer, &parent, owner, None)
         .await
         .unwrap();
     assert_eq!(

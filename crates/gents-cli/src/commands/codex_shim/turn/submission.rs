@@ -29,6 +29,7 @@ pub(super) async fn create_agent_request_with_retry(
             if let Some(physical) = row.doc_id.as_deref() {
                 if let Err(error) = gents::interrupt_request_by_doc_id(
                     &state.node,
+                    state.agent_signer.as_ref(),
                     physical,
                     &prepared.create.node_did,
                     row.requester_did.as_deref(),

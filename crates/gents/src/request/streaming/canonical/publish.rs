@@ -76,16 +76,6 @@ fn created_tool_call_doc_ids(
         .collect()
 }
 
-#[cfg(test)]
-pub(crate) async fn publish_provider_turn(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor: identity::Did,
-    generation: &str,
-    plan: ProviderPublicationPlan,
-) -> Result<PublishedProviderTurn> {
-    publish_provider_turn_with_time(node, actor, None, generation, plan, None).await
-}
-
 pub(in crate::request::streaming) async fn publish_provider_turn_with_signer(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: identity::Did,

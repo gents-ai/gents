@@ -25,17 +25,6 @@ use super::{
     PartialHeaderFactory, ProviderAttemptClose, ProviderCloseRejection, ProviderPartialCandidate,
 };
 
-#[cfg(test)]
-pub(crate) async fn close_provider_attempt(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor: identity::Did,
-    generation: &str,
-    prepared: &OutputSegment,
-    close: ProviderAttemptClose,
-) -> Result<Option<String>> {
-    close_provider_attempt_at(node, actor, generation, prepared, close, None, Utc::now()).await
-}
-
 pub(in crate::request::streaming) async fn close_provider_attempt_with_signer(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: identity::Did,
@@ -52,30 +41,6 @@ pub(in crate::request::streaming) async fn close_provider_attempt_with_signer(
         close,
         None,
         Utc::now(),
-    )
-    .await
-}
-
-/// Fenced to the writer generation, except a changed generation may acknowledge
-/// an already committed, exact auxiliary closure without authorizing another write.
-#[cfg(test)]
-pub(crate) async fn close_provider_attempt_at(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor: identity::Did,
-    generation: &str,
-    prepared: &OutputSegment,
-    close: ProviderAttemptClose,
-    candidate: Option<ProviderPartialCandidate>,
-    now: DateTime<Utc>,
-) -> Result<Option<String>> {
-    close_provider_attempt_with_time(
-        node,
-        (actor, None),
-        generation,
-        prepared,
-        close,
-        candidate,
-        now,
     )
     .await
 }
@@ -105,6 +70,8 @@ pub(crate) async fn close_provider_attempt_at_with_access(
     .await
 }
 
+/// Fenced to the writer generation, except a changed generation may acknowledge
+/// an already committed, exact auxiliary closure without authorizing another write.
 async fn close_provider_attempt_with_time(
     node: &std::sync::Arc<EmbeddedNode>,
     (actor, signer): (

@@ -30,33 +30,25 @@ pub async fn interrupt_request(node: &Arc<EmbeddedNode>, request_id: &str) -> Re
         .map(|_| ())
 }
 
+/// Latch the exact scoped request as its working Agent. An Agent-owned request
+/// row accepts only that Agent's signed update, so the caller supplies the
+/// Agent's managed signer; without one the interrupt is refused rather than
+/// attempted as another actor.
 pub async fn interrupt_request_by_doc_id(
     node: &Arc<EmbeddedNode>,
+    signer: Option<&crate::store::identity::ManagedAgentSigner>,
     request_doc_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<()> {
-    interrupt_request_by_doc_id_returning_drained_wake_ids(
-        node,
-        request_doc_id,
-        node_did,
-        requester_did,
-    )
-    .await
-    .map(|_| ())
-}
-
-pub(crate) async fn interrupt_request_by_doc_id_returning_drained_wake_ids(
-    node: &Arc<EmbeddedNode>,
-    request_doc_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-) -> Result<Vec<String>> {
-    interrupt_request_matching(
-        node,
-        exact_request_filter(request_doc_id, node_did, requester_did)?,
-    )
-    .await
+    let signer =
+        signer.ok_or(crate::store::config_client::ConfigClientError::ManagedAgentSignerRequired)?;
+    let access = crate::store::config_client::ConfigAccess::local_with_agent_signer(
+        node.clone(),
+        identity::Did::new(signer.did())?,
+        signer.clone(),
+    )?;
+    interrupt_request_by_doc_id_with_access(&access, request_doc_id, node_did, requester_did).await
 }
 
 fn exact_request_filter(

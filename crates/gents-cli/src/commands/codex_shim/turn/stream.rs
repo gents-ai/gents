@@ -1295,6 +1295,7 @@ async fn cancel_pending_steering_request(
     connection.take_steering_input(&request.request_id).await;
     if let Err(error) = gents::interrupt_request_by_doc_id(
         &state.node,
+        state.agent_signer.as_ref(),
         &request.request_doc_id,
         &state.node_did,
         Some(state.local_requester_did()),

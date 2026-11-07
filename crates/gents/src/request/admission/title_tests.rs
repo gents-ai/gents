@@ -69,20 +69,33 @@ fn native_input(case: &LeanTitleRequestAdmissionCase) -> RequestInput {
     .expect("generated title input has native representation")
 }
 
+/// Creates the signed row as the runtime root and grants its working Agent,
+/// the relationship every request row carries in production.
 async fn insert_request(node: &Arc<EmbeddedNode>, create: &AgentRequestCreate) -> String {
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "test.title_admission.create_request",
-        &create.graphql_mutation().expect("native request mutation"),
-    )
-    .await
-    .expect("create request");
-    crate::store::graphql::single_mutation_document(&response, "create_AgentRequest")
-        .expect("create response")
-        .expect("created request")["_docID"]
-        .as_str()
-        .expect("created physical request ID")
-        .to_owned()
+    let root = node
+        .node_identity_did()
+        .expect("fixture node identity")
+        .parse()
+        .expect("fixture node DID");
+    let mutation = create.graphql_mutation().expect("native request mutation");
+    crate::store::config_client::ConfigAccess::local_as(node.clone(), root)
+        .transact_write("test.title_admission.create_request", |txn| {
+            let mutation = &mutation;
+            Box::pin(async move {
+                let response = txn.execute(mutation).await?;
+                let doc = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                txn.add_actor_relationship(
+                    "AgentRequest",
+                    &doc,
+                    "working_agent",
+                    &::identity::Did::new(&create.agent_did)?,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        })
+        .await
+        .expect("create request")
 }
 
 async fn update_request_field(node: &Arc<EmbeddedNode>, doc_id: &str, field: &str, value: &str) {
@@ -107,9 +120,10 @@ async fn update_request_field(node: &Arc<EmbeddedNode>, doc_id: &str, field: &st
     );
 }
 
-/// Maps a modeled agent label to a valid Agent DID. Equal labels map to equal DIDs
-/// and distinct labels to distinct DIDs, so the model's agent relations are kept.
-fn modeled_agent_did(label: &str) -> String {
+/// Maps a modeled agent label to a signing Agent identity. Equal labels map to
+/// equal identities and distinct labels to distinct ones, so the model's agent
+/// relations are kept.
+fn modeled_agent(label: &str) -> Arc<dyn NodeIdentity> {
     let root = crate::triggers::callback::test_root_identity();
     let nonce: String = label
         .bytes()
@@ -121,8 +135,10 @@ fn modeled_agent_did(label: &str) -> String {
         .collect();
     crate::store::identity::derive_agent_identity(&root, &nonce)
         .expect("derive modeled agent identity")
-        .did()
-        .to_owned()
+}
+
+fn modeled_agent_did(label: &str) -> String {
+    modeled_agent(label).did().to_owned()
 }
 
 async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
@@ -161,7 +177,12 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
     assert_eq!(parent_fields[1], parent.request_id);
     assert_eq!(parent_fields[3], parent.document_id);
     let target = identity.did();
-    let requester = if case.request.requester_did == case.request.target_node {
+    let request_agent = modeled_agent(&case.request.agent_did);
+    // The modeled requester is the request's own Agent, the target node, or a
+    // foreign principal.
+    let requester = if case.request.requester_did == case.request.agent_did {
+        request_agent.did()
+    } else if case.request.requester_did == case.request.target_node {
         target
     } else {
         foreign.did()
@@ -173,19 +194,22 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
     } else {
         parent.request_id.clone()
     };
+    // Each request is signed by its own Agent: the model's target runtime is
+    // the Agent that executes the request on this node.
+    let parent_agent = modeled_agent(&parent.agent_did);
     let mut parent_create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         parent_request_id,
         target,
-        target,
-        modeled_agent_did(&parent.agent_did),
+        parent_agent.did(),
+        parent_agent.did(),
         &parent.session_id,
         &case.request.content,
         "interactive",
         &case.request.created_at,
-        AgentRequestAdmissionRecord::local_self(target),
+        AgentRequestAdmissionRecord::local_self(parent_agent.did()),
     );
-    super::sign_agent_request_create(identity.as_ref(), &mut parent_create)
+    super::sign_agent_request_create(parent_agent.as_ref(), &mut parent_create)
         .await
         .expect("sign physical parent");
     let parent_doc_id = insert_request(&node, &parent_create).await;
@@ -203,17 +227,17 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
     ) {
         ("runtime-internal", "local-control") => {
             AgentRequestAdmissionRecord::runtime_local_control(
-                target,
+                request_agent.did(),
                 &case.admission.source_request_id,
             )
         }
         ("runtime-internal", "automated-trigger") => {
             AgentRequestAdmissionRecord::runtime_automated_trigger(
-                target,
+                request_agent.did(),
                 &case.admission.source_request_id,
             )
         }
-        ("local-self", _) => AgentRequestAdmissionRecord::local_self(target),
+        ("local-self", _) => AgentRequestAdmissionRecord::local_self(request_agent.did()),
         other => panic!("unsupported generated admission branch: {other:?}"),
     };
     let mut create = AgentRequestCreate::base(
@@ -221,7 +245,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
         &case.request.request_id,
         target,
         requester,
-        modeled_agent_did(&case.request.agent_did),
+        request_agent.did(),
         &case.request.session_id,
         &case.request.content,
         "interactive",
@@ -257,12 +281,12 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
     create.purpose = RequestPurpose::try_from(signed_fields[2].as_str())
         .expect("modeled signed purpose has a native representation");
     if !case.admission.signature_valid {
-        super::sign_agent_request_create(identity.as_ref(), &mut create)
+        super::sign_agent_request_create(request_agent.as_ref(), &mut create)
             .await
             .expect("sign before tampering");
         create.content.push_str(&case.request.request_id);
     } else {
-        super::sign_agent_request_create(identity.as_ref(), &mut create)
+        super::sign_agent_request_create(request_agent.as_ref(), &mut create)
             .await
             .expect("sign modeled title request");
     }

@@ -37,7 +37,8 @@ pub use title_text::display_session_title;
 mod tests;
 #[cfg(test)]
 pub(crate) use tests::{
-    import_history_observation, publish_shared_signed_history, publish_signed_history,
+    import_history_observation, import_history_observation_as, publish_shared_signed_history,
+    publish_signed_history,
 };
 
 pub use crate::tools::call::lifecycle::query::{
@@ -59,8 +60,6 @@ pub use fork::{
     fork, fork_edit_on, fork_on, fork_via_http, is_user_turn, publish_fork_relationships,
     ForkBoundary, ForkError, ForkOutcome, ForkParams, ForkRelationshipIntent,
 };
-#[cfg(test)]
-pub(crate) use history::load_history_through_sequence;
 #[cfg(test)]
 pub(crate) use history::load_history_with_access;
 pub use history::{load_history, sequence_message_key};

@@ -44,25 +44,38 @@ impl ConfigApplyTxn<'_> {
                 endpoint,
                 id,
                 client,
-            } => graphql::txn_commit(endpoint, id, client)
-                .await
-                .map_err(|failure| match failure {
-                    graphql::TxnCommitError::CleanupRequired(error) => CommitFailure {
-                        error,
-                        cleanup: CommitCleanup::Required,
-                        definitely_not_committed: false,
-                    },
-                    graphql::TxnCommitError::TransactionConsumed(error) => CommitFailure {
-                        error,
+            } => {
+                let result = graphql::txn_commit(endpoint, id, client)
+                    .await
+                    .map_err(|failure| match failure {
+                        graphql::TxnCommitError::CleanupRequired(error) => CommitFailure {
+                            error,
+                            cleanup: CommitCleanup::Required,
+                            definitely_not_committed: false,
+                        },
+                        graphql::TxnCommitError::TransactionConsumed(error) => CommitFailure {
+                            error,
+                            cleanup: CommitCleanup::NotNeeded,
+                            definitely_not_committed: false,
+                        },
+                        graphql::TxnCommitError::ConfirmedConflict(error) => CommitFailure {
+                            error,
+                            cleanup: CommitCleanup::NotNeeded,
+                            definitely_not_committed: true,
+                        },
+                    });
+                #[cfg(test)]
+                if result.is_ok() && post_commit_receipt_loss_for_test(self.operation) {
+                    return Err(CommitFailure {
+                        error: retry::transaction_storage_failure(
+                            ConfigClientError::InjectedReceiptLoss,
+                        ),
                         cleanup: CommitCleanup::NotNeeded,
                         definitely_not_committed: false,
-                    },
-                    graphql::TxnCommitError::ConfirmedConflict(error) => CommitFailure {
-                        error,
-                        cleanup: CommitCleanup::NotNeeded,
-                        definitely_not_committed: true,
-                    },
-                }),
+                    });
+                }
+                result
+            }
             TxnBackend::Embedded { node, handle, .. } => {
                 if self.embedded_poisoned() {
                     return Err(CommitFailure {
