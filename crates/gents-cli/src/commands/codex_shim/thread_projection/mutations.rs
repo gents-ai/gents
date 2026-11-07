@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use gents::store::config_client::ConfigAccess;
 use gents_codex_protocol as codex;
 
 use crate::commands::codex_shim::ShimState;
@@ -53,34 +52,36 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_name(
     }
 
     let now = chrono::Utc::now().to_rfc3339();
-    ConfigAccess::transact_local_write(&state.node, None, "codex.thread.set_name", |txn| {
-        let now = now.clone();
-        Box::pin(async move {
-            let row = gents::session::load_agent_session_row_in_txn(
-                txn,
-                &state.node_did,
-                thread_id,
-                Some(state.local_requester_did()),
-            )
-            .await?
-            .context("thread session vanished during rename")?;
-            anyhow::ensure!(
-                row.session.agent_did == state.agent_did.as_ref(),
-                "thread agent changed during rename"
-            );
-            gents::session::apply_title_in_txn(
-                txn,
-                &state.node_did,
-                Some(state.local_requester_did()),
-                thread_id,
-                (!name.is_empty()).then_some(name),
-                gents_protocol::session::SessionTitleSource::User,
-                &now,
-            )
-            .await
+    state
+        .writer()
+        .transact_write("codex.thread.set_name", |txn| {
+            let now = now.clone();
+            Box::pin(async move {
+                let row = gents::session::load_agent_session_row_in_txn(
+                    txn,
+                    &state.node_did,
+                    thread_id,
+                    Some(state.local_requester_did()),
+                )
+                .await?
+                .context("thread session vanished during rename")?;
+                anyhow::ensure!(
+                    row.session.agent_did == state.agent_did.as_ref(),
+                    "thread agent changed during rename"
+                );
+                gents::session::apply_title_in_txn(
+                    txn,
+                    &state.node_did,
+                    Some(state.local_requester_did()),
+                    thread_id,
+                    (!name.is_empty()).then_some(name),
+                    gents_protocol::session::SessionTitleSource::User,
+                    &now,
+                )
+                .await
+            })
         })
-    })
-    .await?;
+        .await?;
     state.set_thread_name(thread_id, name).await;
     Ok(true)
 }

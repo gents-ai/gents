@@ -85,17 +85,19 @@ pub(super) struct AvailableBackend {
 async fn load_bound_agent_document(state: &ShimState) -> Result<gents::AgentDocument> {
     let node_did = state.node_did.as_ref();
     let agent_did = state.agent_did.as_ref();
-    let raw = ConfigAccess::transact_local_write(&state.node, None, "codex.bound_agent", |txn| {
-        Box::pin(async move {
-            read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_did)
-                .await?
-                .map(|(_, value)| value)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("bound Agent {agent_did:?} missing for {node_did:?}")
-                })
+    let raw = state
+        .reader
+        .transact_readonly("codex.bound_agent", |txn| {
+            Box::pin(async move {
+                read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_did)
+                    .await?
+                    .map(|(_, value)| value)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("bound Agent {agent_did:?} missing for {node_did:?}")
+                    })
+            })
         })
-    })
-    .await?;
+        .await?;
     let agent: gents::AgentDocument = serde_json::from_value(raw)
         .with_context(|| format!("decoding bound Agent {agent_did:?}"))?;
     Ok(agent)
@@ -146,12 +148,9 @@ pub(super) async fn available_model_backends(state: &ShimState) -> Result<Vec<Av
         })
         .collect::<Vec<_>>();
 
-    let readiness_row = crate::commands::status::load_node_readiness(
-        &ConfigAccess::local(state.node.clone()),
-        node_did,
-    )
-    .await
-    .context("loading agent readiness for model selection")?;
+    let readiness_row = crate::commands::status::load_node_readiness(&state.reader, node_did)
+        .await
+        .context("loading agent readiness for model selection")?;
     backends.retain(|backend| {
         !backend_vetoed_by_readiness(
             &backend.backend_id,

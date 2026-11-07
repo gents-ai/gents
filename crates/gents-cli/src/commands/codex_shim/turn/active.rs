@@ -181,18 +181,15 @@ pub(super) async fn next_steering_request_after(
         .iter()
         .map(|row| row.doc_id.clone().expect("decoded physical identity"))
         .collect::<Vec<_>>();
-    let order = gents::store::config_client::ConfigAccess::transact_local_write(
-        &state.node,
-        None,
-        "codex.active.steering_order",
-        |txn| {
+    let order = state
+        .reader
+        .transact_readonly("codex.active.steering_order", |txn| {
             let ids = &ids;
             Box::pin(
                 async move { gents::request::lifecycle::request_arrival_order(txn, ids).await },
             )
-        },
-    )
-    .await?;
+        })
+        .await?;
     Ok(order.first().and_then(|first| {
         candidates
             .iter()
@@ -485,7 +482,7 @@ async fn load_thread_request_rows(
         thread_id,
         requester_did,
     ));
-    gents::store::config_client::ConfigAccess::transact_local_write(&state.node,None,"codex.active.rows",|txn| {
+    state.reader.transact_readonly("codex.active.rows",|txn| {
         let scope=&scope;
         Box::pin(async move {
             let response=txn.execute(&format!(r#"{{
@@ -704,7 +701,7 @@ mod tests {
         .await
         .expect("interrupt selected normal turn");
         let response = super::super::super::store::query_node_json(
-            &node,
+            &state.reader,
             r#"{ AgentRequest(filter: { session_id: {_eq: "thread"} }) {request_id interrupt_requested_at} }"#,
         )
         .await

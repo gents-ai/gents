@@ -141,6 +141,18 @@ pub(crate) async fn bind_codex_shim(
         crate::home_state::resolve_graphql_endpoint(Some(&args.graphql), Some(args.home.as_path()))
             .context("resolving the Codex shim's client-signed GraphQL endpoint")
             .map_err(CodexShimBindError::DependencyMissing)?;
+    let client_did = graphql
+        .held_client_signing_capability()
+        .context("the Codex shim's endpoint holds no User client key")
+        .map_err(CodexShimBindError::DependencyMissing)?
+        .did()
+        .to_owned();
+    let reader = gents::store::config_client::ConfigAccess::local_as(
+        args.node.clone(),
+        identity::Did::new(&client_did)
+            .context("the Codex shim's User client DID")
+            .map_err(CodexShimBindError::DependencyMissing)?,
+    );
     let state = ShimState {
         usage_cache: args.usage_cache,
         codex_home: codex_home.clone(),
@@ -152,6 +164,8 @@ pub(crate) async fn bind_codex_shim(
         node: args.node,
         background_execution_registry: args.background_execution_registry,
         graphql,
+        client_did: Arc::from(client_did),
+        reader,
         node_did: Arc::from(args.node_did.clone()),
         agent_did: Arc::from(bound_agent_did.clone()),
         agent_signer,

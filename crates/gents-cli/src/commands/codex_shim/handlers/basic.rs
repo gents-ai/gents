@@ -14,7 +14,6 @@ use super::models::{
     apply_config_writes, available_model_backends, load_bound_agent, model_list_entries,
 };
 use super::skills::load_skill_metadata;
-use crate::config_writes::ConfigAccess;
 
 pub(super) async fn handle_basic_request(
     outbound: &Outbound,
@@ -249,20 +248,19 @@ async fn session_usage(state: &ShimState) -> Option<UsageObservation> {
         let profile = load_bound_agent(state).await?.inference_profile;
         let node_did = state.node_did.as_ref();
         let backend_id = profile.backend_id.as_str();
-        let backend = ConfigAccess::transact_local_write(&state.node, None, "codex.usage", |txn| {
-            Box::pin(async move { load_inference_backend_in_txn(txn, node_did, backend_id).await })
-        })
-        .await?;
+        let backend = state
+            .reader
+            .transact_readonly("codex.usage", |txn| {
+                Box::pin(
+                    async move { load_inference_backend_in_txn(txn, node_did, backend_id).await },
+                )
+            })
+            .await?;
         let Some(backend) = backend else {
             return Ok(None);
         };
-        let mut stored = usage_for_backend(
-            &state.usage_cache,
-            &ConfigAccess::local(state.node.clone()),
-            node_did,
-            &backend,
-        )
-        .await?;
+        let mut stored =
+            usage_for_backend(&state.usage_cache, &state.reader, node_did, &backend).await?;
         if backend.provider_kind != gents::BackendProviderKind::ChatGptCodex {
             if let Some(stored) = stored.as_mut() {
                 stored.report.plan = None;
@@ -317,11 +315,13 @@ mod tests {
                 .join("codex-home/log/codex-shim-events.jsonl"),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             fs_root: None,
-            node,
+            node: node.clone(),
             background_execution_registry: gents::BackgroundExecutionRegistry::default(),
             graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
                 "http://127.0.0.1/graphql",
             ),
+            client_did: Arc::from(DID),
+            reader: gents::store::config_client::ConfigAccess::local(node.clone()),
             node_did: Arc::from(DID),
             agent_did: Arc::from(
                 crate::shared::test_support::fixture_agent_named("default").agent_did,
