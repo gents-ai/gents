@@ -109,7 +109,13 @@ agent that owns the job consumes that intent and settles the existing tool-call
 lifecycle. Native ACP reads and the intent write share a transaction: a
 concurrent revocation that invalidates the read must conflict before commit.
 This is an external DefraDB transaction premise, not a second authorization
-decision in the runtime. -/
+decision in the runtime.
+
+Decision (2026-11-07): desktop and CLI share one User DID key, and the client
+publishes the intent itself through its client-signed endpoint, signed by
+that key. The runtime holds no client key, so it never writes the intent on
+the client's behalf; `commitClientIntent` takes the authenticated author and
+has no runtime fallback (`denied_intent_has_no_runtime_fallback`). -/
 structure ClientIntent where
   actor : String
   invocation : Invocation

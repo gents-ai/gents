@@ -535,40 +535,6 @@ impl Gents {
         .await
     }
 
-    /// The HTTP boundary authenticates `actor` with DefraDB.
-    pub async fn operator_job_control(
-        &self,
-        actor: &str,
-        request: &gents_protocol::process_control::ToolControlIntent,
-    ) -> Result<
-        gents_protocol::job::JobControlOutcome,
-        crate::tools::call::control::client::ClientControlError,
-    > {
-        if !matches!(request.action.as_str(), "job_stop" | "job_pause") {
-            return Err(crate::tools::call::control::client::ClientControlError::NotAuthorized);
-        }
-        let intent_doc_id =
-            crate::tools::call::control::client::submit(&self.node, actor, request).await?;
-        Ok(gents_protocol::job::JobControlOutcome::Queued { intent_doc_id })
-    }
-
-    /// The transport must authenticate this actor with DefraDB before dispatch.
-    pub async fn operator_process_control(
-        &self,
-        actor: &str,
-        request: &gents_protocol::process_control::ToolControlIntent,
-    ) -> Result<
-        gents_protocol::process_control::ProcessControlOutcome,
-        crate::tools::call::control::client::ClientControlError,
-    > {
-        if request.action != "process_stop" {
-            return Err(crate::tools::call::control::client::ClientControlError::NotAuthorized);
-        }
-        let intent_doc_id =
-            crate::tools::call::control::client::submit(&self.node, actor, request).await?;
-        Ok(gents_protocol::process_control::ProcessControlOutcome::Queued { intent_doc_id })
-    }
-
     pub async fn run(self, shutdown: watch::Receiver<bool>) -> anyhow::Result<()> {
         runtime::run_agent(self, shutdown).await
     }

@@ -137,22 +137,23 @@ fn signed_invocation_authorized(
     signature_matches(intent, actor) && intent.action == action && invocation_matches(row, intent)
 }
 
-/// The transport authenticates the client. The client-signed scope is checked
-/// again against native ACP reads before its durable intent is created.
+/// The client publishes its signed intent through its own client-signed
+/// endpoint as the User (`Background.ProcessControl.ClientIntent`); the
+/// runtime holds no client key and never writes an intent on a client's
+/// behalf. The signed scope is checked against the client's own native ACP
+/// read in the transaction that creates the intent.
 pub async fn submit(
-    node: &Arc<EmbeddedNode>,
-    actor: &str,
+    access: &ConfigAccess,
     intent: &gents_protocol::process_control::ToolControlIntent,
 ) -> Result<String, ClientControlError> {
-    if node.node_identity_did() != Some(intent.node_did.as_str()) {
-        return Err(ClientControlError::WrongNode);
-    }
-    if !signature_matches(intent, actor) {
+    let Some(actor) = access.actor_did() else {
+        return Err(ClientControlError::NotAuthorized);
+    };
+    if !signature_matches(intent, &actor) {
         return Err(ClientControlError::NotAuthorized);
     }
-    let actor =
-        identity::Did::new(actor).map_err(|error| ClientControlError::Unavailable(error.into()))?;
-    let access = ConfigAccess::local_as(node.clone(), actor.clone());
+    let actor = identity::Did::new(&actor)
+        .map_err(|error| ClientControlError::Unavailable(error.into()))?;
     let signed = serde_json::to_string(intent)
         .map_err(|error| ClientControlError::Unavailable(error.into()))?;
     let (document, created) = access.transact_write("tool_control.submit", |txn| {
@@ -175,7 +176,7 @@ pub async fn submit(
             let rows: Vec<Invocation> = serde_json::from_value(result["data"]["AgentToolCall"].clone())?;
             let [row] = rows.as_slice() else { return Ok(None); };
             if !signed_invocation_authorized(intent, actor.as_str(), &intent.action, row) { return Ok(None); }
-            let created = txn.execute_with_variables(
+            let created = txn.execute_client_signed_create(
                 "mutation($input: AgentToolControlMutationInputArg!) { create_AgentToolControl(input: $input) { _docID } }",
                 &serde_json::json!({"input": {
                     "intent_id": intent.intent_id, "intent_json": signed, "client_did": intent.client_did,
@@ -184,6 +185,7 @@ pub async fn submit(
                     "request_doc_id": intent.request_doc_id, "tool_call_id": intent.tool_call_id,
                     "tool_call_doc_id": intent.tool_call_doc_id, "action": intent.action, "state": "pending"
                 }}),
+                gents_protocol::schemas::AGENT_TOOL_CONTROL,
             ).await?;
             let doc_id = crate::store::graphql::created_doc_id(&created, "AgentToolControl")?;
             Ok::<_, anyhow::Error>(Some((doc_id, true)))

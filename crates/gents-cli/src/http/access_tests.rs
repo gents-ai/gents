@@ -532,7 +532,6 @@ async fn foreign_host_is_refused_on_public_private_and_independently_authenticat
         "/enrollment/pending",
         "/accounts/usage/read",
         gents_protocol::serve_lifecycle::control::RUNTIME_CONTROL_PATH,
-        gents_protocol::job::JOB_CONTROL_PATH,
         gents_desktop_core::inference::INFERENCE_SETTINGS_PATH,
         gents_protocol::file_inventory::FILE_INVENTORY_OPERATOR_PATH,
     ] {

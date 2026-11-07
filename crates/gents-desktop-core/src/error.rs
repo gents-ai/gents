@@ -198,9 +198,9 @@ impl From<gents::tools::call::control::client::send::ControlSendError> for Bridg
             | ControlSendError::Rejected { .. } => BridgeErrorCode::PermissionDenied,
             ControlSendError::NotFound => BridgeErrorCode::NotFound,
             ControlSendError::RuntimeRequired => BridgeErrorCode::Unsupported,
-            ControlSendError::Unavailable(_)
-            | ControlSendError::Refused { .. }
-            | ControlSendError::Unconfirmed { .. } => BridgeErrorCode::Unknown,
+            ControlSendError::Unavailable(_) | ControlSendError::Unconfirmed { .. } => {
+                BridgeErrorCode::Unknown
+            }
         };
         Self::new(
             code,

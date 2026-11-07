@@ -1,23 +1,17 @@
 use std::future::Future;
 use std::time::Duration;
 
-use gents_protocol::job::{JobControlKind, JobControlOutcome, JOB_CONTROL_PATH};
-use gents_protocol::process_control::{
-    ProcessControlOutcome, ToolControlIntent, ToolControlReceiptOutcome, PROCESS_CONTROL_PATH,
-};
-use serde::Deserialize;
+use gents_protocol::job::{JobControlKind, JobControlOutcome};
+use gents_protocol::process_control::{ProcessControlOutcome, ToolControlReceiptOutcome};
 
 use super::{ClientControlError, ClientControlObservationError};
-use crate::store::config_client::{
-    ConfigAccess, ConfigClientError, GraphqlEndpoint, TransactionFailure,
-};
+use crate::store::config_client::{ConfigAccess, ConfigClientError, TransactionFailure};
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
 
-const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(15);
 const OBSERVATION_DEADLINE: Duration = Duration::from_secs(30);
 
-/// One signed control action and the runtime route that accepts it.
+/// One signed control action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlAction {
     Job(JobControlKind),
@@ -32,18 +26,11 @@ impl ControlAction {
             Self::ProcessStop => "process_stop",
         }
     }
-
-    fn path(self) -> &'static str {
-        match self {
-            Self::Job(_) => JOB_CONTROL_PATH,
-            Self::ProcessStop => PROCESS_CONTROL_PATH,
-        }
-    }
 }
 
 /// Why a signed control did not return a verified agent receipt. Variants
-/// before submission mean nothing was sent; `Refused` means the runtime
-/// answered without saving it; `Unconfirmed` means it may still take effect.
+/// other than `Rejected` and `Unconfirmed` mean no intent was saved;
+/// `Unconfirmed` means it may still take effect.
 #[derive(Debug, thiserror::Error)]
 pub enum ControlSendError {
     #[error("connect to the owning runtime to control this invocation")]
@@ -56,12 +43,6 @@ pub enum ControlSendError {
     NotFound,
     #[error("the control intent could not be prepared")]
     Unavailable(#[source] anyhow::Error),
-    #[error("the runtime refused control intent {intent_id} (HTTP {status}): {detail}")]
-    Refused {
-        intent_id: String,
-        status: u16,
-        detail: String,
-    },
     #[error("the selected agent rejected control {intent_doc_id}; check this client's permissions and the agent's state")]
     Rejected { intent_doc_id: String },
     #[error("control intent {intent_id} was not confirmed; the action may still take effect")]
@@ -165,7 +146,6 @@ async fn send_and_observe(
     if endpoint.is_anonymous() {
         return Err(ControlSendError::NotAuthorized);
     }
-    let url = control_url(endpoint, action)?;
     let intent = super::prepare(
         access,
         signer,
@@ -176,12 +156,9 @@ async fn send_and_observe(
     )
     .await
     .map_err(ControlSendError::prepared)?;
-    let request = endpoint
-        .authorize(control_client().await?.post(url))
-        .map_err(|error| ControlSendError::Unavailable(error.into()))?
-        .timeout(SUBMISSION_TIMEOUT)
-        .json(&intent);
-    let intent_doc_id = submit(request, &intent).await?;
+    let intent_doc_id = super::submit(access, &intent)
+        .await
+        .map_err(|error| submission_failed(&intent.intent_id, error))?;
     let observed = ObservedIntent {
         intent_id: intent.intent_id,
         intent_doc_id,
@@ -205,111 +182,34 @@ async fn send_and_observe(
     }
 }
 
-fn control_url(
-    endpoint: &GraphqlEndpoint,
-    action: ControlAction,
-) -> Result<reqwest::Url, ControlSendError> {
-    let mut url = reqwest::Url::parse(endpoint.url())
-        .map_err(|error| ControlSendError::Unavailable(error.into()))?;
-    if !matches!(url.scheme(), "http" | "https")
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(ControlSendError::Unavailable(anyhow::anyhow!(
-            "runtime endpoint must be an HTTP URL without credentials"
-        )));
-    }
-    let base = url
-        .path()
-        .strip_suffix("/api/v0/graphql")
-        .ok_or_else(|| {
-            ControlSendError::Unavailable(anyhow::anyhow!(
-                "runtime endpoint has no canonical GraphQL path"
-            ))
-        })?
-        .to_owned();
-    url.set_path(&format!("{base}{}", action.path()));
-    Ok(url)
-}
-
-/// Redirects are refused because the signed bearer is scoped to this runtime.
-async fn control_client() -> Result<&'static reqwest::Client, ControlSendError> {
-    static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
-    CLIENT
-        .get_or_try_init(|| async {
-            tokio::task::spawn_blocking(|| {
-                reqwest::Client::builder()
-                    .redirect(reqwest::redirect::Policy::none())
-                    .build()
-                    .map_err(|error| ControlSendError::Unavailable(error.into()))
-            })
-            .await
-            .map_err(|error| ControlSendError::Unavailable(error.into()))?
-        })
-        .await
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum Accepted {
-    Queued { intent_doc_id: String },
-}
-
-#[derive(Deserialize)]
-struct Failure {
-    error: String,
-}
-
-/// Every answer after the request leaves the client is either an explicit
-/// refusal that saved nothing or an unconfirmed intent.
-async fn submit(
-    request: reqwest::RequestBuilder,
-    intent: &ToolControlIntent,
-) -> Result<String, ControlSendError> {
-    let unconfirmed = |source: anyhow::Error| ControlSendError::Unconfirmed {
-        intent_id: intent.intent_id.clone(),
-        intent_doc_id: None,
-        source,
-    };
-    let response = request
-        .send()
-        .await
-        .map_err(|error| unconfirmed(error.into()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .await
-        .map_err(|error| unconfirmed(error.into()))?;
-    if status.is_success() {
-        return match serde_json::from_slice::<Accepted>(&body) {
-            Ok(Accepted::Queued { intent_doc_id }) => Ok(intent_doc_id),
-            Err(error) => Err(unconfirmed(
-                anyhow::Error::new(error)
-                    .context(format!("runtime returned HTTP {status} without a queued intent")),
-            )),
-        };
-    }
-    let detail = serde_json::from_slice::<Failure>(&body)
-        .map(|failure| failure.error)
-        .unwrap_or_else(|_| format!("runtime returned HTTP {status}"));
-    if status.is_server_error() || status == reqwest::StatusCode::REQUEST_TIMEOUT {
-        return Err(unconfirmed(anyhow::anyhow!(
-            "runtime returned HTTP {status}: {detail}"
-        )));
-    }
-    Err(match status {
-        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
+/// The client's own transaction either refused before saving an intent or
+/// may have committed one.
+fn submission_failed(intent_id: &str, error: ClientControlError) -> ControlSendError {
+    match error {
+        ClientControlError::NotFound => ControlSendError::NotFound,
+        ClientControlError::NotAuthorized | ClientControlError::WrongNode => {
             ControlSendError::NotAuthorized
         }
-        reqwest::StatusCode::NOT_FOUND => ControlSendError::NotFound,
-        status => ControlSendError::Refused {
-            intent_id: intent.intent_id.clone(),
-            status: status.as_u16(),
-            detail,
+        ClientControlError::Unavailable(error)
+            if TransactionFailure::config_client_error(&error)
+                .is_some_and(ConfigClientError::is_permission_denied) =>
+        {
+            ControlSendError::PermissionDenied
+        }
+        ClientControlError::Unavailable(source) => ControlSendError::Unconfirmed {
+            intent_id: intent_id.to_owned(),
+            intent_doc_id: None,
+            source,
         },
-    })
+        ClientControlError::Unconfirmed {
+            intent_doc_id,
+            source,
+        } => ControlSendError::Unconfirmed {
+            intent_id: intent_id.to_owned(),
+            intent_doc_id: Some(intent_doc_id),
+            source,
+        },
+    }
 }
 
 async fn bounded<F>(

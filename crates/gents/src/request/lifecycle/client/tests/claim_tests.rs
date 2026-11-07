@@ -729,6 +729,18 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
             .await
             .unwrap();
     }
+    // `session_writer` confers invoke but not session update, which comes
+    // from the session's `working_agent` or the Agent's `session_admin`
+    // (`Identity.Household.policy`).
+    user_access
+        .add_actor_relationship(
+            "AgentSession",
+            create.session_doc_id.as_ref().unwrap(),
+            "working_agent",
+            &collaborator.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
     crate::sign_agent_request_create(&user, &mut create)
         .await
         .unwrap();
@@ -793,7 +805,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     )
     .await
     .unwrap();
-    let document_race = submit(&node, collaborator.did(), &collaborator_intent)
+    let document_race = submit(&collaborator_access, &collaborator_intent)
         .await
         .unwrap();
     let document_pause = Arc::new(ClaimPause {
@@ -834,6 +846,15 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     );
     let session_doc = create.session_doc_id.as_ref().unwrap();
     user_access
+        .delete_actor_relationship(
+            "AgentSession",
+            session_doc,
+            "working_agent",
+            &collaborator.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
+    user_access
         .add_actor_relationship(
             "AgentSession",
             session_doc,
@@ -861,7 +882,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     )
     .await
     .unwrap();
-    let denied_update = submit(&node, collaborator.did(), &denied_update)
+    let denied_update = submit(&collaborator_access, &denied_update)
         .await
         .unwrap();
     assert_eq!(
@@ -914,7 +935,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     )
     .await
     .unwrap();
-    let denied_invoke = submit(&node, collaborator.did(), &denied_invoke)
+    let denied_invoke = submit(&collaborator_access, &denied_invoke)
         .await
         .unwrap();
     assert_eq!(
@@ -958,7 +979,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     )
     .await
     .unwrap();
-    let denied_read = submit(&node, collaborator.did(), &denied_read)
+    let denied_read = submit(&collaborator_access, &denied_read)
         .await
         .unwrap();
     admin
@@ -1001,11 +1022,11 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     let mut tampered = signed.clone();
     tampered.action = "job_stop".into();
     assert!(matches!(
-        submit(&node, user.did(), &tampered).await,
+        submit(&user_access, &tampered).await,
         Err(crate::tools::call::control::client::ClientControlError::NotAuthorized)
     ));
     assert!(matches!(
-        submit(&node, runtime.did(), &signed).await,
+        submit(&collaborator_access, &signed).await,
         Err(crate::tools::call::control::client::ClientControlError::NotAuthorized)
     ));
     let persisted_tampered = user_access.transact_write("test.control.invalid_signed_intent", |txn| {
@@ -1042,7 +1063,6 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         "the agent rejects a stored intent whose signed operation was changed"
     );
     async fn publish(
-        node: &Arc<defra_node::Node>,
         access: &ConfigAccess,
         user: &KeyIdentity,
         node_did: &str,
@@ -1058,13 +1078,13 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         )
         .await
         .unwrap();
-        submit(node, user.did(), &intent).await.unwrap()
+        submit(access, &intent).await.unwrap()
     }
-    let first = publish(&node, &user_access, &user, runtime.did(), tool_doc).await;
-    let second = publish(&node, &user_access, &user, runtime.did(), tool_doc).await;
-    let third = publish(&node, &user_access, &user, runtime.did(), tool_doc).await;
-    let fourth = publish(&node, &user_access, &user, runtime.did(), tool_doc).await;
-    let fifth = publish(&node, &user_access, &user, runtime.did(), tool_doc).await;
+    let first = publish(&user_access, &user, runtime.did(), tool_doc).await;
+    let second = publish(&user_access, &user, runtime.did(), tool_doc).await;
+    let third = publish(&user_access, &user, runtime.did(), tool_doc).await;
+    let fourth = publish(&user_access, &user, runtime.did(), tool_doc).await;
+    let fifth = publish(&user_access, &user, runtime.did(), tool_doc).await;
     let foreign_access = client_access(&endpoint, &foreign);
     let fake = foreign_access.transact_write("test.control.foreign_claim", |txn| {
         let first = &first; let binding = &binding;
