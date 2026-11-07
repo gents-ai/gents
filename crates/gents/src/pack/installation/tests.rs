@@ -1814,9 +1814,8 @@ fn dependency_loader_preserves_bindings_and_rejects_unknown_legacy_values() {
         overridden.agents[0].description.as_deref(),
         Some("override/fallback")
     );
-    let error = load(&BTreeMap::new(), &BTreeMap::new())
-        .err()
-        .expect("unknown bindings must be rejected");
+    let error =
+        load(&BTreeMap::new(), &BTreeMap::new()).expect_err("unknown bindings must be rejected");
     assert!(error.to_string().contains("ABSENT"));
     assert!(error.to_string().contains("LABEL"));
 }
