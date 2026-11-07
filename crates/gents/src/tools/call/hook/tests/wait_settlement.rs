@@ -178,13 +178,17 @@ async fn wait_process_refuses_a_job_row_with_the_completion_message_text() {
     accept_hook_tool_call(&hook, "job-call", "plugin_job_tool", "{}", None).await;
     let job = fetch_tool_call_row(&hook, &session, "job-call").await;
     let job_doc = job["_docID"].as_str().unwrap();
-    let flipped = node
-        .execute(&format!(
-            r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{job_doc}" }} }}, input: {{ await_mode: "background" }}) {{ _docID }} }}"#
-        ))
-        .await;
-    assert!(!flipped.has_errors(), "{:?}", flipped.errors);
-    crate::tools::call::lifecycle::admission_fixture::write_fixture_job_pin(&node, job_doc)
+    let access = hook.actor_access().unwrap();
+    access
+        .write(
+            "test.wait_settlement.flip_background",
+            &format!(
+                r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{job_doc}" }} }}, input: {{ await_mode: "background" }}) {{ _docID }} }}"#
+            ),
+        )
+        .await
+        .unwrap();
+    crate::tools::call::lifecycle::admission_fixture::write_fixture_job_pin_as(&access, job_doc)
         .await
         .unwrap();
 

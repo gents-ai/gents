@@ -707,7 +707,11 @@ async fn selected_agent_reads_private_background_call_but_other_agent_cannot() {
     .expect("selected agent read")
     .expect("selected agent can read the call");
     assert_eq!(visible.tool_call_id(), call_id);
-    let other = identity::Did::new(crate::test_support::agent_did(&db.node)).unwrap();
+    // An installed Agent of the same runtime: it holds baseline read grants,
+    // so the read is answered and the private call is simply absent.
+    let other_binding =
+        crate::test_support::install_test_agent(&db.node, db.node_identity.did(), "other").await;
+    let other = identity::Did::new(&other_binding.agent_did).unwrap();
     assert!(
         crate::tools::call::lifecycle::ToolCallLifecycle::load_as(
             db.node.clone(),

@@ -170,9 +170,15 @@ async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
         Some(format!("payload-{}", ordering.payload_hash).as_str())
     );
     assert_eq!(
-        crate::session::max_sequence(&node, &session, "did:test:general", None)
-            .await
-            .unwrap() as usize,
+        crate::session::max_sequence_as(
+            &node,
+            &session,
+            &hook.node_did,
+            hook.active_requester_did().await.as_deref(),
+            hook.actor.clone(),
+        )
+        .await
+        .unwrap() as usize,
         ordering.result_sequence
     );
     assert_eq!(

@@ -77,6 +77,18 @@ pub(crate) async fn write_fixture_job_pin(
     write_fixture_job_pin_with_access(&access, &mutation).await
 }
 
+/// [`write_fixture_job_pin`] as `access`'s actor, for a row an Agent owns.
+pub(crate) async fn write_fixture_job_pin_as(
+    access: &crate::ConfigAccess,
+    tool_doc_id: &str,
+) -> anyhow::Result<()> {
+    let mutation = format!(
+        r#"mutation($job_pin: JSON) {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ job_pin: $job_pin }}) {{ _docID }} }}"#,
+        crate::store::graphql::escape_graphql_string(tool_doc_id),
+    );
+    write_fixture_job_pin_with_access(access, &mutation).await
+}
+
 async fn write_fixture_job_pin_with_access(
     access: &crate::ConfigAccess,
     mutation: &str,
