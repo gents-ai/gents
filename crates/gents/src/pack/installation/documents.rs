@@ -767,6 +767,12 @@ async fn prepare_document_pack_install_inner(
             "variable override names undeclared dependency {coordinate:?}"
         );
     }
+    for selected in overrides.values() {
+        anyhow::ensure!(
+            !selected.contains_key("GENTS_PACK_NODE_DID"),
+            "GENTS_PACK_NODE_DID is supplied by the runtime and cannot be overridden"
+        );
+    }
     for slot in requested.keys() {
         anyhow::ensure!(
             std::iter::once(manifest)

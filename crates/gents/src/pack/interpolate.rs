@@ -86,6 +86,12 @@ pub fn override_installed_literals(
     known: &std::collections::BTreeMap<String, Option<String>>,
     locate: &dyn Fn(&str, &str) -> Option<String>,
 ) -> anyhow::Result<()> {
+    for name in overrides.keys() {
+        anyhow::ensure!(
+            !known.contains_key(name),
+            "install variable {name:?} is supplied by the runtime and cannot be overridden"
+        );
+    }
     let mut staged = installed.clone();
     let uses = inspect_install_variables(authored, &|_| Some("inspection".to_owned())).map_err(
         |names| anyhow::anyhow!("cannot inspect install variables: {}", names.join(", ")),
@@ -177,6 +183,16 @@ mod install_variable_conformance {
         )
         .is_err());
         assert_eq!(installed, before);
+        let known = std::collections::BTreeMap::from([("FIRST".into(), Some("node owner".into()))]);
+        assert!(override_installed_literals(
+            &authored,
+            &mut installed,
+            &override_values,
+            &known,
+            &|path, _| Some(path.into())
+        )
+        .is_err());
+        assert_eq!(installed, before);
     }
 
     #[test]
@@ -200,6 +216,7 @@ mod install_variable_conformance {
         let cases: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(cases.len(), 4);
         for case in cases {
+            assert_eq!(case["nodeOverrideAllowed"], false);
             let affected = case["affected"].as_bool().unwrap();
             let replacement = case["replacement"].as_str();
             let first = if affected && replacement.is_none() {
