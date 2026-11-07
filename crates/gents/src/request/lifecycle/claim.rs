@@ -400,12 +400,12 @@ impl RequestLifecycle {
                         return Ok(());
                     }
                     anyhow::ensure!(super::execution_policy::authorize_begin(observed, &generation, now),
-                        "execution begin requires a live claimed generation");
+                        "execution begin requires a live claimed or resuming generation");
                     let response = txn.execute(&format!(r#"mutation {{ update_AgentRequest(
                         docID: "{doc}", filter: {{ _docID: {{ _eq: "{doc}" }}, lifecycle_state: {{ _eq: "{claimed}" }},
                             execution_generation: {{ _eq: "{}" }}, execution_lease_expires_at: {{ _eq: "{}" }} }},
                         input: {{ lifecycle_state: "{processing}" }}
-                    ) {{ _docID }} }}"#, escape_graphql_string(&generation), escape_graphql_string(expiry), claimed = RequestLifecycleState::Claimed.as_str(), processing = RequestLifecycleState::Processing.as_str())).await?;
+                    ) {{ _docID }} }}"#, escape_graphql_string(&generation), escape_graphql_string(expiry), claimed = state.as_str(), processing = RequestLifecycleState::Processing.as_str())).await?;
                     anyhow::ensure!(response["data"]["update_AgentRequest"].as_array()
                         .is_some_and(|rows| rows.len() == 1), "execution begin lost its request CAS");
                     Ok(())

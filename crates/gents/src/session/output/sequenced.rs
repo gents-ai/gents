@@ -15,7 +15,7 @@ use super::replay_violation;
 /// input. Other publications belonging to that request (notably tool results
 /// and background notifications) remain history. This binds PromptAssembly.CurrentInput;
 /// request membership alone is not an input classification.
-pub(super) fn is_current_admission_input(
+pub(in crate::session) fn is_current_admission_input(
     header: &gents_protocol::output::TranscriptMessage,
     request_doc_id: &str,
 ) -> bool {

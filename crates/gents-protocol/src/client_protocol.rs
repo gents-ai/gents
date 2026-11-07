@@ -68,7 +68,10 @@ pub fn derive_attempt(view: &AttemptView) -> ClientTurnState {
     }
     match view.request.lifecycle_state {
         Request::WorkspaceBindingPending | Request::Pending => ClientTurnState::WaitingForClaim,
-        Request::Claimed | Request::Processing => ClientTurnState::Running,
+        Request::Claimed
+        | Request::Processing
+        | Request::WaitingForBackend
+        | Request::ResumingBackend => ClientTurnState::Running,
         Request::Completed => ClientTurnState::Completed,
         Request::Failed | Request::Dead => ClientTurnState::Failed,
         Request::Superseded => ClientTurnState::Superseded,

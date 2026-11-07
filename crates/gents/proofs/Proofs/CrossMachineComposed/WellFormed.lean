@@ -127,6 +127,27 @@ theorem allToolsCoherent_preserved
     | continue_processing _ _ h_post =>
       exact coherent_of_request_clock_eq (h_coherent tool h_in_pre h_live) h_requestId
         (by simp [h_post]) (by simp [h_post])
+    | park_backend _ _ _ _ _ h_post =>
+      exact coherent_of_request_clock_eq (h_coherent tool h_in_pre h_live) h_requestId
+        (by simp [h_post]) (by simp [h_post])
+    | resume_backend _ _ _ _ _ h_post =>
+      exact coherent_of_request_clock_eq (h_coherent tool h_in_pre h_live) h_requestId
+        (by simp [h_post]) (by simp [h_post])
+    | begin_resumed _ _ _ _ h_post =>
+      exact coherent_of_request_clock_eq (h_coherent tool h_in_pre h_live) h_requestId
+        (by simp [h_post]) (by simp [h_post])
+    | interrupt_resuming _ _ _ h_post =>
+      exact coherent_of_request_clock_eq (h_coherent tool h_in_pre h_live) h_requestId
+        (by simp [h_post]) (by simp [h_post])
+    | expire_resuming _ _ _ _ h_post =>
+      exact coherent_of_request_clock_eq (h_coherent tool h_in_pre h_live) h_requestId
+        (by simp [h_post]) (by simp [h_post])
+    | interrupt_backend_wait _ _ _ h_post =>
+      exact coherent_of_request_clock_eq (h_coherent tool h_in_pre h_live) h_requestId
+        (by simp [h_post]) (by simp [h_post])
+    | expire_backend_wait _ _ _ _ h_post =>
+      exact coherent_of_request_clock_eq (h_coherent tool h_in_pre h_live) h_requestId
+        (by simp [h_post]) (by simp [h_post])
     | finish _ _ h_post =>
       exact coherent_of_request_clock_eq (h_coherent tool h_in_pre h_live) h_requestId
         (by simp [h_post]) (by simp [h_post])
@@ -308,6 +329,20 @@ theorem noToolsBeforeProcessing_preserved
           simpa [h_post] using h_wbp
         rw [h_state] at h_pre_wbp
         cases h_pre_wbp
+    | park_backend _ _ _ _ _ h_post =>
+      simp [h_post]
+    | resume_backend _ _ _ _ _ h_post =>
+      simp [h_post]
+    | begin_resumed _ _ _ _ h_post =>
+      simp [h_post]
+    | interrupt_resuming _ _ _ h_post =>
+      simp [h_post]
+    | expire_resuming _ _ _ _ h_post =>
+      simp [h_post]
+    | interrupt_backend_wait _ _ _ h_post =>
+      simp [h_post]
+    | expire_backend_wait _ _ _ _ h_post =>
+      simp [h_post]
     | finish _ _ h_post =>
       have h_state_post : post.request.state = .completed := by
         simp [h_post]

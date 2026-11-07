@@ -8,6 +8,8 @@ use crate::request::watcher::AgentRequest;
 use crate::session;
 use crate::store::graphql::{escape_graphql_string, response_has_documents};
 
+mod backend_wait;
+pub(crate) use backend_wait::{fresh_healthy, repark_expired_resume};
 mod background_wake_recovery;
 pub use background_wake_recovery::{background_wake_next_retry_at, background_wake_retry_delay};
 mod claim;
@@ -27,7 +29,9 @@ pub use crate::triggers::engine::durable::request_arrival_order;
 pub(crate) use execution_lease::revoke_execution_preserving_output_at;
 #[cfg(test)]
 pub(crate) use execution_lease::terminalize_owned_at;
-pub(crate) use execution_lease::{ExecutionOwnershipLost, RequestExecutionLease};
+pub(crate) use execution_lease::{
+    terminalize_parked_request, ExecutionOwnershipLost, RequestExecutionLease,
+};
 pub use execution_lease::{RequestTerminalOutcome, TerminalizeResult};
 pub(crate) use gents_loop::execution_policy;
 #[cfg(test)]
@@ -306,6 +310,7 @@ enum LocalLifecycleState {
     Pending,
     Claimed,
     Streaming,
+    Parked,
     Completed,
     Failed,
     Interrupted,
@@ -540,9 +545,14 @@ pub struct RequestLifecycle {
     fold_admitted: Vec<String>,
     folded_selection: Vec<queue::FoldedInput>,
     natural_finish_allowed: bool,
+    resumed_from_backend: bool,
 }
 
 impl RequestLifecycle {
+    pub(crate) fn resumed_from_backend(&self) -> bool {
+        self.resumed_from_backend
+    }
+
     pub(crate) fn allow_natural_finish(&mut self, allowed: bool) {
         self.natural_finish_allowed = allowed;
     }

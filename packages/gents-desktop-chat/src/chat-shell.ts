@@ -35,6 +35,10 @@ export function requestProgressPresentation(
       return { label: "Claimed", animated: true };
     case "processing":
       return { label: "Working", animated: true };
+    case "waitingForBackend":
+      return { label: "Waiting for provider", animated: true };
+    case "resumingBackend":
+      return { label: "Reconnecting to provider", animated: true };
     case "completed":
       return { label: "Completed", animated: false };
     case "failed":

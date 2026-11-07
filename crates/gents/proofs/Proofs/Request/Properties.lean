@@ -8,7 +8,7 @@ theorem terminal_implies_released_local
     (h_term : isTerminal r.state) :
     r.admission = .released := by
   cases r with
-  | mk state origin backend admission deadline requestDeadline claimTime currentTime retryCount maxRetries messageSeq persistence interruptRequestedAt validUntil requestHop causedByParentRequestId causedByParentToolCallId =>
+  | mk state origin backend admission deadline requestDeadline claimTime currentTime retryCount maxRetries messageSeq persistence interruptRequestedAt validUntil requestHop causedByParentRequestId causedByParentToolCallId backendAttempts backendRetryAt =>
     cases h_term with
     | inl h =>
       cases h
@@ -89,6 +89,27 @@ theorem transition_produces_coherent
   | continue_processing h_state h_admission h_post =>
     rw [coherent, h_post]
     simp [coherentStateAdmission, h_state, h_admission]
+  | park_backend _ _ _ _ _ h_post =>
+    rw [coherent, h_post]
+    simp [coherentStateAdmission]
+  | resume_backend _ _ _ _ _ h_post =>
+    rw [coherent, h_post]
+    simp [coherentStateAdmission]
+  | begin_resumed _ _ _ _ h_post =>
+    rw [coherent, h_post]
+    simp [coherentStateAdmission]
+  | interrupt_resuming _ _ _ h_post =>
+    rw [coherent, h_post]
+    simp [coherentStateAdmission]
+  | expire_resuming _ _ _ _ h_post =>
+    rw [coherent, h_post]
+    simp [coherentStateAdmission]
+  | interrupt_backend_wait _ h_release _ h_post =>
+    rw [coherent, h_post]
+    simp [coherentStateAdmission, h_release]
+  | expire_backend_wait _ h_release _ _ h_post =>
+    rw [coherent, h_post]
+    simp [coherentStateAdmission, h_release]
   | finish _ _ h_post =>
     rw [coherent, h_post]
     simp [coherentStateAdmission]
@@ -117,14 +138,15 @@ theorem claimed_coherent_cases
     (h_coherent : r.coherent) :
     r.admission = .waiting ∨ r.admission = .acquired := by
   cases r with
-  | mk state origin backend admission deadline requestDeadline claimTime currentTime retryCount maxRetries messageSeq persistence interruptRequestedAt validUntil requestHop causedByParentRequestId causedByParentToolCallId =>
+  | mk state origin backend admission deadline requestDeadline claimTime currentTime retryCount maxRetries messageSeq persistence interruptRequestedAt validUntil requestHop causedByParentRequestId causedByParentToolCallId backendAttempts backendRetryAt =>
     cases h_state
     cases admission <;> simp [coherent, coherentStateAdmission] at h_coherent ⊢
 
 theorem claim_requires_ttl_open
     {pre post : RequestContext}
     (h_trans : Transition pre post)
-    (h_claimed : post.state = .claimed) :
+    (h_claimed : post.state = .claimed)
+    (h_pending : pre.state = .pending) :
     pre.ttlOpen := by
   cases h_trans with
   | bind_workspace _ _ h_post =>
@@ -139,6 +161,20 @@ theorem claim_requires_ttl_open
       simp [h_post] at h_claimed
   | continue_processing h_state _ h_post =>
       simp [h_post, h_state] at h_claimed
+  | park_backend _ _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | resume_backend h_state _ _ _ _ _ =>
+      simp [h_state] at h_pending
+  | begin_resumed _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_resuming _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | expire_resuming _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_backend_wait _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | expire_backend_wait _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
   | finish _ _ h_post =>
       simp [h_post] at h_claimed
   | fail _ _ h_post =>
@@ -159,9 +195,10 @@ theorem claim_with_ttl_bounds_time
     {t : Time}
     (h_trans : Transition pre post)
     (h_claimed : post.state = .claimed)
+    (h_pending : pre.state = .pending)
     (h_ttl : pre.validUntil = some t) :
     pre.currentTime ≤ t := by
-  have h_open := claim_requires_ttl_open h_trans h_claimed
+  have h_open := claim_requires_ttl_open h_trans h_claimed h_pending
   unfold ttlOpen at h_open
   simpa [h_ttl] using h_open
 
@@ -170,6 +207,7 @@ theorem claim_deadline_explicit
     {t : Time}
     (h_trans : Transition pre post)
     (h_claimed : post.state = .claimed)
+    (h_pending : pre.state = .pending)
     (h_requestDeadline : pre.requestDeadline = some t) :
     post.deadline = t := by
   cases h_trans with
@@ -185,6 +223,20 @@ theorem claim_deadline_explicit
       simp [h_post] at h_claimed
   | continue_processing h_state _ h_post =>
       simp [h_post, h_state] at h_claimed
+  | park_backend _ _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | resume_backend h_state _ _ _ _ _ =>
+      simp [h_state] at h_pending
+  | begin_resumed _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_resuming _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | expire_resuming _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_backend_wait _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | expire_backend_wait _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
   | finish _ _ h_post =>
       simp [h_post] at h_claimed
   | fail _ _ h_post =>
@@ -204,6 +256,7 @@ theorem claim_deadline_default
     {pre post : RequestContext}
     (h_trans : Transition pre post)
     (h_claimed : post.state = .claimed)
+    (h_pending : pre.state = .pending)
     (h_requestDeadline : pre.requestDeadline = none) :
     post.deadline = pre.currentTime + 1 := by
   cases h_trans with
@@ -219,6 +272,20 @@ theorem claim_deadline_default
       simp [h_post] at h_claimed
   | continue_processing h_state _ h_post =>
       simp [h_post, h_state] at h_claimed
+  | park_backend _ _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | resume_backend h_state _ _ _ _ _ =>
+      simp [h_state] at h_pending
+  | begin_resumed _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_resuming _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | expire_resuming _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_backend_wait _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | expire_backend_wait _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
   | finish _ _ h_post =>
       simp [h_post] at h_claimed
   | fail _ _ h_post =>

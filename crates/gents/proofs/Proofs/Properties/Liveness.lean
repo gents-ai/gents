@@ -12,12 +12,14 @@ def terminationMeasure (r : RequestContext) : Nat :=
   | .workspaceBindingPending => r.maxRetries + 5
   | .pending => r.maxRetries + 4
   | .claimed => r.maxRetries + 3
-  | .processing => (r.maxRetries - r.retryCount) + 2
+  | .processing | .waitingForBackend | .resumingBackend => (r.maxRetries - r.retryCount) + 2
 
 theorem phase_change_decreases_measure
     {pre post : RequestContext}
     (h_trans : RequestContext.Transition pre post)
-    (h_phase_change : pre.state ≠ post.state) :
+    (h_phase_change : pre.state ≠ post.state)
+    (h_no_backend_wait : pre.state ≠ .waitingForBackend ∧ pre.state ≠ .resumingBackend ∧
+      post.state ≠ .waitingForBackend ∧ post.state ≠ .resumingBackend) :
     terminationMeasure post < terminationMeasure pre := by
   cases h_trans with
   | bind_workspace h_pre _ h_post =>
@@ -40,6 +42,20 @@ theorem phase_change_decreases_measure
   | continue_processing h_pre _ h_post =>
     rw [h_post] at h_phase_change
     exact (h_phase_change rfl).elim
+  | park_backend _ _ _ _ _ h_post =>
+    exact (h_no_backend_wait.2.2.1 (by simp [h_post])).elim
+  | resume_backend h_pre _ _ _ _ _ =>
+    exact (h_no_backend_wait.1 h_pre).elim
+  | begin_resumed h_pre _ _ _ _ =>
+    exact (h_no_backend_wait.2.1 h_pre).elim
+  | interrupt_resuming h_pre _ _ _ =>
+    exact (h_no_backend_wait.2.1 h_pre).elim
+  | expire_resuming h_pre _ _ _ _ =>
+    exact (h_no_backend_wait.2.1 h_pre).elim
+  | interrupt_backend_wait h_pre _ _ _ =>
+    exact (h_no_backend_wait.1 h_pre).elim
+  | expire_backend_wait h_pre _ _ _ _ =>
+    exact (h_no_backend_wait.1 h_pre).elim
   | finish h_pre _ h_post =>
     rw [h_post]
     simp [terminationMeasure, h_pre]
@@ -83,10 +99,5 @@ theorem claimed_eventually_terminal
       simp at h_pending
     ·
       intro h_anti
-      cases h_anti with
-      | inl h_progress =>
-          simp [post, postRequest] at h_progress
-      | inr h_begin =>
-          obtain ⟨_, h_proc⟩ := h_begin
-          simp [post, postRequest] at h_proc
+      simp [post, postRequest] at h_anti
   refine ⟨post, ComposedState.Trace.step h_step ComposedState.Trace.refl, failed_is_terminal⟩

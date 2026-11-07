@@ -207,23 +207,25 @@ active work with unknown completion state. An execution that loses request
 ownership mid-work is `interrupted` too: its result is unknown to this owner,
 so ordinary outcome phases are skipped while cleanup still runs, and whatever
 terminal the request's current owner records stands. -/
-inductive AgentResult where | success | failure | cancelled | interrupted
+inductive AgentResult where | success | failure | cancelled | interrupted | parked
   deriving DecidableEq, Repr
 inductive PrimaryError where | hook (id : String) | agent
   deriving DecidableEq, Repr
-inductive TaskOutcome where | success | failure (err : PrimaryError) | interrupted
+inductive TaskOutcome where | success | failure (err : PrimaryError) | interrupted | parked
   deriving DecidableEq, Repr
 /-- Reuse of the existing request terminal-result abstraction: success
 completes the request, failure fails it, interruption is the existing
 terminal `RequestState.interrupted`. -/
 def TaskOutcome.toRequestState : TaskOutcome → RequestState
   | .success => .completed | .failure _ => .failed | .interrupted => .interrupted
-theorem TaskOutcome.toRequestState_terminal (o : TaskOutcome) :
+  | .parked => .waitingForBackend
+theorem TaskOutcome.toRequestState_terminal (o : TaskOutcome) (h : o ≠ .parked) :
     HasTerminal.isTerminal o.toRequestState := by
   cases o with
   | success => exact Or.inl rfl
   | failure _ => exact Or.inr (Or.inl rfl)
   | interrupted => exact Or.inr (Or.inr (Or.inr (Or.inr rfl)))
+  | parked => exact False.elim (h rfl)
 structure HookAttempt where
   hookId : String
   result : CommandResult
@@ -310,11 +312,12 @@ workspace seal and integration, so `afterSuccess` gates the request's terminal
 but never those effects; how hooks relate to workspace integration is an open
 design question, and current workspace behavior is preserved until it is
 decided. Hook time also counts against the request deadline fixed at claim. -/
-def runTaskBase (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) : RunResult :=
-  let before := runPhase (hooksOfPhase hooks .before) exec
+def runTaskAfterBefore (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult)
+    (before : List HookAttempt) : RunResult :=
   let base : RunResult :=
     { beforeAttempted := before, finallyAttempted := runFinally (hooksOfPhase hooks .finally) exec }
   match phaseOutcome before with
+  | .parked => base
   | .interrupted => { base with outcome := .interrupted }
   | .failure error =>
     { base with
@@ -323,6 +326,7 @@ def runTaskBase (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) 
   | .success =>
     let running := { base with agentResult := some agent }
     match agent with
+    | .parked => { running with outcome := .parked, finallyAttempted := [] }
     | .cancelled | .interrupted => { running with outcome := .interrupted }
     | .success =>
       let after := runPhase (hooksOfPhase hooks .afterSuccess) exec
@@ -331,6 +335,21 @@ def runTaskBase (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) 
       { running with
         outcome := .failure .agent,
         afterFailureAttempted := runPhase (hooksOfPhase hooks .afterFailure) exec }
+
+/-- A resumed execution receives the recorded preparation results instead of
+launching those host commands again. -/
+def runTaskBase (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) : RunResult :=
+  runTaskAfterBefore hooks exec agent (runPhase (hooksOfPhase hooks .before) exec)
+
+def resumeTask (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult)
+    (recordedBefore : List HookAttempt) : RunResult :=
+  runTaskAfterBefore hooks exec agent recordedBefore
+
+theorem resume_retains_before_observations (hooks : List TaskHook) (exec : HookExec)
+    (agent : AgentResult) (recordedBefore : List HookAttempt) :
+    (resumeTask hooks exec agent recordedBefore).beforeAttempted = recordedBefore := by
+  cases hp : phaseOutcome recordedBefore <;> cases agent <;>
+    simp [resumeTask, runTaskAfterBefore, hp]
 
 /-- A configured skip is a successful terminal decision, not a successful
 before phase: the agent and both ordinary after phases are not run. Cleanup
@@ -370,27 +389,39 @@ theorem skip_success_requires_processing {Generation : Type}
       RequestExecutionLease.canFinalize { world with request := .processing } .completed := by
   simp [RequestExecutionLease.canFinalize]
 
-theorem runTaskBase_finally_all (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) :
+theorem runTaskBase_finally_all (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult)
+    (h_not_parked : agent ≠ .parked) :
     (runTaskBase hooks exec agent).finallyAttempted.map HookAttempt.hookId =
       (hooksOfPhase hooks .finally).map TaskHook.hookId := by
   cases h : phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) <;>
-    cases agent <;> simp [runTaskBase, h, runFinally_all]
+    cases agent <;> simp_all [runTaskBase, runTaskAfterBefore, runFinally_all]
 
-theorem runTask_finally_all (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) :
+theorem runTask_finally_all (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult)
+    (h_not_parked : agent ≠ .parked) :
     (runTask hooks exec agent).finallyAttempted.map HookAttempt.hookId =
       (hooksOfPhase hooks .finally).map TaskHook.hookId := by
   cases h : (runPhase (hooksOfPhase hooks .before) exec).find?
       (fun a => !a.result.succeeded) with
-  | none => simp [runTask, h, runTaskBase_finally_all]
+  | none => simp [runTask, h, runTaskBase_finally_all, h_not_parked]
   | some attempt =>
     simp only [runTask, h]
-    split <;> simp [runTaskBase_finally_all, runFinally_all]
+    split <;> simp [runTaskBase_finally_all, runFinally_all, h_not_parked]
+
+/-- A parked execution keeps the existing hook journal and defers every
+outcome and cleanup phase until the request actually finishes. -/
+theorem parked_defers_after_and_cleanup (hooks : List TaskHook) (exec : HookExec)
+    (hb : phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) = .success) :
+    (runTaskBase hooks exec .parked).outcome = .parked ∧
+    (runTaskBase hooks exec .parked).afterSuccessAttempted = [] ∧
+    (runTaskBase hooks exec .parked).afterFailureAttempted = [] ∧
+    (runTaskBase hooks exec .parked).finallyAttempted = [] := by
+  simp [runTaskBase, runTaskAfterBefore, hb]
 
 theorem runTaskBase_agent_attempt_iff (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) :
     (runTaskBase hooks exec agent).agentResult = some agent ↔
       phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) = .success := by
   cases h : phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) <;>
-    cases agent <;> simp [runTaskBase, h]
+    cases agent <;> simp [runTaskBase, runTaskAfterBefore, h]
 
 theorem runTaskBase_beforeFailure (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult)
     (error : PrimaryError)
@@ -399,20 +430,20 @@ theorem runTaskBase_beforeFailure (hooks : List TaskHook) (exec : HookExec) (age
     (runTaskBase hooks exec agent).agentResult = none ∧
     (runTaskBase hooks exec agent).afterSuccessAttempted = [] ∧
     (runTaskBase hooks exec agent).afterFailureAttempted =
-      runPhase (hooksOfPhase hooks .afterFailure) exec := by simp [runTaskBase, hb]
+      runPhase (hooksOfPhase hooks .afterFailure) exec := by simp [runTaskBase, runTaskAfterBefore, hb]
 
 theorem runTaskBase_agentSuccess (hooks : List TaskHook) (exec : HookExec)
     (hb : phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) = .success) :
     (runTaskBase hooks exec .success).afterFailureAttempted = [] ∧
     (runTaskBase hooks exec .success).afterSuccessAttempted =
-      runPhase (hooksOfPhase hooks .afterSuccess) exec := by simp [runTaskBase, hb]
+      runPhase (hooksOfPhase hooks .afterSuccess) exec := by simp [runTaskBase, runTaskAfterBefore, hb]
 
 theorem runTaskBase_agentFailure (hooks : List TaskHook) (exec : HookExec)
     (hb : phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) = .success) :
     (runTaskBase hooks exec .failure).outcome = .failure .agent ∧
     (runTaskBase hooks exec .failure).afterSuccessAttempted = [] ∧
     (runTaskBase hooks exec .failure).afterFailureAttempted =
-      runPhase (hooksOfPhase hooks .afterFailure) exec := by simp [runTaskBase, hb]
+      runPhase (hooksOfPhase hooks .afterFailure) exec := by simp [runTaskBase, runTaskAfterBefore, hb]
 
 theorem runTaskBase_interrupted (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult)
     (hb : phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) = .success)
@@ -420,7 +451,7 @@ theorem runTaskBase_interrupted (hooks : List TaskHook) (exec : HookExec) (agent
     (runTaskBase hooks exec agent).outcome = .interrupted ∧
     (runTaskBase hooks exec agent).afterSuccessAttempted = [] ∧
     (runTaskBase hooks exec agent).afterFailureAttempted = [] := by
-  rcases ha with rfl | rfl <;> simp [runTaskBase, hb]
+  rcases ha with rfl | rfl <;> simp [runTaskBase, runTaskAfterBefore, hb]
 
 def runOrReject (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) : Option RunResult :=
   (admitHooks hooks).map (fun admitted => runTask admitted exec agent)

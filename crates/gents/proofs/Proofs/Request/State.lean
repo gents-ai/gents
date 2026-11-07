@@ -1,4 +1,5 @@
 import Proofs.Basic
+import Proofs.Request.BackendWake
 import Proofs.Persistence
 import Proofs.Scheduling
 import Proofs.ToolExecution.State
@@ -40,6 +41,11 @@ inductive RequestState where
   | pending
   | claimed
   | processing
+  /-- Work parked after an availability failure; the request retains its
+  original deadline and does not hold an execution slot. -/
+  | waitingForBackend
+  /-- A previously started request reacquiring its execution slot. -/
+  | resumingBackend
   | completed
   | failed
   | superseded
@@ -54,6 +60,8 @@ def toDefraDB : RequestState → String
   | .pending => "pending"
   | .claimed => "claimed"
   | .processing => "processing"
+  | .waitingForBackend => "waitingForBackend"
+  | .resumingBackend => "resumingBackend"
   | .completed => "completed"
   | .failed => "failed"
   | .superseded => "superseded"
@@ -65,6 +73,8 @@ def fromDefraDB? : String → Option RequestState
   | "pending" => some .pending
   | "claimed" => some .claimed
   | "processing" => some .processing
+  | "waitingForBackend" => some .waitingForBackend
+  | "resumingBackend" => some .resumingBackend
   | "completed" => some .completed
   | "failed" => some .failed
   | "superseded" => some .superseded
@@ -122,6 +132,24 @@ instance : HasTerminal RequestState where
             | inr h => cases h with
               | inl h => exact absurd h (by decide)
               | inr h => exact absurd h (by decide))
+    | .waitingForBackend => isFalse (by intro h; cases h with
+        | inl h => exact absurd h (by decide)
+        | inr h => cases h with
+          | inl h => exact absurd h (by decide)
+          | inr h => cases h with
+            | inl h => exact absurd h (by decide)
+            | inr h => cases h with
+              | inl h => exact absurd h (by decide)
+              | inr h => exact absurd h (by decide))
+    | .resumingBackend => isFalse (by intro h; cases h with
+        | inl h => exact absurd h (by decide)
+        | inr h => cases h with
+          | inl h => exact absurd h (by decide)
+          | inr h => cases h with
+            | inl h => exact absurd h (by decide)
+            | inr h => cases h with
+              | inl h => exact absurd h (by decide)
+              | inr h => exact absurd h (by decide))
 
 end RequestState
 
@@ -143,15 +171,29 @@ structure RequestContext where
   requestHop                : Nat := 0
   causedByParentRequestId      : Option RequestId := none
   causedByParentToolCallId     : Option ToolExecution.ToolCallId := none
+  /-- Availability attempts are independent of the goal and request retry budget. -/
+  backendAttempts : Nat := 0
+  backendRetryAt : Option Time := none
   deriving Repr
 
 namespace RequestContext
+
+def backendDue (r : RequestContext) : Prop :=
+  match r.backendRetryAt with
+  | none => False
+  | some wake => wake ≤ r.currentTime
+
+instance (r : RequestContext) : Decidable r.backendDue := by
+  unfold backendDue
+  cases r.backendRetryAt <;> infer_instance
 
 def coherentStateAdmission : RequestState → AdmissionState → Prop
   | .workspaceBindingPending, a => a = .released
   | .pending, a => a = .released
   | .claimed, a => a = .waiting ∨ a = .acquired
   | .processing, a => a = .executing
+  | .waitingForBackend, a => a = .released
+  | .resumingBackend, a => a = .waiting ∨ a = .acquired
   | .completed, a => a = .released
   | .failed, a => a = .released
   | .superseded, a => a = .released
@@ -203,6 +245,8 @@ def releaseToTerminal (r : RequestContext) (terminal : RequestState) : RequestCo
   | .pending => { r with admission := .released }
   | .claimed => { r with admission := .released }
   | .processing => { r with admission := .released }
+  | .waitingForBackend => { r with admission := .released }
+  | .resumingBackend => { r with admission := .released }
 
 theorem releaseToTerminal_state
     {r : RequestContext} {terminal : RequestState}

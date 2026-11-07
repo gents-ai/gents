@@ -26,6 +26,10 @@ struct AttemptAuditChannel {
 
 pub use super::CaptureScopeKind;
 
+pub fn next_scope_sequence(persisted: impl IntoIterator<Item = u64>) -> Option<u64> {
+    persisted.into_iter().max().unwrap_or(0).checked_add(1)
+}
+
 #[derive(Clone, Debug)]
 pub struct PendingCapture {
     pub capture_scope: String,
@@ -86,6 +90,31 @@ impl RequestCaptureScope {
 
     pub fn set_compaction_provider_family(&mut self, family: String) {
         self.compaction_provider_family = Some(family);
+    }
+
+    /// Restore allocation counters before the resumed execution can arm calls.
+    pub fn restore_allocations(
+        &mut self,
+        scopes: impl IntoIterator<Item = gents_protocol::rendered_request::CaptureScope>,
+    ) -> Result<(), &'static str> {
+        let mut grouped: BTreeMap<CaptureScopeKind, Vec<u64>> = BTreeMap::new();
+        for scope in scopes {
+            grouped.entry(scope.kind).or_default().push(scope.seq);
+        }
+        let mut allocated = BTreeMap::new();
+        for (kind, sequences) in grouped {
+            let next = next_scope_sequence(sequences).ok_or("capture scope sequence exhausted")?;
+            allocated.insert(kind, next - 1);
+        }
+        let state = self
+            .state
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !state.allocated.is_empty() || !state.armed_labels.is_empty() {
+            return Err("capture scope is already active");
+        }
+        state.allocated = allocated;
+        Ok(())
     }
 
     pub fn context(&self) -> &RenderedRequestContext {

@@ -20,6 +20,7 @@ pub(super) struct RuntimeContext {
     pub(super) node: Arc<defra_node::EmbeddedNode>,
     pub(super) tool_runtime: ToolRuntimeContext,
     pub(super) admission_registry: AdmissionRegistry,
+    pub(super) backend_health: crate::inference::backends::health::BackendHealthMap,
     pub(super) hook_failure_policy: crate::tools::call::hook::FailurePolicy,
     pub(super) rendered_request_capture_factory:
         Option<crate::inference::rendered_request::RenderedRequestCaptureFactory>,
@@ -259,6 +260,7 @@ impl RuntimeContext {
             request_admission,
         })?
         .with_inference_observations(self.inference_observations.clone())
+        .with_backend_health(self.backend_health.clone())
         .with_replay_issuer(replay_issuer)
         .with_account_hops(account_hops)
         .with_approval_home(

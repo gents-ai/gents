@@ -57,7 +57,7 @@ pub(crate) use history::load_history_through_sequence;
 pub use history::{load_history, sequence_message_key};
 pub(crate) use history::{
     load_sequenced_history_for_request, load_sequenced_history_projection,
-    retry_has_published_input,
+    resumed_request_has_published_input, retry_has_published_input,
 };
 pub use observations::apply_title_in_txn;
 pub(crate) use observations::load_latest_requests_in_txn;

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use tokio::sync::RwLock;
+use tokio::sync::{watch, RwLock};
 
 use crate::inference::backends::registry::InferenceBackend;
 
@@ -136,14 +136,29 @@ impl BackendHealthSnapshot {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct BackendHealthMap {
     inner: Arc<RwLock<RapidHashMap<String, BackendHealthEntry>>>,
+    changed: watch::Sender<()>,
+}
+
+impl Default for BackendHealthMap {
+    fn default() -> Self {
+        let (changed, _) = watch::channel(());
+        Self {
+            inner: Arc::new(RwLock::new(RapidHashMap::default())),
+            changed,
+        }
+    }
 }
 
 impl BackendHealthMap {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn subscribe_observations(&self) -> watch::Receiver<()> {
+        self.changed.subscribe()
     }
 
     pub async fn get(&self, backend_id: &str) -> Option<BackendHealthSnapshot> {
@@ -152,6 +167,27 @@ impl BackendHealthMap {
             .await
             .get(backend_id)
             .map(|entry| snapshot_from_entry(backend_id, entry))
+    }
+
+    pub(crate) async fn healthy_observed_at(
+        &self,
+        node: &defra_node::EmbeddedNode,
+        node_did: &str,
+        backend_id: &str,
+    ) -> anyhow::Result<Option<DateTime<Utc>>> {
+        let Some(observation) = self.get(backend_id).await else {
+            return Ok(None);
+        };
+        let Some(backend) =
+            crate::inference::backends::registry::lookup_backend(node, node_did, backend_id)
+                .await?
+        else {
+            return Ok(None);
+        };
+        Ok(
+            (observation.state_for(&backend) == Some(BackendHealthState::Healthy))
+                .then_some(observation.last_probe_at),
+        )
     }
 
     pub async fn snapshot(&self) -> RapidHashMap<String, BackendHealthSnapshot> {
@@ -212,6 +248,7 @@ impl BackendHealthMap {
 
     pub(crate) async fn set_entry(&self, backend_id: String, entry: BackendHealthEntry) {
         self.inner.write().await.insert(backend_id, entry);
+        self.changed.send_replace(());
     }
 
     pub(crate) async fn retain_backends(&self, backend_ids: &RapidHashSet<String>) {

@@ -1,0 +1,8 @@
+type AgentRequestBackendWait @branchable {
+    request_doc_id: String @index(unique: true) @immutable
+    node_did: String @index @immutable
+    claim_cid: String @immutable
+    attempts: Int
+    retry_at: String
+    wait_started_at: String
+}

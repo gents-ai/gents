@@ -78,18 +78,47 @@ where
         );
         lifecycle.set_execution_lease_duration(self.agent_config.stream_liveness_timeout);
         lifecycle.set_configured_max_total_tokens(self.agent_config.max_total_tokens);
-        lifecycle.set_fold_admitted(self.verified_fold_admissions(&request).await);
+        let parked = if request.execution_generation.is_some() {
+            match lifecycle.is_waiting_for_backend().await {
+                Ok(parked) => parked,
+                Err(error) => {
+                    tracing::warn!(request_id = %request.request_id, %error, "could not inspect request recovery state");
+                    return Ok(());
+                }
+            }
+        } else {
+            false
+        };
+        if !parked {
+            lifecycle.set_fold_admitted(self.verified_fold_admissions(&request).await);
+        }
 
-        let claim_result = lifecycle
-            .claim_with_identity()
-            .instrument(tracing::info_span!(
-                "request.claim",
-                request_id = %request.request_id,
-                session_id = %request.session_id,
-                node_did = %request.node_did,
-                agent_id = %self.agent_config.agent_id,
-            ))
-            .await;
+        let claim_result = async {
+            if parked {
+                let observed = if let Some(health) = &self.backend_health {
+                    health
+                        .healthy_observed_at(&self.node, &request.node_did, lifecycle.backend_id())
+                        .await?
+                } else {
+                    None
+                };
+                if lifecycle.wake_for_backend(observed).await? {
+                    Ok(ClaimOutcome::Claimed)
+                } else {
+                    Ok(ClaimOutcome::Queued)
+                }
+            } else {
+                lifecycle.claim_with_identity().await
+            }
+        }
+        .instrument(tracing::info_span!(
+            "request.claim",
+            request_id = %request.request_id,
+            session_id = %request.session_id,
+            node_did = %request.node_did,
+            agent_id = %self.agent_config.agent_id,
+        ))
+        .await;
 
         match claim_result {
             Ok(ClaimOutcome::Claimed) => {
@@ -325,7 +354,7 @@ where
 
         let prepared_hooks = request::prepare_unless_interrupted(
             &mut interrupt_rx,
-            self.prepare_task_hooks(&request),
+            self.prepare_task_hooks(&request, lifecycle.resumed_from_backend()),
         )
         .await;
         let Some(prepared_hooks) = prepared_hooks else {
@@ -333,7 +362,7 @@ where
                 .await?;
             return Ok(());
         };
-        let (hooks, hook_cwd, hook_record, task_owned) = match prepared_hooks {
+        let (hooks, hook_cwd, hook_record, task_owned, recorded_before) = match prepared_hooks {
             Ok(prepared) => prepared,
             Err(error) => {
                 record_current_failure_class(&error);
@@ -377,39 +406,54 @@ where
                 );
 
         let mut owned_work = None;
-        let run = crate::request::task_hooks::run_task_hooks(&hooks, &hook_exec, || async {
-            if let Some(record) = &hook_record {
-                if let Err(error) = record.work_started().await {
-                    let outcome = OwnedWorkOutcome::observed(
-                        crate::request::task_hooks::TaskAgentResult::Failure,
-                        Some(format!("could not record task hook state: {error}")),
-                        true,
-                    );
-                    let observation = outcome.observation();
-                    owned_work = Some(outcome);
-                    return observation;
+        let run = crate::request::task_hooks::run_task_hooks_with_before(
+            &hooks,
+            &hook_exec,
+            recorded_before,
+            || async {
+                if let Some(record) = &hook_record {
+                    if let Err(error) = record.work_started().await {
+                        let outcome = OwnedWorkOutcome::observed(
+                            crate::request::task_hooks::TaskAgentResult::Failure,
+                            Some(format!("could not record task hook state: {error}")),
+                            true,
+                        );
+                        let observation = outcome.observation();
+                        owned_work = Some(outcome);
+                        return observation;
+                    }
                 }
-            }
-            let outcome = self
-                .observe_owned_work(
-                    &mut lifecycle,
-                    &stream_writer,
-                    &request,
-                    shutdown,
-                    interrupt_rx,
-                )
-                .await;
-            let observation = outcome.observation();
-            owned_work = Some(outcome);
-            observation
-        })
+                let outcome = self
+                    .observe_owned_work(
+                        &mut lifecycle,
+                        &stream_writer,
+                        &request,
+                        shutdown,
+                        interrupt_rx,
+                        hook_record.as_ref(),
+                    )
+                    .await;
+                let observation = outcome.observation();
+                owned_work = Some(outcome);
+                observation
+            },
+        )
         .await;
         observer.abort();
         if let Some(follower) = hook_cancellation_follower {
             follower.abort();
         }
-        if let Some(record) = &hook_record {
-            record.release().await;
+        let parked = run.final_outcome() == crate::request::task_hooks::TaskHookOutcome::Parked;
+        if !parked {
+            if let Some(record) = &hook_record {
+                record.release().await;
+            }
+        }
+        if parked {
+            if let Some(OwnedWorkOutcome::UncertainParking(error)) = owned_work {
+                return Err(error.context("provider recovery could not confirm request ownership"));
+            }
+            return Ok(());
         }
 
         // A revoked execution's terminal was written by the revoking owner.
@@ -422,6 +466,8 @@ where
         let (work_reason, release_writer_binding, interruption_source) = match owned_work {
             None => (None, true, RequestInterruptionSource::TaskHook),
             Some(OwnedWorkOutcome::Interrupted(source)) => (None, false, source),
+            Some(OwnedWorkOutcome::Parked) => return Ok(()),
+            Some(OwnedWorkOutcome::UncertainParking(error)) => return Err(error),
             Some(OwnedWorkOutcome::OwnershipLost) => return Ok(()),
             Some(OwnedWorkOutcome::DrainFailed(error)) => return Err(error),
             Some(OwnedWorkOutcome::Observed {
@@ -454,8 +500,13 @@ where
             reason = Some(reason.map_or(note.clone(), |reason| format!("{reason}\n{note}")));
         }
 
-        let terminal = final_outcome.terminal_outcome();
+        let terminal = final_outcome
+            .terminal_outcome()
+            .expect("parked work returned above");
         match final_outcome {
+            crate::request::task_hooks::TaskHookOutcome::Parked => {
+                unreachable!("parked work returned above")
+            }
             crate::request::task_hooks::TaskHookOutcome::Success => {
                 if skipped_before_work {
                     if let Err(error) = lifecycle.begin_owned_execution(&stream_writer).await {

@@ -17,17 +17,30 @@ where
     pub(super) async fn prepare_task_hooks(
         &self,
         request: &AgentRequest,
+        resumed_from_backend: bool,
     ) -> Result<(
         Vec<crate::documents::TaskHook>,
         PathBuf,
         Option<crate::request::task_hooks::TaskHookRecordHandle>,
         bool,
+        Option<Vec<crate::request::task_hooks::HookAttempt>>,
     )> {
         let (hooks, task_owned) =
             crate::request::task_hooks::resolve_request_task_hooks(self.node.as_ref(), request)
                 .await?;
-        if hooks.is_empty() {
-            return Ok((hooks, PathBuf::new(), None, task_owned));
+        if resumed_from_backend && task_owned {
+            let (record, handle, before) = self
+                .background_execution_registry
+                .task_hook_records()
+                .resume(&request.doc_id, &request.request_id, &request.node_did)
+                .await?;
+            if let Some(guard) = &record.root_guard {
+                guard.validate(&self.node).await?;
+            }
+            return Ok((record.hooks, record.cwd, Some(handle), true, Some(before)));
+        }
+        if hooks.is_empty() && !task_owned {
+            return Ok((hooks, PathBuf::new(), None, task_owned, None));
         }
         let cwd = self.task_hook_cwd().await?;
         let record = self
@@ -42,7 +55,7 @@ where
                 hooks: hooks.clone(),
                 attempts: Vec::new(),
             })?;
-        Ok((hooks, cwd, Some(record), task_owned))
+        Ok((hooks, cwd, Some(record), task_owned, None))
     }
 
     /// Task hooks run from the agent_config's host-tools root or the runtime
@@ -70,11 +83,12 @@ where
         interrupt_rx: tokio::sync::watch::Receiver<
             Option<crate::request::interrupt::InterruptIntent>,
         >,
+        hook_record: Option<&crate::request::task_hooks::TaskHookRecordHandle>,
     ) -> OwnedWorkOutcome {
         use crate::request::task_hooks::TaskAgentResult;
 
         let result = self
-            .handle_request(lifecycle, stream_writer, shutdown, interrupt_rx)
+            .handle_request(lifecycle, stream_writer, shutdown, interrupt_rx.clone())
             .await;
 
         match result {
@@ -141,6 +155,51 @@ where
                 tracing::warn!(request_id = %request.request_id, %error, "request work stopped after execution ownership loss");
                 OwnedWorkOutcome::OwnershipLost
             }
+            Ok(HandleRequestOutcome::FailedAfterResponse(error))
+                if error
+                    .downcast_ref::<gents_loop::error::LoopStreamError>()
+                    .is_some_and(|error| {
+                        matches!(
+                            error.loop_verdict(),
+                            Some((gents_loop::error::LoopVerdict::BackendUnavailable, _))
+                        )
+                    }) =>
+            {
+                if let Some(record) = hook_record {
+                    if let Err(persist_error) = record.work_started().await {
+                        return OwnedWorkOutcome::observed(TaskAgentResult::Failure,
+                            Some(format!("could not retain task hook state before provider recovery: {persist_error}")), true);
+                    }
+                }
+                match lifecycle.park_for_backend().await {
+                    Ok(true) => {
+                        record_current_request_outcome("waiting_for_backend");
+                        OwnedWorkOutcome::Parked
+                    }
+                    Ok(false) if interrupt_rx.borrow().is_some() => {
+                        OwnedWorkOutcome::Interrupted(RequestInterruptionSource::Inference)
+                    }
+                    Ok(false) => match lifecycle.owns_execution().await {
+                        Ok(false) => OwnedWorkOutcome::OwnershipLost,
+                        Ok(true) => OwnedWorkOutcome::observed(
+                            TaskAgentResult::Failure,
+                            Some(request_failure_reason(&error)),
+                            true,
+                        ),
+                        Err(error) => OwnedWorkOutcome::UncertainParking(error),
+                    },
+                    Err(park_error) => match lifecycle.owns_execution().await {
+                        Ok(true) => OwnedWorkOutcome::observed(
+                            TaskAgentResult::Failure,
+                            Some(format!(
+                                "could not safely wait for the provider: {park_error:#}"
+                            )),
+                            true,
+                        ),
+                        Ok(false) | Err(_) => OwnedWorkOutcome::UncertainParking(park_error),
+                    },
+                }
+            }
             Ok(HandleRequestOutcome::FailedAfterResponse(error)) => {
                 record_current_request_outcome("failed_after_response");
                 record_current_failure_class(&error);
@@ -201,6 +260,8 @@ async fn lost_execution_ownership(lifecycle: &RequestLifecycle, error: &anyhow::
 
 pub(super) enum OwnedWorkOutcome {
     Interrupted(RequestInterruptionSource),
+    Parked,
+    UncertainParking(anyhow::Error),
     Observed {
         observation: crate::request::task_hooks::TaskAgentResult,
         reason: Option<String>,
@@ -226,6 +287,9 @@ impl OwnedWorkOutcome {
     pub(super) fn observation(&self) -> crate::request::task_hooks::TaskAgentResult {
         match self {
             Self::Interrupted(_) => crate::request::task_hooks::TaskAgentResult::Cancelled,
+            Self::Parked | Self::UncertainParking(_) => {
+                crate::request::task_hooks::TaskAgentResult::Parked
+            }
             Self::Observed { observation, .. } => *observation,
             Self::OwnershipLost | Self::DrainFailed(_) => {
                 crate::request::task_hooks::TaskAgentResult::Interrupted

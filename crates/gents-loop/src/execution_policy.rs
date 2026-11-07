@@ -25,7 +25,9 @@ pub fn is_live(observed: LeaseObservation<'_>, expected_generation: &str, now_ms
 pub fn renewable_lifecycle(request: RequestLifecycleState) -> bool {
     matches!(
         request,
-        RequestLifecycleState::Claimed | RequestLifecycleState::Processing
+        RequestLifecycleState::Claimed
+            | RequestLifecycleState::Processing
+            | RequestLifecycleState::ResumingBackend
     )
 }
 
@@ -100,8 +102,10 @@ pub fn authorize_begin(
     expected_generation: &str,
     now_ms: i64,
 ) -> bool {
-    observed.request == RequestLifecycleState::Claimed
-        && is_live(observed, expected_generation, now_ms)
+    matches!(
+        observed.request,
+        RequestLifecycleState::Claimed | RequestLifecycleState::ResumingBackend
+    ) && is_live(observed, expected_generation, now_ms)
 }
 
 pub fn can_finalize(request: RequestLifecycleState, completed: bool) -> bool {
@@ -110,7 +114,9 @@ pub fn can_finalize(request: RequestLifecycleState, completed: bool) -> bool {
     } else {
         matches!(
             request,
-            RequestLifecycleState::Claimed | RequestLifecycleState::Processing
+            RequestLifecycleState::Claimed
+                | RequestLifecycleState::Processing
+                | RequestLifecycleState::ResumingBackend
         )
     }
 }
@@ -132,7 +138,9 @@ pub fn authorize_execution_revocation(
 ) -> bool {
     let active_pair = matches!(
         observed.request,
-        RequestLifecycleState::Claimed | RequestLifecycleState::Processing
+        RequestLifecycleState::Claimed
+            | RequestLifecycleState::Processing
+            | RequestLifecycleState::ResumingBackend
     );
     active_pair
         && observed.request == expected.request

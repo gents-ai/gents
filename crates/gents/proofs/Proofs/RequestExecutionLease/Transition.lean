@@ -22,6 +22,15 @@ inductive ProducerDecision where
 inductive Action (Generation : Type) where
   | claim (boundary : Boundary) (generation : Generation)
       (duration explicitDeadline : Time)
+  /-- The output owner must close the current attempt in the same transaction. -/
+  | parkBackend (boundary : Boundary) (generation : Generation) (durablyClosed : Bool)
+  /-- Reclaim a parked request with a fresh, fenced execution generation. -/
+  | resumeBackend (boundary : Boundary) (generation : Generation)
+      (duration explicitDeadline : Time) (wake : Bool)
+  /-- A resumed generation which expires before begin has produced no output. -/
+  | reparkExpiredResume (boundary : Boundary) (generation : Generation) (expectedDeadline : Time)
+  /-- Cancellation or deadline expiry terminalizes the parked request once. -/
+  | finalizeParked (boundary : Boundary) (generation : Generation) (outcome : Outcome)
   | begin (boundary : Boundary) (generation : Generation)
   | appendOutput (boundary : Boundary) (generation : Generation)
   | renew (boundary : Boundary) (generation : Generation) (expectedDeadline : Time)
@@ -86,8 +95,40 @@ def step? {Generation : Type} [DecidableEq Generation]
                 usedGenerations := generation :: pre.usedGenerations }
           else none
       | _ => none
+  | .parkBackend boundary generation durablyClosed =>
+      if admitted pre boundary generation ∧ pre.request = .processing ∧ durablyClosed = true then
+        some { pre with request := .waitingForBackend, lease := .vacant }
+      else none
+  | .resumeBackend boundary generation duration explicitDeadline wake =>
+      match pre.lease with
+      | .vacant =>
+          if boundary = .mutationWriteGate ∧ pre.request = .waitingForBackend ∧ wake = true ∧
+              duration > 0 ∧ fresh pre generation ∧ pre.now < explicitDeadline then
+            some { pre with
+              request := .resumingBackend
+              lease := .active generation duration explicitDeadline
+              usedGenerations := generation :: pre.usedGenerations }
+          else none
+      | _ => none
+  | .reparkExpiredResume boundary generation expectedDeadline =>
+      match pre.lease with
+      | .active owner _ deadline =>
+          if boundary = .mutationWriteGate ∧ pre.request = .resumingBackend ∧
+              owner = generation ∧ deadline = expectedDeadline ∧ deadline ≤ pre.now then
+            some { pre with request := .waitingForBackend, lease := .vacant }
+          else none
+      | _ => none
+  | .finalizeParked boundary generation outcome =>
+      match pre.lease with
+      | .vacant =>
+          if boundary = .mutationWriteGate ∧ pre.request = .waitingForBackend ∧
+              (outcome = .failed ∨ outcome = .interrupted) ∧ fresh pre generation ∧
+              pre.continuationCount = 0 ∧ pre.tokenChargeCount = 0 then
+            some (recoveryTerminal pre generation outcome)
+          else none
+      | _ => none
   | .begin boundary generation =>
-      if admitted pre boundary generation ∧ pre.request = .claimed then
+      if admitted pre boundary generation ∧ (pre.request = .claimed ∨ pre.request = .resumingBackend) then
         some { pre with request := .processing }
       else none
   | .appendOutput boundary generation =>
