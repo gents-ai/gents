@@ -948,7 +948,7 @@ mod tests {
     #[tokio::test]
     async fn an_unrecorded_key_is_not_adopted_when_opening_an_older_home() {
         let temp = tempfile::tempdir().unwrap();
-        let home = initialized_home(temp.path());
+        let home = initialized_home(temp.path()).await;
         let mut config = read_init_config(&home).unwrap().unwrap();
         config.store_encryption = None;
         write_init_config(&home, &config).unwrap();
@@ -965,7 +965,9 @@ mod tests {
         assert!(!data.join("MANIFEST").exists(), "the store is never opened");
     }
 
-    fn initialized_home(temp: &Path) -> PathBuf {
+    /// A home as `gents init` leaves it: its config, store key and a fresh
+    /// protected store whose provenance names the runtime.
+    async fn initialized_home(temp: &Path) -> PathBuf {
         let home = temp.join("home");
         let key_path = default_key_path(&home, "default");
         std::fs::create_dir_all(key_path.parent().unwrap()).unwrap();
@@ -1004,13 +1006,26 @@ mod tests {
                 &default_data_dir(&home),
             )
             .unwrap();
+        let data = default_data_dir(&home);
+        std::fs::create_dir_all(&data).unwrap();
+        let key = gents::store::local::store_key::open_home_store_key(&home, &data)
+            .await
+            .unwrap();
+        let lock = gents::store::local::home::lock_store(&home, &data).unwrap();
+        gents::store::local::backend_protection::FreshBackendStore::observe(&data, &lock)
+            .await
+            .unwrap()
+            .initialize(&key, Some(identity.did()))
+            .await
+            .unwrap();
+        drop(lock);
         home
     }
 
     #[tokio::test]
     async fn an_offline_access_claims_its_store_until_the_node_is_released() {
         let temp = tempfile::tempdir().unwrap();
-        let home = initialized_home(temp.path());
+        let home = initialized_home(temp.path()).await;
 
         let (access, _) = resolve_config_access(Some(&home), None).await.unwrap();
         let node = access
@@ -1049,7 +1064,7 @@ mod tests {
     #[tokio::test]
     async fn an_offline_access_names_the_holder_of_a_claimed_store() {
         let temp = tempfile::tempdir().unwrap();
-        let home = initialized_home(temp.path());
+        let home = initialized_home(temp.path()).await;
         let _held = gents::store::local::home::lock_home_store(&home).unwrap();
 
         let error = match resolve_config_access(Some(&home), None).await {
