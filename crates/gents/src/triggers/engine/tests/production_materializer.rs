@@ -38,6 +38,7 @@ async fn signed_trigger_materializer(
     Arc<ResolvedAgent>,
     crate::ConfigAccess,
     ProductionMaterializer,
+    Arc<ActiveRuntimeSnapshot>,
 ) {
     let (db, _user, _client_access, agent) = signed_materializer_agent(name).await;
     let mut task = resolved_task("work");
@@ -67,7 +68,7 @@ async fn signed_trigger_materializer(
         .with_local_did(agent.node_did().to_owned())
         .activate(1, RapidHashMap::new()),
     );
-    let (_tx, rx) = watch::channel(snapshot);
+    let (_tx, rx) = watch::channel(snapshot.clone());
     let materializer = ProductionMaterializer::new(db.node.clone(), rx);
     let access = crate::ConfigAccess::local_managed_agent(
         db.node.clone(),
@@ -75,7 +76,7 @@ async fn signed_trigger_materializer(
         agent.agent_identity.as_ref(),
     )
     .unwrap();
-    (db, agent, access, materializer)
+    (db, agent, access, materializer, snapshot)
 }
 
 #[tokio::test]
@@ -1418,7 +1419,7 @@ async fn group_marker_is_read_by_selected_held_agent_without_node_visibility() {
 #[tokio::test]
 async fn durable_group_marker_preserves_generation_owner_and_goal_mode() {
     let trigger = "review-\"verify";
-    let (_db, agent, access, materializer) =
+    let (_db, agent, access, materializer, _) =
         signed_trigger_materializer("durable-group-marker", &[trigger, "other-trigger"]).await;
     let owner = agent.node_did();
     let correlation = "run-\"42";
@@ -1529,7 +1530,7 @@ async fn materializer_rejects_workspace_from_different_explicit_owner() {
 #[tokio::test]
 async fn trigger_wide_gate_and_supersede_survive_kind_change_and_preserve_exclusion() {
     let trigger = "review-verify";
-    let (_db, agent, access, materializer) =
+    let (_db, agent, access, materializer, _) =
         signed_trigger_materializer("trigger-wide-gate", &[trigger, "other-trigger"]).await;
     let owner = agent.node_did();
     create_request(
@@ -2162,7 +2163,7 @@ async fn canonical_partial_streams(
 
 #[tokio::test]
 async fn latest_only_revokes_live_execution_and_terminalizes_response_atomically() {
-    let (db, agent, access, materializer) =
+    let (db, agent, access, materializer, _) =
         signed_trigger_materializer("latest-only-revokes", &["latest"]).await;
     let node = db.node.clone();
     let node_did = agent.node_did();
@@ -2246,12 +2247,8 @@ async fn latest_only_revokes_live_execution_and_terminalizes_response_atomically
 
 #[tokio::test]
 async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let snapshot =
-        snapshot_with_agent_and_schedules(spy_test_agent(), RapidHashMap::new());
-    let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot.clone());
-    let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
+    let (_db, agent, access, materializer, snapshot) =
+        signed_trigger_materializer("admitted-event-replay", &["replay-trigger"]).await;
     let identity = gents_protocol::trigger_delivery::FireIdentity {
         owner_did: snapshot.local_did.clone(),
         trigger_id: "replay-trigger".into(),
@@ -2277,13 +2274,15 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
         attempt: None,
         created_at: "2030-01-01T00:00:00Z".into(),
     };
-    crate::store::config_client::ConfigAccess::transact_local_write(&node, None, "test.seed_committed_replay", |txn| {
+    // The Agent admitted this fire and owns its receipt and request.
+    access.transact_write("test.seed_committed_replay", |txn| {
         let fire = fire.clone();
+        let agent_did = agent.agent_did.clone();
         Box::pin(async move {
             assert!(crate::triggers::engine::durable::stage_fire_receipt(txn, &fire).await?);
             txn.execute_with_variables("mutation($input: AgentRequestMutationInputArg!) {create_AgentRequest(input: $input) {_docID}}", &serde_json::json!({"input": {
                 "request_id": fire.request_id, "node_did": fire.identity.owner_did,
-                "session_id": fire.session_id, "agent_did": spy_test_agent().agent_did.clone(), "purpose": "normal",
+                "session_id": fire.session_id, "agent_did": agent_did, "purpose": "normal",
                 "lifecycle_state": "processing", "caused_by_trigger_id": "replay-trigger",
                 "created_at": fire.created_at
             }})).await?;
@@ -2294,7 +2293,7 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
     let engine = TriggerEngine::new(rx, Arc::new(materializer));
     let mut task = resolved_task("{{ doc.field_added_after_admission }}");
     task.task_id = "replay-task".into();
-    task.agent_did = spy_test_agent().agent_did.clone();
+    task.agent_did = agent.agent_did.clone();
     let result = engine.dispatch(FireIntent {
         trigger_id: Some("replay-trigger".into()), trigger_kind: TriggerKind::Event,
         task, concurrency: ConcurrencyMode::LatestOnly,
@@ -2307,30 +2306,23 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
     assert!(
         matches!(result, FireResult::Duplicate { request_id } if request_id == fire.request_id)
     );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node.as_ref(),
-        &format!(
+    let response = access
+        .execute(&format!(
             "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{lifecycle_state}} }}",
             escape_graphql_string(&fire.request_id)
-        ),
-        "check replay did not supersede",
-    )
-    .await
-    .unwrap();
+        ))
+        .await
+        .unwrap();
     assert_eq!(
-        response.data.unwrap()["AgentRequest"][0]["lifecycle_state"],
+        response["data"]["AgentRequest"][0]["lifecycle_state"],
         "processing"
     );
 }
 
 #[tokio::test]
 async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let snapshot =
-        snapshot_with_agent_and_schedules(spy_test_agent(), RapidHashMap::new());
-    let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot.clone());
-    let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
+    let (_db, agent, access, materializer, snapshot) =
+        signed_trigger_materializer("admitted-schedule-replay", &["replay-trigger"]).await;
     let identity = gents_protocol::trigger_delivery::FireIdentity {
         owner_did: snapshot.local_did.clone(),
         trigger_id: "replay-trigger".into(),
@@ -2356,13 +2348,15 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
         attempt: None,
         created_at: "2030-01-01T00:00:00Z".into(),
     };
-    crate::store::config_client::ConfigAccess::transact_local_write(&node, None, "test.seed_committed_replay", |txn| {
+    // The Agent admitted this fire and owns its receipt and request.
+    access.transact_write("test.seed_committed_replay", |txn| {
         let fire = fire.clone();
+        let agent_did = agent.agent_did.clone();
         Box::pin(async move {
             assert!(crate::triggers::engine::durable::stage_fire_receipt(txn, &fire).await?);
             txn.execute_with_variables("mutation($input: AgentRequestMutationInputArg!) {create_AgentRequest(input: $input) {_docID}}", &serde_json::json!({"input": {
                 "request_id": fire.request_id, "node_did": fire.identity.owner_did,
-                "session_id": fire.session_id, "agent_did": spy_test_agent().agent_did.clone(), "purpose": "normal",
+                "session_id": fire.session_id, "agent_did": agent_did, "purpose": "normal",
                 "lifecycle_state": "processing", "caused_by_trigger_id": "replay-trigger",
                 "created_at": fire.created_at
             }})).await?;
@@ -2373,7 +2367,7 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
     let engine = TriggerEngine::new(rx, Arc::new(materializer));
     let mut task = resolved_task("{{ doc.field_added_after_admission }}");
     task.task_id = "replay-task".into();
-    task.agent_did = spy_test_agent().agent_did.clone();
+    task.agent_did = agent.agent_did.clone();
     let result = engine.dispatch(FireIntent {
         trigger_id: Some("replay-trigger".into()), trigger_kind: TriggerKind::Schedule,
         task, concurrency: ConcurrencyMode::LatestOnly,
@@ -2386,18 +2380,15 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
     assert!(
         matches!(result, FireResult::Duplicate { request_id } if request_id == fire.request_id)
     );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node.as_ref(),
-        &format!(
+    let response = access
+        .execute(&format!(
             "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{lifecycle_state}} }}",
             escape_graphql_string(&fire.request_id)
-        ),
-        "check replay did not supersede",
-    )
-    .await
-    .unwrap();
+        ))
+        .await
+        .unwrap();
     assert_eq!(
-        response.data.unwrap()["AgentRequest"][0]["lifecycle_state"],
+        response["data"]["AgentRequest"][0]["lifecycle_state"],
         "processing"
     );
 }
