@@ -94,7 +94,10 @@ mod app_pairing_filter_conformance {
             .as_array()
             .unwrap()
             .iter()
-            .filter(|field| field["immutable"].as_bool() == Some(true))
+            .filter(|field| {
+                field["immutable"].as_bool() == Some(true)
+                    && field["supported"].as_bool() == Some(true)
+            })
             .map(|field| {
                 (
                     field["collection"].as_str().unwrap().to_owned(),

@@ -7,12 +7,14 @@ open ScopeTemplates.AppFilters Conformance.Contracts
 
 private def authority : List FieldAuthority :=
   [{ collection := "Post", field := "to_host", immutable := true },
-   { collection := "Post", field := "message", immutable := false }]
+   { collection := "Post", field := "message", immutable := false },
+   { collection := "Post", field := "unsupported", immutable := true, supported := false }]
 
 private def cases : List (String × List String × List FieldFilter) :=
   [ ("unfiltered", ["Post"], [])
   , ("immutable", ["Post"], [{ collection := "Post", field := "to_host", value := "node" }])
   , ("mutable", ["Post"], [{ collection := "Post", field := "message", value := "node" }])
+  , ("unsupported", ["Post"], [{ collection := "Post", field := "unsupported", value := "node" }])
   , ("unknown_field", ["Post"], [{ collection := "Post", field := "other", value := "node" }])
   , ("different_version", ["Post"], [{ collection := "Post", field := "to_host", value := "node", version := "v2" }])
   , ("other_collection", [], [{ collection := "Post", field := "to_host", value := "node" }])
@@ -28,7 +30,8 @@ private def filterJson (filter : FieldFilter) : String :=
 private def authorityJson (field : FieldAuthority) : String :=
   "{\"collection\":" ++ jsonString field.collection ++ ",\"field\":" ++
   jsonString field.field ++ ",\"version\":" ++ jsonString field.version ++ ",\"immutable\":" ++
-  (if field.immutable then "true" else "false") ++ "}"
+  (if field.immutable then "true" else "false") ++ ",\"supported\":" ++
+  (if field.supported then "true" else "false") ++ "}"
 
 private def caseJson (value : String × List String × List FieldFilter) : String :=
   let (label, collections, filters) := value

@@ -13,6 +13,7 @@ structure FieldAuthority where
   collection : String
   field : String
   immutable : Bool
+  supported : Bool := true
   version : String := "v1"
   deriving DecidableEq, Repr
 
@@ -22,7 +23,8 @@ def permitted (collections : List String) (schema : List FieldAuthority)
     !filter.field.isEmpty &&
     !filter.version.isEmpty &&
     schema.any (fun field => field.collection == filter.collection &&
-      field.field == filter.field && field.version == filter.version && field.immutable)
+      field.field == filter.field && field.version == filter.version && field.immutable &&
+      field.supported)
 
 def validate (collections : List String) (schema : List FieldAuthority)
     (filters : List FieldFilter) : Option (List FieldFilter) :=
@@ -79,6 +81,9 @@ example : validate ["Post"] [{ collection := "Post", field := "to_host", immutab
     [{ collection := "Post", field := "to_host", value := "node" }] ≠ none := by decide
 
 example : validate ["Post"] [{ collection := "Post", field := "to_host", immutable := false }]
+    [{ collection := "Post", field := "to_host", value := "node" }] = none := by decide
+
+example : validate ["Post"] [{ collection := "Post", field := "to_host", immutable := true, supported := false }]
     [{ collection := "Post", field := "to_host", value := "node" }] = none := by decide
 
 example : validate ["Post"] [{ collection := "Other", field := "to_host", immutable := true }]
