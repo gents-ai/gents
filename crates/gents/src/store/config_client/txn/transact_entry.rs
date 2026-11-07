@@ -62,7 +62,11 @@ impl ConfigAccess {
     ) -> Result<ConfigApplyTxn<'_>> {
         match self {
             Self::Graphql(endpoint) => {
-                ConfigApplyTxn::begin_http(endpoint, cancellation_rollback_scheduled, false).await
+                let mut txn =
+                    ConfigApplyTxn::begin_http(endpoint, cancellation_rollback_scheduled, false)
+                        .await?;
+                txn.operation = Some(operation.as_str());
+                Ok(txn)
             }
             Self::Local(local) => {
                 local.require_mutation_signer()?;
