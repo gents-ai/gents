@@ -63,6 +63,9 @@ jobs:
           bash scripts/stage-tauri-sidecar.sh --source target/release/gents
       - name: Build desktop installers with embedded managed runtime
         working-directory: apps/gents-desktop
+        env:
+          GENTS_UMAMI_ENDPOINT: ${{ vars.GENTS_UMAMI_ENDPOINT }}
+          GENTS_UMAMI_WEBSITE_ID: ${{ vars.GENTS_UMAMI_WEBSITE_ID }}
         run: npm run tauri -- build --config src-tauri/tauri.bundle.conf.json --ci --bundles deb,appimage -- --locked
       - name: Verify and smoke-test installed package
         run: bash scripts/verify-linux-desktop.sh
