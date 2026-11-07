@@ -157,7 +157,7 @@ mod tests {
         let config: DesiredStateManifest = serde_json::from_value(serde_json::json!({
             "node":{"node_did":"owner"},
             "contexts":[{"node_did":"owner","context_id":"context","system_prompt":prompt}],
-            "agents":[{"node_did":"owner","agent_did":"agent","context_id":"context",
+            "agents":[{"node_did":"owner","agent_did":"agent","creation_nonce":"nonce","context_id":"context",
                 "inference_profile_id":"profile"}],
             "tasks":[{"node_did":"owner","task_id":"task","agent_did":"agent",
                 "prompt_template":"work","hooks":[
