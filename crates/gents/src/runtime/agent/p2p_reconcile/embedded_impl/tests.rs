@@ -2,48 +2,26 @@ mod agent_target;
 pub(in crate::runtime::agent::p2p_reconcile) mod fixtures;
 mod pairing;
 mod peer_admission;
-mod peer_daemon;
 mod replication;
 mod seeding;
 
 use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-use futures::stream;
 use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
-use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
-use tokio_util::sync::CancellationToken;
 
 use super::*;
 use crate::defra_node::P2PConfig;
 use crate::ensure_runtime_schemas;
-use crate::inference::backends::provider::BackendProviderKind;
-use crate::inference::llm::tool::ToolDyn;
-use crate::inference::resolved::{ResolvedAgent, SamplingConfig};
-use crate::runtime::agent::completion_retry::CompletionRetryProfileFields;
-use crate::runtime::agent::daemon::{AgentDaemon, AgentDaemonInit};
 use crate::runtime::agent::p2p_reconcile::templates::{
     Scope, AGENT_TARGET_CALLER_TEMPLATE, AGENT_TARGET_HOST_TEMPLATE,
 };
+use crate::runtime::agent::p2p_reconcile::GraphqlEnrollmentStore;
 use crate::runtime::agent::p2p_reconcile::{combine_filters, equality_filter};
-use crate::runtime::agent::p2p_reconcile::{
-    enrollment_authority_channel, run_enrollment_reconciler, GraphqlEnrollmentStore,
-};
-use crate::runtime::agent::p2p_reconcile::{resolve_template, scope_filter};
-use crate::runtime::agent::runtime::StartupBarrier;
+use crate::runtime::agent::p2p_reconcile::resolve_template;
 use crate::store::graphql::escape_graphql_string;
-use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
-use crate::tools::call::hook::{
-    BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
-};
-use crate::tools::surface::AgentToolSurfaceConfig;
-use crate::turn::prompt::LayeredPromptBuilder;
-use fixtures::{
-    runtime_http_test_node, runtime_test_node_with_identity, wait_for_active_peer,
-    wait_for_peer_info, wait_for_value,
-};
+use crate::store::identity::{KeyIdentity, NodeIdentity};
+use fixtures::{runtime_http_test_node, wait_for_active_peer, wait_for_peer_info};
 use gents_protocol::enrollment::{
     derive_enrollment_id, encode_offer, enrollment_schema_fingerprint, EnrollmentDecisionKind,
     EnrollmentOfferRecord, EnrollmentRequestRecord, ENROLLMENT_PROTOCOL_VERSION,

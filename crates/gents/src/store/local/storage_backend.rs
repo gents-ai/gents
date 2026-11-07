@@ -479,16 +479,23 @@ mod tests {
         let tempdir = tempfile::tempdir().unwrap();
         let data = tempdir.path().join("data");
         let node = std::sync::Arc::new(
-            defra_node::Node::builder()
+            crate::test_support::node_builder()
                 .data_path(&data)
                 .with_storage_backend(defra_node::StorageBackend::Regolith)
                 .build()
                 .await
                 .unwrap(),
         );
+        // The older collection keeps its identity policy binding, which the
+        // migration owner checks before lineage, so only its schema lineage is
+        // unknown.
+        crate::test_support::acp_policies::install_identity_acp_policies(&node)
+            .await
+            .unwrap();
         node.add_collection(&format!(
-            "type {} {{ backend_id: String }}",
-            gents_protocol::schemas::INFERENCE_BACKEND_NAME
+            r#"type {} @policy(id: "{}", resource: "secret_configuration") {{ backend_id: String }}"#,
+            gents_protocol::schemas::INFERENCE_BACKEND_NAME,
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
         ))
         .await
         .unwrap();
@@ -497,7 +504,13 @@ mod tests {
         let error = crate::store::schema::migration::ensure_all_runtime_migrations(node.clone())
             .await
             .expect_err("an older lineage must not open");
-        let store = incompatible_store(&error, &data).expect("typed refusal");
+        let store = incompatible_store(&error, &data)
+            .unwrap_or_else(|| {
+                panic!(
+                    "typed refusal: {}",
+                    gents_protocol::error_chain::ErrorChain(&error)
+                )
+            });
         assert_eq!(store.kind, IncompatibleStoreKind::UnknownLineage);
         assert!(
             node.get_collection(gents_protocol::schemas::NODE_NAME)

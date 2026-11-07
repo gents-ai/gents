@@ -1053,7 +1053,7 @@ mod tests {
     use crate::store::identity::KeyIdentity;
 
     #[tokio::test]
-    async fn signed_enrollment_repairs_p2p_merged_production_unique_index_twins() {
+    async fn signed_enrollment_reconciles_the_local_pairing_witness_without_replicating_it() {
         use crate::runtime::agent::p2p_reconcile::embedded_impl::push_documents_to_peer;
         use crate::runtime::agent::p2p_reconcile::embedded_impl::tests::fixtures::{
             authorize_enrollment_peer, runtime_http_test_node, wait_for_active_peer,
@@ -1128,21 +1128,24 @@ mod tests {
             .expect("current signed enrollment");
         assert_eq!(signed.authorization_sequence, 1);
 
-        // Both local writes obey uniqueness. Only a remote merge may retain twins.
+        // Desired pairing is runtime-local state: P2P carries only discovery
+        // and enrollment, so neither a replicator nor a selected push can merge
+        // a remote twin into the receiver's uniquely indexed witness.
         let mut ids = Vec::new();
-        for (node, digest) in [
-            (receiver, "previous-request-a"),
-            (sender, "previous-request-b"),
+        for (node, owner, digest) in [
+            (receiver, &admin, "previous-request-a"),
+            (sender, &member, "previous-request-b"),
         ] {
             let input = serde_json::json!({
-                "peer_id": peer, "node_did": admin.did(), "source": "enrollment",
-                "template": "client", "collections": ["AgentRequest"], "profiles": null,
+                "peer_id": peer, "node_did": admin.did(), "actor_did": owner.did(), "source": "enrollment",
+                "template": "client", "collections": ["PeerRegistry"], "profiles": null,
                 "replicator_addresses": ["previous-address"],
                 "enrollment_request_digest": digest, "enrollment_authorization_sequence": 1,
-                "enrollment_authorization_expires_at": signed.authorization_expires_at,
+                "enrollment_authorization_expires_at": signed.authorization_expires_at, "parent_linked": false,
             });
+            // Each runtime owns the desired route it writes.
             let response = ConfigAccess::transact_local_write(
-                node, None, "test.desired.seed_unique_replica", |txn| {
+                node, Some(::identity::Did::new(owner.did()).unwrap()), "test.desired.seed_unique_replica", |txn| {
                     let input = input.clone();
                     Box::pin(async move {
                         txn.execute_with_variables(
@@ -1156,18 +1159,23 @@ mod tests {
                 crate::store::graphql::created_doc_id(&response, "PeerPairingDesired").unwrap(),
             );
         }
-        assert_ne!(ids[0], ids[1]);
-        let mut updates = crate::subscribe_collections(receiver, ["PeerPairingDesired"]).unwrap();
-        receiver_admin
+        let refused = receiver_admin
             .add_replicator(
                 &sender_addresses,
                 &["PeerPairingDesired".into()],
                 &PairingFilters::default(),
             )
-            .await
-            .unwrap();
+            .await;
+        assert!(
+            matches!(
+                refused,
+                Err(crate::runtime::agent::p2p_reconcile::RemoteP2pAdminError::RuntimeLocalCollection(ref name))
+                    if name == "PeerPairingDesired"
+            ),
+            "{refused:?}"
+        );
         let receiver_peer = receiver.p2p().unwrap().local_peer_id().await.unwrap();
-        push_documents_to_peer(
+        let pushed = push_documents_to_peer(
             sender,
             &receiver_peer,
             vec![P2pDocumentRequest {
@@ -1175,81 +1183,26 @@ mod tests {
                 doc_id: ids[1].clone(),
             }],
         )
-        .await
-        .unwrap();
+        .await;
+        assert!(pushed.is_err(), "desired pairing reached the P2P transport");
+        sender.shutdown().await.expect("node shutdown");
         let access = ConfigAccess::local(receiver.clone());
         const ROWS: &str = "{ PeerPairingDesired { _docID peer_id node_did source template collections profiles replicator_addresses enrollment_request_digest enrollment_authorization_sequence enrollment_authorization_expires_at created_at updated_at } }";
-        // Delivery ACK only admits a head; observe both fully merged documents.
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                let response = access.execute(ROWS).await.unwrap();
-                let rows = response["data"]["PeerPairingDesired"].as_array().unwrap();
-                if ids
-                    .iter()
-                    .all(|id| rows.iter().any(|row| row["_docID"] == *id))
-                {
-                    break;
-                }
-                updates
-                    .recv()
-                    .await
-                    .expect("desired subscription stays open");
-            }
-        })
-        .await
-        .expect("both genuinely remote-merged twins become visible");
-        sender.shutdown().await.expect("node shutdown");
         let before = access.execute(ROWS).await.unwrap();
         let before_rows = before["data"]["PeerPairingDesired"].as_array().unwrap();
-        assert_eq!(before_rows.len(), 2);
-        ids.sort();
-        let parked = before_rows
-            .iter()
-            .find(|row| row["_docID"] == ids[1])
-            .unwrap()
-            .clone();
-        assert_ne!(
-            before_rows[0]["enrollment_request_digest"],
-            before_rows[1]["enrollment_request_digest"]
-        );
-        assert!(before_rows
-            .iter()
-            .all(|row| row["enrollment_authorization_sequence"] == 1));
+        assert_eq!(before_rows.len(), 1, "no remote twin was merged");
+        assert_eq!(before_rows[0]["_docID"], ids[0]);
 
-        let old = ConfigAccess::write_local(receiver, "test.desired.old_filter_upsert", &format!(
-            "mutation {{ upsert_PeerPairingDesired(filter: {{peer_id: {{_eq: \"{}\"}}}}, add: {{peer_id: \"{}\", collections: null, replicator_addresses: null}}, update: {{template: \"client\"}}) {{ _docID }} }}",
-            escape_graphql_string(&peer), escape_graphql_string(&peer),
-        )).await;
-        assert!(
-            old.is_err(),
-            "real indexed twins must reproduce the old upsert failure; got {old:?}"
-        );
-        assert!(format!("{:#}", old.unwrap_err()).contains("multiple matching documents"));
-        assert_eq!(
-            access.execute(ROWS).await.unwrap(),
-            before,
-            "failed upsert is atomic"
-        );
-
-        // Exercise the production caller: signed projection is reloaded and fenced
-        // inside the same transaction as canonical witness materialization.
+        // Exercise the production caller: the signed projection is reloaded and
+        // fenced inside the same transaction as the canonical witness.
         reconcile_data_plane(receiver, admin.did(), &store, &projection)
             .await
             .unwrap();
         let after = access.execute(ROWS).await.unwrap();
         let after_rows = after["data"]["PeerPairingDesired"].as_array().unwrap();
-        assert_eq!(after_rows.len(), 2);
-        assert_eq!(
-            after_rows
-                .iter()
-                .find(|row| row["_docID"] == ids[1])
-                .unwrap(),
-            &parked
-        );
-        let canonical = after_rows
-            .iter()
-            .find(|row| row["_docID"] == ids[0])
-            .unwrap();
+        assert_eq!(after_rows.len(), 1);
+        let canonical = &after_rows[0];
+        assert_eq!(canonical["_docID"], ids[0]);
         assert_eq!(canonical["node_did"], admin.did());
         assert_eq!(
             canonical["enrollment_request_digest"],
@@ -1267,24 +1220,13 @@ mod tests {
             canonical["replicator_addresses"],
             serde_json::json!([ticket])
         );
-        let indexed = access
-            .execute(&format!(
-                "{{ PeerPairingDesired(filter: {{peer_id: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
-                escape_graphql_string(&peer),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(
-            indexed["data"]["PeerPairingDesired"],
-            serde_json::json!([{ "_docID": ids[0] }])
-        );
         reconcile_data_plane(receiver, admin.did(), &store, &projection)
             .await
             .unwrap();
         assert_eq!(
             access.execute(ROWS).await.unwrap(),
             after,
-            "a repeated sweep preserves both witnesses"
+            "a repeated sweep preserves the witness"
         );
         receiver.shutdown().await.expect("node shutdown");
     }
@@ -1612,32 +1554,57 @@ mod tests {
         crate::sign_agent_request_create(member, &mut create)
             .await
             .expect("sign enrollment AgentRequest");
-        let response = node.execute(&create.graphql_mutation().unwrap()).await;
-        assert!(
-            !response.has_errors(),
-            "create enrollment AgentRequest: {:?}",
-            response.errors
-        );
-        let doc_id = response
-            .data
-            .as_ref()
-            .and_then(|data| {
-                data.get("create_AgentRequest")
-                    .or_else(|| data.get("add_AgentRequest"))
-            })
-            .and_then(|value| {
-                value.get("_docID").or_else(|| {
-                    value
-                        .as_array()
-                        .and_then(|rows| rows.first())
-                        .and_then(|row| row.get("_docID"))
+        // The runtime stores the member's signed request and grants its target
+        // Agent the `working_agent` edge it reads and terminalizes through.
+        let mutation = create.graphql_mutation().unwrap();
+        let working_agent = ::identity::Did::new(agent_did).unwrap();
+        let doc_id = runtime_access(&node, target)
+            .transact_write("test.enrollment_request", |txn| {
+                let (mutation, working_agent) = (&mutation, &working_agent);
+                Box::pin(async move {
+                    let response = txn.execute(mutation).await?;
+                    let doc_id = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                    txn.add_actor_relationship("AgentRequest", &doc_id, "working_agent", working_agent)
+                        .await?;
+                    Ok::<_, anyhow::Error>(doc_id)
                 })
             })
-            .and_then(serde_json::Value::as_str)
-            .expect("created AgentRequest doc id");
-        crate::request::admission::load_request_for_admission_test(node.as_ref(), doc_id)
+            .await
+            .expect("create enrollment AgentRequest");
+        crate::request::admission::load_request_for_admission_test_as(&node, &doc_id, agent_did)
             .await
             .expect("load queued AgentRequest")
+    }
+
+    fn runtime_access(
+        node: &Arc<EmbeddedNode>,
+        target: &dyn NodeIdentity,
+    ) -> crate::store::config_client::ConfigAccess {
+        crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            ::identity::Did::new(target.did()).unwrap(),
+        )
+    }
+
+    async fn request_row_as_runtime<T>(
+        node: &Arc<EmbeddedNode>,
+        target: &dyn NodeIdentity,
+        request_id: &str,
+    ) -> T
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let response = runtime_access(node, target)
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    lifecycle_state claimed_at failure_reason
+                }} }}"#,
+                crate::store::graphql::escape_graphql_string(request_id),
+            ))
+            .await
+            .expect("query AgentRequest as its runtime");
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone())
+            .expect("decode AgentRequest row")
     }
 
     #[test]
@@ -1656,7 +1623,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn final_claim_fence_reloads_revocation_expiry_supersession_and_read_failure() {
+    async fn enrollment_authority_reloads_each_generation_and_cross_actor_claims_stay_blocked() {
         let target_dir = tempfile::tempdir().unwrap();
         let member_dir = tempfile::tempdir().unwrap();
         let target: Arc<dyn NodeIdentity> = Arc::new(
@@ -1747,20 +1714,14 @@ mod tests {
         )
         .await;
 
+        // The authority owner reloads the signed projection on every fresh
+        // read: revocation, supersession and a read failure each surface there.
         let script = ScriptedProjectionReader {
             steps: Mutex::new(VecDeque::from([
                 ScriptedProjection::Projection(Box::new(projection_with_active(
                     generation_one.clone(),
                 ))),
                 ScriptedProjection::Projection(Box::new(projection_with_revoked(&generation_one))),
-                ScriptedProjection::Projection(Box::new(projection_with_active(expired.clone()))),
-                ScriptedProjection::Projection(Box::new(projection_with_active(expired))),
-                ScriptedProjection::Projection(Box::new(projection_with_active(
-                    generation_one.clone(),
-                ))),
-                ScriptedProjection::Projection(Box::new(projection_with_active(
-                    generation_two.clone(),
-                ))),
                 ScriptedProjection::Projection(Box::new(projection_with_active(
                     generation_two.clone(),
                 ))),
@@ -1769,7 +1730,7 @@ mod tests {
         };
         let (mut owner, handle) = enrollment_authority_channel();
         let command_task = tokio::spawn(async move {
-            for _ in 0..8 {
+            for _ in 0..4 {
                 let command = owner.commands.recv().await.expect("authority command");
                 handle_authority_command(&script, &owner.sender, command).await;
             }
@@ -1777,133 +1738,73 @@ mod tests {
         let verifier =
             AgentRequestAdmissionVerifier::new(node.clone(), target.clone(), handle.clone());
 
-        assert!(handle
-            .fresh_member_authorization(member.did())
-            .await
-            .unwrap()
-            .is_some());
-        let revoked_request_id = revoked_request.request_id.clone();
-        let rejected = crate::runtime::agent::daemon::verify_request_at_claim_boundary(
-            &verifier,
-            node.clone(),
-            agent.as_ref(),
-            revoked_request,
-        )
-        .await;
-        assert!(rejected.is_none());
-        #[derive(Deserialize)]
-        struct RejectedRow {
-            lifecycle_state: RequestLifecycleState,
-            claimed_at: Option<String>,
-            failure_reason: Option<String>,
-        }
-        let response = node
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
-                    lifecycle_state claimed_at failure_reason
-                }} }}"#,
-                crate::store::graphql::escape_graphql_string(&revoked_request_id),
-            ))
-            .await;
-        assert!(
-            !response.has_errors(),
-            "query rejected request: {:?}",
-            response.errors
-        );
-        let rejected_row: RejectedRow = crate::store::graphql::first_row(&response, "AgentRequest")
-            .unwrap()
-            .expect("rejected request row");
-        assert_eq!(rejected_row.lifecycle_state, RequestLifecycleState::Failed);
-        assert!(rejected_row.claimed_at.is_none());
-        assert!(rejected_row
-            .failure_reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("request admission denied")));
-
-        assert!(handle
-            .fresh_member_authorization(member.did())
-            .await
-            .unwrap()
-            .is_some());
-        let expiry_error = verifier
-            .verify_fresh_at(
-                &expired_request,
-                agent.did(),
-                "2030-01-01T00:05:00Z".parse().unwrap(),
-            )
-            .await
-            .unwrap_err();
-        assert!(expiry_error.is_denied());
-        assert!(expiry_error.to_string().contains("lease expired"));
-
         let first_fence = handle
             .fresh_member_authorization(member.did())
             .await
             .unwrap()
-            .unwrap();
+            .expect("generation one is active");
         assert_eq!(first_fence.authorization_sequence, 1);
-        let superseded_error = verifier
-            .verify_fresh_at(
-                &superseded_request,
-                agent.did(),
-                "2030-01-01T00:06:00Z".parse().unwrap(),
-            )
+        assert!(handle
+            .fresh_member_authorization(member.did())
+            .await
+            .unwrap()
+            .is_none());
+        let second_fence = handle
+            .fresh_member_authorization(member.did())
+            .await
+            .unwrap()
+            .expect("generation two supersedes generation one");
+        assert_eq!(second_fence.authorization_sequence, 2);
+        let read_error = handle
+            .fresh_member_authorization(member.did())
             .await
             .unwrap_err();
-        assert!(superseded_error.is_denied());
-        assert!(superseded_error
-            .to_string()
-            .contains("stale or mixed enrollment generation"));
-
-        let verified = verifier
-            .verify_fresh_at(
-                &replacement_request,
-                agent.did(),
-                "2030-01-01T00:06:00Z".parse().unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(verified.request_id, replacement_request.request_id);
-
-        let read_error = verifier
-            .verify_fresh_at(
-                &replacement_request,
-                agent.did(),
-                "2030-01-01T00:06:00Z".parse().unwrap(),
-            )
-            .await
-            .unwrap_err();
-        assert!(!read_error.is_denied());
         assert!(format!("{read_error:#}").contains("injected enrollment projection read failure"));
         command_task.await.unwrap();
 
-        let replacement_request_id = replacement_request.request_id.clone();
-        assert!(
-            crate::runtime::agent::daemon::verify_request_at_claim_boundary(
-                &verifier,
-                node.clone(),
-                agent.as_ref(),
-                replacement_request,
-            )
-            .await
-            .is_none()
-        );
-        let response = node
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
-                    lifecycle_state claimed_at failure_reason
-                }} }}"#,
-                crate::store::graphql::escape_graphql_string(&replacement_request_id),
-            ))
-            .await;
-        let pending_row: RejectedRow = crate::store::graphql::first_row(&response, "AgentRequest")
-            .unwrap()
-            .expect("temporarily unavailable request row");
-        assert_eq!(pending_row.lifecycle_state, RequestLifecycleState::Pending);
-        assert!(pending_row.claimed_at.is_none());
-        assert!(pending_row
-            .failure_reason
-            .as_deref()
-            .is_none_or(str::is_empty));
+        // A member-signed request is cross-actor work for the target Agent.
+        // Without atomic requester authorization in the claim transaction the
+        // modeled decision is blocked (Request.CrossActorAuthorization): it is
+        // neither denied nor claimed, so every generation stays pending.
+        #[derive(Deserialize)]
+        struct PendingRow {
+            lifecycle_state: RequestLifecycleState,
+            claimed_at: Option<String>,
+            failure_reason: Option<String>,
+        }
+        for request in [
+            revoked_request,
+            expired_request,
+            superseded_request,
+            replacement_request,
+        ] {
+            let request_id = request.request_id.clone();
+            let blocked = verifier
+                .verify_fresh_at(&request, agent.did(), "2030-01-01T00:06:00Z".parse().unwrap())
+                .await
+                .unwrap_err();
+            assert!(!blocked.is_denied(), "{request_id}: {blocked:#}");
+            assert!(
+                format!("{blocked:#}").contains("atomic requester authorization"),
+                "{request_id}: {blocked:#}"
+            );
+            assert!(
+                crate::runtime::agent::daemon::verify_request_at_claim_boundary(
+                    &verifier,
+                    node.clone(),
+                    agent.as_ref(),
+                    request,
+                )
+                .await
+                .is_none()
+            );
+            let row: PendingRow = request_row_as_runtime(&node, target.as_ref(), &request_id).await;
+            assert_eq!(row.lifecycle_state, RequestLifecycleState::Pending, "{request_id}");
+            assert!(row.claimed_at.is_none(), "{request_id}");
+            assert!(
+                row.failure_reason.as_deref().is_none_or(str::is_empty),
+                "{request_id}"
+            );
+        }
     }
 }

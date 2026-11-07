@@ -623,11 +623,26 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     );
     candidate_node.shutdown().await?;
     admin_node.shutdown().await?;
+    // The store's directory lock is released only when its last handle drops,
+    // so every holder of the admin node goes before the reopen.
+    drop((
+        admin_local,
+        receiver_author,
+        receiving_admin,
+        issuer,
+        arrivals,
+        public_arrivals,
+    ));
+    let super::fixtures::TestNode {
+        node: admin_handle,
+        _tempdir: admin_directory,
+    } = admin_test;
+    drop(admin_handle);
     let reopened_address = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?;
     let reopened_key = crate::store::identity::load_file_identity(&admin_path)?.private_key_bytes();
     let reopened = Arc::new(
         EmbeddedNode::builder()
-            .data_path(admin_test._tempdir.path())
+            .data_path(admin_directory.path())
             .with_node_identity_did(admin.did())
             .with_signing_key(defra_node::SigningKey::Ed25519(reopened_key))
             .with_node_acp_enabled()

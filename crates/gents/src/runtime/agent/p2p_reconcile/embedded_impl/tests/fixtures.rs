@@ -410,22 +410,3 @@ pub(super) async fn collection_values(
         .map(ToOwned::to_owned)
         .collect()
 }
-
-pub(super) async fn wait_for_value(
-    node: &EmbeddedNode,
-    collection: &str,
-    field: &str,
-    expected: &str,
-) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        let last = collection_values(node, collection, field).await;
-        if last.contains(expected) {
-            return;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            panic!("timed out waiting for {collection}.{field}={expected}; last={last:?}");
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
