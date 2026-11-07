@@ -9,6 +9,46 @@ use futures_util::StreamExt;
 use gents::pack::{PackKind, PackManifest};
 use serde_json::json;
 
+pub(super) fn reused_variable_preview(
+    pack: &PackSource,
+    config: &gents::documents::PackConfig,
+) -> Result<serde_json::Value> {
+    let path = pack
+        .manifest()
+        .config
+        .as_deref()
+        .context("pack has no configuration")?;
+    let authored: serde_json::Value = serde_json::from_slice(pack.asset(path)?)?;
+    let installed = serde_json::to_value(config)?;
+    let uses =
+        gents::pack::interpolate::inspect_install_variables(&authored, &|_| Some("preview".into()))
+            .map_err(|names| {
+                anyhow::anyhow!("cannot inspect install variables: {}", names.join(", "))
+            })?;
+    let uses = uses.into_iter().map(|entry| {
+        let mut parts = entry.path.trim_start_matches('/').splitn(3, '/');
+        let field = parts.next().unwrap_or_default();
+        let index = parts.next().and_then(|value| value.parse::<usize>().ok());
+        let suffix = parts.next().map(|part| format!("/{part}")).unwrap_or_default();
+        let found = index.and_then(|index| {
+            let collection = gents::Collection::ALL.iter().copied().find(|collection| collection.dir_name() == Some(field))?;
+            let authored_id = authored.get(field)?.get(index)?.get(collection.unique_field())?.as_str()?;
+            if authored_id.contains('$') { return None; }
+            let row = installed.get(field)?.as_array()?.iter().find(|row| row.get(collection.unique_field()).and_then(serde_json::Value::as_str) == Some(authored_id))?;
+            Some((json!({"collection": collection.graphql_type(), "id": authored_id}), row.pointer(&suffix)?.clone()))
+        });
+        let (document, resolved) = found.map_or((None, None), |(document, value)| (Some(document), Some(value)));
+        json!({"path": entry.path, "variables": entry.variables.keys().collect::<Vec<_>>(), "document": document, "resolved": resolved})
+    }).collect::<Vec<_>>();
+    let runtime_environment = pack.manifest().metadata.plugins.iter().map(|plugin| {
+        let manifold = gents::plugin::authority::declared_manifold(plugin)?;
+        Ok(json!({"plugin": plugin.name, "declared": gents::plugin::authority::declared_environment(&manifold)}))
+    }).collect::<Result<Vec<_>>>()?;
+    Ok(
+        json!({"pack": format!("{}/{}", pack.manifest().metadata.namespace, pack.manifest().name), "kind": "existing_installation", "uses": uses, "runtime_environment": runtime_environment}),
+    )
+}
+
 pub(super) fn install_variable_preview(
     pack: &PackSource,
     owner: &str,
@@ -201,8 +241,8 @@ pub(crate) async fn install_documents_pack_resolved(
                     source.manifest().metadata.namespace,
                     source.manifest().name
                 );
-                if prepared.reuses_dependency(&coordinate) {
-                    Ok(json!({"pack": coordinate, "kind": "existing_installation", "uses": []}))
+                if let Some(config) = prepared.reused_dependency_config(&coordinate) {
+                    reused_variable_preview(source, config)
                 } else {
                     install_variable_preview(source, owner)
                 }

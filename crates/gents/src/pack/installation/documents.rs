@@ -161,10 +161,11 @@ pub struct PreparedDocumentPackInstall {
 }
 
 impl PreparedDocumentPackInstall {
-    pub fn reuses_dependency(&self, coordinate: &str) -> bool {
+    pub fn reused_dependency_config(&self, coordinate: &str) -> Option<&PackConfig> {
         self.dependencies
             .iter()
-            .any(|dependency| dependency.coordinate == coordinate && dependency.snapshot.is_some())
+            .find(|dependency| dependency.coordinate == coordinate && dependency.snapshot.is_some())
+            .map(|dependency| &dependency.config)
     }
 }
 

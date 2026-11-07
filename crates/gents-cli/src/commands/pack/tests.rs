@@ -215,6 +215,37 @@ fn document_pack_preview_shows_the_install_variable_and_its_target() {
     assert_eq!(task["resolved"], "fallback");
 }
 
+#[test]
+fn dependency_preview_reads_installed_literals_instead_of_the_current_environment() {
+    let dir = documents_pack_dir("1.0.0");
+    let config_path = dir.path().join("pack_config.json");
+    let mut authored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    authored["tools"][0]["display_name"] = json!("${DISPLAY_LABEL:-fallback}");
+    std::fs::write(config_path, serde_json::to_vec(&authored).unwrap()).unwrap();
+    let (bytes, _) = gents::pack::archive::pack_dir(dir.path()).unwrap();
+    let source = super::source::PackSource::received(
+        gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap(),
+    );
+    let config: gents::documents::PackConfig = serde_json::from_value(json!({
+        "node": {"node_did": "did:key:node"},
+        "tools": [{"node_did": "did:key:node", "tools_id": "demo-tools", "display_name": "installed value"}]
+    })).unwrap();
+    let preview = super::install::reused_variable_preview(&source, &config).unwrap();
+    let target = preview["uses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["path"] == "/tools/0/display_name")
+        .unwrap();
+    assert_eq!(target["resolved"], "installed value");
+    assert_eq!(target["variables"], json!(["DISPLAY_LABEL"]));
+    assert_eq!(
+        target["document"],
+        json!({"collection": "Tools", "id": "demo-tools"})
+    );
+}
+
 async fn initialized_home() -> tempfile::TempDir {
     use clap::Parser;
     let home = tempfile::tempdir().unwrap();
