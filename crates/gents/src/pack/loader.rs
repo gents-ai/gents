@@ -4,6 +4,28 @@ use serde_json::Value;
 use super::{asset_path, interpolate, validate_pack_manifest, PackInstallOptions, PackManifest};
 use crate::documents::{EvalCase, PackConfig};
 
+/// Captures only values referenced by the authored configuration. A repeated
+/// variable is resolved once so one installation cannot observe two values.
+pub fn load_pack_config_with_variables(
+    manifest: &PackManifest,
+    options: &PackInstallOptions,
+    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> Result<(
+    PackConfig,
+    std::collections::BTreeMap<String, Option<String>>,
+)> {
+    let captured = std::cell::RefCell::new(std::collections::BTreeMap::new());
+    let config = load_pack_config(manifest, options, read_asset, &|name| {
+        let mut values = captured.borrow_mut();
+        values
+            .entry(name.to_owned())
+            .or_insert_with(|| environment(name))
+            .clone()
+    })?;
+    Ok((config, captured.into_inner()))
+}
+
 pub fn load_pack_config(
     manifest: &PackManifest,
     options: &PackInstallOptions,
