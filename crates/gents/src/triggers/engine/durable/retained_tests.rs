@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 async fn signed_request(
     access: &ConfigAccess,
-    identity: &KeyIdentity,
+    owner: &str,
+    identity: &dyn NodeIdentity,
     id: &str,
     session: &str,
     goal_id: &str,
@@ -18,9 +19,9 @@ async fn signed_request(
     let mut request = AgentRequestCreate::base(
         RequestPurpose::Normal,
         id,
+        owner,
         identity.did(),
         identity.did(),
-        "did:test:task-agent",
         session,
         "Task assignment input",
         "interactive",
@@ -55,16 +56,45 @@ async fn signed_request(
     doc
 }
 
+/// The Task's Agent opens the session its fires and outcomes belong to.
+async fn task_session(access: &ConfigAccess, owner: &str, agent: &str, session: &str) {
+    access
+        .transact_write("test.retained_task_session", |txn| {
+            Box::pin(crate::session::ensure_session_in_txn(
+                txn,
+                session,
+                owner,
+                agent,
+                None,
+                None,
+                None,
+                "2026-10-21T00:00:00Z",
+            ))
+        })
+        .await
+        .unwrap();
+}
+
+/// Goals bind their physical session when one exists for their owner/session.
 async fn goal_document(access: &ConfigAccess, input: Value) -> String {
     let result = access
         .transact_write("test.retained_fire_goal", |txn| {
-            let input = input.clone();
+            let mut input = input.clone();
             Box::pin(async move {
+                if let Some(session) = crate::session::load_agent_session_owner_in_txn(
+                    txn,
+                    input["node_did"].as_str().unwrap(),
+                    input["session_id"].as_str().unwrap(),
+                )
+                .await?
+                {
+                    input["session_doc_id"] = session.doc_id.into();
+                }
                 let response = txn.execute_with_variables(
                     "mutation($input: GoalMutationInputArg!) {create_Goal(input: $input) {_docID}}",
                     &json!({"input":input}),
                 ).await?;
-                crate::store::graphql::created_doc_id(&response, "Goal")
+                Ok::<_, anyhow::Error>(crate::store::graphql::created_doc_id(&response, "Goal")?)
             })
         })
         .await
@@ -101,8 +131,21 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::local(node.clone());
+        // Task requests, receipts, Goals and outcomes belong to the Task's
+        // Agent; it writes and recovers them with its managed signer.
+        let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
+        let agent = crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
+        let agent_access = |node: &Arc<defra_node::Node>| {
+            ConfigAccess::local_managed_agent(
+                node.clone(),
+                ::identity::Did::new(agent.did()).unwrap(),
+                agent.as_ref(),
+            )
+            .unwrap()
+        };
+        let access = agent_access(&node);
         let session = case["request"]["fire"]["session"].as_str().unwrap();
+        task_session(&access, identity.did(), agent.did(), session).await;
         let mut fire_identity: FireIdentity =
             serde_json::from_value(case["request"]["fire"]["identity"].clone()).unwrap();
         fire_identity.owner_did = identity.did().into();
@@ -124,11 +167,20 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
             attempt: None,
             created_at: "2026-10-21T00:00:00Z".into(),
         };
-        let root = signed_request(&access, &identity, &fire.request_id, session, "task-goal").await;
+        let root = signed_request(
+            &access,
+            identity.did(),
+            agent.as_ref(),
+            &fire.request_id,
+            session,
+            "task-goal",
+        )
+        .await;
         let reused = case["classification"] == "superseded";
         let next_root = signed_request(
             &access,
-            &identity,
+            identity.did(),
+            agent.as_ref(),
             "fresh-request",
             session,
             if reused { "task-goal" } else { "fresh-goal" },
@@ -249,12 +301,12 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
                 })
             })
             .await;
+        let rollback = rollback.unwrap_err();
         assert!(
             rollback
-                .unwrap_err()
                 .to_string()
                 .contains("injected outcome publication rollback"),
-            "{name}"
+            "{name}: {rollback:#}"
         );
         assert_eq!(outcome_rows(&access).await, before, "{name}: rollback");
         drop(access);
@@ -268,17 +320,17 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
                 .await
                 .unwrap(),
         );
-        let access = ConfigAccess::local(node.clone());
+        let access = agent_access(&node);
         let due = case["recover_reason"].as_str();
         assert_eq!(
-            recover_outcomes(&node, identity.did(), "did:test:task-agent")
+            recover_outcomes(&node, identity.did(), agent.as_ref())
                 .await
                 .unwrap(),
             usize::from(due.is_some()),
             "{name}: recovery"
         );
         assert_eq!(
-            recover_outcomes(&node, identity.did(), "did:test:task-agent")
+            recover_outcomes(&node, identity.did(), agent.as_ref())
                 .await
                 .unwrap(),
             0,

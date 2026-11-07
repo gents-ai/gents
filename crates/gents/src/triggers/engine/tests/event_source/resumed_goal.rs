@@ -20,49 +20,13 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
         agent.as_ref(),
     )
     .unwrap();
-    access
-        .transact_write("test.resumed_goal_session", |txn| {
-            let (identity, agent) = (&identity, &agent);
-            Box::pin(async move {
-                crate::session::ensure_session_in_txn(
-                    txn,
-                    "resumed-event-session",
-                    identity.did(),
-                    agent.did(),
-                    Some(agent.did()),
-                    None,
-                    None,
-                    "2020-01-01T00:00:00Z",
-                )
-                .await?;
-                // A created session admits requests only once its creator has
-                // published the session's Agent relationships.
-                let session = crate::session::load_agent_session_owner_in_txn(
-                    txn,
-                    identity.did(),
-                    "resumed-event-session",
-                )
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("fixture session is unavailable"))?;
-                let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
-                    txn,
-                    crate::Collection::Agent,
-                    identity.did(),
-                    agent.did(),
-                )
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("fixture Agent is unavailable"))?;
-                crate::session::stage_created_session_relationships_in_txn(
-                    txn,
-                    &session.doc_id,
-                    &agent_doc,
-                    &::identity::Did::new(agent.did())?,
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap();
+    crate::test_support::create_agent_owned_session(
+        &access,
+        identity.did(),
+        "resumed-event-session",
+        Some(agent.did()),
+    )
+    .await;
     let goal = crate::goal::set_goal_from_access(
         &access,
         identity.did(),

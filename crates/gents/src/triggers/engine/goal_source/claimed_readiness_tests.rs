@@ -144,20 +144,22 @@ async fn install_claim_with_terminal(db: &TestDb, before: &Value, terminal: &str
     let agent = crate::test_support::install_test_agent(&db.node, db.node_identity.did(), BEHAVIOR)
         .await
         .agent_did;
-    crate::session::ensure_session_with_agent_did_and_requester_did(
-        &db.node,
-        SESSION,
+    // The interrupted attempt is the Agent's own signed request in its own
+    // session, so the Agent observes it when reconciling the claim.
+    let access = agent_access(db).await;
+    let signer = selected_identity(db).await;
+    crate::test_support::create_agent_owned_session(
+        &access,
         db.node_identity.did(),
-        &agent,
-        Some(db.node_identity.did()),
+        SESSION,
+        Some(&agent),
     )
-    .await
-    .unwrap();
+    .await;
     let parent = before["parent"].as_str().unwrap();
     let spec = crate::RequestSpec::new(
         gents_protocol::request_admission::RequestPurpose::Normal,
         crate::request::lifecycle::RequestIdentity {
-            requester_did: Some(db.node_identity.did().to_owned()),
+            requester_did: Some(agent.clone()),
             request_id: parent.to_owned(),
             node_did: db.node_identity.did().to_owned(),
             agent_did: agent.clone(),
@@ -166,30 +168,24 @@ async fn install_claim_with_terminal(db: &TestDb, before: &Value, terminal: &str
             execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
             created_at: "2020-01-01T00:00:00Z".to_owned(),
         },
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-            db.node_identity.did(),
-        ),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent),
     );
-    let request = crate::build_signed_request(
-        spec,
-        crate::RequestSigner::Identity(db.node_identity.as_ref()),
-    )
-    .await
-    .unwrap();
-    crate::ConfigAccess::write_local(
-        &db.node,
-        "goal.claimed_readiness_test_parent",
-        &request.graphql_mutation().unwrap(),
-    )
-    .await
-    .unwrap();
-    crate::ConfigAccess::write_local(
-        &db.node,
+    let request =
+        crate::build_signed_request(spec, crate::RequestSigner::Identity(signer.as_ref()))
+            .await
+            .unwrap();
+    access
+        .write(
+            "goal.claimed_readiness_test_parent",
+            &request.graphql_mutation().unwrap(),
+        )
+        .await
+        .unwrap();
+    access.write(
         "goal.claimed_readiness_test_terminal",
         &format!(r#"mutation {{ update_AgentRequest(filter: {{request_id: {{_eq: "{}"}}, lifecycle_state: {{_eq: "pending"}}}}, input: {{lifecycle_state: "{}", terminalized_at: "2020-01-02T00:00:00Z"}}) {{_docID}} }}"#,
             escape_graphql_string(parent), escape_graphql_string(terminal)),
     ).await.unwrap();
-    let access = agent_access(db).await;
     let goal = set_goal_from_access(
         &access,
         db.node_identity.did(),
@@ -324,23 +320,25 @@ async fn required_question_holds_the_claim_until_its_native_item_is_acted() {
     let did = escape_graphql_string(db.node_identity.did());
     let session = escape_graphql_string(SESSION);
     let behavior = escape_graphql_string(&selected_agent(&db).await);
-    let response = crate::ConfigAccess::write_local(
-        &db.node,
-        "test.goal.required_question",
-        &format!(
-            r#"mutation {{ create_MailboxItem(input: {{
-            item_key: "required-question", requester_did: "{did}", node_did: "{did}",
+    // The Agent asks its own session's requester, which is the Agent here.
+    let agent = agent_access(&db).await;
+    let response = agent
+        .write(
+            "test.goal.required_question",
+            &format!(
+                r#"mutation {{ create_MailboxItem(input: {{
+            item_key: "required-question", requester_did: "{behavior}", node_did: "{did}",
             status: "open", kind: "ask", action: "start_request", title: "Next step",
             payload: "{}", source_kind: "agent", source_id: "required-question-source",
             session_id: "{session}", request_id: "{}", target_node_did: "{did}",
             target_agent_did: "{behavior}", created_at: "2020-01-02T00:00:00Z"
         }}) {{ _docID }} }}"#,
-            escape_graphql_string(&payload),
-            escape_graphql_string(parent),
-        ),
-    )
-    .await
-    .unwrap();
+                escape_graphql_string(&payload),
+                escape_graphql_string(parent),
+            ),
+        )
+        .await
+        .unwrap();
     let item_id = crate::store::graphql::created_doc_id(&response, "MailboxItem").unwrap();
     for _ in 0..2 {
         assert!(controller
@@ -354,7 +352,7 @@ async fn required_question_holds_the_claim_until_its_native_item_is_acted() {
         assert_eq!(child_count(&db, &goal, parent).await, 0);
         assert_eq!(recovery_projection(&load_goal(&db).await), before);
     }
-    crate::ConfigAccess::write_local(&db.node, "test.goal.acted_question", &format!(
+    agent.write("test.goal.acted_question", &format!(
         r#"mutation {{ update_MailboxItem(filter: {{_docID: {{_eq: "{}"}}}},
             input: {{status: "acted", resolved_doc_id: "accepted-answer", resolved_at: "2030-01-01T00:00:00Z"}}) {{_docID}} }}"#,
         escape_graphql_string(&item_id),
@@ -651,7 +649,7 @@ async fn unclaimed_goal_follows_live_reconcile_status_and_modeled_readiness() {
             let input = json!({"call_id":"readiness-activity", "node_did":node_did,
                 "agent_did":agent_did, "session_id":SESSION, "request_id":request_id,
                 "request_doc_id":request_doc, "call_seq":1, "call_kind":"inference",
-                "attempt":1, "call_state":"completed"});
+                "attempt":1, "call_state":"completed", "backend_id":"readiness-backend"});
             let response = txn.execute_with_variables(
                 "mutation($input: InferenceCallMutationInputArg!) {create_InferenceCall(input: $input) {_docID}}",
                 &json!({"input":input}),

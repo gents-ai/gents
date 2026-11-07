@@ -7,15 +7,19 @@ use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::trigger_delivery::TriggerFire;
 
+/// Recover as the Agent's managed signer, as runtime startup does.
 #[cfg(test)]
 pub(crate) async fn recover_outcomes(
     node: &std::sync::Arc<EmbeddedNode>,
     owner: &str,
-    agent_did: &str,
+    agent: &dyn crate::store::identity::NodeIdentity,
 ) -> Result<usize> {
-    let actor = identity::Did::new(agent_did)?;
-    let access = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
-    recover_outcomes_with_access(&access, owner, agent_did).await
+    let access = crate::store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did())?,
+        agent,
+    )?;
+    recover_outcomes_with_access(&access, owner, agent.did()).await
 }
 
 pub(crate) async fn recover_outcomes_with_access(
@@ -135,7 +139,6 @@ async fn recover_fire_outcome_in_txn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::config_client::ConfigAccess;
     use crate::triggers::engine::durable::{fire_key, stage_fire_request};
 
     #[tokio::test]
@@ -179,13 +182,19 @@ mod tests {
             };
             let directory = tempfile::tempdir().unwrap();
             let node = std::sync::Arc::new(
-                crate::test_support::node_builder()
+                crate::triggers::callback::test_node_builder()
                     .data_path(directory.path())
                     .build()
                     .await
                     .unwrap(),
             );
             crate::ensure_runtime_schemas(&node).await.unwrap();
+            crate::triggers::callback::seed_test_agent(
+                &node,
+                crate::request::lifecycle::test_support::PIN_FIXED_DID,
+            )
+            .await;
+            let agent = crate::triggers::callback::test_agent_identity();
             let terminal = modeled["terminal"].as_bool().unwrap();
             let state = if terminal { "completed" } else { "pending" };
             let agent_did = crate::triggers::callback::test_agent_did();
@@ -199,10 +208,16 @@ mod tests {
                 crate::store::graphql::escape_graphql_string(&session),
                 crate::store::graphql::escape_graphql_string(&agent_did)
             );
-            ConfigAccess::transact_local_write(&node, None, "test.seed_terminal_outcome_boundary", |txn| {
+            // The Task's Agent owns its session, admitted request, receipt and outcome.
+            crate::triggers::callback::test_agent_access(&node).transact_write("test.seed_terminal_outcome_boundary", |txn| {
                 let fire = &fire;
                 let request_mutation = &request_mutation;
+                let agent_did = &agent_did;
                 Box::pin(async move {
+                    crate::session::ensure_session_in_txn(
+                        txn, &fire.session_id, &fire.identity.owner_did, agent_did,
+                        None, None, None, "2026-01-01T00:00:00Z",
+                    ).await?;
                     stage_fire_request(txn, fire, request_mutation).await?;
                     if goal_backed {
                         let response = txn.execute(&format!("{{AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{_docID}}}}", crate::store::graphql::escape_graphql_string(&fire.request_id))).await?;
@@ -226,7 +241,7 @@ mod tests {
             node.shutdown().await.expect("node shutdown");
             drop(node);
             let node = std::sync::Arc::new(
-                EmbeddedNode::builder()
+                crate::triggers::callback::test_node_builder()
                     .data_path(directory.path())
                     .build()
                     .await
@@ -235,28 +250,24 @@ mod tests {
             let expected = case["post"]["outcomes"].as_array().unwrap().len();
             let before = case["pre"]["outcomes"].as_array().unwrap().len();
             assert_eq!(
-                recover_outcomes(&node, &fire.identity.owner_did, &agent_did)
+                recover_outcomes(&node, &fire.identity.owner_did, agent.as_ref())
                     .await
                     .unwrap(),
                 expected - before,
                 "{name}"
             );
             assert_eq!(
-                recover_outcomes(&node, &fire.identity.owner_did, &agent_did)
+                recover_outcomes(&node, &fire.identity.owner_did, agent.as_ref())
                     .await
                     .unwrap(),
                 0,
                 "{name}"
             );
-            let response = crate::store::graphql::graphql_with_transaction_retry(
-                &node,
-                "{ FireOutcome { handoff_id } }",
-                "verify recovered outcome uniqueness",
-            )
-            .await
-            .unwrap();
-            let outcomes: Vec<serde_json::Value> =
-                crate::store::graphql::rows(&response, "FireOutcome").unwrap();
+            let response = crate::triggers::callback::test_agent_access(&node)
+                .execute("{ FireOutcome { handoff_id } }")
+                .await
+                .unwrap();
+            let outcomes = response["data"]["FireOutcome"].as_array().unwrap();
             assert_eq!(outcomes.len(), expected, "{name}");
             node.shutdown().await.expect("node shutdown");
         }
