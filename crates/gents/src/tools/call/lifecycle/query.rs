@@ -460,47 +460,6 @@ impl ToolCallLifecycle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
-    use crate::request::streaming::DefraStreamWriter;
-    use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
-    use std::time::Duration;
-
-    async fn claimed_request(
-        node: &Arc<EmbeddedNode>,
-        request_id: &str,
-        session_id: &str,
-        node_did_raw: &str,
-        requester_did: Option<&str>,
-    ) -> RequestLifecycle {
-        let now = crate::store::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-        let request_id = crate::store::graphql::escape_graphql_string(request_id);
-        let session_id = crate::store::graphql::escape_graphql_string(session_id);
-        let node_did = crate::store::graphql::escape_graphql_string(node_did_raw);
-        // Request rows carry a validated Agent DID; the fixture's Agent is
-        // installed under the node and its DID is the one the row names.
-        let agent = crate::test_support::install_test_agent(node, node_did_raw, "general").await;
-        let agent_did = crate::store::graphql::escape_graphql_string(&agent.agent_did);
-        let requester_did_field = crate::session::requester_did_create_field(requester_did);
-        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_did: "{agent_did}", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "query fixture", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0, {requester_did_field} }}) {{ _docID }} }}"#)).await;
-        assert!(!created.has_errors(), "{:#?}", created.errors);
-        let row = crate::store::graphql::graphql_with_transaction_retry(node, &format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
-        ), "test.tool_call.load_request").await.unwrap();
-        let row: gents_protocol::row::AgentRequestRow =
-            crate::store::graphql::first_row(&row, "AgentRequest")
-                .unwrap()
-                .unwrap();
-        let mut lifecycle = RequestLifecycle::new_with_node_did(
-            node.clone(),
-            &agent.agent_did,
-            &node_did,
-            row.try_into().unwrap(),
-            60,
-        );
-        assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-        lifecycle
-    }
 
     #[tokio::test]
     async fn accepted_tool_reads_retain_the_callers_snapshot_through_terminal_commit() {
@@ -582,111 +541,66 @@ mod tests {
 
     #[tokio::test]
     async fn load_preserves_requester_route_and_selected_tool_identity() {
-        let data_path = std::env::temp_dir().join(format!(
-            "agent-tool-call-query-route-{}",
-            uuid::Uuid::new_v4()
-        ));
-        let node = Arc::new(
-            crate::test_support::node_builder()
-                .data_path(&data_path)
-                .build()
-                .await
-                .expect("embedded node"),
-        );
-        crate::ensure_runtime_schemas(node.as_ref())
+        use crate::tools::call::lifecycle::admission_fixture::{
+            publish_accepted_on_claimed_request, published_admission_with_owner,
+            PublishedAdmissionOptions,
+        };
+        // The request is client-admitted for its User and claimed by its
+        // selected Agent; the requester route is the User, not the Agent.
+        let (fixture, mut request) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: "tool-call-query-route".into(),
+            real_identity: true,
+            ..Default::default()
+        })
+        .await
+        .expect("published admission");
+        let node = fixture.node.clone();
+        let requester = fixture.requester_identity.did().to_owned();
+        let mut spawn = fixture.tool;
+        spawn
+            .complete("spawned")
             .await
-            .expect("runtime schemas");
-
-        use crate::NodeIdentity as _;
-        let node_did = node
-            .node_identity_did()
-            .expect("fixture node has an identity");
-        let coordinator_keys = tempfile::tempdir().expect("coordinator key directory");
-        let coordinator = crate::KeyIdentity::load_or_create(
-            coordinator_keys.path().join("coordinator.key"),
-            None,
-        )
-        .expect("coordinator identity")
-        .did()
-        .to_string();
-        let mut request = claimed_request(
-            &node,
-            "request-routed",
-            "session-routed",
-            node_did,
-            Some(coordinator.as_str()),
-        )
-        .await;
-        let writer = DefraStreamWriter::new(node.clone(), node_did, Duration::from_millis(1));
-        request
-            .begin_owned_execution(&writer)
-            .await
-            .expect("owned execution");
-        writer
-            .start_provider_attempt(
-                &request.request().doc_id,
-                0,
-                0,
-                "inference.1".parse().unwrap(),
-            )
-            .await;
+            .expect("settle the first call");
         let arguments = serde_json::json!({
             "service_id": "metrics-prod",
             "tool_name": "query_metrics",
             "arguments": {},
         });
-        let message = Message::Assistant {
-            request_id: None,
-            id: Some("routed-provider-message".into()),
-            content: vec![AssistantContent::ToolCall(ToolCall {
-                raw_arguments: None,
-                id: "tool-call-routed".into(),
-                call_id: Some("routed-provider-call".into()),
-                function: ToolFunction::new("call_tool".into(), arguments.clone()),
-                signature: None,
-                additional_params: None,
-            })],
-        };
-        let mut published = writer
-            .publish_native_turn(&request, 0, 0, &message)
-            .await
-            .expect("canonical publication accepted call_tool");
-        let accepted = published
-            .accepted_tools
-            .pop()
-            .expect("accepted native tool call");
-        let deadline = request
-            .claimed_deadline_at()
-            .expect("claimed request deadline");
         let selected = crate::tools::mcp::meta::selected_tool_identity(
             "call_tool",
             &serde_json::to_string(&arguments).expect("arguments text"),
         )
         .expect("call_tool carries a selected tool identity");
-        let mut lifecycle = ToolCallLifecycle::from_accepted(
+        let mut lifecycle = publish_accepted_on_claimed_request(
             node.clone(),
-            node_did.to_string(),
-            Some(coordinator.clone()),
-            accepted,
-            deadline,
+            &mut request,
+            &fixture.node_did,
+            1,
+            "call_tool",
+            "tool-call-routed",
+            arguments,
             AwaitMode::Foreground,
+            false,
         )
-        .expect("accepted lifecycle")
+        .await
+        .expect("canonical publication accepted call_tool")
         .with_selected_tool_identity(Some(selected));
         lifecycle.start_running().await.expect("dispatch tool call");
 
         let actor = lifecycle.actor().clone();
+        let session_id = lifecycle.session_id().to_owned();
         let loaded =
-            ToolCallLifecycle::load_as(node.clone(), actor, "session-routed", "tool-call-routed")
+            ToolCallLifecycle::load_as(node.clone(), actor, &session_id, "tool-call-routed")
                 .await
                 .expect("load tool call")
                 .expect("persisted tool call");
 
-        assert_eq!(loaded.requester_did.as_deref(), Some(coordinator.as_str()));
+        assert_eq!(loaded.requester_did.as_deref(), Some(requester.as_str()));
+        assert_ne!(loaded.requester_did.as_deref(), Some(loaded.actor.as_str()));
         let selected = loaded.selected_tool_identity.expect("selected identity");
         assert_eq!(selected.service_id, "metrics-prod");
         assert_eq!(selected.tool_name, "query_metrics");
         node.shutdown().await.expect("shut down test node");
-        let _ = std::fs::remove_dir_all(&data_path);
+        let _ = std::fs::remove_dir_all(&fixture.path);
     }
 }
