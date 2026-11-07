@@ -449,11 +449,15 @@ impl ConfigClientError {
                 error.as_ref(),
                 query::error::QueryError::PermissionDenied(_)
             ),
+            // A local relationship change the actor may not manage is the
+            // native counterpart of the HTTP relationship endpoint's 401/403.
             Self::Node(error) => matches!(
                 error.as_ref(),
                 defra_node::Error::Transaction(query::TransactionError::Storage(
                     storage::corekv::Error::ProjectionPermissionDenied
-                ))
+                )) | defra_node::Error::Acp(
+                    acp::Error::NotManager { .. } | acp::Error::NotOwner { .. }
+                )
             ),
             Self::EmbeddedGraphqlErrors { errors } => errors.iter().any(|error| {
                 error.code() == Some(gents_protocol::database_error::PERMISSION_DENIED_CODE)
@@ -654,5 +658,25 @@ mod tests {
         )));
         assert!(!other.is_permission_denied());
         assert!(!other.is_retryable_database_conflict());
+    }
+
+    #[test]
+    fn native_relationship_refusals_are_permission_denials() {
+        for refused in [
+            acp::Error::NotManager {
+                operation: "create relationship".into(),
+            },
+            acp::Error::NotOwner {
+                operation: "delete relationship".into(),
+            },
+        ] {
+            let denied = ConfigClientError::Node(Box::new(defra_node::Error::Acp(refused)));
+            assert!(denied.is_permission_denied(), "{denied}");
+            assert!(!denied.is_retryable_database_conflict());
+        }
+        let invalid = ConfigClientError::Node(Box::new(defra_node::Error::Acp(
+            acp::Error::InvalidRelation("unknown".into()),
+        )));
+        assert!(!invalid.is_permission_denied());
     }
 }
