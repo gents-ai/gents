@@ -153,7 +153,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
             .with_client_signing_capability(user.client_signing_capability()?)?
             .with_client_signed_agent_creates(),
     );
-    access
+    let node_response = access
         .transact_write("test.backend.node", |txn| {
             let runtime_did = runtime.did();
             Box::pin(async move {
@@ -162,6 +162,16 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
             &json!({"input":{"node_did":runtime_did}}), gents_protocol::schemas::NODE).await
             })
         })
+        .await?;
+    // The runtime observes configuration through its Node relationship, as
+    // in production; native ACP has no Node fallback.
+    access
+        .add_actor_relationship(
+            "Node",
+            &crate::store::graphql::created_doc_id(&node_response, "Node")?,
+            "runtime_reader",
+            &identity::Did::new(runtime.did())?,
+        )
         .await?;
     let legacy = access.transact_write("test.backend.protected_legacy", |txn| {
         let runtime_did = runtime.did();
@@ -195,10 +205,28 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
     let metadata_doc = super::write_inference_backend_document(&access, &backend).await?;
     let runtime_access =
         super::ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
-    assert!(runtime_access.write("test.backend.runtime_config_denied", &format!(
+    // Native ACP denies the runtime either by refusing the mutation or by
+    // matching no document it may update; the User's row must not change.
+    match runtime_access.write("test.backend.runtime_config_denied", &format!(
         "mutation {{ update_InferenceBackendMetadata(docID: \"{}\", input: {{ endpoint: \"https://other.example\" }}) {{ _docID }} }}",
         crate::store::graphql::escape_graphql_string(&metadata_doc),
-    )).await.is_err());
+    )).await {
+        Ok(denied) => assert_eq!(
+            denied["data"]["update_InferenceBackendMetadata"]
+                .as_array()
+                .map(Vec::len),
+            Some(0),
+            "runtime updated User configuration: {denied}"
+        ),
+        Err(error) => assert!(error.is_graphql_rejection(), "{error}"),
+    }
+    let unchanged = access
+        .execute("{ InferenceBackendMetadata { endpoint } }")
+        .await?;
+    assert_eq!(
+        unchanged["data"]["InferenceBackendMetadata"][0]["endpoint"],
+        json!(backend.endpoint)
+    );
     let read = || async {
         access.execute("{ InferenceBackendMetadata { _docID creation_nonce auth_kind credential_id credential_version _version { cid } } InferenceBackendObservation { _docID metadata_doc_id catalogs probe_status _version { cid } } BackendCredential { _docID credential_id version secret _version { cid } } }").await
     };
