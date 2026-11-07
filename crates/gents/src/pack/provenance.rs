@@ -32,8 +32,8 @@ pub fn pack_origin_from_tags(tags: &[String]) -> Result<Option<&str>> {
     );
     if let Some(origin) = origin {
         anyhow::ensure!(
-            is_coordinate(origin) || super::is_valid_pack_name(origin),
-            "configuration document carries invalid pack origin {origin:?}"
+            is_coordinate(origin),
+            "configuration document pack origin must be a namespace/name coordinate: {origin:?}"
         );
     }
     Ok(origin)
@@ -41,10 +41,6 @@ pub fn pack_origin_from_tags(tags: &[String]) -> Result<Option<&str>> {
 
 pub(super) fn ensure_origin_owned(tags: &[String], coordinate: &str) -> Result<()> {
     if let Some(origin) = pack_origin_from_tags(tags)? {
-        anyhow::ensure!(
-            origin.contains('/'),
-            "configuration document has an ambiguous unqualified pack origin {origin:?}; resolve its ownership before retrying"
-        );
         anyhow::ensure!(
             origin == coordinate,
             "configuration document belongs to pack {origin:?}, not {coordinate:?}"
