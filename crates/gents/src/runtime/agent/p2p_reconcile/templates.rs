@@ -235,6 +235,7 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "AgentOutputSegment",
     "AgentSession",
     "CompactionEntry",
+    "ProviderReductionDisplay",
     "MailboxItem",
     "PeerEndpoint",
     "SessionHydrationRequest",
@@ -565,7 +566,15 @@ pub fn compare_client_replicated_schema(
     local: &ReplicatedSchema,
     remote: Option<&ReplicatedSchema>,
 ) -> Result<(), ReplicatedSchemaSkew> {
-    compare_replicated_schema(CLIENT_COLLECTIONS, local, remote).map_err(|mut skew| {
+    let expected: Vec<_> = CLIENT_COLLECTIONS
+        .iter()
+        .copied()
+        .filter(|name| {
+            *name != "ProviderReductionDisplay"
+                || remote.is_none_or(|schema| schema.contains_key(*name))
+        })
+        .collect();
+    compare_replicated_schema(&expected, local, remote).map_err(|mut skew| {
         // Name the side that is off the canonical lineage, so the fix offered is re-creating
         // that store rather than "update to the same version", which cannot help.
         fn off_lineage(collections: &[String], schema: &ReplicatedSchema) -> Vec<String> {
@@ -630,6 +639,70 @@ pub fn scope_filter(
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn generated_display_schema_cases_drive_client_compatibility() {
+        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        let cases = snapshot["display_schema_cases"]
+            .as_array()
+            .expect("display schema cases");
+        assert!(!cases.is_empty());
+        for case in cases {
+            let identity = ReplicatedCollectionIdentity {
+                version_id: "base".into(),
+                branchable: true,
+                policy_resource: None,
+            };
+            let mut local: ReplicatedSchema = CLIENT_COLLECTIONS
+                .iter()
+                .map(|name| ((*name).to_owned(), identity.clone()))
+                .collect();
+            let mut remote = local.clone();
+            for (schema, value) in [(&mut local, &case["local"]), (&mut remote, &case["remote"])] {
+                match value.as_u64() {
+                    Some(version) => {
+                        schema
+                            .get_mut("ProviderReductionDisplay")
+                            .unwrap()
+                            .version_id = version.to_string()
+                    }
+                    None => {
+                        schema.remove("ProviderReductionDisplay");
+                    }
+                }
+            }
+            assert_eq!(
+                compare_client_replicated_schema(&local, Some(&remote)).is_ok(),
+                case["compatible"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn old_runtime_can_omit_display_collection_but_not_other_or_mismatched_schemas() {
+        let identity = ReplicatedCollectionIdentity {
+            version_id: "version".into(),
+            branchable: true,
+            policy_resource: None,
+        };
+        let local: ReplicatedSchema = CLIENT_COLLECTIONS
+            .iter()
+            .map(|name| ((*name).to_owned(), identity.clone()))
+            .collect();
+        let mut remote = local.clone();
+        remote.remove("ProviderReductionDisplay");
+        assert!(compare_client_replicated_schema(&local, Some(&remote)).is_ok());
+        remote.remove("AgentMessage");
+        assert!(compare_client_replicated_schema(&local, Some(&remote)).is_err());
+        remote = local.clone();
+        remote
+            .get_mut("ProviderReductionDisplay")
+            .unwrap()
+            .version_id = "different".into();
+        assert!(compare_client_replicated_schema(&local, Some(&remote)).is_err());
+        assert!(compare_client_replicated_schema(&local, None).is_err());
+    }
 
     #[tokio::test]
     async fn pre_reasoning_audit_runtime_schema_is_refused_as_skew() {

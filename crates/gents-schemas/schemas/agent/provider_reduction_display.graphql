@@ -1,0 +1,13 @@
+type ProviderReductionDisplay @branchable {
+    reduction_key: String @index @immutable
+    node_did: String @index @immutable
+    requester_did: String @index @immutable
+    session_id: String @index @immutable
+    request_doc_id: String @index @immutable
+    canonical_through_sequence: Int @immutable
+    summary: String @immutable
+    messages_compacted: Int @immutable
+    original_tokens: Int @immutable
+    compacted_tokens: Int @immutable
+    created_at: DateTime @index @immutable
+}

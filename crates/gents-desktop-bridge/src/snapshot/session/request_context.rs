@@ -194,19 +194,57 @@ pub(super) async fn load_session_reductions(
                 reduction_key source_boundary_json messages_compacted
                 original_tokens compacted_tokens created_at
             }}
+            ProviderReductionDisplay(
+                filter: {{
+                    node_did: {{ _eq: "{node_did}" }},
+                    session_id: {{ _eq: "{session_id}" }},
+                    requester_did: {{ _eq: {requester} }}
+                }},
+                order: [{{ created_at: ASC }}, {{ reduction_key: ASC }}]
+            ) {{
+                reduction_key canonical_through_sequence messages_compacted
+                original_tokens compacted_tokens created_at
+            }}
         }}"#,
         node_did = gents::store::graphql::escape_graphql_string(node_did),
         session_id = gents::store::graphql::escape_graphql_string(session_id),
     );
     let data = access.execute(&query).await?;
-    data.pointer("/data/ProviderContextReduction")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| {
-            anyhow::anyhow!("ProviderContextReduction response omitted its result array")
-        })?
-        .iter()
-        .map(decode_reduction_row)
-        .collect()
+    let mut reductions = std::collections::BTreeMap::<String, LoadedReduction>::new();
+    for collection in ["ProviderReductionDisplay", "ProviderContextReduction"] {
+        let mut collection_keys = std::collections::BTreeSet::new();
+        let rows = data
+            .pointer(&format!("/data/{collection}"))
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| anyhow::anyhow!("{collection} response omitted its result array"))?;
+        for row in rows {
+            let reduction = decode_reduction_row(row)?;
+            anyhow::ensure!(
+                collection_keys.insert(reduction.reduction_key.clone()),
+                "duplicate {collection} records for {}",
+                reduction.reduction_key
+            );
+            if let Some(previous) = reductions.get(&reduction.reduction_key) {
+                anyhow::ensure!(
+                    previous.anchor_sequence == reduction.anchor_sequence
+                        && previous.messages_compacted == reduction.messages_compacted
+                        && previous.original_tokens == reduction.original_tokens
+                        && previous.compacted_tokens == reduction.compacted_tokens
+                        && previous.created_at == reduction.created_at,
+                    "conflicting reduction display records for {}",
+                    reduction.reduction_key
+                );
+            }
+            reductions.insert(reduction.reduction_key.clone(), reduction);
+        }
+    }
+    let mut reductions: Vec<_> = reductions.into_values().collect();
+    reductions.sort_by(|a, b| {
+        a.created_at
+            .cmp(&b.created_at)
+            .then_with(|| a.reduction_key.cmp(&b.reduction_key))
+    });
+    Ok(reductions)
 }
 
 /// Requests whose first message one placement query reads; each is a
@@ -338,12 +376,23 @@ pub(super) async fn load_marker_summaries(
             .map(|did| format!("\"{}\"", gents::store::graphql::escape_graphql_string(did)))
             .unwrap_or_else(|| "null".to_string()),
     );
+    let mut selections = Vec::new();
+    if !entry_keys.is_empty() {
+        selections.push(format!(
+            "CompactionEntry(filter: {{ {scope}, compaction_key: {{ _in: [{}] }} }}) {{ compaction_key summary files_read files_modified }}",
+            keys(entry_keys),
+        ));
+    }
+    if !reduction_keys.is_empty() {
+        let reductions = keys(reduction_keys);
+        for collection in ["ProviderReductionDisplay", "ProviderContextReduction"] {
+            selections.push(format!(
+                "{collection}(filter: {{ {scope}, reduction_key: {{ _in: [{reductions}] }} }}) {{ reduction_key summary }}"
+            ));
+        }
+    }
     let data = access
-        .execute(&format!(
-            "query {{ CompactionEntry(filter: {{ {scope}, compaction_key: {{ _in: [{entries}] }} }}) {{ compaction_key summary files_read files_modified }} ProviderContextReduction(filter: {{ {scope}, reduction_key: {{ _in: [{reductions}] }} }}) {{ reduction_key summary }} }}",
-            entries = keys(entry_keys),
-            reductions = keys(reduction_keys),
-        ))
+        .execute(&format!("query {{ {} }}", selections.join(" ")))
         .await?;
     let text = |row: &serde_json::Value, field: &str| {
         row.get(field)
@@ -367,14 +416,30 @@ pub(super) async fn load_marker_summaries(
             );
         }
     }
-    for row in data
-        .pointer("/data/ProviderContextReduction")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        if let Some(key) = text(row, "reduction_key") {
-            summaries.reductions.insert(key, text(row, "summary"));
+    for collection in ["ProviderReductionDisplay", "ProviderContextReduction"] {
+        if reduction_keys.is_empty() {
+            break;
+        }
+        let mut collection_keys = std::collections::BTreeSet::new();
+        let rows = data
+            .pointer(&format!("/data/{collection}"))
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| anyhow::anyhow!("{collection} response omitted its result array"))?;
+        for row in rows {
+            if let Some(key) = text(row, "reduction_key") {
+                anyhow::ensure!(
+                    collection_keys.insert(key.clone()),
+                    "duplicate {collection} records for {key}"
+                );
+                let summary = text(row, "summary");
+                if let Some(previous) = summaries.reductions.get(&key) {
+                    anyhow::ensure!(
+                        previous == &summary,
+                        "conflicting reduction summaries for {key}"
+                    );
+                }
+                summaries.reductions.insert(key, summary);
+            }
         }
     }
     Ok(summaries)
@@ -390,13 +455,17 @@ fn decode_reduction_row(row: &serde_json::Value) -> anyhow::Result<LoadedReducti
     let reduction_key = string("reduction_key")
         .filter(|key| !key.trim().is_empty())
         .ok_or_else(|| anyhow::anyhow!("ProviderContextReduction row has no reduction_key"))?;
-    let anchor_sequence = string("source_boundary_json")
-        .and_then(|json| {
-            serde_json::from_str::<gents::turn::provider_context_reduction::SourceBoundary>(&json)
+    let anchor_sequence = int("canonical_through_sequence").or_else(|| {
+        string("source_boundary_json")
+            .and_then(|json| {
+                serde_json::from_str::<gents::turn::provider_context_reduction::SourceBoundary>(
+                    &json,
+                )
                 .ok()
-        })
-        .and_then(|boundary| boundary.canonical_through)
-        .map(|fact| fact.sequence);
+            })
+            .and_then(|boundary| boundary.canonical_through)
+            .map(|fact| fact.sequence)
+    });
     Ok(LoadedReduction {
         reduction_key,
         anchor_sequence,
@@ -572,6 +641,187 @@ mod tests {
             "created_at": created_at,
         }))
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn reduction_summary_query_omits_empty_compaction_selection() {
+        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(|request: &wiremock::Request| {
+                request
+                    .body_json::<serde_json::Value>()
+                    .ok()
+                    .and_then(|body| body["query"].as_str().map(str::to_owned))
+                    .is_some_and(|query| {
+                        query.contains("ProviderReductionDisplay")
+                            && !query.contains("CompactionEntry")
+                            && !query.contains("_in: []")
+                    })
+            })
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": {
+                    "ProviderReductionDisplay": [{"reduction_key": "key", "summary": "saved"}],
+                    "ProviderContextReduction": []
+                }})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let summaries = load_marker_summaries(
+            &ConfigAccess::graphql(server.uri()),
+            "node",
+            "session",
+            Some("requester"),
+            &[],
+            &["key".to_owned()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            summaries.reductions.get("key"),
+            Some(&Some("saved".to_owned()))
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn conflicting_reduction_summaries_are_rejected() {
+        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": {
+                    "ProviderReductionDisplay": [{"reduction_key": "key", "summary": "one"}],
+                    "ProviderContextReduction": [{"reduction_key": "key", "summary": "other"}]
+                }})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = load_marker_summaries(
+            &ConfigAccess::graphql(server.uri()),
+            "node",
+            "session",
+            Some("requester"),
+            &[],
+            &["key".to_owned()],
+        )
+        .await
+        .err()
+        .expect("different summaries must fail");
+        assert!(error
+            .to_string()
+            .contains("conflicting reduction summaries"));
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn missing_reduction_summary_result_is_not_treated_as_empty() {
+        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": {
+                    "ProviderReductionDisplay": []
+                }})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = load_marker_summaries(
+            &ConfigAccess::graphql(server.uri()),
+            "node",
+            "session",
+            Some("requester"),
+            &[],
+            &["key".to_owned()],
+        )
+        .await
+        .err()
+        .expect("missing results must fail");
+        assert!(error
+            .to_string()
+            .contains("ProviderContextReduction response omitted"));
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn conflicting_reduction_display_does_not_silently_replace_source() {
+        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let boundary = serde_json::json!({"boundary_version": 2, "request_doc_id": "doc",
+            "request_commit_cid": "cid", "canonical_through": {"doc_id": "m", "sequence": 7, "commit_cid": "cid"}}).to_string();
+        Mock::given(method("POST")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": {
+            "ProviderReductionDisplay": [{"reduction_key": "key", "canonical_through_sequence": 8}],
+            "ProviderContextReduction": [{"reduction_key": "key", "source_boundary_json": boundary}]
+        }}))).expect(1).mount(&server).await;
+        let error = load_session_reductions(
+            &ConfigAccess::graphql(server.uri()),
+            "node",
+            "session",
+            Some("requester"),
+        )
+        .await
+        .err()
+        .expect("conflicting boundaries must fail");
+        assert!(error.to_string().contains("conflicting reduction display"));
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn duplicate_display_records_do_not_silently_collapse() {
+        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": {
+                    "ProviderReductionDisplay": [
+                        {"reduction_key": "key", "canonical_through_sequence": 8},
+                        {"reduction_key": "key", "canonical_through_sequence": 8}
+                    ],
+                    "ProviderContextReduction": []
+                }})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = load_session_reductions(
+            &ConfigAccess::graphql(server.uri()),
+            "node",
+            "session",
+            Some("requester"),
+        )
+        .await
+        .err()
+        .expect("duplicate records must fail");
+        assert!(error
+            .to_string()
+            .contains("duplicate ProviderReductionDisplay"));
+        server.verify().await;
+    }
+
+    #[test]
+    fn replicated_reduction_uses_the_canonical_message_boundary() {
+        let row = decode_reduction_row(&serde_json::json!({
+            "reduction_key": "replicated",
+            "canonical_through_sequence": 13,
+            "messages_compacted": 12,
+            "original_tokens": 16523,
+            "compacted_tokens": 516,
+            "created_at": "2026-10-29T21:14:59.563619Z"
+        }))
+        .unwrap();
+        assert_eq!(row.reduction_key, "replicated");
+        assert_eq!(row.anchor_sequence, Some(13));
+        assert_eq!(row.messages_compacted, Some(12));
+        assert_eq!(row.original_tokens, Some(16523));
+        assert_eq!(row.compacted_tokens, Some(516));
     }
 
     #[test]
@@ -843,6 +1093,7 @@ mod tests {
                 ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": {
                     "CompactionEntry": [{"compaction_key": "drawn", "summary": "## Goal\nKept.",
                         "files_read": "[\"src/lib.rs\"]", "files_modified": null}],
+                    "ProviderReductionDisplay": [],
                     "ProviderContextReduction": [{"reduction_key": "mid", "summary": "  "}]
                 }})),
             )

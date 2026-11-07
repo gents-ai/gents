@@ -32,6 +32,7 @@ enum BackgroundTaskResult {
     Reconcile(Result<()>),
     Control(Result<()>),
     BackgroundCompletion(Result<()>),
+    ReductionDisplayBackfill(Result<()>),
     PairingReconcile(Result<()>),
     EnrollmentReconcile(Result<()>),
     RegistryHeartbeat(Result<()>),
@@ -49,6 +50,9 @@ impl BackgroundTaskResult {
             Self::Reconcile(result) => result.context("generation supervisor task"),
             Self::Control(result) => result.context("control watcher task"),
             Self::BackgroundCompletion(result) => result.context("background completion task"),
+            Self::ReductionDisplayBackfill(result) => {
+                result.context("reduction display backfill task")
+            }
             Self::PairingReconcile(result) => result.context("pairing reconcile task"),
             Self::EnrollmentReconcile(result) => result.context("enrollment reconcile task"),
             Self::RegistryHeartbeat(result) => result.context("registry heartbeat task"),
@@ -621,6 +625,20 @@ async fn run_agent_owned(
     }));
 
     let mut background_tasks = JoinSet::new();
+
+    let backfill_node = agent.node.clone();
+    let backfill_node_did = agent.node_did().to_string();
+    let backfill_cancel = cancel.child_token();
+    background_tasks.spawn(async move {
+        BackgroundTaskResult::ReductionDisplayBackfill(
+            crate::turn::provider_context_reduction::run_display_backfill(
+                backfill_node,
+                backfill_node_did,
+                backfill_cancel,
+            )
+            .await,
+        )
+    });
 
     let completion_node = agent.node.clone();
     let completion_node_did = agent.node_did().to_string();
