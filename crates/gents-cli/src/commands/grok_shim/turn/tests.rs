@@ -175,6 +175,7 @@ async fn test_config(graphql: String, node_did: &str, node: &EmbeddedNode) -> Tu
                     .unwrap(),
             )
             .unwrap(),
+        agent_signer: None,
     }
 }
 

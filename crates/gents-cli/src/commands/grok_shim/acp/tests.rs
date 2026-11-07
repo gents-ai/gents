@@ -77,6 +77,7 @@ async fn service_over(signing_node: bool) -> (tempfile::TempDir, AcpService) {
             )
             .with_client_signing_capability(identity.client_signing_capability().unwrap())
             .unwrap(),
+            agent_signer: config.agent_signer.clone(),
         },
     ));
     let projections = Arc::new(ProjectionEngine::new_for_test(

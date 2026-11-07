@@ -124,6 +124,8 @@ pub(super) struct TurnManagerConfig {
     pub node_did: String,
     pub agent_did: String,
     pub graphql: gents::store::config_client::GraphqlEndpoint,
+    /// The bound Agent's managed signer; interrupts of its rows require it.
+    pub agent_signer: Option<gents::store::identity::ManagedAgentSigner>,
 }
 
 #[derive(Debug, Default)]

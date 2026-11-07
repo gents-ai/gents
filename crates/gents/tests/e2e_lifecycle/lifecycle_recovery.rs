@@ -1057,6 +1057,7 @@ async fn recover_interrupted_request_after_crash(
         .expect("accepted request principal identity");
     gents::request::interrupt::interrupt_request_by_doc_id(
         node,
+        None,
         doc_id,
         node_did,
         row.requester_did.as_deref(),

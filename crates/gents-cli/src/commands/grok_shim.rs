@@ -150,6 +150,7 @@ impl AcpDelegateFactoryInputs {
                 node_did: inputs.node_did.clone(),
                 agent_did: inputs.agent_did.clone(),
                 graphql: inputs.graphql.clone(),
+                agent_signer: inputs.agent_signer.clone(),
             },
         ));
         let projections = Arc::new(

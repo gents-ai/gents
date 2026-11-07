@@ -913,7 +913,7 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
     )
     .await;
 
-    gents::interrupt_request_by_doc_id(&db.node, &target_doc_id, OWNER_DID, None)
+    gents::interrupt_request_by_doc_id(&db.node, None, &target_doc_id, OWNER_DID, None)
         .await
         .unwrap();
     assert!(
