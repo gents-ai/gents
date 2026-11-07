@@ -62,23 +62,24 @@ fn modeled_removal_requires_the_exact_returned_document() {
 #[tokio::test]
 async fn modeled_callback_configuration_publication_and_revocation() -> Result<()> {
     use crate::lean_vocab_test::{lean_identity_household_cases, LeanIdentitySubject};
+    use crate::NodeIdentity as _;
     let case = lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
-    let user = &case
+    let modeled_user = &case
         .objects
         .iter()
         .find(|object| object.id == "home")
         .unwrap()
         .owner;
-    let agent = &case
+    let modeled_agent = &case
         .objects
         .iter()
         .find(|object| object.id == "agent-created")
         .unwrap()
         .owner;
-    let runtime = case
+    let modeled_runtime = case
         .relations
         .iter()
         .find_map(|relation| match &relation.subject {
@@ -90,24 +91,61 @@ async fn modeled_callback_configuration_publication_and_revocation() -> Result<(
             _ => None,
         })
         .unwrap();
+    // Modeled DIDs carry no keys. Each modeled actor is played by a held
+    // identity so every write is signed by its real actor.
+    let keys = tempfile::tempdir()?;
+    let held = |name: &str| crate::KeyIdentity::load_or_create(keys.path().join(name), None);
+    let (user_key, runtime_key, agent_key) = (held("user")?, held("runtime")?, held("agent")?);
+    let mut actors = BTreeMap::new();
+    for observation in &case.callback_configuration_cases {
+        let modeled = observation["actor"].as_str().unwrap().to_owned();
+        if !actors.contains_key(&modeled) {
+            let real = if modeled == *modeled_runtime {
+                runtime_key.did().to_owned()
+            } else if modeled == *modeled_agent {
+                agent_key.did().to_owned()
+            } else {
+                held(&format!("actor-{}", actors.len()))?.did().to_owned()
+            };
+            actors.insert(modeled, real);
+        }
+    }
+    let (user, agent, runtime) = (user_key.did(), agent_key.did(), runtime_key.did());
+    assert_ne!(modeled_user, modeled_agent);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
     // The Node is the runtime's identity; the user is the configuration actor.
     let node = Arc::new(
         EmbeddedNode::builder()
             .with_node_identity_did(runtime)
             .with_node_acp_owner(user.to_owned())
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
             .build()
             .await?,
     );
-    let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(user)?);
-    let context = defra_core::RequestContext::default().with_identity(Some(user.clone()));
+    let owner = ConfigAccess::Graphql(
+        crate::store::config_client::GraphqlEndpoint::as_principal(
+            format!("http://{address}/api/v0/graphql"),
+            user,
+        )
+        .with_client_signing_capability(user_key.client_signing_capability()?)?,
+    );
+    let context = defra_core::RequestContext::default().with_identity(Some(user.to_owned()));
     node.add_dac_policy_with_counter_as(&context, &case.policy_yaml, 0)
         .await?;
     register_config_schemas(&node).await?;
-    owner
-        .add_collection(gents_protocol::schemas::EVENT_SOURCE_CURSOR)
+    for actor in actors.values() {
+        for permission in [
+            acp::nac::NodePermission::DocumentRead,
+            acp::nac::NodePermission::CollectionGet,
+        ] {
+            node.add_nac_actor_relationship_as(&context, permission.as_str(), actor)
+                .await?;
+        }
+    }
+    node.add_collection_as(&context, gents_protocol::schemas::EVENT_SOURCE_CURSOR)
         .await?;
-    owner
-        .add_collection("type CallbackTestEvent { label: String }")
+    node.add_collection_as(&context, "type CallbackTestEvent { label: String }")
         .await?;
     let created = owner
         .write(
@@ -128,7 +166,7 @@ async fn modeled_callback_configuration_publication_and_revocation() -> Result<(
         )
         .await?;
     owner.write("test.callback.dependencies", &format!(
-        "mutation {{ create_Agent(input: {{node_did: \"{runtime}\", agent_did: \"{agent}\", creation_nonce: \"nonce\"}}) {{_docID}} create_EventSource(input: {{node_did: \"{runtime}\", event_source_id: \"source\", source_collection: \"CallbackTestEvent\", event_kind: \"created\"}}) {{_docID}} }}",
+        "mutation {{ create_Agent(input: {{node_did: \"{runtime}\", agent_did: \"{agent}\", creation_nonce: \"nonce\", inference_profile_id: \"profile\"}}) {{_docID}} create_EventSource(input: {{node_did: \"{runtime}\", event_source_id: \"source\", source_collection: \"CallbackTestEvent\", event_kind: \"created\"}}) {{_docID}} }}",
         runtime = escape_graphql_string(runtime), agent = escape_graphql_string(agent),
     )).await?;
     let docs = [
@@ -157,7 +195,7 @@ async fn modeled_callback_configuration_publication_and_revocation() -> Result<(
             apply(&owner, docs.clone()).await?;
             revoked = true;
         }
-        let actor = observation["actor"].as_str().unwrap();
+        let actor = &actors[observation["actor"].as_str().unwrap()];
         let id = observation["id"].as_str().unwrap();
         let (collection, field) = match id {
             "binding" => ("CallbackBinding", "binding_id"),
@@ -175,7 +213,8 @@ async fn modeled_callback_configuration_publication_and_revocation() -> Result<(
         assert_eq!(
             !response["data"][collection].as_array().unwrap().is_empty(),
             observation["expected"].as_bool().unwrap(),
-            "{actor} {id}"
+            "{} {id}",
+            observation["actor"]
         );
     }
     node.shutdown().await?;
@@ -2340,19 +2379,13 @@ async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_act
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration contract");
-    let user = &case
-        .objects
-        .iter()
-        .find(|object| object.id == "home")
-        .unwrap()
-        .owner;
-    let agent = &case
+    let modeled_agent = &case
         .objects
         .iter()
         .find(|object| object.id == "agent-created")
         .unwrap()
         .owner;
-    let runtime = case
+    let _modeled_runtime = case
         .relations
         .iter()
         .find_map(|relation| match &relation.subject {
@@ -2367,16 +2400,36 @@ async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_act
     assert!(case
         .actions
         .iter()
-        .any(|action| matches!(action, LeanIdentityAction::Check { actor, .. } if actor == agent)));
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
-    let user_access = ConfigAccess::local_as(node.clone(), identity::Did::new(user)?);
+        .any(|action| matches!(action, LeanIdentityAction::Check { actor, .. } if actor == modeled_agent)));
+    // Modeled DIDs carry no keys; held identities play the modeled User,
+    // runtime and Agent so the User's configuration writes are signed.
+    use crate::NodeIdentity as _;
+    let keys = tempfile::tempdir()?;
+    let held = |name: &str| crate::KeyIdentity::load_or_create(keys.path().join(name), None);
+    let (user_key, runtime_key, agent_key) = (held("user")?, held("runtime")?, held("agent")?);
+    let (user, runtime, agent) = (user_key.did().to_owned(), runtime_key.did(), agent_key.did());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .enable_signing()
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .build()
+            .await?,
+    );
+    let user_access = ConfigAccess::Graphql(
+        crate::store::config_client::GraphqlEndpoint::as_principal(
+            format!("http://{address}/api/v0/graphql"),
+            &user,
+        )
+        .with_client_signing_capability(user_key.client_signing_capability()?)?,
+    );
     let runtime_did = identity::Did::new(runtime)?;
     let agent_access = ConfigAccess::local_as(node.clone(), identity::Did::new(agent)?);
     let ctx = defra_core::RequestContext::default().with_identity(Some(user.clone()));
     node.add_dac_policy_with_counter_as(&ctx, &case.policy_yaml, 0)
         .await?;
-    user_access
-        .add_collection(gents_protocol::schemas::NODE)
+    node.add_collection_as(&ctx, gents_protocol::schemas::NODE)
         .await?;
     let response = user_access
         .write(
@@ -2423,7 +2476,7 @@ async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_act
                         "agent unexpectedly reads Node"
                     );
                     anyhow::ensure!(
-                        txn.actor_did() == Some(agent.as_str()),
+                        txn.actor_did() == Some(agent),
                         "transaction actor changed"
                     );
                     configuration_node_doc(txn, runtime, Some(binding)).await
