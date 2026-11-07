@@ -538,7 +538,34 @@ mod turn_assignment_tests {
             escape_graphql_string(&session),
             escape_graphql_string(&now)
         );
-        let created = owner.write("test.folded_head", &create).await.unwrap();
+        // The head is verified and claimed below, so its Agent signs it as a
+        // local-self request; the foreign heads only name fold targets.
+        assert_eq!(
+            caused_requester, caused_agent,
+            "a caused request is local-self"
+        );
+        let signer = owner.managed_agent_signer().unwrap();
+        let mut head = gents_protocol::request_admission::AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            &head_id,
+            did,
+            &caused_requester,
+            &caused_agent,
+            &session,
+            "head",
+            "interactive",
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                &caused_agent,
+            ),
+        );
+        crate::sign_agent_request_create(&signer, &mut head)
+            .await
+            .unwrap();
+        let created = owner
+            .write("test.folded_head", &head.graphql_mutation().unwrap())
+            .await
+            .unwrap();
         let head_doc = crate::store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
         let foreign_create = create
             .replace(
