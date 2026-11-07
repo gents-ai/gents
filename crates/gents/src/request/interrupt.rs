@@ -23,9 +23,28 @@ pub(crate) use scoped::observe_interrupt_requested_at_with_access;
 /// owner. In P2P-replicated deployments independent writers may each stamp and
 /// CRDT merge picks one timestamp: audit meaning is preserved, microsecond
 /// ordering is not.
-pub async fn interrupt_request(node: &Arc<EmbeddedNode>, request_id: &str) -> Result<()> {
+///
+/// The latch runs as the request's working Agent, signed by that Agent's
+/// managed key, and selects only a request naming that Agent; a caller without
+/// the Agent's key cannot latch it as another actor.
+pub async fn interrupt_request(
+    node: &Arc<EmbeddedNode>,
+    agent: &dyn crate::store::identity::NodeIdentity,
+    request_id: &str,
+) -> Result<()> {
+    let access = crate::store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did())?,
+        agent,
+    )?;
     let logical = escape_graphql_string(request_id);
-    interrupt_request_matching(node, format!("request_id:{{_eq:\"{logical}\"}}"))
+    let owner = escape_graphql_string(agent.did());
+    let filter = format!("request_id:{{_eq:\"{logical}\"}},agent_did:{{_eq:\"{owner}\"}}");
+    access
+        .transact_write("interrupt.latch_request", |txn| {
+            let filter = &filter;
+            Box::pin(async move { interrupt_request_matching_in_txn(txn, filter).await })
+        })
         .await
         .map(|_| ())
 }
@@ -117,38 +136,6 @@ pub(crate) async fn interrupt_request_by_doc_id_in_txn(
     interrupt_request_matching_in_txn(txn, &filter)
         .await
         .map(|_| ())
-}
-
-async fn interrupt_request_matching(
-    node: &std::sync::Arc<EmbeddedNode>,
-    filter: String,
-) -> Result<Vec<String>> {
-    let lookup = graphql_with_transaction_retry(
-        node,
-        &format!(r#"{{ AgentRequest(filter: {{{filter}}}, limit: 2) {{ agent_did }} }}"#),
-        "interrupt.resolve_agent",
-    )
-    .await?;
-    let rows = crate::store::graphql::rows::<serde_json::Value>(&lookup, "AgentRequest")?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "interrupt request is missing or ambiguous within selected scope"
-    );
-    let actor = identity::Did::new(
-        rows[0]["agent_did"]
-            .as_str()
-            .context("interrupt request has no selected agent DID")?,
-    )?;
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        Some(actor),
-        "interrupt.latch_request",
-        |txn| {
-            let filter = &filter;
-            Box::pin(async move { interrupt_request_matching_in_txn(txn, filter).await })
-        },
-    )
-    .await
 }
 
 async fn interrupt_request_matching_in_txn(

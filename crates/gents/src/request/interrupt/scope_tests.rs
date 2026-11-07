@@ -121,7 +121,11 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
         Some("background_completion"),
     )
     .await;
-    assert!(interrupt_request(&node, "same-parent-label").await.is_err());
+    assert!(
+        interrupt_request(&node, agent.as_ref(), "same-parent-label")
+            .await
+            .is_err()
+    );
     assert!(
         interrupt_request_by_doc_id(&node, signer, &parent, foreign_owner, None)
             .await
@@ -160,5 +164,71 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
         first,
         "repeat interrupt preserves latch timestamp"
     );
+    node.shutdown().await.expect("shut down test node");
+}
+
+#[tokio::test]
+async fn logical_interrupt_latches_only_as_the_signed_working_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = Arc::new(
+        crate::triggers::callback::test_node_builder()
+            .data_path(dir.path().join("db"))
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let root_did = crate::request::lifecycle::test_support::PIN_FIXED_DID;
+    crate::triggers::callback::seed_test_agent(&node, root_did).await;
+    let agent = crate::triggers::callback::test_agent_identity();
+    let value = json!({"request_id":"logical-latch","purpose":"normal","node_did":root_did,
+        "session_id":"logical-latch-session","agent_did":agent.did(),"lifecycle_state":"pending",
+        "execution_origin":"interactive","created_at":"2026-09-01T00:00:00Z"});
+    let agent_did = agent.did().to_owned();
+    let doc = crate::store::config_client::ConfigAccess::transact_local_write(
+        &node,
+        Some(::identity::Did::new(root_did).unwrap()),
+        "test.interrupt.logical_fixture",
+        |txn| {
+            let (value, agent_did) = (value.clone(), agent_did.clone());
+            Box::pin(async move {
+                let response = txn.execute_with_variables(
+                    "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                    &json!({"input": value}),
+                ).await?;
+                let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentRequest")?;
+                txn.add_actor_relationship("AgentRequest", &doc, "working_agent", &::identity::Did::new(&agent_did)?).await?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        },
+    )
+    .await
+    .unwrap();
+    let latched = || async {
+        let doc = escape_graphql_string(&doc);
+        crate::triggers::callback::test_agent_access(&node)
+            .execute(&format!(
+                "{{AgentRequest(filter:{{_docID:{{_eq:\"{doc}\"}}}}){{interrupt_requested_at}}}}"
+            ))
+            .await
+            .unwrap()["data"]["AgentRequest"][0]["interrupt_requested_at"]
+            .clone()
+    };
+    // A key without a managed Agent signer, even one derived by this runtime,
+    // is refused before any read or write.
+    let root = crate::triggers::callback::test_root_identity();
+    let unmanaged = crate::store::identity::derive_agent_identity(&root, &"f".repeat(64)).unwrap();
+    let refused = interrupt_request(&node, unmanaged.as_ref(), "logical-latch").await;
+    assert!(matches!(
+        refused
+            .unwrap_err()
+            .downcast_ref::<crate::store::config_client::ConfigClientError>(),
+        Some(crate::store::config_client::ConfigClientError::ManagedAgentSignerRequired)
+    ));
+    assert!(latched().await.is_null());
+    interrupt_request(&node, agent.as_ref(), "logical-latch")
+        .await
+        .unwrap();
+    assert!(latched().await.is_string());
     node.shutdown().await.expect("shut down test node");
 }

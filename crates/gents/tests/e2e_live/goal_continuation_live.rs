@@ -72,12 +72,21 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
     let db = test_db("durable-goal-real-inference").await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("durable-goal-real-inference"));
     let (node_did, agent_did) = bind_target(&db.node, identity.as_ref(), &target).await;
+    let runtime = identity.clone();
     let agent = boot_live_agent(&db, identity)
         .await
         .expect("boot real-inference goal agent");
     let session_id = "session-durable-goal-real";
+    let session_agent = crate::support::fixtures::session_agent_identity(
+        &db.node,
+        runtime.as_ref(),
+        &node_did,
+        session_id,
+    )
+    .await;
     let goal = set_goal(
         &db.node,
+        session_agent.as_ref(),
         &node_did,
         session_id,
         Some(

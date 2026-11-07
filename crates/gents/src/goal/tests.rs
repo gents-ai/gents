@@ -789,3 +789,113 @@ async fn goal_and_claim_publication_links_match_lean() {
         node.shutdown().await.expect("node shutdown");
     }
 }
+
+#[tokio::test]
+async fn set_goal_runs_only_as_the_sessions_signed_agent() {
+    use crate::store::identity::NodeIdentity;
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
+
+    let (db, user, user_access, binding) =
+        crate::test_support::signed_test_node("goal-set-signed-agent").await;
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let create = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        "set-request",
+        db.node_identity.did(),
+        user.did(),
+        agent.did(),
+        "set-session",
+        "test",
+        "interactive",
+        "2026-07-15T00:00:00Z",
+        AgentRequestAdmissionRecord::client(user.did()),
+    );
+    let _lifecycle =
+        crate::tools::call::lifecycle::admission_fixture::pending_client_fixture_request(
+            &db.node,
+            &user_access,
+            db.node_identity.clone(),
+            &user,
+            agent.as_ref(),
+            create,
+        )
+        .await
+        .unwrap();
+    let owner = db.node_identity.did();
+    let no_goal = || async {
+        user_access
+            .transact_readonly("test.goal_set_observe", |txn| {
+                Box::pin(async move {
+                    Ok::<_, anyhow::Error>(
+                        load_canonical_goal_in_txn(txn, owner, "set-session")
+                            .await?
+                            .is_none(),
+                    )
+                })
+            })
+            .await
+            .unwrap()
+    };
+
+    // A key without a managed Agent signer is refused before any read.
+    let unmanaged = set_goal(
+        &db.node,
+        &user,
+        owner,
+        "set-session",
+        Some("ship"),
+        None,
+        None,
+    )
+    .await;
+    assert!(matches!(
+        unmanaged
+            .unwrap_err()
+            .downcast_ref::<crate::store::config_client::ConfigClientError>(),
+        Some(crate::store::config_client::ConfigClientError::ManagedAgentSignerRequired)
+    ));
+    assert!(no_goal().await);
+
+    // Another managed Agent of this runtime is not the session's working Agent.
+    let foreign_binding =
+        crate::store::identity::provision_agent_identity(db.node_identity.as_ref()).unwrap();
+    crate::test_support::install_test_agent_binding(
+        &db.node,
+        owner,
+        "foreign goal Agent",
+        &foreign_binding,
+    )
+    .await;
+    let foreign =
+        crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &foreign_binding)
+            .unwrap();
+    assert!(set_goal(
+        &db.node,
+        foreign.as_ref(),
+        owner,
+        "set-session",
+        Some("ship"),
+        None,
+        None
+    )
+    .await
+    .is_err());
+    assert!(no_goal().await);
+
+    let goal = set_goal(
+        &db.node,
+        agent.as_ref(),
+        owner,
+        "set-session",
+        Some("ship"),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(goal.objective, "ship");
+    assert!(!no_goal().await);
+}

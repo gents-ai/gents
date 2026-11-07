@@ -1926,9 +1926,13 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
     .await;
     assert_pre_queue_snapshot(case, &pre);
 
-    gents::interrupt_request(&db.node, parent_request_id)
-        .await
-        .unwrap();
+    gents::interrupt_request(
+        &db.node,
+        support::managed_agent(&db).await.as_ref(),
+        parent_request_id,
+    )
+    .await
+    .unwrap();
 
     let post = fetch_queue_runtime_snapshot(
         &db.node,

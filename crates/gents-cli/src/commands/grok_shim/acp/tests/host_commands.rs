@@ -13,13 +13,14 @@ async fn goal_slash_controls_use_runtime_owner_without_submitting_inference() {
         .get("error")
         .is_none());
     let node = &service.config.node;
-    gents::goal::set_goal(
-        node,
+    gents::goal::set_goal_from_access(
+        &service.turns.client_access(),
         &service.config.node_did,
         "goal-controls",
         Some("Finish the feature"),
         None,
         Some(Some(1000)),
+        None,
     )
     .await
     .unwrap();
