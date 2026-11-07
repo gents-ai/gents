@@ -153,7 +153,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         let session_id = "desktop-owned-session";
         let (desktop, create, parent, writer) = desktop_owned_session(&db, session_id).await;
         let query = format!("{{ AgentSession {{ {} }} }}", session::AGENT_SESSION_FIELDS);
-        let before = db.node.execute(&query).await.data.unwrap();
+        let before = agent_data(&db, &query).await;
         let mutation = if source == QueueSource::Goal {
             let mut continuation = prepare_goal_continuation(
                 &parent,
@@ -217,7 +217,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             lifecycle.claim_with_identity().await.unwrap(),
             crate::request::lifecycle::ClaimOutcome::Claimed
         );
-        let sessions = db.node.execute(&query).await.data.unwrap();
+        let sessions = agent_data(&db, &query).await;
         assert_eq!(sessions["AgentSession"].as_array().unwrap().len(), 1);
         assert_eq!(
             sessions["AgentSession"][0]["_docID"], before["AgentSession"][0]["_docID"],
@@ -269,7 +269,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             crate::request::lifecycle::ClaimOutcome::Claimed
         );
         assert_eq!(
-            db.node.execute(&query).await.data.unwrap()["AgentSession"][0]["_docID"],
+            agent_data(&db, &query).await["AgentSession"][0]["_docID"],
             before["AgentSession"][0]["_docID"]
         );
         second_lifecycle
@@ -325,9 +325,11 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             .reject_admission(&error.to_string())
             .await
             .unwrap();
-        let failed = db.node.execute("{ AgentRequest(filter: { request_id: { _eq: \"forged-control\" } }) { lifecycle_state failure_reason } }").await;
-        assert!(!failed.has_errors(), "{:?}", failed.errors);
-        let failed = failed.data.unwrap();
+        let failed = agent_data(
+            &db,
+            "{ AgentRequest(filter: { request_id: { _eq: \"forged-control\" } }) { lifecycle_state failure_reason } }",
+        )
+        .await;
         assert_eq!(failed["AgentRequest"][0]["lifecycle_state"], "failed");
         assert_eq!(
             failed["AgentRequest"][0]["failure_reason"],
@@ -362,7 +364,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             followup_lifecycle.claim_with_identity().await.unwrap(),
             crate::request::lifecycle::ClaimOutcome::Claimed
         );
-        let after = db.node.execute(&query).await.data.unwrap();
+        let after = agent_data(&db, &query).await;
         assert_eq!(after["AgentSession"].as_array().unwrap().len(), 1);
         assert_eq!(
             after["AgentSession"][0]["_docID"],
@@ -435,6 +437,12 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
     }
 }
 
+/// Agent-owned session and request rows are read through the owning Agent's managed access;
+/// the node identity has no read grant over them.
+async fn agent_data(db: &TestDb, query: &str) -> serde_json::Value {
+    db.agent_access.execute(query).await.unwrap()["data"].clone()
+}
+
 /// Agent-owned request rows are written through the owning Agent's managed access.
 async fn agent_write(db: &TestDb, operation: &'static str, mutation: &str) {
     db.agent_access
@@ -475,9 +483,13 @@ async fn a_returned_result_is_admitted_into_a_paired_client_session() {
     .unwrap()
     .request
     .expect("completion wake");
-    let wake = crate::request::admission::load_request_for_admission_test(&db.node, &wake.doc_id)
-        .await
-        .unwrap();
+    let wake = crate::request::admission::load_request_for_admission_test_as(
+        &db.node,
+        &wake.doc_id,
+        db.agent_did(),
+    )
+    .await
+    .unwrap();
     assert_eq!(wake.requester_did.as_deref(), Some(desktop.did()));
     assert_eq!(wake.request_hop, parent.request_hop);
     let verified = admission_verifier(&db)
@@ -1466,8 +1478,9 @@ async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
 #[tokio::test]
 async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() {
     let db = test_db("wake-hop-refusal").await;
-    crate::store::config_client::ConfigAccess::write_local(
-            &db.node,
+    // Node is configuration, so the fixture's User signs the cap.
+    db.user_access
+        .write(
             "test.max_request_hop",
             &format!(
                 r#"mutation {{ update_Node(filter: {{ node_did: {{ _eq: "{}" }} }}, input: {{ max_request_hop: 8 }}) {{ _docID }} }}"#,
