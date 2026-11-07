@@ -168,6 +168,7 @@ async fn type_errors_name_the_field_path_and_shape() {
 async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
     let fixture = SelfConfigFixture::new("tools-drop").await;
     fixture.grant_selected_configuration().await;
+    fixture.grant_engineer_tool_sources().await;
     let worker = fixture.install_sibling("worker").await;
     fixture.grant_node_reader().await;
     let mut grants = config(&["node", "tools"]);
@@ -428,11 +429,12 @@ async fn execution_deadlines_are_bounded_where_a_claim_can_represent_them() {
 #[tokio::test]
 async fn help_is_layered_and_its_recipes_run_as_written() {
     let (fixture, tools) =
-        authenticated_setup("recipes", &["node", "tools", "profile", "automation"]).await;
+        authenticated_setup("recipes", &["node", "agent", "tools", "profile", "automation"]).await;
     let owner = fixture.node_did();
     let agent = fixture.agent_did();
     let backend = format!("{agent}:backend");
     fixture.grant_agent_schema().await;
+    let root = fixture.admitted_workspace_root().await;
     let index = call_config_tool(&tools, vec!["help".into()]).await.unwrap();
     assert!(index.len() < 2_000, "help index is {} chars", index.len());
     for resource in [
@@ -478,7 +480,8 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
                     .replace("<AGENT_DID>", agent)
                     .replace("<MODEL>", "test-model")
                     .replace("<PROMPT>", "Lead the work.")
-                    .replace("<DID>", owner);
+                    .replace("<DID>", owner)
+                    .replace("<ROOT>", &root);
                 if text.contains("<CREATED_AGENT_DID>") {
                     text = text.replace(
                         "<CREATED_AGENT_DID>",
@@ -829,12 +832,12 @@ async fn crud_documents_share_verbs_and_preserve_reference_and_identity_checks()
     assert!(refused_delete.contains("remove or redirect the reference"));
     assert!(!refused_delete.contains("create it"));
     let before = ok(&tools, json!({"argv":["profile","get",id]})).await;
-    assert!(refused(
+    let missing = refused(
         &tools,
-        json!({"argv":["profile","update",id],"set":{"sampling_id":"missing"}})
+        json!({"argv":["profile","update",id],"set":{"sampling_id":"missing"}}),
     )
-    .await
-    .contains("missing"));
+    .await;
+    assert!(missing.contains("missing"), "{missing}");
     assert_eq!(
         ok(&tools, json!({"argv":["profile","get",id]})).await,
         before
@@ -1871,6 +1874,7 @@ async fn composition_help_and_field_placement_match_the_accepted_calls() {
 #[tokio::test]
 async fn saved_config_audit_checks_selected_schema_fields_and_accepts_updates() {
     let (fixture, tools) = authenticated_setup("saved-schema-audit", &["node", "tools"]).await;
+    fixture.grant_engineer_tool_sources().await;
     fixture
         .add_collection("type AuditRecord { message: String }")
         .await;

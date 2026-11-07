@@ -88,6 +88,87 @@ pub(super) fn config(categories: &[&str]) -> SelfConfigToolConfig {
     }
 }
 
+/// Grants `subject` the direct sets Lean `Identity.GrantSets.directSets` gives
+/// `recipient`, as the runtime owner does at init. The fixture Agent is its
+/// Node's default Agent, so it holds the modeled default-Agent sets.
+pub(super) async fn grant_modeled_direct_sets(
+    db: &crate::support::TestDb,
+    recipient: &str,
+    subject: &str,
+) {
+    use crate::store::identity::GrantSet;
+    let wanted = recipient.to_owned();
+    let case = tokio::task::spawn_blocking(move || {
+        crate::lean_vocab_test::lean_contract_snapshot()
+            .identity_grant_recipient_cases
+            .iter()
+            .find(|case| case.recipient == wanted)
+            .cloned()
+    })
+    .await
+    .unwrap()
+    .unwrap_or_else(|| panic!("Lean recipient {recipient:?}"));
+    let admin = crate::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(db.node_identity.did()).unwrap(),
+    );
+    let subject = identity::Did::new(subject).unwrap();
+    for name in &case.direct {
+        let set = GrantSet::ALL
+            .into_iter()
+            .find(|set| set.name() == name)
+            .unwrap_or_else(|| panic!("Lean grant set {name:?} has no Rust owner"));
+        set.grant(&admin, &subject).await.unwrap();
+    }
+}
+
+/// Grants `subject` the node permissions the init Engineer holds through the
+/// tool sources of its preset Tools: every self-config category plus pack
+/// installation, and a datastore query surface (Lean
+/// `Identity.Configuration.toolOperationSources`, cases `self-config-all`,
+/// `schema-and-pack-overlap` without schema, and `datastore-query`). A fixture
+/// Agent that authors its own Engineer-like Tools must already hold these: the
+/// native held-bounded rule refuses a self-granted tool source.
+pub(super) async fn grant_engineer_tool_source_permissions(
+    db: &crate::support::TestDb,
+    subject: &str,
+) {
+    use crate::store::config_client::NodePermission;
+    let permissions = tokio::task::spawn_blocking(|| {
+        let model = crate::lean_vocab_test::lean_identity_household_cases()
+            .iter()
+            .find(|case| case.name == "configuration-explicit-grants")
+            .expect("configuration contract");
+        let mut permissions = std::collections::BTreeSet::new();
+        for name in ["self-config-all", "datastore-query"] {
+            let case = model
+                .tool_operation_cases
+                .iter()
+                .find(|case| case["name"] == name)
+                .unwrap_or_else(|| panic!("modeled operation case {name}"));
+            for source in case["sources"].as_array().unwrap() {
+                permissions.insert(source["permission"].as_str().unwrap().to_owned());
+            }
+        }
+        permissions
+    })
+    .await
+    .unwrap();
+    let admin = crate::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(db.node_identity.did()).unwrap(),
+    );
+    let subject = identity::Did::new(subject).unwrap();
+    for name in permissions {
+        let permission = NodePermission::parse(&name)
+            .unwrap_or_else(|| panic!("modeled permission {name:?} has no native owner"));
+        admin
+            .grant_node_permission(&subject, permission)
+            .await
+            .unwrap();
+    }
+}
+
 pub(super) struct SelfConfigFixture {
     db: crate::support::TestDb,
     user_access: crate::ConfigAccess,
@@ -112,6 +193,7 @@ impl SelfConfigFixture {
             enabled: true,
             default_agent_did: Some(binding.agent_did.clone()),
         };
+        grant_modeled_direct_sets(&db, "default-agent", &binding.agent_did).await;
         Self {
             db,
             user_access,
@@ -119,6 +201,12 @@ impl SelfConfigFixture {
             agent_did: binding.agent_did,
             node_binding,
         }
+    }
+
+    /// The fixture Agent holds what the init Engineer holds through its preset
+    /// Tools (`grant_engineer_tool_source_permissions`).
+    pub(super) async fn grant_engineer_tool_sources(&self) {
+        grant_engineer_tool_source_permissions(&self.db, &self.agent_did).await;
     }
 
     pub(super) async fn grant_selected_configuration(&self) {
@@ -170,6 +258,19 @@ impl SelfConfigFixture {
         )
         .await
         .expect("User publishes the selected WorkspaceRoot");
+    }
+
+    /// Publishes a directory in the fixture home as this Agent's selected
+    /// WorkspaceRoot. On a signed Node the WorkspaceRoot policy is always
+    /// configured, so Tools with host tools need such an admitted root.
+    pub(super) async fn admitted_workspace_root(&self) -> String {
+        let root = self.db.data_path().join("workspace-root");
+        std::fs::create_dir_all(&root).unwrap();
+        self.publish_workspace_root(&root).await;
+        std::fs::canonicalize(&root)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
     }
 
     pub(super) async fn grant_node_reader(&self) {
@@ -491,6 +592,84 @@ impl SelfConfigFixture {
     }
 }
 
+/// Every config tool access is the invoking Agent's managed signer (Lean
+/// `Identity.AgentBlockSigning.configToolRoute`); the modeled cases name the
+/// actor and signer each core is built with.
+#[tokio::test]
+async fn config_tool_access_follows_the_modeled_managed_route() {
+    let fixture = SelfConfigFixture::new("config-tool-route").await;
+    let runtime = fixture.db.node_identity.clone();
+    let foreign = tokio::task::spawn_blocking(|| node_identity("foreign-runtime"))
+        .await
+        .unwrap();
+    let sibling = crate::store::identity::resolve_agent_identity(
+        runtime.as_ref(),
+        &crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap(),
+    )
+    .unwrap();
+    let foreign_agent = crate::store::identity::resolve_agent_identity(
+        foreign.as_ref(),
+        &crate::store::identity::provision_agent_identity(foreign.as_ref()).unwrap(),
+    )
+    .unwrap();
+    let cases = tokio::task::spawn_blocking(|| {
+        crate::lean_vocab_test::lean_contract_snapshot()
+            .identity_agent_block_signing_cases
+            .clone()
+    })
+    .await
+    .unwrap();
+    let mut checked = 0;
+    for case in &cases {
+        let (actor, signer) = match case.name.as_str() {
+            "managed-agent" => (
+                fixture.agent_did().to_owned(),
+                fixture.agent.managed_agent_signer(),
+            ),
+            "missing-key" => (fixture.agent_did().to_owned(), None),
+            "sibling-key" => (
+                fixture.agent_did().to_owned(),
+                sibling.managed_agent_signer(),
+            ),
+            "foreign-runtime" => (
+                foreign_agent.did().to_owned(),
+                foreign_agent.managed_agent_signer(),
+            ),
+            "empty-actor" => (String::new(), fixture.agent.managed_agent_signer()),
+            "ordinary-node" => (fixture.node_did().to_owned(), None),
+            _ => continue,
+        };
+        let access = SelfConfigCore::new(
+            fixture.db.node.clone(),
+            fixture.node_did().to_owned(),
+            actor,
+        )
+        .and_then(|core| core.with_agent_signer(signer).access());
+        let route = match &access {
+            Ok(access) => {
+                assert!(access.has_managed_agent_signer(), "{}", case.name);
+                "agent"
+            }
+            Err(_) => "refuse",
+        };
+        assert_eq!(route, case.config_tool, "{}", case.name);
+        if case.name == "missing-key" {
+            let error = access.err().expect("a missing signer is refused");
+            assert!(
+                matches!(
+                    error.downcast_ref(),
+                    Some(
+                        crate::store::config_client::ConfigClientError::ManagedAgentSignerRequired
+                    )
+                ),
+                "{error:#}"
+            );
+        }
+        checked += 1;
+    }
+    assert_eq!(checked, 6);
+}
+
 #[tokio::test]
 async fn selected_configuration_requires_and_observes_user_grant() {
     let fixture = SelfConfigFixture::new("self-config-selected-grant").await;
@@ -806,6 +985,11 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     let worker = fixture.install_sibling("worker").await;
     let verifier = fixture.install_sibling("verifier").await;
     fixture.grant_node_reader().await;
+    // Binding a slot selects that sibling's profile, which native document
+    // ACP admits only for a manager of the selection.
+    for sibling in [&coordinator, &worker, &verifier] {
+        fixture.grant_sibling_configuration(sibling).await;
+    }
     let coordinator_profile = format!("{coordinator}:inference");
     let worker_profile = format!("{worker}:inference");
     let verifier_profile = format!("{verifier}:inference");
@@ -2238,6 +2422,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
 async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
     let fixture = SelfConfigFixture::new("datastore-config").await;
     fixture.grant_selected_configuration().await;
+    fixture.grant_engineer_tool_sources().await;
     let tools = fixture.tools(&["tools"]);
     let command = |args: &[&str]| args.iter().map(|s| (*s).to_owned()).collect();
     let expected_help = call_config_tool(&tools, command(&["help", "datastore"]))
@@ -2873,7 +3058,9 @@ async fn config_lists_are_bounded_paginated_and_inference_inventory_is_read_only
     fixture.install_sibling("beta").await;
     fixture.install_sibling("gamma").await;
     fixture.grant_node_reader().await;
-    let tools = fixture.tools(&["node", "profile", "backend"]);
+    // `agent get` of a listed row may name this Agent, whose own read needs the
+    // agent category; the catalog alone reaches only other Agents.
+    let tools = fixture.tools(&["node", "agent", "profile", "backend"]);
     let config = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -3057,6 +3244,7 @@ async fn config_creates_and_discovers_an_unauthenticated_local_backend() {
 async fn config_targets_owned_working_agent_for_all_bound_documents() {
     let fixture = SelfConfigFixture::new("targeted-config").await;
     fixture.grant_selected_configuration().await;
+    fixture.grant_engineer_tool_sources().await;
     fixture.grant_node_reader().await;
     fixture.grant_agent_relation_delete().await;
     let working_did = fixture.install_sibling("working").await;
@@ -3409,6 +3597,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
 async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
     let fixture = SelfConfigFixture::new("config-cleanup").await;
     fixture.grant_selected_configuration().await;
+    let root = fixture.admitted_workspace_root().await;
     fixture.grant_node_reader().await;
     fixture.grant_agent_delete().await;
     fixture.grant_agent_relation_delete().await;
@@ -3454,6 +3643,8 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
                 "Orphan fixture".into(),
                 "--preset".into(),
                 "readonly".into(),
+                "--root".into(),
+                root.clone(),
                 "--profile".into(),
                 "orphan-profile".into(),
             ],
@@ -3679,6 +3870,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
     let fixture = SelfConfigFixture::new("agent-create").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
+    let root = fixture.admitted_workspace_root().await;
     let node = fixture.db.node.clone();
     let node_did = fixture.node_did().to_owned();
     let profile_id = format!("{}:inference", fixture.agent_did());
@@ -3720,6 +3912,8 @@ async fn agent_create_commits_and_resolves_after_restart() {
             "Research the question and cite evidence.".into(),
             "--preset".into(),
             "write".into(),
+            "--root".into(),
+            root.clone(),
             "--profile".into(),
             profile_id.clone(),
         ],
@@ -3755,6 +3949,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
         "--description", "Researches a focused question",
         "--system-prompt", "Research the question and cite evidence.",
         "--preset", "write",
+        "--root", root,
         "--profile", profile_id
     ]})
     .to_string();
@@ -3894,6 +4089,11 @@ async fn agent_clone_accepts_sibling_agent_did() {
     let node = &fixture.db.node;
     let node_did = fixture.node_did();
     let qualified_sibling_id = fixture.install_sibling("sibling-agent").await;
+    // Reusing the sibling's profile selects it, which native document ACP
+    // admits only for a manager of that selection.
+    fixture
+        .grant_sibling_configuration(&qualified_sibling_id)
+        .await;
     let profile_id = format!("{qualified_sibling_id}:inference");
     let tools = fixture.tools(&["node"]);
     let tool = take_agent_tool(tools);
@@ -3923,77 +4123,60 @@ async fn agent_clone_accepts_sibling_agent_did() {
     assert_ne!(source.context_id, cloned.context_id);
 }
 
+/// Lean `SelfConfig.clone_inherits_no_self_config`: a clone never carries its
+/// source's self-config group, so a source's operator grant (pack
+/// installation) is never copied, whether or not the invoker holds it.
 #[tokio::test]
-async fn agent_clone_cannot_copy_unheld_grants() {
+async fn agent_clone_never_copies_the_source_self_config_grants() {
     let fixture = SelfConfigFixture::new("agent-clone-grants").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
-    let node = &fixture.db.node;
-    let node_did = fixture.node_did();
     let granted = fixture.install_sibling("granted").await;
     fixture.grant_pack_install_to(&granted).await;
+    // Reusing the sibling's profile selects it, which native document ACP
+    // admits only for a manager of that selection.
+    fixture.grant_sibling_configuration(&granted).await;
     let profile = format!("{granted}:inference");
     let mut tool_config = config(&["node"]);
     tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.preview = true;
-    let tools = fixture.tools_with_config(&tool_config);
-    let tool = take_agent_tool(tools);
-    for argv in [
-        json!([
-            "agent",
-            "clone",
-            "--display-name",
-            "Granted Copy",
-            "--from",
-            granted,
-            "--profile",
-            profile
-        ]),
-        json!([
-            "agent",
-            "preview",
-            "clone",
-            "--display-name",
-            "Granted Copy",
-            "--from",
-            granted,
-            "--profile",
-            profile
-        ]),
-    ] {
-        let refused = if argv[1] == "preview" {
-            let output: Value =
-                serde_json::from_str(&tool.call(json!({"argv": argv}).to_string()).await.unwrap())
-                    .unwrap();
-            assert_eq!(output["admitted"], false);
-            assert_eq!(output["committed"], false);
-            output["rejection"].as_str().unwrap().to_owned()
-        } else {
-            config_error_message(
-                tool.call(json!({"argv": argv}).to_string())
-                    .await
-                    .expect_err("a clone must not copy grants the invoking agent does not hold"),
-            )
-        };
-        assert!(
-            refused.contains(&format!(
-                "clone source {granted:?} carries an operator grant this agent does not hold"
-            )),
-            "{argv}: {refused}"
-        );
-        assert!(
-            refused.contains("cannot be self-granted"),
-            "{argv}: {refused}"
-        );
-    }
-    assert!(
-        crate::list_agents(node, node_did)
-            .await
-            .unwrap()
-            .iter()
-            .all(|agent| agent.display_name.as_deref() != Some("Granted Copy")),
-        "the refused clone must not publish an Agent"
-    );
+    let tool = take_agent_tool(fixture.tools_with_config(&tool_config));
+    let argv = |preview: bool| {
+        let mut argv = vec!["agent"];
+        if preview {
+            argv.push("preview");
+        }
+        argv.extend(["clone", "--display-name", "Granted Copy", "--from", &granted]);
+        argv.extend(["--profile", &profile]);
+        json!({ "argv": argv }).to_string()
+    };
+    let preview: Value = serde_json::from_str(&tool.call(argv(true)).await.unwrap()).unwrap();
+    assert_eq!(preview["admitted"], true, "{preview}");
+    let output: Value =
+        serde_json::from_str(&tool.call(argv(false)).await.expect("the clone commits")).unwrap();
+    assert_eq!(output["committed"], true);
+    let tools_id = format!("{}:tools", output["agent_did"].as_str().unwrap());
+    let node_did = fixture.node_did().to_owned();
+    let cloned = fixture
+        .user_access
+        .transact_readonly("test.self_config.read_cloned_tools", |txn| {
+            let tools_id = &tools_id;
+            let node_did = &node_did;
+            Box::pin(async move {
+                crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Tools,
+                    node_did,
+                    tools_id,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap()
+        .expect("the clone publishes its Tools")
+        .1;
+    assert!(cloned["self_config"].is_null(), "{cloned}");
 }
 
 #[tokio::test]
@@ -4005,6 +4188,9 @@ async fn agent_clone_by_holder_copies_granted_source() {
     let node_did = fixture.node_did();
     let granted = fixture.install_sibling("granted").await;
     fixture.grant_pack_install_to(&granted).await;
+    // Reusing the sibling's profile selects it, which native document ACP
+    // admits only for a manager of that selection.
+    fixture.grant_sibling_configuration(&granted).await;
     let profile = format!("{granted}:inference");
     fixture.grant_pack_install().await;
     let mut tool_config = config(&["node"]);
@@ -4094,6 +4280,9 @@ async fn clone_does_not_inherit_self_config_from_its_source() {
     let node_did = fixture.node_did().to_owned();
     let source = fixture.install_sibling("self-config-source").await;
     fixture.grant_pack_install_to(&source).await;
+    // Reusing the sibling's profile selects it, which native document ACP
+    // admits only for a manager of that selection.
+    fixture.grant_sibling_configuration(&source).await;
     let profile = format!("{source}:inference");
     let mut tool_config = config(&["node"]);
     tool_config.agent_did = fixture.agent_did().to_owned();
@@ -4140,6 +4329,7 @@ async fn clone_does_not_inherit_self_config_from_its_source() {
 async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_lockout() {
     let fixture = SelfConfigFixture::new("canonical-self-config").await;
     fixture.grant_selected_configuration().await;
+    fixture.grant_engineer_tool_sources().await;
     fixture.grant_node_reader().await;
     let sibling = fixture.install_sibling("unconfigured").await;
     let other = tokio::task::spawn_blocking(|| node_identity("other-self-config"))
@@ -5251,6 +5441,7 @@ async fn compaction_reference_pick_cannot_switch_account() {
 #[tokio::test]
 async fn agent_management_profile_pick_cannot_switch_account() {
     let (fixture, core) = account_choice_core("agent-pick").await;
+    let root = fixture.admitted_workspace_root().await;
     let node = &fixture.db.node;
     let owner = core.node_did().to_owned();
     let params = |action: &str, argv: &[&str]| {
@@ -5273,6 +5464,8 @@ async fn agent_management_profile_pick_cannot_switch_account() {
                 "Pick.",
                 "--preset",
                 "write",
+                "--root",
+                root.as_str(),
                 "--profile",
                 profile,
             ],
@@ -5326,6 +5519,7 @@ async fn agent_management_profile_pick_cannot_switch_account() {
 #[tokio::test]
 async fn agent_preview_agrees_with_the_account_choice_fence() {
     let (fixture, core) = account_choice_core("preview-pick").await;
+    let root = fixture.admitted_workspace_root().await;
     let create = [
         "--display-name",
         "Picker",
@@ -5335,6 +5529,8 @@ async fn agent_preview_agrees_with_the_account_choice_fence() {
         "Pick.",
         "--preset",
         "write",
+        "--root",
+        root.as_str(),
     ];
     let clone = [
         "--from",
@@ -5467,6 +5663,12 @@ async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply
     let config = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    // LSP is a host tool; on a signed Node it needs an admitted Tools.host.root.
+    let root = fixture.admitted_workspace_root().await;
+    config
+        .call(json!({"argv":["tools","edit"],"set":{"host":{"root":root,"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}}).to_string())
+        .await
         .unwrap();
     let safe = json!({"integrations":{"lsp":{"config":json!({"servers":{"rust-analyzer":{"disabled":true,"priority":2}}}).to_string()}}});
     config
@@ -7620,6 +7822,7 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     .unwrap();
     let runtime =
         crate::tools::surface::ToolRuntimeContext::oneshot_with_node_did(node.clone(), &did)
+            .with_agent_identity_for_test(fixture.agent.clone())
             .with_plugins(plugins.clone());
     let fresh_tools = surface.build_tools(&runtime).await.unwrap();
     let fresh_tool = fresh_tools
@@ -8018,6 +8221,8 @@ async fn pack_tool_with_local_read(
     let fixture = SelfConfigFixture::new(label).await;
     fixture.grant_selected_configuration().await;
     fixture.grant_pack_install().await;
+    fixture.grant_engineer_tool_sources().await;
+    fixture.grant_agent_schema().await;
     fixture.publish_workspace_root(root).await;
     let mut tool_config = config(&["tools"]);
     tool_config.agent_did = fixture.agent_did().to_owned();
@@ -8111,6 +8316,15 @@ async fn pack_documents_install_refuses_non_default_account_inference_bindings()
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
     let (fixture, tools) = signed_pack_tool("documents-account-fence", plugins).await;
     install_chat_account_fences(&fixture).await;
+    // The User publishes the fenced profiles under the Node; the Agent reads
+    // them through its Node read grant and manages their selection.
+    fixture.grant_node_reader().await;
+    fixture
+        .grant_account_fixture_selections(&[
+            (crate::Collection::InferenceProfile, "p-default".into(), false),
+            (crate::Collection::InferenceProfile, "p-other".into(), false),
+        ])
+        .await;
     let node = &fixture.db.node;
     let did = fixture.db.node_identity.did();
     let access = &fixture.user_access;
