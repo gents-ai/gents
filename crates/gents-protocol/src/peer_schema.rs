@@ -28,7 +28,7 @@ pub fn admit_app_collections(requested: BTreeSet<String>) -> Option<BTreeSet<Str
 pub struct AppPairingFilter {
     pub collection: String,
     pub field: String,
-    pub value: String,
+    pub value: Value,
 }
 
 /// An unknown or mutable field cannot safely constrain replicated documents.
@@ -41,7 +41,6 @@ pub fn admit_app_pairing_filters(
     filters.iter().all(|filter| {
         collections.contains(&filter.collection)
             && !filter.field.is_empty()
-            && !filter.value.is_empty()
             && immutable_fields.contains(&(filter.collection.clone(), filter.field.clone()))
             && seen.insert(&filter.collection)
     })

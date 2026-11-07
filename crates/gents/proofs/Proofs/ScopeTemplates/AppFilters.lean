@@ -17,7 +17,7 @@ structure FieldAuthority where
 def permitted (collections : List String) (schema : List FieldAuthority)
     (filter : FieldFilter) : Bool :=
   collections.contains filter.collection &&
-    !filter.field.isEmpty && !filter.value.isEmpty &&
+    !filter.field.isEmpty &&
     schema.any (fun field => field.collection == filter.collection &&
       field.field == filter.field && field.immutable)
 
@@ -31,7 +31,7 @@ theorem valid_filter_has_collection (collections : List String) (schema : List F
     (filter : FieldFilter) (h : permitted collections schema filter = true) :
     collections.contains filter.collection = true := by
   simp only [permitted, Bool.and_eq_true] at h
-  exact h.1.1.1
+  exact h.1.1
 
 example : validate ["Post"] [{ collection := "Post", field := "to_host", immutable := true }]
     [{ collection := "Post", field := "to_host", value := "node" }] ≠ none := by decide
