@@ -168,6 +168,62 @@ impl PreparedDocumentPackInstall {
     }
 }
 
+pub(super) fn installed_dependency_bindings(
+    manifest: &super::super::PackManifest,
+    config: &PackConfig,
+    home: Option<&Path>,
+    owner: &str,
+) -> Result<PackInferenceBindings> {
+    let mut bindings = PackInferenceBindings::new();
+    for slot in &manifest.metadata.inference_slots {
+        let mut profiles = std::collections::BTreeSet::new();
+        for id in &slot.agents {
+            let agent = config
+                .agents
+                .iter()
+                .find(|agent| &agent.agent_id == id)
+                .with_context(|| format!("installed dependency agent {id:?} is missing"))?;
+            profiles.insert(agent.inference_profile_id.clone());
+        }
+        for plugin in manifest
+            .metadata
+            .plugins
+            .iter()
+            .filter(|plugin| plugin.model_slot.as_deref() == Some(slot.name.as_str()))
+        {
+            let home = home.context("installed dependency plugin requires its local home")?;
+            let record = crate::plugin::store::read_record(
+                home,
+                &manifest.metadata.namespace,
+                &plugin.name,
+            )?;
+            let binding = record
+                .model_binding
+                .context("installed dependency plugin has no model binding")?;
+            anyhow::ensure!(
+                binding.node_did == owner,
+                "installed dependency plugin has a different model owner"
+            );
+            profiles.insert(binding.profile_id);
+        }
+        anyhow::ensure!(
+            profiles.len() <= 1,
+            "installed dependency slot {:?} has inconsistent bindings",
+            slot.name
+        );
+        if let Some(profile) = profiles.into_iter().next() {
+            bindings.insert(slot.name.clone(), profile);
+        } else {
+            anyhow::ensure!(
+                slot.optional,
+                "installed dependency slot {:?} has no recoverable binding",
+                slot.name
+            );
+        }
+    }
+    Ok(bindings)
+}
+
 pub(super) fn document_ux_install_allowed(
     has_ux: bool,
     has_home: bool,
@@ -296,15 +352,36 @@ pub async fn prepare_document_pack_install(
                 })
             })
             .await?;
-        anyhow::ensure!(snapshot.is_none() || selected(archive.manifest()).is_empty(),
-            "installed dependency {coordinate} has explicit inference selections; update it explicitly before installing its dependent");
-        let preview = super::super::preview_pack_inference_bindings(
-            access,
-            archive.manifest(),
-            owner,
-            &selected(archive.manifest()),
-        )
-        .await?;
+        let requested_dependency = selected(archive.manifest());
+        let preview = if let Some(snapshot) = &snapshot {
+            let bindings = installed_dependency_bindings(
+                archive.manifest(),
+                &snapshot.config(owner)?,
+                plugin_home,
+                owner,
+            )?;
+            for (slot, profile) in &requested_dependency {
+                anyhow::ensure!(bindings.get(slot) == Some(profile),
+                    "installed dependency {coordinate} already uses a different profile for {slot:?}; update it explicitly before installing its dependent");
+            }
+            let mut preview = super::super::inspect_pack_inference_bindings(
+                access,
+                archive.manifest(),
+                owner,
+                &BTreeMap::new(),
+            )
+            .await?;
+            preview.bindings = bindings;
+            preview
+        } else {
+            super::super::preview_pack_inference_bindings(
+                access,
+                archive.manifest(),
+                owner,
+                &requested_dependency,
+            )
+            .await?
+        };
         let options = PackInstallOptions {
             node_did: owner.to_owned(),
         };

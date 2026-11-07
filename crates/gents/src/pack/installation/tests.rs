@@ -2065,6 +2065,29 @@ async fn installing_a_dependent_preserves_the_installed_dependency_environment()
     node.shutdown().await;
 }
 
+#[test]
+fn installed_dependency_inference_uses_recorded_agent_profile() {
+    let (_guards, dependee, _) = documents_dependency_pair(false, false);
+    let options = crate::pack::PackInstallOptions {
+        node_did: OWNER.into(),
+    };
+    let authored = crate::pack::load_pack_config(
+        dependee.manifest(),
+        &options,
+        &|path| Ok(dependee.asset(path)?.to_vec()),
+        &|_| None,
+    )
+    .unwrap();
+    let selected = BTreeMap::from([("worker".to_owned(), "glm:inference".to_owned())]);
+    let installed =
+        crate::pack::bind_pack_install_config(dependee.manifest(), &authored, &selected).unwrap();
+    assert_eq!(
+        documents::installed_dependency_bindings(dependee.manifest(), &installed, None, OWNER)
+            .unwrap(),
+        selected
+    );
+}
+
 #[tokio::test]
 async fn a_failing_dependent_does_not_publish_its_documents_dependency() {
     let (_node, access) = dependency_fixture().await;
