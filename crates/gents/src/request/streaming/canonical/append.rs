@@ -16,16 +16,6 @@ use super::{
     ProviderAppendRejection,
 };
 
-#[cfg(test)]
-pub(crate) async fn append_provider_segment(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor: identity::Did,
-    generation: &str,
-    prepared: &OutputSegment,
-) -> Result<String> {
-    append_provider_segment_with_signer(node, actor, None, generation, prepared).await
-}
-
 pub(in crate::request::streaming) async fn append_provider_segment_with_signer(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: identity::Did,

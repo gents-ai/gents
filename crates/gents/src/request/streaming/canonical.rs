@@ -9,17 +9,11 @@ mod publish;
 mod source;
 
 #[cfg(test)]
-pub(crate) use append::append_provider_segment;
-#[cfg(test)]
 pub(crate) use append::append_provider_segment_at_with_access;
 pub(super) use append::append_provider_segment_with_signer;
 #[cfg(test)]
-pub(crate) use close::close_provider_attempt;
-#[cfg(test)]
 pub(crate) use close::close_provider_attempt_at_with_access;
 pub(super) use close::close_provider_attempt_with_signer;
-#[cfg(test)]
-pub(crate) use publish::publish_provider_turn;
 #[cfg(test)]
 pub(crate) use publish::publish_provider_turn_at_with_access;
 pub(super) use publish::publish_provider_turn_with_signer;
