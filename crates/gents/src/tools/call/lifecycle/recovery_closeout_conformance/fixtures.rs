@@ -3,7 +3,8 @@ use crate::tools::call::lifecycle::admission_fixture::PublishedAdmission;
 /// Fixture writes to a `@branchable` collection also advance its
 /// collection head, so two back-to-back writes can conflict; retry those,
 /// bounded. Writes go through the owning actor's access: ACP hides and
-/// refuses the Agent-owned rows for any other identity.
+/// refuses the Agent-owned rows for any other identity. A client-submitted
+/// parent request is owned by its client, not its Agent.
 async fn execute_fixture_write(access: &crate::ConfigAccess, operation: &'static str, mutation: &str) {
     let mut backoff = std::time::Duration::from_millis(5);
     let mut last_error = None;
@@ -34,9 +35,9 @@ pub(super) async fn update_request(access: &crate::ConfigAccess, doc_id: &str, f
     .await;
 }
 
-pub(super) async fn remove_parent(access: &crate::ConfigAccess, doc_id: &str) {
+pub(super) async fn remove_parent(client: &crate::ConfigAccess, doc_id: &str) {
     let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
-    execute_fixture_write(access, "fixture.request.remove_parent", &format!(
+    execute_fixture_write(client, "fixture.request.remove_parent", &format!(
         r#"mutation {{ delete_AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{ _docID }} }}"#
     ))
     .await;

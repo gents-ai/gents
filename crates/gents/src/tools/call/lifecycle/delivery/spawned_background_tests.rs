@@ -513,12 +513,16 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
 async fn configure_bash_output_budget(
     node: &std::sync::Arc<EmbeddedNode>,
     owner: &str,
+    agent_did: &str,
     budget: i64,
 ) {
     use crate::store::config_client::{
         apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
-    let tools = serde_json::json!({"node_did": owner, "tools_id": "general:tools",
+    // The request's Agent resolves its tools by the `{agent_did}:tools` id the
+    // fixture wrote; a differently named document is never read.
+    let tools_id = format!("{agent_did}:tools");
+    let tools = serde_json::json!({"node_did": owner, "tools_id": tools_id,
         "host": {"bash": {"mode": "ReadOnly", "max_output_chars": budget}}});
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: crate::Collection::Tools,
@@ -555,34 +559,35 @@ async fn interrupted_presentation(
 
 #[tokio::test]
 async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
-    use crate::tools::call::lifecycle::admission_fixture::{
-        published_admission, PublishedAdmission, PublishedAdmissionOptions,
-    };
+    use crate::tools::call::lifecycle::admission_fixture::PublishedAdmission;
     for (name, tool_name, configured, reload, bounded) in [
         ("budget-bash", "bash", true, false, true),
         ("budget-bash-restart", "bash", true, true, true),
         ("budget-remote", "mcp__search__query", true, false, false),
         ("budget-unresolved", "bash", false, false, false),
     ] {
-        let PublishedAdmission {
-            node,
-            path,
-            mut tool,
-            ..
-        } = published_admission(PublishedAdmissionOptions {
+        let (
+            PublishedAdmission {
+                node,
+                path,
+                mut tool,
+                ..
+            },
+            request,
+        ) = published_admission_with_owner(PublishedAdmissionOptions {
             name: name.to_owned(),
             tool_name: Some(tool_name.to_owned()),
             ..Default::default()
         })
         .await
         .unwrap();
+        let agent_did = request.request().agent_did.clone();
         let binding = tool.tool_output_binding().expect("running output binding");
         append_tool_output(&binding, "0123456789abcdefghij")
             .await
             .unwrap();
         if configured {
-            crate::test_support::install_test_agent(&node, &tool.node_did, "general").await;
-            configure_bash_output_budget(&node, &tool.node_did, 5).await;
+            configure_bash_output_budget(&node, &tool.node_did, &agent_did, 5).await;
         }
         if reload {
             let signer = tool.access().unwrap().managed_agent_signer();
@@ -630,7 +635,7 @@ async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
         );
 
         if bounded && !reload {
-            configure_bash_output_budget(&node, &tool.node_did, 12).await;
+            configure_bash_output_budget(&node, &tool.node_did, &agent_did, 12).await;
             assert!(!replay.timeout().await.unwrap(), "{name}: replay");
             assert_eq!(interrupted_presentation(&node, &tool).await, presented);
         }

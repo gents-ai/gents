@@ -49,7 +49,7 @@ async fn generated_native_missing_parent_restart_cases_defer() {
         .expect("publish accepted restart call");
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
         let access = admission.tool.access().unwrap();
-        remove_parent(&access, admission.tool.request_doc_id().unwrap()).await;
+        remove_parent(&admission.client, admission.tool.request_doc_id().unwrap()).await;
         if case.deadline_expired {
             update(
                 &access,
@@ -242,7 +242,8 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                         .to_owned()
                 };
                 if name != "session_message_request_completed_no_goal_to_completed" {
-                    let response = crate::ConfigAccess::local(admission.node.clone())
+                    let access = admission.tool.access().unwrap();
+                    let response = access
                         .execute(&format!(
                             r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{{}}}}}"#,
                             crate::store::graphql::escape_graphql_string(
@@ -255,7 +256,6 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                     let caller: gents_protocol::row::AgentRequestRow =
                         serde_json::from_value(response["data"]["AgentRequest"][0].clone())
                             .unwrap();
-                    let access = admission.tool.access().unwrap();
                     let created = crate::goal::create_goal_for_request_from_access(
                         &admission.node,
                         Some(&access),
@@ -416,13 +416,15 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
         assert_eq!(settled, case.measure_before - case.measure_after, "{name}");
         let escaped = crate::store::graphql::escape_graphql_string(&tool_doc_id);
         let response = admission
-            .node
+            .tool
+            .access()
+            .unwrap()
             .execute(&format!(
                 r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ status lifecycle_state cancel_cause tool_failure_class }} }}"#
             ))
-            .await;
-        assert!(!response.has_errors(), "{name}: {:?}", response.errors);
-        let row = &response.data.unwrap()["AgentToolCall"][0];
+            .await
+            .unwrap();
+        let row = &response["data"]["AgentToolCall"][0];
         assert_eq!(
             row["lifecycle_state"],
             case.terminal_state.as_str(),
@@ -565,13 +567,15 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         assert!(registry.process_record_list().is_empty(), "{name}");
         let escaped = crate::store::graphql::escape_graphql_string(&tool_doc_id);
         let response = admission
-            .node
+            .tool
+            .access()
+            .unwrap()
             .execute(&format!(
                 r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ status lifecycle_state cancel_cause tool_failure_class }} }}"#
             ))
-            .await;
-        assert!(!response.has_errors(), "{name}: {:?}", response.errors);
-        let row = &response.data.unwrap()["AgentToolCall"][0];
+            .await
+            .unwrap();
+        let row = &response["data"]["AgentToolCall"][0];
         assert_eq!(row["status"], "completed", "{name}");
         assert_eq!(
             row["lifecycle_state"],
@@ -645,7 +649,7 @@ async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
         .await
         .expect("publish accepted native background call");
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
-        remove_parent(&admission.tool.access().unwrap(), admission.tool.request_doc_id().unwrap()).await;
+        remove_parent(&admission.client, admission.tool.request_doc_id().unwrap()).await;
         assert_eq!(case.deadline_expired, Some(true), "{name}");
         update(
             &admission.tool.access().unwrap(),

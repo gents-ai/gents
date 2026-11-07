@@ -252,13 +252,11 @@ impl ToolCallLifecycle {
             }}"#
         );
 
-        let response = crate::store::config_client::ConfigAccess::local_as(
-            self.node.clone(),
-            self.actor.clone(),
-        )
-        .write("foreground", &mutation)
-        .await
-        .context("foreground mutation")?;
+        let response = self
+            .access()?
+            .write("foreground", &mutation)
+            .await
+            .context("foreground mutation")?;
         let response: defra_node::QueryResponse = serde_json::from_value(response)?;
         if !response
             .data

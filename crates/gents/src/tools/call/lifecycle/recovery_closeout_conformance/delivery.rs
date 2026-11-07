@@ -145,13 +145,16 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     let session_id = message.admission.tool.session_id().to_owned();
     let caller_doc_id = message.admission.tool.request_doc_id().unwrap().to_owned();
     crate::documents::ensure_node(&node, &did).await.unwrap();
-    let response = node
-        .execute(&format!(
-            r#"mutation {{ update_Node(filter: {{ node_did: {{ _eq: "{}" }} }}, input: {{ max_request_hop: 1 }}) {{ _docID }} }}"#,
-            crate::store::graphql::escape_graphql_string(&did)
-        ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    crate::ConfigAccess::local(node.clone())
+        .write(
+            "fixture.node.max_request_hop",
+            &format!(
+                r#"mutation {{ update_Node(filter: {{ node_did: {{ _eq: "{}" }} }}, input: {{ max_request_hop: 1 }}) {{ _docID }} }}"#,
+                crate::store::graphql::escape_graphql_string(&did)
+            ),
+        )
+        .await
+        .expect("raise the node's request hop bound");
     let identity: Arc<dyn NodeIdentity> = Arc::new(
         crate::KeyIdentity::load_existing(message.admission.path.join("node.key"), None).unwrap(),
     );
@@ -295,10 +298,14 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     let did = message.admission.node_did.clone();
     let session_id = message.admission.tool.session_id().to_owned();
     let caller_doc_id = message.admission.tool.request_doc_id().unwrap().to_owned();
-    let caller = crate::request::binding::load_agent_request_by_doc_id(&node, &caller_doc_id)
-        .await
-        .unwrap()
-        .unwrap();
+    // A paired client's request is visible to its Agent, not to the node.
+    let caller = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
+        &caller_doc_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let client = caller
         .requester_did
         .clone()
