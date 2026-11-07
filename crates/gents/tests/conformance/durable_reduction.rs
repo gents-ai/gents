@@ -251,10 +251,7 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
         };
         assert_eq!(rust_outcome, case.outcome, "{} outcome drifted", case.name);
 
-        let loaded = load_for_request(
-            &gents::store::config_client::ConfigAccess::local(node.clone()),
-            &request_doc_id,
-        )
+        let loaded = load_for_request(&access, &request_doc_id)
         .await
         .unwrap();
         let durable_after = loaded.iter().any(|row| {
