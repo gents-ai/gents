@@ -80,17 +80,11 @@ async fn signed_trigger_materializer(
 
 #[tokio::test]
 async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
-    let snapshot =
-        snapshot_with_agent_and_schedules(spy_test_agent(), RapidHashMap::new());
+    let (db, _user, _client_access, agent) =
+        signed_materializer_agent("task-opening-interrupt").await;
+    let node = db.node.clone();
+    let snapshot = snapshot_with_agent_and_schedules(agent.clone(), RapidHashMap::new());
     let owner = snapshot.local_did.clone();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(&owner)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let identity = gents_protocol::trigger_delivery::FireIdentity {
@@ -124,6 +118,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
     };
     let mut task = resolved_task("work");
     task.task_id = prepared.receipt.task_id.clone();
+    task.agent_did = agent.agent_did.clone();
     materializer
         .materialize(
             &task,
@@ -141,7 +136,12 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         )
         .await
         .unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent.agent_did.parse().unwrap(),
+        agent.agent_identity.as_ref(),
+    )
+    .unwrap();
     let rows = access
         .execute(&format!(
             "{{AgentRequest {{{}}}}}",
@@ -153,15 +153,15 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         serde_json::from_value(rows["data"]["AgentRequest"][0].clone()).unwrap();
     let request = crate::AgentRequest::try_from(row).unwrap();
     let scope = crate::session::origin::SessionScope::of_request(&request);
+    // Delivery opens the Task session with its verified provenance in the
+    // same transaction as the request; replaying the opening creates nothing.
     assert!(
-        !crate::session::origin::task_triggered_opening(&access, &scope)
+        crate::session::origin::task_triggered_opening(&access, &scope)
             .await
             .unwrap()
     );
     let session_request = request.clone();
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
+    let reopened = access.transact_write(
         "test.task_session",
         move |txn| {
             let request = session_request.clone();
@@ -182,6 +182,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
     )
     .await
     .unwrap();
+    assert!(!reopened, "the delivered Task session already exists");
     assert!(
         crate::session::origin::task_triggered_opening(&access, &scope)
             .await
@@ -191,10 +192,10 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         session_id: "caller".into(),
         ..scope.clone()
     };
+    // A same-node Agent's session interrupts the Task-opened session.
     assert!(crate::session::message::interrupt_refusal(
         &node,
-        node.node_identity_did()
-            .expect("fixture has a registered signing principal"),
+        &agent.agent_did,
         &caller,
         &scope
     )
@@ -245,8 +246,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
     };
     assert!(crate::session::message::interrupt_refusal(
         &node,
-        node.node_identity_did()
-            .expect("fixture has a registered signing principal"),
+        &agent.agent_did,
         &foreign,
         &scope
     )
@@ -308,9 +308,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         escape_graphql_string(&owner), escape_graphql_string(&scope.session_id)
     )).await.unwrap();
     let original_request = request.clone();
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
+    access.transact_write(
         "test.wrong_requester_session",
         move |txn| {
             let request = original_request.clone();
