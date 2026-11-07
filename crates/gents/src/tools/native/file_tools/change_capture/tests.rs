@@ -813,6 +813,10 @@ async fn readonly_receipts_commit_without_images_and_survive_terminal_retry() {
     .await
     .unwrap()
     .unwrap();
+    // A rehydrated row terminates through its owning Agent's signer.
+    replay
+        .bind_agent_signer(call.access().unwrap().managed_agent_signer())
+        .unwrap();
     replay.stage_deferred_writes(registry.deferred_writes(&doc_id).await);
     crate::tools::call::lifecycle::delivery::fail_next_terminal_for_test(&doc_id);
     crate::tools::call::lifecycle::file_inventory::fail_next_publication(&doc_id);
