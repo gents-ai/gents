@@ -201,7 +201,12 @@ structure AuditCase where
   deriving Repr
 
 def auditCases : List AuditCase :=
-  [ { name := "reasoning_audit_eof", input := observation [observed],
+  [ { name := "reasoning_audit_stopped", input := observation [stoppedObserved],
+      expected := reconstructAuditPrefix (observation [stoppedObserved]) none }
+  , { name := "reasoning_audit_stopped_late_signature", input :=
+        observation [stoppedObserved, signatureContinuation],
+      expected := reconstructAuditPrefix (observation [stoppedObserved, signatureContinuation]) none }
+  , { name := "reasoning_audit_eof", input := observation [observed],
       expected := reconstructAuditPrefix (observation [observed]) none }
   , { name := "reasoning_audit_signature_delta", input :=
         observation [observed, signatureContinuation],

@@ -2,12 +2,12 @@
 //! The caller owns authorization, expiry, generation fencing, physical IDs and
 //! the atomic database write.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::reconstruction::ObservedSegment;
 use super::{
     MessageBlock, OutputOutcome, OutputSource, OutputWriter, PayloadPresentation, PayloadRef,
-    PresentedPayload, SourceClose, StreamPayload,
+    PresentedPayload, ReasoningPart, SourceClose, StreamPayload,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,8 +60,19 @@ impl std::error::Error for RecoveryPlanError {}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecoveryPrefixPlan {
     pub close: SourceClose,
-    /// Text survivors in original native `(block_index, part_index)` order.
+    /// Surviving payloads in original native `(block_index, part_index)` order.
     pub retained_streams: Vec<u32>,
+    retained_blocks: Vec<RetainedBlock>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RetainedBlock {
+    Text(u32),
+    Reasoning {
+        stream: u32,
+        signature: Option<String>,
+    },
+    Redacted(u32),
 }
 
 impl RecoveryPrefixPlan {
@@ -72,17 +83,32 @@ impl RecoveryPrefixPlan {
         if close_doc_id.trim().is_empty() {
             return Err(RecoveryPlanError::BlankCloseIdentity);
         }
+        let reference = |stream| PayloadRef {
+            close_doc_id: close_doc_id.to_owned(),
+            stream,
+        };
         Ok(self
-            .retained_streams
+            .retained_blocks
             .iter()
-            .copied()
-            .map(|stream| MessageBlock::Text {
-                text: PresentedPayload {
-                    output: PayloadRef {
-                        close_doc_id: close_doc_id.to_owned(),
-                        stream,
+            .map(|block| match block {
+                RetainedBlock::Text(stream) => MessageBlock::Text {
+                    text: PresentedPayload {
+                        output: reference(*stream),
+                        presentation: PayloadPresentation::Full,
                     },
-                    presentation: PayloadPresentation::Full,
+                },
+                RetainedBlock::Reasoning { stream, signature } => MessageBlock::Reasoning {
+                    id: None,
+                    parts: vec![ReasoningPart::Text {
+                        text: reference(*stream),
+                        signature: signature.clone(),
+                    }],
+                },
+                RetainedBlock::Redacted(stream) => MessageBlock::Reasoning {
+                    id: None,
+                    parts: vec![ReasoningPart::Redacted {
+                        data: reference(*stream),
+                    }],
                 },
             })
             .collect())
@@ -161,13 +187,26 @@ pub fn plan_recovery_prefix(
         super::extent::inspect_open_source(records, request_doc_id, source, expected_writer)
             .map_err(|_| RecoveryPlanError::MalformedExtent)?;
     let stream_bytes = extent.stream_bytes;
+    let stopped: BTreeSet<_> = extent
+        .streams
+        .iter()
+        .filter_map(|stream| {
+            matches!(stream.declaration.payload, StreamPayload::ReasoningStop)
+                .then_some(stream.declaration.block_index)
+        })
+        .collect();
     let mut text = extent
         .streams
         .iter()
         .enumerate()
         .filter(|(_, stream)| {
-            matches!(stream.declaration.payload, StreamPayload::Text)
-                && stream.declaration.part_index == 0
+            let declaration = &stream.declaration;
+            declaration.part_index == 0
+                && (matches!(declaration.payload, StreamPayload::Text)
+                    || (matches!(
+                        declaration.payload,
+                        StreamPayload::Reasoning | StreamPayload::ReasoningRedacted
+                    ) && stopped.contains(&declaration.block_index)))
         })
         .map(|(index, stream)| (&stream.declaration, index as u32))
         .collect::<Vec<_>>();
@@ -178,6 +217,34 @@ pub fn plan_recovery_prefix(
         text.into_iter().map(|(_, stream)| stream).collect()
     };
 
+    let signatures: BTreeMap<_, _> = extent
+        .streams
+        .iter()
+        .filter_map(|item| {
+            matches!(item.declaration.payload, StreamPayload::ReasoningSignature).then_some((
+                (item.declaration.block_index, item.declaration.part_index),
+                &item.text,
+            ))
+        })
+        .collect();
+    let retained_blocks = retained_streams
+        .iter()
+        .map(|&stream| {
+            let item = &extent.streams[stream as usize];
+            match item.declaration.payload {
+                StreamPayload::Text => RetainedBlock::Text(stream),
+                StreamPayload::Reasoning => RetainedBlock::Reasoning {
+                    stream,
+                    signature: signatures
+                        .get(&(item.declaration.block_index, item.declaration.part_index))
+                        .map(|signature| (*signature).clone()),
+                },
+                StreamPayload::ReasoningRedacted => RetainedBlock::Redacted(stream),
+                _ => unreachable!("only recoverable payload kinds are selected"),
+            }
+        })
+        .collect();
+
     Ok(RecoveryPrefixPlan {
         close: SourceClose::Closed {
             outcome: OutputOutcome::Partial,
@@ -185,5 +252,159 @@ pub fn plan_recovery_prefix(
             stream_bytes,
         },
         retained_streams,
+        retained_blocks,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output::{OutputSegment, SegmentRun, StreamDeclaration};
+
+    fn source() -> OutputSource {
+        OutputSource::ProviderTurn {
+            scope: "inference.1".parse().unwrap(),
+            turn_index: 0,
+            attempt: 0,
+        }
+    }
+
+    fn segment(runs: Vec<SegmentRun>, payload: &str) -> OutputSegment {
+        OutputSegment {
+            node_did: "node".into(),
+            requester_did: Some("requester".into()),
+            session_id: "session".into(),
+            request_doc_id: "request".into(),
+            source: source(),
+            writer: OutputWriter::RequestExecution {
+                execution_generation: "generation".into(),
+            },
+            ordinal: Some(0),
+            runs,
+            payload: payload.into(),
+            close: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    fn declaration(stream: u32, bytes: u32, payload: StreamPayload) -> SegmentRun {
+        SegmentRun {
+            stream,
+            bytes,
+            declaration: Some(StreamDeclaration {
+                block_index: 0,
+                part_index: 0,
+                payload,
+            }),
+        }
+    }
+
+    #[test]
+    fn stopped_reasoning_retains_body_and_exact_signature() {
+        let record = segment(
+            vec![
+                declaration(0, 1, StreamPayload::Reasoning),
+                declaration(1, 1, StreamPayload::ReasoningSignature),
+                declaration(2, 0, StreamPayload::ReasoningStop),
+            ],
+            "AS",
+        );
+        let writer = record.writer.clone();
+        let plan = plan_recovery_prefix(
+            &[ObservedSegment {
+                doc_id: "segment",
+                segment: &record,
+            }],
+            "request",
+            &source(),
+            &writer,
+        )
+        .unwrap();
+        assert_eq!(plan.retained_streams, [0]);
+        assert_eq!(
+            plan.retained_blocks("close").unwrap(),
+            vec![MessageBlock::Reasoning {
+                id: None,
+                parts: vec![ReasoningPart::Text {
+                    text: PayloadRef {
+                        close_doc_id: "close".into(),
+                        stream: 0
+                    },
+                    signature: Some("S".into()),
+                }],
+            }]
+        );
+        assert_eq!(
+            plan.close,
+            SourceClose::Closed {
+                outcome: OutputOutcome::Partial,
+                segments: 1,
+                stream_bytes: vec![1, 1, 0],
+            }
+        );
+    }
+
+    #[test]
+    fn signature_without_stop_is_not_recovered() {
+        let record = segment(
+            vec![
+                declaration(0, 1, StreamPayload::Reasoning),
+                declaration(1, 1, StreamPayload::ReasoningSignature),
+            ],
+            "AS",
+        );
+        let plan = plan_recovery_prefix(
+            &[ObservedSegment {
+                doc_id: "segment",
+                segment: &record,
+            }],
+            "request",
+            &source(),
+            &record.writer,
+        )
+        .unwrap();
+        assert!(plan.retained_blocks("close").unwrap().is_empty());
+    }
+
+    #[test]
+    fn stop_without_body_or_later_signature_bytes_is_invalid() {
+        let missing = segment(vec![declaration(0, 0, StreamPayload::ReasoningStop)], "");
+        assert_eq!(
+            plan_recovery_prefix(
+                &[ObservedSegment {
+                    doc_id: "segment",
+                    segment: &missing
+                }],
+                "request",
+                &source(),
+                &missing.writer
+            ),
+            Err(RecoveryPlanError::MalformedExtent)
+        );
+        let late = segment(
+            vec![
+                declaration(0, 1, StreamPayload::Reasoning),
+                declaration(1, 1, StreamPayload::ReasoningSignature),
+                declaration(2, 0, StreamPayload::ReasoningStop),
+                SegmentRun {
+                    stream: 1,
+                    bytes: 1,
+                    declaration: None,
+                },
+            ],
+            "AST",
+        );
+        assert_eq!(
+            plan_recovery_prefix(
+                &[ObservedSegment {
+                    doc_id: "segment",
+                    segment: &late
+                }],
+                "request",
+                &source(),
+                &late.writer
+            ),
+            Err(RecoveryPlanError::MalformedExtent)
+        );
+    }
 }
