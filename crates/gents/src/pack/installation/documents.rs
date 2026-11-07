@@ -416,26 +416,38 @@ pub async fn prepare_document_pack_install(
         let options = PackInstallOptions {
             node_did: owner.to_owned(),
         };
-        let (authored, variables) = super::super::load_pack_config_with_variables(
-            manifest,
-            &options,
-            &|path| Ok(archive.asset(path)?.to_vec()),
-            &|name| {
-                super::super::interpolate::resolve_upgrade_variable(
-                    root_snapshot
-                        .as_ref()
-                        .and_then(|s| s.record.variables.get(name))
-                        .cloned()
-                        .flatten(),
-                    environment(name),
-                )
-            },
-        )?;
-        if root_snapshot.is_some() {
+        if let Some(snapshot) = &root_snapshot {
+            let (authored, variables) = super::super::load_pack_config_with_variables(
+                manifest,
+                &options,
+                &|path| Ok(archive.asset(path)?.to_vec()),
+                &|name| {
+                    super::super::interpolate::resolve_upgrade_variable(
+                        snapshot.record.variables.get(name).cloned().flatten(),
+                        environment(name),
+                    )
+                },
+            )?;
             config =
                 super::super::bind_pack_install_config(manifest, &authored, &inference.bindings)?;
+            variables
+        } else {
+            let path = manifest.config.as_deref().context("pack has no config")?;
+            let authored: serde_json::Value = serde_json::from_slice(archive.asset(path)?)?;
+            let captured = std::cell::RefCell::new(BTreeMap::new());
+            super::super::interpolate::inspect_install_variables(&authored, &|name| {
+                if name == "GENTS_PACK_NODE_DID" {
+                    return Some(owner.to_owned());
+                }
+                captured
+                    .borrow_mut()
+                    .entry(name.to_owned())
+                    .or_insert_with(|| environment(name))
+                    .clone()
+            })
+            .map_err(|names| anyhow::anyhow!("unset variables: {}", names.join(", ")))?;
+            captured.into_inner()
         }
-        variables
     } else {
         BTreeMap::new()
     };
