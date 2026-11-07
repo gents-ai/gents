@@ -309,6 +309,49 @@ async fn install_review_policy(
     selection
 }
 
+/// A User-created Task is editable by its Agent only through the selected
+/// self-configuration writer grant that `self_config_inference::grant` links on
+/// selection. Fixtures that edit it as the Agent must establish that grant.
+async fn grant_agent_self_configuration_on_review_task(fixture: &TitleFixture) {
+    let node_did = fixture.parent.node_did.clone();
+    let agent_did = fixture.parent.agent_did.clone();
+    fixture
+        .user_access
+        .transact_write("test.review_policy.self_config_grant", |txn| {
+            let node_did = &node_did;
+            let agent_did = &agent_did;
+            Box::pin(async move {
+                let escaped_node = crate::store::graphql::escape_graphql_string(node_did);
+                let escaped_agent = crate::store::graphql::escape_graphql_string(agent_did);
+                let rows = txn
+                    .execute(&format!(
+                        r#"{{ Task(filter: {{ node_did: {{ _eq: "{escaped_node}" }}, task_id: {{ _eq: "review" }} }}, limit: 2) {{ _docID }} Agent(filter: {{ node_did: {{ _eq: "{escaped_node}" }}, agent_did: {{ _eq: "{escaped_agent}" }} }}, limit: 2) {{ _docID }} }}"#
+                    ))
+                    .await?;
+                let task = rows["data"]["Task"][0]["_docID"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("review Task is unavailable"))?;
+                let agent = rows["data"]["Agent"][0]["_docID"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Agent is unavailable"))?;
+                txn.add_entity_set_relationship("Task", task, "writer", "agents", agent, "config_writer")
+                    .await?;
+                txn.add_entity_set_relationship(
+                    "Task",
+                    task,
+                    "selection_manager",
+                    "agents",
+                    agent,
+                    "config_writer",
+                )
+                .await?;
+                Ok::<(), anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
+}
+
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn workspace_command_uses_the_configured_review_task_and_the_callers_ledger() {
@@ -566,6 +609,7 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
         "Ask before making changes outside the requested project.",
     )
     .await;
+    grant_agent_self_configuration_on_review_task(&fixture).await;
     let home = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
     let key = workspace::WorkspaceKey::canonical(
@@ -1479,8 +1523,8 @@ impl TitleFixture {
             lifecycle.claim_with_identity().await.unwrap(),
             crate::request::lifecycle::ClaimOutcome::Claimed
         );
-        crate::request::interrupt::interrupt_request_by_doc_id(
-            &self.node,
+        crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+            &self.agent_access(),
             &self.parent.doc_id,
             &self.parent.node_did,
             self.parent.requester_did.as_deref(),
