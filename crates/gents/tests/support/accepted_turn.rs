@@ -1,7 +1,7 @@
 use gents::{DocumentRuntimeOptions, Gents, NodeIdentity};
 
 use super::fixtures::{bind_agent_backend, bind_selected_managed_agent_backend};
-use super::interrupt::{wait_for_runtime_ready, BootedAgent};
+use super::interrupt::BootedAgent;
 use super::streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse};
 
 pub struct AcceptedTurnSpec<'a> {

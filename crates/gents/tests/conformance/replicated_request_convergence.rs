@@ -1,12 +1,123 @@
 use super::*;
 
-use gents::__test_internals::{reconcile_coalesced_pending_request, QueueSource};
+use gents::__test_internals::QueueSource;
 use gents::{DefraWatcher, NodeIdentity, Watcher, TERMINAL_REDRIVE_CAP};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 const CONVERGENCE_CREATED_AT: &str = "2026-03-23T00:00:00Z";
-const OWNER_DID: &str = NODE_DID;
-const FOREIGN_DID: &str = "did:test:foreign-owner";
+
+/// A replicated row as the runtime root persists it: the root authors the row
+/// with any node scope and relates the working Agent, which then executes it.
+async fn root_write_request(
+    node: &std::sync::Arc<EmbeddedNode>,
+    input: Value,
+    working_agent: Option<&str>,
+) -> String {
+    let root = ::identity::Did::new(node.node_identity_did().expect("runtime DID")).unwrap();
+    let working_agent = working_agent.map(|did| ::identity::Did::new(did).expect("Agent DID"));
+    gents::ConfigAccess::local_as(node.clone(), root)
+        .transact_write("test.convergence.request", |txn| {
+            let (input, working_agent) = (&input, &working_agent);
+            Box::pin(async move {
+                let response = txn
+                    .execute_with_variables(
+                        "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                        &json!({"input": input}),
+                    )
+                    .await?;
+                let doc = gents::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                if let Some(agent) = working_agent {
+                    txn.add_actor_relationship("AgentRequest", &doc, "working_agent", agent)
+                        .await?;
+                }
+                Ok::<_, anyhow::Error>(doc)
+            })
+        })
+        .await
+        .expect("root writes replicated request")
+}
+
+fn local_self_request(
+    request_id: &str,
+    node_did: &str,
+    session_id: &str,
+    agent_did: &str,
+) -> gents_protocol::request_admission::AgentRequestCreate {
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
+    AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        request_id,
+        node_did,
+        agent_did,
+        agent_did,
+        session_id,
+        "work",
+        "interactive",
+        CONVERGENCE_CREATED_AT,
+        AgentRequestAdmissionRecord::local_self(agent_did),
+    )
+}
+
+/// Persists a signed request create as the runtime root would a replicated row.
+async fn root_write_signed(
+    node: &std::sync::Arc<EmbeddedNode>,
+    mut create: gents_protocol::request_admission::AgentRequestCreate,
+    signer: &dyn gents::NodeIdentity,
+    working_agent: Option<&str>,
+) -> String {
+    gents::sign_agent_request_create(signer, &mut create)
+        .await
+        .expect("sign replicated request");
+    let mutation = create
+        .graphql_mutation()
+        .expect("render replicated request");
+    let root = ::identity::Did::new(node.node_identity_did().expect("runtime DID")).unwrap();
+    let working_agent = working_agent.map(|did| ::identity::Did::new(did).expect("Agent DID"));
+    gents::ConfigAccess::local_as(node.clone(), root)
+        .transact_write("test.convergence.signed_request", |txn| {
+            let (mutation, working_agent) = (&mutation, &working_agent);
+            Box::pin(async move {
+                let response = txn.execute(mutation).await?;
+                let doc = gents::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                if let Some(agent) = working_agent {
+                    txn.add_actor_relationship("AgentRequest", &doc, "working_agent", agent)
+                        .await?;
+                }
+                Ok::<_, anyhow::Error>(doc)
+            })
+        })
+        .await
+        .expect("root writes signed replicated request")
+}
+
+/// The runtime root authored the fixture rows and reads them as their owner.
+async fn root_read(node: &std::sync::Arc<EmbeddedNode>, query: &str) -> Value {
+    let root = ::identity::Did::new(node.node_identity_did().expect("runtime DID")).unwrap();
+    let mut response = gents::ConfigAccess::local_as(node.clone(), root)
+        .execute(query)
+        .await
+        .expect("root reads fixture rows");
+    response["data"].take()
+}
+
+fn first_data_row<T>(data: &Value, key: &str) -> T
+where
+    T: serde::de::DeserializeOwned,
+{
+    serde_json::from_value(data[key][0].clone())
+        .unwrap_or_else(|error| panic!("decode {key}: {error}; data={data}"))
+}
+
+/// A syntactically valid DID for a node this process does not run.
+fn foreign_did(db: &support::TestDb) -> String {
+    gents::NodeIdentity::did(
+        &gents::KeyIdentity::load_or_create(db.data_path().join("foreign-owner.key"), None)
+            .unwrap(),
+    )
+    .to_owned()
+}
 
 #[derive(Debug, Deserialize)]
 struct ConvergenceRow {
@@ -18,7 +129,8 @@ struct ConvergenceRow {
 }
 
 async fn create_owned_request(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     node_did: &str,
@@ -26,6 +138,7 @@ async fn create_owned_request(
 ) -> String {
     create_owned_request_with_times(
         node,
+        agent_did,
         request_id,
         session_id,
         node_did,
@@ -37,21 +150,64 @@ async fn create_owned_request(
 }
 
 async fn seed_owned_request_projection(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     session_id: &str,
     request_id: &str,
     node_did: &str,
     agent_did: &str,
 ) {
-    let session =
+    let rows = root_read(
+        node,
+        &format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID lifecycle_state created_at }} }}"#,
+            escape_graphql_string(request_id)
+        ),
+    )
+    .await;
+    let row = &rows["AgentRequest"][0];
+    let mut session =
         support::session_document_in_scope(node_did, session_id, agent_did, CONVERGENCE_CREATED_AT);
-    support::create_session_document(node, &session).await;
-    support::seed_session_observation_from_request(node, session_id, request_id, "hello").await;
+    session.observation = Some(gents_protocol::session::SessionObservation {
+        reply_preview: None,
+        last_activity_at: row["created_at"]
+            .as_str()
+            .expect("creation time")
+            .to_owned(),
+        preview: Some("hello".into()),
+        latest_request: Some(gents_protocol::session::SessionRequestObservation {
+            request_doc_id: row["_docID"].as_str().expect("physical request").to_owned(),
+            request_id: request_id.to_owned(),
+            lifecycle_state: serde_json::from_value(row["lifecycle_state"].clone())
+                .expect("canonical lifecycle"),
+        }),
+    });
+    let root = ::identity::Did::new(node.node_identity_did().expect("runtime DID")).unwrap();
+    let agent = ::identity::Did::new(agent_did).expect("Agent DID");
+    let session = serde_json::to_value(&session).expect("serialize session");
+    gents::ConfigAccess::local_as(node.clone(), root)
+        .transact_write("test.convergence.session", |txn| {
+            let (session, agent) = (&session, &agent);
+            Box::pin(async move {
+                let response = txn
+                    .execute_with_variables(
+                        "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+                        &json!({"input": session}),
+                    )
+                    .await?;
+                let doc = gents::store::graphql::created_doc_id(&response, "AgentSession")?;
+                txn.add_actor_relationship("AgentSession", &doc, "working_agent", agent)
+                    .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .expect("root writes request-owned session projection");
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn create_owned_request_with_times(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     node_did: &str,
@@ -61,6 +217,7 @@ async fn create_owned_request_with_times(
 ) -> String {
     create_owned_request_with_times_and_requester(
         node,
+        agent_did,
         request_id,
         session_id,
         node_did,
@@ -74,7 +231,8 @@ async fn create_owned_request_with_times(
 
 #[allow(clippy::too_many_arguments)]
 async fn create_owned_request_with_times_and_requester(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     node_did: &str,
@@ -88,7 +246,7 @@ async fn create_owned_request_with_times_and_requester(
         request_id,
         session_id,
         node_did,
-        AGENT_NAME,
+        agent_did,
         lifecycle_state,
         created_at,
         terminalized_at,
@@ -99,7 +257,7 @@ async fn create_owned_request_with_times_and_requester(
 
 #[allow(clippy::too_many_arguments)]
 async fn create_recovery_request(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
     session_id: &str,
     node_did: &str,
@@ -109,75 +267,35 @@ async fn create_recovery_request(
     terminalized_at: &str,
     requester_did: Option<&str>,
 ) -> String {
-    let is_terminal = RequestLifecycleState::is_terminal_str(Some(lifecycle_state));
-    let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_node_did = escape_graphql_string(node_did);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_lifecycle_state = escape_graphql_string(lifecycle_state);
-    let escaped_created_at = escape_graphql_string(created_at);
-    let escaped_terminalized_at = escape_graphql_string(terminalized_at);
-    let requester_field = requester_did
-        .map(|did| format!("requester_did: \"{}\",", escape_graphql_string(did)))
-        .unwrap_or_default();
-    let terminal_fields = if is_terminal {
-        format!(", terminalized_at: \"{escaped_terminalized_at}\", terminal_redrive_attempts: 0")
-    } else {
-        String::new()
-    };
-    let execution_fields = if matches!(lifecycle_state, "claimed" | "processing") {
-        format!(
-            r#", execution_generation: "{}", execution_lease_expires_at: "{CONVERGENCE_CREATED_AT}""#,
-            uuid::Uuid::new_v4()
-        )
-    } else {
-        String::new()
-    };
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{escaped_request_id}",
-                purpose: "normal",
-                node_did: "{escaped_node_did}",
-                {requester_field}
-                agent_did: "{escaped_agent_did}",
-                session_id: "{escaped_session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{escaped_request_id}",
-                superseded_by_request: "",
-                content: "hello",
-                lifecycle_state: "{escaped_lifecycle_state}",
-                backend_id: "",
-                execution_origin: "interactive",
-                created_at: "{escaped_created_at}",
-                retry_count: 0,
-                max_retries: {max_retries},
-                request_hop: 0
-                {terminal_fields}
-                {execution_fields}
-            }}) {{ _docID }}
-        }}"#,
-        max_retries = gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create owned request failed: {:?}",
-        resp.errors
-    );
-
-    let query = format!(
-        r#"{{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
-                _docID
-            }}
-        }}"#
-    );
-    first_row::<support::DocIdRow>(&node.execute(&query).await, "AgentRequest").doc_id
+    let mut input = json!({
+        "request_id": request_id,
+        "purpose": "normal",
+        "node_did": node_did,
+        "requester_did": requester_did,
+        "agent_did": agent_did,
+        "session_id": session_id,
+        "retry_root_request": request_id,
+        "content": "hello",
+        "lifecycle_state": lifecycle_state,
+        "execution_origin": "interactive",
+        "created_at": created_at,
+        "retry_count": 0,
+        "max_retries": gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        "request_hop": 0,
+    });
+    if RequestLifecycleState::is_terminal_str(Some(lifecycle_state)) {
+        input["terminalized_at"] = json!(terminalized_at);
+        input["terminal_redrive_attempts"] = json!(0);
+    }
+    if matches!(lifecycle_state, "claimed" | "processing") {
+        input["execution_generation"] = json!(uuid::Uuid::new_v4().to_string());
+        input["execution_lease_expires_at"] = json!(CONVERGENCE_CREATED_AT);
+    }
+    root_write_request(node, input, Some(agent_did)).await
 }
 
 async fn create_recovery_request_basic(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
     session_id: &str,
     node_did: &str,
@@ -211,8 +329,10 @@ fn coalesce_wakeup_input(session_id: &str) -> String {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn create_queue_request(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     node_did: &str,
@@ -220,56 +340,34 @@ async fn create_queue_request(
     input: &str,
     created_at: &str,
 ) -> String {
-    let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_node_did = escape_graphql_string(node_did);
-    let escaped_execution_origin = escape_graphql_string(execution_origin);
-    let input = serde_json::from_str::<Value>(input).expect("request input JSON");
-    let input =
-        gents_protocol::graphql::graphql_input_literal(&input).expect("request input GraphQL");
-    let escaped_created_at = escape_graphql_string(created_at);
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{escaped_request_id}",
-                purpose: "normal",
-                node_did: "{escaped_node_did}",
-                agent_did: "{AGENT_NAME}",
-                session_id: "{escaped_session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{escaped_request_id}",
-                superseded_by_request: "",
-                content: "wake up",
-                input: {input},
-                lifecycle_state: "pending",
-                backend_id: "",
-                execution_origin: "{escaped_execution_origin}",
-                created_at: "{escaped_created_at}",
-                retry_count: 0,
-                max_retries: {max_retries},
-                request_hop: 0
-            }}) {{ _docID }}
-        }}"#,
-        max_retries = gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create queue request failed: {:?}",
-        resp.errors
-    );
-
-    let query = format!(
-        r#"{{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
-                _docID
-            }}
-        }}"#
-    );
-    first_row::<support::DocIdRow>(&node.execute(&query).await, "AgentRequest").doc_id
+    let queue_input = serde_json::from_str::<Value>(input).expect("request input JSON");
+    root_write_request(
+        node,
+        json!({
+            "request_id": request_id,
+            "purpose": "normal",
+            "node_did": node_did,
+            "agent_did": agent_did,
+            "session_id": session_id,
+            "retry_root_request": request_id,
+            "content": "wake up",
+            "input": queue_input,
+            "lifecycle_state": "pending",
+            "execution_origin": execution_origin,
+            "created_at": created_at,
+            "retry_count": 0,
+            "max_retries": gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+            "request_hop": 0,
+        }),
+        Some(agent_did),
+    )
+    .await
 }
 
-async fn fetch_queue_convergence_row(node: &EmbeddedNode, request_id: &str) -> QueueConvergenceRow {
+async fn fetch_queue_convergence_row(
+    node: &std::sync::Arc<EmbeddedNode>,
+    request_id: &str,
+) -> QueueConvergenceRow {
     let escaped_request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
@@ -280,10 +378,13 @@ async fn fetch_queue_convergence_row(node: &EmbeddedNode, request_id: &str) -> Q
             }}
         }}"#
     );
-    first_row(&node.execute(&query).await, "AgentRequest")
+    first_data_row(&root_read(node, &query).await, "AgentRequest")
 }
 
-async fn fetch_convergence_row(node: &EmbeddedNode, request_id: &str) -> ConvergenceRow {
+async fn fetch_convergence_row(
+    node: &std::sync::Arc<EmbeddedNode>,
+    request_id: &str,
+) -> ConvergenceRow {
     let escaped_request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
@@ -296,10 +397,10 @@ async fn fetch_convergence_row(node: &EmbeddedNode, request_id: &str) -> Converg
             }}
         }}"#
     );
-    first_row(&node.execute(&query).await, "AgentRequest")
+    first_data_row(&root_read(node, &query).await, "AgentRequest")
 }
 
-async fn composite_commit_count(node: &EmbeddedNode, doc_id: &str) -> usize {
+async fn composite_commit_count(node: &std::sync::Arc<EmbeddedNode>, doc_id: &str) -> usize {
     let escaped_doc_id = escape_graphql_string(doc_id);
     let query = format!(
         r#"query {{
@@ -309,33 +410,31 @@ async fn composite_commit_count(node: &EmbeddedNode, doc_id: &str) -> usize {
             ) {{ cid }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "query composite request commits failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("_commits"))
+    root_read(node, &query)
+        .await
+        .get("_commits")
         .and_then(serde_json::Value::as_array)
         .map_or(0, Vec::len)
 }
 
 pub(super) async fn single_claimer_watcher_never_claims_foreign_replica() {
     let db = test_db("convergence-single-claimer").await;
+    let agent = support::managed_agent(&db).await;
+    let owner_did = db.node_identity.did();
+    let foreign = foreign_did(&db);
 
     let foreign_doc = create_owned_request(
         &db.node,
+        agent.did(),
         "convergence-foreign-req",
         "convergence-foreign-session",
-        FOREIGN_DID,
+        &foreign,
         "pending",
     )
     .await;
 
-    let mut watcher = DefraWatcher::new(db.node.clone(), OWNER_DID).expect("request watcher");
+    let mut watcher = DefraWatcher::for_agents(db.node.clone(), owner_did, vec![agent.clone()])
+        .expect("request watcher");
 
     assert!(
         watcher
@@ -354,16 +453,17 @@ pub(super) async fn single_claimer_watcher_never_claims_foreign_replica() {
 
     let own_doc = create_owned_request(
         &db.node,
+        agent.did(),
         "convergence-own-req",
         "convergence-own-session",
-        OWNER_DID,
+        owner_did,
         "pending",
     )
     .await;
     let claimed = watcher.try_fetch_request(&own_doc).await.unwrap();
     let claimed = claimed.expect("own pending request must be claimable (guards a vacuous filter)");
     assert_eq!(
-        claimed.node_did, OWNER_DID,
+        claimed.node_did, owner_did,
         "the claimable request must be the owner's own"
     );
 }
@@ -661,22 +761,25 @@ pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_wr
     )
     .await;
     let runtime_interrupt_doc_id = escape_graphql_string(&runtime_interrupt_doc_id);
-    let response = db
-        .node
-        .execute(&format!(
+    gents::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        ::identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap()
+    .write(
+        "test.convergence.interrupt_latch",
+        &format!(
             r#"mutation {{
                 update_AgentRequest(
-                    filter: {{ _docID: {{ _eq: "{runtime_interrupt_doc_id}" }} }},
+                    docID: "{runtime_interrupt_doc_id}",
                     input: {{ interrupt_requested_at: "2026-07-10T00:00:00Z" }}
                 ) {{ _docID }}
             }}"#
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "seed request-owned interrupt latch: {:?}",
-        response.errors
-    );
+        ),
+    )
+    .await
+    .expect("seed request-owned interrupt latch as working Agent");
 
     let runtime_interrupt_repair = RequestLifecycle::repair_terminal_requests_with_identities(
         &db.node,
@@ -744,54 +847,61 @@ pub(super) async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
 }
 
 pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
-    use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
-    };
-
     let db = test_db("convergence-coalesce-foreign").await;
-    let owner = db.node_identity.as_ref();
-    let foreign_identity =
-        gents::KeyIdentity::load_or_create(db.data_path().join("foreign.key"), None).unwrap();
+    let agent = support::managed_agent(&db).await;
+    let agent_access = gents::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        ::identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let owner_did = db.node_identity.did();
+    let foreign = foreign_did(&db);
     let session_id = "convergence-coalesce-foreign-session";
-    let input = coalesce_wakeup_input(session_id);
     let key = format!("background_completion:{session_id}");
+    let foreign_identity =
+        gents::KeyIdentity::load_or_create(db.data_path().join("foreign-owner.key"), None).unwrap();
     let owner_parent_id = "convergence-coalesce-owner-parent";
-    let owner_parent_doc = support::interrupt::create_runtime_request(
+    let owner_parent_doc = root_write_signed(
         &db.node,
-        owner.did(),
-        AGENT_NAME,
-        owner_parent_id,
-        session_id,
-        "work",
+        local_self_request(owner_parent_id, owner_did, session_id, agent.did()),
+        agent.as_ref(),
+        Some(agent.did()),
     )
     .await;
     let foreign_parent_id = "convergence-coalesce-foreign-parent";
-    let foreign_parent_doc = support::interrupt::create_runtime_request(
+    let foreign_parent_doc = root_write_signed(
         &db.node,
-        foreign_identity.did(),
-        AGENT_NAME,
-        foreign_parent_id,
-        session_id,
-        "work",
+        local_self_request(
+            foreign_parent_id,
+            &foreign,
+            session_id,
+            foreign_identity.did(),
+        ),
+        &foreign_identity,
+        None,
     )
     .await;
 
-    for (identity, parent_id, parent_doc, request_id, created_at) in [
+    for (node_did, identity, parent_id, parent_doc, request_id, created_at) in [
         (
-            owner,
+            owner_did,
+            agent.as_ref(),
             owner_parent_id,
             owner_parent_doc.as_str(),
             "convergence-coalesce-owner-survivor",
             "2026-03-23T00:00:00Z",
         ),
         (
-            owner,
+            owner_did,
+            agent.as_ref(),
             owner_parent_id,
             owner_parent_doc.as_str(),
             "convergence-coalesce-owner-duplicate",
             "2026-03-23T00:00:01Z",
         ),
         (
+            foreign.as_str(),
             &foreign_identity as &dyn gents::NodeIdentity,
             foreign_parent_id,
             foreign_parent_doc.as_str(),
@@ -799,41 +909,42 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
             "2026-03-23T00:00:02Z",
         ),
     ] {
+        use gents_protocol::request_admission::{
+            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        };
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             request_id,
+            node_did,
             identity.did(),
             identity.did(),
-            AGENT_NAME,
             session_id,
             "wake up",
             "scheduled",
             created_at,
             AgentRequestAdmissionRecord::runtime_local_control(identity.did(), parent_id),
         );
-        create.input = serde_json::from_str(&input).unwrap();
+        create.input = serde_json::from_str(&coalesce_wakeup_input(session_id)).unwrap();
         create.input.queue.as_mut().unwrap().queued_after_request_id = Some(parent_id.into());
         create.caused_by_parent_request_id = Some(parent_id.into());
         create.caused_by_parent_request_doc_id = Some(parent_doc.into());
-        gents::sign_agent_request_create(identity, &mut create)
-            .await
-            .unwrap();
-        gents::store::config_client::ConfigAccess::write_local(
+        root_write_signed(
             &db.node,
-            "conformance.signed_completion_wake",
-            &create.graphql_mutation().unwrap(),
+            create,
+            identity,
+            (node_did == owner_did).then_some(agent.did()),
         )
-        .await
-        .unwrap();
+        .await;
     }
 
-    let survivor = reconcile_coalesced_pending_request(
-        &db.node,
-        AGENT_NAME,
+    let survivor = gents::__test_internals::reconcile_coalesced_pending_request_for_with_access(
+        (&db.node, &agent_access),
+        agent.did(),
         session_id,
-        owner.did(),
+        owner_did,
         QueueSource::BackgroundCompletion,
         &key,
+        None,
     )
     .await
     .unwrap()
@@ -861,19 +972,18 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
         Some("convergence-coalesce-owner-survivor"),
     );
 
-    let foreign = fetch_queue_convergence_row(&db.node, "convergence-coalesce-foreign").await;
+    let foreign_row = fetch_queue_convergence_row(&db.node, "convergence-coalesce-foreign").await;
     assert_eq!(
-        foreign.node_did,
-        foreign_identity.did(),
+        foreign_row.node_did, foreign,
         "foreign replica ownership unchanged"
     );
     assert_eq!(
-        foreign.lifecycle_state,
+        foreign_row.lifecycle_state,
         RequestLifecycleState::Pending,
         "foreign replica must not be superseded by the owner's coalesce reconcile"
     );
     assert_eq!(
-        foreign.superseded_by_request.as_deref().unwrap_or(""),
+        foreign_row.superseded_by_request.as_deref().unwrap_or(""),
         "",
         "foreign replica must carry no supersede pointer"
     );
@@ -881,22 +991,27 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
 
 pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
     let db = test_db("convergence-drain-foreign").await;
+    let agent = support::managed_agent(&db).await;
+    let owner_did = db.node_identity.did();
+    let foreign = foreign_did(&db);
     let session_id = "convergence-drain-foreign-session";
     let input = coalesce_wakeup_input(session_id);
     let target_doc_id = create_owned_request(
         &db.node,
+        agent.did(),
         "convergence-drain-active",
         session_id,
-        OWNER_DID,
+        owner_did,
         "processing",
     )
     .await;
 
     create_queue_request(
         &db.node,
+        agent.did(),
         "convergence-drain-owner",
         session_id,
-        OWNER_DID,
+        owner_did,
         "scheduled",
         &input,
         "2026-03-23T00:00:00Z",
@@ -904,33 +1019,40 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
     .await;
     create_queue_request(
         &db.node,
+        agent.did(),
         "convergence-drain-foreign",
         session_id,
-        FOREIGN_DID,
+        &foreign,
         "scheduled",
         &input,
         "2026-03-23T00:00:01Z",
     )
     .await;
 
-    gents::interrupt_request_by_doc_id(&db.node, None, &target_doc_id, OWNER_DID, None)
+    let signer = agent.managed_agent_signer().expect("managed Agent signer");
+    gents::interrupt_request_by_doc_id(&db.node, Some(&signer), &target_doc_id, owner_did, None)
         .await
         .unwrap();
+    let latched = root_read(
+        &db.node,
+        &format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ interrupt_requested_at }} }}"#,
+            escape_graphql_string(&target_doc_id)
+        ),
+    )
+    .await;
     assert!(
-        gents::fetch_interrupt_requested_at_by_doc_id(&db.node, &target_doc_id)
-            .await
-            .unwrap()
-            .is_some(),
+        latched["AgentRequest"][0]["interrupt_requested_at"].is_string(),
         "the exact owned request must be latched"
     );
 
     let owner = fetch_queue_convergence_row(&db.node, "convergence-drain-owner").await;
     assert_eq!(owner.lifecycle_state, RequestLifecycleState::Interrupted);
 
-    let foreign = fetch_queue_convergence_row(&db.node, "convergence-drain-foreign").await;
-    assert_eq!(foreign.node_did, FOREIGN_DID);
+    let foreign_row = fetch_queue_convergence_row(&db.node, "convergence-drain-foreign").await;
+    assert_eq!(foreign_row.node_did, foreign);
     assert_eq!(
-        foreign.lifecycle_state,
+        foreign_row.lifecycle_state,
         RequestLifecycleState::Pending,
         "foreign replica must not be interrupted by the owner's wake-up drain"
     );
