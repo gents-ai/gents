@@ -310,8 +310,8 @@ async fn install_review_policy(
 }
 
 /// A User-created Task is editable by its Agent only through the selected
-/// self-configuration writer grant that `self_config_inference::grant` links on
-/// selection. Fixtures that edit it as the Agent must establish that grant.
+/// self-configuration writer grant: the User's explicit
+/// `grant_selected_self_configuration` plus the Task's link to that role.
 async fn grant_agent_self_configuration_on_review_task(fixture: &TitleFixture) {
     let node_did = fixture.parent.node_did.clone();
     let agent_did = fixture.parent.agent_did.clone();
@@ -321,6 +321,12 @@ async fn grant_agent_self_configuration_on_review_task(fixture: &TitleFixture) {
             let node_did = &node_did;
             let agent_did = &agent_did;
             Box::pin(async move {
+                // The Task links resolve through the Agent's own revocable
+                // `config_writer` role, which only the User's explicit grant holds.
+                crate::store::config_client::grant_selected_self_configuration(
+                    txn, node_did, agent_did,
+                )
+                .await?;
                 let escaped_node = crate::store::graphql::escape_graphql_string(node_did);
                 let escaped_agent = crate::store::graphql::escape_graphql_string(agent_did);
                 let rows = txn
