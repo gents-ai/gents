@@ -190,8 +190,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             .await
             .unwrap()
         };
-        let response = db.node.execute(&mutation).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
+        agent_write(&db, "test.desktop_control_request", &mutation).await;
         let request_id = if source == QueueSource::Goal {
             goal_continuation_identity("goal", &parent.request_id, 1)
                 .unwrap()
@@ -199,7 +198,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         } else {
             "runtime-control".into()
         };
-        let request = crate::request::binding::load_agent_request(&db.node, &request_id)
+        let request = crate::request::binding::load_agent_request_with_access(&db.agent_access, &request_id)
             .await
             .unwrap()
             .unwrap();
@@ -213,6 +212,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             ExecutionOrigin::Scheduled,
             "backend-test",
         );
+        lifecycle.bind_managed_agent(db.agent_identity.as_ref()).unwrap();
         assert_eq!(
             lifecycle.claim_with_identity().await.unwrap(),
             crate::request::lifecycle::ClaimOutcome::Claimed
@@ -249,9 +249,8 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         )
         .await
         .unwrap();
-        let response = db.node.execute(&next).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        let second = crate::request::binding::load_agent_request(&db.node, "second-control")
+        agent_write(&db, "test.desktop_second_control", &next).await;
+        let second = crate::request::binding::load_agent_request_with_access(&db.agent_access, "second-control")
             .await
             .unwrap()
             .unwrap();
@@ -264,6 +263,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             ExecutionOrigin::Scheduled,
             "backend-test",
         );
+        second_lifecycle.bind_managed_agent(db.agent_identity.as_ref()).unwrap();
         assert_eq!(
             second_lifecycle.claim_with_identity().await.unwrap(),
             crate::request::lifecycle::ClaimOutcome::Claimed
@@ -301,9 +301,8 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         .await
         .unwrap()
         .replace("signed-original", "unsigned-tampering");
-        let response = db.node.execute(&forged).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        let forged = crate::request::binding::load_agent_request(&db.node, "forged-control")
+        agent_write(&db, "test.desktop_forged_control", &forged).await;
+        let forged = crate::request::binding::load_agent_request_with_access(&db.agent_access, "forged-control")
             .await
             .unwrap()
             .unwrap();
@@ -321,6 +320,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             ExecutionOrigin::Scheduled,
             "backend-test",
         );
+        forged_lifecycle.bind_managed_agent(db.agent_identity.as_ref()).unwrap();
         forged_lifecycle
             .reject_admission(&error.to_string())
             .await
@@ -343,9 +343,8 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         crate::sign_agent_request_create(&desktop, &mut followup)
             .await
             .unwrap();
-        let response = db.node.execute(&followup.graphql_mutation().unwrap()).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        let followup = crate::request::binding::load_agent_request(&db.node, "desktop-followup")
+        agent_write(&db, "test.desktop_followup", &followup.graphql_mutation().unwrap()).await;
+        let followup = crate::request::binding::load_agent_request_with_access(&db.agent_access, "desktop-followup")
             .await
             .unwrap()
             .unwrap();
@@ -358,6 +357,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             ExecutionOrigin::Interactive,
             "backend-test",
         );
+        followup_lifecycle.bind_managed_agent(db.agent_identity.as_ref()).unwrap();
         assert_eq!(
             followup_lifecycle.claim_with_identity().await.unwrap(),
             crate::request::lifecycle::ClaimOutcome::Claimed
@@ -387,18 +387,39 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         )
         .await
         .unwrap();
-        let response = db.node.execute(&bad).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        session::ensure_session_with_agent_did_and_requester_did(
-            &db.node,
-            "other-session",
-            db.node_did(),
-            db.agent_did(),
-            Some(desktop.did()),
-        )
-        .await
-        .unwrap();
-        let bad = crate::request::binding::load_agent_request(&db.node, "foreign-control")
+        agent_write(&db, "test.desktop_foreign_control", &bad).await;
+        // Agent-owned, so the ensure sees the session the Agent's own write may
+        // already have created instead of colliding with it.
+        let desktop_did = desktop.did().to_owned();
+        let node_did = db.node_did().to_owned();
+        let agent_did = db.agent_did().to_owned();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.agent_access
+            .transact_write("test.foreign_control_session", |txn| {
+                let (desktop_did, node_did, agent_did, now) = (
+                    desktop_did.as_str(),
+                    node_did.as_str(),
+                    agent_did.as_str(),
+                    now.as_str(),
+                );
+                Box::pin(async move {
+                    session::ensure_session_in_txn(
+                        txn,
+                        "other-session",
+                        node_did,
+                        agent_did,
+                        Some(desktop_did),
+                        None,
+                        None,
+                        now,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
+        let bad = crate::request::binding::load_agent_request_with_access(&db.agent_access, "foreign-control")
             .await
             .unwrap()
             .unwrap();
@@ -412,6 +433,17 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             "{error:#}"
         );
     }
+}
+
+/// Agent-owned request rows are written through the owning Agent's managed access.
+async fn agent_write(db: &TestDb, operation: &'static str, mutation: &str) {
+    db.agent_access
+        .transact_write(operation, |txn| {
+            let mutation = mutation;
+            Box::pin(async move { Ok::<_, anyhow::Error>(txn.execute(mutation).await?) })
+        })
+        .await
+        .unwrap();
 }
 
 fn admission_verifier(db: &TestDb) -> crate::request::admission::AgentRequestAdmissionVerifier {
@@ -428,7 +460,8 @@ async fn a_returned_result_is_admitted_into_a_paired_client_session() {
     let db = test_db("paired-client-completion").await;
     let session_id = "desktop-owned-session";
     let (desktop, _, parent, _) = desktop_owned_session(&db, session_id).await;
-    let wake = persist_background_completion_with_message_waking(
+    let wake = persist_background_completion_with_message_waking_with_access(
+        &db.agent_access,
         &db.node,
         &parent,
         "gatekeeper answer",
@@ -460,6 +493,7 @@ async fn a_returned_result_is_admitted_into_a_paired_client_session() {
         ExecutionOrigin::Scheduled,
         "backend-test",
     );
+    lifecycle.bind_managed_agent(db.agent_identity.as_ref()).unwrap();
     assert_eq!(
         lifecycle.claim_with_identity().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed
@@ -1157,6 +1191,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         ExecutionOrigin::Scheduled,
         "backend-test",
     );
+    second_lifecycle.bind_managed_agent(&agent_signer).unwrap();
     assert_eq!(
         second_lifecycle.claim_with_identity().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed
@@ -1431,8 +1466,8 @@ async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
 #[tokio::test]
 async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() {
     let db = test_db("wake-hop-refusal").await;
-    db.user_access
-        .write(
+    crate::store::config_client::ConfigAccess::write_local(
+            &db.node,
             "test.max_request_hop",
             &format!(
                 r#"mutation {{ update_Node(filter: {{ node_did: {{ _eq: "{}" }} }}, input: {{ max_request_hop: 8 }}) {{ _docID }} }}"#,
