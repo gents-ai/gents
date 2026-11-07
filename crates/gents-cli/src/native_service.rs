@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 
 mod environment;
+mod systemd_status;
 pub(crate) mod update;
 pub use environment::read_environment_file;
 
@@ -792,8 +793,7 @@ where
                         active.stdout.as_str(),
                         "active" | "activating" | "deactivating" | "reloading"
                     ),
-                    enabled: enabled.success
-                        && matches!(enabled.stdout.as_str(), "enabled" | "enabled-runtime"),
+                    enabled: systemd_status::is_enabled(enabled.success, &enabled.stdout),
                     requires_approval: false,
                     background_item: BackgroundItemStatus::Unavailable,
                     failed: active.stdout == "failed",
