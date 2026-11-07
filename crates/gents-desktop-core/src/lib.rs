@@ -8,6 +8,7 @@ pub mod local_runtime;
 pub mod pack_watch;
 pub mod preference;
 pub mod remote_admin;
+pub mod tool_service;
 pub mod workspace_root;
 
 #[cfg(any(test, feature = "test-fixtures"))]
