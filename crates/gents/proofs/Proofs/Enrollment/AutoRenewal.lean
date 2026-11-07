@@ -9,6 +9,16 @@ theorem unanswered_retry_is_bounded (remaining attempts : Nat) :
     unansweredRetrySeconds remaining attempts ≤ 86400 := by
   simp [unansweredRetrySeconds]
 
+def mayPruneRenewal (owned verified : Bool) (expires now : Nat) : Bool :=
+  owned && verified && decide (expires ≤ now)
+
+theorem foreign_renewal_is_retained (verified : Bool) (expires now : Nat) :
+    mayPruneRenewal false verified expires now = false := by rfl
+
+theorem live_renewal_is_retained (owned verified : Bool) (expires now : Nat)
+    (h : now < expires) : mayPruneRenewal owned verified expires now = false := by
+  simp [mayPruneRenewal, Nat.not_le.mpr h]
+
 structure Generation where
   network : String
   member : String
@@ -63,6 +73,12 @@ def mayOffer (current : Generation) (intent : Intent) (now window maxValidity : 
     intent.network == current.network && intent.member == current.member &&
     intent.peer == current.peer && intent.predecessorSequence == current.sequence
 
+/-- The current-generation projection receives an already verified generation;
+policy, signature and transport are checked by the offer owner. -/
+def offerProjection (current : Generation) (intent : Intent) (now window maxValidity : Nat) : Bool :=
+  mayOffer { current with enabled := true, verified := true }
+    { intent with memberSigned := true, transportAuthenticated := true } now window maxValidity
+
 theorem unauthenticated_cannot_request_offer (current : Generation) (intent : Intent)
     (now window maxValidity : Nat) (h : intent.transportAuthenticated = false) :
     mayOffer current intent now window maxValidity = false := by
@@ -85,12 +101,19 @@ def allowed (current : Generation) (proposal : Proposal) (now window protocolMax
     decide (current.nextSequence = current.sequence + 1) && decide (now < current.expiresAt) &&
     decide (current.expiresAt ≤ now + window) && proposal.memberSigned && proposal.offerFresh &&
     decide (proposal.leaseSeconds > 0 ∧
-      proposal.leaseSeconds ≤ current.renewalLeaseLimit.getD current.leaseSeconds ∧
+      proposal.leaseSeconds = current.renewalLeaseLimit.getD current.leaseSeconds ∧
       proposal.leaseSeconds ≤ protocolMax) &&
     proposal.predecessorSequence == current.sequence &&
     proposal.network == current.network && proposal.member == current.member &&
     proposal.peer == current.peer && proposal.owner == current.owner &&
     proposal.profile == current.profile
+
+/-- The renewal projection selects the lease itself; its caller supplies a
+verified pending request and a verified current generation. -/
+def approvalProjection (current : Generation) (proposal : Proposal) (now window protocolMax : Nat) : Bool :=
+  allowed { current with verified := true }
+    { proposal with memberSigned := true, offerFresh := true, leaseSeconds := current.renewalLeaseLimit.getD current.leaseSeconds }
+    now window protocolMax
 
 theorem revoked_cannot_auto_renew (current : Generation) (proposal : Proposal)
     (now window protocolMax : Nat) (h : current.revoked = true) :
@@ -126,7 +149,7 @@ theorem excessive_lease_cannot_auto_renew (current : Generation) (proposal : Pro
     (now window protocolMax : Nat)
     (h : current.renewalLeaseLimit.getD current.leaseSeconds < proposal.leaseSeconds) :
     allowed current proposal now window protocolMax = false := by
-  simp [allowed, Nat.not_le.mpr h]
+  simp [allowed, Nat.ne_of_gt h]
 
 theorem changed_member_cannot_auto_renew (current : Generation) (proposal : Proposal)
     (now window protocolMax : Nat) (h : proposal.member ≠ current.member) :
@@ -206,6 +229,7 @@ def boundaryInputCases : List BoundaryCase :=
   , ⟨"changed_network", exampleGeneration, { exampleProposal with network := "other" }, 95, 10, 90⟩
   , ⟨"changed_owner", exampleGeneration, { exampleProposal with owner := "other" }, 95, 10, 90⟩
   , ⟨"zero_lease", exampleGeneration, { exampleProposal with leaseSeconds := 0 }, 95, 10, 90⟩
+  , ⟨"shorter_than_selected", exampleGeneration, { exampleProposal with leaseSeconds := 29 }, 95, 10, 90⟩
   , ⟨"extended_without_limit", exampleGeneration, { exampleProposal with leaseSeconds := 31 }, 95, 10, 90⟩
   , ⟨"configured_limit", { exampleGeneration with renewalLeaseLimit := some 60 },
       { exampleProposal with leaseSeconds := 60 }, 95, 10, 90⟩
@@ -218,7 +242,7 @@ def boundaryCases : List (String × Bool) :=
 theorem boundary_cases_preserve_renewal_limits :
     boundaryCases.map Prod.snd =
       [true, false, false, false, false, false, false, false, false, false, false, false,
-       false, false, false, false, false, false, true, false] := by
+       false, false, false, false, false, false, false, true, false] := by
   rfl
 
 end Enrollment.AutoRenewal

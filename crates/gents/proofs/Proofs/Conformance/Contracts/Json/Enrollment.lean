@@ -25,7 +25,8 @@ def renewalIntentCasesJson : String :=
       ",\"transport_authenticated\":" ++ boolJson i.transportAuthenticated ++ "}" ++
       ",\"now\":" ++ toString now ++ ",\"window\":" ++ toString window ++
       ",\"max_validity\":" ++ toString valid ++ ",\"allowed\":" ++
-      boolJson (Enrollment.AutoRenewal.mayOffer g i now window valid) ++ "}")
+      boolJson (Enrollment.AutoRenewal.mayOffer g i now window valid) ++
+      ",\"projection_allowed\":" ++ boolJson (Enrollment.AutoRenewal.offerProjection g i now window valid) ++ "}")
 
 def autoRenewalCasesJson : String :=
   jsonArray (Enrollment.AutoRenewal.boundaryInputCases.map fun c =>
@@ -48,7 +49,8 @@ def autoRenewalCasesJson : String :=
       ",\"predecessor_sequence\":" ++ toString p.predecessorSequence ++ "}" ++
       ",\"now\":" ++ toString c.now ++ ",\"window\":" ++ toString c.window ++
       ",\"protocol_max\":" ++ toString c.protocolMax ++ ",\"allowed\":" ++
-      boolJson (Enrollment.AutoRenewal.allowed g p c.now c.window c.protocolMax) ++ "}")
+      boolJson (Enrollment.AutoRenewal.allowed g p c.now c.window c.protocolMax) ++
+      ",\"projection_allowed\":" ++ boolJson (Enrollment.AutoRenewal.approvalProjection g p c.now c.window c.protocolMax) ++ "}")
 
 def enrollmentTraceStepJson (step : EnrollmentTraceStep) : String :=
   "{"

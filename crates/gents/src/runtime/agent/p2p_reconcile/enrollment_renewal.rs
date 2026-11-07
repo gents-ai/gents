@@ -199,13 +199,6 @@ mod tests {
         for case in cases {
             let current = &case["current"];
             let input = &case["intent"];
-            if !current["enabled"].as_bool().unwrap()
-                || !current["verified"].as_bool().unwrap()
-                || !input["member_signed"].as_bool().unwrap()
-                || !input["transport_authenticated"].as_bool().unwrap()
-            {
-                continue;
-            }
             let text = |v: &Value, key: &str| v[key].as_str().unwrap().to_owned();
             let number = |v: &Value, key: &str| v[key].as_i64().unwrap();
             let model_now = number(case, "now");
@@ -249,13 +242,13 @@ mod tests {
             };
             assert_eq!(
                 state.current_for_renewal_intent(&intent, now).is_ok(),
-                case["allowed"].as_bool().unwrap(),
+                case["projection_allowed"].as_bool().unwrap(),
                 "{}",
                 text(case, "name")
             );
             checked += 1;
         }
-        assert!(checked >= 10);
+        assert_eq!(checked, cases.len());
     }
 
     #[test]
@@ -277,13 +270,6 @@ mod tests {
             let text = |v: &Value, key: &str| v[key].as_str().unwrap().to_owned();
             let limit = current["renewal_limit"].as_u64();
             let selected = limit.unwrap_or(number(current, "lease_seconds") as u64);
-            if !current["verified"].as_bool().unwrap()
-                || !proposed["member_signed"].as_bool().unwrap()
-                || !proposed["offer_fresh"].as_bool().unwrap()
-                || number(proposed, "lease_seconds") as u64 != selected
-            {
-                continue;
-            }
             let model_now = number(case, "now");
             let now_seconds = model_now * 30;
             let now = Utc
@@ -345,7 +331,7 @@ mod tests {
             );
             assert_eq!(
                 actual.is_ok(),
-                case["allowed"].as_bool().unwrap(),
+                case["projection_allowed"].as_bool().unwrap(),
                 "{}",
                 text(case, "name")
             );
@@ -354,7 +340,7 @@ mod tests {
             }
             checked += 1;
         }
-        assert!(checked >= 14);
+        assert_eq!(checked, cases.len());
     }
 
     #[test]

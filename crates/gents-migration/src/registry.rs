@@ -566,7 +566,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::ENROLLMENT_RENEWAL_OFFER_NAME,
         gents_protocol::schemas::ENROLLMENT_RENEWAL_OFFER,
-        "bafyreidatwit33tzjpf7nppfoueh23n3mslccditz7cztvrznypk525ck4"
+        "bafyreictu4v2pzpyt3tzhvqemulmgz2rws5ol4xrlreajdt4l7xi6hndem"
     ),
     baseline_entry!(
         gents_protocol::schemas::SESSION_HYDRATION_REQUEST_NAME,

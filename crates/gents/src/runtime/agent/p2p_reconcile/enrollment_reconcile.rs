@@ -400,6 +400,7 @@ pub async fn run_enrollment_reconciler(
     let mut delivered = BTreeSet::new();
     let mut renewal_notices = super::enrollment_renewal::RenewalNotices::default();
     let mut renewal_intent_cursor = None;
+    let mut expired_offer_cursor = None;
     let mut member_renewal = super::enrollment_member_renewal::MemberRenewalState::default();
     let renewal_offer_id = super::resolve_embedded_collection_id(&node, "EnrollmentRenewalOffer")?
         .context("renewal offer collection is unavailable")?;
@@ -420,6 +421,7 @@ pub async fn run_enrollment_reconciler(
                 &mut renewal_notices,
                 &mut renewal_intent_cursor,
                 &mut member_renewal,
+                &mut expired_offer_cursor,
             ),
         );
         if !serve_authority_during_sweep(sweep, &store, &owner.sender, &mut owner.commands, &cancel)
@@ -653,9 +655,19 @@ async fn sweep_enrollment(
         &mut super::enrollment_renewal::RenewalNotices,
         &mut Option<String>,
         &mut super::enrollment_member_renewal::MemberRenewalState,
+        &mut Option<String>,
     ),
 ) {
-    let (renewal_notices, renewal_intent_cursor, member_renewal) = renewal;
+    let (renewal_notices, renewal_intent_cursor, member_renewal, expired_offer_cursor) = renewal;
+    if let Err(error) = super::enrollment_exchange::prune_expired_offers(
+        node,
+        identity.as_ref(),
+        expired_offer_cursor,
+    )
+    .await
+    {
+        tracing::warn!(%error, "failed to prune expired renewal offers");
+    }
     let projection = match store.load_projection().await {
         Ok(projection) => projection,
         Err(error) => {
