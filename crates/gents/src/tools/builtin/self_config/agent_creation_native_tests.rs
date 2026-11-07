@@ -1822,12 +1822,27 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             .len(),
         1
     );
+    let creator_did = identity::Did::new(signer.did())?;
+    // The creator holds `add-dac-relation` and `update-document` through its
+    // projected baseline as well as any direct grant, so revoking the direct
+    // edges leaves creation admitted (`GrantSets.agentEffective`).
+    for permission in [
+        NodePermission::DacRelationAdd,
+        NodePermission::DocumentUpdate,
+    ] {
+        admin
+            .revoke_node_permission(&creator_did, permission)
+            .await?;
+    }
+    agent_management::model_agent_mutate(&core, signer.as_ref(), &create).await?;
+    // Publishing an Agent projects its baseline, which needs the policy
+    // delegate's `add-nac-relation`; without it the create rolls back whole
+    // (`GrantSets.baseline_agent_cannot_publish_agent`).
     let before = creator_access
         .execute("{ Agent { _docID } AgentContext { _docID } }")
         .await?;
-    let creator_did = identity::Did::new(signer.did())?;
     admin
-        .revoke_node_permission(&creator_did, NodePermission::DacRelationAdd)
+        .revoke_node_permission(&creator_did, NodePermission::NacRelationAdd)
         .await?;
     assert!(
         agent_management::model_agent_mutate(&core, signer.as_ref(), &create)
@@ -1849,23 +1864,9 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         assert_eq!(
             ids(&before),
             ids(&after),
-            "denied relationship must roll back {collection} creation"
+            "a refused baseline must roll back {collection} creation"
         );
     }
-    admin
-        .grant_node_permission(&creator_did, NodePermission::DacRelationAdd)
-        .await?;
-    admin
-        .revoke_node_permission(
-            &identity::Did::new(signer.did())?,
-            NodePermission::DocumentUpdate,
-        )
-        .await?;
-    assert!(
-        agent_management::model_agent_mutate(&core, signer.as_ref(), &create)
-            .await
-            .is_err()
-    );
     node.shutdown().await?;
     Ok(())
 }
