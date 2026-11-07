@@ -564,7 +564,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
     let settled_in = tokio::time::timeout(Duration::from_secs(20), async {
         tokio::select! {
             _ = reached.notified() => {},
-            _ = &mut process => panic!("daemon exited before restoring its provider checkpoint"),
+            exited = &mut process => panic!("daemon exited before restoring its provider checkpoint: {exited:?}"),
         }
         let row = request_terminal_row(&agent_access, &request_doc_id)
             .await
