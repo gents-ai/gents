@@ -112,6 +112,7 @@ def byteListJson (bytes : List UInt8) : String := jsonArray (bytes.map (toString
 
 def payloadKindJson : CanonicalOutput.PayloadKind → String
   | .text => "text" | .reasoning => "reasoning" | .signature => "signature"
+  | .reasoningStop => "reasoning_stop"
   | .summary => "summary" | .encrypted => "encrypted" | .redacted => "redacted"
   | .arguments => "arguments" | .toolOutput => "tool_output" | .media => "media"
 

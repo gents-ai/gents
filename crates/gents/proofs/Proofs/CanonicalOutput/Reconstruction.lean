@@ -542,6 +542,26 @@ def recoveryText (streams : List (Nat × Declaration)) :
       entry.2.kind == .text && entry.2.part == 0)))
   else .error .malformedRuns
 
+def recoveryPayloads (streams : Streams) : Except ExtentError (List (Nat × Declaration)) :=
+  let indexed := streams.zipIdx |>.map fun (entry, index) => (index, entry.1)
+  if recoveryDeclarationsValid indexed then
+    .ok (sortRecoveryByPosition (indexed.filter fun entry =>
+      entry.2.part == 0 &&
+        (entry.2.kind == .text ||
+          ((entry.2.kind == .reasoning || entry.2.kind == .redacted) &&
+            reasoningStopped streams entry.2.block))))
+  else .error .malformedRuns
+
+theorem recovery_selects_only_stopped_reasoning :
+    recoveryPayloads [(reasoningExample, [65]), (signatureExample, [83]),
+      (stopExample, []), ({ reasoningExample with block := 1 }, [66])] =
+      .ok [(0, reasoningExample)] := by
+  native_decide
+
+theorem recovery_does_not_infer_stop_from_signature :
+    recoveryPayloads [(reasoningExample, [65]), (signatureExample, [83])] = .ok [] := by
+  native_decide
+
 theorem recovery_only_text (streams recovered : List (Nat × Declaration))
     (entry : Nat × Declaration) (hresult : recoveryText streams = .ok recovered)
     (h : entry ∈ recovered) :

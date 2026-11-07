@@ -345,9 +345,9 @@ theorem retained_stream_is_not_private {headers : List Header} {closing : Segmen
     {streams : Streams} {stream : Declaration × List UInt8}
     (h : stream ∈ retainedStreams headers closing streams) :
     stream.1.kind ≠ .encrypted ∧ stream.1.kind ≠ .redacted ∧
-      stream.1.kind ≠ .signature := by
+      stream.1.kind ≠ .signature ∧ stream.1.kind ≠ .reasoningStop := by
   simp [retainedStreams, visibleStreams] at h
-  exact ⟨h.2.1.1, h.2.1.2, h.2.2⟩
+  aesop
 
 theorem retained_stream_filter_characterization (headers : List Header)
     (closing : Segment) (streams : Streams) :
@@ -355,7 +355,8 @@ theorem retained_stream_filter_characterization (headers : List Header)
       ((streams.zipIdx.filter fun entry =>
         !streamReferenced headers closing entry.2).map (·.1)).filter
           (fun stream => stream.1.kind != .encrypted &&
-            stream.1.kind != .redacted && stream.1.kind != .signature) := rfl
+            stream.1.kind != .redacted && stream.1.kind != .signature &&
+            stream.1.kind != .reasoningStop) := rfl
 
 theorem segment_delivery_retains_old (observation : Observation)
     (record old : Segment) (hold : old ∈ observation.records) :
