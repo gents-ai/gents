@@ -72,6 +72,8 @@ struct InstallRequest {
     root_source: gents::pack::PackSource,
     dependency_sources: Vec<gents::pack::PackSource>,
     inference_slots: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dependency_variables: Vec<String>,
     overwrite: bool,
     keep: bool,
     preview: bool,
@@ -412,7 +414,7 @@ async fn install_owned(
     let args = PackInstallArgs {
         package: root.manifest().name.clone(),
         inference_slots: request.inference_slots,
-        dependency_variables: Vec::new(),
+        dependency_variables: request.dependency_variables,
         preview: request.preview,
         scope: ScopeArgs {
             home: Some(home.clone()),

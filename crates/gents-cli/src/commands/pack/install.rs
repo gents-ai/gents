@@ -15,6 +15,19 @@ struct LocalPackAccess {
     runtime: std::sync::Arc<dyn gents::NodeIdentity>,
 }
 
+pub(super) fn has_plugin_references(config: &serde_json::Value) -> bool {
+    config
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|tools| {
+            tools.iter().any(|tool| {
+                tool.pointer("/integrations/plugins")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|plugins| !plugins.is_empty())
+            })
+        })
+}
+
 pub(super) fn parse_dependency_variables(
     values: &[String],
 ) -> Result<gents::pack::DependencyVariableOverrides> {
@@ -214,21 +227,11 @@ async fn install_documents_pack_inner(
                 needs_runtime_store = true;
                 break;
             }
-            let config = gents::pack::load_pack_authoring_config(
-                source.manifest(),
-                &gents::pack::PackInstallOptions {
-                    node_did: owner.to_owned(),
-                },
-                &|path| Ok(source.asset(path)?.to_vec()),
-                &|name| std::env::var(name).ok(),
-            )?;
-            if config.documents.tools.iter().any(|tools| {
-                tools
-                    .integrations
-                    .as_ref()
-                    .and_then(|integrations| integrations.plugins.as_ref())
-                    .is_some_and(|plugins| !plugins.is_empty())
-            }) {
+            let Some(path) = source.manifest().config.as_deref() else {
+                continue;
+            };
+            let config: serde_json::Value = serde_json::from_slice(source.asset(path)?)?;
+            if has_plugin_references(&config) {
                 needs_runtime_store = true;
                 break;
             }
