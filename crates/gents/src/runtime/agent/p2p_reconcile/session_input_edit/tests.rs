@@ -31,12 +31,19 @@ impl Fixture {
         let dir = tempfile::tempdir().unwrap();
         let identity: Arc<dyn NodeIdentity> =
             Arc::new(KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap());
+        let key = crate::store::identity::load_file_identity(&dir.path().join("node.key"))
+            .unwrap()
+            .private_key_bytes();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+        // Edit authority is observed through native node permissions, which
+        // exist only on a node with node ACP and its signing key.
         let node = Arc::new(
             EmbeddedNode::builder()
                 .data_path(dir.path())
                 .with_node_identity_did(identity.did())
+                .with_signing_key(defra_node::SigningKey::Ed25519(key))
+                .with_node_acp_enabled()
                 .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
                 .build()
                 .await
@@ -58,6 +65,18 @@ impl Fixture {
             &access,
         )
         .await;
+        // Production projects the AgentBaseline from each live Agent document;
+        // this fixture has no projection pass, so the node admin grants it.
+        crate::store::identity::GrantSet::AgentBaseline
+            .grant(
+                &ConfigAccess::local_as(
+                    node.clone(),
+                    ::identity::Did::new(identity.did()).unwrap(),
+                ),
+                &::identity::Did::new(&binding.agent_did).unwrap(),
+            )
+            .await
+            .unwrap();
         let agent_identity =
             crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
         let agent_doc = access

@@ -222,28 +222,13 @@ impl FileInventorySnapshot {
                 .all(|value| !value.is_empty()),
             InventoryRejection("file inventory requires an exact source-local session reference")
         );
-        // Projection owner observation requires an actor. The test-only loader
-        // reads as the session's owning Agent, which owns its file inventory.
-        let agent_did = ConfigAccess::transact_local_readonly(
-            node,
-            None,
-            "file_inventory.snapshot_agent",
-            |txn| {
-                let (node_did, session_id) =
-                    (&admission.request.node_did, &admission.request.session_id);
-                Box::pin(async move {
-                    let session =
-                        crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
-                            .await?
-                            .context("file inventory session is unavailable")?;
-                    Ok::<_, anyhow::Error>(session.session.agent_did)
-                })
-            },
-        )
-        .await?;
+        // Projection owner observation requires an actor. The source-local
+        // loader reads as the runtime Node, which the session and each
+        // projection grant as their reader; projection ownership is then
+        // checked against the session's Agent, never assumed from the reader.
         ConfigAccess::transact_local_readonly(
             node,
-            Some(identity::Did::new(&agent_did)?),
+            Some(identity::Did::new(&admission.request.node_did)?),
             "file_inventory.snapshot",
             |txn| Box::pin(Self::load_in_txn(txn, admission, false)),
         )

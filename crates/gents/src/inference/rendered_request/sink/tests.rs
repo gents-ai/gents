@@ -722,21 +722,18 @@ async fn deleted_blocks_never_publish_dangling_references() {
         .await
         .unwrap();
     let id = escape_graphql_string(&leaves[0].doc_id);
-    // Blocks are Agent-written; the runtime owner (the node identity) performs
-    // the deletion. A block's delete resolves through its session's chain to the
-    // node administrator, and DocumentDelete alone (a node-level permission)
-    // does not reach it. The runtime takes the native admin relation, which
-    // carries DAC bypass, before deleting as itself.
+    // Blocks are written, and so natively owned, by the capturing Agent. The
+    // runtime grants it the node delete permission so its own access can
+    // remove one out from under the next capture.
     let runtime_did = fixture.db.node_identity.did().to_owned();
-    crate::ConfigAccess::local_as(node.clone(), identity::Did::new(runtime_did.clone()).unwrap())
-        .grant_node_admin(&identity::Did::new(runtime_did.clone()).unwrap())
+    crate::ConfigAccess::local_as(node.clone(), identity::Did::new(runtime_did).unwrap())
+        .grant_node_permission(
+            &identity::Did::new(fixture.agent.did()).unwrap(),
+            crate::store::config_client::NodePermission::DocumentDelete,
+        )
         .await
         .unwrap();
-    let runtime = crate::ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(runtime_did).unwrap(),
-    );
-    let deleted = runtime
+    let deleted = access
         .write(
             "test.delete_capture_block",
             &format!(r#"mutation {{ delete_RenderedRequestBlock(docID: "{id}") {{ _docID }} }}"#),
