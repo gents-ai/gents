@@ -505,42 +505,14 @@ impl ToolSurface {
                 .identity
                 .as_ref()
                 .context("self-configuration requires the runtime identity")?;
-            anyhow::ensure!(
-                runtime_identity.did() == runtime.node_did
-                    && runtime.node.node_identity_did() == Some(runtime.node_did.as_str()),
-                "self-configuration runtime identity does not match the Node"
-            );
-            let actor = identity::Did::new(runtime_identity.did())?;
-            let access = crate::store::config_client::ConfigAccess::local_as(
-                runtime.node.clone(),
-                actor.clone(),
-            );
-            let (doc_id, node_record) = access
-                .transact_readonly("self_config.node_binding", |txn| {
-                    Box::pin(async move {
-                        crate::store::config_client::read_desired_state_record_in_txn(
-                            txn,
-                            crate::Collection::Node,
-                            &runtime.node_did,
-                            &runtime.node_did,
-                        )
-                        .await
-                    })
-                })
-                .await?
-                .context("runtime cannot observe its Node for self-configuration")?;
-            Some(crate::store::config_client::ConfigurationNodeBinding {
-                node_did: actor,
-                doc_id,
-                enabled: node_record
-                    .get("enabled")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false),
-                default_agent_did: node_record
-                    .get("default_agent_did")
-                    .and_then(serde_json::Value::as_str)
-                    .map(ToOwned::to_owned),
-            })
+            Some(
+                crate::tools::builtin::self_config::runtime_node_binding(
+                    &runtime.node,
+                    &runtime.node_did,
+                    runtime_identity.as_ref(),
+                )
+                .await?,
+            )
         } else {
             None
         };
