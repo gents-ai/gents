@@ -1304,7 +1304,6 @@ fn demo_identity(dependencies: Vec<String>) -> PackIdentity {
         plugins: vec![],
         dependencies,
         explicit: true,
-        snapshot: None,
     }
 }
 
@@ -2539,6 +2538,7 @@ async fn installing_a_dependent_preserves_the_installed_dependency_environment()
     let config_path = dep_dir.join("pack_config.json");
     let mut config: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
     config["agents"][0]["description"] = json!("${DEPENDEE_LABEL:-unset}");
+    config["agents"][0]["display_name"] = json!("${DEPENDEE_NAME:-old name}");
     std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
     let (bytes, _) = crate::pack::archive::pack_dir(&dep_dir).unwrap();
     let dependee = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
@@ -2659,7 +2659,7 @@ async fn installing_a_dependent_preserves_the_installed_dependency_environment()
     .await
     .unwrap();
     let rows = access
-        .execute(r#"{ Agent(filter: {agent_id: {_eq: "fixture-dependee"}}) { description } }"#)
+        .execute(r#"{ Agent(filter: {agent_id: {_eq: "fixture-dependee"}}) { description display_name } }"#)
         .await
         .unwrap();
     assert_eq!(rows["data"]["Agent"][0]["description"], "original");
@@ -2701,10 +2701,11 @@ async fn installing_a_dependent_preserves_the_installed_dependency_environment()
     .await
     .unwrap();
     let rows = access
-        .execute(r#"{ Agent(filter: {agent_id: {_eq: "fixture-dependee"}}) { description } }"#)
+        .execute(r#"{ Agent(filter: {agent_id: {_eq: "fixture-dependee"}}) { description display_name } }"#)
         .await
         .unwrap();
     assert_eq!(rows["data"]["Agent"][0]["description"], "explicit");
+    assert_eq!(rows["data"]["Agent"][0]["display_name"], "old name");
     node.shutdown().await;
 }
 
@@ -3876,6 +3877,8 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
         dependencies,
         explicit: true,
         source: None,
+        snapshot: None,
+        reconfigure: false,
     };
     let initial = vec![
         stage(&dependency, "1", empty.clone(), Some(old_bytes), vec![]),
