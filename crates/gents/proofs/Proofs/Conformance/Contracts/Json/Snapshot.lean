@@ -744,6 +744,7 @@ def snapshotJson : String :=
       ++ ",\"agentTargetHostRules\":" ++ scopeRulesJson ScopeTemplates.agentTargetHostRules ++ "},"
     ++ "\"scope_node_route_cases\":" ++ nodeRouteCasesJson ++ ","
     ++ "\"app_pairing_filter_cases\":" ++ Conformance.AppPairingFilters.casesJson ++ ","
+    ++ "\"app_pairing_filter_route_cases\":" ++ Conformance.AppPairingFilters.routeCasesJson ++ ","
     ++ "\"causal_hop_contract\":"
       ++ Conformance.CausalHopContracts.contractJson ++ ","
     ++ "\"operator_base_freeze_cases\":"

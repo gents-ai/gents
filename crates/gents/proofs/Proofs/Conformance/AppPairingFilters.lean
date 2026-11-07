@@ -37,4 +37,24 @@ private def caseJson (value : String × List String × List FieldFilter) : Strin
 
 def casesJson : String := jsonArray (cases.map caseJson)
 
+private def routeCases : List (String × PairingMode × Option (List FieldFilter)) :=
+  [ ("unfiltered", .unfiltered, none)
+  , ("missing", .filtered, none)
+  , ("empty", .filtered, some [])
+  , ("valid", .filtered, some [{ collection := "Post", field := "to_host", value := "node" }])
+  , ("mutable", .filtered, some [{ collection := "Post", field := "message", value := "node" }])
+  , ("unexpected", .unfiltered, some [{ collection := "Post", field := "to_host", value := "node" }]) ]
+
+private def routeCaseJson (value : String × PairingMode × Option (List FieldFilter)) : String :=
+  let (label, mode, filters) := value
+  "{\"label\":" ++ jsonString label ++ ",\"mode\":" ++
+    jsonString (if mode == .filtered then "filtered" else "unfiltered") ++
+    ",\"filters\":" ++ (match filters with
+      | none => "null"
+      | some values => jsonArray (values.map filterJson)) ++
+    ",\"accepted\":" ++
+    (if (resolve mode ["Post"] authority filters).isSome then "true" else "false") ++ "}"
+
+def routeCasesJson : String := jsonArray (routeCases.map routeCaseJson)
+
 end Conformance.AppPairingFilters

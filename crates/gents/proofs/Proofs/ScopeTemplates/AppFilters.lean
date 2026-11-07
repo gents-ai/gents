@@ -27,6 +27,31 @@ def validate (collections : List String) (schema : List FieldAuthority)
   if filters.all (permitted collections schema) && names.eraseDups.length == names.length
   then some filters else none
 
+inductive PairingMode where
+  | unfiltered
+  | filtered
+  deriving DecidableEq, Repr
+
+/-- A filtered pairing must not fall back to an unfiltered route when its
+    filter document is absent, invalid, or empty. -/
+def resolve (mode : PairingMode) (collections : List String)
+    (schema : List FieldAuthority) (filters : Option (List FieldFilter)) :
+    Option (List FieldFilter) :=
+  match mode, filters with
+  | .unfiltered, none => some []
+  | .filtered, some (head :: tail) => validate collections schema (head :: tail)
+  | _, _ => none
+
+theorem filtered_missing_refused (collections : List String) (schema : List FieldAuthority) :
+    resolve .filtered collections schema none = none := rfl
+
+theorem filtered_empty_refused (collections : List String) (schema : List FieldAuthority) :
+    resolve .filtered collections schema (some []) = none := rfl
+
+theorem unfiltered_with_filters_refused (collections : List String) (schema : List FieldAuthority)
+    (filters : List FieldFilter) :
+    resolve .unfiltered collections schema (some filters) = none := rfl
+
 theorem valid_filter_has_collection (collections : List String) (schema : List FieldAuthority)
     (filter : FieldFilter) (h : permitted collections schema filter = true) :
     collections.contains filter.collection = true := by
