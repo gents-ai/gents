@@ -90,6 +90,13 @@ where
         message: &Message,
     ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send;
 
+    fn flush_reasoning_stop(
+        &self,
+        lifecycle: &L,
+        message: &Message,
+        block_index: u32,
+    ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send;
+
     fn close_provider_attempt(
         &self,
         lifecycle: &L,

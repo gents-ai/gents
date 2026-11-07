@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use chrono::DateTime;
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::{
-    MessageBlock, OutputOutcome, OutputSegment, OutputSource, OutputWriter, PayloadPresentation,
-    PayloadRef, PresentedPayload, ReconstructionError, SourceClose, StreamPayload,
+    MessageBlock, OutputOutcome, OutputSegment, OutputSource, OutputWriter, ReconstructionError,
+    SourceClose,
 };
 use gents_protocol::row::AgentRequestRow;
 
@@ -43,27 +43,12 @@ pub(crate) fn retained_partial_blocks(
     if source.is_auxiliary_audit() {
         return Ok(Vec::new());
     }
-    let mut retained = Vec::new();
-    for (stream, reconstructed) in extent.streams.iter().enumerate() {
-        if matches!(reconstructed.declaration.payload, StreamPayload::Text)
-            && reconstructed.declaration.part_index == 0
-        {
-            retained.push((
-                reconstructed.declaration.block_index,
-                MessageBlock::Text {
-                    text: PresentedPayload {
-                        output: PayloadRef {
-                            close_doc_id: closing.doc_id.clone(),
-                            stream: u32::try_from(stream)?,
-                        },
-                        presentation: PayloadPresentation::Full,
-                    },
-                },
-            ));
-        }
-    }
-    retained.sort_by_key(|(block, _)| *block);
-    Ok(retained.into_iter().map(|(_, block)| block).collect())
+    Ok(
+        gents_protocol::output::recovery::retained_blocks_from_validated_extent(
+            &extent,
+            &closing.doc_id,
+        )?,
+    )
 }
 
 fn invalid_source(detail: impl Into<String>) -> ReconstructionError {

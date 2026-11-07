@@ -187,16 +187,32 @@ pub fn plan_recovery_prefix(
         super::extent::inspect_open_source(records, request_doc_id, source, expected_writer)
             .map_err(|_| RecoveryPlanError::MalformedExtent)?;
     let stream_bytes = extent.stream_bytes;
-    let stopped: BTreeSet<_> = extent
-        .streams
+    let (retained_streams, retained_blocks) =
+        select_recovery_blocks(&extent.streams, !source.is_auxiliary_audit());
+
+    Ok(RecoveryPrefixPlan {
+        close: SourceClose::Closed {
+            outcome: OutputOutcome::Partial,
+            segments: count,
+            stream_bytes,
+        },
+        retained_streams,
+        retained_blocks,
+    })
+}
+
+fn select_recovery_blocks(
+    streams: &[super::reconstruction::ReconstructedStream],
+    include: bool,
+) -> (Vec<u32>, Vec<RetainedBlock>) {
+    let stopped: BTreeSet<_> = streams
         .iter()
         .filter_map(|stream| {
             matches!(stream.declaration.payload, StreamPayload::ReasoningStop)
                 .then_some(stream.declaration.block_index)
         })
         .collect();
-    let mut text = extent
-        .streams
+    let mut text = streams
         .iter()
         .enumerate()
         .filter(|(_, stream)| {
@@ -211,14 +227,13 @@ pub fn plan_recovery_prefix(
         .map(|(index, stream)| (&stream.declaration, index as u32))
         .collect::<Vec<_>>();
     text.sort_by_key(|(declaration, _)| (declaration.block_index, declaration.part_index));
-    let retained_streams = if source.is_auxiliary_audit() {
+    let retained_streams = if !include {
         Vec::new()
     } else {
         text.into_iter().map(|(_, stream)| stream).collect()
     };
 
-    let signatures: BTreeMap<_, _> = extent
-        .streams
+    let signatures: BTreeMap<_, _> = streams
         .iter()
         .filter_map(|item| {
             matches!(item.declaration.payload, StreamPayload::ReasoningSignature).then_some((
@@ -230,7 +245,7 @@ pub fn plan_recovery_prefix(
     let retained_blocks = retained_streams
         .iter()
         .map(|&stream| {
-            let item = &extent.streams[stream as usize];
+            let item = &streams[stream as usize];
             match item.declaration.payload {
                 StreamPayload::Text => RetainedBlock::Text(stream),
                 StreamPayload::Reasoning => RetainedBlock::Reasoning {
@@ -245,15 +260,25 @@ pub fn plan_recovery_prefix(
         })
         .collect();
 
-    Ok(RecoveryPrefixPlan {
+    (retained_streams, retained_blocks)
+}
+
+/// Project blocks only after the caller has validated the complete source extent.
+pub fn retained_blocks_from_validated_extent(
+    extent: &super::extent::OpenSourceExtent,
+    close_doc_id: &str,
+) -> Result<Vec<MessageBlock>, RecoveryPlanError> {
+    let (retained_streams, retained_blocks) = select_recovery_blocks(&extent.streams, true);
+    RecoveryPrefixPlan {
         close: SourceClose::Closed {
             outcome: OutputOutcome::Partial,
-            segments: count,
-            stream_bytes,
+            segments: extent.segments,
+            stream_bytes: extent.stream_bytes.clone(),
         },
         retained_streams,
         retained_blocks,
-    })
+    }
+    .retained_blocks(close_doc_id)
 }
 
 #[cfg(test)]
@@ -321,6 +346,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(plan.retained_streams, [0]);
+        let extent = super::super::extent::inspect_open_source(
+            &[ObservedSegment { doc_id: "segment", segment: &record }],
+            "request", &source(), &writer,
+        ).unwrap();
+        assert_eq!(retained_blocks_from_validated_extent(&extent, "close").unwrap(),
+            plan.retained_blocks("close").unwrap());
         assert_eq!(
             plan.retained_blocks("close").unwrap(),
             vec![MessageBlock::Reasoning {

@@ -281,7 +281,18 @@ pub(crate) fn persisted_native_message(message: &Message) -> std::borrow::Cow<'_
 }
 
 pub(crate) fn encode_native_message(message: &Message) -> Result<EncodedNativeMessage> {
+    encode_native_message_with_stops(message, &std::collections::BTreeSet::new())
+}
+
+pub(crate) fn encode_native_message_with_stops(
+    message: &Message,
+    stopped: &std::collections::BTreeSet<u32>,
+) -> Result<EncodedNativeMessage> {
     if let Message::User { content } = message {
+        anyhow::ensure!(
+            stopped.is_empty(),
+            "user message cannot carry reasoning stops"
+        );
         let mut streams = Vec::new();
         let mut plans = Vec::new();
         for (block, item) in content.iter().enumerate() {
@@ -418,6 +429,22 @@ pub(crate) fn encode_native_message(message: &Message) -> Result<EncodedNativeMe
                     id: reasoning.id.clone(),
                     parts,
                 });
+                if stopped.contains(&block) {
+                    anyhow::ensure!(
+                        matches!(
+                            reasoning.content.as_slice(),
+                            [ReasoningContent::Text { .. }] | [ReasoningContent::Redacted { .. }]
+                        ),
+                        "reasoning stop requires one native reasoning part"
+                    );
+                    push_stream(
+                        &mut streams,
+                        block,
+                        0,
+                        StreamPayload::ReasoningStop,
+                        String::new(),
+                    );
+                }
             }
             AssistantContent::ToolCall(call) => {
                 let arguments =
@@ -465,6 +492,14 @@ pub(crate) fn encode_native_message(message: &Message) -> Result<EncodedNativeMe
         }
     }
     anyhow::ensure!(!plans.is_empty(), "native assistant message has no blocks");
+    anyhow::ensure!(
+        stopped.len()
+            == streams
+                .iter()
+                .filter(|stream| matches!(stream.declaration.payload, StreamPayload::ReasoningStop))
+                .count(),
+        "reasoning stop does not name a native reasoning block"
+    );
     Ok(EncodedNativeMessage {
         role: MessageRole::Assistant,
         native_id: id.clone(),
@@ -484,6 +519,44 @@ mod tests {
         MessagePublication, OutputOutcome, OutputSegment, OutputSource, OutputWriter, SegmentRun,
         SourceClose, TranscriptMessage,
     };
+
+    #[test]
+    fn stopped_reasoning_keeps_later_tool_stream_references_aligned() {
+        let native = Message::Assistant {
+            request_id: None,
+            id: None,
+            content: vec![
+                AssistantContent::Reasoning(Reasoning {
+                    id: None,
+                    content: vec![ReasoningContent::Text {
+                        text: "thought".into(),
+                        signature: Some("signature".into()),
+                    }],
+                }),
+                AssistantContent::ToolCall(ToolCall::new(
+                    "call".into(),
+                    ToolFunction::new("read".into(), serde_json::json!({})),
+                )),
+            ],
+        };
+        let encoded =
+            encode_native_message_with_stops(&native, &std::collections::BTreeSet::from([0]))
+                .unwrap();
+        assert!(matches!(
+            encoded.streams[2].declaration.payload,
+            StreamPayload::ReasoningStop
+        ));
+        assert!(encoded.streams[2].payload.is_empty());
+        assert_eq!(encoded.tool_calls[0].arguments_stream, 3);
+        let blocks = encoded.build_blocks("close", &["tool".into()]).unwrap();
+        assert!(
+            matches!(&blocks[1], MessageBlock::ToolCall { arguments, .. } if arguments.stream == 3)
+        );
+        assert!(
+            encode_native_message_with_stops(&native, &std::collections::BTreeSet::from([1]))
+                .is_err()
+        );
+    }
 
     #[test]
     fn assistant_encoding_round_trips_exact_native_structure() {

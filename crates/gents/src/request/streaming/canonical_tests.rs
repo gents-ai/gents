@@ -1448,6 +1448,73 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
 }
 
 #[tokio::test]
+async fn partial_recovery_keeps_stopped_reasoning_but_not_the_following_open_block() {
+    use gents_protocol::message::{AssistantContent, Message, Reasoning, ReasoningContent};
+    let (node, path, lifecycle, writer) = fixture("partial-stopped-reasoning").await;
+    let request = lifecycle.request();
+    writer
+        .start_provider_attempt(&request.doc_id, 0, 0, "inference.1".parse().unwrap())
+        .await;
+    let first = AssistantContent::Reasoning(Reasoning {
+        id: None,
+        content: vec![ReasoningContent::Text {
+            text: "complete".into(),
+            signature: Some("sig".into()),
+        }],
+    });
+    let snapshot = |content| Message::Assistant {
+        request_id: None,
+        id: None,
+        content,
+    };
+    writer
+        .flush_owned_partial_with_stop(
+            request,
+            lifecycle.execution_generation().unwrap(),
+            &snapshot(vec![first.clone()]),
+            Some(0),
+        )
+        .await
+        .unwrap();
+    writer
+        .flush_native_partial(
+            &lifecycle,
+            &snapshot(vec![
+                first.clone(),
+                AssistantContent::Reasoning(Reasoning {
+                    id: None,
+                    content: vec![ReasoningContent::Text {
+                        text: "unfinished".into(),
+                        signature: None,
+                    }],
+                }),
+            ]),
+        )
+        .await
+        .unwrap();
+    writer
+        .close_provider_attempt(&lifecycle, 0, 0, canonical::ProviderAttemptClose::Partial)
+        .await
+        .unwrap();
+    let gents_protocol::output::TerminalOutput::Message { message_doc_id } =
+        writer.terminal_output(&request.doc_id).await
+    else {
+        panic!("recovery header missing")
+    };
+    let (_, recovered) = crate::session::load_canonical_message(
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &message_doc_id,
+        &request.node_did,
+        request.requester_did.as_deref(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(recovered, snapshot(vec![first]));
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(path);
+}
+
+#[tokio::test]
 async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
     let (node, path, lifecycle, writer) = fixture("tool-replay").await;
