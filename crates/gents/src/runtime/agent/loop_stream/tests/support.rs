@@ -801,7 +801,7 @@ async fn owned_test_hook_with_identity_policy(
     )
     .await
     .unwrap();
-    let (_, row) = write_signed_owned_request(&agent_access, &create).await;
+    let (request_doc_id, row) = write_signed_owned_request(&agent_access, &create).await;
     let mut folded_docs = rapidhash::RapidHashMap::default();
     if let Some(case) = folded_case {
         let mut predecessor = request_id.clone();
@@ -854,9 +854,14 @@ async fn owned_test_hook_with_identity_policy(
     )
     .await
     .unwrap();
-    hook.set_active_request_lineage(Some(request_id), requester_did.map(str::to_owned))
-        .await
-        .unwrap();
+    // The request is agent-owned, so the node identity cannot resolve its
+    // document id by logical id. Bind the id the Agent's write returned.
+    hook.set_active_request_binding(
+        Some(request_id),
+        Some(request_doc_id),
+        requester_did.map(str::to_owned),
+    )
+    .await;
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
         .await;
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
@@ -879,8 +884,13 @@ async fn owned_test_hook_with_identity_policy(
         lifecycle.claim().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed
     );
-    let writer =
-        crate::request::streaming::DefraStreamWriter::new(node.clone(), node_did, Duration::ZERO);
+    // The loop's writes to the agent-owned request run as the claimed Agent.
+    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+        node.clone(),
+        &lifecycle,
+        Duration::ZERO,
+    )
+    .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     (node, hook, writer, lifecycle, folded_docs)
 }
