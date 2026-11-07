@@ -656,8 +656,32 @@ pub(super) async fn owned_test_hook_with_policy(
     crate::request::lifecycle::RequestLifecycle,
 ) {
     let (node, hook, writer, lifecycle, _) =
-        owned_test_hook_with_identity_policy(None, policy, None).await;
+        owned_test_hook_with_identity_policy(None, policy, None, RequestSignature::Valid).await;
     (node, hook, writer, lifecycle)
+}
+
+/// Claims a request whose stored content no longer matches its signature, so
+/// the claimed caller's attribution cannot be verified.
+pub(super) async fn owned_test_hook_with_unattributable_request() -> (
+    Arc<defra_node::Node>,
+    DefraSessionHook,
+    crate::request::streaming::DefraStreamWriter,
+    crate::request::lifecycle::RequestLifecycle,
+) {
+    let (node, hook, writer, lifecycle, _) = owned_test_hook_with_identity_policy(
+        None,
+        FailurePolicy::default(),
+        None,
+        RequestSignature::AlteredAfterSigning,
+    )
+    .await;
+    (node, hook, writer, lifecycle)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RequestSignature {
+    Valid,
+    AlteredAfterSigning,
 }
 
 pub(super) async fn owned_test_hook_with_identity(
@@ -669,7 +693,13 @@ pub(super) async fn owned_test_hook_with_identity(
     crate::request::lifecycle::RequestLifecycle,
 ) {
     let (node, hook, writer, lifecycle, _) =
-        owned_test_hook_with_identity_policy(Some(identity), FailurePolicy::default(), None).await;
+        owned_test_hook_with_identity_policy(
+            Some(identity),
+            FailurePolicy::default(),
+            None,
+            RequestSignature::Valid,
+        )
+        .await;
     (node, hook, writer, lifecycle)
 }
 
@@ -690,12 +720,27 @@ pub(super) async fn owned_test_hook_with_folded_case(
         )
         .unwrap(),
     );
-    owned_test_hook_with_identity_policy(Some(identity), FailurePolicy::default(), Some(case)).await
+    owned_test_hook_with_identity_policy(
+        Some(identity),
+        FailurePolicy::default(),
+        Some(case),
+        RequestSignature::Valid,
+    )
+    .await
 }
 
 /// Writes one signed request through its managed Agent, the actor that owns the
 /// row, and returns its document id with the row read back through the same access.
 async fn write_signed_owned_request(
+    access: &crate::store::config_client::ConfigAccess,
+    create: &gents_protocol::request_admission::AgentRequestCreate,
+) -> (String, gents_protocol::row::AgentRequestRow) {
+    let (doc_id, row) = write_owned_request(access, create).await;
+    crate::request::admission::verify_request_receipt_signature(&row).unwrap();
+    (doc_id, row)
+}
+
+async fn write_owned_request(
     access: &crate::store::config_client::ConfigAccess,
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> (String, gents_protocol::row::AgentRequestRow) {
@@ -715,7 +760,6 @@ async fn write_signed_owned_request(
         .unwrap();
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(loaded["data"]["AgentRequest"][0].clone()).unwrap();
-    crate::request::admission::verify_request_receipt_signature(&row).unwrap();
     (doc_id, row)
 }
 
@@ -723,6 +767,7 @@ async fn owned_test_hook_with_identity_policy(
     identity: Option<Arc<dyn crate::NodeIdentity>>,
     policy: FailurePolicy,
     folded_case: Option<&crate::lean_vocab_test::LeanFoldTurnInputCase>,
+    signature: RequestSignature,
 ) -> (
     Arc<defra_node::Node>,
     DefraSessionHook,
@@ -771,7 +816,7 @@ async fn owned_test_hook_with_identity_policy(
     let session_id = uuid::Uuid::new_v4().to_string();
     let request_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let create = crate::request::lifecycle::build_signed_request(
+    let mut create = crate::request::lifecycle::build_signed_request(
         crate::request::lifecycle::RequestSpec::new(
             gents_protocol::request_admission::RequestPurpose::Normal,
             crate::request::lifecycle::RequestIdentity {
@@ -792,7 +837,15 @@ async fn owned_test_hook_with_identity_policy(
     )
     .await
     .unwrap();
-    let (request_doc_id, row) = write_signed_owned_request(&agent_access, &create).await;
+    let (request_doc_id, row) = match signature {
+        RequestSignature::Valid => write_signed_owned_request(&agent_access, &create).await,
+        RequestSignature::AlteredAfterSigning => {
+            create.content.push_str(" changed after signing");
+            let written = write_owned_request(&agent_access, &create).await;
+            assert!(crate::request::admission::verify_request_receipt_signature(&written.1).is_err());
+            written
+        }
+    };
     let mut folded_docs = rapidhash::RapidHashMap::default();
     if let Some(case) = folded_case {
         let mut predecessor = request_id.clone();
