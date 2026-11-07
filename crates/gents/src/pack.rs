@@ -46,8 +46,8 @@ pub use installation::{
 };
 pub use loader::{
     authored_document_schema, authored_pack_config_schema, decode_pack_config,
-    ensure_pack_leaves_default_unselected, load_pack_config, load_pack_config_with_variables,
-    pin_pack_plugins,
+    ensure_pack_leaves_default_unselected, load_dependency_config_with_variables, load_pack_config,
+    load_pack_config_with_variables, pin_pack_plugins,
 };
 pub use manifest_validation::{validate_manifest, validate_pack_manifest};
 pub use plugin::{

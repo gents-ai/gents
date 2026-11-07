@@ -1724,6 +1724,53 @@ fn captured_pack_variables_are_limited_to_referenced_values_and_resolved_once() 
     assert_eq!(calls.get(), 2);
 }
 
+#[test]
+fn dependency_loader_preserves_bindings_and_rejects_unknown_legacy_values() {
+    let (_guard, root) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+    let path = root.join("pack_config.json");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    config["agents"][0]["description"] = json!("${LABEL}/${ABSENT:-fallback}");
+    std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let (bytes, _) = crate::pack::archive::pack_dir(&root).unwrap();
+    let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
+    let options = crate::pack::PackInstallOptions {
+        node_did: OWNER.into(),
+    };
+    let prior = BTreeMap::from([
+        ("LABEL".into(), Some("original".into())),
+        ("ABSENT".into(), None),
+    ]);
+    let overrides = BTreeMap::from([("LABEL".into(), Some("override".into()))]);
+    let load = |prior: &BTreeMap<String, Option<String>>,
+                overrides: &BTreeMap<String, Option<String>>| {
+        crate::pack::load_dependency_config_with_variables(
+            archive.manifest(),
+            &options,
+            &|path| Ok(archive.asset(path)?.to_vec()),
+            true,
+            prior,
+            overrides,
+            &|_| panic!("an installed dependency must not read ambient values"),
+        )
+    };
+    let (preserved, bindings) = load(&prior, &BTreeMap::new()).unwrap();
+    assert_eq!(
+        preserved.agents[0].description.as_deref(),
+        Some("original/fallback")
+    );
+    assert_eq!(bindings, prior);
+    let (overridden, _) = load(&prior, &overrides).unwrap();
+    assert_eq!(
+        overridden.agents[0].description.as_deref(),
+        Some("override/fallback")
+    );
+    let error = load(&BTreeMap::new(), &BTreeMap::new())
+        .err()
+        .expect("unknown bindings must be rejected");
+    assert!(error.to_string().contains("ABSENT"));
+    assert!(error.to_string().contains("LABEL"));
+}
+
 /// `dependent_fixture` rewired to depend on `dependee_fixture`, and
 /// `dependee_fixture` with the plugin `echo` when `dependee_plugin`; both
 /// Packed as an install reads them; a broken dependent plugin rejects the graph.
