@@ -15,17 +15,22 @@ where
         },
     ])
     .unwrap();
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "test.write_config",
-        |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
-            })
-        },
+    // Configuration is owned by the runtime that installed the fixture Agent
+    // (see `test_support::install_test_agent_binding`); relationship writes
+    // need that authenticated owner.
+    let owner = node
+        .node_identity_did()
+        .expect("fixture node has a runtime identity");
+    crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(owner).unwrap(),
     )
+    .transact_write("test.write_config", |txn| {
+        let plan = &plan;
+        Box::pin(
+            async move { crate::store::config_client::apply_desired_state_plan(txn, plan).await },
+        )
+    })
     .await
     .unwrap();
 }
@@ -69,13 +74,32 @@ async fn enable_agents_tools(node: &Arc<EmbeddedNode>, did: &str, agent_did: &st
     .await;
 }
 
-async fn rows(node: &EmbeddedNode, query: &str, collection: &str) -> Vec<serde_json::Value> {
-    let response = node.execute(query).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    response.data.unwrap()[collection]
+async fn rows(
+    access: &crate::ConfigAccess,
+    query: &str,
+    collection: &str,
+) -> Vec<serde_json::Value> {
+    let response = access.execute(query).await.unwrap();
+    response["data"][collection]
         .as_array()
         .cloned()
         .unwrap_or_default()
+}
+
+/// Forces a request's lifecycle state as its owning Agent, staging the
+/// queue positions the steering cases need.
+async fn force_request_state(access: &crate::ConfigAccess, doc_id: &str, state: &str) {
+    access
+        .write(
+            "test.session_message.force_request_state",
+            &format!(
+                r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "{}" }}) {{ _docID }} }}"#,
+                crate::store::graphql::escape_graphql_string(doc_id),
+                crate::store::graphql::escape_graphql_string(state),
+            ),
+        )
+        .await
+        .unwrap();
 }
 
 async fn dispatch_with_lost_receipt(
@@ -103,9 +127,9 @@ async fn dispatch_with_lost_receipt(
     assert_eq!(receipt["ok"], true, "{operation}: {reason}");
     assert!(receipt.get("retryable").is_none(), "{operation}: {reason}");
 
-    let node = hook.node.as_ref();
+    let access = hook.actor_access().unwrap();
     let tool = rows(
-        node,
+        &access,
         &format!(
             r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{call_id}" }} }}) {{ _docID lifecycle_state }} }}"#
         ),
@@ -116,7 +140,7 @@ async fn dispatch_with_lost_receipt(
     assert_eq!(tool[0]["lifecycle_state"], "running", "{operation}");
     let tool_doc_id = tool[0]["_docID"].as_str().unwrap().to_owned();
     let caused = rows(
-        node,
+        &access,
         &format!(
             r#"{{ AgentRequest(filter: {{ caused_by_parent_tool_call_doc_id: {{ _eq: "{tool_doc_id}" }} }}) {{ _docID input }} }}"#
         ),
@@ -129,7 +153,7 @@ async fn dispatch_with_lost_receipt(
         "{operation}"
     );
     let segments = rows(
-        node,
+        &access,
         "{ AgentOutputSegment { source close } }",
         "AgentOutputSegment",
     )
@@ -268,8 +292,8 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
         "session_message.commit_request",
     )
     .await;
-    let caused_row = crate::request::binding::load_agent_request_by_doc_id(
-        &node,
+    let caused_row = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &hook.actor_access().unwrap(),
         caused["_docID"].as_str().unwrap(),
     )
     .await
@@ -295,8 +319,9 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
             expected
         );
     }
+    let access = hook.actor_access().unwrap();
     let notifications = rows(
-        node.as_ref(),
+        &access,
         &format!(
             r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
             crate::tools::background::completion::background_completion_notification_message_key(
@@ -317,13 +342,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
         "session_message.commit_goal",
     )
     .await;
-    let response = node
-        .execute(&format!(
-            r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "processing" }}) {{ _docID }} }}"#,
-            caused_row.doc_id
-        ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    force_request_state(&access, &caused_row.doc_id, "processing").await;
     let (_, steering) = dispatch_with_lost_receipt(
         &hook,
         "steer-call",
@@ -357,20 +376,16 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
         "session_message.commit_request",
     ).await;
     assert_eq!(second["input"]["queue"]["delivery"], "steer");
-    let ordered = crate::store::config_client::ConfigAccess::transact_local_readonly(
-        &node,
-        None,
-        "test.steer_order",
-        |txn| {
+    let ordered = access
+        .transact_readonly("test.steer_order", |txn| {
             let did = &did;
             let session_id = &caused_row.session_id;
             Box::pin(async move {
                 crate::request::lifecycle::queue::pending_in_txn(txn, did, session_id).await
             })
-        },
-    )
-    .await
-    .unwrap();
+        })
+        .await
+        .unwrap();
     let ids = ordered
         .iter()
         .filter_map(|row| row.doc_id.as_deref())
@@ -384,41 +399,34 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
                 .position(|id| *id == second["_docID"].as_str().unwrap())
                 .unwrap()
     );
-    let response = node.execute(&format!(
-        r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#,
-        caused_row.doc_id,
-    )).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    force_request_state(&access, &caused_row.doc_id, "completed").await;
     let mut incompatible = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "incompatible-head",
         &did,
-        &did,
-        "general",
+        agent_signer.did(),
+        agent_signer.did(),
         &caused_row.session_id,
         "work in another directory",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+            agent_signer.did(),
+        ),
     );
     incompatible.input.cwd = Some("/different-cwd".to_owned());
-    crate::sign_agent_request_create(&identity, &mut incompatible)
+    crate::sign_agent_request_create(&agent_signer, &mut incompatible)
         .await
         .unwrap();
-    let created = node
-        .execute(&incompatible.graphql_mutation().unwrap())
-        .await;
-    assert!(!created.has_errors(), "{:?}", created.errors);
-    let incompatible_doc = crate::store::graphql::created_doc_id(
-        &serde_json::json!({"data": created.data.unwrap()}),
-        "AgentRequest",
-    )
-    .unwrap();
-    let response = node.execute(&format!(
-        r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "processing" }}) {{ _docID }} }}"#,
-        incompatible_doc,
-    )).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    let created = access
+        .write(
+            "test.session_message.incompatible_head",
+            &incompatible.graphql_mutation().unwrap(),
+        )
+        .await
+        .unwrap();
+    let incompatible_doc = crate::store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
+    force_request_state(&access, &incompatible_doc, "processing").await;
     let args =
         json!({ "session_id": caused_row.session_id, "message": "bad scope", "delivery": "steer" })
             .to_string();
@@ -456,7 +464,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
         "{reason}"
     );
     let previous = rows(
-        node.as_ref(),
+        &access,
         &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
             steering["_docID"].as_str().unwrap()

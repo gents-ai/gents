@@ -2,24 +2,25 @@ use std::sync::Arc;
 
 use crate::request::admission::AgentRequestAdmissionVerifier;
 use crate::request::lifecycle::{
-    build_signed_client_request, submit_client_request, ClaimOutcome, ExecutionOrigin,
-    RequestIdentity, RequestLifecycle, RequestSigner, RequestSpec, SessionMessageCause,
+    submit_client_request, ClaimOutcome, ExecutionOrigin, RequestLifecycle, SessionMessageCause,
     SessionMessageTarget,
 };
 use crate::request::watcher::AgentRequest;
 use crate::session::message::{AgentMessageDelivery, Plan, RenderedBody};
 use crate::store::config_client::{
-    ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
+    ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use crate::store::identity::{KeyIdentity, NodeIdentity};
+use crate::store::identity::NodeIdentity;
 use crate::tools::call::lifecycle::{AwaitMode, FailureClass, ToolCallLifecycle};
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
 use serde_json::json;
 
 struct Fixture {
-    _home: tempfile::TempDir,
+    _db: crate::support::TestDb,
     node: Arc<defra_node::Node>,
     access: ConfigAccess,
+    config: ConfigAccess,
+    parent_binding: gents_protocol::agent_identity::AgentIdentityBinding,
     runtime: Arc<dyn NodeIdentity>,
     parent: Arc<dyn NodeIdentity>,
     child: Arc<dyn NodeIdentity>,
@@ -30,31 +31,14 @@ struct Fixture {
 }
 
 async fn fixture(name: &str) -> Fixture {
-    let home = tempfile::tempdir().unwrap();
-    let runtime: Arc<dyn NodeIdentity> =
-        Arc::new(KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap());
-    let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(runtime.did())
-            .with_node_acp_enabled()
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
-    for permission in [
-        NodePermission::DocumentRead,
-        NodePermission::DocumentUpdate,
-        NodePermission::DacRelationAdd,
-    ] {
-        admin
-            .grant_node_permission(&user.did().parse().unwrap(), permission)
-            .await
-            .unwrap();
-    }
-    let user_access = ConfigAccess::local_as(node.clone(), user.did().parse().unwrap());
+    // Users write configuration through the signed client endpoint; a local
+    // ConfigAccess may act only as the node or a managed Agent.
+    let fixture_name = format!("finality-{name}");
+    let db = crate::support::test_db(&fixture_name).await;
+    let (db, user, user_access) =
+        crate::test_support::signed_test_node_without_agent_from_db(db, &fixture_name).await;
+    let node = db.node.clone();
+    let runtime = db.node_identity.clone();
     let value = json!({"node_did": runtime.did(), "enabled": true});
     let node_plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: crate::Collection::Node,
@@ -90,35 +74,19 @@ async fn fixture(name: &str) -> Fixture {
         crate::store::identity::resolve_agent_identity(runtime.as_ref(), &parent).unwrap();
     let child_identity =
         crate::store::identity::resolve_agent_identity(runtime.as_ref(), &child).unwrap();
-    let mut docs: Vec<_> = [
-        (
-            crate::Collection::InferenceBackend,
-            json!({
-                "node_did": runtime.did(), "backend_id": "fixture", "name": "Fixture",
-                "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:1/v1",
-                "auth": {"kind": "unauthenticated"}
-            }),
-        ),
-        (
-            crate::Collection::InferenceProfile,
-            json!({
-                "node_did": runtime.did(), "profile_id": "fixture", "backend_id": "fixture",
-                "model_name": "fixture"
-            }),
-        ),
-    ]
-    .into_iter()
-    .map(|(collection, value)| DesiredStateApplyDocument {
-        collection,
-        add: value.clone(),
-        update: value,
-    })
-    .collect();
-    docs.extend([&parent, &child].into_iter().map(|binding| {
-        let value = json!({"node_did": runtime.did(), "agent_did": binding.agent_did,
-            "creation_nonce": binding.creation_nonce, "inference_profile_id": "fixture", "enabled": true});
-        DesiredStateApplyDocument { collection: crate::Collection::Agent, add: value.clone(), update: value }
-    }));
+    // Each Agent carries a context so the runtime projects its baseline node
+    // grants; an Agent without one cannot read its own requests.
+    let docs: Vec<_> = [("parent", &parent), ("child", &child)]
+        .into_iter()
+        .flat_map(|(name, binding)| {
+            crate::test_support::test_agent_documents(runtime.did(), name, binding)
+        })
+        .map(|(collection, value)| DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        })
+        .collect();
     let plan = DesiredStateApplyPlan::new(docs).unwrap();
     user_access
         .transact_write("test.finality.agents", |txn| {
@@ -164,55 +132,35 @@ async fn fixture(name: &str) -> Fixture {
     }
     let request_id = format!("finality-{name}");
     let session_id = format!("finality-session-{name}");
-    let create = build_signed_client_request(
-        &user_access,
-        RequestSpec::new(
-            RequestPurpose::Normal,
-            RequestIdentity {
-                request_id,
-                node_did: runtime.did().into(),
-                requester_did: Some(user.did().into()),
-                agent_did: parent.agent_did.clone(),
-                session_id,
-                content: "start child".into(),
-                execution_origin: ExecutionOrigin::Interactive,
-                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            },
-            AgentRequestAdmissionRecord::client(user.did()),
-        ),
-        RequestSigner::Identity(&user),
-    )
-    .await
-    .unwrap();
-    submit_client_request(&user_access, &create).await.unwrap();
-    let access = ConfigAccess::local_as(node.clone(), parent.agent_did.parse().unwrap());
-    let response = access
-        .execute(&format!(
-            "{{ AgentRequest {{ {} }} }}",
-            crate::SIGNED_REQUEST_FIELDS
-        ))
-        .await
-        .unwrap();
-    let row: gents_protocol::row::AgentRequestRow =
-        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    let request = AgentRequest::try_from(row).unwrap();
-    let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
-    let verifier = AgentRequestAdmissionVerifier::new(node.clone(), runtime.clone(), authority);
-    let (request, admission) = verifier
-        .verify_fresh_for_claim(&request, &parent.agent_did)
-        .await
-        .unwrap();
-    let mut owner = RequestLifecycle::new_with_execution_binding(
-        node.clone(),
-        &parent.agent_did,
+    let create = gents_protocol::request_admission::AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        request_id,
         runtime.did(),
-        request,
-        60,
-        ExecutionOrigin::Interactive,
-        String::new(),
+        user.did(),
+        parent.agent_did.clone(),
+        session_id,
+        "start child",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        AgentRequestAdmissionRecord::client(user.did()),
     );
-    owner.bind_managed_agent(parent_identity.as_ref()).unwrap();
-    owner.set_client_claim_admission(admission);
+    let mut owner =
+        crate::tools::call::lifecycle::admission_fixture::pending_client_fixture_request(
+            &node,
+            &user_access,
+            runtime.clone(),
+            &user,
+            parent_identity.as_ref(),
+            create,
+        )
+        .await
+        .unwrap();
+    let access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        parent.agent_did.parse().unwrap(),
+        parent_identity.as_ref(),
+    )
+    .unwrap();
     assert!(matches!(
         owner.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
@@ -269,9 +217,11 @@ async fn fixture(name: &str) -> Fixture {
         .await
         .unwrap();
     Fixture {
-        _home: home,
+        _db: db,
         node,
         access,
+        config: user_access,
+        parent_binding: parent,
         runtime,
         parent: parent_identity,
         child: child_identity,
@@ -280,6 +230,37 @@ async fn fixture(name: &str) -> Fixture {
         tool,
         plan: Some(plan),
     }
+}
+
+/// Enables or disables the parent Agent as its configuring User. The runtime
+/// projects an Agent's baseline node grants from its live Agent document
+/// (`GrantSet::AgentBaseline`), so disabling the document revokes them.
+async fn set_parent_enabled(fixture: &Fixture, enabled: bool) {
+    let (collection, mut value) = crate::test_support::test_agent_documents(
+        fixture.runtime.did(),
+        "parent",
+        &fixture.parent_binding,
+    )
+    .into_iter()
+    .find(|(collection, _)| matches!(collection, crate::Collection::Agent))
+    .unwrap();
+    value["enabled"] = json!(enabled);
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection,
+        add: value.clone(),
+        update: value,
+    }])
+    .unwrap();
+    fixture
+        .config
+        .transact_write("test.finality.parent_enabled", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .unwrap();
 }
 
 async fn observed(fixture: &Fixture) -> (String, Vec<serde_json::Value>) {
@@ -492,6 +473,9 @@ async fn cancelled_after_child_commit_recovers_relationships_in_the_actor_watche
         ExecutionOrigin::Interactive,
         String::new(),
     );
+    lifecycle
+        .bind_managed_agent(fixture.child.as_ref())
+        .unwrap();
     lifecycle.set_client_claim_admission(admission);
     assert!(matches!(
         lifecycle.claim_with_identity().await.unwrap(),
@@ -708,16 +692,8 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
             .await
             .unwrap();
         assert!(admission.is_some());
-        let admin =
-            ConfigAccess::local_as(fixture.node.clone(), fixture.runtime.did().parse().unwrap());
         if deny {
-            admin
-                .revoke_node_permission(
-                    &fixture.parent.did().parse().unwrap(),
-                    NodePermission::DocumentUpdate,
-                )
-                .await
-                .unwrap();
+            set_parent_enabled(&fixture, false).await;
         }
         if active {
             let blocked = crate::request::lifecycle::queue::steering_snapshot(
@@ -729,13 +705,7 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
             .await
             .unwrap();
             assert!(blocked.inputs.is_empty());
-            admin
-                .grant_node_permission(
-                    &fixture.parent.did().parse().unwrap(),
-                    NodePermission::DocumentUpdate,
-                )
-                .await
-                .unwrap();
+            set_parent_enabled(&fixture, true).await;
             let snapshot = crate::request::lifecycle::queue::steering_snapshot(
                 &fixture.node,
                 child.request(),
@@ -792,7 +762,7 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
                 &first.session_id,
                 "forged source",
                 "interactive",
-                chrono::Utc::now().to_rfc3339(),
+                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 AgentRequestAdmissionRecord::client(fixture.parent.did()),
             );
             forged.session_doc_id = session_doc_id;
@@ -801,6 +771,7 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
             forged.caused_by_parent_request_doc_id = Some(cause.caller_request_doc_id.clone());
             forged.caused_by_parent_tool_call_id = Some(cause.tool_call_id.clone());
             forged.caused_by_parent_tool_call_doc_id = Some("unrelated-tool-document".into());
+            forged.request_hop = cause.caller_hop + 1;
             crate::sign_agent_request_create(fixture.parent.as_ref(), &mut forged)
                 .await
                 .unwrap();
@@ -820,12 +791,12 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
             let row: gents_protocol::row::AgentRequestRow =
                 serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
             let forged = AgentRequest::try_from(row).unwrap();
+            let verdict = verifier
+                .verify_fresh_for_claim_with_identity(&forged, fixture.child.as_ref())
+                .await;
             assert!(
-                verifier
-                    .verify_fresh_for_claim_with_identity(&forged, fixture.child.as_ref())
-                    .await
-                    .is_err(),
-                "a signed request with an unrelated source call must not receive a claim witness"
+                verdict.is_err(),
+                "a signed request with an unrelated source call must not receive a claim witness: {verdict:?}"
             );
         }
         fixture.node.shutdown().await.unwrap();

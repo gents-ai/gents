@@ -1095,6 +1095,17 @@ async fn reload_tool_call_as_hook(
     lifecycle
 }
 
+/// Runs a read as the hook's selected Agent and returns its `data` object.
+async fn hook_query(hook: &DefraSessionHook, query: &str) -> serde_json::Value {
+    let response = hook
+        .actor_access()
+        .expect("a signed hook reads as its selected Agent")
+        .execute(query)
+        .await
+        .expect("query as the hook's Agent");
+    response["data"].clone()
+}
+
 /// Loads the hook's transcript as its selected Agent, which owns the session.
 async fn hook_history(hook: &DefraSessionHook, session_id: &str) -> anyhow::Result<Vec<Message>> {
     crate::session::load_history_with_access(
@@ -2350,20 +2361,25 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
     let request_doc_id = hook1.active_request_doc_id().await.unwrap();
     publish_claimed_authored_input(&hook1, "req-retry", Some(context.clone()), prompt.clone())
         .await;
-    let hook2 = DefraSessionHook::resume_with_identity_policy(
+    let agent = hook1.actor.clone().expect("hook1 selects an Agent");
+    let signer = hook1.agent_signer.clone().expect("hook1 holds its signer");
+    let hook2 = DefraSessionHook::resume_with_actor_policy(
         node.clone(),
         &session_id,
-        "did:test:general",
-        None,
+        &hook1.node_did,
+        Some(agent.as_str()),
+        agent.clone(),
         FailurePolicy::default(),
     )
     .await
+    .unwrap()
+    .with_managed_identity(&signer)
     .unwrap();
     hook2
         .set_active_request_binding(
             Some("req-retry".to_string()),
             Some(request_doc_id.clone()),
-            None,
+            Some(agent.to_string()),
         )
         .await;
     publish_claimed_authored_input(&hook2, "req-retry", Some(context), prompt).await;
@@ -2385,18 +2401,14 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
         2,
         "retry must not duplicate turn-1 messages; expected [context, prompt], got {history:?}"
     );
-    let response = node
-        .execute(&format!(
+    let data = hook_query(
+        &hook2,
+        &format!(
             r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ request_doc_id }} }}"#,
             crate::store::graphql::escape_graphql_string(&session_id)
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "query failed: {:?}",
-        response.errors
-    );
-    let data = response.data.unwrap();
+        ),
+    )
+    .await;
     let rows = data["AgentMessage"].as_array().expect("message rows");
     assert!(rows
         .iter()
@@ -2433,20 +2445,19 @@ async fn steering_input_is_published_once_when_claimed_owner_runs() {
     publish_claimed_authored_input(&hook, "req-steering", None, prompt.clone()).await;
     publish_claimed_authored_input(&hook, "req-steering", None, prompt.clone()).await;
 
-    let response = node
-        .execute(&format!(
+    let data = hook_query(
+        &hook,
+        &format!(
             r#"{{
                 AgentMessage(filter: {{
                     session_id: {{ _eq: "{}" }}
                 }}) {{ message_key request_doc_id }}
             }}"#,
             crate::store::graphql::escape_graphql_string(&session_id)
-        ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let rows = response
-        .data
-        .as_ref()
+        ),
+    )
+    .await;
+    let rows = Some(&data)
         .and_then(|data| data.get("AgentMessage"))
         .and_then(serde_json::Value::as_array)
         .expect("message rows");
@@ -3506,24 +3517,19 @@ async fn owned_tool_result_materializes_one_transcript_row() {
         ToolResultContent::Text(Text { text }) if text == tool_result_text
     ));
 
-    let resp = node
-        .execute(&format!(
+    let data = hook_query(
+        &hook,
+        &format!(
             r#"{{
                 AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
                     tool_call_key
                     tool_call_id
                 }}
             }}"#
-        ))
-        .await;
-    assert!(
-        !resp.has_errors(),
-        "query tool calls failed: {:?}",
-        resp.errors
-    );
-    let tool_call_rows = resp
-        .data
-        .as_ref()
+        ),
+    )
+    .await;
+    let tool_call_rows = Some(&data)
         .and_then(|data| data.get("AgentToolCall"))
         .and_then(|value| value.as_array())
         .cloned()
@@ -3713,6 +3719,7 @@ async fn remote_presentations_persist_the_same_selected_identity() {
             .unwrap(),
     );
     ensure_runtime_schemas(&node).await.unwrap();
+    let mut rows = Vec::new();
     for (index, style) in [RemoteToolStyle::Flat, RemoteToolStyle::Discovery]
         .into_iter()
         .enumerate()
@@ -3753,16 +3760,15 @@ async fn remote_presentations_persist_the_same_selected_identity() {
                 .await,
             ToolCallHookAction::Continue
         ));
-    }
-    let response = node
-        .execute("{ AgentToolCall { lifecycle_state selected_service_id selected_tool_name } }")
+        let data = hook_query(
+            &hook,
+            "{ AgentToolCall { lifecycle_state selected_service_id selected_tool_name } }",
+        )
         .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let rows = response.data.as_ref().unwrap()["AgentToolCall"]
-        .as_array()
-        .unwrap();
+        rows.extend(data["AgentToolCall"].as_array().unwrap().iter().cloned());
+    }
     assert_eq!(rows.len(), 2);
-    for row in rows {
+    for row in &rows {
         assert_eq!(row["lifecycle_state"], "running");
         assert_eq!(row["selected_service_id"], "selected-service");
         assert_eq!(row["selected_tool_name"], "inspect");
@@ -4575,10 +4581,12 @@ async fn plugin_child_timeout_is_child_terminal_and_parent_completes() {
         .await,
         HookAction::Continue
     ));
-    let rows = node
-        .execute("query { AgentToolCall { tool_name lifecycle_state } }")
-        .await;
-    let rows = rows.data.unwrap()["AgentToolCall"].clone();
+    let rows = hook_query(
+        &hook,
+        "query { AgentToolCall { tool_name lifecycle_state } }",
+    )
+    .await["AgentToolCall"]
+        .clone();
     for (name, state) in [("plugin", "completed"), ("query", "timedOut")] {
         assert!(
             rows.as_array()
@@ -4656,10 +4664,12 @@ async fn plugin_child_naming_a_job_tool_is_refused_and_persisted_as_policy_denie
         "{error}"
     );
     assert!(hook.effect_tool_calls.lock().await.is_empty());
-    let rows = node
-        .execute("query { AgentToolCall { tool_name lifecycle_state } }")
-        .await;
-    let rows = rows.data.unwrap()["AgentToolCall"].clone();
+    let rows = hook_query(
+        &hook,
+        "query { AgentToolCall { tool_name lifecycle_state } }",
+    )
+    .await["AgentToolCall"]
+        .clone();
     assert!(
         rows.as_array().unwrap().iter().any(|row| {
             row["tool_name"] == "workflow_run" && row["lifecycle_state"] == "failed"
