@@ -4,6 +4,7 @@ use std::io;
 use ratatui::crossterm::event::Event;
 
 use crate::app::ChatLine;
+use crate::keys::KeySet;
 use crate::sample::{MenuId, Running, Tone};
 
 /// What the shell asks of its source.
@@ -45,6 +46,12 @@ pub enum Intent {
     },
     /// A menu is shown: the source answers its rows with `Update::Menu`.
     ReadMenu(MenuId),
+    /// The profiles `agent` can run on: answered with `Update::Menu` for `MenuId::Profiles`.
+    ReadProfiles {
+        agent: String,
+    },
+    /// The key set the user switched to, for the next start.
+    SaveKeys(KeySet),
     Act {
         menu: MenuId,
         act: MenuAct,
@@ -71,6 +78,19 @@ pub enum Intent {
         connection: SetupConnection,
         model: String,
         settings: Vec<(SettingKey, String)>,
+    },
+    /// Answered with `Update::Form`.
+    OpenForm(FormRef),
+    /// The shown fields' keys and values, in order: answered with `Update::FormSaved`.
+    SaveForm {
+        form: FormRef,
+        values: Vec<(String, String)>,
+    },
+    /// Runs one of the form's actions on its current values: answered with `Update::FormNote`.
+    FormAct {
+        form: FormRef,
+        act: FormAct,
+        values: Vec<(String, String)>,
     },
 }
 
@@ -169,6 +189,22 @@ pub enum Update {
     },
     /// The notice for what was saved, or why it was not.
     Saved(Result<String, String>),
+    /// Answers `OpenForm`: the form to show, or why it could not be read.
+    Form {
+        form: FormRef,
+        result: Result<Form, String>,
+    },
+    /// Answers `SaveForm`: the notice for what was saved, or why it was not.
+    FormSaved {
+        form: FormRef,
+        result: Result<String, FormError>,
+    },
+    /// Answers `FormAct` with what the action did.
+    FormNote {
+        form: FormRef,
+        text: String,
+        tone: Tone,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,6 +213,8 @@ pub struct MenuRow {
     pub tone: Tone,
     pub enter: Option<MenuAct>,
     pub d: Option<MenuAct>,
+    /// What `.` offers, each with its label.
+    pub more: Vec<(String, MenuAct)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -188,12 +226,40 @@ pub enum MenuAct {
     RunTask {
         task: String,
     },
-    SetTaskEnabled {
-        task: String,
+    SetEnabled {
+        doc: Doc,
+        id: String,
         enabled: bool,
+    },
+    Duplicate(Doc, String),
+    /// `access` is `read` or `read_write`.
+    SetFolderAccess {
+        path: String,
+        access: String,
+    },
+    RemoveFolder(String),
+    SetAgentProfile {
+        agent: String,
+        name: String,
+        profile: String,
+        label: String,
     },
     Dismiss {
         item: String,
+    },
+    /// Handled by the shell.
+    Open(FormRef),
+    /// Handled by the shell: asks for `name` typed before it deletes.
+    ConfirmDelete {
+        doc: Doc,
+        id: String,
+        label: String,
+        name: String,
+    },
+    /// Handled by the shell: lists the profiles `agent` can run on.
+    ChooseProfile {
+        agent: String,
+        name: String,
     },
     /// Handled by the shell.
     OpenSession {
@@ -205,6 +271,111 @@ pub enum MenuAct {
     },
     /// Handled by the shell: opens the Setup layer.
     OpenSetup,
+    /// The document of `Doc`'s kind with this id.
+    Delete(Doc, String),
+}
+
+/// A kind of document a form edits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Doc {
+    Task,
+    Skill,
+    Trigger,
+    Schedule,
+    EventSource,
+    RemoteTool,
+}
+
+impl Doc {
+    /// The desktop's nouns (`ListDetail.tsx:503-516`).
+    pub fn noun(self) -> &'static str {
+        match self {
+            Doc::Task => "task",
+            Doc::Skill => "skill",
+            Doc::Trigger => "trigger",
+            Doc::Schedule => "schedule",
+            Doc::EventSource => "event source",
+            Doc::RemoteTool => "tool service",
+        }
+    }
+
+    /// The menu that lists them.
+    pub fn menu(self) -> MenuId {
+        match self {
+            Doc::Task => MenuId::Tasks,
+            Doc::Skill => MenuId::Skills,
+            Doc::Trigger => MenuId::Triggers,
+            Doc::Schedule => MenuId::Schedules,
+            Doc::EventSource => MenuId::EventSources,
+            Doc::RemoteTool => MenuId::RemoteTools,
+        }
+    }
+}
+
+/// What a form is for. `Delete` is the shell's own confirmation, which the source never reads.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum FormRef {
+    New(Doc),
+    Edit(Doc, String),
+    Node,
+    AddFolder,
+    Delete(Doc, String),
+}
+
+/// A form the source describes for the shell to show.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Form {
+    pub form: FormRef,
+    pub title: String,
+    pub note: Vec<String>,
+    pub fields: Vec<FormField>,
+    pub actions: Vec<FormAction>,
+}
+
+/// With `when`, the field shows only while the field `.0` holds one of `.1`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormField {
+    pub key: String,
+    pub label: String,
+    pub kind: FieldKind,
+    pub value: String,
+    pub placeholder: String,
+    pub help: Option<String>,
+    pub when: Option<(String, Vec<String>)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FieldKind {
+    Text,
+    Lines,
+    /// Its `(value, label)` pairs.
+    Choice(Vec<(String, String)>),
+    Fixed,
+    Heading,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormAction {
+    pub label: String,
+    pub act: FormAct,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FormAct {
+    RunSchedule,
+    TestConnection,
+    /// Opens the shell's confirmation, titled with `label`, which asks for `name` typed.
+    Delete {
+        label: String,
+        name: String,
+    },
+}
+
+/// A save's failure: under `field`'s value when it names one, else in the form's status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormError {
+    pub field: Option<String>,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -6,11 +6,11 @@ use super::{first_selectable, step_row, stepped, App};
 use crate::commands::COMMANDS;
 use crate::filter::subsequence;
 use crate::jump::{self, Target};
-use crate::keys::{Action, Dir, KeyCtx};
+use crate::keys::{Action, Dir, KeyCtx, KeySet};
 pub use crate::layout::LayerKind;
 use crate::layout::{keys_rows_area, layer_rect, sessions_can_dock, sidebar_can_dock};
-use crate::sample::{menu, note, MenuId, RowAction, SidebarRow, Tone, KEY_ROWS};
-use crate::source::{Agent, Connection, Intent, MenuAct, MenuRow};
+use crate::sample::{empty, menu, note, MenuId, RowAction, SidebarRow, Tone, KEY_ROWS};
+use crate::source::{Agent, Connection, FormRef, Intent, MenuAct, MenuRow};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layer {
@@ -22,12 +22,27 @@ pub struct Layer {
 const NOT_LISTED: &str = "that session is not in the list";
 
 impl App {
-    /// Node settings and App settings are static; every other menu shows its rows as last read.
+    /// The settings menus are the shell's own; every other menu shows its rows as last read.
     /// A lost source drops the reads still out, so a menu not read by then says why.
     pub fn menu_rows(&self, id: MenuId) -> (Vec<SidebarRow>, &'static str) {
         let (rows, footer) = menu(id);
+        let notes = || {
+            empty(id)
+                .iter()
+                .map(|text| note(text, Tone::Label))
+                .collect()
+        };
         let rows = match (id, self.menus.get(&id), &self.connection) {
             (MenuId::NodeSettings | MenuId::AppSettings, ..) => rows.to_vec(),
+            (MenuId::General, ..) => {
+                let set = match self.keymap.set() {
+                    KeySet::Vim => "vim",
+                    KeySet::Emacs => "emacs",
+                };
+                let keys = format!(" Keys      {set}");
+                vec![item(keys, Tone::Plain, RowAction::SwitchKeys)]
+            }
+            (MenuId::Developer | MenuId::Experimental, ..) => notes(),
             (_, Some(Err(why)), _) | (_, None, Connection::Lost(why)) => {
                 vec![item(
                     format!(" could not read: {why}"),
@@ -36,7 +51,7 @@ impl App {
                 )]
             }
             (_, None, _) => vec![note(" reading…", Tone::Label)],
-            (_, Some(Ok(read)), _) if read.is_empty() => vec![note(" none", Tone::Label)],
+            (_, Some(Ok(read)), _) if read.is_empty() => notes(),
             (_, Some(Ok(read)), _) => read
                 .iter()
                 .enumerate()
@@ -49,6 +64,9 @@ impl App {
     /// The layer showing the menu, on top or beneath, keeps its selection in range; rows read
     /// for another menu move nothing. A menu is in the stack at most once.
     pub(super) fn set_menu(&mut self, id: MenuId, rows: Result<Vec<MenuRow>, String>) {
+        if self.for_another_agent(id, &rows) {
+            return;
+        }
         self.menus.insert(id, rows);
         let shown = self.menu_rows(id).0;
         let showing = self
@@ -60,25 +78,57 @@ impl App {
         }
     }
 
+    /// A Profiles answer names its agent only in its rows' acts, so one for an agent chosen
+    /// before this one is late.
+    fn for_another_agent(&self, id: MenuId, rows: &Result<Vec<MenuRow>, String>) -> bool {
+        let (MenuId::Profiles, Ok(rows)) = (id, rows) else {
+            return false;
+        };
+        rows.iter().any(|row| match &row.enter {
+            Some(MenuAct::SetAgentProfile { agent, .. }) => {
+                self.profiles_of.as_ref() != Some(agent)
+            }
+            _ => false,
+        })
+    }
+
     /// A lost source reads no more intents, so the menu says why at once.
     pub(super) fn read_menu(&mut self, id: MenuId) {
+        let intent = match (id, &self.profiles_of) {
+            (MenuId::Profiles, Some(agent)) => Intent::ReadProfiles {
+                agent: agent.clone(),
+            },
+            _ => Intent::ReadMenu(id),
+        };
         match &self.connection {
             Connection::Lost(why) => self.set_menu(id, Err(why.clone())),
-            _ => self.emit(Intent::ReadMenu(id)),
+            _ => self.emit(intent),
         }
     }
 
     /// Enter, or with `d` the `d` key, on the menu's `row`th row as read. A row without that act
-    /// does nothing.
+    /// does nothing. More and Profiles close as they choose, and More's choice acts on the menu
+    /// it was opened over.
     pub(super) fn run_row(&mut self, menu: MenuId, row: usize, d: bool) {
         let Some(Ok(rows)) = self.menus.get(&menu) else {
             return;
         };
-        let act = rows
+        let Some(act) = rows
             .get(row)
-            .and_then(|row| if d { &row.d } else { &row.enter }.clone());
+            .and_then(|row| if d { &row.d } else { &row.enter }.clone())
+        else {
+            return;
+        };
+        if matches!(menu, MenuId::More | MenuId::Profiles) {
+            self.layers
+                .retain(|layer| layer.kind != LayerKind::Menu(menu));
+        }
+        let menu = match (menu, &self.more) {
+            (MenuId::More, Some((over, _))) => *over,
+            _ => menu,
+        };
         match act {
-            Some(MenuAct::OpenSession { session }) => {
+            MenuAct::OpenSession { session } => {
                 let rows = self.session_rows();
                 let listed = rows.iter().position(|row| match row.action {
                     RowAction::OpenSession(index) => self.sessions[index].id == session,
@@ -89,8 +139,8 @@ impl App {
                     None => self.notice = Some(NOT_LISTED.to_string()),
                 }
             }
-            Some(MenuAct::OpenSetup) => self.push_layer(LayerKind::Setup),
-            Some(MenuAct::Insert { text }) => {
+            MenuAct::OpenSetup => self.push_layer(LayerKind::Setup),
+            MenuAct::Insert { text } => {
                 self.layers.clear();
                 self.act(Action::EnterInput);
                 self.slash = None;
@@ -99,8 +149,53 @@ impl App {
                 input.paste_inline(&text);
                 input.end();
             }
-            Some(act) if !self.says_lost() => self.emit(Intent::Act { menu, act }),
+            MenuAct::Open(form) => self.open_form(form),
+            MenuAct::ConfirmDelete {
+                doc,
+                id,
+                label,
+                name,
+            } => self.confirm_delete(doc, id, label, name),
+            MenuAct::ChooseProfile { agent, .. } => {
+                self.profiles_of = Some(agent);
+                self.menus.remove(&MenuId::Profiles);
+                self.push_layer(LayerKind::Menu(MenuId::Profiles));
+            }
+            act if !self.says_lost() => self.emit(Intent::Act { menu, act }),
             _ => {}
+        }
+    }
+
+    /// `.` on the menu's `row`th row as read: its further acts, titled with the row.
+    fn open_more(&mut self, menu: MenuId, row: usize) {
+        let Some(Ok(rows)) = self.menus.get(&menu) else {
+            return;
+        };
+        let Some(row) = rows.get(row).filter(|row| !row.more.is_empty()) else {
+            return;
+        };
+        let title = row.text.trim().to_string();
+        let choices = row
+            .more
+            .iter()
+            .map(|(label, act)| MenuRow {
+                text: format!(" {label}"),
+                tone: Tone::Plain,
+                enter: Some(act.clone()),
+                d: None,
+                more: Vec::new(),
+            })
+            .collect();
+        self.more = Some((menu, title));
+        self.set_menu(MenuId::More, Ok(choices));
+        self.push_layer(LayerKind::Menu(MenuId::More));
+    }
+
+    /// More is titled with the row it was opened for.
+    pub fn menu_title(&self, id: MenuId) -> &str {
+        match (id, &self.more) {
+            (MenuId::More, Some((_, title))) => title,
+            _ => id.name(),
         }
     }
 
@@ -135,7 +230,14 @@ impl App {
             });
         }
         match kind {
-            LayerKind::Menu(MenuId::NodeSettings | MenuId::AppSettings) => {}
+            LayerKind::Menu(
+                MenuId::NodeSettings
+                | MenuId::AppSettings
+                | MenuId::More
+                | MenuId::General
+                | MenuId::Developer
+                | MenuId::Experimental,
+            ) => {}
             LayerKind::Menu(id) => self.read_menu(id),
             LayerKind::Jump => self.read_menu(MenuId::Workflows),
             LayerKind::Setup if found.is_none() => self.open_setup(),
@@ -160,8 +262,12 @@ impl App {
     }
 
     pub(super) fn act_on_layer(&mut self, action: Action) {
-        let on_setup = self.layers.last().map(|top| top.kind) == Some(LayerKind::Setup);
-        if on_setup && self.act_on_setup(action) {
+        let took = match self.layers.last().map(|top| top.kind) {
+            Some(LayerKind::Setup) => self.act_on_setup(action),
+            Some(LayerKind::Form) => self.act_on_form(action),
+            _ => false,
+        };
+        if took {
             return;
         }
         let width = self.size.0;
@@ -169,17 +275,11 @@ impl App {
             return;
         };
         match action {
-            Action::Insert(_) | Action::Backspace | Action::Delete | Action::DeleteToStart => {
+            _ if action.edits_line() => {
                 top.filter.edit(action);
-                top.selected = 0;
-            }
-            Action::CursorLeft
-            | Action::CursorRight
-            | Action::WordLeft
-            | Action::WordRight
-            | Action::Home
-            | Action::End => {
-                top.filter.edit(action);
+                if action.changes_line() {
+                    top.selected = 0;
+                }
             }
             Action::Submit => self.submit_layer(),
             Action::Back => self.back(),
@@ -193,12 +293,14 @@ impl App {
             Action::MoveFocus(_) | Action::NextPane => self.layers.rotate_right(1),
             Action::Next => self.step_layer(true),
             Action::Prev => self.step_layer(false),
-            Action::SecondAct => {
+            Action::SecondAct | Action::More => {
                 if let LayerKind::Menu(id) = top.kind {
                     let selected = top.selected;
-                    let action = self.menu_rows(id).0.get(selected).map(|row| row.action);
-                    if let Some(RowAction::MenuRow(row)) = action {
-                        self.run_row(id, row, true);
+                    let on = self.menu_rows(id).0.get(selected).map(|row| row.action);
+                    match (on, action) {
+                        (Some(RowAction::MenuRow(row)), Action::More) => self.open_more(id, row),
+                        (Some(RowAction::MenuRow(row)), _) => self.run_row(id, row, true),
+                        _ => {}
                     }
                 }
             }
@@ -235,6 +337,8 @@ impl App {
                 match self.menu_rows(id).0.get(top.selected).map(|row| row.action) {
                     Some(RowAction::OpenMenu(next)) => self.push_layer(LayerKind::Menu(next)),
                     Some(RowAction::MenuRow(row)) => self.run_row(id, row, false),
+                    Some(RowAction::NodeForm) => self.open_form(FormRef::Node),
+                    Some(RowAction::SwitchKeys) => self.switch_keys(),
                     Some(RowAction::NotWired) => self.not_wired(),
                     _ => {}
                 }
@@ -243,7 +347,7 @@ impl App {
             LayerKind::Sidebar => self.activate_view_row(),
             LayerKind::Jump => self.submit_jump(top.selected),
             LayerKind::Setup => self.submit_setup(),
-            LayerKind::Keys => {}
+            LayerKind::Keys | LayerKind::Form => {}
         }
     }
 
@@ -308,6 +412,7 @@ impl App {
                     top.selected = stepped(top.selected, forward, max);
                 }
             }
+            LayerKind::Form => {}
         }
     }
 }
@@ -321,7 +426,7 @@ mod tests {
     use crate::draw::theme;
     use crate::keys::KeySet::{Emacs, Vim};
     use crate::sample::{self, MENUS};
-    use crate::source::Update;
+    use crate::source::{Doc, FormRef, Update};
     use crate::testing::{
         buffer, find, kinds, press, screen, type_text, with_right_pane, with_sample_session,
     };
@@ -332,6 +437,9 @@ mod tests {
     const ACCOUNTS: LayerKind = LayerKind::Menu(MenuId::Accounts);
     const TOOLS: LayerKind = LayerKind::Menu(MenuId::Tools);
     const TASKS: LayerKind = LayerKind::Menu(MenuId::Tasks);
+    const SKILLS: LayerKind = LayerKind::Menu(MenuId::Skills);
+    const MORE: LayerKind = LayerKind::Menu(MenuId::More);
+    const APP: LayerKind = LayerKind::Menu(MenuId::AppSettings);
 
     fn connected() -> (App, Receiver<Intent>) {
         let (intents, intended) = channel();
@@ -344,7 +452,23 @@ mod tests {
             tone: Tone::Plain,
             enter,
             d,
+            more: Vec::new(),
         }
+    }
+
+    fn with_more(text: &str, more: &[(&str, MenuAct)]) -> MenuRow {
+        let more = more
+            .iter()
+            .map(|(label, act)| (label.to_string(), act.clone()))
+            .collect();
+        MenuRow {
+            more,
+            ..menu_row(text, None, None)
+        }
+    }
+
+    fn sent(intended: &Receiver<Intent>) -> Vec<Intent> {
+        intended.try_iter().collect()
     }
 
     fn plain(texts: &[&str]) -> Vec<MenuRow> {
@@ -454,14 +578,278 @@ mod tests {
     }
 
     #[test]
-    fn other_sections_say_not_wired() {
-        for name in ["Node", "Skills", "Triggers", "Packs", "UX Plugins"] {
-            let mut app = App::new(Vim, 132, 36);
+    fn packs_says_not_wired() {
+        let mut app = App::new(Vim, 132, 36);
+        app.push_layer(NODE);
+        app.layers[0].selected = row_named(MenuId::NodeSettings, "Packs");
+        press(&mut app, "enter");
+        assert_eq!(app.notice.as_deref(), Some("not wired yet"));
+        assert_eq!(kinds(&app), [NODE]);
+    }
+
+    #[test]
+    fn node_settings_rows_open_their_sections() {
+        for (name, id) in [
+            ("Skills", MenuId::Skills),
+            ("Triggers", MenuId::Triggers),
+            ("Schedules", MenuId::Schedules),
+            ("Event sources", MenuId::EventSources),
+            ("Remote Tools", MenuId::RemoteTools),
+            ("Allowed folders", MenuId::AllowedFolders),
+            ("UX Plugins", MenuId::UxPlugins),
+        ] {
+            let (mut app, intended) = connected();
             app.push_layer(NODE);
             app.layers[0].selected = row_named(MenuId::NodeSettings, name);
             press(&mut app, "enter");
-            assert_eq!(app.notice.as_deref(), Some("not wired yet"), "{name}");
-            assert_eq!(kinds(&app), [NODE]);
+            assert_eq!(kinds(&app), [NODE, LayerKind::Menu(id)], "{name}");
+            assert_eq!(sent(&intended), [Intent::ReadMenu(id)], "{name}");
+            assert!(find(&screen(&app), &format!(" {} ", id.name())).is_some());
+        }
+
+        let (mut app, intended) = connected();
+        app.push_layer(NODE);
+        app.layers[0].selected = row_named(MenuId::NodeSettings, "Node");
+        press(&mut app, "enter");
+        assert_eq!(kinds(&app), [NODE, LayerKind::Form]);
+        assert_eq!(sent(&intended), [Intent::OpenForm(FormRef::Node)]);
+    }
+
+    #[test]
+    fn an_empty_section_says_what_the_desktop_says() {
+        let (mut app, _intended) = connected();
+        app.push_layer(LayerKind::Menu(MenuId::AllowedFolders));
+        read(&mut app, MenuId::AllowedFolders, Vec::new());
+        assert_eq!(
+            shown(&app, MenuId::AllowedFolders),
+            [
+                (" None added.".to_string(), Tone::Label),
+                (
+                    " The working folder is always readable. Other paths are asked about."
+                        .to_string(),
+                    Tone::Label
+                ),
+            ]
+        );
+        let s = screen(&app);
+        assert!(find(&s, "None added.").is_some());
+        assert!(find(&s, "The working folder is always readable.").is_some());
+        assert_eq!(find(&s, " none"), None);
+    }
+
+    #[test]
+    fn a_section_menu_shows_the_desktops_copy_uncut() {
+        for (set, back) in [(Vim, "esc back"), (Emacs, "ctrl-g back")] {
+            let (intents, _intended) = channel();
+            let mut app = App::connected(set, 132, 36, intents);
+            app.push_layer(LayerKind::Menu(MenuId::AllowedFolders));
+            read(&mut app, MenuId::AllowedFolders, Vec::new());
+            let s = screen(&app);
+            let note = " The working folder is always readable. Other paths are asked about.";
+            let footer = format!(" d read only or read and write · . more · {back}");
+            assert!(find(&s, note).is_some(), "{set:?}");
+            assert!(find(&s, &footer).is_some(), "{set:?}");
+        }
+    }
+
+    #[test]
+    fn a_profiles_answer_for_another_agent_is_dropped() {
+        let (mut app, intended) = connected();
+        app.push_layer(LayerKind::Menu(MenuId::Agents));
+        let choose = MenuAct::ChooseProfile {
+            agent: "a1".to_string(),
+            name: "Engineer".to_string(),
+        };
+        let rows = vec![with_more(" Engineer", &[("Inference profile…", choose)])];
+        read(&mut app, MenuId::Agents, rows);
+        press(&mut app, ". enter");
+        intended.try_iter().for_each(drop);
+        let profile = |agent: &str| {
+            let set = MenuAct::SetAgentProfile {
+                agent: agent.to_string(),
+                name: agent.to_string(),
+                profile: "opus".to_string(),
+                label: "Claude Opus".to_string(),
+            };
+            vec![menu_row(&format!("   Opus for {agent}"), Some(set), None)]
+        };
+        let reading = [(" reading…".to_string(), Tone::Label)];
+
+        read(&mut app, MenuId::Profiles, profile("a2"));
+        assert_eq!(shown(&app, MenuId::Profiles), reading);
+
+        app.apply(Update::Menu {
+            menu: MenuId::Profiles,
+            rows: Err("gone".to_string()),
+        });
+        let why = (" could not read: gone".to_string(), Tone::Warn);
+        assert_eq!(shown(&app, MenuId::Profiles), [why]);
+
+        read(&mut app, MenuId::Profiles, profile("a1"));
+        let rows = [("   Opus for a1".to_string(), Tone::Plain)];
+        assert_eq!(shown(&app, MenuId::Profiles), rows);
+    }
+
+    #[test]
+    fn dot_opens_the_rows_more_menu_and_runs_its_choice() {
+        let (mut app, intended) = connected();
+        app.push_layer(SKILLS);
+        let duplicate = MenuAct::Duplicate(Doc::Skill, "s1".to_string());
+        let rows = vec![
+            with_more(" Code review", &[("Duplicate", duplicate.clone())]),
+            menu_row(" bare", None, None),
+        ];
+        read(&mut app, MenuId::Skills, rows);
+        intended.try_iter().for_each(drop);
+
+        press(&mut app, ".");
+        assert_eq!(kinds(&app), [SKILLS, MORE]);
+        assert_eq!(sent(&intended), [], "More reads nothing");
+        let rect = app.top_layer_rect().expect("More");
+        let s = screen(&app);
+        assert!(s[usize::from(rect.y)].contains(" Code review "));
+        assert!(find(&s, " Duplicate").is_some());
+        assert!(find(&s, " enter choose · esc back").is_some());
+
+        press(&mut app, "enter");
+        let act = Intent::Act {
+            menu: MenuId::Skills,
+            act: duplicate,
+        };
+        assert_eq!(sent(&intended), [act]);
+        assert_eq!(kinds(&app), [SKILLS]);
+
+        press(&mut app, "j .");
+        assert_eq!(kinds(&app), [SKILLS], "a row without more ignores it");
+        assert_eq!(sent(&intended), []);
+    }
+
+    #[test]
+    fn delete_from_more_asks_for_the_name() {
+        let (mut app, intended) = connected();
+        app.push_layer(SKILLS);
+        let delete = MenuAct::ConfirmDelete {
+            doc: Doc::Skill,
+            id: "s1".to_string(),
+            label: "Review".to_string(),
+            name: "review".to_string(),
+        };
+        let rows = vec![with_more(" Review", &[("Delete skill…", delete)])];
+        read(&mut app, MenuId::Skills, rows);
+        intended.try_iter().for_each(drop);
+
+        press(&mut app, ". enter");
+        assert_eq!(kinds(&app), [SKILLS, LayerKind::Form]);
+        assert!(find(&screen(&app), " Delete Review? ").is_some());
+        assert_eq!(sent(&intended), []);
+    }
+
+    #[test]
+    fn p_is_gone_and_profiles_come_from_more() {
+        let (mut app, intended) = connected();
+        let agents = LayerKind::Menu(MenuId::Agents);
+        let profiles = LayerKind::Menu(MenuId::Profiles);
+        app.push_layer(agents);
+        let choose = |agent: &str, name: &str| {
+            let (agent, name) = (agent.to_string(), name.to_string());
+            [("Inference profile…", MenuAct::ChooseProfile { agent, name })]
+        };
+        let rows = vec![
+            with_more(" Engineer", &choose("a1", "Engineer")),
+            with_more(" Reviewer", &choose("a2", "Reviewer")),
+        ];
+        read(&mut app, MenuId::Agents, rows);
+        intended.try_iter().for_each(drop);
+
+        press(&mut app, "p");
+        assert_eq!(kinds(&app), [agents]);
+        assert_eq!(sent(&intended), []);
+
+        press(&mut app, ". enter");
+        assert_eq!(kinds(&app), [agents, profiles]);
+        let agent = "a1".to_string();
+        assert_eq!(sent(&intended), [Intent::ReadProfiles { agent }]);
+        assert!(find(&screen(&app), " Inference profile ").is_some());
+
+        let set = MenuAct::SetAgentProfile {
+            agent: "a1".to_string(),
+            name: "Engineer".to_string(),
+            profile: "opus".to_string(),
+            label: "Claude Opus".to_string(),
+        };
+        let rows = vec![
+            menu_row(" ● Claude Sonnet", None, None),
+            menu_row("   Claude Opus", Some(set.clone()), None),
+        ];
+        read(&mut app, MenuId::Profiles, rows);
+        press(&mut app, "j enter");
+        let act = Intent::Act {
+            menu: MenuId::Profiles,
+            act: set,
+        };
+        assert_eq!(sent(&intended), [act]);
+        assert_eq!(kinds(&app), [agents]);
+
+        press(&mut app, "j . enter");
+        let agent = "a2".to_string();
+        assert_eq!(sent(&intended), [Intent::ReadProfiles { agent }]);
+        assert_eq!(
+            shown(&app, MenuId::Profiles),
+            [(" reading…".to_string(), Tone::Label)],
+            "another agent's profiles are not shown for this one"
+        );
+    }
+
+    #[test]
+    fn app_settings_saves_the_key_set() {
+        let (mut app, intended) = connected();
+        let general = LayerKind::Menu(MenuId::General);
+        app.push_layer(APP);
+        app.layers[0].selected = row_named(MenuId::AppSettings, "General");
+        press(&mut app, "enter");
+        assert_eq!(kinds(&app), [APP, general]);
+        assert_eq!(sent(&intended), [], "General reads nothing");
+        let s = screen(&app);
+        assert!(find(&s, " Keys      vim").is_some());
+        assert!(find(&s, " enter change · esc back").is_some());
+
+        press(&mut app, "enter");
+        assert_eq!(app.keymap.set(), Emacs);
+        assert_eq!(sent(&intended), [Intent::SaveKeys(Emacs)]);
+        assert_eq!(kinds(&app), [APP, general]);
+        assert!(find(&screen(&app), " Keys      emacs").is_some());
+
+        press(&mut app, "enter");
+        assert_eq!(app.keymap.set(), Vim);
+        assert_eq!(sent(&intended), [Intent::SaveKeys(Vim)]);
+    }
+
+    #[test]
+    fn switching_keys_from_the_bar_saves_them() {
+        let (mut app, intended) = connected();
+        press(&mut app, "ctrl-p");
+        intended.try_iter().for_each(drop);
+        type_text(&mut app, "Switch key set");
+        press(&mut app, "enter");
+        assert_eq!(app.keymap.set(), Emacs);
+        assert_eq!(sent(&intended), [Intent::SaveKeys(Emacs)]);
+    }
+
+    #[test]
+    fn developer_and_experimental_say_there_is_nothing_here() {
+        for (name, id) in [
+            ("Developer", MenuId::Developer),
+            ("Experimental features", MenuId::Experimental),
+        ] {
+            let (mut app, intended) = connected();
+            app.push_layer(APP);
+            app.layers[0].selected = row_named(MenuId::AppSettings, name);
+            press(&mut app, "enter");
+            assert_eq!(kinds(&app), [APP, LayerKind::Menu(id)], "{name}");
+            let s = screen(&app);
+            assert!(find(&s, " Nothing to set up here on this computer.").is_some());
+            assert!(find(&s, &format!(" {} ", id.name())).is_some());
+            assert_eq!(sent(&intended), [], "{name}");
         }
     }
 
@@ -1307,8 +1695,9 @@ mod tests {
         let run = MenuAct::RunTask {
             task: "t".to_string(),
         };
-        let off = MenuAct::SetTaskEnabled {
-            task: "t".to_string(),
+        let off = MenuAct::SetEnabled {
+            doc: Doc::Task,
+            id: "t".to_string(),
             enabled: false,
         };
         let rows = vec![

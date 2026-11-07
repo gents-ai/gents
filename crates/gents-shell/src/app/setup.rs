@@ -1,4 +1,4 @@
-use super::input::LineInput;
+use super::fields::{self, Field, Kind};
 use super::layers::LayerKind;
 use super::{stepped, App};
 use crate::filter::subsequence;
@@ -23,30 +23,6 @@ pub enum Step {
     Models,
     Settings,
     Saving,
-}
-
-/// Not `Debug`: an API key's field holds the key.
-pub struct Field {
-    pub label: &'static str,
-    pub placeholder: &'static str,
-    pub input: LineInput,
-    /// Shown as one `•` per character.
-    pub masked: bool,
-    pub fixed: bool,
-}
-
-impl Field {
-    fn new(label: &'static str, placeholder: &'static str, text: &str) -> Field {
-        let mut input = LineInput::default();
-        input.set(text);
-        Field {
-            label,
-            placeholder,
-            input,
-            masked: false,
-            fixed: false,
-        }
-    }
 }
 
 /// Not `Debug`, as its fields are not.
@@ -156,12 +132,8 @@ impl Setup {
         let Some(setting) = chosen.settings.get(self.setting) else {
             return;
         };
-        let count = setting.choices.len();
-        let next = match setting.choices.iter().position(|c| c == field.input.text()) {
-            Some(now) if forward => (now + 1) % count,
-            Some(now) => (now + count - 1) % count,
-            None => 0,
-        };
+        let now = setting.choices.iter().position(|c| c == field.input.text());
+        let next = fields::cycle(now, setting.choices.len(), forward);
         if let Some(choice) = setting.choices.get(next) {
             field.input.set(choice);
         }
@@ -233,7 +205,11 @@ impl Setup {
                     ..Field::new(key, "Stored only when you save", "")
                 },
                 Field {
-                    fixed: method.endpoint_fixed,
+                    kind: if method.endpoint_fixed {
+                        Kind::Fixed
+                    } else {
+                        Kind::Text
+                    },
                     ..Field::new("Endpoint", "", &method.endpoint)
                 },
             ],
@@ -266,17 +242,16 @@ impl Setup {
     }
 
     /// The field the keys edit. A changed search selects its first match again.
-    fn field_mut(&mut self) -> Option<&mut LineInput> {
-        let field = match self.step {
-            Step::Connect => self.fields.get_mut(self.focus)?,
+    pub(super) fn field_mut(&mut self) -> Option<&mut Field> {
+        match self.step {
+            Step::Connect => self.fields.get_mut(self.focus),
             Step::Models if self.shows_query() => {
                 self.model = 0;
-                &mut self.query
+                Some(&mut self.query)
             }
-            Step::Settings if !self.on_choice() => self.settings.get_mut(self.setting)?,
-            _ => return None,
-        };
-        Some(&mut field.input)
+            Step::Settings if !self.on_choice() => self.settings.get_mut(self.setting),
+            _ => None,
+        }
     }
 
     /// Focus passes a fixed field by, so it never rests on one: the first field is never fixed.
@@ -286,13 +261,9 @@ impl Setup {
             Step::Settings => (&self.settings, &mut self.setting),
             _ => return,
         };
-        let count = fields.len();
-        let next = (1..count)
-            .map(|offset| (*focus + offset) % count)
-            .find(|&index| !fields[index].fixed);
-        if let Some(next) = next {
-            *focus = next;
-        }
+        *focus = fields::next_focus(*focus, fields.len(), true, |index| {
+            fields[index].focusable()
+        });
     }
 
     pub(super) fn step_row(&mut self, forward: bool) {
@@ -324,12 +295,10 @@ impl App {
 
     /// A lost source reads no more intents, so the step stays and says why.
     pub(super) fn setup_says_lost(&mut self) -> bool {
-        let (Connection::Lost(why), Some(setup)) = (&self.connection, &mut self.setup) else {
+        let Some(setup) = &mut self.setup else {
             return false;
         };
-        let why = format!(" could not reach the runtime: {why}");
-        setup.status = Some((why, Tone::Warn));
-        true
+        fields::status_says_lost(&self.connection, &mut setup.status)
     }
 
     /// Enters `step` before sending, because a sample answers at once.
@@ -378,18 +347,9 @@ impl App {
             Action::CursorLeft | Action::CursorRight if setup.on_choice() => {
                 setup.cycle(action == Action::CursorRight);
             }
-            Action::Insert(_)
-            | Action::Backspace
-            | Action::Delete
-            | Action::DeleteToStart
-            | Action::CursorLeft
-            | Action::CursorRight
-            | Action::WordLeft
-            | Action::WordRight
-            | Action::Home
-            | Action::End => {
-                if let Some(input) = setup.field_mut() {
-                    input.edit(action);
+            _ if action.edits_line() => {
+                if let Some(field) = setup.field_mut() {
+                    field.input.edit(action);
                 }
             }
             Action::Complete => setup.next_field(),
@@ -397,12 +357,6 @@ impl App {
             _ => return false,
         }
         true
-    }
-
-    pub(super) fn paste_setup(&mut self, text: &str) {
-        if let Some(input) = self.setup.as_mut().and_then(Setup::field_mut) {
-            input.paste_inline(text);
-        }
     }
 
     pub(super) fn submit_setup(&mut self) {
@@ -723,6 +677,7 @@ mod tests {
             tone: Tone::Accent,
             enter: Some(MenuAct::OpenSetup),
             d: None,
+            more: Vec::new(),
         };
         app.apply(Update::Menu {
             menu: MenuId::Accounts,

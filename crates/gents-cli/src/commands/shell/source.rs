@@ -15,8 +15,8 @@ use gents_codex_protocol as codex;
 use gents_shell::app::ChatLine;
 use gents_shell::sample::{MenuId, Opens, RunState, Running, Tone};
 use gents_shell::source::{
-    BackgroundCall, Change, Connection, Input, Intent, Job, MenuAct, Prompt, SavedAccount, Session,
-    Update,
+    BackgroundCall, Change, Connection, FormError, Input, Intent, Job, MenuAct, Prompt,
+    SavedAccount, Session, Update,
 };
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use serde_json::Value;
@@ -423,6 +423,11 @@ impl Source {
             } => self.reply(session, &agent, &item, &text).await,
             Intent::WorkingTree { agent } => self.read_tree(agent),
             Intent::ReadMenu(menu) => self.read_menu(menu),
+            Intent::ReadProfiles { .. } => self.tell(Update::Menu {
+                menu: MenuId::Profiles,
+                rows: Err(menus::NOT_WIRED.to_string()),
+            }),
+            Intent::SaveKeys(_) => {}
             Intent::Act { menu, act } => self.act(menu, act),
             Intent::ReadSetup => self.answer_setup(Update::Setup, |access, node| async move {
                 let rows = account_rows(&access, &node, None, Utc::now()).await;
@@ -459,6 +464,22 @@ impl Source {
                 settings,
             } => self.answer_setup(Update::Saved, |access, node| async move {
                 setup::save(&access, &node, &connection, &model, &settings).await
+            }),
+            Intent::OpenForm(form) => self.tell(Update::Form {
+                form,
+                result: Err(menus::NOT_WIRED.to_string()),
+            }),
+            Intent::SaveForm { form, .. } => self.tell(Update::FormSaved {
+                form,
+                result: Err(FormError {
+                    field: None,
+                    message: menus::NOT_WIRED.to_string(),
+                }),
+            }),
+            Intent::FormAct { form, .. } => self.tell(Update::FormNote {
+                form,
+                text: menus::NOT_WIRED.to_string(),
+                tone: Tone::Warn,
             }),
         }
     }

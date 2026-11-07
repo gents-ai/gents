@@ -2,9 +2,10 @@ use std::borrow::Cow;
 
 use crate::app::{sample_chat, ChatLine, NOT_WIRED};
 use crate::source::{
-    Agent, Answer, BackgroundCall, Change, ChangeKind, Day, Discovered, Intent, Job, MenuAct,
-    MenuRow, Prompt, PromptKind, SavedAccount, Session, SessionState, SettingKey, SetupAuth,
-    SetupMethod, SetupModel, SetupProvider, SetupSetting, Update,
+    Agent, Answer, BackgroundCall, Change, ChangeKind, Day, Discovered, Doc, FieldKind, Form,
+    FormAct, FormAction, FormField, FormRef, Intent, Job, MenuAct, MenuRow, Prompt, PromptKind,
+    SavedAccount, Session, SessionState, SettingKey, SetupAuth, SetupMethod, SetupModel,
+    SetupProvider, SetupSetting, Update,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +36,8 @@ pub enum RowAction {
     OpenJob(usize),
     /// A position in the menu's rows as the source read them.
     MenuRow(usize),
+    NodeForm,
+    SwitchKeys,
     NotWired,
 }
 
@@ -79,6 +82,19 @@ pub enum MenuId {
     NodeSettings,
     AppSettings,
     Workflows,
+    Skills,
+    Triggers,
+    Schedules,
+    EventSources,
+    RemoteTools,
+    AllowedFolders,
+    UxPlugins,
+    Profiles,
+    /// The selected row's further acts.
+    More,
+    General,
+    Developer,
+    Experimental,
 }
 
 impl MenuId {
@@ -93,6 +109,18 @@ impl MenuId {
             MenuId::NodeSettings => "Node settings",
             MenuId::AppSettings => "App settings",
             MenuId::Workflows => "Workflows",
+            MenuId::Skills => "Skills",
+            MenuId::Triggers => "Triggers",
+            MenuId::Schedules => "Schedules",
+            MenuId::EventSources => "Event sources",
+            MenuId::RemoteTools => "Remote Tools",
+            MenuId::AllowedFolders => "Allowed folders",
+            MenuId::UxPlugins => "UX Plugins",
+            MenuId::Profiles => "Inference profile",
+            MenuId::More => "Actions",
+            MenuId::General => "General",
+            MenuId::Developer => "Developer",
+            MenuId::Experimental => "Experimental features",
         }
     }
 }
@@ -113,6 +141,10 @@ pub const fn note(text: &'static str, tone: Tone) -> SidebarRow {
 
 const fn item(text: &'static str, tone: Tone) -> SidebarRow {
     row(text, tone, RowAction::NotWired)
+}
+
+const fn opens(text: &'static str, id: MenuId) -> SidebarRow {
+    row(text, Tone::Plain, RowAction::OpenMenu(id))
 }
 
 const BLANK: SidebarRow = note("", Tone::Plain);
@@ -506,6 +538,33 @@ pub fn answer(intent: &Intent) -> Vec<Update> {
             menu: *id,
             rows: Ok(menu_rows(*id)),
         }],
+        Intent::ReadProfiles { agent } => {
+            let profile = |text: &str, tone, profile: &str, label: &str| MenuRow {
+                text: text.to_string(),
+                tone,
+                enter: Some(MenuAct::SetAgentProfile {
+                    agent: agent.clone(),
+                    name: agent.clone(),
+                    profile: profile.to_string(),
+                    label: label.to_string(),
+                }),
+                d: None,
+                more: Vec::new(),
+            };
+            let rows = vec![
+                profile(
+                    " ● Claude Sonnet 4.5",
+                    Tone::Accent,
+                    "sonnet",
+                    "Claude Sonnet 4.5",
+                ),
+                profile("   Claude Opus 4.1", Tone::Plain, "opus", "Claude Opus 4.1"),
+            ];
+            vec![Update::Menu {
+                menu: MenuId::Profiles,
+                rows: Ok(rows),
+            }]
+        }
         Intent::ReadSetup => vec![Update::Setup(Ok(setup_catalog()))],
         Intent::SignIn { .. } => vec![
             Update::SignInUrl {
@@ -535,7 +594,109 @@ pub fn answer(intent: &Intent) -> Vec<Update> {
             vec![Update::Saved(Ok(format!("saved anthropic-2: {model}")))]
         }
         Intent::Act { .. } => vec![Update::Notice(NOT_WIRED.to_string())],
-        Intent::Interrupt { .. } | Intent::Refresh | Intent::CancelSignIn => Vec::new(),
+        Intent::OpenForm(form) => vec![Update::Form {
+            form: form.clone(),
+            result: Ok(sample_form(form)),
+        }],
+        Intent::SaveForm { form, .. } => vec![Update::FormSaved {
+            form: form.clone(),
+            result: Ok("Saved".to_string()),
+        }],
+        Intent::FormAct { form, .. } => vec![Update::FormNote {
+            form: form.clone(),
+            text: NOT_WIRED.to_string(),
+            tone: Tone::Warn,
+        }],
+        Intent::Interrupt { .. } | Intent::Refresh | Intent::CancelSignIn | Intent::SaveKeys(_) => {
+            Vec::new()
+        }
+    }
+}
+
+/// A schedule's form shows only its cadence's fields; any other is a name and a description.
+fn sample_form(form: &FormRef) -> Form {
+    let field = |key: &str, label: &str, kind, value: &str, when: Option<&str>| FormField {
+        key: key.to_string(),
+        label: label.to_string(),
+        kind,
+        value: value.to_string(),
+        placeholder: String::new(),
+        help: None,
+        when: when.map(|value| ("cadence".to_string(), vec![value.to_string()])),
+    };
+    let action = |label: &str, act| FormAction {
+        label: label.to_string(),
+        act,
+    };
+    let (title, fields, actions) = match form {
+        FormRef::Edit(Doc::Schedule, id) => {
+            let cadence = ["interval", "cron"].map(|value| {
+                let label = if value == "cron" { "Cron" } else { "Interval" };
+                (value.to_string(), label.to_string())
+            });
+            let interval = field(
+                "interval_secs",
+                "Interval seconds",
+                FieldKind::Text,
+                "",
+                Some("interval"),
+            );
+            let delete = FormAct::Delete {
+                label: "nightly eval".to_string(),
+                name: "nightly eval".to_string(),
+            };
+            (
+                "nightly eval",
+                vec![
+                    field("schedule_id", "Schedule ID", FieldKind::Fixed, id, None),
+                    field(
+                        "display_name",
+                        "Display name",
+                        FieldKind::Text,
+                        "nightly eval",
+                        None,
+                    ),
+                    field(
+                        "cadence",
+                        "Cadence",
+                        FieldKind::Choice(cadence.into()),
+                        "cron",
+                        None,
+                    ),
+                    FormField {
+                        help: Some("Positive whole number.".to_string()),
+                        ..interval
+                    },
+                    field(
+                        "expression",
+                        "Cron",
+                        FieldKind::Text,
+                        "0 2 * * *",
+                        Some("cron"),
+                    ),
+                    field("timezone", "Timezone", FieldKind::Text, "UTC", Some("cron")),
+                ],
+                vec![
+                    action("Run schedule now", FormAct::RunSchedule),
+                    action("Delete this schedule", delete),
+                ],
+            )
+        }
+        _ => (
+            "Sample",
+            vec![
+                field("name", "Name", FieldKind::Text, "sample", None),
+                field("description", "Description", FieldKind::Lines, "", None),
+            ],
+            Vec::new(),
+        ),
+    };
+    Form {
+        form: form.clone(),
+        title: title.to_string(),
+        note: Vec::new(),
+        fields,
+        actions,
     }
 }
 
@@ -670,35 +831,124 @@ fn setup_catalog() -> Vec<SetupProvider> {
     ]
 }
 
-/// Today's static rows, which take no act but adding a provider, and two installed workflows.
+/// Each section's document: its kind, "+ New" row, id and title.
+const SECTIONS: [(Doc, &str, &str, &str); 5] = [
+    (Doc::Skill, " + New skill", "code-review", "Code review"),
+    (Doc::Trigger, " + New trigger", "nightly", "Nightly eval"),
+    (
+        Doc::Schedule,
+        " + New schedule",
+        "nightly-eval",
+        "nightly eval",
+    ),
+    (
+        Doc::EventSource,
+        " + New event source",
+        "github-push",
+        "GitHub push",
+    ),
+    (Doc::RemoteTool, " + New remote tools", "linear", "linear"),
+];
+
+/// A section's "+ New" row and its document, with the acts a source gives them.
+fn section_rows(doc: Doc, new: &str, id: &str, title: &str) -> Vec<MenuRow> {
+    let open = MenuAct::Open(FormRef::Edit(doc, id.to_string()));
+    let duplicate = MenuAct::Duplicate(doc, id.to_string());
+    let delete = MenuAct::ConfirmDelete {
+        doc,
+        id: id.to_string(),
+        label: title.to_string(),
+        name: title.to_string(),
+    };
+    let mut more = vec![("Open".to_string(), open.clone())];
+    if doc != Doc::RemoteTool {
+        more.push(("Duplicate".to_string(), duplicate));
+    }
+    more.push((format!("Delete {}…", doc.noun()), delete));
+    let on_off = matches!(doc, Doc::Skill | Doc::Trigger).then(|| MenuAct::SetEnabled {
+        doc,
+        id: id.to_string(),
+        enabled: false,
+    });
+    vec![
+        MenuRow {
+            text: new.to_string(),
+            tone: Tone::Accent,
+            enter: Some(MenuAct::Open(FormRef::New(doc))),
+            d: None,
+            more: Vec::new(),
+        },
+        MenuRow {
+            text: format!(" {title}"),
+            tone: Tone::Plain,
+            enter: Some(open),
+            d: on_off,
+            more,
+        },
+    ]
+}
+
+/// Today's static rows, which take no act but adding a provider and choosing an agent's
+/// profile, one document per section, and two installed workflows.
 fn menu_rows(id: MenuId) -> Vec<MenuRow> {
     let row = |text: &str, tone, enter| MenuRow {
         text: text.to_string(),
         tone,
         enter,
         d: None,
+        more: Vec::new(),
     };
-    if id != MenuId::Workflows {
-        let rows = menu(id).0.iter();
-        return rows
+    if let Some(&(doc, new, doc_id, title)) = SECTIONS.iter().find(|(doc, ..)| doc.menu() == id) {
+        return section_rows(doc, new, doc_id, title);
+    }
+    match id {
+        MenuId::AllowedFolders => {
+            let path = "~/Repos".to_string();
+            let read = MenuAct::SetFolderAccess {
+                path: path.clone(),
+                access: "read".to_string(),
+            };
+            let add = Some(MenuAct::Open(FormRef::AddFolder));
+            vec![
+                row(" + Add a folder", Tone::Accent, add),
+                MenuRow {
+                    d: Some(read),
+                    more: vec![("Remove".to_string(), MenuAct::RemoveFolder(path))],
+                    ..row(" ~/Repos   Read and write", Tone::Plain, None)
+                },
+            ]
+        }
+        MenuId::UxPlugins => vec![row(" review panel   code review pack", Tone::Plain, None)],
+        MenuId::Workflows => [
+            (
+                " review_changes   Review a diff with three readers",
+                "review_changes",
+            ),
+            (" release_notes   promoted", "release_notes"),
+        ]
+        .map(|(text, name)| {
+            let prompt = format!("use the {name} workflow: ");
+            row(text, Tone::Plain, Some(MenuAct::Insert { text: prompt }))
+        })
+        .into(),
+        _ => menu(id)
+            .0
+            .iter()
             .map(|shown| {
                 let add = (shown.text == ADD_PROVIDER).then_some(MenuAct::OpenSetup);
-                row(&shown.text, shown.tone, add)
+                let mut row = row(&shown.text, shown.tone, add);
+                if id == MenuId::Agents && shown.selectable() && shown.tone == Tone::Plain {
+                    let name = shown.text.trim().to_string();
+                    let choose = MenuAct::ChooseProfile {
+                        agent: name.clone(),
+                        name,
+                    };
+                    row.more = vec![("Inference profile…".to_string(), choose)];
+                }
+                row
             })
-            .collect();
+            .collect(),
     }
-    [
-        (
-            " review_changes   Review a diff with three readers",
-            "review_changes",
-        ),
-        (" release_notes   promoted", "release_notes"),
-    ]
-    .map(|(text, name)| {
-        let prompt = format!("use the {name} workflow: ");
-        row(text, Tone::Plain, Some(MenuAct::Insert { text: prompt }))
-    })
-    .into()
 }
 
 pub const PICKER_FOOTER: &str = " enter open in a new tab · esc back";
@@ -725,42 +975,33 @@ const ACCOUNTS: &[SidebarRow] = &[
     item(" ○ Cloud     not signed in", Tone::Label),
 ];
 
-/// The sections of the desktop app's Node page, in its order. Four open the menu the shell
-/// already has for them; the rest are not wired.
+/// The sections of the desktop app's Node page, in its order. Packs is not wired.
 const NODE_SETTINGS: &[SidebarRow] = &[
     note(" CONFIGURE", Tone::Label),
-    item(" Node", Tone::Plain),
-    row(" Agents", Tone::Plain, RowAction::OpenMenu(MenuId::Agents)),
-    item(" Skills", Tone::Plain),
-    row(
-        " Providers",
-        Tone::Plain,
-        RowAction::OpenMenu(MenuId::Accounts),
-    ),
+    row(" Node", Tone::Plain, RowAction::NodeForm),
+    opens(" Agents", MenuId::Agents),
+    opens(" Skills", MenuId::Skills),
+    opens(" Providers", MenuId::Accounts),
     note(" AUTOMATION", Tone::Label),
-    row(" Tasks", Tone::Plain, RowAction::OpenMenu(MenuId::Tasks)),
-    item(" Triggers", Tone::Plain),
-    item(" Schedules", Tone::Plain),
-    item(" Event sources", Tone::Plain),
-    row(
-        " Workflows",
-        Tone::Plain,
-        RowAction::OpenMenu(MenuId::Workflows),
-    ),
+    opens(" Tasks", MenuId::Tasks),
+    opens(" Triggers", MenuId::Triggers),
+    opens(" Schedules", MenuId::Schedules),
+    opens(" Event sources", MenuId::EventSources),
+    opens(" Workflows", MenuId::Workflows),
     note(" TOOLS", Tone::Label),
-    row(" Tools", Tone::Plain, RowAction::OpenMenu(MenuId::Tools)),
-    item(" Remote Tools", Tone::Plain),
-    item(" Allowed folders", Tone::Plain),
+    opens(" Tools", MenuId::Tools),
+    opens(" Remote Tools", MenuId::RemoteTools),
+    opens(" Allowed folders", MenuId::AllowedFolders),
     note(" PACKS", Tone::Label),
     item(" Packs", Tone::Plain),
-    item(" UX Plugins", Tone::Plain),
+    opens(" UX Plugins", MenuId::UxPlugins),
 ];
 
 /// The sections of the desktop app's Settings page.
 const APP_SETTINGS: &[SidebarRow] = &[
-    item(" General", Tone::Plain),
-    item(" Developer", Tone::Plain),
-    item(" Experimental features", Tone::Plain),
+    opens(" General", MenuId::General),
+    opens(" Developer", MenuId::Developer),
+    opens(" Experimental features", MenuId::Experimental),
 ];
 
 const AGENTS_MENU: &[SidebarRow] = &[
@@ -798,7 +1039,7 @@ const STATUS: &[SidebarRow] = &[
 pub fn menu(id: MenuId) -> (&'static [SidebarRow], &'static str) {
     match id {
         MenuId::Accounts => (ACCOUNTS, " gents accounts login signs in · esc back"),
-        MenuId::Agents => (AGENTS_MENU, " enter make default · esc back"),
+        MenuId::Agents => (AGENTS_MENU, " enter make default · . more · esc back"),
         MenuId::Tools => (TOOLS, " esc back"),
         MenuId::Tasks => (TASKS, " enter run now · d on/off · esc back"),
         MenuId::Mailbox => (MAILBOX, " enter open its session · d dismiss · esc back"),
@@ -806,6 +1047,45 @@ pub fn menu(id: MenuId) -> (&'static [SidebarRow], &'static str) {
         MenuId::NodeSettings => (NODE_SETTINGS, " enter open · esc back"),
         MenuId::AppSettings => (APP_SETTINGS, " enter open · esc back"),
         MenuId::Workflows => (&[], " enter use it · esc back"),
+        MenuId::Skills | MenuId::Triggers => (&[], " enter open · d on/off · . more · esc back"),
+        MenuId::Schedules | MenuId::EventSources | MenuId::RemoteTools => {
+            (&[], " enter open · . more · esc back")
+        }
+        MenuId::AllowedFolders => (&[], " d read only or read and write · . more · esc back"),
+        MenuId::UxPlugins | MenuId::Developer | MenuId::Experimental => (&[], " esc back"),
+        MenuId::Profiles => (&[], " enter use · esc back"),
+        MenuId::More => (&[], " enter choose · esc back"),
+        MenuId::General => (&[], " enter change · esc back"),
+    }
+}
+
+/// What a menu read with no rows says, one row per sentence, as the desktop says it.
+pub fn empty(id: MenuId) -> &'static [&'static str] {
+    match id {
+        MenuId::Skills => &[
+            " No skills yet.",
+            " A skill is instructions and tool references an agent can load by name.",
+        ],
+        MenuId::Triggers => &[
+            " No triggers.",
+            " A trigger runs a task on a schedule or when something happens.",
+        ],
+        MenuId::Schedules => &[" No schedules.", " A trigger binds a task to a schedule."],
+        MenuId::EventSources => &[
+            " No event sources.",
+            " A trigger binds a task to a reusable source.",
+        ],
+        MenuId::RemoteTools => &[
+            " No remote tools.",
+            " Add an MCP connection, then select its tools in a Tools document.",
+        ],
+        MenuId::AllowedFolders => &[
+            " None added.",
+            " The working folder is always readable. Other paths are asked about.",
+        ],
+        MenuId::UxPlugins => &[" None loaded."],
+        MenuId::Developer | MenuId::Experimental => &[" Nothing to set up here on this computer."],
+        _ => &[" none"],
     }
 }
 
@@ -833,3 +1113,49 @@ pub const KEY_ROWS: &[(&str, &str, &str)] = &[
 ];
 
 pub const DIFF_BACK_ROW: &str = " esc back to files";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read(intent: Intent) -> Vec<MenuRow> {
+        match answer(&intent).as_slice() {
+            [Update::Menu { rows: Ok(rows), .. }] => rows.clone(),
+            other => panic!("{intent:?}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sample_menus_have_rows_for_every_section() {
+        for doc in [
+            Doc::Skill,
+            Doc::Trigger,
+            Doc::Schedule,
+            Doc::EventSource,
+            Doc::RemoteTool,
+        ] {
+            let rows = read(Intent::ReadMenu(doc.menu()));
+            assert_eq!(rows[0].enter, Some(MenuAct::Open(FormRef::New(doc))));
+            assert!(
+                rows[1].enter.is_some() && !rows[1].more.is_empty(),
+                "{doc:?}"
+            );
+        }
+        let folders = read(Intent::ReadMenu(MenuId::AllowedFolders));
+        assert_eq!(folders[0].enter, Some(MenuAct::Open(FormRef::AddFolder)));
+        assert!(folders[1].d.is_some() && !folders[1].more.is_empty());
+        assert!(!read(Intent::ReadMenu(MenuId::UxPlugins)).is_empty());
+
+        let engineer = &read(Intent::ReadMenu(MenuId::Agents))[0];
+        let choose = MenuAct::ChooseProfile {
+            agent: "Engineer".to_string(),
+            name: "Engineer".to_string(),
+        };
+        assert_eq!(engineer.more, [("Inference profile…".to_string(), choose)]);
+        let agent = "Engineer".to_string();
+        let profiles = read(Intent::ReadProfiles { agent });
+        assert!(profiles
+            .iter()
+            .all(|row| matches!(row.enter, Some(MenuAct::SetAgentProfile { .. }))));
+    }
+}

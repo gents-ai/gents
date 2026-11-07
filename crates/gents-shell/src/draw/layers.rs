@@ -4,7 +4,8 @@ use ratatui::style::Style;
 use ratatui::widgets::{Clear, Paragraph, Widget, Wrap};
 
 use super::{
-    draw_footer, draw_no_matches, draw_row, draw_rows, pane_box, sessions, setup, sidebar, theme,
+    draw_footer, draw_no_matches, draw_row, draw_rows, form, pane_box, sessions, setup, sidebar,
+    theme,
 };
 use crate::app::input::LineInput;
 use crate::app::layers::{Layer, LayerKind};
@@ -38,6 +39,7 @@ pub fn draw(app: &App, area: Rect, buf: &mut Buffer) {
             LayerKind::Sessions => sessions::draw(app, rect, focused, buf),
             LayerKind::Sidebar => sidebar::draw(app, rect, focused, buf),
             LayerKind::Setup => setup::draw(app, rect, focused, buf),
+            LayerKind::Form => form::draw(app, rect, focused, buf),
         }
     }
 }
@@ -47,7 +49,7 @@ fn inner(rect: Rect) -> Rect {
 }
 
 fn draw_menu(app: &App, layer: &Layer, id: MenuId, rect: Rect, focused: bool, buf: &mut Buffer) {
-    pane_box(buf, rect, id.name(), focused);
+    pane_box(buf, rect, app.menu_title(id), focused);
     let (rows, footer) = app.menu_rows(id);
     let area = inner(rect);
     let list = Rect {

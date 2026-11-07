@@ -3138,6 +3138,7 @@ async fn reading_the_mailbox_menu_lists_every_open_item() {
         d: Some(MenuAct::Dismiss {
             item: item.to_string(),
         }),
+        more: Vec::new(),
     };
     let rows = vec![
         row(" ! ask: i2 title", Tone::Warn, "i2"),
@@ -3245,6 +3246,7 @@ async fn a_refused_act_notices_why_and_rereads() {
         d: Some(MenuAct::Dismiss {
             item: "i1".to_string(),
         }),
+        more: Vec::new(),
     };
     let listed = Update::Menu {
         menu: MenuId::Mailbox,

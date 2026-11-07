@@ -9,7 +9,7 @@ use gents::Collection;
 use gents_desktop_core::client::{patch_config_components_on, set_default_agent_on};
 use gents_desktop_core::inference::{load_inference_setup_state, AgentView};
 use gents_shell::sample::{MenuId, Tone};
-use gents_shell::source::{MenuAct, MenuRow};
+use gents_shell::source::{Doc, MenuAct, MenuRow};
 use serde_json::{json, Value};
 
 use super::work::Work;
@@ -22,6 +22,9 @@ use crate::commands::task::load_task_inventory;
 
 /// Runs the scripts an agent writes on the fly rather than being a workflow itself.
 const RUNNER: &str = "gents/workflow";
+
+/// What a section, form or act the shell asks for answers until it is wired.
+pub(super) const NOT_WIRED: &str = "not wired yet";
 
 /// `menu`'s rows, read as the node through `work`, or why they could not be. The installed
 /// workflows are read from `home` alone, so they are listed while `work` is off.
@@ -62,8 +65,22 @@ pub(super) async fn read_menu(
         MenuId::Status => load_runtime_status_output(Some(home), &work.endpoint, node_did)
             .await
             .map(|output| status(&output)),
-        // Workflows is read above, and the shell never asks for the settings menus' rows.
-        MenuId::NodeSettings | MenuId::AppSettings | MenuId::Workflows => Ok(Vec::new()),
+        // Workflows is read above, and the shell never asks for its own menus' rows.
+        MenuId::NodeSettings
+        | MenuId::AppSettings
+        | MenuId::Workflows
+        | MenuId::More
+        | MenuId::General
+        | MenuId::Developer
+        | MenuId::Experimental => Ok(Vec::new()),
+        MenuId::Skills
+        | MenuId::Triggers
+        | MenuId::Schedules
+        | MenuId::EventSources
+        | MenuId::RemoteTools
+        | MenuId::AllowedFolders
+        | MenuId::UxPlugins
+        | MenuId::Profiles => Err(anyhow::anyhow!(NOT_WIRED)),
     };
     rows.map_err(|error| format!("{error:#}"))
 }
@@ -87,7 +104,11 @@ pub(super) async fn act(
                 .map(|_| format!("started {task}"))
                 .map_err(|error| format!("could not run {task}: {error:#}"))
         }
-        MenuAct::SetTaskEnabled { task, enabled } => {
+        MenuAct::SetEnabled {
+            doc: Doc::Task,
+            id: task,
+            enabled,
+        } => {
             let state = if *enabled { "on" } else { "off" };
             let patch = vec![("enabled".to_string(), Some(json!(enabled)))];
             let patches = [(SelfConfigTarget::Task, task.clone(), patch)];
@@ -100,8 +121,19 @@ pub(super) async fn act(
             .await
             .map(|_| "dismissed".to_string())
             .map_err(|error| format!("could not dismiss it: {error:#}")),
-        MenuAct::OpenSession { .. } | MenuAct::Insert { .. } | MenuAct::OpenSetup => {
-            unreachable!("the shell opens a session, inserts text and opens setup itself")
+        MenuAct::SetEnabled { .. }
+        | MenuAct::Delete(..)
+        | MenuAct::Duplicate(..)
+        | MenuAct::SetFolderAccess { .. }
+        | MenuAct::RemoveFolder(_)
+        | MenuAct::SetAgentProfile { .. } => Err(NOT_WIRED.to_string()),
+        MenuAct::OpenSession { .. }
+        | MenuAct::Insert { .. }
+        | MenuAct::OpenSetup
+        | MenuAct::Open(_)
+        | MenuAct::ConfirmDelete { .. }
+        | MenuAct::ChooseProfile { .. } => {
+            unreachable!("the shell runs these acts itself")
         }
     }
 }
@@ -116,6 +148,7 @@ fn row(text: String, tone: Tone) -> MenuRow {
         tone,
         enter: None,
         d: None,
+        more: Vec::new(),
     }
 }
 
@@ -199,10 +232,12 @@ fn tasks(tasks: &[Value]) -> Vec<MenuRow> {
             enter: Some(MenuAct::RunTask {
                 task: id.to_string(),
             }),
-            d: Some(MenuAct::SetTaskEnabled {
-                task: id.to_string(),
+            d: Some(MenuAct::SetEnabled {
+                doc: Doc::Task,
+                id: id.to_string(),
                 enabled: !enabled,
             }),
+            more: Vec::new(),
         }
     };
     tasks.iter().map(shown).collect()
@@ -227,6 +262,7 @@ fn mailbox(items: &[MailboxItem]) -> Vec<MenuRow> {
             d: Some(MenuAct::Dismiss {
                 item: item.doc_id.clone(),
             }),
+            more: Vec::new(),
         }
     };
     items.iter().map(shown).collect()
@@ -301,6 +337,7 @@ mod tests {
             tone,
             enter,
             d,
+            more: Vec::new(),
         }
     }
 
@@ -438,8 +475,9 @@ mod tests {
             })
         };
         let set = |task: &str, enabled| {
-            Some(MenuAct::SetTaskEnabled {
-                task: task.to_string(),
+            Some(MenuAct::SetEnabled {
+                doc: Doc::Task,
+                id: task.to_string(),
                 enabled,
             })
         };
@@ -626,8 +664,9 @@ mod tests {
             agent: "reviewer".to_string(),
             name: "Reviewer".to_string(),
         };
-        let off = MenuAct::SetTaskEnabled {
-            task: "digest".to_string(),
+        let off = MenuAct::SetEnabled {
+            doc: Doc::Task,
+            id: "digest".to_string(),
             enabled: false,
         };
 

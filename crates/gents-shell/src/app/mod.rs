@@ -1,4 +1,6 @@
 pub mod changes;
+pub mod fields;
+pub mod form;
 pub mod input;
 pub mod layers;
 mod mouse;
@@ -32,6 +34,8 @@ use crate::source::{
     Agent, BackgroundCall, Change, Connection, Day, Intent, Job, MenuRow, Prompt, Session,
     SessionState, Update,
 };
+use fields::Field;
+use form::FormState;
 use input::LineInput;
 use layers::{Layer, LayerKind};
 use search::Search;
@@ -383,8 +387,14 @@ pub struct App {
     pub working_tree: Option<Result<Vec<Change>, String>>,
     /// Each menu's rows as last read; a menu not read yet has none.
     pub menus: RapidHashMap<MenuId, Result<Vec<MenuRow>, String>>,
+    /// The menu `MenuId::More` acts on, and the row it was opened for as its title.
+    more: Option<(MenuId, String)>,
+    /// The agent `MenuId::Profiles` lists for.
+    profiles_of: Option<String>,
     /// The Setup layer's state, from when it last opened.
     pub setup: Option<Setup>,
+    /// The Form layer's state, from when it last opened.
+    pub form: Option<FormState>,
     /// Without a source, the sample answers each intent at once.
     intents: Option<Sender<Intent>>,
     pub connection: Connection,
@@ -447,7 +457,10 @@ impl App {
             background_as_of: String::new(),
             working_tree: None,
             menus: RapidHashMap::new(),
+            more: None,
+            profiles_of: None,
             setup: None,
+            form: None,
             intents: None,
             connection: Connection::Sample,
             clipboard: None,
@@ -565,6 +578,7 @@ impl App {
             Update::Connection(connection) => {
                 self.connection = connection;
                 self.setup_says_lost();
+                self.form_says_lost();
             }
             Update::Notice(notice) => self.notice = Some(notice),
             Update::Prompts { session, prompts } => {
@@ -583,6 +597,9 @@ impl App {
             | Update::Models { .. }
             | Update::Recommended { .. }
             | Update::Saved(_)) => self.apply_setup(update),
+            update @ (Update::Form { .. } | Update::FormSaved { .. } | Update::FormNote { .. }) => {
+                self.apply_form(update)
+            }
         }
     }
 
@@ -755,7 +772,9 @@ impl App {
 
     pub fn ctx(&self) -> KeyCtx {
         match self.layers.last().map(|top| top.kind) {
-            Some(LayerKind::Jump | LayerKind::Picker | LayerKind::Setup) => KeyCtx::Filter,
+            Some(LayerKind::Jump | LayerKind::Picker | LayerKind::Setup | LayerKind::Form) => {
+                KeyCtx::Filter
+            }
             Some(_) => KeyCtx::Menu,
             None if self.search.as_ref().is_some_and(|search| !search.committed) => {
                 KeyCtx::SearchLine
@@ -932,8 +951,15 @@ impl App {
     fn paste(&mut self, text: &str) {
         self.notice = None;
         match self.ctx() {
-            KeyCtx::Filter if self.layers.last().map(|top| top.kind) == Some(LayerKind::Setup) => {
-                self.paste_setup(text);
+            KeyCtx::Filter
+                if matches!(
+                    self.layers.last().map(|top| top.kind),
+                    Some(LayerKind::Setup | LayerKind::Form)
+                ) =>
+            {
+                if let Some(field) = self.focused_field() {
+                    field.paste(text);
+                }
             }
             KeyCtx::Filter => {
                 if let Some(top) = self.layers.last_mut() {
@@ -957,6 +983,14 @@ impl App {
                 self.slash = None;
                 self.tabs[self.active].input.paste(text);
             }
+        }
+    }
+
+    fn focused_field(&mut self) -> Option<&mut Field> {
+        match self.layers.last()?.kind {
+            LayerKind::Setup => self.setup.as_mut()?.field_mut(),
+            LayerKind::Form => self.form.as_mut()?.field_mut(),
+            _ => None,
         }
     }
 
@@ -1141,15 +1175,19 @@ impl App {
             }
             Effect::NotWired => self.not_wired(),
             Effect::DismissPrompt => self.dismiss(),
-            Effect::SwitchKeys => {
-                self.keymap = Keymap::new(match self.keymap.set() {
-                    KeySet::Vim => KeySet::Emacs,
-                    KeySet::Emacs => KeySet::Vim,
-                });
-                self.activate_tab(self.active);
-            }
+            Effect::SwitchKeys => self.switch_keys(),
             Effect::Quit => self.quit = true,
         }
+    }
+
+    fn switch_keys(&mut self) {
+        let set = match self.keymap.set() {
+            KeySet::Vim => KeySet::Emacs,
+            KeySet::Emacs => KeySet::Vim,
+        };
+        self.keymap = Keymap::new(set);
+        self.activate_tab(self.active);
+        self.emit(Intent::SaveKeys(set));
     }
 
     fn open_sidebar(&mut self) {

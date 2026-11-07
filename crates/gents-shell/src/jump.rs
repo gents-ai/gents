@@ -634,6 +634,7 @@ mod tests {
                 text: prompt.to_string(),
             }),
             d: None,
+            more: Vec::new(),
         };
         app.apply(Update::Menu {
             menu: MenuId::Workflows,

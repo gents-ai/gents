@@ -33,6 +33,9 @@ fn key(token: &str) -> KeyEvent {
     if let Some(code) = named {
         return KeyEvent::new(code, KeyModifiers::NONE);
     }
+    if token == "shift-tab" {
+        return KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+    }
     let (modifiers, text) = match token.split_once('-') {
         Some(("ctrl", text)) if !text.is_empty() => (KeyModifiers::CONTROL, text),
         Some(("alt", text)) if !text.is_empty() => (KeyModifiers::ALT, text),

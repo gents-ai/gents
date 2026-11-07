@@ -71,11 +71,41 @@ pub enum Action {
     SearchNext,
     SearchPrev,
     Complete,
+    /// Shift-Tab in a form: the field before.
+    CompleteBack,
+    /// Ctrl-s in a form.
+    Save,
     /// `y`: the shown prompt's main answer.
     Accept,
     /// `d` in a menu: the selected row's other act, beside enter's.
     SecondAct,
+    /// `.` in a menu: the selected row's further acts.
+    More,
     Quit,
+}
+
+impl Action {
+    /// Changes the text of a line being typed.
+    pub fn changes_line(self) -> bool {
+        matches!(
+            self,
+            Action::Insert(_) | Action::Backspace | Action::Delete | Action::DeleteToStart
+        )
+    }
+
+    /// Changes a line being typed or moves in it, as `LineInput::edit` takes.
+    pub fn edits_line(self) -> bool {
+        self.changes_line()
+            || matches!(
+                self,
+                Action::CursorLeft
+                    | Action::CursorRight
+                    | Action::WordLeft
+                    | Action::WordRight
+                    | Action::Home
+                    | Action::End
+            )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,6 +165,7 @@ impl Keymap {
             KeyCode::PageDown if matches!(ctx, KeyCtx::Normal | KeyCtx::Input) => Action::PageDown,
             KeyCode::Char(c) => self.character(ctx, c),
             KeyCode::Tab if matches!(ctx, KeyCtx::Input | KeyCtx::Filter) => Action::Complete,
+            KeyCode::BackTab if ctx == KeyCtx::Filter => Action::CompleteBack,
             code if in_line(ctx) => edit_key(code),
             _ => Action::None,
         }
@@ -206,6 +237,7 @@ impl Keymap {
             }
             'w' if !emacs => self.wait_for(Prefix::CtrlW),
             'x' if emacs => self.wait_for(Prefix::CtrlX),
+            's' if ctx == KeyCtx::Filter => Action::Save,
             's' if emacs && ctx == KeyCtx::Input => Action::OpenSearch,
             's' if emacs && ctx == KeyCtx::SearchLine => Action::SearchNext,
             'r' if emacs && ctx == KeyCtx::SearchLine => Action::SearchPrev,
@@ -234,6 +266,7 @@ impl Keymap {
             (KeyCtx::Normal, 'y') => Action::Accept,
             (KeyCtx::Normal, 's') if self.set == KeySet::Vim => Action::Stop,
             (KeyCtx::Menu, 'd') => Action::SecondAct,
+            (KeyCtx::Menu, '.') => Action::More,
             (KeyCtx::Normal, ':') => Action::OpenBar,
             (KeyCtx::Menu, ':') if self.set == KeySet::Vim => Action::OpenBar,
             (KeyCtx::Normal | KeyCtx::Menu, 'j') => Action::Next,
@@ -289,9 +322,10 @@ mod tests {
         (Input, "x", A::Insert('x')), (Input, "T", A::Insert('T')), (Input, "/", A::Insert('/')), (Input, "bs", A::Backspace), (Input, "enter", A::Submit), (Input, "esc", A::Back),
         (Input, "tab", A::Complete), (Input, "ctrl-c", A::Interrupt), (Input, "ctrl-w", A::DeleteWord), (Input, "ctrl-n", A::Next), (Input, "left", A::CursorLeft),
         (Input, "right", A::CursorRight), (Input, "home", A::Home), (Input, "end", A::End), (Input, "del", A::Delete),
-        (Menu, "j", A::Next), (Menu, "k", A::Prev), (Menu, ":", A::OpenBar), (Menu, "d", A::SecondAct), (Menu, "enter", A::Submit), (Menu, "esc", A::Back), (Menu, "ctrl-w l", A::MoveFocus(Dir::Right)),
+        (Menu, "j", A::Next), (Menu, "k", A::Prev), (Menu, ":", A::OpenBar), (Menu, "d", A::SecondAct), (Menu, ".", A::More), (Menu, "enter", A::Submit), (Menu, "esc", A::Back), (Menu, "ctrl-w l", A::MoveFocus(Dir::Right)),
         (Menu, "ctrl-c", A::Interrupt), (Menu, "ctrl-w ]", A::ToggleSidebar), (Filter, "j", A::Insert('j')), (Filter, "bs", A::Backspace), (Filter, "ctrl-c", A::Interrupt), (Filter, "ctrl-n", A::Next), (Filter, "ctrl-p", A::Prev), (Filter, "up", A::Prev),
         (Filter, "ctrl-w h", A::MoveFocus(Dir::Left)), (Filter, "enter", A::Submit), (Filter, "tab", A::Complete),
+        (Filter, "shift-tab", A::CompleteBack), (Filter, "ctrl-s", A::Save), (Input, "shift-tab", A::None), (Input, "ctrl-s", A::None), (Menu, "ctrl-s", A::None),
         (Normal, "ctrl-w ctrl-h", A::MoveFocus(Dir::Left)), (Normal, "ctrl-w ctrl-j", A::MoveFocus(Dir::Down)), (Normal, "ctrl-w ctrl-k", A::MoveFocus(Dir::Up)), (Normal, "ctrl-w ctrl-l", A::MoveFocus(Dir::Right)),
         (Normal, "ctrl-w ctrl-q", A::None), (Menu, "ctrl-w ctrl-l", A::MoveFocus(Dir::Right)), (Filter, "ctrl-w ctrl-h", A::MoveFocus(Dir::Left)), (Input, "ctrl-a", A::Home), (Input, "ctrl-e", A::End),
         (SearchLine, "x", A::Insert('x')), (SearchLine, "bs", A::Backspace), (SearchLine, "ctrl-c", A::Interrupt), (SearchLine, "enter", A::Submit), (SearchLine, "esc", A::Back), (SearchLine, "ctrl-g", A::Back), (SearchLine, "ctrl-w", A::DeleteWord),
@@ -306,9 +340,10 @@ mod tests {
         (Input, "ctrl-x t", A::NewTab), (Input, "ctrl-x 0", A::ClosePane), (Input, "ctrl-x [", A::ToggleSessions), (Input, "ctrl-x ]", A::ToggleSidebar),
         (Input, "alt-x", A::OpenBar), (Input, "ctrl-x x", A::OpenBar), (Input, "ctrl-s", A::OpenSearch), (Input, "ctrl-x ?", A::OpenKeys), (Input, "ctrl-g", A::Back), (Input, "esc", A::Back),
         (Input, "ctrl-n", A::Next), (Input, "ctrl-p", A::Prev), (Input, "enter", A::Submit), (Input, "ctrl-x ctrl-c", A::Quit), (Input, "ctrl-c", A::Interrupt), (Input, "tab", A::Complete),
-        (Menu, "ctrl-n", A::Next), (Menu, "alt-x", A::OpenBar), (Menu, "ctrl-x x", A::OpenBar), (Menu, "ctrl-x o", A::NextPane), (Menu, "d", A::SecondAct), (Menu, "ctrl-g", A::Back),
+        (Menu, "ctrl-n", A::Next), (Menu, "alt-x", A::OpenBar), (Menu, "ctrl-x x", A::OpenBar), (Menu, "ctrl-x o", A::NextPane), (Menu, "d", A::SecondAct), (Menu, ".", A::More), (Menu, "ctrl-g", A::Back),
         (Menu, "esc", A::Back), (Menu, "ctrl-x ]", A::ToggleSidebar), (Menu, "ctrl-x ctrl-c", A::Quit),
         (Filter, "j", A::Insert('j')), (Filter, "ctrl-n", A::Next), (Filter, "tab", A::Complete), (Filter, "ctrl-x o", A::NextPane), (Filter, "ctrl-x ctrl-c", A::Quit), (Filter, "alt-x", A::OpenBar), (Filter, "ctrl-x x", A::OpenBar),
+        (Filter, "shift-tab", A::CompleteBack), (Filter, "ctrl-s", A::Save), (Menu, "ctrl-s", A::None),
         (SearchLine, "ctrl-s", A::SearchNext), (SearchLine, "ctrl-r", A::SearchPrev), (SearchLine, "enter", A::Submit), (SearchLine, "ctrl-g", A::Back), (SearchLine, "ctrl-x ctrl-c", A::Quit), (SearchLine, "alt-x", A::OpenBar), (SearchLine, "ctrl-x x", A::OpenBar),
         (Input, "ctrl-a", A::Home), (Input, "ctrl-e", A::End), (Filter, "ctrl-a", A::Home), (Filter, "ctrl-e", A::End), (Menu, "ctrl-a", A::None), (Input, "ctrl-w", A::None),
         (Input, "ctrl-u", A::DeleteToStart), (Filter, "ctrl-u", A::DeleteToStart), (SearchLine, "ctrl-u", A::DeleteToStart), (SearchLine, "ctrl-a", A::Home), (SearchLine, "ctrl-e", A::End),

@@ -60,7 +60,7 @@ impl App {
             LayerKind::Picker => self.click_picker(rect, at),
             LayerKind::Menu(id) => self.click_menu(id, rect, at),
             LayerKind::Jump => self.click_jump(rect, at),
-            LayerKind::Keys | LayerKind::Setup => {}
+            LayerKind::Keys | LayerKind::Setup | LayerKind::Form => {}
         }
     }
 
@@ -467,7 +467,7 @@ mod tests {
         let node = LayerKind::Menu(MenuId::NodeSettings);
         let mut app = App::new(Vim, 132, 36);
         app.push_layer(node);
-        click_text(&mut app, " Skills ");
+        click_text(&mut app, " Packs ");
         assert_eq!(app.notice.as_deref(), Some("not wired yet"));
         assert_eq!(top(&app), Some(node));
         click_text(&mut app, " Agents ");

@@ -53,6 +53,7 @@ pub enum LayerKind {
     Sessions,
     Sidebar,
     Setup,
+    Form,
 }
 
 pub fn sessions_can_dock(width: u16) -> bool {
@@ -134,23 +135,46 @@ fn size_of(kind: LayerKind, on_top: bool) -> (u16, u16) {
         LayerKind::Jump => (40, 15),
         LayerKind::Picker => (66, 16),
         LayerKind::Menu(MenuId::NodeSettings) => (50, 23),
+        // As wide as a form, so the desktop's empty copy and footers fit.
+        LayerKind::Menu(
+            MenuId::Skills
+            | MenuId::Triggers
+            | MenuId::Schedules
+            | MenuId::EventSources
+            | MenuId::RemoteTools
+            | MenuId::AllowedFolders
+            | MenuId::UxPlugins
+            | MenuId::Profiles
+            | MenuId::More
+            | MenuId::General
+            | MenuId::Developer
+            | MenuId::Experimental,
+        ) => (76, 20),
         LayerKind::Menu(_) => (50, 13),
         LayerKind::Keys => (KEYS_FULL_W, 23),
         LayerKind::Sessions => (36, 15),
         LayerKind::Sidebar => (40, 20),
         LayerKind::Setup => (72, 20),
+        LayerKind::Form => (76, 30),
     }
 }
 
 /// Each step of depth moves by (4, 2), and a window too small for that keeps the layer inside it.
 pub fn layer_rect(kind: LayerKind, area: Rect, depth: u16, on_top: bool) -> Rect {
     let (want_w, want_h) = size_of(kind, on_top);
+    // Four rows short of the terminal, which is one more than `area`.
+    let want_h = match kind {
+        LayerKind::Form => want_h.min(area.height.saturating_sub(3)),
+        _ => want_h,
+    };
     let (w, h) = (want_w.min(area.width), want_h.min(area.height));
     let center_x = (area.width - w) / 2;
     let center_y = ((area.height - h) / 2).min(5);
     let (x, y) = match kind {
         LayerKind::Sessions => (3, 2),
-        LayerKind::Picker | LayerKind::Setup => (center_x.saturating_sub(1), center_y + 2),
+        LayerKind::Picker | LayerKind::Setup | LayerKind::Form => {
+            (center_x.saturating_sub(1), center_y + 2)
+        }
         LayerKind::Menu(_) => (center_x + 11, center_y + 3),
         LayerKind::Jump if !on_top => (center_x.saturating_sub(20), center_y.saturating_sub(1)),
         _ => (center_x, center_y),
@@ -247,14 +271,16 @@ mod tests {
         assert!(matches!(layout(u16::MAX, u16::MAX, ON), Screen::Shell(_)));
     }
 
-    const KINDS: [LayerKind; 7] = [
+    const KINDS: [LayerKind; 9] = [
         LayerKind::Jump,
         LayerKind::Picker,
         LayerKind::Menu(MenuId::Accounts),
+        LayerKind::Menu(MenuId::Skills),
         LayerKind::Keys,
         LayerKind::Sessions,
         LayerKind::Sidebar,
         LayerKind::Setup,
+        LayerKind::Form,
     ];
 
     #[test]
@@ -301,8 +327,27 @@ mod tests {
             layer_rect(LayerKind::Sessions, Rect::new(0, 0, 70, 23), 0, true),
             Rect::new(3, 2, 36, 15)
         );
+        assert_eq!(
+            layer_rect(LayerKind::Form, area, 0, true),
+            Rect::new(27, 4, 76, 30)
+        );
+        assert_eq!(
+            layer_rect(LayerKind::Form, Rect::new(0, 0, 132, 23), 0, true).height,
+            20
+        );
         let small = Rect::new(0, 0, 60, 15);
         assert_eq!(layer_rect(LayerKind::Keys, small, 0, true), small);
+    }
+
+    #[test]
+    fn a_section_menu_is_as_wide_as_a_form() {
+        let area = Rect::new(0, 0, 132, 35);
+        for id in [MenuId::Skills, MenuId::AllowedFolders, MenuId::More] {
+            let rect = layer_rect(LayerKind::Menu(id), area, 0, true);
+            assert_eq!(rect, Rect::new(39, 8, 76, 20), "{id:?}");
+        }
+        let tasks = layer_rect(LayerKind::Menu(MenuId::Tasks), area, 0, true);
+        assert_eq!((tasks.width, tasks.height), (50, 13));
     }
 
     #[test]

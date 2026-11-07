@@ -1,4 +1,6 @@
 pub mod agent;
+pub mod fields;
+pub mod form;
 pub mod layers;
 pub mod logo;
 pub mod sessions;
@@ -65,6 +67,7 @@ pub fn draw(app: &App, frame: &mut Frame) {
             if let (Some(top), Some(rect)) = (app.layers.last(), app.top_layer_rect()) {
                 let at = match top.kind {
                     LayerKind::Setup => app.setup.as_ref().and_then(|s| setup::cursor(s, rect)),
+                    LayerKind::Form => app.form.as_ref().and_then(|f| form::cursor(f, rect)),
                     _ => Some(layers::cursor(&top.filter, rect)),
                 };
                 if let Some(at) = at {
@@ -206,6 +209,7 @@ mod tests {
     use crate::app::{sample_chat, Mode};
     use crate::keys::KeySet::{Emacs, Vim};
     use crate::sample::{note, MenuId, View};
+    use crate::source::{Doc, FormRef};
     use crate::testing::{
         buffer, find, press, rows, screen, type_text, with_right_pane, with_sample_session,
     };
@@ -480,6 +484,7 @@ mod tests {
             LayerKind::Sessions,
             LayerKind::Sidebar,
             LayerKind::Setup,
+            LayerKind::Form,
         ];
         for width in [
             60, 61, 89, 90, 91, 104, 119, 120, 121, 124, 125, 132, 168, 300,
@@ -491,6 +496,7 @@ mod tests {
 
                 app.tabs[0].lines = sample_chat();
                 app.diff = Some(0);
+                app.open_form(FormRef::Edit(Doc::Schedule, "nightly".to_string()));
                 for focus in [Pane::Sessions, Pane::Agent, Pane::Sidebar] {
                     app.focus = focus;
                     assert!(find(&screen(&app), "sample data").is_some(), "{size}");

@@ -219,6 +219,117 @@ impl LineInput {
     }
 }
 
+/// The rows a `Lines` box shows at most.
+const LINES_SHOWN: usize = 6;
+
+/// A box of many lines, never none. Enter breaks the line at the cursor, and Backspace at a
+/// line's start joins it to the end of the one above.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lines {
+    lines: Vec<LineInput>,
+    row: usize,
+}
+
+impl Lines {
+    pub fn new(text: &str) -> Lines {
+        let lines = text
+            .split('\n')
+            .map(|line| {
+                let mut input = LineInput::default();
+                input.set(line);
+                input
+            })
+            .collect();
+        Lines { lines, row: 0 }
+    }
+
+    pub fn text(&self) -> String {
+        let lines: Vec<&str> = self.lines.iter().map(LineInput::text).collect();
+        lines.join("\n")
+    }
+
+    pub fn lines(&self) -> &[LineInput] {
+        &self.lines
+    }
+
+    pub fn row(&self) -> usize {
+        self.row
+    }
+
+    pub fn current(&self) -> &LineInput {
+        &self.lines[self.row]
+    }
+
+    /// The rows shown, which keep the cursor's in view.
+    pub fn shown(&self) -> std::ops::Range<usize> {
+        let first = self.row.saturating_sub(LINES_SHOWN - 1);
+        first..(first + LINES_SHOWN).min(self.lines.len())
+    }
+
+    pub fn break_line(&mut self) {
+        let line = &mut self.lines[self.row];
+        let rest = LineInput {
+            text: line.text.split_off(line.cursor),
+            cursor: 0,
+            pastes: Vec::new(),
+        };
+        self.row += 1;
+        self.lines.insert(self.row, rest);
+    }
+
+    fn backspace(&mut self) {
+        if self.row == 0 || self.lines[self.row].cursor > 0 {
+            return self.lines[self.row].backspace();
+        }
+        let line = self.lines.remove(self.row);
+        self.row -= 1;
+        let above = &mut self.lines[self.row];
+        above.cursor = above.text.len();
+        above.text.push_str(&line.text);
+    }
+
+    /// To the line below, or above, at the same character: false past the last or first.
+    pub fn step(&mut self, down: bool) -> bool {
+        let to = if down {
+            self.row.checked_add(1)
+        } else {
+            self.row.checked_sub(1)
+        };
+        let Some(to) = to.filter(|&to| to < self.lines.len()) else {
+            return false;
+        };
+        let from = &self.lines[self.row];
+        let at = clusters(&from.text[..from.cursor]).len();
+        let line = &mut self.lines[to];
+        line.cursor = clusters(&line.text)
+            .into_iter()
+            .take(at)
+            .map(|(len, _)| len)
+            .sum();
+        self.row = to;
+        true
+    }
+
+    /// A paste keeps its line breaks; tabs become spaces.
+    pub fn paste(&mut self, text: &str) {
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        for c in text.trim_end_matches('\n').chars() {
+            match c {
+                '\n' => self.break_line(),
+                '\t' => self.lines[self.row].insert(' '),
+                c => self.lines[self.row].insert(c),
+            }
+        }
+    }
+
+    pub fn edit(&mut self, action: Action) {
+        match action {
+            Action::Backspace => self.backspace(),
+            action => self.lines[self.row].edit(action),
+        }
+    }
+}
+
 /// A cluster's first character carries its class: a combining mark after a letter is part of it.
 fn is_word(cluster: &str) -> bool {
     cluster.chars().next().is_some_and(char::is_alphanumeric)
@@ -490,6 +601,21 @@ mod tests {
             word_stops("日本👩\u{200d}💻x"),
             (vec![6, 0, 0, 0, 0, 0], vec![4, 7, 7, 7, 7, 7])
         );
+    }
+
+    #[test]
+    fn lines_move_at_the_same_character_and_show_six_around_the_cursor() {
+        let mut l = Lines::new("日本語\nab\n\n3\n4\n5\n6\n7");
+        l.lines[0].left();
+        assert!(l.step(true));
+        assert_eq!(l.current().view(40), ("ab", 2));
+        assert!(l.step(false));
+        assert_eq!(l.current().view(40), ("日本語", 4));
+        assert!(!l.step(false));
+        assert_eq!(l.shown(), 0..6);
+        while l.step(true) {}
+        assert_eq!((l.row(), l.shown()), (7, 2..8));
+        assert_eq!(l.text(), "日本語\nab\n\n3\n4\n5\n6\n7");
     }
 
     #[test]
