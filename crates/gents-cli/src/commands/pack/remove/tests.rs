@@ -696,6 +696,7 @@ async fn wiring_holds_store_lock_through_pin_commit() {
         false,
         Some(&owner),
         &std::collections::BTreeMap::new(),
+        gents::pack::PackSource::Local { file_name: None },
         move |identity| async move {
             gents::pack::record_plugin_store_change(
                 &notify_access,

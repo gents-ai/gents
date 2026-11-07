@@ -3053,6 +3053,7 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::PackSource::Local { file_name: None },
         |_| async { Ok(()) },
     )
     .await
@@ -3074,6 +3075,7 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::PackSource::Local { file_name: None },
         |_| async { Ok(()) },
     )
     .await
@@ -3137,6 +3139,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::PackSource::Local { file_name: None },
         |_| async { Ok(()) },
     )
     .await
@@ -3199,6 +3202,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::PackSource::Local { file_name: None },
         move |identity| async move {
             super::record_plugin_store_change(
                 &notify_access,
@@ -3229,6 +3233,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::PackSource::Local { file_name: None },
         move |identity| async move {
             super::record_plugin_store_change(
                 &notify_access,
@@ -3263,6 +3268,7 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::PackSource::Local { file_name: None },
         |_| async { Ok(()) },
     )
     .await
@@ -3296,6 +3302,7 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::PackSource::Local { file_name: None },
         move |identity| async move {
             super::record_plugin_store_change(
                 &notify_access,

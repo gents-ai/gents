@@ -33,11 +33,11 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         version: pack.version.clone(),
         artifact_digest: pack.artifact_digest.clone(),
     };
-    let result = gents::pack::plugin_lifecycle::install_plugin_with_source(
+    let result = gents::pack::plugin_lifecycle::install_plugin(
         &home,
         &pack.archive,
         args.grant_authority,
-        Some(source),
+        source,
         move |identity| async move {
             if let Some((access, owner)) = notify_scope {
                 gents::pack::record_plugin_store_change(
