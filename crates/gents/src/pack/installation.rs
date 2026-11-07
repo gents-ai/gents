@@ -25,7 +25,7 @@ pub use declared_access::declared_readers;
 pub use documents::{
     apply_hosted_document_graph, apply_prepared_dependency_schemas, assemble_document_graph_report,
     document_pack_schema_paths, hosted_document_graph, install_documents_with_plugins,
-    install_prepared_document_graph, install_prepared_document_pack, plugin_data_unique_keys,
+    install_prepared_document_graph, install_prepared_document_pack, load_pack_upgrade_config, plugin_data_unique_keys,
     prepare_document_pack_archive, prepare_document_pack_archive_with_runtime,
     prepare_document_pack_install, prepare_hosted_document_pack_archive,
     DependencyVariableOverrides, HostedDocumentGraph, HostedPackPreparation, PreparedDependency,
