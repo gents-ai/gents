@@ -58,7 +58,7 @@ async fn replacing_a_filtered_overlay_requires_explicit_filter_choice() {
     let db = crate::support::test_p2p_db("pairing-filter-replace").await;
     let actor = db.node_identity.did();
     let access = ConfigAccess::local(db.node.clone());
-    access.write("test.p2p.filtered-overlay", &format!(
+    access.write("test.p2p.filtered_overlay", &format!(
         "mutation {{create_DataPlanePairingDesired(input: {{peer_id: \"peer-filter\", node_did: {}, source: \"engineer\", collections: [\"FilteredPost\"], replicator_addresses: null, template: \"app-collections-filtered\"}}) {{_docID}}}}", quoted(actor)
     )).await.unwrap();
     let tool = P2pTool::new(
@@ -91,7 +91,7 @@ async fn revoking_an_orphaned_filter_removes_it_without_panicking() {
     let db = crate::support::test_p2p_db("pairing-filter-orphan").await;
     let actor = db.node_identity.did();
     let access = ConfigAccess::local(db.node.clone());
-    access.write("test.p2p.orphaned-filter", &format!(
+    access.write("test.p2p.orphaned_filter", &format!(
         "mutation {{create_DataPlanePairingFilter(input: {{peer_id: \"peer-orphan\", node_did: {}, filters: \"[]\"}}) {{_docID}}}}", quoted(actor)
     )).await.unwrap();
     let tool = P2pTool::new(
@@ -188,7 +188,7 @@ async fn filtered_pairing_survives_reload_and_refuses_missing_filter() {
         Some(("recipient", "node-a"))
     );
     let local_access = ConfigAccess::local(local.node.clone());
-    local_access.write("test.scoped-posts", "mutation {create_ScopedPost(input: [{recipient: \"node-a\", body: \"matching\"}, {recipient: \"node-b\", body: \"other\"}]) {_docID}}").await.unwrap();
+    local_access.write("test.scoped_posts", "mutation {create_ScopedPost(input: [{recipient: \"node-a\", body: \"matching\"}, {recipient: \"node-b\", body: \"other\"}]) {_docID}}").await.unwrap();
     let (_, local_address) = wait_for_peer_identity(&local.node).await;
     let remote_admin = EmbeddedRemoteP2pAdmin::new(remote.node.clone());
     remote_admin

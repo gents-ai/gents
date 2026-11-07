@@ -31,7 +31,7 @@ mod filter_subscription_test {
             .expect("subscribe to pairing state");
         crate::store::config_client::ConfigAccess::local(db.node.clone())
             .write(
-                "test.pairing-filter-notification",
+                "test.pairing_filter_notification",
                 "mutation {create_DataPlanePairingFilter(input: {peer_id: \"peer\", node_did: \"did:key:test\", filters: \"[]\"}) {_docID}}",
             )
             .await
