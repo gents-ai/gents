@@ -1678,15 +1678,74 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     )
     .await?;
     assert_eq!(removal_case("agent-owner")?["expected"], true);
-    crate::pack::remove_pack(
+    // A plugin-only pack is retired through plugin removal: the local store
+    // releases its plugins, then the Agent records the disappearance.
+    let local_home = plugin_home.path().to_owned();
+    let local = tokio::task::spawn_blocking(move || {
+        crate::pack::plugin_lifecycle::remove_local(
+            &local_home,
+            "fixture/native_echo_pack",
+            |_| Ok(()),
+            |()| Ok(()),
+        )
+    })
+    .await??;
+    assert!(!local.plugins.is_empty());
+    crate::pack::record_plugin_store_change_as(
         &creator_access,
         runtime.did(),
+        Some(agent_did.clone()),
+        plugin_home.path(),
         "fixture/native_echo_pack",
-        crate::pack::DriftPolicy::Refuse,
+        None,
     )
     .await?;
-    assert!(creator_access.execute("{ PackInstallation(filter: {coordinate: {_eq: \"fixture/native_echo_pack\"}}) { _docID } }").await?["data"]["PackInstallation"].as_array().context("removed pack query missing")?.is_empty());
-    let archive = tokio::task::spawn_blocking(|| -> Result<crate::pack::archive::PackArchive> {
+    assert!(
+        crate::pack::read_home_install(plugin_home.path(), "fixture/native_echo_pack")?.is_none()
+    );
+    // Without a complete reference inventory the disappearance notice keeps
+    // the installation evidence, refreshed by the Agent (`retainPluginStoreRecord`).
+    let retain = tokio::task::spawn_blocking(|| {
+        crate::lean_vocab_test::lean_plugin_reference_cases()
+            .iter()
+            .find(|case| case["root_ships"].as_array().is_some_and(|ships| !ships.is_empty()))
+            .and_then(|case| case["retain_notification_record"].as_bool())
+    })
+    .await?
+    .context("modeled plugin retirement case missing")?;
+    let retained = creator_access
+        .execute("{ PackInstallation(filter: {coordinate: {_eq: \"fixture/native_echo_pack\"}}) { _docID } }")
+        .await?;
+    let retained = retained["data"]["PackInstallation"]
+        .as_array()
+        .context("removed pack query missing")?;
+    assert_eq!(!retained.is_empty(), retain);
+    if retain {
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0]["_docID"], record_doc);
+        let history = creator_access
+            .execute(&format!(
+                "{{ _commits(docID: \"{}\") {{ cid height fieldName signature {{ identity type }} }} }}",
+                crate::store::graphql::escape_graphql_string(record_doc),
+            ))
+            .await?;
+        let notice = crate::store::graphql::composite_commits_at(
+            history["data"].get("_commits"),
+            "_commits",
+        )?
+        .into_iter()
+        .max_by_key(|commit| commit.height)
+        .context("plugin removal notice missing")?;
+        assert!(notice.height > latest.height);
+        assert_eq!(
+            notice
+                .signature
+                .as_ref()
+                .map(|signature| signature.identity.as_str()),
+            Some(creator_signer.as_str())
+        );
+    }
+    let archive =tokio::task::spawn_blocking(|| -> Result<crate::pack::archive::PackArchive> {
         let directory = tempfile::tempdir()?;
         let manifest = json!({"manifest_version":1,"name":"native_child","namespace":"fixture","version":"1.0.0",
             "description":"Agent provisioning fixture","kind":"documents","authors":["Fixture"],
