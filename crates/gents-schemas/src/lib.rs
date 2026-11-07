@@ -125,6 +125,9 @@ pub const PEER_PAIRING_DESIRED: &str =
 pub const DATA_PLANE_PAIRING_DESIRED_NAME: &str = "DataPlanePairingDesired";
 pub const DATA_PLANE_PAIRING_DESIRED: &str =
     include_str!("../schemas/agent/data_plane_pairing_desired.graphql");
+pub const DATA_PLANE_PAIRING_FILTER_NAME: &str = "DataPlanePairingFilter";
+pub const DATA_PLANE_PAIRING_FILTER: &str =
+    include_str!("../schemas/agent/data_plane_pairing_filter.graphql");
 pub const PEER_PAIRING_APPLIED_NAME: &str = "PeerPairingApplied";
 pub const PEER_PAIRING_APPLIED: &str =
     include_str!("../schemas/agent/peer_pairing_applied.graphql");
@@ -236,6 +239,7 @@ pub const ALL: &[&str] = &[
     EVENT_GROUP_STATE,
     PEER_PAIRING_DESIRED,
     DATA_PLANE_PAIRING_DESIRED,
+    DATA_PLANE_PAIRING_FILTER,
     PEER_PAIRING_APPLIED,
     PEER_REGISTRY,
     NETWORK,
@@ -316,6 +320,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     EVENT_GROUP_STATE_NAME,
     PEER_PAIRING_DESIRED_NAME,
     DATA_PLANE_PAIRING_DESIRED_NAME,
+    DATA_PLANE_PAIRING_FILTER_NAME,
     PEER_PAIRING_APPLIED_NAME,
     PEER_REGISTRY_NAME,
     NETWORK_NAME,

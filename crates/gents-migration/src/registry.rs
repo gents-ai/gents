@@ -504,6 +504,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreiaitj36nr5nmsevxytznad44gg3bmunlbodwfpq6xueleofu67dpm"
     ),
     baseline_entry!(
+        gents_protocol::schemas::DATA_PLANE_PAIRING_FILTER_NAME,
+        gents_protocol::schemas::DATA_PLANE_PAIRING_FILTER,
+        "bafyreifmmfivdbg77x2422obfmbd4dwdiw73d4gtnqg3wstibrxorjv7ma"
+    ),
+    baseline_entry!(
         gents_protocol::schemas::PEER_PAIRING_APPLIED_NAME,
         gents_protocol::schemas::PEER_PAIRING_APPLIED,
         "bafyreickzo4uxque2a7wdnkp45ya3bsn33vbs4rpj6xglvxrftsxbd3hla"

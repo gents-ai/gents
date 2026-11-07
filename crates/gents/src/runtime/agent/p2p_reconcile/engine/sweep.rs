@@ -13,11 +13,35 @@ use super::super::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
 use super::reconcile::{prepare_pairing_peer, reconcile_prepared_peer};
 use super::{GraphqlPairingStateStore, PairingStateStore, MAX_CONCURRENT_PEER_PREPARATIONS};
 
-const PAIRING_STATE_COLLECTIONS: [&str; 3] = [
+const PAIRING_STATE_COLLECTIONS: [&str; 4] = [
     "PeerPairingDesired",
     "DataPlanePairingDesired",
+    "DataPlanePairingFilter",
     "PeerPairingApplied",
 ];
+
+#[cfg(test)]
+mod filter_subscription_test {
+    use super::*;
+
+    #[tokio::test]
+    async fn filter_changes_wake_the_pairing_reconciler() {
+        let db = crate::support::test_p2p_db("pairing-filter-notification").await;
+        let mut changes = crate::subscribe_collections(&db.node, PAIRING_STATE_COLLECTIONS)
+            .expect("subscribe to pairing state");
+        crate::store::config_client::ConfigAccess::local(db.node.clone())
+            .write(
+                "test.pairing_filter_notification",
+                "mutation {create_DataPlanePairingFilter(input: {peer_id: \"peer\", node_did: \"did:key:test\", filters: \"[]\"}) {_docID}}",
+            )
+            .await
+            .expect("create pairing filter");
+        tokio::time::timeout(std::time::Duration::from_secs(5), changes.recv())
+            .await
+            .expect("filter change should wake the reconciler")
+            .expect("pairing subscription should remain open");
+    }
+}
 
 pub async fn run_pairing_reconciler(
     node: Arc<EmbeddedNode>,

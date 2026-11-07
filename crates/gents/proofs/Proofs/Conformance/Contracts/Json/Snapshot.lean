@@ -130,6 +130,7 @@ import Proofs.Conformance.Contracts.Json.PayloadPresentation
 import Proofs.Conformance.Eval
 import Proofs.Conformance.Optimization
 import Proofs.ScopeTemplates.Derivation
+import Proofs.Conformance.AppPairingFilters
 
 namespace Conformance.Contracts
 
@@ -742,6 +743,8 @@ def snapshotJson : String :=
         ++ scopeRulesJson ScopeTemplates.agentTargetCallerRules
       ++ ",\"agentTargetHostRules\":" ++ scopeRulesJson ScopeTemplates.agentTargetHostRules ++ "},"
     ++ "\"scope_node_route_cases\":" ++ nodeRouteCasesJson ++ ","
+    ++ "\"app_pairing_filter_cases\":" ++ Conformance.AppPairingFilters.casesJson ++ ","
+    ++ "\"app_pairing_filter_route_cases\":" ++ Conformance.AppPairingFilters.routeCasesJson ++ ","
     ++ "\"causal_hop_contract\":"
       ++ Conformance.CausalHopContracts.contractJson ++ ","
     ++ "\"operator_base_freeze_cases\":"

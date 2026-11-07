@@ -193,6 +193,24 @@ pub(super) fn conjunctive_string_eq<'a>(
 
 pub type PairingFilters = BTreeMap<String, FilterPredicate>;
 
+pub fn validate_app_filter(
+    version: &Value,
+    filter: &gents_protocol::peer_schema::AppPairingFilter,
+) -> Result<(), String> {
+    let fields: Vec<schema::FieldDescription> = serde_json::from_value(
+        version
+            .get("Fields")
+            .cloned()
+            .ok_or("collection field metadata is missing")?,
+    )
+    .map_err(|error| format!("invalid collection field metadata: {error}"))?;
+    replication_filter::validate_replication_filter(
+        &fields,
+        &filter.collection,
+        &FilterPredicate::eq(&filter.field, filter.value.clone()),
+    )
+}
+
 pub fn decode_pairing_filters(raw: &str) -> serde_json::Result<PairingFilters> {
     serde_json::from_str(raw)
 }

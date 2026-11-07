@@ -24,6 +24,148 @@ pub fn admit_app_collections(requested: BTreeSet<String>) -> Option<BTreeSet<Str
     (!requested.is_empty() && !overlaps_protocol_catalog).then_some(requested)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppPairingFilter {
+    pub collection: String,
+    pub field: String,
+    pub value: Value,
+    pub version: String,
+}
+
+/// An unknown or mutable field cannot safely constrain replicated documents.
+pub fn admit_app_pairing_filters(
+    collections: &BTreeSet<String>,
+    immutable_fields: &BTreeSet<(String, String, String)>,
+    filters: &[AppPairingFilter],
+) -> bool {
+    let mut seen = BTreeSet::new();
+    filters.iter().all(|filter| {
+        collections.contains(&filter.collection)
+            && !filter.field.is_empty()
+            && !filter.version.is_empty()
+            && immutable_fields.contains(&(
+                filter.collection.clone(),
+                filter.field.clone(),
+                filter.version.clone(),
+            ))
+            && seen.insert(&filter.collection)
+    })
+}
+
+pub fn resolve_app_pairing_filters(
+    filtered: bool,
+    collections: &BTreeSet<String>,
+    immutable_fields: &BTreeSet<(String, String, String)>,
+    filters: Option<&[AppPairingFilter]>,
+) -> Option<Vec<AppPairingFilter>> {
+    match (filtered, filters) {
+        (false, None) => Some(Vec::new()),
+        (true, Some(filters))
+            if !filters.is_empty()
+                && admit_app_pairing_filters(collections, immutable_fields, filters) =>
+        {
+            Some(filters.to_vec())
+        }
+        _ => None,
+    }
+}
+
+pub fn app_pairing_subscriptions(
+    collections: &BTreeSet<String>,
+    filters: &[AppPairingFilter],
+) -> BTreeSet<String> {
+    let filtered: BTreeSet<&str> = filters
+        .iter()
+        .map(|filter| filter.collection.as_str())
+        .collect();
+    collections
+        .iter()
+        .filter(|collection| !filtered.contains(collection.as_str()))
+        .cloned()
+        .collect()
+}
+
+#[cfg(test)]
+mod app_pairing_filter_conformance {
+    use super::*;
+
+    fn fields(case: &Value) -> BTreeSet<(String, String, String)> {
+        case["authority"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|field| {
+                field["immutable"].as_bool() == Some(true)
+                    && field["supported"].as_bool() == Some(true)
+            })
+            .map(|field| {
+                (
+                    field["collection"].as_str().unwrap().to_owned(),
+                    field["field"].as_str().unwrap().to_owned(),
+                    field["version"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn admission_matches_executable_model() {
+        let snapshot: Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        let cases = snapshot["app_pairing_filter_cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let collections: BTreeSet<String> =
+                serde_json::from_value(case["collections"].clone()).unwrap();
+            let filters: Vec<AppPairingFilter> =
+                serde_json::from_value(case["filters"].clone()).unwrap();
+            let immutable = fields(case);
+            assert_eq!(
+                admit_app_pairing_filters(&collections, &immutable, &filters),
+                case["valid"].as_bool().unwrap(),
+                "{}",
+                case["label"]
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_matches_executable_model() {
+        let snapshot: Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        let cases = snapshot["app_pairing_filter_route_cases"]
+            .as_array()
+            .unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let collections: BTreeSet<String> =
+                serde_json::from_value(case["collections"].clone()).unwrap();
+            let filters: Option<Vec<AppPairingFilter>> =
+                serde_json::from_value(case["filters"].clone()).unwrap();
+            let actual = resolve_app_pairing_filters(
+                case["mode"] == "filtered",
+                &collections,
+                &fields(case),
+                filters.as_deref(),
+            );
+            assert_eq!(
+                actual.is_some(),
+                case["accepted"].as_bool().unwrap(),
+                "{}",
+                case["label"]
+            );
+            if let Some(filters) = actual {
+                let expected: BTreeSet<String> =
+                    serde_json::from_value(case["subscriptions"].clone()).unwrap();
+                assert_eq!(
+                    app_pairing_subscriptions(&collections, &filters),
+                    expected,
+                    "{}",
+                    case["label"]
+                );
+            }
+        }
+    }
+}
+
 /// What a merge depends on for one collection: DefraDB's content-addressed
 /// active version ID, plus the branchable and policy settings that version
 /// ID does not cover.

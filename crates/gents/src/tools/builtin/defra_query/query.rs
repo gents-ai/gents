@@ -87,6 +87,7 @@ pub const AGENT_CONFIG_QUERY_COLLECTIONS: &[&str] = &[
     "PeerPairingDesired",
     "PeerPairingApplied",
     "DataPlanePairingDesired",
+    "DataPlanePairingFilter",
 ];
 
 pub fn expand_collection_scope_aliases<'a>(
