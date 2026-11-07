@@ -55,7 +55,12 @@ pub(super) fn reused_variable_preview(
     let uses = uses.into_iter().map(|entry| {
         let mut parts = entry.path.trim_start_matches('/').splitn(3, '/');
         let field = parts.next().unwrap_or_default();
-        let index = parts.next().and_then(|value| value.parse::<usize>().ok());
+        let next = parts.next();
+        if field == "node" {
+            let resolved = installed.pointer(&entry.path).cloned();
+            return json!({"path": entry.path, "variables": entry.variables.keys().collect::<Vec<_>>(), "document": {"collection": "Node", "id": config.node.node_did}, "resolved": resolved});
+        }
+        let index = next.and_then(|value| value.parse::<usize>().ok());
         let suffix = parts.next().map(|part| format!("/{part}")).unwrap_or_default();
         let found = index.and_then(|index| {
             let collection = gents::Collection::ALL.iter().copied().find(|collection| collection.dir_name() == Some(field))?;

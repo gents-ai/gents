@@ -232,6 +232,13 @@ fn dependency_preview_reads_installed_literals_instead_of_the_current_environmen
         "tools": [{"node_did": "did:key:node", "tools_id": "demo-tools", "display_name": "installed value"}]
     })).unwrap();
     let preview = super::install::reused_variable_preview(&source, &config).unwrap();
+    let node = preview["uses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["path"] == "/node/node_did")
+        .unwrap();
+    assert_eq!(node["resolved"], "did:key:node");
     let target = preview["uses"]
         .as_array()
         .unwrap()
