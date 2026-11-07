@@ -1847,6 +1847,13 @@ def promptAssemblyReasoningSuffixCases : List PromptAssemblyReasoningSuffixCase 
       [recoveredOnly] [recoveredEvidence]
   , reasoningSuffixCase "recovered-reasoning-only-without-stop-witness" context claude .claudeMessages
       [recoveredOnly] [{ recoveredEvidence with evidence := { recoveredEvidence.evidence with reasoning := [] } }]
+  , reasoningSuffixCase "recovered-reasoning-only-with-foreign-issuer" context claude .claudeMessages
+      [recoveredOnly] [{ recoveredEvidence with evidence := { recoveredEvidence.evidence with
+        issuer := { family := "other", endpoint := "messages" } } }]
+  , reasoningSuffixCase "recovered-reasoning-only-without-capture" context claude .claudeMessages
+      [recoveredOnly] [{ recoveredEvidence with evidence := { recoveredEvidence.evidence with captured := none } }]
+  , reasoningSuffixCase "recovered-reasoning-only-with-ambiguous-evidence" context claude .claudeMessages
+      [recoveredOnly] [recoveredEvidence, recoveredEvidence]
   , reasoningSuffixCase "recovered-block-without-stop-witness" context claude .claudeMessages
       [recovered] [{ recoveredEvidence with evidence := { recoveredEvidence.evidence with reasoning := [] } }]
   , reasoningSuffixCase "recovered-origin-cannot-claim-complete" context claude .claudeMessages
