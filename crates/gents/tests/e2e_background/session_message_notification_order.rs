@@ -1,23 +1,23 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::Node as EmbeddedNode;
+use gents::documents::{AgentTools, Tools};
 use gents::store::graphql::escape_graphql_string;
 use gents::{DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use serde_json::json;
 
 use crate::support::accepted_turn::{
-    boot_prepared_accepted_turn, prepare_accepted_turn, AcceptedTurnSpec,
+    boot_prepared_accepted_turn, enqueue_managed_accepted_request, prepare_managed_accepted_turn,
+    AcceptedTurnSpec,
 };
-use crate::support::fixtures::{agent_target, bind_agent_backend, configure_child_agent};
-use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
+use crate::support::fixtures::{agent_target, bind_agent_backend, configure_agent_tools_as};
+use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
-use crate::support::{test_db, TestDb};
+use crate::support::{managed_agent_fixture, test_db, ManagedAgentFixture, TestDb};
 
-const PARENT_AGENT_DID: &str = "e2e-session-order-parent";
-const CHILD_AGENT_DID: &str = "e2e-session-order-child";
+const CHILD_TARGET: &str = "e2e-session-order-child";
 const BACKEND_ID: &str = "e2e-session-order-backend";
 const MODEL: &str = "e2e-session-order-model";
 const RESUME_BACKEND_ID: &str = "e2e-session-order-resume-backend";
@@ -33,61 +33,81 @@ struct TranscriptRow {
     content: String,
 }
 
-async fn configure_session_chain(db: &TestDb) {
+/// The enrolled User's default Agent delegates to a second named Agent the
+/// same User installed; both are managed Agents of this Node.
+async fn configure_session_chain(db: &TestDb) -> (ManagedAgentFixture, String) {
+    let fixture = managed_agent_fixture(db).await;
     let node_did = db.node_identity.did().to_string();
-    configure_child_agent(
-        &db.node,
+    let parent_did = fixture.binding.agent_did.clone();
+    let (_, child) =
+        crate::support::install_managed_agent(db, &fixture.access, &fixture.user, "Order child")
+            .await;
+    let child_did = child.agent_did;
+    crate::support::grant_agent_session_writer(db, &fixture.access, &child_did, &parent_did).await;
+    configure_agent_tools_as(
+        &fixture.access,
         &node_did,
-        CHILD_AGENT_DID,
-        "e2e-session-order-child-tools",
+        &child_did,
+        None,
+        Tools {
+            tools_id: "e2e-session-order-child-tools".into(),
+            node_did: node_did.clone(),
+            agents: Some(AgentTools {
+                target_ids: Vec::new(),
+                enabled: Some(false),
+            }),
+            ..Default::default()
+        },
         Vec::new(),
-        false,
     )
     .await;
-    configure_child_agent(
-        &db.node,
+    configure_agent_tools_as(
+        &fixture.access,
         &node_did,
-        PARENT_AGENT_DID,
-        "e2e-session-order-parent-tools",
-        vec![agent_target(
-            &node_did,
-            CHILD_AGENT_DID,
-            &node_did,
-            CHILD_AGENT_DID,
+        &parent_did,
+        None,
+        Tools {
+            tools_id: "e2e-session-order-parent-tools".into(),
+            node_did: node_did.clone(),
+            agents: Some(AgentTools {
+                target_ids: vec![CHILD_TARGET.into()],
+                enabled: Some(true),
+            }),
+            ..Default::default()
+        },
+        vec![(
+            gents::Collection::AgentTarget,
+            serde_json::to_value(agent_target(&node_did, CHILD_TARGET, &node_did, &child_did))
+                .expect("serialize the child target"),
         )],
-        true,
     )
     .await;
+    (fixture, child_did)
 }
 
-async fn session_transcript(node: &EmbeddedNode, node_did: &str) -> Vec<TranscriptRow> {
+/// The caller session as its configuring User reads it.
+async fn session_transcript(db: &TestDb, fixture: &ManagedAgentFixture) -> Vec<TranscriptRow> {
     let session_id = escape_graphql_string(SESSION_ID);
-    let response = node
+    let response = fixture
+        .access
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, order: {{ sequence: ASC }}) {{ _docID }} }}"#
         ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "message query failed: {:?}",
-        response.errors
-    );
-    let header_ids = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentMessage"))
-        .and_then(serde_json::Value::as_array)
+        .await
+        .expect("read caller session messages");
+    let header_ids = response["data"]["AgentMessage"]
+        .as_array()
         .into_iter()
         .flatten()
         .map(|row| row["_docID"].as_str().expect("message identity").to_owned())
         .collect::<Vec<_>>();
     let mut rows = Vec::with_capacity(header_ids.len());
     for header_id in header_ids {
-        let (header, message) = gents::session::load_canonical_message_from_node(
-            node,
+        let (header, message) = gents::session::load_canonical_message(
+            &fixture.access,
             &header_id,
-            node_did,
-            Some(node_did),
+            db.node_identity.did(),
+            Some(fixture.user.did()),
         )
         .await
         .unwrap_or_else(|error| panic!("reconstruct message {header_id}: {error:#}"));
@@ -99,9 +119,9 @@ async fn session_transcript(node: &EmbeddedNode, node_did: &str) -> Vec<Transcri
     rows
 }
 
-async fn wait_for_transcript_marker(node: &EmbeddedNode, node_did: &str, marker: &str) {
+async fn wait_for_transcript_marker(db: &TestDb, fixture: &ManagedAgentFixture, marker: &str) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    while !session_transcript(node, node_did)
+    while !session_transcript(db, fixture)
         .await
         .iter()
         .any(|row| row.content.contains(marker))
@@ -118,22 +138,24 @@ async fn wait_for_transcript_marker(node: &EmbeddedNode, node_did: &str, marker:
 async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
     let db = test_db("e2e-session-order").await;
     let node_did = db.node_identity.did().to_string();
-    configure_session_chain(&db).await;
+    let (fixture, child_did) = configure_session_chain(&db).await;
+    let parent_did = fixture.binding.agent_did.clone();
 
-    let prepared = prepare_accepted_turn(
+    let prepared = prepare_managed_accepted_turn(
         &db,
+        &fixture,
         AcceptedTurnSpec {
             backend_id: BACKEND_ID,
             model: MODEL,
-            parent_agent_did: PARENT_AGENT_DID,
-            configured_agent_dids: &[PARENT_AGENT_DID, CHILD_AGENT_DID],
+            parent_agent_did: &parent_did,
+            configured_agent_dids: &[&parent_did, &child_did],
             request_id: "e2e-session-order-request",
             session_id: SESSION_ID,
             prompt: PARENT_PROMPT,
             accepted_chunks: vec![StreamChunk::tool_call(
                 "e2e-session-order-tool-call",
                 gents::tools::native::AGENT_NEW_TOOL_NAME,
-                json!({ "agent": CHILD_AGENT_DID, "prompt": CHILD_PROMPT }).to_string(),
+                json!({ "agent": CHILD_TARGET, "prompt": CHILD_PROMPT }).to_string(),
             )],
             child_plans: vec![StreamPlan::new(
                 CHILD_PROMPT,
@@ -158,7 +180,7 @@ async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
     .await
     .expect("build first runtime");
     let first = boot_prepared_accepted_turn(&db, prepared, agent).await;
-    wait_for_transcript_marker(db.node.as_ref(), &node_did, CHILD_ANSWER).await;
+    wait_for_transcript_marker(&db, &fixture, CHILD_ANSWER).await;
     first.shutdown().await;
 
     let resume_backend = MockStreamingBackend::start(
@@ -168,16 +190,15 @@ async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
     .expect("start resume backend");
     bind_agent_backend(
         &db,
-        PARENT_AGENT_DID,
+        &parent_did,
         RESUME_BACKEND_ID,
         resume_backend.endpoint(),
         RESUME_MODEL,
     )
     .await;
-    create_runtime_request(
-        db.node.as_ref(),
-        &node_did,
-        PARENT_AGENT_DID,
+    enqueue_managed_accepted_request(
+        &db,
+        &fixture,
         "e2e-session-order-resume-request",
         SESSION_ID,
         RESUMED_PROMPT,
@@ -199,10 +220,10 @@ async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
     let handle = tokio::spawn(agent.run(shutdown_rx));
     wait_for_runtime_ready(db.node.as_ref(), &node_did).await;
     let resumed = BootedAgent::new(shutdown_tx, handle, node_did.clone());
-    wait_for_transcript_marker(db.node.as_ref(), &node_did, RESUMED_PROMPT).await;
+    wait_for_transcript_marker(&db, &fixture, RESUMED_PROMPT).await;
     resumed.shutdown().await;
 
-    let transcript = session_transcript(db.node.as_ref(), &node_did).await;
+    let transcript = session_transcript(&db, &fixture).await;
     let notification = transcript
         .iter()
         .find(|row| row.content.contains(CHILD_ANSWER))
