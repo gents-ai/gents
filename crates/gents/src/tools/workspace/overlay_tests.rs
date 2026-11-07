@@ -1108,15 +1108,11 @@ async fn artifact_alternate_owner(
     crate::request::lifecycle::ClaimOutcome,
 )> {
     use crate::store::identity::NodeIdentity;
-    let identity = crate::store::identity::KeyIdentity::load_or_create(
-        fx._dir.path().join(if binding["owner_matches"] == false {
-            "foreign.key"
-        } else {
-            "agent.key"
-        }),
-        None,
-    )
-    .unwrap();
+    // The local Agent signs every alternate request; an owner mismatch is
+    // the request naming a workspace owner other than the workspace's own.
+    let identity =
+        crate::store::identity::KeyIdentity::load_or_create(fx._dir.path().join("agent.key"), None)
+            .unwrap();
     let did = identity.did();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
@@ -1134,7 +1130,12 @@ async fn artifact_alternate_owner(
     if !binding.is_null() {
         create.workspace_id = Some("artifact-workspace".into());
         create.workspace_owner_node_did = if binding["owner_matches"] == false {
-            Some(did.to_owned())
+            let foreign = crate::store::identity::KeyIdentity::load_or_create(
+                fx._dir.path().join("foreign.key"),
+                None,
+            )
+            .unwrap();
+            Some(foreign.did().to_owned())
         } else {
             fx.owner.request().workspace_owner_node_did.clone()
         };
