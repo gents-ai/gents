@@ -804,9 +804,9 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
     .await
     .unwrap();
     assert_eq!(
-        interrupt_session(
+        interrupt_session_with_access(
             &node,
-            &caller_agent_did(&message),
+            &owner(&message),
             &scope
         )
         .await
@@ -868,9 +868,9 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
     assert_eq!(steer.hop(), 1);
 
     assert_eq!(
-        interrupt_session(
+        interrupt_session_with_access(
             &node,
-            &caller_agent_did(&message),
+            &owner(&message),
             &scope
         )
         .await
@@ -906,9 +906,9 @@ async fn explicit_stop_drains_pending_work_and_rejects_late_admission() {
     .await
     .unwrap();
 
-    let receipt = crate::session::stop_session(
+    let receipt = crate::session::stop_session_with_access(
         &node,
-        &caller_agent_did(&message),
+        &owner(&message),
         &caused.node_did,
         &caused.session_id,
         caused.requester_did.as_deref(),
@@ -1254,10 +1254,27 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
     assert_eq!(all, stale);
     let identity =
         crate::KeyIdentity::load_existing(message.admission.path.join("node.key"), None).unwrap();
-    let mut worker = crate::tools::call::lifecycle::admission_fixture::claimed_signed_request_with_trigger_correlation(
-        &node, "trigger-worker-request", "correlated-worker", &identity, None,
-        Some("shard-assignment"), Some("R3a"),
-    ).await;
+    // A trigger run records the calling Agent as its requester, which is what
+    // makes a same-node session without a parent link messageable by it.
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        "trigger-worker-request",
+        identity.did(),
+        caller.agent_did.as_str(),
+        identity.did(),
+        "correlated-worker",
+        "spawn",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(identity.did()),
+    );
+    create.caused_by_trigger_id = Some("shard-assignment".to_owned());
+    create.caused_by_trigger_kind = Some("schedule".to_owned());
+    create.caused_by_correlation = Some("R3a".to_owned());
+    let mut worker = crate::tools::call::lifecycle::admission_fixture::claimed_signed_request_create(
+        &node, &identity, create,
+    )
+    .await;
     let filtered = agent_session_list(&node, &caller, &tools, &serde_json::from_value(serde_json::json!({"filter": {"caused_by_trigger_id": "shard-assignment", "caused_by_correlation": "R3a", "status": "busy"}})).unwrap()).await.unwrap();
     assert_eq!(filtered["sessions"].as_array().unwrap().len(), 1);
     assert_eq!(filtered["sessions"][0]["session_id"], "correlated-worker");
