@@ -29,8 +29,10 @@ async fn read_owned_config_bundle(
     anyhow::ensure!(!node_did.trim().is_empty(), "configuration owner is blank");
     let owner = node_did.to_owned();
     let access_mode = access.mode().to_owned();
+    // A snapshot read: offline client access admits only read-only
+    // transactions, and export must work without a running server.
     access
-        .transact_write("export_owned_configuration", |txn| {
+        .transact_readonly("export_owned_configuration", |txn| {
             let owner = owner.clone();
             let access_mode = access_mode.clone();
             Box::pin(async move {
@@ -184,4 +186,31 @@ pub(crate) fn select_apply_collection_docs(
     }
 
     Ok(selected)
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn offline_client_access_exports_the_owned_configuration() {
+        let node = std::sync::Arc::new(
+            crate::shared::test_support::fixture_node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let owner = crate::shared::test_support::publish_test_node(&node).await;
+        // Offline client configuration access refuses every write transaction,
+        // even for the runtime's own DID.
+        let offline_client = gents::ConfigAccess::local_as(
+            node.clone(),
+            ::identity::Did::new(owner.as_str()).unwrap(),
+        )
+        .with_client_signed_configuration();
+        let bundle = super::build_config_export_bundle(&offline_client, &owner)
+            .await
+            .unwrap();
+        assert_eq!(bundle.node_did, owner);
+        node.shutdown().await.unwrap();
+    }
 }
