@@ -57,9 +57,7 @@ pub struct P2pParams {
     pub details: Option<Value>,
     #[serde(default)]
     pub valid_for_secs: Option<Value>,
-    #[serde(default)]
     pub lease_seconds: Option<Value>,
-    #[serde(default)]
     pub auto_renew: Option<Value>,
     #[serde(default)]
     pub argv: Vec<String>,
