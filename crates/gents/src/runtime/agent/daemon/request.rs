@@ -285,7 +285,8 @@ where
                 };
                 let consumed_prompts =
                     crate::request::lifecycle::queue::load_consumed_folded_inputs(
-                        &self.node, &request,
+                        &lifecycle.access()?,
+                        &request,
                     )
                     .await?
                     .into_iter()
