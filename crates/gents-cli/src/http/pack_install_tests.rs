@@ -10,8 +10,11 @@ fn archive(name: &str) -> Arc<PackArchive> {
 
 fn body(root: &PackArchive, dependencies: &[Arc<PackArchive>], node_did: &str) -> Vec<u8> {
     encode_request(root, dependencies, |root, dependencies| InstallRequest {
-        root_source: None,
-        dependency_sources: Vec::new(),
+        root_source: gents::pack::PackSource::Local { file_name: None },
+        dependency_sources: vec![
+            gents::pack::PackSource::Local { file_name: None };
+            dependencies.len()
+        ],
         node_did: node_did.into(),
         root,
         dependencies,
@@ -72,6 +75,17 @@ fn remote_sources_keep_file_names_but_reject_paths() {
     assert!(
         refusal(&serde_json::to_vec(&request).unwrap()).contains("registry source does not match")
     );
+}
+
+#[test]
+fn remote_install_requires_source_fields() {
+    let root = archive("documents_fixture");
+    let request: serde_json::Value = serde_json::from_slice(&body(&root, &[], NODE)).unwrap();
+    for field in ["root_source", "dependency_sources"] {
+        let mut missing = request.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(refusal(&serde_json::to_vec(&missing).unwrap()).contains(field));
+    }
 }
 
 #[test]
