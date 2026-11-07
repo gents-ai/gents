@@ -1046,6 +1046,14 @@ pub(in crate::commands::codex_shim) mod tests {
         )
         .await;
         let agent = crate::shared::test_support::fixture_agent();
+        // The bound Agent's managed signer, as bind_codex_shim derives it from
+        // the runtime root.
+        let agent_signer = gents::store::identity::resolve_agent_identity(
+            &crate::caused_sessions::fixtures::fixture_signer(),
+            &agent,
+        )
+        .unwrap()
+        .managed_agent_signer();
         ShimState {
             usage_cache: Arc::default(),
             codex_home: directory.to_path_buf(),
@@ -1059,7 +1067,7 @@ pub(in crate::commands::codex_shim) mod tests {
             ),
             node_did: Arc::from(crate::caused_sessions::fixtures::FIXTURE_DID),
             agent_did: Arc::from(agent.agent_did),
-            agent_signer: None,
+            agent_signer,
             id_counter: Arc::new(AtomicU64::new(1)),
             timeout: Duration::from_secs(5),
             poll_interval: Duration::from_millis(10),
