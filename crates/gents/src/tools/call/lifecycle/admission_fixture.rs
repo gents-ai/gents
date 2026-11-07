@@ -177,6 +177,9 @@ pub(crate) async fn publish_accepted_on_claimed_request(
 
 pub struct PublishedAdmission {
     pub node: Arc<EmbeddedNode>,
+    /// Holds the store lock until dropped, so a test that shuts the node down
+    /// and drops this can reopen the retained store at `path`.
+    pub home: crate::support::TestDb,
     pub path: PathBuf,
     pub tool: ToolCallLifecycle,
     pub node_did: String,
@@ -689,6 +692,7 @@ pub async fn published_admission_with_owner(
     Ok((
         PublishedAdmission {
             node,
+            home: db,
             path,
             tool,
             node_did,
