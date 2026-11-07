@@ -116,16 +116,25 @@ async fn assert_access_control(
         .expect("the home principal may write in an HTTP transaction");
 
     let admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(node));
-    admin
-        .add_p2p_collections(&["NodeAccessProbe".to_string()])
-        .await
-        .expect("in-process P2P administration acts as the node");
-    assert!(admin
+    assert!(
+        matches!(
+            admin
+                .add_p2p_collections(&["NodeAccessProbe".to_string()])
+                .await,
+            Err(gents::runtime::agent::p2p_reconcile::RemoteP2pAdminError::RuntimeLocalCollection(
+                ref name
+            )) if name == "NodeAccessProbe"
+        ),
+        "P2P carries only discovery and enrollment documents"
+    );
+    let replicated = admin
         .list_p2p_collections()
         .await
-        .expect("in-process P2P listing acts as the node")
-        .iter()
-        .any(|collection| !collection.is_empty()));
+        .expect("in-process P2P listing acts as the node");
+    assert!(
+        !replicated.iter().any(|collection| collection == "NodeAccessProbe"),
+        "a refused runtime-local collection is never replicated: {replicated:?}"
+    );
 }
 
 /// Stopping the phase runtime releases the node's detached HTTP/P2P tasks for the next opener.

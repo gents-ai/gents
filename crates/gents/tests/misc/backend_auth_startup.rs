@@ -1,6 +1,5 @@
 use anyhow::Result;
 use gents::eval::runner::embedded::EmbeddedHome;
-use gents::store::graphql::escape_graphql_string;
 use gents::{DocumentRuntimeOptions, Gents, ToolCeiling};
 use serde_json::Value;
 
@@ -55,20 +54,14 @@ async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> 
         MockModelEndpoint::start_with_required_bearer("default", Some("backend-key"))?;
     bind_default_agent_backend(&db, "backend-startup-auth", mock_endpoint.endpoint()).await;
 
-    let escaped_backend_id = escape_graphql_string("backend-startup-auth");
-    let mutation = format!(
-        r#"mutation {{
-            update_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                input: {{ auth: {{
-                    kind: "environment",
-                    variable: "GENTS_TEST_RUNTIME_BACKEND_KEY"
-                }} }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    let user = crate::support::load_managed_fixture_user(&db).await;
+    crate::support::fixtures::set_backend_auth_as(
+        &db.client_access(&user),
+        db.node_identity.did(),
+        "backend-startup-auth",
+        serde_json::json!({"kind": "environment", "variable": "GENTS_TEST_RUNTIME_BACKEND_KEY"}),
+    )
+    .await;
 
     let mut env = TestEnvGuard::new(&["GENTS_TEST_RUNTIME_BACKEND_KEY"]);
     env.set("GENTS_TEST_RUNTIME_BACKEND_KEY", "backend-key");
@@ -76,6 +69,7 @@ async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> 
         node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },

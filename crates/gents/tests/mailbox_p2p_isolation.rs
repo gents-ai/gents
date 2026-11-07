@@ -105,7 +105,7 @@ async fn mailbox_recipient_access_and_unrelated_exact_peer_pull() {
         .as_str()
         .unwrap();
     assert_eq!(
-        source.verified_block_signer_did(cid).await.unwrap(),
+        support::snapshots::verified_block_signer_as(&source, agent.did(), cid).await,
         agent.did()
     );
     let visible = ConfigAccess::local_as(source.clone(), recipient.did().parse().unwrap())
@@ -135,8 +135,7 @@ async fn mailbox_recipient_access_and_unrelated_exact_peer_pull() {
         )
         .await
         .unwrap();
-    receiver
-        .p2p()
+    gents::store::identity::node_p2p(&receiver)
         .unwrap()
         .sync_documents(
             "PeerRegistry",
@@ -156,8 +155,7 @@ async fn mailbox_recipient_access_and_unrelated_exact_peer_pull() {
         public_probe["data"]["PeerRegistry"][0]["peer_id"],
         "mailbox-public-probe"
     );
-    let pull = receiver
-        .p2p()
+    let pull = gents::store::identity::node_p2p(&receiver)
         .unwrap()
         .sync_documents(
             "MailboxItem",

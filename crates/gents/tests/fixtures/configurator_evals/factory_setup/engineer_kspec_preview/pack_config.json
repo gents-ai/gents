@@ -59,7 +59,8 @@
           "profile",
           "backend",
           "mcp_service",
-          "automation"
+          "automation",
+          "policy"
         ],
         "self_config_no_lockout": true,
         "self_config_preview": true,

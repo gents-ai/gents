@@ -149,9 +149,13 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
             };
             let response = http.execute(&format!(r#"{{ PendingChatSubmission(filter: {{_docID: {{_eq: "{doc_id_escaped}"}}}}) {{ _docID payload }} }}"#)).await;
             let visible = match response {
+                // An anonymous reader is not shown the private collection at all.
+                Ok(response) if identity.is_none() && response["data"] == serde_json::json!({}) => {
+                    false
+                }
                 Ok(response) => response["data"]["PendingChatSubmission"]
                     .as_array()
-                    .unwrap()
+                    .unwrap_or_else(|| panic!("journal read returned no rows for {case}: {response}"))
                     .iter()
                     .any(|row| row["_docID"] == doc_id && row["payload"] == "client secret"),
                 Err(error) if identity.is_none() => {
@@ -267,8 +271,7 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
         )
         .await
         .unwrap();
-    receiver
-        .p2p()
+    gents::store::identity::node_p2p(receiver)
         .unwrap()
         .sync_documents(
             "PeerRegistry",
@@ -287,8 +290,7 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
         public_on_receiver["data"]["PeerRegistry"][0]["peer_id"],
         "journal-public-probe"
     );
-    let pull = receiver
-        .p2p()
+    let pull = gents::store::identity::node_p2p(receiver)
         .unwrap()
         .sync_documents(
             "PendingChatSubmission",
