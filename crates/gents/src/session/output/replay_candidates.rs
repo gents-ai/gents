@@ -697,6 +697,15 @@ mod recovered_provenance_tests {
         assert!(recovered_provider_provenance(&restored, kind).is_err());
         let mut restored = fixture();
         restored.segments[0].segment.runs.pop();
-        assert!(recovered_provider_provenance(&restored, kind).is_err());
+        let Some(SourceClose::Closed { stream_bytes, .. }) =
+            &mut restored.segments[0].segment.close
+        else {
+            panic!("expected a source close");
+        };
+        stream_bytes.pop();
+        assert!(recovered_provider_provenance(&restored, kind)
+            .unwrap_err()
+            .to_string()
+            .contains("exact stopped projection"));
     }
 }
