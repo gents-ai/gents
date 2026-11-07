@@ -576,12 +576,42 @@ mod tests {
         crate::triggers::callback::test_agent_did()
     }
 
-    fn agent_codex_did() -> String {
+    fn agent_codex_identity() -> Arc<dyn crate::store::identity::NodeIdentity> {
         let root = crate::triggers::callback::test_root_identity();
-        crate::store::identity::derive_agent_identity(&root, &"d".repeat(64))
-            .unwrap()
-            .did()
-            .to_owned()
+        let binding = gents_protocol::agent_identity::AgentIdentityBinding {
+            creation_nonce: "d".repeat(64),
+            agent_did: crate::store::identity::derive_agent_identity(&root, &"d".repeat(64))
+                .unwrap()
+                .did()
+                .to_owned(),
+        };
+        crate::store::identity::resolve_agent_identity(&root, &binding).unwrap()
+    }
+
+    fn agent_codex_did() -> String {
+        agent_codex_identity().did().to_owned()
+    }
+
+    /// Each Agent signs the rows it owns; the tool reads as that Agent.
+    fn agent_access(node: &Arc<EmbeddedNode>, agent_did: &str) -> crate::ConfigAccess {
+        if agent_did == agent_context_did() {
+            return crate::triggers::callback::test_agent_access(node);
+        }
+        assert_eq!(agent_did, agent_codex_did());
+        let agent = agent_codex_identity();
+        crate::ConfigAccess::local_managed_agent(
+            node.clone(),
+            identity::Did::new(agent.did()).unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap()
+    }
+
+    async fn seed_as(node: &Arc<EmbeddedNode>, agent_did: &str, mutation: &str) {
+        agent_access(node, agent_did)
+            .write("test.context_budget.seed", mutation)
+            .await
+            .unwrap_or_else(|error| panic!("seed failed: {error:#}"));
     }
 
     #[test]
@@ -594,7 +624,15 @@ mod tests {
     }
 
     async fn seeded_node() -> Arc<EmbeddedNode> {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        // The runtime holds the root its fixture Agents derive from.
+        let root = crate::triggers::callback::test_root_identity();
+        let node = Arc::new(
+            defra_node::Node::builder()
+                .with_node_identity_did(crate::store::identity::NodeIdentity::did(&root))
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
         for mutation in [
@@ -663,8 +701,7 @@ mod tests {
             }"#,
         ] {
             let mutation = mutation.replace("agent-context", &agent_context_did());
-            let response = node.execute(&mutation).await;
-            assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
+            seed_as(&node, &agent_context_did(), &mutation).await;
         }
 
         let accounting = gents_protocol::rendered_request::ContextAccounting {
@@ -694,8 +731,10 @@ mod tests {
         };
         let accounting = escape_graphql_string(&serde_json::to_string(&accounting).unwrap());
         let agent_context = escape_graphql_string(&agent_context_did());
-        let response = node
-            .execute(&format!(
+        seed_as(
+            &node,
+            &agent_context_did(),
+            &format!(
                 r#"mutation {{
                     create_InferenceCall(input: {{
                         call_id: "context-call",
@@ -709,9 +748,9 @@ mod tests {
                         context_accounting_json: "{accounting}"
                     }}) {{ _docID }}
                 }}"#
-            ))
-            .await;
-        assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
+            ),
+        )
+        .await;
 
         node
     }
@@ -737,7 +776,7 @@ mod tests {
     /// Seed a newer, larger provider dispatch for a different agent on the
     /// same node (the reported Codex background-completion shape), plus a
     /// newer dispatch by the same agent in a different session.
-    async fn seed_foreign_dispatches(node: &EmbeddedNode) {
+    async fn seed_foreign_dispatches(node: &Arc<EmbeddedNode>) {
         for (agent_did, session_id, request_id, call_id, queued_at) in [
             (
                 agent_codex_did(),
@@ -754,8 +793,10 @@ mod tests {
                 "2026-06-03T12:30:00Z",
             ),
         ] {
-            let response = node
-                .execute(&format!(
+            seed_as(
+                node,
+                &agent_did,
+                &format!(
                     r#"mutation {{
                         create_AgentRequest(input: {{
                             request_id: "{request_id}",
@@ -766,11 +807,13 @@ mod tests {
                             created_at: "{queued_at}"
                         }}) {{ _docID }}
                     }}"#
-                ))
-                .await;
-            assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
-            let response = node
-                .execute(&format!(
+                ),
+            )
+            .await;
+            seed_as(
+                node,
+                &agent_did,
+                &format!(
                     r#"mutation {{
                         create_CompactionEntry(input: {{
                             compaction_key: "{session_id}:1",
@@ -782,9 +825,9 @@ mod tests {
                             created_at: "{queued_at}"
                         }}) {{ _docID }}
                     }}"#
-                ))
-                .await;
-            assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
+                ),
+            )
+            .await;
             let accounting = gents_protocol::rendered_request::ContextAccounting {
                 accounting_version: gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
                 turn_index: 0,
@@ -811,8 +854,10 @@ mod tests {
                 pre_compaction_input_tokens: None,
             };
             let accounting = escape_graphql_string(&serde_json::to_string(&accounting).unwrap());
-            let response = node
-                .execute(&format!(
+            seed_as(
+                node,
+                &agent_did,
+                &format!(
                     r#"mutation {{
                         create_InferenceCall(input: {{
                             call_id: "{call_id}",
@@ -826,16 +871,16 @@ mod tests {
                             context_accounting_json: "{accounting}"
                         }}) {{ _docID }}
                     }}"#
-                ))
-                .await;
-            assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
+                ),
+            )
+            .await;
         }
     }
 
     #[tokio::test]
     async fn context_budget_tool_ignores_other_agents_and_sessions_on_the_node() {
         let node = seeded_node().await;
-        seed_foreign_dispatches(node.as_ref()).await;
+        seed_foreign_dispatches(&node).await;
         let tool = ContextBudgetTool::new(node, "did:key:z-context");
 
         let output = call_as(&tool, &agent_context_did(), "session-context").await;
@@ -898,8 +943,7 @@ mod tests {
             }"#,
         ] {
             let mutation = mutation.replace("agent-context", &agent_context_did());
-            let response = node.execute(&mutation).await;
-            assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
+            seed_as(&node, &agent_context_did(), &mutation).await;
         }
         let output = call_as(&tool, &agent_context_did(), "session-without-accounting").await;
         let scoped: ContextBudgetSnapshot = serde_json::from_str(&output).unwrap();
