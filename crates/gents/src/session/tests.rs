@@ -1591,9 +1591,74 @@ pub(crate) async fn import_history_observation(
     tool_call: Option<(&str, &str)>,
 ) {
     use canonical_rows::*;
+    let segment = history_observation_segment(
+        request_id,
+        session_id,
+        node_did,
+        requester_did,
+        text,
+        message_key_suffix,
+        tool_call,
+    );
+    let response = node
+        .execute_request(
+            defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
+                .with_variables(output_segment_create_variables(&segment).unwrap()),
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let row =
+        crate::store::graphql::single_mutation_document(&response, "create_AgentOutputSegment")
+            .unwrap()
+            .unwrap();
+    let header = history_observation_header(
+        request_id,
+        session_id,
+        node_did,
+        requester_did,
+        message_key_suffix,
+        sequence,
+        tool_call,
+        row["_docID"].as_str().unwrap(),
+        &segment.created_at,
+    );
+    let response = node
+        .execute_request(
+            defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
+                .with_variables(transcript_message_create_variables(&header).unwrap()),
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let row = crate::store::graphql::single_mutation_document(&response, "create_AgentMessage")
+        .unwrap()
+        .unwrap();
+    let (_, reconstructed) = load_canonical_message_from_node(
+        node,
+        row["_docID"].as_str().unwrap(),
+        node_did,
+        requester_did,
+    )
+    .await
+    .unwrap();
+    let expected = history_observation_message(text, tool_call);
+    assert_eq!(reconstructed, expected);
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the shared history observation fixture's arguments"
+)]
+fn history_observation_segment(
+    request_id: &str,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    text: &str,
+    message_key_suffix: &str,
+    tool_call: Option<(&str, &str)>,
+) -> gents_protocol::output::OutputSegment {
     use gents_protocol::output::*;
-    let now = chrono::Utc::now().to_rfc3339();
-    let segment = OutputSegment {
+    OutputSegment {
         node_did: node_did.into(),
         requester_did: requester_did.map(str::to_owned),
         session_id: session_id.into(),
@@ -1634,20 +1699,27 @@ pub(crate) async fn import_history_observation(
             segments: 1,
             stream_bytes: vec![text.len() as u64],
         }),
-        created_at: now.clone(),
-    };
-    let response = node
-        .execute_request(
-            defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
-                .with_variables(output_segment_create_variables(&segment).unwrap()),
-        )
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let row =
-        crate::store::graphql::single_mutation_document(&response, "create_AgentOutputSegment")
-            .unwrap()
-            .unwrap();
-    let header = TranscriptMessage {
+        created_at: chrono::Utc::now().to_rfc3339(),
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the shared history observation fixture's arguments"
+)]
+fn history_observation_header(
+    request_id: &str,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    message_key_suffix: &str,
+    sequence: u32,
+    tool_call: Option<(&str, &str)>,
+    close_doc_id: &str,
+    now: &str,
+) -> gents_protocol::output::TranscriptMessage {
+    use gents_protocol::output::*;
+    TranscriptMessage {
         native_request_id: None,
         message_key: message_key_suffix.into(),
         session_id: session_id.into(),
@@ -1669,7 +1741,7 @@ pub(crate) async fn import_history_observation(
         blocks: vec![{
             let payload = PresentedPayload {
                 output: PayloadRef {
-                    close_doc_id: row["_docID"].as_str().unwrap().into(),
+                    close_doc_id: close_doc_id.into(),
                     stream: 0,
                 },
                 presentation: PayloadPresentation::Full,
@@ -1684,27 +1756,12 @@ pub(crate) async fn import_history_observation(
                 None => MessageBlock::Text { text: payload },
             }
         }],
-        created_at: now,
-    };
-    let response = node
-        .execute_request(
-            defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
-                .with_variables(transcript_message_create_variables(&header).unwrap()),
-        )
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let row = crate::store::graphql::single_mutation_document(&response, "create_AgentMessage")
-        .unwrap()
-        .unwrap();
-    let (_, reconstructed) = load_canonical_message_from_node(
-        node,
-        row["_docID"].as_str().unwrap(),
-        node_did,
-        requester_did,
-    )
-    .await
-    .unwrap();
-    let expected = match tool_call {
+        created_at: now.into(),
+    }
+}
+
+fn history_observation_message(text: &str, tool_call: Option<(&str, &str)>) -> Message {
+    match tool_call {
         Some((_, call_id)) => Message::User {
             content: vec![UserContent::ToolResult(ToolResult {
                 id: call_id.into(),
@@ -1713,8 +1770,76 @@ pub(crate) async fn import_history_observation(
             })],
         },
         None => Message::user(text),
-    };
-    assert_eq!(reconstructed, expected);
+    }
+}
+
+/// [`import_history_observation`] written and read back by `access`, so the
+/// rows are owned by the actor (such as the session's Agent) that reads them.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "shared test helper with call sites in modules outside session"
+)]
+pub(crate) async fn import_history_observation_as(
+    access: &crate::ConfigAccess,
+    request_id: &str,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    text: &str,
+    message_key_suffix: &str,
+    sequence: u32,
+    tool_call: Option<(&str, &str)>,
+) {
+    use canonical_rows::*;
+    let segment = history_observation_segment(
+        request_id,
+        session_id,
+        node_did,
+        requester_did,
+        text,
+        message_key_suffix,
+        tool_call,
+    );
+    let header_doc = access
+        .transact_write("test.history_observation", |txn| {
+            let segment = &segment;
+            Box::pin(async move {
+                let response = txn
+                    .execute_with_variables(
+                        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                        &output_segment_create_variables(segment)?,
+                    )
+                    .await?;
+                let close = crate::store::graphql::created_doc_id(&response, "AgentOutputSegment")?;
+                let header = history_observation_header(
+                    request_id,
+                    session_id,
+                    node_did,
+                    requester_did,
+                    message_key_suffix,
+                    sequence,
+                    tool_call,
+                    &close,
+                    &segment.created_at,
+                );
+                let response = txn
+                    .execute_with_variables(
+                        CREATE_AGENT_MESSAGE_MUTATION,
+                        &transcript_message_create_variables(&header)?,
+                    )
+                    .await?;
+                Ok::<_, anyhow::Error>(crate::store::graphql::created_doc_id(
+                    &response,
+                    "AgentMessage",
+                )?)
+            })
+        })
+        .await
+        .unwrap();
+    let (_, reconstructed) = load_canonical_message(access, &header_doc, node_did, requester_did)
+        .await
+        .unwrap();
+    assert_eq!(reconstructed, history_observation_message(text, tool_call));
 }
 
 #[tokio::test]

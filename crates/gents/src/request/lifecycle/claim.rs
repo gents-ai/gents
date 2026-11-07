@@ -1867,32 +1867,35 @@ mod tests {
         );
     }
 
+    /// Agent-authored background work: the managed Agent signs both its prior
+    /// request and the local-control wake, as the runtime does.
     async fn signed_background_claim_fixture(
         node: &Arc<EmbeddedNode>,
-        identity: &crate::store::identity::KeyIdentity,
         session: &str,
     ) -> (AgentRequest, String) {
-        use crate::store::identity::NodeIdentity;
         use gents_protocol::request_admission::{
             AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
         };
         use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestQueue};
         let access = root_access(node);
         let agent = agent_access(node);
-        ensure_agent_session(node, session, identity.did(), Some(identity.did()))
+        let identity = crate::triggers::callback::test_agent_identity();
+        let identity = identity.as_ref();
+        let (node_did, agent_did) = (test_node_did(), test_agent_did());
+        ensure_agent_session(node, session, &node_did, Some(&agent_did))
             .await
         .unwrap();
         let mut parent = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "snapshot-parent",
-            identity.did(),
-            identity.did(),
-            test_agent_did(),
+            &node_did,
+            &agent_did,
+            &agent_did,
             session,
             "Prior work",
             "interactive",
             "2026-10-21T00:00:00Z",
-            AgentRequestAdmissionRecord::local_self(identity.did()),
+            AgentRequestAdmissionRecord::local_self(&agent_did),
         );
         crate::sign_agent_request_create(identity, &mut parent)
             .await
@@ -1906,14 +1909,14 @@ mod tests {
         let mut wake = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "snapshot-wake",
-            identity.did(),
-            identity.did(),
-            test_agent_did(),
+            &node_did,
+            &agent_did,
+            &agent_did,
             session,
             "Review background results",
             "scheduled",
             "2026-10-21T00:00:01Z",
-            AgentRequestAdmissionRecord::runtime_local_control(identity.did(), &parent.request_id),
+            AgentRequestAdmissionRecord::runtime_local_control(&agent_did, &parent.request_id),
         );
         wake.input.queue = Some(RequestQueue {
             delivery: Default::default(),
@@ -1971,32 +1974,28 @@ mod tests {
     #[tokio::test]
     async fn background_claim_snapshots_transcript_before_successor_input() {
         let node = test_node().await;
-        use crate::store::identity::NodeIdentity;
-        let dir = tempfile::tempdir().unwrap();
-        let identity =
-            crate::store::identity::KeyIdentity::load_or_create(dir.path().join("owner.key"), None)
-                .unwrap();
+        let (node_did, agent_did) = (test_node_did(), test_agent_did());
+        let agent = agent_access(&node);
         let session_id = "background-claim-snapshot";
-        let (request, source_doc) =
-            signed_background_claim_fixture(&node, &identity, session_id).await;
-        session::import_history_observation(
-            &node,
+        let (request, source_doc) = signed_background_claim_fixture(&node, session_id).await;
+        session::import_history_observation_as(
+            &agent,
             &source_doc,
             session_id,
-            identity.did(),
-            Some(identity.did()),
+            &node_did,
+            Some(&agent_did),
             "first notification",
             "background-completion-notification:child-1:agent",
             1,
             None,
         )
         .await;
-        session::import_history_observation(
-            &node,
+        session::import_history_observation_as(
+            &agent,
             &source_doc,
             session_id,
-            identity.did(),
-            Some(identity.did()),
+            &node_did,
+            Some(&agent_did),
             "prior context",
             "prior-context",
             2,
@@ -2007,8 +2006,8 @@ mod tests {
         let request_doc_id = request.doc_id.clone();
         let mut lifecycle = test_lifecycle(
             node.clone(),
-            &test_agent_did(),
-            identity.did(),
+            &agent_did,
+            &node_did,
             request,
             60,
             ExecutionOrigin::Scheduled,
@@ -2022,7 +2021,7 @@ mod tests {
             lifecycle.background_completion_input_through_sequence(),
             Some(2)
         );
-        let snapshot = node
+        let snapshot = agent
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
                     background_completion_input_through_sequence
@@ -2030,13 +2029,9 @@ mod tests {
                 }} }}"#,
                 escape_graphql_string(&request_doc_id)
             ))
-            .await;
-        assert!(
-            !snapshot.has_errors(),
-            "snapshot query: {:?}",
-            snapshot.errors
-        );
-        let row = &snapshot.data.as_ref().unwrap()["AgentRequest"][0];
+            .await
+            .unwrap();
+        let row = &snapshot["data"]["AgentRequest"][0];
         assert_eq!(
             row["background_completion_input_through_sequence"].as_i64(),
             Some(2)
@@ -2051,24 +2046,26 @@ mod tests {
             vec!["background-completion-notification:child-1:agent"]
         );
 
-        session::import_history_observation(
-            &node,
+        session::import_history_observation_as(
+            &agent,
             &source_doc,
             session_id,
-            identity.did(),
-            Some(identity.did()),
+            &node_did,
+            Some(&agent_did),
             "successor notification",
             "background-completion-notification:child-2:agent",
             3,
             None,
         )
         .await;
-        let history = session::load_history_through_sequence(
-            node.as_ref(),
+        let history = session::load_sequenced_history_projection_on(
+            &agent,
             session_id,
-            identity.did(),
-            Some(identity.did()),
+            &node_did,
+            Some(&agent_did),
             lifecycle.background_completion_input_through_sequence(),
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -2082,31 +2079,24 @@ mod tests {
     #[tokio::test]
     async fn background_claim_keeps_fork_imports_out_of_notification_input() {
         let node = test_node().await;
-        use crate::store::identity::NodeIdentity;
-        let dir = tempfile::tempdir().unwrap();
-        let identity =
-            crate::store::identity::KeyIdentity::load_or_create(dir.path().join("owner.key"), None)
-                .unwrap();
+        let (node_did, agent_did) = (test_node_did(), test_agent_did());
+        let agent = agent_access(&node);
         let session_id = "background-import-snapshot";
         let origin_key = "background-completion-notification:owned:tool";
-        let (request, source_doc) =
-            signed_background_claim_fixture(&node, &identity, session_id).await;
-        session::import_history_observation(
-            &node,
+        let (request, source_doc) = signed_background_claim_fixture(&node, session_id).await;
+        session::import_history_observation_as(
+            &agent,
             &source_doc,
             session_id,
-            identity.did(),
-            Some(identity.did()),
+            &node_did,
+            Some(&agent_did),
             "notification",
             origin_key,
             1,
             None,
         )
         .await;
-        let access = crate::store::config_client::ConfigAccess::local_as(
-            node.clone(),
-            identity::Did::new(identity.did().to_owned()).unwrap(),
-        );
+        let access = &agent;
         let response = access
             .execute(&format!(
                 "{{ AgentMessage(filter: {{ message_key: {{ _eq: \"{}\" }} }}) {{ {} }} }}",
@@ -2146,8 +2136,8 @@ mod tests {
         let doc_id = request.doc_id.clone();
         let mut lifecycle = test_lifecycle(
             node.clone(),
-            &test_agent_did(),
-            identity.did(),
+            &agent_did,
+            &node_did,
             request,
             60,
             ExecutionOrigin::Scheduled,
