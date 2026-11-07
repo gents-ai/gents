@@ -564,7 +564,31 @@ async fn p2p_rejects_foreign_actor_and_preserves_another_overlays_owner() {
     let agent =
         crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &agent_binding)
             .unwrap();
-    access.write("test.p2p.overlay", "mutation {create_DataPlanePairingDesired(input: {peer_id: \"foreign-route\", node_did: \"did:key:another\", source: \"another-owner\", collections: [\"DeploymentNote\"], replicator_addresses: null, template: \"app-collections\"}) {_docID}}").await.unwrap();
+    let agent_did = identity::Did::new(agent.did()).unwrap();
+    let admin = ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(db.node_identity.did()).unwrap(),
+    );
+    use crate::store::config_client::NodePermission;
+    for permission in [
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::DacRelationAdd,
+    ] {
+        admin
+            .grant_node_permission(&agent_did, permission)
+            .await
+            .unwrap();
+    }
+    // The runtime signs these overlays and lets the invoking Agent read them, so
+    // the refusal comes from ownership and grant scope rather than visibility.
+    let foreign = access.write("test.p2p.overlay", "mutation {create_DataPlanePairingDesired(input: {peer_id: \"foreign-route\", node_did: \"did:key:another\", source: \"another-owner\", collections: [\"DeploymentNote\"], replicator_addresses: null, template: \"app-collections\"}) {_docID}}").await.unwrap();
+    let foreign =
+        crate::store::graphql::created_doc_id(&foreign, "DataPlanePairingDesired").unwrap();
+    admin
+        .add_actor_relationship("DataPlanePairingDesired", &foreign, "reader", &agent_did)
+        .await
+        .unwrap();
     let tool = P2pTool::new(
         db.node.clone(),
         Some(db.node_identity.clone()),
@@ -583,7 +607,11 @@ async fn p2p_rejects_foreign_actor_and_preserves_another_overlays_owner() {
     .unwrap_err();
     assert!(result.to_string().contains("another owner"), "{result}");
     assert!(tool.overlay("foreign-route").await.unwrap().is_some());
-    access.write("test.p2p.mixed", &format!("mutation {{create_DataPlanePairingDesired(input: {{peer_id: \"mixed-route\", node_did: {}, source: \"engineer\", collections: [\"DeploymentNote\", \"PrivateNote\"], replicator_addresses: null, template: \"app-collections\"}}) {{_docID}}}}", quoted(db.node_identity.did()))).await.unwrap();
+    // The Agent owns this overlay, so only its collection scope can refuse it.
+    let agent_access =
+        ConfigAccess::local_managed_agent(db.node.clone(), agent_did.clone(), agent.as_ref())
+            .unwrap();
+    agent_access.write("test.p2p.mixed", &format!("mutation {{create_DataPlanePairingDesired(input: {{peer_id: \"mixed-route\", node_did: {}, actor_did: {}, source: \"engineer\", collections: [\"DeploymentNote\", \"PrivateNote\"], replicator_addresses: null, template: \"app-collections\"}}) {{_docID}}}}", quoted(db.node_identity.did()), quoted(agent.did()))).await.unwrap();
     let scoped = P2pTool::new(
         db.node.clone(),
         Some(db.node_identity.clone()),
@@ -600,7 +628,10 @@ async fn p2p_rejects_foreign_actor_and_preserves_another_overlays_owner() {
     )
     .await
     .unwrap_err();
-    assert!(result.to_string().contains("outside the P2P grant"));
+    assert!(
+        result.to_string().contains("outside the P2P grant"),
+        "{result}"
+    );
     assert!(scoped.overlay("mixed-route").await.unwrap().is_some());
     let key_dir = tempfile::tempdir().unwrap();
     let foreign = Arc::new(
