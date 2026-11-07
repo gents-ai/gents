@@ -728,6 +728,18 @@ def sourcePrefixLength (row : TaggedReplayRow) : Nat :=
   ((row.blockIndices.zip (List.range row.blocks.length)).takeWhile fun pair =>
     pair.1 == pair.2).length
 
+def keepRecoveredBlock (cutoff : Nat)
+    (pair : Nat × CanonicalOutput.MessageBlock (List UInt8)) : Bool :=
+  pair.1 < cutoff || match pair.2 with
+    | .reasoning .. => false
+    | _ => true
+
+theorem keptRecoveredReasoning_precedes_gap (cutoff index : Nat)
+    (id : Option String) (parts : List (CanonicalOutput.ReasoningPart (List UInt8)))
+    (h : keepRecoveredBlock cutoff (index, .reasoning id parts) = true) :
+    index < cutoff := by
+  simpa [keepRecoveredBlock] using h
+
 def projectRecoveredPrefix (resolve : ReplayTag → List ResolvedReplayEvidence)
     (row : TaggedReplayRow) : TaggedReplayRow :=
   match row.source with
@@ -739,10 +751,7 @@ def projectRecoveredPrefix (resolve : ReplayTag → List ResolvedReplayEvidence)
               !replayRowIndicesValid row then row
           else
             let cutoff := sourcePrefixLength row
-            let kept := (row.blockIndices.zip row.blocks).filter fun pair =>
-              pair.1 < cutoff || match pair.2 with
-                | .reasoning .. => false
-                | _ => true
+            let kept := (row.blockIndices.zip row.blocks).filter (keepRecoveredBlock cutoff)
             { row with blockIndices := kept.map Prod.fst, blocks := kept.map Prod.snd }
       | _ => row
 
