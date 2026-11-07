@@ -8,9 +8,18 @@ pub async fn enqueue_local_steering_request(
     input: RequestInput,
     signer: &crate::store::identity::ManagedAgentSigner,
 ) -> Result<EnqueuedAgentRequest> {
-    let parent = crate::request::binding::load_agent_request_by_doc_id(node, parent_request_doc_id)
-        .await?
-        .with_context(|| format!("steering parent request {parent_request_doc_id} not found"))?;
+    // The parent is the signing Agent's own request; ACP hides it from any other actor.
+    let access = crate::ConfigAccess::local_with_agent_signer(
+        node.clone(),
+        ::identity::Did::new(signer.did())?,
+        signer.clone(),
+    )?;
+    let parent = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &access,
+        parent_request_doc_id,
+    )
+    .await?
+    .with_context(|| format!("steering parent request {parent_request_doc_id} not found"))?;
     anyhow::ensure!(
         parent.request_id == parent_request_id,
         "steering parent request changed logical binding"

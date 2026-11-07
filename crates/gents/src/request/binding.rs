@@ -120,6 +120,9 @@ pub(crate) async fn load_agent_request(
     Ok(request)
 }
 
+/// Reads without an actor, which ACP hides Agent-owned requests from; runtime
+/// readers use [`load_agent_request_by_doc_id_with_access`] as the owner.
+#[cfg(test)]
 pub(crate) async fn load_agent_request_by_doc_id(
     node: &EmbeddedNode,
     request_doc_id: &str,
