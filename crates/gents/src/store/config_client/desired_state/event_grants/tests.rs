@@ -650,7 +650,8 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
         cursor_update(&second_access, cursor_doc, "3").await?,
         cursor_expected(modeled_sibling, true)
     );
-    user.add_collection("type EventPolicyInputNext { value: String }")
+    // The source feeds a Task that emits outcomes, so its handoff_id must be a String.
+    user.add_collection("type EventPolicyInputNext { value: String handoff_id: String }")
         .await?;
     let moved_source = json!({"node_did":root.did(),"event_source_id":"source","source_collection":"EventPolicyInputNext","event_kind":"created"});
     apply(&user, vec![document(Collection::EventSource, moved_source)]).await?;
