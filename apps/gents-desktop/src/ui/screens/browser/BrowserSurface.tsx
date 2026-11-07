@@ -2,9 +2,18 @@
    (browser.rs); this surface draws its toolbar and holds the page's place,
    which seeThrough keeps open to the page. */
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { ArrowLeft, ArrowRight, Globe, RotateCw, Search, X } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  FolderOpen,
+  Globe,
+  RotateCw,
+  Search,
+  X,
+} from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
 import { inNativeShell } from "../../../lib/nativeShell";
@@ -42,6 +51,9 @@ function destination(text: string) {
   const value = text.trim();
   if (!value) return null;
   if (/^https?:\/\//i.test(value)) return value;
+  /* a file on this machine: the native side resolves and checks it */
+  if (/^file:\/\//i.test(value) || value.startsWith("/") || value.startsWith("~/"))
+    return value;
   if (/^localhost(:\d+)?(\/.*)?$/.test(value)) return `http://${value}`;
   if (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/.*)?$/.test(value)) return `https://${value}`;
   return `https://duckduckgo.com/?q=${encodeURIComponent(value)}`;
@@ -120,6 +132,14 @@ function open(url: string) {
   page = { ...page, opened: true, url, loading: true };
   for (const notify of listeners) notify();
   void invoke("browser_open", { url, seq: nextSeq() }).catch(() => {});
+}
+
+/* a page from this machine, picked in the system's own dialog */
+async function openFile() {
+  const picked = await openDialog({ multiple: false, directory: false }).catch(
+    () => null,
+  );
+  if (typeof picked === "string") open(picked);
 }
 
 function closePage() {
@@ -227,6 +247,14 @@ export function BrowserSurface(_: SurfaceContext) {
             className="h-6 rounded-md border-transparent bg-transparent px-1.5 text-xs shadow-none hover:bg-muted/50 focus-visible:bg-muted dark:bg-transparent"
           />
         </form>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Open a file"
+          onClick={() => void openFile()}
+        >
+          <FolderOpen />
+        </Button>
         {current.opened && (
           <Button
             variant="ghost"
@@ -255,10 +283,18 @@ export function BrowserSurface(_: SurfaceContext) {
               aria-label="Search or enter address"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
-              placeholder="Search or enter address…"
+              placeholder="Search, or enter an address or a file path…"
               className="h-8 pl-8 text-xs"
             />
           </form>
+          <button
+            type="button"
+            onClick={() => void openFile()}
+            className="mt-3 flex cursor-pointer items-center gap-1.5 px-1 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <FolderOpen className="size-3.5" />
+            Open a file on this Mac…
+          </button>
           {recents.length > 0 && (
             <div className="mt-6">
               <p className="mb-2 text-xs text-muted-foreground">Recent</p>

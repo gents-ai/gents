@@ -63,13 +63,53 @@ struct PageState {
     can_go_forward: bool,
 }
 
+/// What the browser is asked to open: a web page, or a file on this
+/// machine together with the folder its page may read, the file's own.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn parse(url: &str) -> Result<tauri::Url, String> {
-    let url = tauri::Url::parse(url).map_err(|error| error.to_string())?;
-    match url.scheme() {
-        "http" | "https" => Ok(url),
-        other => Err(format!("{other} pages can't open in the browser")),
-    }
+pub(crate) enum Target {
+    Web(String),
+    File {
+        file: std::path::PathBuf,
+        folder: std::path::PathBuf,
+    },
+}
+
+/// A web address (`http`, `https`), or a local file as a `file://` URL, an
+/// absolute path or one under `~/`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+async fn target(text: &str) -> Result<Target, String> {
+    let text = text.trim();
+    let path = match tauri::Url::parse(text) {
+        Ok(url) => match url.scheme() {
+            "http" | "https" => return Ok(Target::Web(url.to_string())),
+            "file" => url
+                .to_file_path()
+                .map_err(|()| format!("{text} isn't a path on this machine"))?,
+            other => return Err(format!("{other} pages can't open in the browser")),
+        },
+        Err(_) if text.starts_with('/') => std::path::PathBuf::from(text),
+        Err(_) => match text.strip_prefix("~/") {
+            Some(rest) => std::env::var_os("HOME")
+                .map(|home| std::path::PathBuf::from(home).join(rest))
+                .ok_or("the home folder isn't known")?,
+            None => return Err(format!("{text} isn't a web address or a file")),
+        },
+    };
+    let shown = path.display().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let file =
+            std::fs::canonicalize(&path).map_err(|_| format!("There's no file at {shown}"))?;
+        if !file.is_file() {
+            return Err(format!("{shown} is a folder, not a file"));
+        }
+        let folder = file
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .ok_or_else(|| format!("{shown} has no folder"))?;
+        Ok(Target::File { file, folder })
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[cfg(target_os = "macos")]
@@ -102,7 +142,7 @@ mod mac {
     };
     use tauri::{AppHandle, Emitter};
 
-    use super::{HandedKey, PageState, Placement, Rect};
+    use super::{HandedKey, PageState, Placement, Rect, Target};
 
     /* the page's own website data, kept across launches */
     const STORE: &str = "5B0C7F3E-6D1A-4E8B-9C2F-7A4D1E6B3C90";
@@ -246,6 +286,9 @@ mod mac {
 
     pub struct PageIvars {
         app: AppHandle,
+        /* the folder a local file opened with may read, which is also as
+        far as its links may go */
+        files: RefCell<Option<String>>,
     }
 
     define_class!(
@@ -264,13 +307,26 @@ mod mac {
                 action: &WKNavigationAction,
                 handler: &block2::DynBlock<dyn Fn(WKNavigationActionPolicy)>,
             ) {
-                let scheme = unsafe { action.request().URL() }
+                let url = unsafe { action.request().URL() };
+                let scheme = url
+                    .as_ref()
                     .and_then(|url| unsafe { url.scheme() })
                     .map(|scheme| scheme.to_string());
-                /* web pages and what they embed; a link to another scheme
+                /* web pages and what they embed, and a local page's own
+                folder; a link to another scheme or elsewhere on the disk
                 stays put */
                 let allowed = match scheme.as_deref() {
                     None => true,
+                    Some("file") => {
+                        let path = url
+                            .as_ref()
+                            .and_then(|url| unsafe { url.path() })
+                            .map(|path| path.to_string());
+                        match (path, self.ivars().files.borrow().as_deref()) {
+                            (Some(path), Some(folder)) => path.starts_with(folder),
+                            _ => false,
+                        }
+                    }
                     Some(scheme) => matches!(scheme, "http" | "https" | "about" | "blob" | "data"),
                 };
                 handler.call((if allowed {
@@ -502,7 +558,10 @@ mod mac {
             unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO, configuration: &*config] }
         };
         let delegate: Retained<PageDelegate> = {
-            let this = PageDelegate::alloc(mtm).set_ivars(PageIvars { app: app.clone() });
+            let this = PageDelegate::alloc(mtm).set_ivars(PageIvars {
+                app: app.clone(),
+                files: RefCell::new(None),
+            });
             unsafe { msg_send![super(this), init] }
         };
         unsafe {
@@ -560,16 +619,38 @@ mod mac {
         unsafe { Retained::retain(main.cast::<WKWebView>()) }
     }
 
-    pub fn open(app: AppHandle, main: *mut c_void, url: String) {
+    pub fn open(app: AppHandle, main: *mut c_void, target: Target) {
         let Some(main) = main_view(main) else { return };
         on_main(|mtm, slot| {
             if slot.is_none() {
                 *slot = create(mtm, &app, &main);
             }
             let Some(browser) = slot.as_ref() else { return };
-            if let Some(url) = NSURL::URLWithString(&NSString::from_str(&url)) {
-                let request = NSURLRequest::requestWithURL(&url);
-                unsafe { browser.page.loadRequest(&request) };
+            let files = &browser.delegate.ivars().files;
+            match target {
+                Target::Web(url) => {
+                    files.replace(None);
+                    if let Some(url) = NSURL::URLWithString(&NSString::from_str(&url)) {
+                        let request = NSURLRequest::requestWithURL(&url);
+                        unsafe { browser.page.loadRequest(&request) };
+                    }
+                }
+                Target::File { file, folder } => {
+                    let mut root = folder.display().to_string();
+                    if !root.ends_with('/') {
+                        root.push('/');
+                    }
+                    let file =
+                        NSURL::fileURLWithPath(&NSString::from_str(&file.display().to_string()));
+                    let folder =
+                        NSURL::fileURLWithPath_isDirectory(&NSString::from_str(&root), true);
+                    files.replace(Some(root));
+                    unsafe {
+                        browser
+                            .page
+                            .loadFileURL_allowingReadAccessToURL(&file, &folder)
+                    };
+                }
             }
         });
     }
@@ -693,9 +774,9 @@ fn in_order(
 #[cfg(target_os = "macos")]
 #[tauri::command]
 pub async fn browser_open(webview: tauri::Webview, url: String, seq: u64) -> Result<(), String> {
-    let url = parse(&url)?.to_string();
+    let target = target(&url).await?;
     let app = webview.app_handle().clone();
-    in_order(&webview, seq, move |main| mac::open(app, main, url))
+    in_order(&webview, seq, move |main| mac::open(app, main, target))
 }
 
 #[cfg(target_os = "macos")]
