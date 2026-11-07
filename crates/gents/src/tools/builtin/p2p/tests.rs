@@ -185,6 +185,53 @@ async fn filtered_pairing_survives_reload_and_refuses_missing_filter() {
         ),
         Some(("recipient", "node-a"))
     );
+    let local_access = ConfigAccess::local(local.node.clone());
+    local_access.write("test.scoped-posts", "mutation {create_ScopedPost(input: [{recipient: \"node-a\", body: \"matching\"}, {recipient: \"node-b\", body: \"other\"}]) {_docID}}").await.unwrap();
+    let (_, local_address) = wait_for_peer_identity(&local.node).await;
+    let remote_admin = EmbeddedRemoteP2pAdmin::new(remote.node.clone());
+    remote_admin
+        .add_replicator(
+            &[local_address],
+            &["ScopedPost".to_string()],
+            &Default::default(),
+        )
+        .await
+        .unwrap();
+    let local_admin = EmbeddedRemoteP2pAdmin::new(local.node.clone());
+    let tick = reconcile_peer_tick(&local_admin, &store, &peer)
+        .await
+        .unwrap();
+    assert!(tick.live_route_matches, "{tick:?}");
+    let remote_access = ConfigAccess::local(remote.node.clone());
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let response = remote_access
+                .execute("{ScopedPost {recipient body}}")
+                .await
+                .unwrap();
+            let rows = response["data"]["ScopedPost"].as_array().unwrap();
+            assert!(
+                rows.iter().all(|row| row["recipient"] == "node-a"),
+                "unmatched document replicated: {rows:?}"
+            );
+            if rows.iter().any(|row| row["body"] == "matching") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("matching document was not replicated");
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let rows = remote_access
+        .execute("{ScopedPost {recipient body}}")
+        .await
+        .unwrap();
+    assert_eq!(
+        rows["data"]["ScopedPost"].as_array().unwrap().len(),
+        1,
+        "unexpected replication: {rows}"
+    );
     let retry = call(
         &tool,
         json!({"argv":["pairings","apply"], "options":options}),
