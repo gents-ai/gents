@@ -106,7 +106,12 @@ async fn authority_rejection(
     )
     .await?
     else {
-        anyhow::bail!("edit session unavailable")
+        // Processing is reached only once the command's physical session was
+        // observed as this Agent's, so an unresolved logical ID is a binding
+        // mismatch, not a missing replica.
+        return Ok(Some(
+            "edit physical targets do not match the canonical session".into(),
+        ));
     };
     let Some((agent_doc, _)) = crate::store::config_client::read_desired_state_record_in_txn(
         txn,
@@ -200,6 +205,33 @@ async fn authority_rejection(
         );
     }
     Ok(None)
+}
+
+/// The working Agent of the physical session the signed intent names, when its
+/// logical session ID does not resolve. That Agent answers the mismatch; a
+/// physical session that is not observable leaves the command undecided.
+async fn physical_session_agent(
+    txn: &ConfigApplyTxn<'_>,
+    row: &CommandRow,
+) -> Result<Option<String>> {
+    let Ok(command) = serde_json::from_str::<SessionInputEdit>(&row.intent_json) else {
+        return Ok(None);
+    };
+    let response = txn
+        .execute(&format!(
+            r#"{{ AgentSession(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ node_did agent_did }} }}"#,
+            escape_graphql_string(&command.session_doc_id)
+        ))
+        .await?;
+    let sessions = response["data"]["AgentSession"]
+        .as_array()
+        .context("edit physical session observation unavailable")?;
+    let [session] = sessions.as_slice() else {
+        return Ok(None);
+    };
+    Ok((session["node_did"].as_str() == Some(row.node_did.as_str()))
+        .then(|| session["agent_did"].as_str().map(str::to_owned))
+        .flatten())
 }
 
 async fn verified_graphs(
@@ -329,10 +361,14 @@ pub(crate) async fn process_command(
             if row.node_did != identity.did() {
                 return Ok(None);
             }
-            let Some(session) = crate::session::load_agent_session_owner_in_txn(txn, &row.node_did, &row.session_id).await? else {
-                return Ok(None);
+            let working_agent = match crate::session::load_agent_session_owner_in_txn(txn, &row.node_did, &row.session_id).await? {
+                Some(session) => session.session.agent_did,
+                None => match physical_session_agent(txn, &row).await? {
+                    Some(agent) => agent,
+                    None => return Ok(None),
+                },
             };
-            if session.session.agent_did != actor.as_str() { return Ok(None); }
+            if working_agent != actor.as_str() { return Ok(None); }
             let command: SessionInputEdit = serde_json::from_str(&row.intent_json)?;
             anyhow::ensure!(row.command_id == command.command_id && row.node_did == command.node_did
                 && row.requester_did == command.requester_did && row.requester_peer_id == command.requester_peer_id

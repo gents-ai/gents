@@ -4823,9 +4823,17 @@ pub(crate) struct LeanSessionInputEditAuthority {
     pub(crate) replacements_valid: bool,
     pub(crate) command_identity_unique: bool,
     pub(crate) session_owned: bool,
-    pub(crate) requester_is_node: bool,
+    pub(crate) editor: LeanSessionInputEditor,
     pub(crate) enrollment_fresh: bool,
     pub(crate) route_applied: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LeanSessionInputEditor {
+    Requester,
+    WorkingAgent,
+    Admin,
+    Other,
 }
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

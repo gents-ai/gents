@@ -4,10 +4,10 @@ import Proofs.Session.ManagementCases
 namespace SessionQueue.InputEditCases
 open InputEdit ManagementCases FoldCases
 
-def authority : Authority := ⟨true,true,true,true,true,true,true⟩
+def authority : Authority := ⟨true,true,true,.requester,true,true,true⟩
 def command : Command := ⟨10,20,some 1,false,1,10,[2],0,1,[replacement 3 2]⟩
 def remote : Command := {command with hasPeer := true}
-def remoteAuthority : Authority := {authority with requesterIsNode := false}
+def remoteAuthority : Authority := authority
 def state : State := ⟨initial [pending 2],[]⟩
 
 inductive Step where
@@ -37,7 +37,7 @@ def cases : List Case :=
   , ⟨"revoked_enrollment_rejected",[],remote,{remoteAuthority with enrollmentFresh := false},2⟩
   , ⟨"missing_route_rejected",[],remote,{remoteAuthority with routeApplied := false},2⟩
   , ⟨"local_self_applied",[],command,authority,2⟩
-  , ⟨"direct_client_applied",[],{command with caller := some 99},{authority with requesterIsNode := false},2⟩
+  , ⟨"other_editor_rejected",[],{command with caller := some 99},{authority with editor := .other},2⟩
   , ⟨"expired_rejected",[],command,authority,10⟩
   , ⟨"future_issuance_deferred",[],command,authority,0⟩
   , ⟨"signature_rejected",[],command,{authority with signatureValid := false},2⟩
@@ -57,7 +57,7 @@ def cases : List Case :=
 
 def run (c : Case) := apply c.before.queue.scope c.now c.authority c.command c.before
 example : (cases.map fun c => (run c).2.map (·.outcome)) =
-    [some .applied,some .rejected,some .rejected,some .applied,some .applied,
+    [some .applied,some .rejected,some .rejected,some .applied,some .rejected,
      some .rejected,none,some .rejected,some .rejected,some .rejected,
      some .rejected,some .applied,some .applied,none,none,none,none] := by native_decide
 
