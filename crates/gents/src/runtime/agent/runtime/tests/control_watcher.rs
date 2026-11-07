@@ -695,13 +695,24 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.debounce + Duration::from_millis(10)).await;
     tokio::task::yield_now().await;
 
-    let snapshot = proposal_rx.recv().await.expect("reconciled snapshot");
-    let tool_surface = snapshot
-        .tool_surfaces
-        .get(agent.default_agent_did())
-        .expect("default agent tool surface");
-    let tool_names = tool_surface.tool_names();
-    assert!(tool_names.contains(&"read_file".to_string()));
+    // The WorkspaceRoot and Tools writes are separate control changes; under
+    // load the debounce can propose the root alone first. Take the first
+    // proposal that reflects the published Tools document.
+    let tool_names = tokio::time::timeout(PROPOSAL_TIMEOUT, async {
+        loop {
+            let snapshot = proposal_rx.recv().await.expect("reconciled snapshot");
+            let tool_names = snapshot
+                .tool_surfaces
+                .get(agent.default_agent_did())
+                .expect("default agent tool surface")
+                .tool_names();
+            if tool_names.contains(&"read_file".to_string()) {
+                break tool_names;
+            }
+        }
+    })
+    .await
+    .expect("the published Tools document reaches the reconciled tool surface");
     assert!(tool_names.contains(&"list_files".to_string()));
     assert!(!tool_names.contains(&"discover_tools".to_string()));
 
