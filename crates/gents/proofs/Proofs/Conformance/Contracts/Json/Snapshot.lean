@@ -425,6 +425,7 @@ def snapshotJson : String :=
     ++ "\"goal_submission_cases\":" ++ goalSubmissionCasesJson ++ ","
     ++ "\"goal_continuation_materialization_cases\":"
       ++ goalContinuationMaterializationCasesJson ++ ","
+    ++ "\"session_hydration_discovery_cases\":" ++ hydrationDiscoveryCasesJson ++ ","
     ++ "\"session_hydration_decision_cases\":"
       ++ sessionHydrationDecisionCasesJson ++ ","
     ++ "\"session_hydration_closure_cases\":"

@@ -78,6 +78,7 @@ async fn generated_hydration_routes_require_current_enrollment_materialization()
     )).await?;
     let (_control, authority) = test_enrollment_authority(Some(fence));
     let store = GraphqlHydrationStore {
+        malformed_discovery_count: Default::default(),
         node: node.clone(),
         identity,
         enrollment: authority,

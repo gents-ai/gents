@@ -30,7 +30,7 @@ use crate::session::canonical_rows::{
     decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
     AGENT_OUTPUT_SEGMENT_FIELDS,
 };
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, required_rows};
 use crate::store::identity::NodeIdentity;
 
 mod file_images;
@@ -365,6 +365,7 @@ pub async fn run_session_hydration_reconciler(
     cancel: CancellationToken,
 ) -> Result<()> {
     let store = Arc::new(GraphqlHydrationStore {
+        malformed_discovery_count: Default::default(),
         node: node.clone(),
         enrollment,
         identity,
@@ -452,6 +453,7 @@ struct GraphqlHydrationStore {
     node: Arc<EmbeddedNode>,
     enrollment: EnrollmentAuthorityHandle,
     identity: Arc<dyn NodeIdentity>,
+    malformed_discovery_count: std::sync::Mutex<Option<(usize, bool)>>,
 }
 
 /// Read-only source operation. The caller must still persist and deliver its
@@ -465,6 +467,7 @@ pub async fn sign_file_inventory_page(
     let request_key = demand.derive_request_key()?;
     let admission = &demand.admission;
     let store = GraphqlHydrationStore {
+        malformed_discovery_count: Default::default(),
         node,
         enrollment,
         identity,
@@ -558,6 +561,19 @@ struct PendingRow {
     requester_did: Option<String>,
     node_did: Option<String>,
     session_id: Option<String>,
+}
+
+fn identity_is_observable(row: &serde_json::Value) -> bool {
+    row.get("request_key")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| !value.is_empty())
+        && ["requester_did", "node_did", "session_id"]
+            .iter()
+            .all(|field| {
+                row.get(*field)
+                    .and_then(serde_json::Value::as_str)
+                    .is_some()
+            })
 }
 
 #[derive(Deserialize)]
@@ -656,11 +672,13 @@ impl HydrationRequestStore for GraphqlHydrationStore {
         let query = format!(
             r#"{{
             SessionHydrationRequest(filter: {{ status: {{ _eq: "pending" }}, node_did: {{ _eq: "{node_did}" }} }}) {{
+                _docID
                 request_key
                 requester_did
                 node_did
                 session_id
             }}
+            unowned: SessionHydrationRequest(filter: {{ status: {{ _eq: "pending" }}, _or: [{{ node_did: {{ _eq: null }} }}, {{ node_did: {{ _eq: "" }} }}] }}, limit: 1) {{ _docID }}
         }}"#
         );
         let response = graphql_with_transaction_retry(
@@ -669,17 +687,73 @@ impl HydrationRequestStore for GraphqlHydrationStore {
             "query SessionHydrationRequest pending rows",
         )
         .await?;
-        Ok(rows::<PendingRow>(&response, "SessionHydrationRequest")?
-            .into_iter()
-            .filter_map(|row| {
-                Some(HydrationRequestRow {
-                    request_key: row.request_key.filter(|value| !value.is_empty())?,
-                    requester_did: row.requester_did.unwrap_or_default(),
-                    node_did: row.node_did.unwrap_or_default(),
-                    session_id: row.session_id.unwrap_or_default(),
-                })
-            })
-            .collect())
+        let mut requests = Vec::new();
+        let mut malformed = 0;
+        let mut sample_document_id = None;
+        let mut sample_invalid_fields = Vec::new();
+        let mut sampled = false;
+        for value in required_rows::<serde_json::Value>(&response, "SessionHydrationRequest")? {
+            if !identity_is_observable(&value) {
+                malformed += 1;
+                if !sampled {
+                    sampled = true;
+                    sample_document_id = value
+                        .get("_docID")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned);
+                    for field in ["request_key", "requester_did", "node_did", "session_id"] {
+                        let reason = match value.get(field) {
+                            None => Some("missing"),
+                            Some(serde_json::Value::Null) => Some("null"),
+                            Some(serde_json::Value::String(text))
+                                if field == "request_key" && text.is_empty() =>
+                            {
+                                Some("empty")
+                            }
+                            Some(serde_json::Value::String(_)) => None,
+                            Some(_) => Some("invalid_type"),
+                        };
+                        if let Some(reason) = reason {
+                            sample_invalid_fields.push((field, reason));
+                        }
+                    }
+                }
+                continue;
+            }
+            let row: PendingRow = serde_json::from_value(value)?;
+            requests.push(HydrationRequestRow {
+                request_key: row.request_key.expect("identity checked"),
+                requester_did: row.requester_did.expect("identity checked"),
+                node_did: row.node_did.expect("identity checked"),
+                session_id: row.session_id.expect("identity checked"),
+            });
+        }
+        let unowned_rows = required_rows::<serde_json::Value>(&response, "unowned")?;
+        let unowned = !unowned_rows.is_empty();
+        let unowned_document_id = unowned_rows
+            .first()
+            .and_then(|row| row.get("_docID"))
+            .and_then(serde_json::Value::as_str);
+        let mut previous = self
+            .malformed_discovery_count
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if *previous != Some((malformed, unowned)) {
+            if malformed > 0 || unowned {
+                tracing::warn!(
+                    count = malformed,
+                    sample_document_id = ?sample_document_id,
+                    sample_invalid_fields = ?sample_invalid_fields,
+                    unowned_requests_present = unowned,
+                    unowned_document_id = ?unowned_document_id,
+                    "pending hydration requests have incomplete or unowned identities; leaving them unchanged"
+                );
+            } else if previous.is_some_and(|(count, unowned)| count > 0 || unowned) {
+                tracing::info!("pending hydration requests no longer have incomplete identities");
+            }
+            *previous = Some((malformed, unowned));
+        }
+        Ok(requests)
     }
 
     async fn load_admission(&self, request: &HydrationRequest) -> Result<LoadedHydrationAdmission> {
@@ -1019,6 +1093,140 @@ fn terminal_mutation(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn incomplete_identity_remains_unchanged_while_valid_rows_are_discovered() {
+        use super::super::enrollment_reconcile::test_enrollment_authority;
+        use crate::store::config_client::ConfigAccess;
+        use crate::store::identity::KeyIdentity;
+
+        let directory = tempfile::tempdir().unwrap();
+        let identity: std::sync::Arc<dyn super::NodeIdentity> = std::sync::Arc::new(
+            KeyIdentity::load_or_create(directory.path().join("identity.key"), None).unwrap(),
+        );
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        let (_owner, enrollment) = test_enrollment_authority(None);
+        let store = super::GraphqlHydrationStore {
+            node: node.clone(),
+            identity: identity.clone(),
+            enrollment,
+            malformed_discovery_count: Default::default(),
+        };
+        let node_did = crate::store::graphql::escape_graphql_string(identity.did());
+        for (key, requester) in [
+            ("peer-valid:session", "\"requester\""),
+            ("peer-null:session", "null"),
+            ("peer-empty:session", "\"\""),
+        ] {
+            let mutation = format!(
+                r#"mutation {{ create_SessionHydrationRequest(input: {{ request_key: "{key}", requester_did: {requester}, node_did: "{node_did}", session_id: "session", status: "pending" }}) {{ _docID }} }}"#
+            );
+            ConfigAccess::write_local(&node, "test.hydration.discovery", &mutation)
+                .await
+                .unwrap();
+        }
+        ConfigAccess::write_local(&node, "test.hydration.foreign", r#"mutation { create_SessionHydrationRequest(input: { request_key: "foreign", requester_did: "requester", node_did: "another-node", session_id: "session", status: "pending" }) { _docID } }"#).await.unwrap();
+        let rows = super::HydrationRequestStore::load_pending_requests(&store)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows
+            .iter()
+            .any(|row| row.request_key == "peer-valid:session"));
+        assert!(rows
+            .iter()
+            .any(|row| row.request_key == "peer-empty:session"));
+        let empty = rows
+            .iter()
+            .find(|row| row.request_key == "peer-empty:session")
+            .unwrap()
+            .clone();
+        let mut outcome = super::HydrationTickOutcome::default();
+        assert!(super::admit_or_reject(&store, empty, &mut outcome)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(outcome.rejected.contains("peer-empty:session"));
+        ConfigAccess::write_local(&node, "test.hydration.unowned", r#"mutation { create_SessionHydrationRequest(input: { request_key: "unowned", requester_did: "requester", node_did: null, session_id: "session", status: "pending" }) { _docID } }"#).await.unwrap();
+        let rows = super::HydrationRequestStore::load_pending_requests(&store)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            *store.malformed_discovery_count.lock().unwrap(),
+            Some((1, true))
+        );
+        let repeated = super::HydrationRequestStore::load_pending_requests(&store)
+            .await
+            .unwrap();
+        assert_eq!(repeated.len(), 1);
+        assert_eq!(
+            *store.malformed_discovery_count.lock().unwrap(),
+            Some((1, true))
+        );
+        let observed = ConfigAccess::local(node.clone()).execute("{ SessionHydrationRequest(filter: {request_key: {_eq: \"peer-null:session\"}}) { requester_did status } }").await.unwrap();
+        assert_eq!(
+            observed["data"]["SessionHydrationRequest"][0]["requester_did"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            observed["data"]["SessionHydrationRequest"][0]["status"],
+            "pending"
+        );
+        let foreign = ConfigAccess::local(node.clone())
+            .execute(
+                "{ SessionHydrationRequest(filter: {request_key: {_eq: \"foreign\"}}) { status } }",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            foreign["data"]["SessionHydrationRequest"][0]["status"],
+            "pending"
+        );
+        let unowned = ConfigAccess::local(node.clone()).execute("{ SessionHydrationRequest(filter: {request_key: {_eq: \"unowned\"}}) { node_did status } }").await.unwrap();
+        assert_eq!(
+            unowned["data"]["SessionHydrationRequest"][0]["node_did"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            unowned["data"]["SessionHydrationRequest"][0]["status"],
+            "pending"
+        );
+        node.shutdown().await;
+    }
+    #[test]
+    fn discovery_identity_matches_executable_model() {
+        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        let cases = snapshot["session_hydration_discovery_cases"]
+            .as_array()
+            .unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let mut row = serde_json::Map::new();
+            for (model, stored) in [
+                ("key", "request_key"),
+                ("requester", "requester_did"),
+                ("node", "node_did"),
+                ("session", "session_id"),
+            ] {
+                match case[model]["kind"].as_str().unwrap() {
+                    "missing" => {}
+                    "null" => {
+                        row.insert(stored.into(), serde_json::Value::Null);
+                    }
+                    "text" => {
+                        row.insert(stored.into(), case[model]["value"].clone());
+                    }
+                    kind => panic!("unknown field kind {kind}"),
+                }
+            }
+            assert_eq!(
+                super::identity_is_observable(&row.into()),
+                case["identifiable"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+    }
     use super::*;
     include!("session_hydration_reconcile/admission_tests.rs");
     use crate::runtime::agent::p2p_reconcile::templates::{combine_filters, equality_filter};

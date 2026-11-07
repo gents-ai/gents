@@ -212,6 +212,7 @@ async fn exercise_inventory_delivery_inner(recovery: bool) -> Result<()> {
         cursor: None,
     };
     let store = GraphqlHydrationStore {
+        malformed_discovery_count: Default::default(),
         node: source_node.clone(),
         enrollment: authority.clone(),
         identity: source.clone(),
@@ -908,6 +909,7 @@ async fn pending_inventory_fixture() -> Result<(
     .await?;
     let document_id = crate::store::graphql::created_doc_id(&response, "FileInventoryRequest")?;
     let store = GraphqlHydrationStore {
+        malformed_discovery_count: Default::default(),
         node: node.clone(),
         enrollment: crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
         identity,

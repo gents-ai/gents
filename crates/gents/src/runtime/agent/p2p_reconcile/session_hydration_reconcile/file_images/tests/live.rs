@@ -635,6 +635,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool, shared: bool) -> 
             cursor: None,
         };
         let source_store = GraphqlHydrationStore {
+            malformed_discovery_count: Default::default(),
             node: source_node.clone(),
             enrollment: authority.clone(),
             identity: source.clone(),
@@ -777,6 +778,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool, shared: bool) -> 
     });
     let store = ObservedStore {
         inner: GraphqlHydrationStore {
+            malformed_discovery_count: Default::default(),
             node: source_node.clone(),
             enrollment: authority,
             identity: source.clone(),

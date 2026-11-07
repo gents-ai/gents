@@ -700,4 +700,17 @@ def sessionHydrationAdmissionCaseJson (w : SessionHydrationAdmissionCase) : Stri
 def sessionHydrationAdmissionCasesJson : String :=
   jsonArray (sessionHydrationAdmissionCases.map sessionHydrationAdmissionCaseJson)
 
+def discoveryFieldJson : SessionHydration.Discovery.Field → String
+  | .missing => "{\"kind\":\"missing\"}"
+  | .null => "{\"kind\":\"null\"}"
+  | .text value => "{\"kind\":\"text\",\"value\":" ++ jsonString value ++ "}"
+
+def hydrationDiscoveryCasesJson : String :=
+  jsonArray (SessionHydration.Discovery.identityCases.map fun identity =>
+    "{\"key\":" ++ discoveryFieldJson identity.key ++
+      ",\"requester\":" ++ discoveryFieldJson identity.requester ++
+      ",\"node\":" ++ discoveryFieldJson identity.node ++
+      ",\"session\":" ++ discoveryFieldJson identity.session ++
+      ",\"identifiable\":" ++ boolString (SessionHydration.Discovery.identifiable identity) ++ "}")
+
 end Conformance.Contracts
