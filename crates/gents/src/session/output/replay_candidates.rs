@@ -130,24 +130,29 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
         )
         .await?;
         let origin_header = &reconstructed.origin.message;
-        if origin_header.outcome != OutputOutcome::Complete
-            || !matches!(
+        let complete = origin_header.outcome == OutputOutcome::Complete
+            && matches!(
                 origin_header.publication,
                 MessagePublication::RequestExecution { .. }
+            );
+        let provenance = if complete {
+            provider_coordinate_for_candidate(&reconstructed, scope.expected_scope_kind).map(
+                |value| {
+                    value.map(|coordinate| (coordinate, (0..origin_header.blocks.len()).collect()))
+                },
             )
-        {
-            continue;
-        }
-        let coordinate =
-            match provider_coordinate_for_candidate(&reconstructed, scope.expected_scope_kind) {
-                Ok(coordinate) => coordinate,
-                Err(error) => {
-                    tracing::debug!(header_doc_id = %row.doc_id, error = %error,
+        } else {
+            recovered_provider_provenance(&reconstructed, scope.expected_scope_kind)
+        };
+        let provenance = match provenance {
+            Ok(provenance) => provenance,
+            Err(error) => {
+                tracing::debug!(header_doc_id = %row.doc_id, error = %error,
                     "historical assistant has no usable provider replay coordinate");
-                    continue;
-                }
-            };
-        let Some(coordinate) = coordinate else {
+                continue;
+            }
+        };
+        let Some((coordinate, block_indices)) = provenance else {
             // An authored assistant belongs in permissive history, but is not
             // a provider continuation candidate merely because its role and
             // publication match a provider-owned assistant.
@@ -192,6 +197,8 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
             requester_did: origin_header.requester_did.clone(),
             session_id: origin_header.session_id.clone(),
             coordinate,
+            block_indices,
+            complete,
             #[cfg(test)]
             sequence: row.message.sequence,
             message: reconstructed.message,
@@ -270,6 +277,8 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
             request_id,
             request_commits,
             coordinate: candidate.coordinate,
+            block_indices: candidate.block_indices,
+            complete: candidate.complete,
             #[cfg(test)]
             sequence: candidate.sequence,
             message: candidate.message,
@@ -301,6 +310,8 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
             sequence: item.sequence,
             message: item.message,
             coordinate: item.coordinate,
+            block_indices: item.block_indices,
+            complete: item.complete,
             capture,
         });
     }
@@ -315,6 +326,8 @@ struct PendingReplayCandidate {
     requester_did: Option<String>,
     session_id: String,
     coordinate: CanonicalProviderCoordinate,
+    block_indices: Vec<usize>,
+    complete: bool,
     #[cfg(test)]
     sequence: u32,
     message: gents_protocol::message::Message,
@@ -333,6 +346,8 @@ pub(super) struct SelectedReplayCandidate {
     request_id: String,
     request_commits: BTreeSet<String>,
     coordinate: CanonicalProviderCoordinate,
+    block_indices: Vec<usize>,
+    complete: bool,
     #[cfg(test)]
     sequence: u32,
     message: gents_protocol::message::Message,
@@ -432,4 +447,256 @@ fn provider_coordinate_for_candidate_inner(
         "canonical replay assistant combines authored and provider sources"
     );
     Ok(provider)
+}
+
+/// Recovery must carry the source's native positions, including gaps for
+/// omitted blocks. Only the exact sealed, stopped recovery projection is
+/// eligible to become a replay witness.
+pub(super) fn recovered_provider_provenance(
+    reconstructed: &ReconstructedScopedMessage,
+    expected_scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
+) -> Result<Option<(CanonicalProviderCoordinate, Vec<usize>)>> {
+    use gents_protocol::output::reconstruction::ObservedSegment;
+    let header = &reconstructed.origin.message;
+    if !matches!(
+        header.publication,
+        MessagePublication::RequestRecovery { .. }
+    ) || header.outcome != OutputOutcome::Partial
+    {
+        return Ok(None);
+    }
+    let request_doc_id = header
+        .request_doc_id
+        .as_deref()
+        .context("recovery has no request")?;
+    let close_ids = header
+        .payload_references()
+        .into_iter()
+        .map(|reference| reference.close_doc_id.as_str())
+        .collect::<BTreeSet<_>>();
+    anyhow::ensure!(
+        close_ids.len() == 1,
+        "recovery must reference one physical close"
+    );
+    let close_id = *close_ids.iter().next().expect("checked singleton");
+    let closes = reconstructed
+        .segments
+        .iter()
+        .filter(|row| row.doc_id == close_id)
+        .collect::<Vec<_>>();
+    anyhow::ensure!(closes.len() == 1, "recovery close is missing or ambiguous");
+    let close = &closes[0].segment;
+    let OutputSource::ProviderTurn {
+        scope,
+        turn_index,
+        attempt,
+    } = &close.source
+    else {
+        anyhow::bail!("recovery source is not a provider turn");
+    };
+    anyhow::ensure!(
+        scope.kind == expected_scope_kind,
+        "recovery has a different provider scope"
+    );
+    let Some(SourceClose::Closed {
+        outcome: OutputOutcome::Partial,
+        segments,
+        stream_bytes,
+    }) = &close.close
+    else {
+        anyhow::bail!("recovery source is not partially closed");
+    };
+    anyhow::ensure!(
+        matches!(close.writer, OutputWriter::RequestExecution { .. }),
+        "recovery source is not request-owned"
+    );
+    let scoped = reconstructed
+        .segments
+        .iter()
+        .filter(|row| {
+            row.segment.request_doc_id == request_doc_id && row.segment.source == close.source
+        })
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        scoped
+            .iter()
+            .all(|row| row.segment.close.is_none() || row.doc_id == close_id),
+        "recovery source has conflicting closure"
+    );
+    let bounded = scoped
+        .iter()
+        .filter(|row| {
+            row.segment
+                .ordinal
+                .is_some_and(|ordinal| ordinal < *segments)
+                || row.doc_id == close_id
+        })
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        bounded
+            .iter()
+            .all(|row| row.segment.node_did == header.node_did
+                && row.segment.requester_did == header.requester_did
+                && row.segment.session_id == header.session_id
+                && row.segment.writer == close.writer),
+        "recovery source has conflicting scope or writer"
+    );
+    let observed = bounded
+        .iter()
+        .map(|row| ObservedSegment {
+            doc_id: &row.doc_id,
+            segment: &row.segment,
+        })
+        .collect::<Vec<_>>();
+    let extent = gents_protocol::output::extent::inspect_open_source(
+        &observed,
+        request_doc_id,
+        &close.source,
+        &close.writer,
+    )?;
+    anyhow::ensure!(
+        extent.segments == *segments && extent.stream_bytes == *stream_bytes,
+        "recovery source does not match its sealed extent"
+    );
+    let blocks =
+        gents_protocol::output::recovery::retained_blocks_from_validated_extent(&extent, close_id)?;
+    anyhow::ensure!(
+        blocks == header.blocks,
+        "recovery header is not the exact stopped projection"
+    );
+    let indices =
+        gents_protocol::output::recovery::retained_block_indices_from_validated_extent(&extent)
+            .into_iter()
+            .map(|index| index as usize)
+            .collect::<Vec<_>>();
+    anyhow::ensure!(
+        indices.len() == blocks.len() && indices.windows(2).all(|pair| pair[0] < pair[1]),
+        "recovery block positions are invalid"
+    );
+    Ok(Some((
+        CanonicalProviderCoordinate {
+            scope: *scope,
+            turn_index: *turn_index,
+            attempt: *attempt,
+        },
+        indices,
+    )))
+}
+
+#[cfg(test)]
+mod recovered_provenance_tests {
+    use super::*;
+    use crate::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
+    use gents_protocol::output::{
+        OutputSegment, SegmentRun, StreamDeclaration, StreamPayload, TranscriptMessage,
+    };
+
+    fn fixture() -> ReconstructedScopedMessage {
+        let declaration = |stream, bytes, payload| SegmentRun {
+            stream,
+            bytes,
+            declaration: Some(StreamDeclaration {
+                block_index: 2,
+                part_index: 0,
+                payload,
+            }),
+        };
+        let source = OutputSource::ProviderTurn {
+            scope: "inference.1".parse().unwrap(),
+            turn_index: 0,
+            attempt: 0,
+        };
+        let segment = OutputSegment {
+            node_did: "node".into(),
+            requester_did: None,
+            session_id: "session".into(),
+            request_doc_id: "request".into(),
+            source: source.clone(),
+            writer: OutputWriter::RequestExecution {
+                execution_generation: "producer".into(),
+            },
+            ordinal: Some(0),
+            runs: vec![
+                declaration(0, 1, StreamPayload::Reasoning),
+                declaration(1, 1, StreamPayload::ReasoningSignature),
+                declaration(2, 0, StreamPayload::ReasoningStop),
+            ],
+            payload: "AS".into(),
+            close: Some(SourceClose::Closed {
+                outcome: OutputOutcome::Partial,
+                segments: 1,
+                stream_bytes: vec![1, 1, 0],
+            }),
+            created_at: "2026-01-01T00:00:00Z".into(),
+        };
+        let observations = [gents_protocol::output::reconstruction::ObservedSegment {
+            doc_id: "close",
+            segment: &segment,
+        }];
+        let extent = gents_protocol::output::extent::inspect_open_source(
+            &observations,
+            "request",
+            &source,
+            &segment.writer,
+        )
+        .unwrap();
+        let blocks = gents_protocol::output::recovery::retained_blocks_from_validated_extent(
+            &extent, "close",
+        )
+        .unwrap();
+        let header = TranscriptMessageRow {
+            doc_id: "header".into(),
+            message: TranscriptMessage {
+                message_key: "recovered".into(),
+                session_id: "session".into(),
+                node_did: "node".into(),
+                requester_did: None,
+                request_doc_id: Some("request".into()),
+                publication: MessagePublication::RequestRecovery {
+                    execution_generation: "recovery".into(),
+                },
+                outcome: OutputOutcome::Partial,
+                sequence: 1,
+                role: MessageRole::Assistant,
+                native_id: None,
+                native_request_id: None,
+                blocks,
+                created_at: "2026-01-01T00:00:00Z".into(),
+            },
+        };
+        ReconstructedScopedMessage {
+            header: header.clone(),
+            origin: header,
+            message: gents_protocol::message::Message::Assistant {
+                id: None,
+                request_id: None,
+                content: vec![],
+            },
+            segments: vec![OutputSegmentRow {
+                doc_id: "close".into(),
+                segment,
+            }],
+        }
+    }
+
+    #[test]
+    fn recovered_witness_requires_exact_scoped_sealed_projection() {
+        let mut restored = fixture();
+        let kind = gents_protocol::rendered_request::CaptureScopeKind::Inference;
+        assert_eq!(
+            recovered_provider_provenance(&restored, kind)
+                .unwrap()
+                .unwrap()
+                .1,
+            [2]
+        );
+        restored.origin.message.blocks.clear();
+        assert!(recovered_provider_provenance(&restored, kind).is_err());
+        let mut restored = fixture();
+        restored.segments[0].segment.session_id = "foreign".into();
+        assert!(recovered_provider_provenance(&restored, kind).is_err());
+        let mut restored = fixture();
+        restored.segments[0].segment.runs.pop();
+        assert!(recovered_provider_provenance(&restored, kind).is_err());
+    }
 }

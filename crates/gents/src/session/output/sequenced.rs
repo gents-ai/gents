@@ -8,7 +8,7 @@ use super::super::query::session_scope_filter;
 use super::super::SequencedMessage;
 use super::access::{ReadAccess, ReadCache};
 use super::reconstruct::{preload_request_output_segments, reconstruct_scoped_message_with_facts};
-use super::replay_candidates::provider_coordinate_for_candidate;
+use super::replay_candidates::{provider_coordinate_for_candidate, recovered_provider_provenance};
 use super::replay_violation;
 
 /// The owned loop rebuilds context, prompt and folded messages from admission
@@ -144,32 +144,51 @@ pub(in crate::session) async fn load_sequenced_messages(
                 row.doc_id
             )
         })?;
+        let mut block_indices = match &reconstructed.message {
+            gents_protocol::message::Message::Assistant { content, .. } => {
+                (0..content.len()).collect()
+            }
+            _ => Vec::new(),
+        };
         let provider_source = if replay_profile.is_some()
             && reconstructed.origin.message.role == MessageRole::Assistant
-            && reconstructed.origin.message.outcome == OutputOutcome::Complete
-            && matches!(
-                reconstructed.origin.message.publication,
-                MessagePublication::RequestExecution { .. }
-            ) {
-            match provider_coordinate_for_candidate(
-                &reconstructed,
-                gents_protocol::rendered_request::CaptureScopeKind::Inference,
-            ) {
-                Ok(Some(coordinate)) => Some(gents_loop::claude_messages_body::ReplayTag {
-                    request_doc_id: reconstructed
-                        .origin
-                        .message
-                        .request_doc_id
-                        .clone()
-                        .ok_or_else(|| {
-                            replay_violation("provider coordinate requires request document")
-                        })?,
-                    source: OutputSource::ProviderTurn {
-                        scope: coordinate.scope,
-                        turn_index: coordinate.turn_index,
-                        attempt: coordinate.attempt,
-                    },
-                }),
+        {
+            let header = &reconstructed.origin.message;
+            let provenance = if header.outcome == OutputOutcome::Complete
+                && matches!(
+                    header.publication,
+                    MessagePublication::RequestExecution { .. }
+                ) {
+                provider_coordinate_for_candidate(
+                    &reconstructed,
+                    gents_protocol::rendered_request::CaptureScopeKind::Inference,
+                )
+                .map(|value| value.map(|coordinate| (coordinate, block_indices.clone())))
+            } else {
+                recovered_provider_provenance(
+                    &reconstructed,
+                    gents_protocol::rendered_request::CaptureScopeKind::Inference,
+                )
+            };
+            match provenance {
+                Ok(Some((coordinate, physical_indices))) => {
+                    block_indices = physical_indices;
+                    Some(gents_loop::claude_messages_body::ReplayTag {
+                        request_doc_id: reconstructed
+                            .origin
+                            .message
+                            .request_doc_id
+                            .clone()
+                            .ok_or_else(|| {
+                                replay_violation("provider coordinate requires request document")
+                            })?,
+                        source: OutputSource::ProviderTurn {
+                            scope: coordinate.scope,
+                            turn_index: coordinate.turn_index,
+                            attempt: coordinate.attempt,
+                        },
+                    })
+                }
                 Ok(None) => None,
                 Err(error) => {
                     tracing::debug!(header_doc_id = %row.doc_id, error = %error,
@@ -183,12 +202,7 @@ pub(in crate::session) async fn load_sequenced_messages(
         messages.push(SequencedMessage {
             provider_source,
             canonical_header_doc_id: Some(reconstructed.origin.doc_id),
-            block_indices: match &reconstructed.message {
-                gents_protocol::message::Message::Assistant { content, .. } => {
-                    (0..content.len()).collect()
-                }
-                _ => Vec::new(),
-            },
+            block_indices,
             sequence,
             message: reconstructed.message,
         });

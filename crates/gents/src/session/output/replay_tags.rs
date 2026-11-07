@@ -20,7 +20,7 @@ pub(crate) async fn resolve_canonical_replay_tags(
         Vec<gents_loop::claude_messages_body::ResolvedReplayEvidence>,
     )>,
 > {
-    use gents_loop::claude_messages_body::{reasoning_witness, ResolvedReplayEvidence};
+    use gents_loop::claude_messages_body::ResolvedReplayEvidence;
 
     for tag in tags {
         replay_ensure!(
@@ -57,6 +57,10 @@ pub(crate) async fn resolve_canonical_replay_tags(
                             "canonical replay candidate is not an assistant message",
                         ));
                     };
+                    replay_ensure!(
+                        content.len() == candidate.block_indices.len(),
+                        "canonical replay block positions do not match the message"
+                    );
                     let capture = candidate.capture.as_ref().expect("capture filtered above");
                     // An undecodable capture leaves the turn without evidence
                     // of its producing prefix, which makes it non-replayable.
@@ -66,12 +70,25 @@ pub(crate) async fn resolve_canonical_replay_tags(
                     )
                     .ok();
                     Ok(ResolvedReplayEvidence {
-                        origin: gents_loop::claude_messages_body::ReplayOrigin::AcceptedProvider,
-                        reasoning: reasoning_witness(content),
+                        origin: if candidate.complete {
+                            gents_loop::claude_messages_body::ReplayOrigin::AcceptedProvider
+                        } else {
+                            gents_loop::claude_messages_body::ReplayOrigin::RecoveredProvider
+                        },
+                        reasoning: content
+                            .iter()
+                            .zip(&candidate.block_indices)
+                            .filter_map(|(block, index)| match block {
+                                gents_protocol::message::AssistantContent::Reasoning(reasoning) => {
+                                    Some((*index, reasoning.content.clone()))
+                                }
+                                _ => None,
+                            })
+                            .collect(),
                         issuer: capture.issuer.clone(),
                         wire: capture.wire,
                         physical_header: candidate.header_doc_id.clone(),
-                        complete: true,
+                        complete: candidate.complete,
                         captured,
                     })
                 })
