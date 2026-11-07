@@ -208,9 +208,14 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_count_filter_is_refused_before_a_plausible_native_zero() {
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter("gents::tools::builtin::defra_query::native_filter=info")
-            .try_init();
+        // Scoped to this test's thread: a global default would race the test
+        // binary's own scoped event capture.
+        let _subscriber = tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_env_filter("gents::tools::builtin::defra_query::native_filter=info")
+                .with_test_writer()
+                .finish(),
+        );
         let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
         node.add_collection("type CountFilterProbe { name: String score: Int }")
             .await
