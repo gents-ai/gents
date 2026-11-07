@@ -259,6 +259,52 @@ async fn install_owned(
     super::super::install_pack_documents(access, owner, &pack, config, policy).await
 }
 
+#[tokio::test]
+async fn installed_dependency_snapshot_retains_values_and_detects_concurrent_edits() {
+    let access = access().await;
+    install(
+        &access,
+        "1",
+        &config(&[("tools-a", "original")]),
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let snapshot = access
+        .transact_readonly("test.dependency.snapshot", |txn| {
+            Box::pin(async move {
+                dependency_snapshot_in_txn(txn, OWNER, "acme/demo", &identity("1").digest).await
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let restored = snapshot.config(OWNER).unwrap();
+    assert_eq!(restored.tools.len(), 1);
+    assert_eq!(restored.tools[0].display_name.as_deref(), Some("original"));
+
+    edit_tools(&access, "tools-a", "changed").await;
+    let changed = access
+        .transact_readonly("test.dependency.snapshot_changed", |txn| {
+            Box::pin(async move {
+                dependency_snapshot_in_txn(txn, OWNER, "acme/demo", &identity("1").digest).await
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(snapshot, changed);
+    assert!(access
+        .transact_readonly("test.dependency.snapshot_other_artifact", |txn| {
+            Box::pin(async move {
+                dependency_snapshot_in_txn(txn, OWNER, "acme/demo", &identity("2").digest).await
+            })
+        })
+        .await
+        .unwrap()
+        .is_none());
+}
+
 async fn edit_tools(access: &ConfigAccess, id: &str, name: &str) {
     edit_tools_owned(access, OWNER, id, name).await;
 }
