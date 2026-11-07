@@ -1,6 +1,6 @@
 use crate::store::identity::NodeIdentity;
 use crate::tools::call::lifecycle::admission_fixture::{
-    published_admission, PublishedAdmissionOptions,
+    published_admission_with_owner, PublishedAdmissionOptions,
 };
 use crate::tools::call::lifecycle::{AwaitMode, ToolCallLifecycle};
 use std::sync::Arc;
@@ -171,8 +171,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
             .await;
             crate::session::stop_session(
                 &node,
-                node.node_identity_did()
-                    .expect("fixture has a registered signing principal"),
+                &agent_did,
                 &node_did,
                 &session_id,
                 tool.requester_did(),
@@ -181,8 +180,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
             .unwrap();
             let first_resume = crate::session::resume_session(
                 &node,
-                node.node_identity_did()
-                    .expect("fixture has a registered signing principal"),
+                &agent_did,
                 &node_did,
                 &session_id,
                 tool.requester_did(),
@@ -195,7 +193,9 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 modeled["blocked"],
                 "terminal parent request cannot make a registered live process quiescent"
             );
-            let stopped = node
+            let stopped = tool
+                .access()
+                .unwrap()
                 .execute(&format!(
                     r#"{{ AgentSession(filter: {{ {} }}, limit: 1) {{ stopped_at }} }}"#,
                     crate::session::session_scope_filter(
@@ -204,8 +204,9 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                         tool.requester_did(),
                     ),
                 ))
-                .await;
-            assert!(stopped.data.unwrap()["AgentSession"][0]["stopped_at"].is_string());
+                .await
+                .unwrap();
+            assert!(stopped["data"]["AgentSession"][0]["stopped_at"].is_string());
         } else {
             let response = node
         .execute(&format!(
@@ -233,8 +234,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         if session_stopped {
             crate::session::resume_session(
                 &node,
-                node.node_identity_did()
-                    .expect("fixture has a registered signing principal"),
+                &agent_did,
                 &node_did,
                 &session_id,
                 tool.requester_did(),
@@ -243,7 +243,9 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
             )
             .await
             .expect("resume succeeds after the existing recovery owner verifies process exit");
-            let resumed = node
+            let resumed = tool
+                .access()
+                .unwrap()
                 .execute(&format!(
                     r#"{{ AgentSession(filter: {{ {} }}, limit: 1) {{ stopped_at }} }}"#,
                     crate::session::session_scope_filter(
@@ -252,20 +254,23 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                         tool.requester_did(),
                     ),
                 ))
-                .await;
+                .await
+                .unwrap();
             assert_eq!(
-                resumed.data.unwrap()["AgentSession"][0]["stopped_at"].is_string(),
+                resumed["data"]["AgentSession"][0]["stopped_at"].is_string(),
                 modeled["stopped_after_settlement"]
             );
         }
         let escaped = crate::store::graphql::escape_graphql_string(&tool_doc_id);
-        let response = node
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state cancel_cause }} }}"#
-        ))
-        .await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        let row = &response.data.unwrap()["AgentToolCall"][0];
+        let response = tool
+            .access()
+            .unwrap()
+            .execute(&format!(
+                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state cancel_cause }} }}"#
+            ))
+            .await
+            .unwrap();
+        let row = &response["data"]["AgentToolCall"][0];
         assert_eq!(row["lifecycle_state"], deleted.terminal_state.as_str());
         assert_eq!(
             row["cancel_cause"],
@@ -293,7 +298,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         .iter()
         .find(|case| case["name"] == "resume_waits_for_owned_background")
         .expect("Lean session-control model includes owned-background settlement");
-    let admission = published_admission(PublishedAdmissionOptions {
+    let (admission, request_owner) = published_admission_with_owner(PublishedAdmissionOptions {
         name: "resume-live-terminal-tool".to_owned(),
         real_identity: true,
         await_mode: AwaitMode::Background,
@@ -306,6 +311,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     let tool_call_id = admission.tool.tool_call_id().to_owned();
     let session_id = admission.tool.session_id().to_owned();
     let node_did = admission.node_did.clone();
+    let agent_did = request_owner.request().agent_did.clone();
     let mut tool = admission.tool;
     update_request(
         &tool.access().unwrap(),
@@ -353,10 +359,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     reservation_released_rx.await.unwrap();
     let stop = crate::session::stop_session(
         &admission.node,
-        admission
-            .node
-            .node_identity_did()
-            .expect("fixture has a registered signing principal"),
+        &agent_did,
         &node_did,
         &session_id,
         tool.requester_did(),
@@ -397,10 +400,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     );
     let blocked = crate::session::resume_session(
         &admission.node,
-        admission
-            .node
-            .node_identity_did()
-            .expect("fixture has a registered signing principal"),
+        &agent_did,
         &node_did,
         &session_id,
         tool.requester_did(),
@@ -429,10 +429,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     .unwrap();
     crate::session::resume_session(
         &admission.node,
-        admission
-            .node
-            .node_identity_did()
-            .expect("fixture has a registered signing principal"),
+        &agent_did,
         &node_did,
         &other_session,
         None,
@@ -442,14 +439,15 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     .await
     .expect("an unrelated session is not blocked by this process record");
 
-    let stop_latch = admission
-        .node
+    let stop_latch = tool
+        .access()
+        .unwrap()
         .execute(&format!(
             r#"{{ AgentSession(filter: {{ {} }}, limit: 1) {{ stopped_at }} }}"#,
             crate::session::session_scope_filter(&node_did, &session_id, tool.requester_did(),)
         ))
         .await;
-    assert!(stop_latch.data.unwrap()["AgentSession"][0]["stopped_at"].is_string());
+    assert!(stop_latch["data"]["AgentSession"][0]["stopped_at"].is_string());
     token.cancel();
     worker.await.unwrap();
     assert_ne!(
@@ -458,10 +456,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     );
     crate::session::resume_session(
         &admission.node,
-        admission
-            .node
-            .node_identity_did()
-            .expect("fixture has a registered signing principal"),
+        &agent_did,
         &node_did,
         &session_id,
         tool.requester_did(),
@@ -470,15 +465,17 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     )
     .await
     .expect("resume succeeds after the registered process owner records exit");
-    let resumed = admission
-        .node
+    let resumed = tool
+        .access()
+        .unwrap()
         .execute(&format!(
             r#"{{ AgentSession(filter: {{ {} }}, limit: 1) {{ stopped_at }} }}"#,
             crate::session::session_scope_filter(&node_did, &session_id, tool.requester_did())
         ))
-        .await;
+        .await
+        .unwrap();
     assert_eq!(
-        resumed.data.unwrap()["AgentSession"][0]["stopped_at"].is_string(),
+        resumed["data"]["AgentSession"][0]["stopped_at"].is_string(),
         modeled["stopped_after_settlement"]
     );
     admission
