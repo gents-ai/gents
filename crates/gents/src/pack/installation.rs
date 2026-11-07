@@ -326,6 +326,18 @@ fn edited_error(coordinate: &str, edited: &[String]) -> anyhow::Error {
     )
 }
 
+fn select_install_source(
+    same_digest: bool,
+    prior: Option<&PackSource>,
+    proposed: Option<&PackSource>,
+) -> Option<PackSource> {
+    if same_digest && matches!(proposed, None | Some(PackSource::Installed)) {
+        prior.cloned()
+    } else {
+        proposed.cloned()
+    }
+}
+
 #[expect(clippy::too_many_arguments, reason = "installation record inputs")]
 async fn write_record_in_txn(
     txn: &ConfigApplyTxn<'_>,
@@ -358,11 +370,11 @@ async fn write_record_in_txn(
         history.truncate(HISTORY_LIMIT);
     }
     let required_by: Vec<&String> = prior.required_by.iter().collect();
-    let source = source.cloned().or_else(|| {
-        (prior.digest.as_deref() == Some(pack.digest.as_str()))
-            .then(|| prior.source.clone())
-            .flatten()
-    });
+    let source = select_install_source(
+        prior.digest.as_deref() == Some(pack.digest.as_str()),
+        prior.source.as_ref(),
+        source,
+    );
     let mut source_history = prior.source_history.clone();
     if let (Some(version), Some(digest)) = (&prior.version, &prior.digest) {
         if *version != pack.version || *digest != pack.digest || prior.source != source {

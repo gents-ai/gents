@@ -48,17 +48,28 @@ async fn install_source_is_recorded_and_retained_across_updates() {
             .unwrap();
     }
     let unchanged = identity("2.0.0");
-    access
-        .transact_write("test.source.unchanged", |txn| {
-            let unchanged = &unchanged;
-            Box::pin(async move {
-                let prior = read_record(txn, OWNER, &unchanged.coordinate).await?;
-                write_record_in_txn(txn, OWNER, unchanged, &prior, Vec::new(), true, false, None)
+    for source in [None, Some(&PackSource::Installed)] {
+        access
+            .transact_write("test.source.unchanged", |txn| {
+                let unchanged = &unchanged;
+                Box::pin(async move {
+                    let prior = read_record(txn, OWNER, &unchanged.coordinate).await?;
+                    write_record_in_txn(
+                        txn,
+                        OWNER,
+                        unchanged,
+                        &prior,
+                        Vec::new(),
+                        true,
+                        false,
+                        source,
+                    )
                     .await
+                })
             })
-        })
-        .await
-        .unwrap();
+            .await
+            .unwrap();
+    }
     let rows = access
         .execute("{ PackInstallation { source source_history history } }")
         .await
@@ -72,6 +83,41 @@ async fn install_source_is_recorded_and_retained_across_updates() {
     assert_eq!(row["history"], json!([identity("1.0.0").digest]));
     assert_eq!(row["source_history"].as_array().unwrap().len(), 1);
     assert!(!row.to_string().contains("/private/packs"));
+}
+
+#[test]
+fn install_source_selection_matches_lean() {
+    let raw = gents_lean_contract::run_prepared_generator(
+        &gents_lean_contract::proofs_dir().unwrap(),
+        "Proofs.Conformance.PackSourceSelection:olean",
+        "Proofs/Conformance/PackSourceSelection.lean",
+    )
+    .unwrap();
+    let cases: Vec<serde_json::Value> = serde_json::from_str(&raw).unwrap();
+    assert_eq!(cases.len(), 12);
+    let source = |value: &serde_json::Value| match value.as_str() {
+        None => None,
+        Some("installed") => Some(PackSource::Installed),
+        Some("store") => Some(PackSource::Store),
+        Some("registry") => Some(PackSource::Registry {
+            namespace: "acme".into(),
+            name: "demo".into(),
+            version: "1.0.0".into(),
+            artifact_digest: "a".repeat(64),
+        }),
+        _ => panic!("unexpected modeled source"),
+    };
+    for case in cases {
+        assert_eq!(
+            select_install_source(
+                case["same_digest"].as_bool().unwrap(),
+                source(&case["prior"]).as_ref(),
+                source(&case["proposed"]).as_ref()
+            ),
+            source(&case["selected"]),
+            "{case}"
+        );
+    }
 }
 
 #[test]
