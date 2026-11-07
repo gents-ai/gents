@@ -592,6 +592,13 @@ theorem unrelated_installed_field_preserved (previous : String) (replacement : O
 theorem ambiguous_affected_field_refused (previous : String) :
     resolveInstalledPackField previous true none = none := by rfl
 
+/-- Node identity comes from the installation scope, not from pack variables. -/
+def packVariableOverrideAllowed (name : String) : Bool :=
+  name != "GENTS_PACK_NODE_DID"
+
+theorem node_identity_override_refused :
+    packVariableOverrideAllowed "GENTS_PACK_NODE_DID" = false := by decide
+
 /-- An installed dependency can be reused without recovering its original
 environment only when the same artifact is requested and the caller has not
 explicitly selected replacement bindings. The snapshot is authoritative only
