@@ -221,6 +221,9 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 HookAction::Continue
             ));
             let session = hook.session_id().await.unwrap();
+            super::ensure_runtime_session(&node, &identity, &session)
+                .await
+                .unwrap();
             let entry = &case["entry"];
             let entry_id = entry["doc"].as_u64().unwrap();
             let mut root_goals = BTreeMap::new();
@@ -393,7 +396,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 assert!(
                     !crate::goal::update_goal_fields_if_status(
                         &node,
-                        &identity::Did::new("did:test:agent").unwrap(),
+                        &identity::Did::new(identity.did()).unwrap(),
                         &observed,
                         observed.parsed_status().unwrap(),
                         r#"last_failure: "Stale controller write""#
@@ -404,7 +407,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 );
                 crate::goal::refresh_goal_usage(
                     &node,
-                    &identity::Did::new("did:test:agent").unwrap(),
+                    &identity::Did::new(identity.did()).unwrap(),
                     &observed,
                 )
                 .await

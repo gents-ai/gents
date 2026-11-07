@@ -2073,6 +2073,60 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
+/// Publishes an unsigned hook's session as the runtime it runs as. That hook
+/// never writes its session, and an unsigned reader cannot resolve one.
+pub(super) async fn ensure_runtime_session(
+    node: &Arc<EmbeddedNode>,
+    owner: &KeyIdentity,
+    session_id: &str,
+) -> anyhow::Result<crate::ConfigAccess> {
+    let access = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(owner.did())?);
+    let session = crate::store::graphql::escape_graphql_string(session_id);
+    let did = crate::store::graphql::escape_graphql_string(owner.did());
+    let existing = access
+        .execute(&format!(
+            r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{did}" }}, session_id: {{ _eq: "{session}" }} }}) {{ _docID }} }}"#
+        ))
+        .await?;
+    if existing["data"]["AgentSession"]
+        .as_array()
+        .is_some_and(Vec::is_empty)
+    {
+        access
+            .write(
+                "test.hook.runtime_session",
+                &format!(
+                    r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", node_did: "{did}", requester_did: "{did}", agent_did: "{did}", created_at: "{}" }}) {{ _docID }} }}"#,
+                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                ),
+            )
+            .await?;
+    }
+    Ok(access)
+}
+
+/// Writes the session's Goal as the runtime that signs the session.
+async fn set_goal_as_session_owner(
+    node: &Arc<EmbeddedNode>,
+    owner: &KeyIdentity,
+    session_id: &str,
+    objective: Option<&str>,
+    status: Option<crate::goal::GoalStatus>,
+    token_budget: Option<Option<i64>>,
+) -> anyhow::Result<crate::goal::GoalDocument> {
+    let access = ensure_runtime_session(node, owner, session_id).await?;
+    crate::goal::set_goal_from_access(
+        &access,
+        owner.did(),
+        session_id,
+        objective,
+        status,
+        token_budget,
+        None,
+    )
+    .await
+}
+
 #[tokio::test]
 async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
     let identity_dir = tempfile::tempdir().unwrap();
@@ -2080,17 +2134,21 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-goal-update-{}", uuid::Uuid::new_v4()));
+    // The hook's session is signed by the runtime it runs as.
     let node = Arc::new(
-        crate::test_support::node_builder()
+        EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
             .data_path(&data_path)
             .build()
             .await
             .expect("embedded node"),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let hook =
+    let mut hook =
         DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
             .with_goal_tool_authority(true, false);
+    // The hook acts as the runtime that signs its session and requests.
+    hook.actor = Some(identity::Did::new(identity.did()).unwrap());
     assert!(matches!(
         hook.on_completion_call(&user_text_message("start goal"), &[])
             .await,
@@ -2103,9 +2161,9 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
     // (edited_fields_match_operator_updates_without_changing_goal_identity),
     // which cover active-edit success and CAS/identity rejection at the edit layer.
     {
-        crate::goal::set_goal(
+        set_goal_as_session_owner(
             &node,
-            identity.did(),
+            &identity,
             &session_id,
             Some("blocked-edit semantics"),
             Some(crate::goal::GoalStatus::Active),
@@ -2182,9 +2240,9 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
             "a budget_limited goal cannot be reactivated and has no resume path",
         ),
     ] {
-        crate::goal::set_goal(
+        set_goal_as_session_owner(
             &node,
-            identity.did(),
+            &identity,
             &session_id,
             Some("blocked-edit semantics"),
             Some(crate::goal::GoalStatus::Active),
@@ -2193,9 +2251,9 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         .await
         .expect("create active goal");
         goal_context::bind_signed_request(&node, &hook, &identity, &format!("goal-update-{}", uuid::Uuid::new_v4()), &session_id, None).await;
-        crate::goal::set_goal(
+        set_goal_as_session_owner(
             &node,
-            identity.did(),
+            &identity,
             &session_id,
             None,
             Some(status),
@@ -4087,23 +4145,32 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     let identity =
         KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
     use crate::documents::{WriteToolOutputObligation, WriteToolOutputObligationScope};
-    use crate::goal::{load_canonical_goal, set_goal, GoalStatus};
+    use crate::goal::{load_canonical_goal, GoalStatus};
     use crate::runtime::agent::output_obligation::{ActiveOutputObligation, OutputObligationGate};
 
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    // The hook's session is signed by the runtime it runs as.
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
-    let hook =
+    let mut hook =
         DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
             .with_goal_tool_authority(true, false);
+    // The hook acts as the runtime that signs its session and requests.
+    hook.actor = Some(identity::Did::new(identity.did()).unwrap());
     assert!(matches!(
         hook.on_completion_call(&user_text_message("publish required review output"), &[])
             .await,
         HookAction::Continue
     ));
     let session = hook.session_id().await.unwrap();
-    set_goal(
+    set_goal_as_session_owner(
         &node,
-        identity.did(),
+        &identity,
         &session,
         Some("publish review output"),
         Some(GoalStatus::Active),
@@ -4232,9 +4299,9 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
         .unwrap();
     assert_eq!(complete.parsed_status(), Some(GoalStatus::Complete));
 
-    set_goal(
+    set_goal_as_session_owner(
         &node,
-        identity.did(),
+        &identity,
         "operator-output-session",
         Some("operator decision"),
         Some(GoalStatus::Active),
@@ -4256,9 +4323,9 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
         }],
     );
     assert_eq!(empty_gate.unmet().await.unwrap().len(), 1);
-    set_goal(
+    set_goal_as_session_owner(
         &node,
-        identity.did(),
+        &identity,
         "operator-output-session",
         None,
         Some(GoalStatus::Complete),
