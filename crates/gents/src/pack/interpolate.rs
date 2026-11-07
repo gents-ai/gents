@@ -21,9 +21,65 @@ pub fn resolve_install_variable(
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct InstallVariableUse {
+    pub path: String,
+    pub variables: std::collections::BTreeMap<String, Option<String>>,
+    pub resolved: String,
+}
+
+/// The paths and final literal values use the same interpolation parser as installation.
+pub fn inspect_install_variables(
+    value: &serde_json::Value,
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> Result<Vec<InstallVariableUse>, Vec<String>> {
+    fn visit(
+        value: &serde_json::Value,
+        path: &str,
+        environment: &dyn Fn(&str) -> Option<String>,
+        uses: &mut Vec<InstallVariableUse>,
+    ) -> Result<(), Vec<String>> {
+        match value {
+            serde_json::Value::String(text) => {
+                let seen = std::cell::RefCell::new(std::collections::BTreeMap::new());
+                let resolved = interpolate_with(text, &|name| {
+                    seen.borrow_mut()
+                        .entry(name.to_owned())
+                        .or_insert_with(|| environment(name))
+                        .clone()
+                })?;
+                let variables = seen.into_inner();
+                if !variables.is_empty() {
+                    uses.push(InstallVariableUse {
+                        path: path.to_owned(),
+                        variables,
+                        resolved,
+                    });
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for (index, value) in values.iter().enumerate() {
+                    visit(value, &format!("{path}/{index}"), environment, uses)?;
+                }
+            }
+            serde_json::Value::Object(values) => {
+                for (name, value) in values {
+                    let escaped = name.replace('~', "~0").replace('/', "~1");
+                    visit(value, &format!("{path}/{escaped}"), environment, uses)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    let mut uses = Vec::new();
+    visit(value, "", environment, &mut uses)?;
+    Ok(uses)
+}
+
 #[cfg(test)]
 mod install_variable_conformance {
-    use super::resolve_install_variable;
+    use super::{inspect_install_variables, resolve_install_variable};
     use serde_json::Value;
 
     #[test]
@@ -61,6 +117,30 @@ mod install_variable_conformance {
             );
             assert_eq!(actual, nested("result"), "{case}");
         }
+    }
+
+    #[test]
+    fn preview_reports_interpolated_document_fields_and_defaults() {
+        let config = serde_json::json!({"tasks": [{"prompt": "${TOPIC:-general}"}],
+            "a/b": "$${LITERAL} ${HOST}"});
+        let uses = inspect_install_variables(&config, &|name| {
+            (name == "HOST").then(|| "example.test".to_owned())
+        })
+        .unwrap();
+        assert_eq!(uses.len(), 2);
+        let task = uses
+            .iter()
+            .find(|item| item.path == "/tasks/0/prompt")
+            .unwrap();
+        assert_eq!(task.resolved, "general");
+        assert_eq!(task.variables.get("TOPIC"), Some(&None));
+        let escaped = uses.iter().find(|item| item.path == "/a~1b").unwrap();
+        assert_eq!(escaped.resolved, "${LITERAL} example.test");
+        assert_eq!(
+            escaped.variables.get("HOST"),
+            Some(&Some("example.test".to_owned()))
+        );
+        assert!(!escaped.variables.contains_key("LITERAL"));
     }
 }
 

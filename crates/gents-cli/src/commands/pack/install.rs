@@ -9,6 +9,36 @@ use futures_util::StreamExt;
 use gents::pack::{PackKind, PackManifest};
 use serde_json::json;
 
+pub(super) fn install_variable_preview(
+    pack: &PackSource,
+    owner: &str,
+) -> Result<serde_json::Value> {
+    let path = pack
+        .manifest()
+        .config
+        .as_deref()
+        .context("pack has no configuration")?;
+    let authored: serde_json::Value = serde_json::from_slice(pack.asset(path)?)
+        .context("parsing pack config for variable preview")?;
+    let uses = gents::pack::interpolate::inspect_install_variables(&authored, &|name| {
+        if name == "GENTS_PACK_NODE_DID" {
+            Some(owner.to_owned())
+        } else {
+            std::env::var(name).ok()
+        }
+    })
+    .map_err(|missing| {
+        anyhow::anyhow!(
+            "pack config references unset environment variables: {}",
+            missing.join(", ")
+        )
+    })?;
+    Ok(
+        json!({ "pack": format!("{}/{}", pack.manifest().metadata.namespace, pack.manifest().name),
+        "kind": "install_literal", "uses": uses }),
+    )
+}
+
 /// The documents pack install: the CLI's single site that writes a documents
 /// pack and its dependencies. `explicit` is false only when the pack is
 /// installed as another pack's dependency.
@@ -119,6 +149,10 @@ pub(crate) async fn install_documents_pack_resolved(
     let dependency_inference = prepared.dependency_inference.clone();
     let origin_tag = gents::pack::pack_origin_tag(&pack.manifest().name)?;
     if args.preview {
+        let variables = std::iter::once(pack)
+            .chain(dependencies.iter())
+            .map(|source| install_variable_preview(source, owner))
+            .collect::<Result<Vec<_>>>()?;
         return Ok(json!({
             "pack": pack.manifest().name,
             "source": pack.label(),
@@ -128,6 +162,7 @@ pub(crate) async fn install_documents_pack_resolved(
             "dependency_inference": dependency_inference,
             "origin_tag": origin_tag,
             "dependencies": pack.manifest().metadata.dependencies,
+            "install_variables": variables,
             "would_write": false,
         }));
     }

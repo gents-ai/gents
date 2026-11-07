@@ -178,6 +178,22 @@ fn documents_pack_dir(version: &str) -> tempfile::TempDir {
     dir
 }
 
+#[test]
+fn document_pack_preview_shows_the_install_variable_and_its_target() {
+    let dir = documents_pack_dir("1.0.0");
+    let (bytes, _) = gents::pack::archive::pack_dir(dir.path()).unwrap();
+    let archive = gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
+    let source = super::source::PackSource::received(archive);
+    let preview = super::install::install_variable_preview(&source, "did:key:node").unwrap();
+    assert_eq!(preview["kind"], "install_literal");
+    assert_eq!(preview["uses"][0]["path"], "/node/node_did");
+    assert_eq!(preview["uses"][0]["resolved"], "did:key:node");
+    assert_eq!(
+        preview["uses"][0]["variables"]["GENTS_PACK_NODE_DID"],
+        "did:key:node"
+    );
+}
+
 async fn initialized_home() -> tempfile::TempDir {
     use clap::Parser;
     let home = tempfile::tempdir().unwrap();
