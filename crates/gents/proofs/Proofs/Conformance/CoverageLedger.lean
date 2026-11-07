@@ -1535,8 +1535,8 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "stored_file_image_access_cases"
       "StoredFileImageAccessCases"
-      "runtime::agent::p2p_reconcile::embedded_impl::tests::explicit_file_image_push_keeps_unselected_images_and_collection_interest_local"
-      "Drives native document ACP on the source and recipient, and attempts a direct pull from an unrelated transport peer. Fresh enrollment remains the delivery owner's obligation.")
+      "runtime::agent::p2p_reconcile::embedded_impl::tests::explicit_file_image_push_refuses_runtime_local_collections"
+      "Drives the native refusal to replicate or push runtime-local file-image collections between peers; P2P carries only discovery and enrollment.")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "identity_private_journal_policy"

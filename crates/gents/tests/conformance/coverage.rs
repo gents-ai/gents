@@ -192,7 +192,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 18);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
-    assert_eq!(lean_recovery_sweep_cases().len(), 53);
+    assert_eq!(lean_recovery_sweep_cases().len(), 55);
     assert_eq!(lean_transcript_cases().len(), 11);
     assert_eq!(lean_composed_invariant_witnesses().len(), 4);
 }
@@ -573,6 +573,51 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             !snapshot.workspace_completion_access_cases.is_empty(),
             "workspace_completion_access_cases",
             "WorkspaceCompletionAccessCases",
+        ),
+        (
+            !snapshot.client_control_grant_cases.is_empty(),
+            "client_control_grant_cases",
+            "ClientControlGrantCases",
+        ),
+        (
+            !snapshot.client_process_claim_cases.is_empty(),
+            "client_process_claim_cases",
+            "ClientProcessClaimCases",
+        ),
+        (
+            !snapshot.client_process_receipt_cases.is_empty(),
+            "client_process_receipt_cases",
+            "ClientProcessReceiptCases",
+        ),
+        (
+            !snapshot.client_signed_control_cases.is_empty(),
+            "client_signed_control_cases",
+            "ClientSignedControlCases",
+        ),
+        (
+            !snapshot.cross_actor_authorization_cases.is_empty(),
+            "cross_actor_authorization_cases",
+            "CrossActorAuthorization",
+        ),
+        (
+            !snapshot.goal_link_cases.is_empty(),
+            "goal_link_cases",
+            "GoalLinks",
+        ),
+        (
+            !snapshot.identity_callback_parent_actor_cases.is_empty(),
+            "identity_callback_parent_actor_cases",
+            "CallbackParentActor",
+        ),
+        (
+            !snapshot.identity_parent_publication_cases.is_empty(),
+            "identity_parent_publication_cases",
+            "ParentPublication",
+        ),
+        (
+            !snapshot.pack_eval_subject_cases.is_empty(),
+            "pack_eval_subject_cases",
+            "PackEvalSubjectCases",
         ),
     ] {
         if present {
