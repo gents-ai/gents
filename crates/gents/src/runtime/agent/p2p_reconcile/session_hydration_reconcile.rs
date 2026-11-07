@@ -1196,10 +1196,8 @@ mod tests {
     }
     #[test]
     fn discovery_identity_matches_executable_model() {
-        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = snapshot["session_hydration_discovery_cases"]
-            .as_array()
-            .unwrap();
+        let cases =
+            &crate::lean_vocab_test::lean_contract_snapshot().session_hydration_discovery_cases;
         assert!(!cases.is_empty());
         for case in cases {
             let mut row = serde_json::Map::new();
