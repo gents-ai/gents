@@ -14,6 +14,7 @@ private def cases : List (String × List String × List FieldFilter) :=
   , ("immutable", ["Post"], [{ collection := "Post", field := "to_host", value := "node" }])
   , ("mutable", ["Post"], [{ collection := "Post", field := "message", value := "node" }])
   , ("unknown_field", ["Post"], [{ collection := "Post", field := "other", value := "node" }])
+  , ("different_version", ["Post"], [{ collection := "Post", field := "to_host", value := "node", version := "v2" }])
   , ("other_collection", [], [{ collection := "Post", field := "to_host", value := "node" }])
   , ("empty_value", ["Post"], [{ collection := "Post", field := "to_host", value := "" }])
   , ("duplicate", ["Post"], [{ collection := "Post", field := "to_host", value := "node" },
@@ -21,11 +22,12 @@ private def cases : List (String × List String × List FieldFilter) :=
 
 private def filterJson (filter : FieldFilter) : String :=
   "{\"collection\":" ++ jsonString filter.collection ++ ",\"field\":" ++
-  jsonString filter.field ++ ",\"value\":" ++ jsonString filter.value ++ "}"
+  jsonString filter.field ++ ",\"value\":" ++ jsonString filter.value ++
+  ",\"version\":" ++ jsonString filter.version ++ "}"
 
 private def authorityJson (field : FieldAuthority) : String :=
   "{\"collection\":" ++ jsonString field.collection ++ ",\"field\":" ++
-  jsonString field.field ++ ",\"immutable\":" ++
+  jsonString field.field ++ ",\"version\":" ++ jsonString field.version ++ ",\"immutable\":" ++
   (if field.immutable then "true" else "false") ++ "}"
 
 private def caseJson (value : String × List String × List FieldFilter) : String :=

@@ -29,19 +29,25 @@ pub struct AppPairingFilter {
     pub collection: String,
     pub field: String,
     pub value: Value,
+    pub version: String,
 }
 
 /// An unknown or mutable field cannot safely constrain replicated documents.
 pub fn admit_app_pairing_filters(
     collections: &BTreeSet<String>,
-    immutable_fields: &BTreeSet<(String, String)>,
+    immutable_fields: &BTreeSet<(String, String, String)>,
     filters: &[AppPairingFilter],
 ) -> bool {
     let mut seen = BTreeSet::new();
     filters.iter().all(|filter| {
         collections.contains(&filter.collection)
             && !filter.field.is_empty()
-            && immutable_fields.contains(&(filter.collection.clone(), filter.field.clone()))
+            && !filter.version.is_empty()
+            && immutable_fields.contains(&(
+                filter.collection.clone(),
+                filter.field.clone(),
+                filter.version.clone(),
+            ))
             && seen.insert(&filter.collection)
     })
 }
@@ -49,7 +55,7 @@ pub fn admit_app_pairing_filters(
 pub fn resolve_app_pairing_filters(
     filtered: bool,
     collections: &BTreeSet<String>,
-    immutable_fields: &BTreeSet<(String, String)>,
+    immutable_fields: &BTreeSet<(String, String, String)>,
     filters: Option<&[AppPairingFilter]>,
 ) -> Option<Vec<AppPairingFilter>> {
     match (filtered, filters) {
@@ -68,7 +74,7 @@ pub fn resolve_app_pairing_filters(
 mod app_pairing_filter_conformance {
     use super::*;
 
-    fn fields(case: &Value) -> BTreeSet<(String, String)> {
+    fn fields(case: &Value) -> BTreeSet<(String, String, String)> {
         case["authority"]
             .as_array()
             .unwrap()
@@ -78,6 +84,7 @@ mod app_pairing_filter_conformance {
                 (
                     field["collection"].as_str().unwrap().to_owned(),
                     field["field"].as_str().unwrap().to_owned(),
+                    field["version"].as_str().unwrap().to_owned(),
                 )
             })
             .collect()
