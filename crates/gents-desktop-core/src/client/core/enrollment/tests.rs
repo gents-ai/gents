@@ -1,21 +1,25 @@
 use super::super::super::principal_identity::PrincipalIdentity;
 use super::super::route_manager::ClientRouteManager;
 use super::super::sync_state::ClientSyncStateOwner;
-use super::authority::{
-    apply_current_generational_conflicts, raw_authority_targets, scoped_authority_outcomes,
-};
-use super::projection::project_desktop_approval;
 use super::reconcile::{
     authenticate_enrolled_server, demote_enrollment_peer, enrolled_server_address,
-    prioritized_current_approvals, reconcile_status_enrollment_approvals, ApprovedStatusEnrollment,
-    DesktopApprovalProjection, EnrollmentAuthorityOutcome,
+    prioritized_current_approvals, reconcile_status_enrollment_approvals,
 };
-use super::rows::{EnrollmentRevisionRow, EnrollmentRouteReceiptRow, STATUS_ENROLLMENT_QUERY};
 use super::*;
 use crate::client::peer_directory::RemovalCause;
 use defra_p2p_adapter::P2pDocumentRequest;
 use defra_p2p_adapter::TransportPeerId;
 use gents::runtime::agent::p2p_reconcile::enrollment_candidate::enrollment_request_input;
+use gents::runtime::agent::p2p_reconcile::enrollment_member_authority::EnrollmentAuthorityOutcome;
+use gents::runtime::agent::p2p_reconcile::enrollment_member_authority::{
+    apply_current_generational_conflicts, raw_authority_targets, scoped_authority_outcomes,
+};
+use gents::runtime::agent::p2p_reconcile::enrollment_projection::{
+    project_desktop_approval, ApprovedStatusEnrollment, DesktopApprovalProjection,
+};
+use gents::runtime::agent::p2p_reconcile::enrollment_rows::{
+    EnrollmentRevisionRow, EnrollmentRouteReceiptRow, STATUS_ENROLLMENT_QUERY,
+};
 use gents_protocol::enrollment::derive_enrollment_id;
 use gents_protocol::enrollment::{
     AuthorizationRevisionKind, AuthorizationRevisionRecord, EnrollmentDecisionRecord,

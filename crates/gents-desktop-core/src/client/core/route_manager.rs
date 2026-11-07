@@ -464,8 +464,8 @@ impl ClientRouteManager {
         direction: PairingDirection,
         record: &PeerRecord,
     ) -> Result<()> {
-        use super::enrollment::{
-            load_status_enrollment_approvals_in_txn, reconcile::EnrollmentAuthorityOutcome,
+        use gents::runtime::agent::p2p_reconcile::enrollment_member_authority::{
+            load_status_enrollment_approvals_in_txn, EnrollmentAuthorityOutcome,
         };
         use gents::runtime::agent::p2p_reconcile::materialize_enrollment_desired_in_txn;
 

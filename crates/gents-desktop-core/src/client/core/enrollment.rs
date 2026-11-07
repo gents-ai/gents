@@ -22,23 +22,18 @@ use tokio::time::timeout;
 
 use super::sync_state::RuntimeSchemaObservation;
 use super::{ClientCore, P2P_OPERATION_TIMEOUT};
-use projection::{
+use gents::runtime::agent::p2p_reconcile::enrollment_projection::{
     assemble_durable_enrollment_documents, listing_assembly_requests, listing_revision_rows,
 };
-use reconcile::EnrollmentAuthorizationGeneration;
-use rows::{
+use gents::runtime::agent::p2p_reconcile::enrollment_rows::{
     to_pure_decision, EnrollmentDecisionRow, EnrollmentPinRow, EnrollmentRequestRow,
     STATUS_ENROLLMENT_QUERY,
 };
+use reconcile::EnrollmentAuthorizationGeneration;
 
-mod authority;
-mod projection;
 pub(super) mod reconcile;
-mod rows;
 #[cfg(test)]
 mod tests;
-
-pub(super) use authority::load_status_enrollment_approvals_in_txn;
 
 pub(super) async fn current_local_endpoint(
     p2p: &Arc<dyn P2POps>,
