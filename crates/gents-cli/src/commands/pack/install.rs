@@ -20,19 +20,52 @@ pub(super) fn install_variable_preview(
         .context("pack has no configuration")?;
     let authored: serde_json::Value = serde_json::from_slice(pack.asset(path)?)
         .context("parsing pack config for variable preview")?;
-    let uses = gents::pack::interpolate::inspect_install_variables(&authored, &|name| {
+    let environment = |name: &str| {
         if name == "GENTS_PACK_NODE_DID" {
             Some(owner.to_owned())
         } else {
             std::env::var(name).ok()
         }
-    })
-    .map_err(|missing| {
-        anyhow::anyhow!(
-            "pack config references unset environment variables: {}",
-            missing.join(", ")
-        )
-    })?;
+    };
+    let uses = gents::pack::interpolate::inspect_install_variables(&authored, &environment)
+        .map_err(|missing| {
+            anyhow::anyhow!(
+                "pack config references unset environment variables: {}",
+                missing.join(", ")
+            )
+        })?;
+    let uses = uses
+        .into_iter()
+        .map(|entry| {
+            let mut value = serde_json::to_value(&entry)?;
+            let mut segments = entry.path.trim_start_matches('/').split('/');
+            let collection_name = segments.next().unwrap_or_default();
+            let document = if collection_name == "node" {
+                Some(json!({"collection": "Node", "id": owner}))
+            } else if let Some(collection) = gents::Collection::ALL
+                .iter()
+                .copied()
+                .find(|collection| collection.dir_name() == Some(collection_name))
+            {
+                segments
+                    .next()
+                    .and_then(|index| index.parse::<usize>().ok())
+                    .and_then(|index| authored.get(collection_name)?.get(index))
+                    .and_then(|row| row.get(collection.unique_field()))
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|id| {
+                        gents::pack::interpolate::interpolate_with(id, &environment).ok()
+                    })
+                    .map(|id| json!({"collection": collection.graphql_type(), "id": id}))
+            } else {
+                None
+            };
+            if let Some(document) = document {
+                value["document"] = document;
+            }
+            Ok(value)
+        })
+        .collect::<Result<Vec<_>>>()?;
     let runtime_environment = pack
         .manifest()
         .metadata
