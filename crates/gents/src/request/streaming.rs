@@ -674,13 +674,13 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::request::lifecycle:
         message: &gents_protocol::message::Message,
         block_index: u32,
     ) -> Result<bool, Self::Error> {
-        self.flush_owned_partial_with_stop(
+        Ok(self.flush_owned_partial_with_stop(
             lifecycle.request(),
             lifecycle.execution_generation()?,
             message,
             Some(block_index),
         )
-        .await
+        .await?)
     }
 
     async fn close_provider_attempt(
