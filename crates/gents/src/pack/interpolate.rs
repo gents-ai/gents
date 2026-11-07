@@ -171,7 +171,7 @@ pub fn preserve_omitted_upgrade_literals(
         let mut supplied = 0;
         let mut omitted = 0;
         for name in entry.variables.keys() {
-            if environment(name).is_some() {
+            if environment(name).is_some_and(|value| !value.is_empty()) {
                 supplied += 1
             } else {
                 omitted += 1
@@ -250,6 +250,16 @@ mod install_variable_conformance {
         )
         .is_err());
         assert_eq!(next["field"], "new");
+        let mut next = json!({"field": "new"});
+        preserve_omitted_upgrade_literals(
+            &json!({"field": "${VALUE:-new}"}),
+            &json!({"field": "old"}),
+            &mut next,
+            &|_| Some(String::new()),
+            &|path| Some((path.into(), path.into())),
+        )
+        .unwrap();
+        assert_eq!(next["field"], "old");
     }
 
     #[test]
