@@ -43,9 +43,11 @@ export function ParentLine({ work }: { work: ParentWork }) {
 export function StartedByAutomation({
   summary,
   nodeDid,
+  inherited = false,
 }: {
   summary: SessionSummary;
   nodeDid: string | null;
+  inherited?: boolean;
 }) {
   const how =
     summary.triggerKind === "schedule"
@@ -55,7 +57,9 @@ export function StartedByAutomation({
         : summary.triggerKind
           ? `by a ${summary.triggerKind}`
           : null;
-  const name = summary.taskName ?? "a task";
+  const name = summary.taskOrigin?.taskName ?? summary.taskName ?? "a task";
+  const taskNode = summary.taskOrigin?.nodeDid ?? nodeDid;
+  const taskId = summary.taskOrigin?.taskId ?? summary.taskId;
   return (
     <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
       {summary.triggerKind === "schedule" ? (
@@ -65,14 +69,14 @@ export function StartedByAutomation({
       ) : (
         <Play className="size-3 shrink-0" />
       )}
-      Started by
-      {nodeDid && summary.taskId ? (
+      {inherited ? "From task" : "Started by"}
+      {taskNode && taskId ? (
         <a
           href={href({
             name: "agent",
-            nodeDid,
+            nodeDid: taskNode,
             section: "tasks",
-            item: summary.taskId,
+            item: taskId,
           })}
           className="truncate hover:text-foreground hover:underline"
         >

@@ -310,12 +310,14 @@ export function OpenSession() {
                     </div>
                   )}
                   {summary &&
-                    !parentWork.parent &&
-                    (summary.taskId || summary.triggerId) && (
+                    (summary.taskOrigin ||
+                      summary.taskId ||
+                      (!parentWork.parent && summary.triggerId)) && (
                       <div className="mt-1 mb-1">
                         <StartedByAutomation
                           summary={summary}
                           nodeDid={deployment?.nodeDid ?? null}
+                          inherited={Boolean(parentWork.parent)}
                         />
                       </div>
                     )}

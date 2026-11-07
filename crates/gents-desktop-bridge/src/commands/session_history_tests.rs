@@ -20,6 +20,7 @@ fn summary(session_id: &str, agent_id: Option<&str>, turn_state: Option<&str>) -
         latest_request_id: None,
         task_id: None,
         task_name: None,
+        task_origin: None,
         trigger_id: None,
         trigger_kind: None,
         created_at: None,
