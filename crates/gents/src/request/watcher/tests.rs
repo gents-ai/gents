@@ -775,21 +775,23 @@ async fn revoked_request_is_not_rejected_or_reported_as_terminalized() {
         .create_request(fixture.request_input("req-absent", "sess-absent"))
         .await;
     let absent_doc = crate::store::graphql::escape_graphql_string(&absent);
-    let deleted = fixture
-        .access
-        .write(
-            "test.watcher.delete_absent",
-            &format!(r#"mutation {{ delete_AgentRequest(docID: "{absent_doc}") {{ _docID }} }}"#),
-        )
+    // The requester owns its request; only its signed deletion removes it.
+    fixture
+        .client_access
+        .transact_write("test.watcher.delete_absent", |txn| {
+            let absent = &absent;
+            Box::pin(async move { txn.delete_request_for_native_fixture(absent).await })
+        })
         .await
         .unwrap();
-    assert_eq!(
-        crate::store::graphql::mutation_documents(&deleted, "delete_AgentRequest")
-            .unwrap()
-            .unwrap()
-            .len(),
-        1
-    );
+    let gone = fixture
+        .client_access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{absent_doc}" }} }}) {{ _docID }} }}"#
+        ))
+        .await
+        .unwrap();
+    assert!(gone["data"]["AgentRequest"].as_array().unwrap().is_empty());
 
     for doc_id in [&revoked, &absent] {
         let result = terminalize_pending_request_rejection(

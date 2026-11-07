@@ -974,6 +974,33 @@ mod tests {
 
     /// The fixture Agent's managed access, used for every lifecycle write a
     /// request performs (claim, begin, goal and requeue writes).
+    /// The working Agent owns the sessions its claims and goals observe.
+    async fn ensure_agent_session(
+        node: &Arc<EmbeddedNode>,
+        session: &str,
+        node_did: &str,
+        requester_did: Option<&str>,
+    ) -> anyhow::Result<()> {
+        agent_access(node)
+            .transact_write("test.claim_agent_session", |txn| {
+                Box::pin(async move {
+                    crate::session::ensure_session_in_txn(
+                        txn,
+                        session,
+                        node_did,
+                        &test_agent_did(),
+                        requester_did,
+                        None,
+                        None,
+                        "2026-09-01T00:00:00Z",
+                    )
+                    .await
+                    .map(|_| ())
+                })
+            })
+            .await
+    }
+
     fn agent_access(node: &Arc<EmbeddedNode>) -> crate::ConfigAccess {
         crate::ConfigAccess::local_managed_agent(
             node.clone(),
@@ -1470,14 +1497,8 @@ mod tests {
             for task_budget in [None, Some(50)] {
                 let node = test_node().await;
                 let session = "task-goal-session";
-                crate::session::ensure_session_with_agent_did_and_requester_did(
-                    &node,
-                    session,
-                    &test_node_did(),
-                    &test_agent_did(),
-                    None,
-                )
-                .await
+                ensure_agent_session(&node, session, &test_node_did(), None)
+                    .await
                 .unwrap();
                 let original = crate::goal::set_goal_from_access(
                     &agent_access(&node),
@@ -1850,14 +1871,8 @@ mod tests {
         use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestQueue};
         let access = root_access(node);
         let agent = agent_access(node);
-        crate::session::ensure_session_with_agent_did_and_requester_did(
-            node,
-            session,
-            identity.did(),
-            &test_agent_did(),
-            Some(identity.did()),
-        )
-        .await
+        ensure_agent_session(node, session, identity.did(), Some(identity.did()))
+            .await
         .unwrap();
         let mut parent = AgentRequestCreate::base(
             RequestPurpose::Normal,

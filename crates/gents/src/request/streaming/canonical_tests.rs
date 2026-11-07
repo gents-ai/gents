@@ -1689,17 +1689,13 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
         identity::Did::new(&lifecycle.request().node_did).unwrap(),
     )
     .grant_node_permission(
-        &identity::Did::new(lifecycle.request().requester_did.as_deref().unwrap()).unwrap(),
+        &lifecycle.actor_did().unwrap(),
         crate::store::config_client::NodePermission::DocumentDelete,
     )
     .await
     .unwrap();
-    // The requester holds DocumentDelete above; a Local access bound to it is the signed
-    // route, since the client-signed endpoint refuses ordinary mutations by design.
-    let deleted = crate::ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(lifecycle.request().requester_did.as_deref().unwrap()).unwrap(),
-    )
+    // The Agent created the header, so its own signed access removes it.
+    let deleted = fixture_access(&node, &lifecycle)
     .write("test.remove_imported_header", &format!(
             r#"mutation {{ delete_AgentMessage(filter: {{ _docID: {{ _eq: "{escaped_message}" }} }}) {{ _docID }} }}"#
         ))
