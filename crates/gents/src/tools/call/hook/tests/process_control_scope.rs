@@ -386,8 +386,10 @@ async fn accepted_cross_agent_process_controls_preserve_the_owners_running_job()
         let denial = invoke(&foreign, &format!("foreign-{name}"), name, &args).await;
         assert_eq!(denial["ok"], false, "{name}: {denial}");
         assert!(
-            denial["message"].as_str().is_some_and(|message| message
-                == format!("background tool call {tool_call_id} was not found")),
+            denial["message"]
+                .as_str()
+                .is_some_and(|message| message
+                    == format!("background tool call {tool_call_id} was not found")),
             "{name}: {denial}"
         );
     }

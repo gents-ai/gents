@@ -169,7 +169,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
     })
     .await
     .unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let access = hook.actor_access().unwrap();
     assert!(
         crate::tools::background::status::request_foreground_backgrounding(
             &access,
@@ -329,16 +329,17 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
         modeled_completion.tool_state.as_deref()
     );
     assert_eq!(row["await_mode"], "background");
-    let output = crate::tools::background::status::canonical_tool_output(
-        &node,
+    let output = crate::tools::background::status::observe_canonical_tool_output_with_access(
+        &access,
         &tool_doc,
         &request_doc,
         &session,
         &hook.node_did,
-        None,
+        hook.active_requester_did().await.as_deref(),
     )
     .await
-    .unwrap();
+    .unwrap()
+    .into_text();
     assert!(output.contains("finished:released"), "{output}");
     assert!(!crate::active_native_executors()
         .iter()
@@ -392,7 +393,7 @@ async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_ex
     });
     let execution_token = observed.await.unwrap();
     let guard = hook.in_flight_lifecycles.lock().await;
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let access = hook.actor_access().unwrap();
     assert!(
         crate::tools::background::status::request_foreground_backgrounding(
             &access,
@@ -473,7 +474,7 @@ async fn refused_foreground_handoff_can_be_retried() {
         .lock()
         .await
         .remove("retry-command");
-    let access = crate::store::config_client::ConfigAccess::local(node);
+    let access = hook.actor_access().unwrap();
     assert!(
         crate::tools::background::status::request_foreground_backgrounding(
             &access,
@@ -805,8 +806,9 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
     let row = fetch_tool_call_row(&hook, &session, "failed-handoff").await;
     assert_eq!(row["await_mode"], modeled.await_mode);
     assert_eq!(row["lifecycle_state"], modeled.terminal_state);
-    let mut settling = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
+    let mut settling = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
         node.clone(),
+        identity::Did::new(signer.did()).unwrap(),
         &doc,
         &hook.node_did,
         &session,

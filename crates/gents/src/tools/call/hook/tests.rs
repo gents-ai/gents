@@ -1155,10 +1155,9 @@ async fn claimed_hook_request(
     hook: &DefraSessionHook,
     request_id: &str,
     session_id: &str,
-    parent: Option<(&str, &str, &str, &str)>,
 ) -> crate::request::lifecycle::RequestLifecycle {
     let root = crate::test_support::held_runtime_identity(&hook.node_did);
-    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+    let create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
         root.did(),
@@ -1170,13 +1169,6 @@ async fn claimed_hook_request(
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(root.did()),
     );
-    if let Some((request_id, request_doc_id, tool_call_id, tool_call_doc_id)) = parent {
-        create.caused_by_parent_request_id = Some(request_id.to_owned());
-        create.caused_by_parent_request_doc_id = Some(request_doc_id.to_owned());
-        create.caused_by_parent_tool_call_id = Some(tool_call_id.to_owned());
-        create.caused_by_parent_tool_call_doc_id = Some(tool_call_doc_id.to_owned());
-        create.request_hop = 1;
-    }
     let signer = hook
         .agent_signer
         .clone()
@@ -1187,6 +1179,8 @@ async fn claimed_hook_request(
     .await
 }
 
+/// Writes a child request the hook's Agent caused through `tool_call_doc_id`,
+/// signed and owned by that Agent and left unclaimed in the parent's session.
 async fn create_corroborated_child_request(
     hook: &DefraSessionHook,
     child_request_id: &str,
@@ -1196,18 +1190,38 @@ async fn create_corroborated_child_request(
     tool_call_id: &str,
     tool_call_doc_id: &str,
 ) {
-    claimed_hook_request(
-        hook,
+    let signer = hook
+        .agent_signer
+        .clone()
+        .expect("a signed hook holds its Agent's managed signer");
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         child_request_id,
+        &hook.node_did,
+        signer.did(),
+        signer.did(),
         session_id,
-        Some((
-            parent_request_id,
-            parent_request_doc_id,
-            tool_call_id,
-            tool_call_doc_id,
-        )),
-    )
-    .await;
+        "child request",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(signer.did()),
+    );
+    create.caused_by_parent_request_id = Some(parent_request_id.to_owned());
+    create.caused_by_parent_request_doc_id = Some(parent_request_doc_id.to_owned());
+    create.caused_by_parent_tool_call_id = Some(tool_call_id.to_owned());
+    create.caused_by_parent_tool_call_doc_id = Some(tool_call_doc_id.to_owned());
+    create.request_hop = 1;
+    crate::sign_agent_request_create(&signer, &mut create)
+        .await
+        .expect("sign the child request as the hook's Agent");
+    hook.actor_access()
+        .unwrap()
+        .write(
+            "test.hook.corroborated_child",
+            &create.graphql_mutation().unwrap(),
+        )
+        .await
+        .expect("create the child request as the hook's Agent");
 }
 
 async fn bind_interruptible_request(
@@ -1216,7 +1230,7 @@ async fn bind_interruptible_request(
     session_id: &str,
     deadline_at: chrono::DateTime<chrono::Utc>,
 ) {
-    let lifecycle = claimed_hook_request(hook, request_id, session_id, None).await;
+    let lifecycle = claimed_hook_request(hook, request_id, session_id).await;
     bind_claimed_hook_request(hook, lifecycle, deadline_at).await;
 }
 
@@ -3028,22 +3042,29 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
     assert_eq!(bridge_row["lifecycle_state"], "running");
     assert_eq!(bridge_row["await_mode"], "background");
     assert!(bridge_row["cancel_cause"].is_null());
+    let child = hook_query(
+        &hook,
+        &format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{child_request_id}" }} }}) {{ _docID }} }}"#
+        ),
+    )
+    .await;
+    let child_doc_id = child["AgentRequest"][0]["_docID"]
+        .as_str()
+        .expect("the hook's Agent sees its child request");
     assert!(
-        crate::request::interrupt::fetch_interrupt_requested_at(&node, child_request_id)
-            .await
-            .unwrap()
-            .is_none(),
+        crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+            &hook.actor_access().unwrap(),
+            child_doc_id,
+        )
+        .await
+        .unwrap()
+        .is_none(),
         "interrupting the parent must not reach the child"
     );
 
-    let mut reloaded = crate::tools::call::lifecycle::ToolCallLifecycle::load(
-        node.clone(),
-        &session_id,
-        "native-tool",
-    )
-    .await
-    .unwrap()
-    .expect("outer row");
+    let outer_doc_id = outer_row["_docID"].as_str().expect("outer row document");
+    let mut reloaded = reload_tool_call_as_hook(&hook, outer_doc_id, &session_id).await;
     reloaded.set_state(crate::tools::call::lifecycle::ToolCallState::Running);
     reloaded.set_started_at(Some(chrono::Utc::now() - chrono::Duration::seconds(1)));
     let late_completion = reloaded.complete("late success").await;
