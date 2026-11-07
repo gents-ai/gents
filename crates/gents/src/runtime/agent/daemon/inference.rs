@@ -1969,9 +1969,11 @@ pub(super) mod tests {
         let title_purpose = crate::store::graphql::escape_graphql_string(
             gents_protocol::request_admission::RequestPurpose::TitleAudit.as_str(),
         );
+        // The auxiliary title request is the Agent's own work, read as it.
+        let agent_reader = admission.tool.access().unwrap();
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
-                let response = admission.client
+                let response = agent_reader
                     .execute(&format!(
                         r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }}, purpose: {{ _eq: "{title_purpose}" }} }}) {{ lifecycle_state caused_by_parent_request_id caused_by_parent_request_doc_id }} }}"#
                     ))
