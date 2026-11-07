@@ -545,8 +545,8 @@ mod mac {
             let store = unsafe { WKWebsiteDataStore::dataStoreForIdentifier(&id, mtm) };
             unsafe { config.setWebsiteDataStore(&store) };
         }
-        /* sites tailor themselves to Safari; a bare WebKit agent gets
-        their fallback pages */
+        /* sites tailor themselves to the system browser's user agent; a
+        bare WebKit agent gets their fallback pages */
         unsafe {
             config.setApplicationNameForUserAgent(Some(ns_string!("Version/26.0 Safari/605.1.15")))
         };
