@@ -1887,12 +1887,14 @@ mod tests {
         runtime: Arc<dyn NodeIdentity>,
         agent: Arc<dyn NodeIdentity>,
         admin: crate::store::config_client::ConfigAccess,
+        /// The configuring User's client-signed access; it owns Agent configuration.
+        user: crate::store::config_client::ConfigAccess,
     }
 
     impl AdmissionFixture {
         async fn new(name: &str) -> Self {
             let db = crate::support::test_db(name).await;
-            let (db, _user, _access, binding) =
+            let (db, _user, user, binding) =
                 crate::test_support::signed_test_node_from_db(db, name).await;
             let runtime = db.node_identity.clone();
             let agent =
@@ -1934,6 +1936,7 @@ mod tests {
                 runtime,
                 agent,
                 admin,
+                user,
             }
         }
 
@@ -2030,6 +2033,65 @@ mod tests {
                 .unwrap();
         }
 
+        /// The managed Agent owns the sessions it projects into; fixture sessions
+        /// and their observations are written and read under that same actor.
+        fn agent_access(&self) -> crate::store::config_client::ConfigAccess {
+            crate::store::config_client::ConfigAccess::local_managed_agent(
+                self.db.node.clone(),
+                identity::Did::new(self.agent.did()).unwrap(),
+                self.agent.as_ref(),
+            )
+            .unwrap()
+        }
+
+        async fn ensure_agent_session(&self, session_id: &str, requester_did: Option<&str>) {
+            let node_did = self.runtime.did().to_owned();
+            let agent_did = self.agent.did().to_owned();
+            self.agent_access()
+                .transact_write("test.admission_fixture_session", |txn| {
+                    let node_did = &node_did;
+                    let agent_did = &agent_did;
+                    Box::pin(async move {
+                        crate::session::ensure_session_in_txn(
+                            txn,
+                            session_id,
+                            node_did,
+                            agent_did,
+                            requester_did,
+                            None,
+                            None,
+                            "2026-09-01T00:00:00Z",
+                        )
+                        .await
+                    })
+                })
+                .await
+                .unwrap();
+        }
+
+        async fn write_as_agent(&self, mutation: String, collection: &'static str) -> String {
+            self.agent_access()
+                .transact_write("test.admission_fixture_agent_write", |txn| {
+                    let mutation = &mutation;
+                    Box::pin(async move {
+                        let response = txn.execute(mutation).await?;
+                        let doc_id = crate::store::graphql::created_doc_id(&response, collection)?;
+                        Ok::<_, anyhow::Error>(doc_id)
+                    })
+                })
+                .await
+                .unwrap()
+        }
+
+        async fn read_as_agent(&self, document: &str) -> defra_node::QueryResponse {
+            self.agent_access()
+                .transact_readonly("test.admission_fixture_agent_read", |txn| {
+                    Box::pin(async move { txn.execute_local_response(document).await })
+                })
+                .await
+                .unwrap()
+        }
+
         async fn write_as_runtime(&self, mutation: String, collection: &'static str) -> String {
             self.admin
                 .transact_write("test.admission_fixture_write", |txn| {
@@ -2098,16 +2160,43 @@ mod tests {
     async fn signed_input_cannot_expand_context_or_spoof_runtime_queue() {
         let fixture = AdmissionFixture::new("signed-input").await;
         let agent_did = fixture.agent.did().to_owned();
-        let owner = crate::store::graphql::escape_graphql_string(fixture.runtime.did());
-        let context = crate::store::graphql::escape_graphql_string(&format!("{agent_did}:context"));
+        let owner = fixture.runtime.did().to_owned();
+        let context = format!("{agent_did}:context");
         fixture
-            .admin
-            .write(
-                "test.admission_context_allowlist",
-                &format!(
-                    r#"mutation {{ update_AgentContext(filter: {{ node_did: {{ _eq: "{owner}" }}, context_id: {{ _eq: "{context}" }} }}, input: {{ skill_ids: ["allowed"] }}) {{ _docID }} }}"#
-                ),
-            )
+            .user
+            .transact_write("test.admission_context_allowlist", |txn| {
+                let owner = &owner;
+                let context = &context;
+                Box::pin(async move {
+                    let (_, mut record) =
+                        crate::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            crate::Collection::AgentContext,
+                            owner,
+                            context,
+                        )
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("fixture AgentContext is missing"))?;
+                    record["skill_ids"] = serde_json::json!(["allowed"]);
+                    let skill = serde_json::json!({
+                        "skill_id": "allowed", "node_did": owner, "name": "Allowed skill",
+                        "instructions": "Admitted by the context allowlist.", "enabled": true,
+                    });
+                    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+                        crate::store::config_client::DesiredStateApplyDocument {
+                            collection: crate::Collection::Skill,
+                            add: skill.clone(),
+                            update: skill,
+                        },
+                        crate::store::config_client::DesiredStateApplyDocument {
+                            collection: crate::Collection::AgentContext,
+                            add: record.clone(),
+                            update: record,
+                        },
+                    ])?;
+                    crate::store::config_client::apply_desired_state_plan(txn, &plan).await
+                })
+            })
             .await
             .unwrap();
         for (index, input, allowed) in [
@@ -2166,15 +2255,9 @@ mod tests {
         let fixture = AdmissionFixture::new("admission-projection").await;
         let agent_did = fixture.agent.did().to_owned();
         let owner = crate::store::graphql::escape_graphql_string(fixture.runtime.did());
-        crate::session::ensure_session_with_agent_did_and_requester_did(
-            fixture.node(),
-            "foreign-session",
-            fixture.runtime.did(),
-            &agent_did,
-            Some(foreign.did()),
-        )
-        .await
-        .unwrap();
+        fixture
+            .ensure_agent_session("foreign-session", Some(foreign.did()))
+            .await;
 
         let refusal_reason =
             "request admission denied: request activates a skill outside its context allowlist";
@@ -2218,8 +2301,7 @@ mod tests {
             .unwrap();
 
             let selected = fixture
-                .node()
-                .execute(&format!(
+                .read_as_agent(&format!(
                     r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{owner}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
                     crate::store::graphql::escape_graphql_string(session_id),
                     crate::session::AGENT_SESSION_FIELDS,
@@ -2301,7 +2383,7 @@ mod tests {
                 None => "requester_did: null,".to_owned(),
             };
             fixture
-                .write_as_runtime(
+                .write_as_agent(
                     format!(
                         r#"mutation {{ create_AgentSession(input: {{
                         session_id: "{}", node_did: "{node_did}", {requester} agent_did: "{escaped_agent_did}",
@@ -2347,8 +2429,7 @@ mod tests {
                 "{session_id}: the refused request must not stay pending"
             );
             let sessions = fixture
-                .node()
-                .execute(&format!(
+                .read_as_agent(&format!(
                     r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
                     crate::store::graphql::escape_graphql_string(session_id),
                     crate::session::AGENT_SESSION_FIELDS,
@@ -2391,15 +2472,9 @@ mod tests {
                 "2026-09-01T00:00:00Z",
             ),
         ] {
-            crate::session::ensure_session_with_agent_did_and_requester_did(
-                fixture.node(),
-                session_id,
-                fixture.runtime.did(),
-                &agent_did,
-                Some(fixture.runtime.did()),
-            )
-            .await
-            .unwrap();
+            fixture
+                .ensure_agent_session(session_id, Some(fixture.runtime.did()))
+                .await;
             let request_id = if session_id == "facts-duplicate-roots" {
                 "refused-dup-root".to_owned()
             } else {
@@ -2412,7 +2487,7 @@ mod tests {
                 &agent_did,
             )
             .await;
-            fixture
+            let sibling = fixture
                 .write_as_runtime(
                     format!(
                         r#"mutation {{ create_AgentRequest(input: {{
@@ -2428,6 +2503,7 @@ mod tests {
                     "AgentRequest",
                 )
                 .await;
+            fixture.grant_working_agent(&sibling, &agent_did).await;
 
             super::terminalize_pending_request_rejection(
                 fixture.node(),
@@ -2455,8 +2531,7 @@ mod tests {
                 "{session_id}: the refused request must not stay pending"
             );
             let sessions = fixture
-                .node()
-                .execute(&format!(
+                .read_as_agent(&format!(
                     r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
                     crate::store::graphql::escape_graphql_string(session_id),
                     crate::session::AGENT_SESSION_FIELDS,
