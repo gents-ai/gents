@@ -544,8 +544,8 @@ fn write_files(
 
 async fn round_trip(dir: &Path, expected: &EvalDefinition) -> Result<EvalDefinition> {
     let (manifest, assets) = read_pack(dir)?;
-    let home = EmbeddedHome::create_temp("eval-init-roundtrip").await?;
-    let result = install_and_read_back(&home, &manifest, &assets, expected).await;
+    let mut home = EmbeddedHome::create_temp("eval-init-roundtrip").await?;
+    let result = install_and_read_back(&mut home, &manifest, &assets, expected).await;
     if let Err(error) = home.node.shutdown().await {
         tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down trial node");
     }
@@ -553,7 +553,7 @@ async fn round_trip(dir: &Path, expected: &EvalDefinition) -> Result<EvalDefinit
 }
 
 async fn install_and_read_back(
-    home: &EmbeddedHome,
+    home: &mut EmbeddedHome,
     manifest: &PackManifest,
     assets: &BTreeMap<String, Vec<u8>>,
     expected: &EvalDefinition,
@@ -585,8 +585,21 @@ async fn install_and_read_back(
         "the loaded definition differs from the validated draft"
     );
 
-    let caller = crate::load_client_identity().await?;
-    let access = ConfigAccess::local_as(home.node.clone(), caller.did().parse()?);
+    // The scratch home's runtime admits the operator's client as an operator;
+    // the client then installs through the home's client-signed endpoint, as
+    // every User write does.
+    let caller = std::sync::Arc::new(crate::load_client_identity().await?);
+    let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        caller.private_key_bytes(),
+    )?;
+    home.set_evaluator(caller.clone(), capability);
+    gents::store::identity::GrantSet::OperatorUser
+        .grant(
+            &ConfigAccess::local_as(home.node.clone(), owner.parse()?),
+            &caller.did().parse()?,
+        )
+        .await?;
+    let access = home.client_access(caller.did())?;
     let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
     access
         .transact_write("eval.init.round_trip", |txn| {
