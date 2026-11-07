@@ -149,7 +149,8 @@ theorem flushAt_order_independent (left right : List Segment) (writer : Writer)
 abbrev Streams := List (Declaration × List UInt8)
 
 def declarationField (declaration : Declaration) : Nat :=
-  if declaration.kind == .signature then 1 else 0
+  if declaration.kind == .signature then 1
+  else if declaration.kind == .reasoningStop then 2 else 0
 
 def declarationBefore (left right : Declaration) : Bool :=
   left.block < right.block ||
@@ -164,12 +165,14 @@ def sameDeclarationPosition (left right : Declaration) : Bool :=
 theorem body_and_signature_positions_are_distinct (body : Declaration)
     (h : body.kind ≠ .signature) :
     sameDeclarationPosition body { body with kind := .signature } = false := by
-  simp [sameDeclarationPosition, declarationField, h]
+  by_cases hstop : body.kind = .reasoningStop <;>
+    simp [sameDeclarationPosition, declarationField, h, hstop]
 
 theorem body_kinds_share_position (body : Declaration) (kind : PayloadKind)
-    (hbody : body.kind ≠ .signature) (hkind : kind ≠ .signature) :
+    (hbody : body.kind ≠ .signature) (hbodyStop : body.kind ≠ .reasoningStop)
+    (hkind : kind ≠ .signature) (hkindStop : kind ≠ .reasoningStop) :
     sameDeclarationPosition body { body with kind := kind } = true := by
-  simp [sameDeclarationPosition, declarationField, hbody, hkind]
+  simp [sameDeclarationPosition, declarationField, hbody, hbodyStop, hkind, hkindStop]
 
 theorem signature_kinds_share_position (signature : Declaration)
     (h : signature.kind = .signature) :
@@ -179,6 +182,18 @@ theorem signature_kinds_share_position (signature : Declaration)
 
 def declarationPositionFresh (streams : Streams) (declaration : Declaration) : Bool :=
   streams.all fun existing => !sameDeclarationPosition existing.1 declaration
+
+def reasoningStopped (streams : Streams) (block : Nat) : Bool :=
+  streams.any fun entry => entry.1.block == block && entry.1.kind == .reasoningStop
+
+def reasoningBodyExists (streams : Streams) (block : Nat) : Bool :=
+  streams.any fun entry => entry.1.block == block &&
+    (entry.1.kind == .reasoning || entry.1.kind == .redacted)
+
+def validStopDeclaration (streams : Streams) (declaration : Declaration) (bytes : Nat) : Bool :=
+  if declaration.kind == .reasoningStop then
+    bytes == 0 && declaration.part == 0 && reasoningBodyExists streams declaration.block
+  else true
 
 def consumeRuns : List Run → List UInt8 → Streams → Except ExtentError Streams
   | [], [], streams => .ok streams
@@ -193,14 +208,63 @@ def consumeRuns : List Run → List UInt8 → Streams → Except ExtentError Str
         else match run.declaration with
         | some declaration =>
             if run.stream = streams.length ∧ declarationPositionFresh streams declaration ∧
-                declarationWellFormed declaration then
+                declarationWellFormed declaration ∧
+                !reasoningStopped streams declaration.block ∧
+                validStopDeclaration streams declaration run.bytes then
               consumeRuns rest remaining (streams ++ [(declaration, part)])
             else .error .malformedRuns
         | none =>
-            if run.stream < streams.length then
+            if (streams[run.stream]?).any (fun stream =>
+                !(reasoningStopped streams stream.1.block)) then
               consumeRuns rest remaining
                 (streams.modify (fun old => (old.1, old.2 ++ part)) run.stream)
             else .error .malformedRuns
+
+private def reasoningExample : Declaration := ⟨0, 0, .reasoning, none, none⟩
+private def signatureExample : Declaration := ⟨0, 0, .signature, none, none⟩
+private def stopExample : Declaration := ⟨0, 0, .reasoningStop, none, none⟩
+
+local instance {ε α : Type} [DecidableEq ε] [DecidableEq α] :
+    DecidableEq (Except ε α)
+  | .error a, .error b =>
+    if h : a = b then .isTrue (h ▸ rfl) else .isFalse (fun e => h (Except.error.inj e))
+  | .error _, .ok _ => .isFalse nofun
+  | .ok _, .error _ => .isFalse nofun
+  | .ok a, .ok b =>
+    if h : a = b then .isTrue (h ▸ rfl) else .isFalse (fun e => h (Except.ok.inj e))
+
+theorem stopped_reasoning_keeps_received_body_and_signature :
+    consumeRuns [⟨0, 1, some reasoningExample⟩, ⟨1, 1, some signatureExample⟩,
+        ⟨2, 0, some stopExample⟩] [65, 83] [] =
+      .ok [(reasoningExample, [65]), (signatureExample, [83]), (stopExample, [])] := by
+  native_decide
+
+theorem stop_without_matching_body_is_rejected :
+    consumeRuns [⟨0, 0, some stopExample⟩] [] [] = .error .malformedRuns := by
+  native_decide
+
+theorem stopped_reasoning_rejects_later_signature_bytes :
+    consumeRuns [⟨1, 1, none⟩] [84]
+      [(reasoningExample, [65]), (signatureExample, [83]), (stopExample, [])] =
+      .error .malformedRuns := by
+  native_decide
+
+theorem stop_for_another_block_is_rejected :
+    consumeRuns [⟨1, 0, some { stopExample with block := 1 }⟩] []
+      [(reasoningExample, [65])] = .error .malformedRuns := by
+  native_decide
+
+theorem stop_marker_cannot_carry_bytes :
+    consumeRuns [⟨1, 1, some stopExample⟩] [83]
+      [(reasoningExample, [65])] = .error .malformedRuns := by
+  native_decide
+
+theorem stopped_block_does_not_prevent_a_later_block :
+    consumeRuns [⟨2, 1, some { reasoningExample with block := 1 }⟩] [66]
+      [(reasoningExample, [65]), (stopExample, [])] =
+      .ok [(reasoningExample, [65]), (stopExample, []),
+        ({ reasoningExample with block := 1 }, [66])] := by
+  native_decide
 
 def consumeFlushes : List Flush → Streams → Except ExtentError Streams
   | [], streams => .ok streams
@@ -273,11 +337,13 @@ theorem no_declaration_is_not_an_empty_stream (bytes : List UInt8) :
   simp [consumeRuns]
 
 theorem explicit_empty_stream_is_preserved (declaration : Declaration)
-    (h : declarationWellFormed declaration = true) :
+    (h : declarationWellFormed declaration = true)
+    (hstop : declaration.kind ≠ .reasoningStop) :
     consumeRuns [⟨0, 0, some declaration⟩] [] [] = .ok [(declaration, [])] := by
   have hempty : String.fromUTF8? (ByteArray.mk (#[] : Array UInt8)) = some "" := by
     native_decide
-  simp [consumeRuns, declarationPositionFresh, h, hempty]
+  simp [consumeRuns, declarationPositionFresh, reasoningStopped,
+    validStopDeclaration, hstop, h, hempty]
 
 inductive ReconstructionError where
   | lookup (error : LookupError)
@@ -502,11 +568,11 @@ theorem recovery_no_text_no_header (streams : List (Nat × Declaration))
 
 theorem recovery_rejects_duplicate_position
     (stream : Nat) (declaration : Declaration)
-    (h : declaration.kind ≠ .signature) :
+    (h : declaration.kind ≠ .signature) (hstop : declaration.kind ≠ .reasoningStop) :
     recoveryText [(stream, declaration), (stream + 1, { declaration with kind := .text })] =
       .error .malformedRuns := by
   simp [recoveryText, recoveryDeclarationsValid, sameDeclarationPosition,
-    declarationField, h]
+    declarationField, h, hstop]
 
 inductive MessageRole where
   | system
