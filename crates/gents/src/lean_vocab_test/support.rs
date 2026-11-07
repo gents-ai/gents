@@ -844,6 +844,7 @@ pub(crate) struct LeanAgentBlockSigningCase {
     pub(crate) binding_node: Option<String>,
     pub(crate) root_held: bool,
     pub(crate) expected: String,
+    pub(crate) config_tool: String,
 }
 
 #[derive(Debug, Deserialize)]

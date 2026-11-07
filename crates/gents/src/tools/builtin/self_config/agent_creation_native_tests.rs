@@ -189,15 +189,9 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     crate::store::schema::ensure_runtime_schemas(&node).await?;
     let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
     let user_did = identity::Did::new(user.did())?;
-    for permission in [
-        NodePermission::DocumentRead,
-        NodePermission::DocumentUpdate,
-        NodePermission::DocumentDelete,
-        NodePermission::DacRelationAdd,
-        NodePermission::DacRelationDelete,
-    ] {
-        admin.grant_node_permission(&user_did, permission).await?;
-    }
+    crate::store::identity::GrantSet::OperatorUser
+        .grant(&admin, &user_did)
+        .await?;
     let endpoint =
         GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), user.did())
             .with_client_signing_capability(user.client_signing_capability()?)?

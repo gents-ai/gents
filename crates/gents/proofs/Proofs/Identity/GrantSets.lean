@@ -253,7 +253,13 @@ def baselineWanted (o : AgentObservation) : List String :=
 mutation's actor, in the mutation's transaction. Every edge that would change
 must be admitted, or the mutation and all its edges are discarded, so no
 partial grant survives a refusal. An unchanged edge needs no authority, so an
-actorless startup reconcile succeeds exactly when nothing is missing. -/
+actorless startup reconcile succeeds exactly when nothing is missing.
+
+Every edge is judged against the actor as it stood before the mutation. The
+native gate reads the actor's current effective permissions, so the Rust owner
+stages all additions before any removal: a re-keyed source (a new Context or
+Tools path to a permission the actor already holds) is then admitted through
+the path it replaces, as this definition admits it. -/
 def projectBaseline (actor : Holder) (after : AgentObservation) (installed : List String) :
     Option (List String) :=
   let wanted := baselineWanted after

@@ -44,6 +44,38 @@ theorem matched_agent_signs (node actor : String)
     route true true true node actor (some actor) (some node) = .agent := by
   simp [route, nonemptyNode, nonemptyActor]
 
+/-- The config tool (self-config and its `policy` resource) always asks for
+the managed route: every read and write it issues is signed by the invoking
+Agent's own managed signer, or refused. Decision: an Agent never configures as
+the Node and never as its bare DID; full native admin stays with the client key
+(`Identity.GrantSets.only_init_user_is_admin`). The Node DID is not an Agent,
+so an invoking actor equal to the Node is refused before the route. -/
+def configToolRoute (valid rootHeld : Bool) (node actor : String)
+    (signer bindingNode : Option String) : Route :=
+  if !node.isEmpty && actor == node then .refuse
+  else route true valid rootHeld node actor signer bindingNode
+
+theorem config_tool_never_native (valid held : Bool) (node actor : String)
+    (signer bindingNode : Option String) :
+    configToolRoute valid held node actor signer bindingNode ≠ .native := by
+  unfold configToolRoute
+  split
+  · decide
+  · exact managed_never_falls_back valid held node actor signer bindingNode
+
+theorem config_tool_refuses_missing_signer (valid held : Bool) (node actor : String)
+    (bindingNode : Option String) :
+    configToolRoute valid held node actor none bindingNode = .refuse := by
+  unfold configToolRoute
+  split
+  · rfl
+  · simp [route]
+
+theorem config_tool_refuses_node_actor (valid held : Bool) (node : String)
+    (signer bindingNode : Option String) (nonempty : node.isEmpty = false) :
+    configToolRoute valid held node node signer bindingNode = .refuse := by
+  simp [configToolRoute, nonempty]
+
 structure Case where
   name : String
   managed : Bool
@@ -77,6 +109,8 @@ def casesJson : String :=
     ("node", Lean.toJson c.node), ("actor", Lean.toJson c.actor),
     ("signer", Lean.toJson c.signer), ("binding_node", Lean.toJson c.bindingNode),
     ("expected", Lean.toJson (routeString
-      (route c.managed c.valid c.rootHeld c.node c.actor c.signer c.bindingNode)))])).compress
+      (route c.managed c.valid c.rootHeld c.node c.actor c.signer c.bindingNode))),
+    ("config_tool", Lean.toJson (routeString
+      (configToolRoute c.valid c.rootHeld c.node c.actor c.signer c.bindingNode)))])).compress
 
 end Identity.AgentBlockSigning

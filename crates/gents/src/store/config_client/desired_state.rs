@@ -69,32 +69,17 @@ pub async fn grant_selected_self_configuration(
     txn.add_actor_relationship("Agent", &agent_doc, "config_writer", &target)
         .await?;
     if let Some(context_id) = agent["context_id"].as_str() {
-        let (context_doc, context) =
-            read::read_record(txn, Collection::AgentContext, node_did, context_id)
-                .await?
-                .context("selected AgentContext is unavailable")?;
-        txn.add_entity_set_relationship(
-            "AgentContext",
-            &context_doc,
-            "writer",
-            "agents",
+        let context = self_config_inference::grant(
+            txn,
+            node_did,
             &agent_doc,
-            "config_writer",
+            Collection::AgentContext,
+            context_id,
         )
         .await?;
         if let Some(tools_id) = context["tools_id"].as_str() {
-            let (tools_doc, _) = read::read_record(txn, Collection::Tools, node_did, tools_id)
-                .await?
-                .context("selected Tools is unavailable")?;
-            txn.add_entity_set_relationship(
-                "Tools",
-                &tools_doc,
-                "writer",
-                "agents",
-                &agent_doc,
-                "config_writer",
-            )
-            .await?;
+            self_config_inference::grant(txn, node_did, &agent_doc, Collection::Tools, tools_id)
+                .await?;
         }
     }
     self_config_inference::grant_selected_inference(txn, node_did, &agent_doc, &agent).await?;

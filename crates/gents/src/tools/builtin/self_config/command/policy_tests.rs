@@ -68,6 +68,18 @@ impl PolicyFixture {
         }
     }
 
+    /// Grants the Engineer its modeled default-Agent sets, as init does, then
+    /// each extra permission as the runtime owner.
+    async fn grant_engineer_sets(&self, extra: &[NodePermission]) {
+        crate::tools::builtin::self_config::tests::grant_modeled_direct_sets(
+            &self.db,
+            "default-agent",
+            &self.agent_did,
+        )
+        .await;
+        self.grant_engineer(extra).await;
+    }
+
     /// Publishes a second Agent through the User, as `install_sibling` does.
     async fn install_sibling(&self, display_name: &str) -> String {
         let user = ::identity::Did::new(self.user_access.actor_did().unwrap()).unwrap();
@@ -184,12 +196,7 @@ async fn engineer_grants_held_permission_to_sibling_and_policy_get_shows_it() {
     let fixture = PolicyFixture::new("policy-grant-held").await;
     let sibling = fixture.install_sibling("Reviewer").await;
     fixture
-        .grant_engineer(&[
-            NodePermission::NacRelationAdd,
-            NodePermission::NacRelationDelete,
-            NodePermission::NacStatus,
-            NodePermission::CollectionGet,
-        ])
+        .grant_engineer_sets(&[NodePermission::CollectionGet])
         .await;
     let tools = fixture.tools(&["policy"], false);
     let tool = config(&tools);
@@ -220,13 +227,7 @@ async fn engineer_grants_held_permission_to_sibling_and_policy_get_shows_it() {
 async fn engineer_grant_of_non_held_permission_is_refused_naming_policy_get() {
     let fixture = PolicyFixture::new("policy-grant-not-held").await;
     let sibling = fixture.install_sibling("Reviewer").await;
-    fixture
-        .grant_engineer(&[
-            NodePermission::NacRelationAdd,
-            NodePermission::NacRelationDelete,
-            NodePermission::NacStatus,
-        ])
-        .await;
+    fixture.grant_engineer_sets(&[]).await;
     let tools = fixture.tools(&["policy"], false);
     let tool = config(&tools);
 
@@ -252,12 +253,7 @@ async fn engineer_grant_of_admin_class_permission_is_refused_even_when_held() {
     // The Engineer holds the admin-class permissions it tries to delegate, so
     // only the admin-class rule can refuse these grants.
     fixture
-        .grant_engineer(&[
-            NodePermission::NacRelationAdd,
-            NodePermission::NacRelationDelete,
-            NodePermission::NacStatus,
-            NodePermission::DacBypass,
-        ])
+        .grant_engineer_sets(&[NodePermission::DacBypass])
         .await;
     let tools = fixture.tools(&["policy"], false);
     let tool = config(&tools);
@@ -280,12 +276,7 @@ async fn engineer_revokes_held_permission_and_receipt_states_access_honestly() {
     let fixture = PolicyFixture::new("policy-revoke-held").await;
     let sibling = fixture.install_sibling("Reviewer").await;
     fixture
-        .grant_engineer(&[
-            NodePermission::NacRelationAdd,
-            NodePermission::NacRelationDelete,
-            NodePermission::NacStatus,
-            NodePermission::CollectionGet,
-        ])
+        .grant_engineer_sets(&[NodePermission::CollectionGet])
         .await;
     let tools = fixture.tools(&["policy"], false);
     let tool = config(&tools);
@@ -325,13 +316,7 @@ async fn engineer_revokes_held_permission_and_receipt_states_access_honestly() {
 async fn policy_explain_names_the_real_denial_and_the_grant_that_would_allow_it() {
     let fixture = PolicyFixture::new("policy-explain-denial").await;
     let sibling = fixture.install_sibling("Reviewer").await;
-    fixture
-        .grant_engineer(&[
-            NodePermission::NacRelationAdd,
-            NodePermission::NacRelationDelete,
-            NodePermission::NacStatus,
-        ])
-        .await;
+    fixture.grant_engineer_sets(&[]).await;
     let tools = fixture.tools(&["policy"], false);
     let tool = config(&tools);
 
@@ -411,13 +396,7 @@ async fn explain_reports_missing_add_nac_relation_when_permission_is_held() {
 async fn agent_without_policy_category_is_refused_even_with_native_operation() {
     let fixture = PolicyFixture::new("policy-no-category").await;
     let sibling = fixture.install_sibling("Reviewer").await;
-    fixture
-        .grant_engineer(&[
-            NodePermission::NacRelationAdd,
-            NodePermission::NacRelationDelete,
-            NodePermission::NacStatus,
-        ])
-        .await;
+    fixture.grant_engineer_sets(&[]).await;
     // Native grants alone do not open the resource; the category gate applies first.
     let tools = fixture.tools(&["tools"], false);
     let tool = config(&tools);
@@ -474,13 +453,7 @@ async fn engineer_grants_document_relation_through_manager_relation() {
     let fixture = PolicyFixture::new("policy-document-relation").await;
     let reviewer = fixture.install_sibling("Reviewer").await;
     let helper = fixture.install_sibling("Helper").await;
-    fixture
-        .grant_engineer(&[
-            NodePermission::NacRelationAdd,
-            NodePermission::NacRelationDelete,
-            NodePermission::NacStatus,
-        ])
-        .await;
+    fixture.grant_engineer_sets(&[]).await;
     // `administrator` on an Agent manages `config_writer`, so the Engineer
     // may add or remove that relation on this document and nothing else.
     let doc = fixture.agent_doc_id(&reviewer).await;
@@ -538,18 +511,12 @@ async fn engineer_grants_document_relation_through_manager_relation() {
 async fn policy_revoke_of_own_lockout_permissions_is_refused_under_no_lockout() {
     let fixture = PolicyFixture::new("policy-self-lockout").await;
     fixture
-        .grant_engineer(&[
-            NodePermission::NacRelationAdd,
-            NodePermission::NacRelationDelete,
-            NodePermission::NacStatus,
-            NodePermission::CollectionGet,
-        ])
+        .grant_engineer_sets(&[NodePermission::CollectionGet])
         .await;
     let tools = fixture.tools(&["policy"], true);
     let tool = config(&tools);
-    let self_revoke = |permission: &str| {
-        json!({"argv": ["policy", "revoke", "--permission", permission]})
-    };
+    let self_revoke =
+        |permission: &str| json!({"argv": ["policy", "revoke", "--permission", permission]});
 
     // The Agent's baseline read grant is kept against its own revoke.
     let baseline = run(tool, self_revoke("read-document"))

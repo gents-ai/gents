@@ -232,6 +232,8 @@ pub(crate) struct LeanSelfConfigScopeOfCase {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LeanSelfConfigScopeCases {
+    pub(crate) categories: Vec<String>,
+    pub(crate) default_categories: Vec<String>,
     pub(crate) edit: Vec<LeanSelfConfigScopeEditCase>,
     pub(crate) groups: Vec<LeanSelfConfigGroupCase>,
     pub(crate) scope_of: Vec<LeanSelfConfigScopeOfCase>,

@@ -59,7 +59,10 @@ fn selected(
         .filter(|reference| !reference.id.is_empty()))
 }
 
-async fn grant(
+/// Link one selected document to the Agent's revocable self-configuration
+/// role: `writer` to edit it and `selection_manager` to select or unselect it
+/// (Lean `Identity.Household.agentConfigWriterFixture`).
+pub(super) async fn grant(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
     agent_doc: &str,
