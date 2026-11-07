@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
-use gents::NodeIdentity as _;
 use gents::tools::call::control::client::{submit, ClientControlError};
+use gents::NodeIdentity as _;
 use gents_protocol::process_control::{
     OperatorProcessControlRequest, ProcessControlOutcome, ToolControlReceiptOutcome,
 };

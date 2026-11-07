@@ -1030,7 +1030,7 @@ pub(in crate::commands::codex_shim) mod tests {
         use std::time::Duration;
         use tokio::sync::Mutex;
         let node = Arc::new(
-            crate::shared::test_support::node_builder()
+            crate::shared::test_support::fixture_node_builder()
                 .data_path(directory.join("node"))
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()
@@ -1040,6 +1040,12 @@ pub(in crate::commands::codex_shim) mod tests {
         gents::store::schema::ensure_runtime_schemas(&node)
             .await
             .expect("runtime schemas");
+        crate::shared::test_support::publish_test_node_as(
+            &node,
+            crate::caused_sessions::fixtures::FIXTURE_DID,
+        )
+        .await;
+        let agent = crate::shared::test_support::fixture_agent();
         ShimState {
             usage_cache: Arc::default(),
             codex_home: directory.to_path_buf(),
@@ -1052,7 +1058,7 @@ pub(in crate::commands::codex_shim) mod tests {
                 "http://127.0.0.1/graphql",
             ),
             node_did: Arc::from(crate::caused_sessions::fixtures::FIXTURE_DID),
-            agent_did: Arc::from("notification"),
+            agent_did: Arc::from(agent.agent_did),
             agent_signer: None,
             id_counter: Arc::new(AtomicU64::new(1)),
             timeout: Duration::from_secs(5),

@@ -205,10 +205,14 @@ mod tests {
     use gents::documents::BackendAuth;
     use std::sync::Arc;
 
+    const OWNER: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
+
     async fn seed_backend(access: &ConfigAccess, backend: &InferenceBackend, status: Option<&str>) {
-        gents::ensure_node(access.local_node().unwrap(), &backend.node_did)
-            .await
-            .unwrap();
+        crate::shared::test_support::publish_test_node_as(
+            access.local_node().unwrap(),
+            &backend.node_did,
+        )
+        .await;
         gents::store::config_client::write_inference_backend_document(access, backend)
             .await
             .unwrap();
@@ -245,19 +249,19 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let node = Arc::new(
-            crate::shared::test_support::node_builder()
+            crate::shared::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let backend: InferenceBackend = serde_json::from_value(json!({
-            "node_did":"did:key:owner", "backend_id":"offline-backend", "name":"Local",
+            "node_did":OWNER, "backend_id":"offline-backend", "name":"Local",
             "provider_kind":"OpenAiCompatible", "endpoint":format!("http://{address}/v1"),
             "auth":{"kind":"unauthenticated"}, "enabled":true,
         }))
         .unwrap();
-        let access = ConfigAccess::local(node.clone());
+        let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(OWNER).unwrap());
         seed_backend(&access, &backend, Some("unknown")).await;
         let report = backend_check(&access, &backend, &BTreeSet::from(["local-model"]))
             .await
@@ -304,23 +308,20 @@ mod tests {
     #[tokio::test]
     async fn oauth_backend_uses_exact_owner_observation_without_discovery() {
         let node = Arc::new(
-            crate::shared::test_support::node_builder()
+            crate::shared::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let backend: InferenceBackend = serde_json::from_value(json!({
-            "node_did": "did:key:owner", "backend_id": "claude-max", "name": "Claude",
+            "node_did": OWNER, "backend_id": "claude-max", "name": "Claude",
             "provider_kind": "ClaudeCliSubscription", "endpoint": "claude-cli://subscription",
             "auth": BackendAuth::NodeOAuth { account_ref: None },
         }))
         .unwrap();
-        let access = ConfigAccess::local(node.clone());
-        for (owner, status) in [
-            ("did:key:owner", "healthy"),
-            ("did:key:foreign", "unhealthy"),
-        ] {
+        let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(OWNER).unwrap());
+        for (owner, status) in [(OWNER, "healthy"), ("did:key:foreign", "unhealthy")] {
             let mut value = backend.clone();
             value.node_did = owner.to_owned();
             seed_backend(&access, &value, Some(status)).await;
@@ -339,9 +340,9 @@ mod tests {
 
     #[tokio::test]
     async fn unprobed_oauth_backend_reports_the_runtime_probe_reason() {
-        let owner = "did:key:owner";
+        let owner = OWNER;
         let node = Arc::new(
-            crate::shared::test_support::node_builder()
+            crate::shared::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
@@ -352,7 +353,7 @@ mod tests {
             "provider_kind": "ClaudeCliSubscription", "endpoint": "https://api.anthropic.com",
             "auth": BackendAuth::NodeOAuth { account_ref: None }, "enabled": true,
         });
-        let access = ConfigAccess::local(node.clone());
+        let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(OWNER).unwrap());
         let backend_doc: InferenceBackend = serde_json::from_value(backend.clone()).unwrap();
         seed_backend(&access, &backend_doc, None).await;
         let bundle: ConfigExportBundle = serde_json::from_value(json!({
@@ -390,8 +391,8 @@ mod tests {
 
     #[tokio::test]
     async fn diagnose_reports_an_xai_effort_that_will_not_be_sent() {
-        let owner = "did:key:owner";
-        let access = crate::shared::test_support::seed_unsent_xai_effort(owner).await;
+        let (access, owner) = crate::shared::test_support::seed_unsent_xai_effort().await;
+        let owner = owner.as_str();
         let mut backend = crate::shared::test_support::xai_effort_backend(owner);
         let object = backend.as_object_mut().unwrap();
         object.remove("catalogs");

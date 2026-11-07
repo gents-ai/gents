@@ -78,9 +78,8 @@ impl Fixture {
         let binding =
             gents::store::identity::provision_agent_identity(home.identity.as_ref()).unwrap();
         let mut initial = vec![(Collection::Node, json!({"node_did": &owner}))];
-        let (client_documents, owner_documents): (Vec<_>, Vec<_>) = documents(&owner)
-            .into_iter()
-            .partition(|(collection, _)| {
+        let (client_documents, owner_documents): (Vec<_>, Vec<_>) =
+            documents(&owner).into_iter().partition(|(collection, _)| {
                 !matches!(collection, Collection::Tools | Collection::AgentContext)
             });
         initial.extend(client_documents);

@@ -168,7 +168,10 @@ mod tests {
         }))
         .await
         .unwrap();
-        assert_eq!(report["config"]["agents"][0]["agent_slot"], "fixture-worker");
+        assert_eq!(
+            report["config"]["agents"][0]["agent_slot"],
+            "fixture-worker"
+        );
         assert_eq!(report["scenario"]["seed"]["collection"], "FixtureJob");
     }
 }
