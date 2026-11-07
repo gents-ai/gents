@@ -13,14 +13,14 @@ use super::super::super::principal_identity::PrincipalIdentity;
 use super::super::route_manager::ClientRouteManager;
 use super::super::sync_state::ClientSyncStateOwner;
 use super::super::{EnrollmentActivationError, EnrollmentActivationStage, P2P_OPERATION_TIMEOUT};
-use super::authority::load_status_enrollment_approvals;
 use super::map_p2p_error;
 use crate::client::peer_directory::RemovalCause;
+use gents::runtime::agent::p2p_reconcile::enrollment_member_authority::{
+    load_status_enrollment_approvals, EnrollmentAuthorityOutcome,
+};
 
-pub(in crate::client::core) use gents::runtime::agent::p2p_reconcile::enrollment_projection::ApprovedStatusEnrollment;
+use gents::runtime::agent::p2p_reconcile::enrollment_projection::ApprovedStatusEnrollment;
 #[cfg(test)]
-pub(super) use gents::runtime::agent::p2p_reconcile::enrollment_projection::DesktopApprovalProjection;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::client::core) struct EnrollmentAuthorizationGeneration {
     pub request_digest: String,
@@ -40,8 +40,6 @@ impl EnrollmentAuthorizationGeneration {
             && gents_protocol::enrollment::authorization_lease_is_fresh_at(&self.expires_at, now)
     }
 }
-
-pub(in crate::client::core) use gents::runtime::agent::p2p_reconcile::enrollment_member_authority::EnrollmentAuthorityOutcome;
 
 pub(super) fn prioritized_current_approvals(
     outcomes: &BTreeMap<String, EnrollmentAuthorityOutcome>,
