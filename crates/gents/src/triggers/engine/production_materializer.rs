@@ -299,11 +299,20 @@ impl MaterializerHandle for ProductionMaterializer {
             let (enqueued, conversation_title) = if let Some(prepared) = &delivery {
                 let mut prepared = prepared.clone();
                 if prepared.receipt.goal_id.is_some() {
-                    let current = crate::goal::load_canonical_goal(
-                        &node,
-                        &node_did,
-                        &prepared.receipt.session_id,
-                    )
+                    // Task Goals are Agent-owned; select the assignment as the
+                    // Agent that validates it inside the delivery transaction.
+                    let session_id = prepared.receipt.session_id.clone();
+                    let current = crate::ConfigAccess::local_managed_agent(
+                        node.clone(),
+                        agent_actor.clone(),
+                        agent_identity.as_ref(),
+                    )?
+                    .transact_readonly("trigger.task_goal_assignment", |txn| {
+                        let (node_did, session_id) = (&node_did, &session_id);
+                        Box::pin(async move {
+                            crate::goal::load_canonical_goal_in_txn(txn, node_did, session_id).await
+                        })
+                    })
                     .await?;
                     prepared.receipt.goal_id = Some(crate::goal::task_assignment_goal_id(
                         current.as_ref().map(|goal| goal.goal_id.as_str()),
