@@ -529,15 +529,16 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
     use crate::tools::workspace::*;
     use std::{collections::BTreeSet, sync::Arc};
     fn git(root: &std::path::Path, args: &[&str]) -> String {
-        let output = crate::tools::exec::native_spawn::std_command("git")
-            .args(args)
-            .current_dir(root)
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_COMMON_DIR")
-            .env_remove("GIT_INDEX_FILE")
-            .output()
-            .unwrap();
+        let output = crate::tools::exec::native_spawn::output_std(
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
+                .env_remove("GIT_COMMON_DIR")
+                .env_remove("GIT_INDEX_FILE"),
+        )
+        .unwrap();
         assert!(
             output.status.success(),
             "{:?}: {}",

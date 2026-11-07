@@ -231,9 +231,9 @@ async fn prompt_secret(text: &str) -> Result<String> {
 }
 
 fn set_terminal_echo(on: bool) -> bool {
-    gents::tools::exec::native_spawn::std_command("stty")
-        .arg(if on { "echo" } else { "-echo" })
-        .status()
+    let mut command = std::process::Command::new("stty");
+    command.arg(if on { "echo" } else { "-echo" });
+    gents::tools::exec::native_spawn::status_std(&mut command)
         .map(|status| status.success())
         .unwrap_or(false)
 }

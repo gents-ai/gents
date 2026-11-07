@@ -9,11 +9,11 @@ pub(super) fn path_arg(path: &Path) -> String {
 }
 
 pub(super) async fn run_cli_text(bin: &Path, args: &[String]) -> Result<String> {
-    let output = tokio::process::Command::from(gents::tools::exec::native_spawn::std_command(bin))
-        .args(args)
-        .output()
-        .await
-        .context("running gents subcommand")?;
+    let output = gents::tools::exec::native_spawn::output_tokio(
+        tokio::process::Command::new(bin).args(args),
+    )
+    .await
+    .context("running gents subcommand")?;
     if !output.status.success() {
         bail!(
             "gents {} failed: {}",
@@ -39,12 +39,13 @@ pub(super) async fn run_cli_json_with_env(
     args: &[String],
     environment: BTreeMap<String, String>,
 ) -> Result<Value> {
-    let output = tokio::process::Command::from(gents::tools::exec::native_spawn::std_command(bin))
-        .args(args)
-        .envs(environment)
-        .output()
-        .await
-        .context("running gents subcommand")?;
+    let output = gents::tools::exec::native_spawn::output_tokio(
+        tokio::process::Command::new(bin)
+            .args(args)
+            .envs(environment),
+    )
+    .await
+    .context("running gents subcommand")?;
     if !output.status.success() {
         bail!(
             "gents {} failed: {}",

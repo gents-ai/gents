@@ -109,8 +109,7 @@ async fn run_git_output(
     cwd: &Path,
     args: &[&str],
 ) -> Result<std::process::Output, HostRuntimeError> {
-    let mut command =
-        tokio::process::Command::from(gents::tools::exec::native_spawn::std_command("git"));
+    let mut command = tokio::process::Command::new("git");
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
         .args(["-c", "core.hooksPath=/dev/null"])
@@ -121,16 +120,19 @@ async fn run_git_output(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    tokio::time::timeout(GIT_COMMAND_TIMEOUT, command.output())
-        .await
-        .map_err(|_| HostRuntimeError {
-            code: JSONRPC_INTERNAL_ERROR,
-            message: format!("git {} timed out", args.join(" ")),
-        })?
-        .map_err(|err| HostRuntimeError {
-            code: JSONRPC_INTERNAL_ERROR,
-            message: format!("failed to run git {}: {err}", args.join(" ")),
-        })
+    tokio::time::timeout(
+        GIT_COMMAND_TIMEOUT,
+        gents::tools::exec::native_spawn::output_tokio(&mut command),
+    )
+    .await
+    .map_err(|_| HostRuntimeError {
+        code: JSONRPC_INTERNAL_ERROR,
+        message: format!("git {} timed out", args.join(" ")),
+    })?
+    .map_err(|err| HostRuntimeError {
+        code: JSONRPC_INTERNAL_ERROR,
+        message: format!("failed to run git {}: {err}", args.join(" ")),
+    })
 }
 
 async fn untracked_git_diff(cwd: &Path) -> Result<String, HostRuntimeError> {

@@ -141,10 +141,9 @@ fn reserve_promoted_dir(home: &Path, name: &str) -> Result<PathBuf> {
 
 fn javy_version() -> Result<String, JavyMissing> {
     let javy = std::env::var("JAVY").unwrap_or_else(|_| "javy".into());
-    match gents::tools::exec::native_spawn::std_command(&javy)
-        .arg("--version")
-        .output()
-    {
+    match gents::tools::exec::native_spawn::output_std(
+        std::process::Command::new(&javy).arg("--version"),
+    ) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
         }
