@@ -18,6 +18,7 @@ mod persisted;
 pub(super) struct MemberRenewalState {
     peer_cursor: Option<String>,
     intent_cursors: BTreeMap<(String, u64), Option<String>>,
+    expired_intent_cursor: Option<String>,
     last_intent_creation: BTreeMap<(String, u64), (std::time::Instant, u32)>,
     last_sweep: Option<std::time::Instant>,
     last_wake: Option<std::time::Instant>,
@@ -29,6 +30,7 @@ impl Default for MemberRenewalState {
         Self {
             peer_cursor: None,
             intent_cursors: BTreeMap::new(),
+            expired_intent_cursor: None,
             last_intent_creation: BTreeMap::new(),
             last_sweep: None,
             last_wake: None,
@@ -160,6 +162,11 @@ pub(super) async fn sweep_member_renewals(
     identity: &dyn NodeIdentity,
     state: &mut MemberRenewalState,
 ) -> Result<()> {
+    if let Err(error) =
+        persisted::prune_expired_intents(node, identity, &mut state.expired_intent_cursor).await
+    {
+        tracing::warn!(%error, "failed to prune expired renewal intents");
+    }
     let p2p = crate::store::identity::node_p2p(node).context("runtime P2P is unavailable")?;
     let local_peer = p2p.local_peer_id().await.map_err(anyhow::Error::msg)?;
     let (outcomes, _) = load_status_enrollment_approvals(node, identity, &local_peer).await?;
