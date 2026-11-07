@@ -746,6 +746,22 @@ def projectRecoveredPrefix (resolve : ReplayTag → List ResolvedReplayEvidence)
             { row with blockIndices := kept.map Prod.fst, blocks := kept.map Prod.snd }
       | _ => row
 
+theorem projectRecoveredPrefix_preserves_physical_identity
+    (resolve : ReplayTag → List ResolvedReplayEvidence) (row : TaggedReplayRow) :
+    (projectRecoveredPrefix resolve row).source = row.source ∧
+    (projectRecoveredPrefix resolve row).physicalHeader = row.physicalHeader := by
+  cases hsource : row.source with
+  | none => simp [projectRecoveredPrefix, hsource]
+  | some tag =>
+      cases hresolve : resolve tag with
+      | nil => simp [projectRecoveredPrefix, hsource, hresolve]
+      | cons evidence rest =>
+          cases rest with
+          | nil =>
+              simp only [projectRecoveredPrefix, hsource, hresolve]
+              split <;> simp [hsource]
+          | cons next tail => simp [projectRecoveredPrefix, hsource, hresolve]
+
 /-- Replayability is endpoint-family specific. This validates native payload
 shape only; acceptance and source closure remain external provenance premises. -/
 def replayableReasoning (wire : ReplayWire)
