@@ -168,6 +168,7 @@ fn deterministic_parse_400_skips_remaining_resample_budget_and_repairs() {
     let policy = CompletionRetryPolicy {
         transport_backoff: vec![Duration::from_secs(5), Duration::from_secs(30)],
         max_resample: 2,
+        max_empty_resample: 2,
         allow_repair: true,
         account_hops: 0,
     };
@@ -192,6 +193,7 @@ fn repair_is_available_only_once() {
     let policy = CompletionRetryPolicy {
         transport_backoff: vec![Duration::from_secs(5)],
         max_resample: 0,
+        max_empty_resample: 0,
         allow_repair: true,
         account_hops: 0,
     };
@@ -217,6 +219,7 @@ fn fresh_parse_400_deadline_overshoot_fails_immediately_not_repair() {
     let policy = CompletionRetryPolicy {
         transport_backoff: vec![Duration::from_secs(30)],
         max_resample: 1,
+        max_empty_resample: 1,
         allow_repair: true,
         account_hops: 0,
     };
@@ -349,6 +352,7 @@ fn reasoning_rejection_repairs_once_then_fails() {
     let mut state = CompletionRetryState::new(CompletionRetryPolicy {
         transport_backoff: vec![Duration::from_secs(1)],
         max_resample: 3,
+        max_empty_resample: 3,
         allow_repair: true,
         account_hops: 0,
     });
@@ -506,4 +510,39 @@ fn account_rotated_marker_reaches_the_classified_report() {
     assert!(matches!(failure.error, InferenceError::UsageLimited(_)));
     assert_eq!(failure_class(&failure), FailureClass::AccountLimited);
     assert!(!failure.text.contains("provider-limit"));
+}
+
+#[test]
+fn empty_output_retries_independently_of_transport_and_resets_for_next_turn() {
+    let now = Utc::now();
+    let mut state = CompletionRetryState::new(CompletionRetryPolicy::interactive_default());
+    assert!(matches!(
+        state.on_mid_stream_failure(false, now, None),
+        MidStreamDirective::RetractAndResample { .. }
+    ));
+    assert!(matches!(
+        state.on_no_visible_output(now, None),
+        MidStreamDirective::RetractAndResample { .. }
+    ));
+    assert!(matches!(
+        state.on_no_visible_output(now, None),
+        MidStreamDirective::Fail { .. }
+    ));
+    assert_eq!(state.retry_count(), 2);
+    state.on_turn_accepted();
+    assert_eq!(state.retry_count(), 2);
+    assert!(matches!(
+        state.on_no_visible_output(now, None),
+        MidStreamDirective::RetractAndResample { .. }
+    ));
+    let mut no_retry = CompletionRetryState::new(CompletionRetryPolicy::no_retry());
+    assert!(matches!(
+        no_retry.on_no_visible_output(now, None),
+        MidStreamDirective::Fail { .. }
+    ));
+    let mut deadline = CompletionRetryState::new(CompletionRetryPolicy::interactive_default());
+    assert!(matches!(
+        deadline.on_no_visible_output(now, Some(now)),
+        MidStreamDirective::Fail { .. }
+    ));
 }

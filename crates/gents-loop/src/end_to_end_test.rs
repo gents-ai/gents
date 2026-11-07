@@ -936,3 +936,28 @@ async fn the_accepted_assistant_message_records_the_final_responses_request_id()
     })
     .await;
 }
+
+#[tokio::test]
+async fn empty_output_is_retried_through_the_owned_loop() {
+    let model = ScriptedModel::new(vec![
+        vec![RawStreamingChoice::FinalResponse(())],
+        vec![
+            RawStreamingChoice::Message("recovered".into()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+    ]);
+    let requests = model.requests.clone();
+    let mut config = test_loop_config();
+    config.retry_policy.transport_backoff = vec![std::time::Duration::ZERO];
+    let answer = run_loop_to_text(
+        model,
+        Message::user("hello"),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        config,
+    )
+    .await
+    .expect("an empty provider response should be resampled");
+    assert_eq!(answer, "recovered");
+    assert_eq!(requests.lock().unwrap().len(), 2);
+}

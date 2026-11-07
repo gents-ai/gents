@@ -53,7 +53,7 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
     let cases = lean_completion_retry_cases();
     assert_eq!(
         cases.len(),
-        30,
+        33,
         "Lean should emit the finite CompletionRetry witness set"
     );
     assert_failure_class_bridge_matches_vocabulary();
@@ -95,6 +95,9 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
             "provider_account_limit_requires_retraction",
             "account_limit_reissues_on_next_account_without_backoff",
             "account_hops_exhausted_is_terminal_for_policy",
+            "empty_sample_retry_independent_of_transport",
+            "empty_sample_retry_exhausted",
+            "empty_sample_retry_respects_deadline",
         ]),
         "CompletionRetry witness names drifted"
     );
@@ -109,6 +112,44 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
             assert_context_overflow_compacts_once();
         }
         match case.name.as_str() {
+            "empty_sample_retry_independent_of_transport" => {
+                let now = chrono::Utc::now();
+                let mut retry =
+                    CompletionRetryState::new(CompletionRetryPolicy::interactive_default());
+                assert!(matches!(
+                    retry.on_mid_stream_failure(false, now, None),
+                    MidStreamDirective::RetractAndResample { .. }
+                ));
+                assert_eq!(case.expected_phase.as_deref(), Some("backing_off"));
+                assert!(matches!(
+                    retry.on_no_visible_output(now, None),
+                    MidStreamDirective::RetractAndResample { .. }
+                ));
+            }
+            "empty_sample_retry_exhausted" => {
+                let now = chrono::Utc::now();
+                let mut retry =
+                    CompletionRetryState::new(CompletionRetryPolicy::interactive_default());
+                assert!(matches!(
+                    retry.on_no_visible_output(now, None),
+                    MidStreamDirective::RetractAndResample { .. }
+                ));
+                assert_eq!(case.expected_phase.as_deref(), Some("exhausted"));
+                assert!(matches!(
+                    retry.on_no_visible_output(now, None),
+                    MidStreamDirective::Fail { .. }
+                ));
+            }
+            "empty_sample_retry_respects_deadline" => {
+                let now = chrono::Utc::now();
+                let mut retry =
+                    CompletionRetryState::new(CompletionRetryPolicy::interactive_default());
+                assert_eq!(case.expected_phase.as_deref(), Some("exhausted"));
+                assert!(matches!(
+                    retry.on_no_visible_output(now, Some(now)),
+                    MidStreamDirective::Fail { .. }
+                ));
+            }
             "provider_account_limit_requires_retraction" => {
                 assert_eq!(case.expected_phase.as_deref(), Some("retract_required"));
             }
@@ -399,6 +440,7 @@ fn assert_selected_delay_past_deadline_fails_fast(case: &LeanCompletionRetryCase
     let mut state = CompletionRetryState::new(CompletionRetryPolicy {
         transport_backoff: vec![Duration::from_secs(30)],
         max_resample: 0,
+        max_empty_resample: 0,
         allow_repair: true,
         account_hops: 0,
     });
@@ -420,6 +462,7 @@ fn assert_deadline_behind_clock_fails_fast(case: &LeanCompletionRetryCase) {
     let mut state = CompletionRetryState::new(CompletionRetryPolicy {
         transport_backoff: vec![Duration::from_secs(5)],
         max_resample: 0,
+        max_empty_resample: 0,
         allow_repair: true,
         account_hops: 0,
     });
@@ -443,6 +486,7 @@ fn assert_deterministic_400_repairs(_case: &LeanCompletionRetryCase) {
     let mut state = CompletionRetryState::new(CompletionRetryPolicy {
         transport_backoff: vec![Duration::from_secs(5), Duration::from_secs(30)],
         max_resample: 2,
+        max_empty_resample: 2,
         allow_repair: true,
         account_hops: 0,
     });
@@ -465,6 +509,7 @@ fn assert_resample_budget_outlives_ladder(_case: &LeanCompletionRetryCase) {
     let mut state = CompletionRetryState::new(CompletionRetryPolicy {
         transport_backoff: vec![Duration::from_secs(5)],
         max_resample: 3,
+        max_empty_resample: 3,
         allow_repair: true,
         account_hops: 0,
     });
@@ -494,6 +539,7 @@ fn assert_resample_exhausts_on_its_own_budget(_case: &LeanCompletionRetryCase) {
     let mut state = CompletionRetryState::new(CompletionRetryPolicy {
         transport_backoff: vec![Duration::from_secs(5)],
         max_resample: 2,
+        max_empty_resample: 2,
         allow_repair: true,
         account_hops: 0,
     });
@@ -524,6 +570,7 @@ fn assert_repair_second_time_illegal(case: &LeanCompletionRetryCase) {
     let mut state = CompletionRetryState::new(CompletionRetryPolicy {
         transport_backoff: vec![Duration::from_secs(5)],
         max_resample: 0,
+        max_empty_resample: 0,
         allow_repair: true,
         account_hops: 0,
     });
@@ -675,6 +722,7 @@ fn scheduled_like_policy() -> CompletionRetryPolicy {
             Duration::from_secs(120),
         ],
         max_resample: 1,
+        max_empty_resample: 1,
         allow_repair: true,
         account_hops: 0,
     }

@@ -11,6 +11,7 @@ def failureClassVocabulary : List String :=
    "account_limited", "permanent"]
 
 def failureClassName : FailureClass → String
+  | .emptySample => "empty_sample"
   | .transport => "transport"
   | .parseBadRequest => "parse_bad_request"
   | .reasoningRejected => "reasoning_rejected"

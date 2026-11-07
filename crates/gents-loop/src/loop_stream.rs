@@ -973,7 +973,7 @@ where
             }
 
             if pending_calls.is_empty() && turn_text.trim().is_empty() {
-                match retry.on_mid_stream_failure(false, Utc::now(), config.deadline) {
+                match retry.on_no_visible_output(Utc::now(), config.deadline) {
                     MidStreamDirective::RetractAndResample { delay } => {
                         yield LoopStreamItem::TurnRetracted {
                             turn: turn_index,
