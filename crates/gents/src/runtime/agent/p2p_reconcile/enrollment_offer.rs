@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use chrono::{Duration, SecondsFormat, Utc};
 use defra_p2p_adapter::P2POperations;
 use gents_protocol::enrollment::{
-    derive_enrollment_id, encode_offer, enrollment_schema_fingerprint, EnrollmentOfferRecord,
-    ENROLLMENT_PROTOCOL_VERSION,
+    derive_enrollment_id, encode_offer, enrollment_schema_fingerprint, linkable_offer_length,
+    EnrollmentOfferRecord, ENROLLMENT_PROTOCOL_VERSION,
 };
 use p2p::iroh::parse_public_peer_addr;
 use serde::Serialize;
@@ -57,10 +57,19 @@ impl EnrollmentOfferIssuer {
     }
 
     pub async fn mint(&self) -> Result<EnrollmentOfferStatus> {
-        self.mint_valid_for(DEFAULT_OFFER_VALIDITY).await
+        self.mint_inner(Duration::minutes(5)).await
     }
 
     pub async fn mint_valid_for(&self, validity: Duration) -> Result<EnrollmentOfferStatus> {
+        let offer = self.mint_inner(validity).await?;
+        anyhow::ensure!(
+            linkable_offer_length(offer.token.len()),
+            "enrollment invitation is too large to share as a link"
+        );
+        Ok(offer)
+    }
+
+    async fn mint_inner(&self, validity: Duration) -> Result<EnrollmentOfferStatus> {
         anyhow::ensure!(
             validity > Duration::zero() && validity <= MAX_OFFER_VALIDITY,
             "enrollment offer validity must be between 1 and {} seconds",

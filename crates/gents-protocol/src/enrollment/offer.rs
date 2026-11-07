@@ -61,7 +61,7 @@ pub fn encode_offer(offer: &EnrollmentOfferRecord) -> Result<String> {
     let mut bytes = Vec::new();
     ciborium::ser::into_writer(offer, &mut bytes).map_err(EnrollmentError::EncodeOffer)?;
     let encoded = bs58::encode(bytes).into_string();
-    if !linkable_offer_length(encoded.len()) {
+    if encoded.len() > MAX_OFFER_TOKEN_BYTES {
         return Err(EnrollmentError::OfferTooLarge);
     }
     Ok(encoded)
@@ -187,8 +187,13 @@ mod link_tests {
                 Err(EnrollmentError::InvalidLiveSchemaDigest)
             ));
         }
+        let mut large_status_offer = offer.clone();
+        large_status_offer.server_ticket = "t".repeat(3000);
+        let status_token = encode_offer(&large_status_offer).unwrap();
+        assert!(!linkable_offer_length(status_token.len()));
+        assert_eq!(decode_offer(&status_token).unwrap(), large_status_offer);
         let mut oversized = offer;
-        oversized.server_ticket = "t".repeat(3000);
+        oversized.server_ticket = "t".repeat(MAX_OFFER_TOKEN_BYTES);
         assert!(matches!(
             encode_offer(&oversized),
             Err(EnrollmentError::OfferTooLarge)

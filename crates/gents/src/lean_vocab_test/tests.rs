@@ -28,6 +28,14 @@ fn reports_missing_namespace() {
 }
 
 #[test]
+fn enrollment_invite_length_contract_cases_parse_through_typed_snapshot() {
+    let snapshot = lean_contract_snapshot();
+    assert!(!snapshot.enrollment_invite_length_cases.is_empty());
+    assert!(!snapshot.enrollment_invite_schema_cases.is_empty());
+    assert!(!snapshot.enrollment_invite_window_cases.is_empty());
+}
+
+#[test]
 fn reports_missing_to_defradb() {
     let lean = r#"
 namespace Sample
