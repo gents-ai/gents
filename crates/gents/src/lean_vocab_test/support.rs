@@ -530,6 +530,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
     pub(crate) recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
     pub(crate) session_message_kill_cases: Vec<LeanKillCase>,
+    pub(crate) session_message_kill_observation_cases: Vec<LeanKillObservationCase>,
     pub(crate) restart_disposition_cases: Vec<LeanRestartDispositionCase>,
     pub(crate) r4c_background_work_cases: Vec<LeanR4cBackgroundWorkCase>,
     pub(crate) tool_output_paging_cases: Vec<LeanToolOutputPagingCase>,
@@ -2645,6 +2646,20 @@ pub(crate) struct LeanScopeCollectionRule {
 pub(crate) struct LeanKillCase {
     pub(crate) observation: String,
     pub(crate) action: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanCausedFacts {
+    pub(crate) terminal: bool,
+    pub(crate) this_runtime: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanKillObservationCase {
+    pub(crate) caused: Option<LeanCausedFacts>,
+    pub(crate) observation: String,
 }
 
 #[derive(Debug, Deserialize)]

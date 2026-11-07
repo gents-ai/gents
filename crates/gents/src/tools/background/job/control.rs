@@ -64,17 +64,37 @@ impl KillCause {
 pub enum KillObservation {
     CausedTerminal,
     CausedLiveLocal,
-    CausedLiveRemote,
     Unresolved,
 }
 
+/// Lean `Recovery.CausedFacts`: what a kill read from the caused request it resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CausedFacts {
+    pub terminal: bool,
+    pub this_runtime: bool,
+}
+
 impl KillObservation {
+    /// Lean `Recovery.observeCaused`.
+    pub fn observe(caused: Option<CausedFacts>) -> Self {
+        match caused {
+            None
+            | Some(CausedFacts {
+                this_runtime: false,
+                ..
+            }) => Self::Unresolved,
+            Some(CausedFacts { terminal: true, .. }) => Self::CausedTerminal,
+            Some(CausedFacts {
+                terminal: false, ..
+            }) => Self::CausedLiveLocal,
+        }
+    }
+
     /// Lean `Recovery.killAction`.
     pub fn action(self) -> KillAction {
         match self {
             Self::CausedTerminal => KillAction::Settle,
             Self::CausedLiveLocal => KillAction::InterruptCaused,
-            Self::CausedLiveRemote => KillAction::InterruptAndCancelRow,
             Self::Unresolved => KillAction::CancelRow,
         }
     }
@@ -86,7 +106,6 @@ impl KillObservation {
 pub enum KillAction {
     Settle,
     InterruptCaused,
-    InterruptAndCancelRow,
     CancelRow,
 }
 
@@ -205,18 +224,15 @@ async fn observe_children_in_txn(
     let caused = caused_requests(txn, job).await?;
     let observed = live_own_children(job)
         .map(|child| {
-            let observation = match caused.get(&child.retry_key) {
-                None => KillObservation::Unresolved,
-                Some(request)
-                    if RequestLifecycleState::is_terminal_str(
-                        request.lifecycle_state.as_deref(),
-                    ) =>
-                {
-                    KillObservation::CausedTerminal
-                }
-                Some(request) if request.node_did == node_did => KillObservation::CausedLiveLocal,
-                Some(_) => KillObservation::CausedLiveRemote,
-            };
+            let observation =
+                KillObservation::observe(caused.get(&child.retry_key).map(|request| {
+                    CausedFacts {
+                        terminal: RequestLifecycleState::is_terminal_str(
+                            request.lifecycle_state.as_deref(),
+                        ),
+                        this_runtime: request.node_did == node_did,
+                    }
+                }));
             (child.retry_key.clone(), observation)
         })
         .collect();
@@ -348,30 +364,19 @@ async fn kill_in_txn(
         ));
     }
     for (key, action) in &outcome.killed {
-        let local = match action {
-            KillAction::InterruptCaused => true,
-            KillAction::InterruptAndCancelRow => false,
-            KillAction::Settle | KillAction::CancelRow => continue,
-        };
+        if *action != KillAction::InterruptCaused {
+            continue;
+        }
         let Some(request) = caused.get(key) else {
             continue;
         };
-        let interrupted = crate::request::interrupt::interrupt_request_by_doc_id_in_txn(
+        crate::request::interrupt::interrupt_request_by_doc_id_in_txn(
             txn,
             &request.doc_id,
             &request.node_did,
             request.requester_did.as_deref(),
         )
-        .await;
-        match interrupted {
-            Ok(()) => {}
-            Err(error) if local => return Err(error),
-            Err(error) => tracing::warn!(
-                caused_request_doc_id = request.doc_id,
-                error = %format!("{error:#}"),
-                "peer interrupt of a killed job child was not written"
-            ),
-        }
+        .await?;
     }
     Ok((outcome, Some(terminal)))
 }
@@ -1070,7 +1075,7 @@ mod tests {
             if key == k1 {
                 KillObservation::CausedLiveLocal
             } else if key == k2 {
-                KillObservation::CausedLiveRemote
+                KillObservation::Unresolved
             } else {
                 KillObservation::CausedLiveLocal
             }
@@ -1087,7 +1092,7 @@ mod tests {
                 outcome.killed,
                 vec![
                     (k1.clone(), KillAction::InterruptCaused),
-                    (k2.clone(), KillAction::InterruptAndCancelRow),
+                    (k2.clone(), KillAction::CancelRow),
                 ],
                 "{cause:?}"
             );
@@ -1115,39 +1120,30 @@ mod tests {
     }
 
     #[test]
-    fn kill_action_and_spellings_are_lean_kill_action() {
-        for (observation, action, observation_spelling, action_spelling) in [
-            (
-                KillObservation::CausedTerminal,
-                KillAction::Settle,
-                "causedTerminal",
-                "settle",
-            ),
-            (
-                KillObservation::CausedLiveLocal,
-                KillAction::InterruptCaused,
-                "causedLiveLocal",
-                "interruptCaused",
-            ),
-            (
-                KillObservation::CausedLiveRemote,
-                KillAction::InterruptAndCancelRow,
-                "causedLiveRemote",
-                "interruptAndCancelRow",
-            ),
-            (
-                KillObservation::Unresolved,
-                KillAction::CancelRow,
-                "unresolved",
-                "cancelRow",
-            ),
-        ] {
-            assert_eq!(observation.action(), action);
-            assert_eq!(
-                serde_json::to_value(observation).unwrap(),
-                observation_spelling
-            );
-            assert_eq!(serde_json::to_value(action).unwrap(), action_spelling);
+    fn generated_kill_actions_are_lean_kill_action() {
+        let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+        assert_eq!(snapshot.session_message_kill_cases.len(), 3);
+        for case in &snapshot.session_message_kill_cases {
+            let observation: KillObservation =
+                serde_json::from_value(json!(case.observation)).unwrap();
+            let action: KillAction = serde_json::from_value(json!(case.action)).unwrap();
+            assert_eq!(observation.action(), action, "{case:?}");
+        }
+    }
+
+    #[test]
+    fn generated_kill_observations_are_lean_observe_caused() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot()
+            .session_message_kill_observation_cases;
+        assert_eq!(cases.len(), 5);
+        for case in cases {
+            let caused = case.caused.as_ref().map(|facts| CausedFacts {
+                terminal: facts.terminal,
+                this_runtime: facts.this_runtime,
+            });
+            let expected: KillObservation =
+                serde_json::from_value(json!(case.observation)).unwrap();
+            assert_eq!(KillObservation::observe(caused), expected, "{case:?}");
         }
     }
 

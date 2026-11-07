@@ -56,8 +56,6 @@ use first_request_binding::{continuation_assignment, continuation_reference_matc
 pub(crate) use history::{
     load_assignment_versions_for_session, load_goal_versions_for_session, GoalAssignmentVersion,
 };
-#[cfg(test)]
-pub(crate) use observation::project_session_goal;
 pub use observation::{
     bind_goal_input, load_session_goal_observation, load_session_goal_observation_state,
     load_session_goal_observation_state_in_txn, prepare_goal_input, prepare_goal_input_in_txn,
