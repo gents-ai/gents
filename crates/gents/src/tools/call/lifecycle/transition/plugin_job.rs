@@ -175,6 +175,16 @@ impl ToolCallLifecycle {
         self.state = fields.state;
         self.failure_class = fields.failure;
         self.cancel_cause = fields.cancel;
+        // The settlement's output segment commits before its session
+        // relationship; until it is published, session readers other than
+        // the job's Agent cannot see the job's outcome.
+        crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+            &self.access()?,
+            &self.node_did,
+            &self.actor,
+            &self.session_id,
+        )
+        .await?;
         if terminal.continuation {
             let doc_id = self
                 .doc_id

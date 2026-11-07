@@ -1072,6 +1072,7 @@ mod lifecycle_tests {
         .await
         .unwrap()
         .expect("admitted tool loads");
+        loaded.inherit_signer(&tool).unwrap();
         loaded.timeout().await.unwrap();
         let row = row(&access, "session-native-load").await;
         assert_eq!(row["lifecycle_state"], "timedOut");
@@ -1133,6 +1134,9 @@ mod lifecycle_tests {
         .unwrap()
         .unwrap();
         loaded
+            .bind_agent_signer(access.managed_agent_signer())
+            .unwrap();
+        loaded
             .cancel_during_run(CancelCause::Interrupted)
             .await
             .unwrap();
@@ -1173,10 +1177,18 @@ mod lifecycle_tests {
         let signer = tool_access.managed_agent_signer().unwrap();
         let identities: Vec<Arc<dyn NodeIdentity>> = vec![Arc::new(signer)];
         let request = crate::store::graphql::escape_graphql_string("request-timeout-cas");
-        let response = node
-            .execute(&format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{request}" }} }}, input: {{ lifecycle_state: "interrupted" }}) {{ _docID }} }}"#))
-            .await;
-        assert!(!response.has_errors(), "{:#?}", response.errors);
+        // The Agent that owns the request ends it, as its runtime would.
+        let response = tool_access
+            .write(
+                "test.timeout_cas.interrupt_parent",
+                &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{request}" }} }}, input: {{ lifecycle_state: "interrupted" }}) {{ _docID }} }}"#),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response["data"]["update_AgentRequest"].as_array().map(Vec::len),
+            Some(1)
+        );
 
         let report =
             ToolCallLifecycle::reconcile_terminal_parent_owned_tools(&node, &node_did, &identities)

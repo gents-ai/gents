@@ -331,13 +331,9 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
         } else {
             None
         };
-        let requester = if remote {
-            caller.did()
-        } else if case["plugin"] == true {
-            f.identity.did()
-        } else {
-            f.agent.did()
-        };
+        // A local job child's session is requested by the job's own Agent,
+        // which signs the delivered request, as a staged spawn records it.
+        let requester = if remote { caller.did() } else { f.agent.did() };
         let access = f.agent_access();
         if case["existing"] == true {
             access
@@ -376,14 +372,23 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
                 })
                 .await
                 .unwrap();
+            // A delivered client request requires its existing session's
+            // relationships to be complete, as session creation records them.
             access
-                .add_resource_relationship(
-                    "AgentSession",
-                    &session_doc,
-                    "parent",
-                    "agents",
-                    &f.agent_doc_id,
-                )
+                .transact_write("test.delivery.session_relationships", |txn| {
+                    let session_doc = &session_doc;
+                    let agent_doc = &f.agent_doc_id;
+                    let agent = &f.agent;
+                    Box::pin(async move {
+                        crate::session::stage_created_session_relationships_in_txn(
+                            txn,
+                            session_doc,
+                            agent_doc,
+                            &identity::Did::new(agent.did())?,
+                        )
+                        .await
+                    })
+                })
                 .await
                 .unwrap();
             if remote {
@@ -439,6 +444,31 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
                 escape_graphql_string(&orphan.goal_id), escape_graphql_string(f.identity.did()),
                 escape_graphql_string(f.agent.did()), escape_graphql_string(&session))).await.unwrap();
         }
+        // A local delivery's source is the caller's pinned job row in its own
+        // session; the delivered request's provenance and job keys name it.
+        let tool_call_doc_id = if remote {
+            "delivery-call-doc".to_owned()
+        } else {
+            let mut pin = crate::tools::call::lifecycle::admission_fixture::fixture_job_pin();
+            pin.chain_root_doc_id = name.to_owned();
+            crate::tools::background::job::input::tests::insert_as(
+                &access,
+                "AgentToolCall",
+                json!({
+                    "request_id": f.parent.request_id,
+                    "request_doc_id": f.parent.doc_id,
+                    "node_did": f.identity.did(),
+                    "requester_did": f.parent.requester_did,
+                    "session_id": f.parent.session_id,
+                    "tool_call_id": "delivery-call",
+                    "tool_name": "workflow",
+                    "lifecycle_state": "running",
+                    "started_at": "2026-10-21T00:00:00Z",
+                    "job_pin": pin,
+                }),
+            )
+            .await
+        };
         let cause = SessionMessageCause {
             caller_node_did: if remote {
                 caller.did().into()
@@ -468,7 +498,7 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
                 .map_or_else(|| f.parent.doc_id.clone(), |(_, _, doc)| doc.clone()),
             caller_hop: 0,
             tool_call_id: "delivery-call".into(),
-            tool_call_doc_id: "delivery-call-doc".into(),
+            tool_call_doc_id,
             correlation: None,
         };
         if remote {

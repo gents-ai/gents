@@ -31,20 +31,19 @@ async fn terminalize_accepted_parent(
             .expect("terminalize through retained request owner"),
         TerminalizeResult::Won,
     );
+    // The request is Agent-owned; only its Agent's access observes it.
     let response = admitted
-        .node
+        .tool
+        .access()
+        .unwrap()
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ terminal_output }} }}"#,
             crate::store::graphql::escape_graphql_string(request_doc_id),
         ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "terminal selection: {:?}",
-        response.errors
-    );
+        .await
+        .expect("terminal selection");
     assert_eq!(
-        response.data.unwrap()["AgentRequest"][0]["terminal_output"],
+        response["data"]["AgentRequest"][0]["terminal_output"],
         serde_json::to_value(TerminalOutput::Message {
             message_doc_id: accepted_header_doc_id.to_owned(),
         })
@@ -75,15 +74,17 @@ async fn recovery_leaves_session_message_row_and_its_request_running_after_calle
     assert_eq!(report.tool_calls_recovered, 0);
     let tool_doc_id = admitted.tool.doc_id().unwrap().to_owned();
     let response = admitted
-        .node
+        .tool
+        .access()
+        .unwrap()
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state await_mode }} AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ caused_by_parent_tool_call_doc_id interrupt_requested_at lifecycle_state }} }}"#,
             crate::store::graphql::escape_graphql_string(&tool_doc_id),
             crate::store::graphql::escape_graphql_string(&message.caused_request_doc_id),
         ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let data = response.data.unwrap();
+        .await
+        .unwrap();
+    let data = &response["data"];
     assert_eq!(data["AgentToolCall"][0]["lifecycle_state"], "running");
     assert_eq!(data["AgentToolCall"][0]["await_mode"], "background");
     assert_eq!(

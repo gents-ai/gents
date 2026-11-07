@@ -2,22 +2,36 @@ use super::{AwaitMode, ToolCallLifecycle};
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission, PublishedAdmission, PublishedAdmissionOptions,
 };
-use defra_node::Node as EmbeddedNode;
 
-async fn update(node: &EmbeddedNode, collection: &str, doc_id: &str, fields: &str) {
-    let response = node
-        .execute(&format!(
-            r#"mutation {{ update_{collection}(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#,
-            crate::store::graphql::escape_graphql_string(doc_id)
-        ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+/// The admission's Agent owns its request and tool rows; ACP hides them
+/// from any other reader.
+fn owner(admission: &PublishedAdmission) -> crate::ConfigAccess {
+    admission.tool.access().expect("admission carries its Agent access")
 }
 
-async fn row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
-    let response = node.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id lifecycle_state await_mode cancel_cause tool_failure_class }} }}"#, crate::store::graphql::escape_graphql_string(doc_id))).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let rows = response.data.unwrap()["AgentToolCall"]
+async fn update(admission: &PublishedAdmission, collection: &str, doc_id: &str, fields: &str) {
+    let response = owner(admission)
+        .write(
+            "test.recovery_conformance.update",
+            &format!(
+                r#"mutation {{ update_{collection}(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#,
+                crate::store::graphql::escape_graphql_string(doc_id)
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response["data"][format!("update_{collection}")]
+            .as_array()
+            .map(Vec::len),
+        Some(1),
+        "{collection} {doc_id} update must reach its row"
+    );
+}
+
+async fn row(admission: &PublishedAdmission, doc_id: &str) -> serde_json::Value {
+    let response = owner(admission).execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id lifecycle_state await_mode cancel_cause tool_failure_class }} }}"#, crate::store::graphql::escape_graphql_string(doc_id))).await.unwrap();
+    let rows = response["data"]["AgentToolCall"]
         .as_array()
         .unwrap()
         .clone();
@@ -35,27 +49,28 @@ async fn teardown(admission: PublishedAdmission) {
 }
 
 async fn restart_obligations(
-    node: &EmbeddedNode,
+    admission: &PublishedAdmission,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
 ) -> (Vec<String>, Vec<serde_json::Value>) {
+    let access = owner(admission);
     let session_id = crate::store::graphql::escape_graphql_string(session_id);
-    let response = node
+    let data = access
         .execute(&format!(
             r#"{{
                 AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ _docID }}
                 AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }}, execution_origin: {{ _eq: "scheduled" }} }}) {{ input }}
             }}"#
         ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let data = response.data.unwrap();
+        .await
+        .unwrap()["data"]
+        .clone();
     let mut messages = Vec::new();
     for row in data["AgentMessage"].as_array().unwrap() {
         let doc_id = row["_docID"].as_str().unwrap();
         let (_, message) =
-            crate::session::load_canonical_message_from_node(node, doc_id, node_did, requester_did)
+            crate::session::load_canonical_message(&access, doc_id, node_did, requester_did)
                 .await
                 .expect("reconstruct canonical restart notification");
         if let crate::inference::llm::message::Message::User { content } = message {
@@ -113,7 +128,7 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
         let request_doc = admission.tool.request_doc_id().unwrap().to_owned();
         if case.deadline_expired {
             update(
-                admission.node.as_ref(),
+                &admission,
                 "AgentToolCall",
                 &tool_doc,
                 r#"deadline_at: "2020-01-01T00:00:00Z""#,
@@ -124,7 +139,7 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
             "live" => {}
             "interrupted" => {
                 update(
-                    admission.node.as_ref(),
+                    &admission,
                     "AgentRequest",
                     &request_doc,
                     r#"lifecycle_state: "interrupted""#,
@@ -133,7 +148,7 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
             }
             "otherTerminal" => {
                 update(
-                    admission.node.as_ref(),
+                    &admission,
                     "AgentRequest",
                     &request_doc,
                     r#"lifecycle_state: "failed""#,
@@ -173,7 +188,7 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
             );
             process.finish().await;
         }
-        let actual = row(&admission.node, &tool_doc).await;
+        let actual = row(&admission, &tool_doc).await;
         match case.disposition.as_str() {
             "leave_running" => {
                 assert_eq!(report.tool_calls_recovered, 0, "{name}");
@@ -210,7 +225,7 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
         }
         let session_id = format!("session-restart-{name}");
         let (messages, wakes) = restart_obligations(
-            &admission.node,
+            &admission,
             &session_id,
             &admission.node_did,
             admission.tool.requester_did(),
@@ -253,7 +268,7 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
         .unwrap();
         assert_eq!(second.tool_calls_recovered, 0, "{name}");
         let (messages_after, wakes_after) = restart_obligations(
-            &admission.node,
+            &admission,
             &session_id,
             &admission.node_did,
             admission.tool.requester_did(),
@@ -294,7 +309,7 @@ async fn generated_session_message_restart_dispositions_use_canonical_admission_
         let request_doc = admission.tool.request_doc_id().unwrap().to_owned();
         if case.deadline_expired {
             update(
-                admission.node.as_ref(),
+                &admission,
                 "AgentToolCall",
                 &tool_doc,
                 r#"deadline_at: "2020-01-01T00:00:00Z""#,
@@ -310,7 +325,7 @@ async fn generated_session_message_restart_dispositions_use_canonical_admission_
         };
         if let Some(state) = parent_state {
             update(
-                admission.node.as_ref(),
+                &admission,
                 "AgentRequest",
                 &request_doc,
                 &format!(r#"lifecycle_state: "{state}""#),
@@ -333,7 +348,7 @@ async fn generated_session_message_restart_dispositions_use_canonical_admission_
         )
         .await
         .unwrap();
-        let actual = row(&admission.node, &tool_doc).await;
+        let actual = row(&admission, &tool_doc).await;
         assert_eq!(actual["await_mode"], case.await_mode.as_str(), "{name}");
         match case.disposition.as_str() {
             "leave_running" => {
@@ -346,7 +361,7 @@ async fn generated_session_message_restart_dispositions_use_canonical_admission_
         }
         let session_id = format!("session-restart-{name}");
         let (messages, wakes) = restart_obligations(
-            &admission.node,
+            &admission,
             &session_id,
             &admission.node_did,
             admission.tool.requester_did(),
@@ -413,7 +428,7 @@ async fn generated_native_recovery_cases_use_canonical_admission_owner() {
         );
         if deadline_expired {
             update(
-                admission.node.as_ref(),
+                &admission,
                 "AgentToolCall",
                 &tool_doc,
                 r#"deadline_at: "2020-01-01T00:00:00Z""#,
@@ -422,7 +437,7 @@ async fn generated_native_recovery_cases_use_canonical_admission_owner() {
         }
         if parent_interrupted {
             update(
-                admission.node.as_ref(),
+                &admission,
                 "AgentRequest",
                 &request_doc,
                 r#"lifecycle_state: "interrupted""#,
@@ -430,7 +445,7 @@ async fn generated_native_recovery_cases_use_canonical_admission_owner() {
             .await;
         } else if parent_terminal {
             update(
-                admission.node.as_ref(),
+                &admission,
                 "AgentRequest",
                 &request_doc,
                 r#"lifecycle_state: "completed""#,
@@ -445,7 +460,7 @@ async fn generated_native_recovery_cases_use_canonical_admission_owner() {
         .await
         .unwrap();
         assert_eq!(report.tool_calls_recovered, 1, "{name}");
-        let actual = row(&admission.node, &tool_doc).await;
+        let actual = row(&admission, &tool_doc).await;
         assert_eq!(actual["request_doc_id"], request_doc, "{name}");
         assert_eq!(actual["lifecycle_state"], case.terminal_state, "{name}");
         if parent_interrupted {

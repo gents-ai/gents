@@ -7,38 +7,36 @@ use crate::tools::call::lifecycle::admission_fixture::{
 use defra_node::Node as EmbeddedNode;
 use std::sync::Arc;
 
-async fn exec(node: &EmbeddedNode, statement: &str) {
-    let response = node.execute(statement).await;
-    assert!(
-        !response.has_errors(),
-        "GraphQL errors: {:?}",
-        response.errors
-    );
+/// The parent request's Agent owns the session's requests and tool rows;
+/// ACP hides them from any other reader.
+async fn exec(access: &crate::ConfigAccess, statement: &str) {
+    access
+        .write("test.request_scope.exec", statement)
+        .await
+        .expect("GraphQL fixture write");
 }
 
-async fn scope_row(node: &EmbeddedNode, collection: &str, doc_id: &str) -> serde_json::Value {
+async fn scope_row(access: &crate::ConfigAccess, collection: &str, doc_id: &str) -> serde_json::Value {
     let fields = match collection {
         "AgentRequest" => "_docID request_id node_did lifecycle_state failure_reason deadline execution_generation execution_lease_expires_at",
         "AgentToolCall" => "_docID request_doc_id node_did tool_call_id lifecycle_state cancel_cause tool_failure_class",
         other => panic!("unsupported scope collection {other}"),
     };
     let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
-    let response = node.execute(&format!(
+    let response = access.execute(&format!(
         r#"{{ {collection}(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ {fields} }} }}"#,
-    )).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    response.data.unwrap()[collection][0].clone()
+    )).await.unwrap();
+    response["data"][collection][0].clone()
 }
 
 async fn queue_snapshot(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     session_id: &str,
     queue_key: Option<&str>,
 ) -> (Vec<String>, usize) {
     let session_id = crate::store::graphql::escape_graphql_string(session_id);
-    let response = node.execute(&format!(r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ request_id lifecycle_state input }} }}"#)).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let rows = response.data.unwrap()["AgentRequest"]
+    let response = access.execute(&format!(r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ request_id lifecycle_state input }} }}"#)).await.unwrap();
+    let rows = response["data"]["AgentRequest"]
         .as_array()
         .unwrap()
         .clone();
@@ -89,7 +87,8 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
     let mut parent = claimed_signed_request(&node, &parent_id, &session_id, &identity, None).await;
     let parent_doc_id = parent.request().doc_id.clone();
     let queue_key = case.queue_key.as_deref();
-    let pre = queue_snapshot(node.as_ref(), &session_id, queue_key).await;
+    let owner = parent.access().unwrap();
+    let pre = queue_snapshot(&owner, &session_id, queue_key).await;
     assert_eq!(
         pre.0.len(),
         case.pre_pending_request_ids.len(),
@@ -127,14 +126,14 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
         .unwrap();
         let tool_doc_id = row.doc_id().unwrap().to_owned();
         assert_eq!(row.request_doc_id.as_deref(), Some(parent_doc_id.as_str()));
-        let persisted = scope_row(node.as_ref(), "AgentToolCall", &tool_doc_id).await;
+        let persisted = scope_row(&owner, "AgentToolCall", &tool_doc_id).await;
         assert_eq!(persisted["request_doc_id"], parent_doc_id);
         assert_eq!(persisted["node_did"], node_did);
         assert_eq!(persisted["lifecycle_state"], "running");
         children.push(receipt.request_id);
     }
     let escaped_parent_doc = crate::store::graphql::escape_graphql_string(&parent_doc_id);
-    exec(node.as_ref(), &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_parent_doc}" }} }}, input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#)).await;
+    exec(&owner, &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_parent_doc}" }} }}, input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#)).await;
     let agent_signer = agent_signer.expect("session-message fixture managed signer");
     let access = crate::ConfigAccess::local_with_agent_signer(
         node.clone(),
@@ -159,7 +158,7 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
         .await
         .unwrap();
     assert_eq!(settled, 2);
-    let post = queue_snapshot(node.as_ref(), &session_id, queue_key).await;
+    let post = queue_snapshot(&owner, &session_id, queue_key).await;
     assert!(
         case.post_pending_request_ids.is_empty(),
         "{} generated notification must add no modeled request",

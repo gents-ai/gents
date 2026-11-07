@@ -15,7 +15,7 @@ use crate::tools::background::job::admit::Refusal;
 use crate::tools::background::job::driver::tests::{pinned_job_row, settle_row, start_running};
 use crate::tools::background::job::driver::{load_lifecycle, settle_plugin_job, Settlement};
 use crate::tools::background::job::input::tests::{
-    insert, live_settings, new_job, node_did, request, Job,
+    insert_as, live_settings, new_job, node_did, request_as, Job,
 };
 use crate::tools::background::job::keys::{job_session_id, job_spawn_key};
 use crate::tools::background::job::records::{read_pin, read_progress, write_pin_in_txn};
@@ -58,9 +58,10 @@ fn await_user() -> Settlement {
     })
 }
 
+/// A child of `row`, created by the job's Agent as a spawn is.
 async fn child(job: &Job, row: &str, request_id: &str, slot: &str, attempt: u32, title: &str) {
-    request(
-        &job.node,
+    request_as(
+        &job.access,
         row,
         request_id,
         &job_session_id(row, slot, attempt),
@@ -564,10 +565,10 @@ async fn list_jobs_skips_an_undecodable_row_with_a_warning() {
 }
 
 /// A running job row of `requester`, inserted directly because
-/// `requester_did` is immutable.
+/// `requester_did` is immutable; the job's Agent owns its rows.
 async fn requester_job_row(job: &Job, requester: &str, call_id: &str) -> String {
-    insert(
-        &job.node,
+    insert_as(
+        &job.access,
         "AgentToolCall",
         json!({
             "request_id": "request-1",

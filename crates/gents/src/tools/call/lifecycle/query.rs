@@ -78,6 +78,10 @@ struct ToolCallRow {
 }
 
 impl ToolCallLifecycle {
+    /// Reads without an actor. Agent-owned rows (the tool call, its request
+    /// and session) are invisible to it, so it exists only for fixtures;
+    /// runtime readers load as the owning Agent through `load_as`.
+    #[cfg(test)]
     pub async fn load(
         node: Arc<EmbeddedNode>,
         session_id: &str,
@@ -135,6 +139,9 @@ impl ToolCallLifecycle {
         .await
     }
 
+    /// Reads without an actor; see [`Self::load`]. Runtime readers use
+    /// `load_by_doc_id_as` or `load_by_doc_id_in_txn` with the owning Agent.
+    #[cfg(test)]
     pub async fn load_by_doc_id(
         node: Arc<EmbeddedNode>,
         doc_id: &str,
@@ -166,6 +173,7 @@ impl ToolCallLifecycle {
             .await
     }
 
+    #[cfg(test)]
     async fn load_filtered(node: Arc<EmbeddedNode>, filter: String) -> Result<Option<Self>> {
         ConfigAccess::transact_local_readonly(&node, None, "tool_call.load", |txn| {
             let node = node.clone();

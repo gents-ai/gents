@@ -149,6 +149,7 @@ mod persistence_tests {
             .await
             .unwrap()
             .unwrap();
+            replay.inherit_signer(&tool).unwrap();
             let evidence = receipt();
             tool.stage_plugin_receipt(Some(evidence.clone()));
             match terminal {
@@ -203,6 +204,7 @@ mod persistence_tests {
                 .await
                 .unwrap()
                 .unwrap();
+                conflict.inherit_signer(&tool).unwrap();
                 conflict.state = ToolCallState::Running;
                 let mut changed = evidence;
                 changed.input_digest = "conflicting-input".into();
@@ -351,6 +353,7 @@ mod persistence_tests {
         .await
         .unwrap()
         .unwrap();
+        loser.inherit_signer(&winner).unwrap();
         winner
             .cancel_during_run(CancelCause::Interrupted)
             .await

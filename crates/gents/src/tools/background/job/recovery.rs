@@ -371,7 +371,7 @@ mod tests {
         start_running, stepper, write_step_tools, Stepper,
     };
     use crate::tools::background::job::driver::StepOutcome;
-    use crate::tools::background::job::input::tests::{node_did, request};
+    use crate::tools::background::job::input::tests::{node_did, request_as};
     use crate::tools::background::job::keys::{job_session_id, job_spawn_key};
     use crate::tools::background::job::records::read_pin;
     use gents_protocol::job::JobState;
@@ -384,8 +384,8 @@ mod tests {
         state: &str,
         terminalized_at: Option<&str>,
     ) -> String {
-        request(
-            &step.job.node,
+        request_as(
+            &step.job.access,
             row,
             request_id,
             &job_session_id(row, request_id, 0),

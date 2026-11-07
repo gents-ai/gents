@@ -142,7 +142,7 @@ async fn published_admission_with_job_pin_loads_as_plugin_job() {
         ))
         .await
         .expect("read pinned job row as its owning actor");
-    let stored = &response["AgentToolCall"][0]["job_pin"];
+    let stored = &response["data"]["AgentToolCall"][0]["job_pin"];
     assert_eq!(
         serde_json::from_value::<gents_protocol::job::JobPin>(stored.clone()).unwrap(),
         fixture_job_pin()
