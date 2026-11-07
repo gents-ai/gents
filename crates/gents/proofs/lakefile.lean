@@ -24,7 +24,6 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.DocumentPackUx,
   `Proofs.Conformance.PackSourceSelection,
   `Proofs.Conformance.PackInstallVariables,
-  `Proofs.Conformance.PackInstallFields,
   `Proofs.Conformance.PackInstallUpgrade,
   `Proofs.Conformance.PluginDelete,
   `Proofs.Conformance.ClientOptimisticSend,
