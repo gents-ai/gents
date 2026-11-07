@@ -4752,9 +4752,10 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         let rows = response["data"]["AgentRequest"].as_array().unwrap();
         assert_eq!(rows.len(), 1);
         let request_doc_id = rows[0]["_docID"].as_str().unwrap().to_owned();
-        let request = crate::request::admission::load_request_for_admission_test(
-            node.as_ref(),
+        let request = crate::request::admission::load_request_for_admission_test_as(
+            &node,
             &request_doc_id,
+            &created.agent_did,
         )
         .await
         .expect("load the fresh request through the admission representation");
