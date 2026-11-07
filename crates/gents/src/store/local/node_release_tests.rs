@@ -10,10 +10,11 @@ const REPORT_ENV: &str = "GENTS_NODE_RELEASE_REPORT";
 const TEST_NAME: &str =
     "store::local::node_release_tests::dropped_fixture_nodes_release_threads_and_descriptors";
 const CYCLES: usize = 20;
-/// Lazily started process-wide threads and descriptors (tracing, DNS, a
-/// shared HTTP client) may appear once; a leaked HTTP-serving node costs
-/// about 14 threads and 7 descriptors per cycle.
-const SLACK: usize = 8;
+/// Process-wide residue that does not grow with cycles: lazily started
+/// threads, and a few store files whose handles close after their node is
+/// released (measured at 3 to 8 over 20 and 60 signed cycles). A leaked
+/// HTTP-serving node costs about 15 threads and 11 descriptors per cycle.
+const SLACK: usize = 16;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 struct ProcessResources {

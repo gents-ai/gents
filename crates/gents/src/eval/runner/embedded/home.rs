@@ -26,6 +26,13 @@ pub type P2PConfigForPath = Arc<dyn Fn(&Path) -> P2PConfig + Send + Sync>;
 
 /// Trial homes are harness scratch. Their file-custodied store key and data
 /// live together; the key binds the fresh-store provenance, not host secrecy.
+///
+/// Dropping a home whose node was not shut down hands the node to a release
+/// thread, which shuts it down once no other holder remains, then releases
+/// the store lock and temporary directory. DefraDB's
+/// HTTP transaction sweep is a pool task that holds its own pool and is
+/// stopped only by `Node::shutdown`, so an HTTP-serving node dropped without
+/// it keeps its worker threads, store and descriptors for the process life.
 pub struct EmbeddedHome {
     pub node: Arc<EmbeddedNode>,
     pub identity: Arc<dyn NodeIdentity>,
@@ -38,7 +45,7 @@ pub struct EmbeddedHome {
     path: PathBuf,
     data_path: PathBuf,
     store_key: crate::store::local::store_key::StoreKey,
-    store_lock: crate::store::local::home::StoreLock,
+    store_lock: Option<crate::store::local::home::StoreLock>,
     backend_admission: crate::store::local::backend_protection::BackendAdmission,
     p2p: Option<P2PConfigForPath>,
     #[allow(dead_code)]
@@ -216,7 +223,7 @@ impl EmbeddedHome {
             path,
             data_path,
             store_key,
-            store_lock,
+            store_lock: Some(store_lock),
             backend_admission,
             p2p,
             tempdir: None,
@@ -323,7 +330,9 @@ impl EmbeddedHome {
         let protected = crate::store::local::backend_protection::ProtectedBackendStore::open(
             &self.data_path,
             &self.store_key,
-            &self.store_lock,
+            self.store_lock
+                .as_ref()
+                .context("trial store lock was released")?,
         )
         .await?
         .preflight(&self.store_key, Some(&self.did))
@@ -347,6 +356,47 @@ impl EmbeddedHome {
             .map_err(|e| anyhow!("simulate_process_crash: ensure schemas: {e}"))?;
         Ok(())
     }
+}
+
+impl Drop for EmbeddedHome {
+    fn drop(&mut self) {
+        if self.node.is_shutdown() {
+            return;
+        }
+        let node = self.node.clone();
+        let held = (self.store_lock.take(), self.tempdir.take());
+        let release = std::thread::Builder::new()
+            .name("gents-home-release".to_owned())
+            .spawn(move || release_unstopped_node(node, held));
+        if let Err(error) = release {
+            tracing::warn!(
+                %error,
+                did = %self.did,
+                "could not start the trial node release thread; its node stays running"
+            );
+        }
+    }
+}
+
+/// Runs on its own OS thread, outside any Tokio runtime, so the shutdown
+/// completes even when the dropping runtime is itself shutting down. Callers
+/// may keep using the node after its home is dropped; `Arc` offers no release
+/// notification, so this thread polls for being the last holder.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "waits for and drives Node::shutdown on a dedicated release thread; no runtime worker waits"
+)]
+fn release_unstopped_node<H>(node: Arc<EmbeddedNode>, held: H) {
+    let mut wait = Duration::from_millis(5);
+    while Arc::strong_count(&node) > 1 && !node.is_shutdown() {
+        std::thread::sleep(wait);
+        wait = (wait * 2).min(Duration::from_millis(100));
+    }
+    if let Err(error) = futures::executor::block_on(node.shutdown()) {
+        tracing::warn!(error = %error, "dropped trial node did not shut down cleanly");
+    }
+    drop(node);
+    drop(held);
 }
 
 async fn trial_http() -> Result<(crate::defra_node::HttpConfig, String)> {
