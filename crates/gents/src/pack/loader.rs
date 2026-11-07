@@ -26,6 +26,42 @@ pub fn load_pack_config_with_variables(
     Ok((config, captured.into_inner()))
 }
 
+pub fn load_dependency_config_with_variables(
+    manifest: &PackManifest,
+    options: &PackInstallOptions,
+    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    installed: bool,
+    previous: &std::collections::BTreeMap<String, Option<String>>,
+    overrides: &std::collections::BTreeMap<String, Option<String>>,
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> Result<(
+    PackConfig,
+    std::collections::BTreeMap<String, Option<String>>,
+)> {
+    let unknown = std::cell::RefCell::new(std::collections::BTreeSet::new());
+    let result = load_pack_config_with_variables(manifest, options, read_asset, &|name| {
+        let prior = previous.get(name).cloned();
+        let explicit = overrides.get(name).cloned();
+        let ambient = if !installed && explicit.is_none() {
+            environment(name)
+        } else {
+            None
+        };
+        match interpolate::resolve_install_variable(true, installed, prior, explicit, ambient) {
+            Some(value) => value,
+            None => {
+                unknown.borrow_mut().insert(name.to_owned());
+                None
+            }
+        }
+    });
+    let unknown = unknown.into_inner();
+    anyhow::ensure!(unknown.is_empty(),
+        "installed dependency has unknown variable bindings: {}; explicitly configure them before reinstalling",
+        unknown.into_iter().collect::<Vec<_>>().join(", "));
+    result
+}
+
 pub fn load_pack_config(
     manifest: &PackManifest,
     options: &PackInstallOptions,
