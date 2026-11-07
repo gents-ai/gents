@@ -251,6 +251,28 @@ pub fn fast_mode_backend_ids(backends: &[InferenceBackendView]) -> Vec<String> {
         .collect()
 }
 
+/// A failed model discovery's kind, whether the provider answered, and whether the user may
+/// type a model id it did not advertise.
+pub fn classify_discovery_failure(error: &anyhow::Error) -> (&'static str, bool, bool) {
+    let http_error = error.chain().find_map(|cause| {
+        cause.downcast_ref::<gents::inference::backends::provider::ModelDiscoveryHttpError>()
+    });
+    let is_decode = error
+        .chain()
+        .any(|cause| cause.downcast_ref::<serde_json::Error>().is_some());
+    if let Some(error) = http_error {
+        if error.is_auth() {
+            ("authentication", true, false)
+        } else {
+            ("http", true, true)
+        }
+    } else if is_decode {
+        ("decode", true, true)
+    } else {
+        ("connection", false, false)
+    }
+}
+
 pub async fn load_inference_setup_state(
     access: &gents::store::config_client::ConfigAccess,
     node_did: &str,

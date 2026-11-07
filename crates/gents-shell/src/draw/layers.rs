@@ -4,7 +4,7 @@ use ratatui::style::Style;
 use ratatui::widgets::{Clear, Paragraph, Widget, Wrap};
 
 use super::{
-    draw_footer, draw_no_matches, draw_row, draw_rows, pane_box, sessions, sidebar, theme,
+    draw_footer, draw_no_matches, draw_row, draw_rows, pane_box, sessions, setup, sidebar, theme,
 };
 use crate::app::input::LineInput;
 use crate::app::layers::{Layer, LayerKind};
@@ -37,6 +37,7 @@ pub fn draw(app: &App, area: Rect, buf: &mut Buffer) {
             LayerKind::Keys => draw_keys(app, layer, rect, focused, buf),
             LayerKind::Sessions => sessions::draw(app, rect, focused, buf),
             LayerKind::Sidebar => sidebar::draw(app, rect, focused, buf),
+            LayerKind::Setup => setup::draw(app, rect, focused, buf),
         }
     }
 }

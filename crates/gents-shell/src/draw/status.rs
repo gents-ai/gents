@@ -23,6 +23,7 @@ fn layer_hints(kind: LayerKind, set: KeySet) -> &'static str {
     match (kind, set) {
         (LayerKind::Jump, _) => "type to filter tabs, sessions, agents, menus and commands",
         (LayerKind::Picker, _) => "each tab keeps its own agent, side by side",
+        (LayerKind::Setup, _) => "a provider, its connection and a model make one backend",
         (LayerKind::Menu(_), KeySet::Vim) => "esc back one layer · ctrl-w h/j/k/l cycles layers",
         (LayerKind::Menu(_), KeySet::Emacs) => "ctrl-g back one layer · ctrl-x o cycles layers",
         (LayerKind::Keys, KeySet::Vim) => "j/k scroll · esc close",

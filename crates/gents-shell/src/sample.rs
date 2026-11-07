@@ -2,8 +2,9 @@ use std::borrow::Cow;
 
 use crate::app::{sample_chat, ChatLine, NOT_WIRED};
 use crate::source::{
-    Agent, Answer, BackgroundCall, Change, ChangeKind, Day, Intent, Job, MenuAct, MenuRow, Prompt,
-    PromptKind, Session, SessionState, Update,
+    Agent, Answer, BackgroundCall, Change, ChangeKind, Day, Discovered, Intent, Job, MenuAct,
+    MenuRow, Prompt, PromptKind, SavedAccount, Session, SessionState, SettingKey, SetupAuth,
+    SetupMethod, SetupModel, SetupProvider, SetupSetting, Update,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -505,12 +506,171 @@ pub fn answer(intent: &Intent) -> Vec<Update> {
             menu: *id,
             rows: Ok(menu_rows(*id)),
         }],
+        Intent::ReadSetup => vec![Update::Setup(Ok(setup_catalog()))],
+        Intent::SignIn { .. } => vec![
+            Update::SignInUrl {
+                url: "https://claude.ai/oauth/authorize?sample".to_string(),
+            },
+            Update::SignedIn(Ok(SavedAccount {
+                label: "Claude 2".to_string(),
+                account_ref: "sample-ref".to_string(),
+            })),
+        ],
+        Intent::Discover(connection) => vec![Update::Models {
+            connection: connection.clone(),
+            found: Ok(Discovered {
+                models: vec![
+                    sample_model("claude-sonnet-4-5", "Claude Sonnet 4.5"),
+                    sample_model("claude-opus-4-1", "Claude Opus 4.1"),
+                ],
+                failure: None,
+                manual: false,
+            }),
+        }],
+        Intent::Recommend { connection, model } => vec![Update::Recommended {
+            connection: connection.clone(),
+            model: Ok(sample_model(model, model)),
+        }],
+        Intent::SaveBackend { model, .. } => {
+            vec![Update::Saved(Ok(format!("saved anthropic-2: {model}")))]
+        }
         Intent::Act { .. } => vec![Update::Notice(NOT_WIRED.to_string())],
-        Intent::Interrupt { .. } | Intent::Refresh => Vec::new(),
+        Intent::Interrupt { .. } | Intent::Refresh | Intent::CancelSignIn => Vec::new(),
     }
 }
 
-/// Today's static rows, which take no act, and two installed workflows.
+fn sample_model(id: &str, name: &str) -> SetupModel {
+    let number = |key, value: &str, min: &str, max: &str| SetupSetting {
+        key,
+        value: value.to_string(),
+        min: Some(min.to_string()),
+        max: Some(max.to_string()),
+        choices: Vec::new(),
+    };
+    SetupModel {
+        id: id.to_string(),
+        name: name.to_string(),
+        settings: vec![
+            number(SettingKey::ContextWindow, "200000", "1024", "200000"),
+            number(SettingKey::MaxOutputTokens, "64000", "1", "64000"),
+            SetupSetting {
+                key: SettingKey::ReasoningEffort,
+                value: "medium".to_string(),
+                min: None,
+                max: None,
+                choices: ["low", "medium", "high"].map(str::to_string).to_vec(),
+            },
+            number(SettingKey::MaxConcurrent, "4", "1", "64"),
+        ],
+    }
+}
+
+/// The desktop's providers, with one Claude account saved.
+fn setup_catalog() -> Vec<SetupProvider> {
+    use SetupAuth::{Key, OptionalKey, SignIn};
+    let method = |id: &str, name: &str, endpoint: &str, auth| SetupMethod {
+        id: id.to_string(),
+        name: name.to_string(),
+        endpoint: endpoint.to_string(),
+        endpoint_fixed: false,
+        auth,
+        accounts: Vec::new(),
+    };
+    let provider = |id: &str, name: &str, about: &str, methods| SetupProvider {
+        id: id.to_string(),
+        name: name.to_string(),
+        about: about.to_string(),
+        methods,
+    };
+    let claude = SavedAccount {
+        label: "Claude".to_string(),
+        account_ref: "sample-ref-0".to_string(),
+    };
+    vec![
+        provider(
+            "openai",
+            "OpenAI",
+            "Sign in with ChatGPT or use an OpenAI API key.",
+            vec![
+                method(
+                    "chat_gpt_oauth",
+                    "ChatGPT sign-in",
+                    "https://chatgpt.com/backend-api/codex",
+                    SignIn,
+                ),
+                method(
+                    "api_key",
+                    "OpenAI API key",
+                    "https://api.openai.com/v1",
+                    Key,
+                ),
+            ],
+        ),
+        provider(
+            "anthropic",
+            "Anthropic",
+            "Use a Claude Pro or Max subscription, or an Anthropic API key.",
+            vec![
+                SetupMethod {
+                    accounts: vec![claude],
+                    ..method(
+                        "claude_oauth",
+                        "Claude sign-in",
+                        "claude-cli://subscription",
+                        SignIn,
+                    )
+                },
+                SetupMethod {
+                    endpoint_fixed: true,
+                    ..method(
+                        "api_key",
+                        "Anthropic API key",
+                        "https://api.anthropic.com/v1",
+                        Key,
+                    )
+                },
+            ],
+        ),
+        provider(
+            "grok",
+            "Grok",
+            "Use SuperGrok, an eligible X Premium+ subscription, or an xAI API key.",
+            vec![
+                method(
+                    "grok_oauth",
+                    "Grok sign-in",
+                    "https://cli-chat-proxy.grok.com/v1",
+                    SignIn,
+                ),
+                method("api_key", "xAI API key", "https://api.x.ai/v1", Key),
+            ],
+        ),
+        provider(
+            "local",
+            "Local",
+            "Ollama, llama.cpp, vLLM, or another OpenAI-compatible server.",
+            vec![method(
+                "optional_api_key",
+                "Endpoint + optional key",
+                "http://127.0.0.1:11434/v1",
+                OptionalKey,
+            )],
+        ),
+        provider(
+            "openrouter",
+            "OpenRouter",
+            "Use one API key for OpenRouter's advertised models.",
+            vec![method(
+                "api_key",
+                "OpenRouter API key",
+                "https://openrouter.ai/api/v1",
+                Key,
+            )],
+        ),
+    ]
+}
+
+/// Today's static rows, which take no act but adding a provider, and two installed workflows.
 fn menu_rows(id: MenuId) -> Vec<MenuRow> {
     let row = |text: &str, tone, enter| MenuRow {
         text: text.to_string(),
@@ -521,7 +681,10 @@ fn menu_rows(id: MenuId) -> Vec<MenuRow> {
     if id != MenuId::Workflows {
         let rows = menu(id).0.iter();
         return rows
-            .map(|shown| row(&shown.text, shown.tone, None))
+            .map(|shown| {
+                let add = (shown.text == ADD_PROVIDER).then_some(MenuAct::OpenSetup);
+                row(&shown.text, shown.tone, add)
+            })
             .collect();
     }
     [
@@ -552,7 +715,10 @@ pub const MENUS: [MenuId; 6] = [
 /// A row of the Tools menu the jump bar also lists, with its detail.
 pub const TOOLS_PACK: (&str, &str) = ("Tools > code review pack", "3 tools");
 
+const ADD_PROVIDER: &str = " + Add a provider";
+
 const ACCOUNTS: &[SidebarRow] = &[
+    item(ADD_PROVIDER, Tone::Accent),
     item(" ● Claude    subscription    signed in", Tone::Plain),
     item(" ● Codex     subscription    signed in", Tone::Plain),
     item(" ○ Grok      not signed in", Tone::Label),

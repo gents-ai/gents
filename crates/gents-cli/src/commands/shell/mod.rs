@@ -1,6 +1,7 @@
 mod client;
 mod items;
 mod menus;
+mod setup;
 mod source;
 mod tree;
 mod work;

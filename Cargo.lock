@@ -4505,6 +4505,7 @@ dependencies = [
  "url",
  "uuid",
  "wait-timeout",
+ "webbrowser",
  "windows-sys 0.61.2",
 ]
 

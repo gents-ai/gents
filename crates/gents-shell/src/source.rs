@@ -1,3 +1,4 @@
+use std::fmt;
 use std::io;
 
 use ratatui::crossterm::event::Event;
@@ -47,6 +48,29 @@ pub enum Intent {
     Act {
         menu: MenuId,
         act: MenuAct,
+    },
+    /// The Setup layer opens: the source answers its providers with `Update::Setup`.
+    ReadSetup,
+    /// The source tells the URL to open with `Update::SignInUrl`, then answers `Update::SignedIn`.
+    /// With no label, the source picks one.
+    SignIn {
+        provider: String,
+        method: String,
+        label: Option<String>,
+    },
+    CancelSignIn,
+    /// Answered with `Update::Models`.
+    Discover(SetupConnection),
+    /// The recommended settings for a model typed in: answered with `Update::Recommended`.
+    Recommend {
+        connection: SetupConnection,
+        model: String,
+    },
+    /// Writes one backend and one profile: answered with `Update::Saved`.
+    SaveBackend {
+        connection: SetupConnection,
+        model: String,
+        settings: Vec<(SettingKey, String)>,
     },
 }
 
@@ -127,6 +151,24 @@ pub enum Update {
         menu: MenuId,
         rows: Result<Vec<MenuRow>, String>,
     },
+    /// The providers the Setup layer offers, or why they could not be read.
+    Setup(Result<Vec<SetupProvider>, String>),
+    SignInUrl {
+        url: String,
+    },
+    SignedIn(Result<SavedAccount, String>),
+    /// Answers the `Discover` sent with `connection`.
+    Models {
+        connection: SetupConnection,
+        found: Result<Discovered, String>,
+    },
+    /// Answers the `Recommend` sent with `connection`.
+    Recommended {
+        connection: SetupConnection,
+        model: Result<SetupModel, String>,
+    },
+    /// The notice for what was saved, or why it was not.
+    Saved(Result<String, String>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,6 +203,8 @@ pub enum MenuAct {
     Insert {
         text: String,
     },
+    /// Handled by the shell: opens the Setup layer.
+    OpenSetup,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -337,4 +381,113 @@ pub struct Agent {
     /// The agent's row in the picker.
     pub text: String,
     pub tone: Tone,
+}
+
+/// An API key. Its `Debug` never shows it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Secret(pub String);
+
+impl fmt::Debug for Secret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Secret(…)")
+    }
+}
+
+/// `id` is the provider's serde name, as `openai` or `local`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetupProvider {
+    pub id: String,
+    pub name: String,
+    pub about: String,
+    pub methods: Vec<SetupMethod>,
+}
+
+/// `id` is the method's serde name, as `claude_oauth` or `api_key`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetupMethod {
+    pub id: String,
+    pub name: String,
+    pub endpoint: String,
+    pub endpoint_fixed: bool,
+    pub auth: SetupAuth,
+    /// A sign-in's saved accounts.
+    pub accounts: Vec<SavedAccount>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetupAuth {
+    SignIn,
+    Key,
+    OptionalKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedAccount {
+    pub label: String,
+    pub account_ref: String,
+}
+
+/// `provider` and `method` are their ids, and `account` a saved account's `account_ref`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetupConnection {
+    pub provider: String,
+    pub method: String,
+    pub endpoint: String,
+    pub key: Option<Secret>,
+    pub account: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetupModel {
+    pub id: String,
+    pub name: String,
+    pub settings: Vec<SetupSetting>,
+}
+
+/// Numbers are formatted as text; a reasoning effort's `choices` are its serde names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetupSetting {
+    pub key: SettingKey,
+    pub value: String,
+    pub min: Option<String>,
+    pub max: Option<String>,
+    pub choices: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingKey {
+    ContextWindow,
+    MaxOutputTokens,
+    Temperature,
+    TopP,
+    ReasoningEffort,
+    MaxConcurrent,
+}
+
+impl SettingKey {
+    pub fn label(self) -> &'static str {
+        match self {
+            SettingKey::ContextWindow => "Context window",
+            SettingKey::MaxOutputTokens => "Max output tokens",
+            SettingKey::Temperature => "Temperature",
+            SettingKey::TopP => "Top-p",
+            SettingKey::ReasoningEffort => "Reasoning effort",
+            SettingKey::MaxConcurrent => "Concurrency",
+        }
+    }
+
+    pub fn whole(self) -> bool {
+        matches!(
+            self,
+            SettingKey::ContextWindow | SettingKey::MaxOutputTokens | SettingKey::MaxConcurrent
+        )
+    }
+}
+
+/// With `manual`, the user may type a model id the provider did not advertise.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Discovered {
+    pub models: Vec<SetupModel>,
+    pub failure: Option<String>,
+    pub manual: bool,
 }

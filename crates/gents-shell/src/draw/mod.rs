@@ -2,6 +2,7 @@ pub mod agent;
 pub mod layers;
 pub mod logo;
 pub mod sessions;
+pub mod setup;
 pub mod sidebar;
 pub mod status;
 pub mod theme;
@@ -13,6 +14,7 @@ use ratatui::text::Span;
 use ratatui::widgets::{Block, Paragraph, Widget, Wrap};
 use ratatui::Frame;
 
+use crate::app::layers::LayerKind;
 use crate::app::search::{matches, Match, Search};
 use crate::app::{App, Pane};
 use crate::keys::{in_key_set, KeyCtx};
@@ -61,7 +63,13 @@ pub fn draw(app: &App, frame: &mut Frame) {
         }
         (KeyCtx::Filter, _) => {
             if let (Some(top), Some(rect)) = (app.layers.last(), app.top_layer_rect()) {
-                frame.set_cursor_position(layers::cursor(&top.filter, rect));
+                let at = match top.kind {
+                    LayerKind::Setup => app.setup.as_ref().and_then(|s| setup::cursor(s, rect)),
+                    _ => Some(layers::cursor(&top.filter, rect)),
+                };
+                if let Some(at) = at {
+                    frame.set_cursor_position(at);
+                }
             }
         }
         _ => {}
@@ -195,7 +203,6 @@ fn draw_no_matches(area: Rect, buf: &mut Buffer) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::layers::LayerKind;
     use crate::app::{sample_chat, Mode};
     use crate::keys::KeySet::{Emacs, Vim};
     use crate::sample::{note, MenuId, View};
@@ -472,6 +479,7 @@ mod tests {
             LayerKind::Keys,
             LayerKind::Sessions,
             LayerKind::Sidebar,
+            LayerKind::Setup,
         ];
         for width in [
             60, 61, 89, 90, 91, 104, 119, 120, 121, 124, 125, 132, 168, 300,

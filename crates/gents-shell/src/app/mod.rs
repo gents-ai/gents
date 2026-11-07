@@ -4,6 +4,7 @@ pub mod layers;
 mod mouse;
 mod prompt;
 pub mod search;
+pub mod setup;
 pub mod work;
 
 use std::cell::RefCell;
@@ -34,6 +35,7 @@ use crate::source::{
 use input::LineInput;
 use layers::{Layer, LayerKind};
 use search::Search;
+use setup::Setup;
 
 pub(crate) const NOT_WIRED: &str = "not wired yet";
 const SOURCE_GONE: &str = "the runtime source stopped: reopen the shell";
@@ -381,6 +383,8 @@ pub struct App {
     pub working_tree: Option<Result<Vec<Change>, String>>,
     /// Each menu's rows as last read; a menu not read yet has none.
     pub menus: RapidHashMap<MenuId, Result<Vec<MenuRow>, String>>,
+    /// The Setup layer's state, from when it last opened.
+    pub setup: Option<Setup>,
     /// Without a source, the sample answers each intent at once.
     intents: Option<Sender<Intent>>,
     pub connection: Connection,
@@ -443,6 +447,7 @@ impl App {
             background_as_of: String::new(),
             working_tree: None,
             menus: RapidHashMap::new(),
+            setup: None,
             intents: None,
             connection: Connection::Sample,
             clipboard: None,
@@ -557,7 +562,10 @@ impl App {
             }
             Update::Sessions(sessions) => self.set_sessions(sessions),
             Update::Agents(agents) => self.set_agents(agents),
-            Update::Connection(connection) => self.connection = connection,
+            Update::Connection(connection) => {
+                self.connection = connection;
+                self.setup_says_lost();
+            }
             Update::Notice(notice) => self.notice = Some(notice),
             Update::Prompts { session, prompts } => {
                 if let Some(tab) = self.showing(&session) {
@@ -569,6 +577,12 @@ impl App {
             Update::Begin { agent, prompt } => self.begin(agent, prompt),
             Update::WorkingTree(tree) => self.set_working_tree(tree),
             Update::Menu { menu, rows } => self.set_menu(menu, rows),
+            update @ (Update::Setup(_)
+            | Update::SignInUrl { .. }
+            | Update::SignedIn(_)
+            | Update::Models { .. }
+            | Update::Recommended { .. }
+            | Update::Saved(_)) => self.apply_setup(update),
         }
     }
 
@@ -741,7 +755,7 @@ impl App {
 
     pub fn ctx(&self) -> KeyCtx {
         match self.layers.last().map(|top| top.kind) {
-            Some(LayerKind::Jump | LayerKind::Picker) => KeyCtx::Filter,
+            Some(LayerKind::Jump | LayerKind::Picker | LayerKind::Setup) => KeyCtx::Filter,
             Some(_) => KeyCtx::Menu,
             None if self.search.as_ref().is_some_and(|search| !search.committed) => {
                 KeyCtx::SearchLine
@@ -918,6 +932,9 @@ impl App {
     fn paste(&mut self, text: &str) {
         self.notice = None;
         match self.ctx() {
+            KeyCtx::Filter if self.layers.last().map(|top| top.kind) == Some(LayerKind::Setup) => {
+                self.paste_setup(text);
+            }
             KeyCtx::Filter => {
                 if let Some(top) = self.layers.last_mut() {
                     top.filter.paste_inline(text);

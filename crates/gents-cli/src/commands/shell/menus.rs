@@ -100,8 +100,8 @@ pub(super) async fn act(
             .await
             .map(|_| "dismissed".to_string())
             .map_err(|error| format!("could not dismiss it: {error:#}")),
-        MenuAct::OpenSession { .. } | MenuAct::Insert { .. } => {
-            unreachable!("the shell opens a session and inserts text itself")
+        MenuAct::OpenSession { .. } | MenuAct::Insert { .. } | MenuAct::OpenSetup => {
+            unreachable!("the shell opens a session, inserts text and opens setup itself")
         }
     }
 }
@@ -132,7 +132,11 @@ fn accounts(rows: &[AccountRow]) -> Vec<MenuRow> {
         let text = format!(" {mark} {:<10} {}{plan}", account.label, account.status);
         row(text, tone)
     };
-    rows.iter().map(shown).collect()
+    let add = MenuRow {
+        enter: Some(MenuAct::OpenSetup),
+        ..row(" + Add a provider".to_string(), Tone::Accent)
+    };
+    std::iter::once(add).chain(rows.iter().map(shown)).collect()
 }
 
 fn agents(agents: &[AgentView]) -> Vec<MenuRow> {
@@ -324,9 +328,11 @@ mod tests {
             account("personal", "disabled", None),
         ]);
 
+        let add = Some(MenuAct::OpenSetup);
         assert_eq!(
             rows,
             [
+                row(" + Add a provider", Tone::Accent, add, None),
                 row(" ● work       enabled   max", Tone::Plain, None, None),
                 row(" ○ personal   disabled", Tone::Label, None, None),
             ]

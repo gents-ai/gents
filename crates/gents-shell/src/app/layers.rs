@@ -61,7 +61,7 @@ impl App {
     }
 
     /// A lost source reads no more intents, so the menu says why at once.
-    fn read_menu(&mut self, id: MenuId) {
+    pub(super) fn read_menu(&mut self, id: MenuId) {
         match &self.connection {
             Connection::Lost(why) => self.set_menu(id, Err(why.clone())),
             _ => self.emit(Intent::ReadMenu(id)),
@@ -89,6 +89,7 @@ impl App {
                     None => self.notice = Some(NOT_LISTED.to_string()),
                 }
             }
+            Some(MenuAct::OpenSetup) => self.push_layer(LayerKind::Setup),
             Some(MenuAct::Insert { text }) => {
                 self.layers.clear();
                 self.act(Action::EnterInput);
@@ -137,6 +138,7 @@ impl App {
             LayerKind::Menu(MenuId::NodeSettings | MenuId::AppSettings) => {}
             LayerKind::Menu(id) => self.read_menu(id),
             LayerKind::Jump => self.read_menu(MenuId::Workflows),
+            LayerKind::Setup if found.is_none() => self.open_setup(),
             _ => {}
         }
     }
@@ -158,6 +160,10 @@ impl App {
     }
 
     pub(super) fn act_on_layer(&mut self, action: Action) {
+        let on_setup = self.layers.last().map(|top| top.kind) == Some(LayerKind::Setup);
+        if on_setup && self.act_on_setup(action) {
+            return;
+        }
         let width = self.size.0;
         let Some(top) = self.layers.last_mut() else {
             return;
@@ -236,6 +242,7 @@ impl App {
             LayerKind::Sessions => self.activate_session_row(),
             LayerKind::Sidebar => self.activate_view_row(),
             LayerKind::Jump => self.submit_jump(top.selected),
+            LayerKind::Setup => self.submit_setup(),
             LayerKind::Keys => {}
         }
     }
@@ -290,6 +297,11 @@ impl App {
             }
             LayerKind::Sessions => self.step_session(forward),
             LayerKind::Sidebar => self.step_sidebar(forward),
+            LayerKind::Setup => {
+                if let Some(setup) = &mut self.setup {
+                    setup.step_row(forward);
+                }
+            }
             LayerKind::Jump => {
                 let max = self.jump_items().len().saturating_sub(1);
                 if let Some(top) = self.layers.last_mut() {

@@ -22,7 +22,7 @@ pub use core::{
     RefreshedRequestProjection, RetainedGoalSubmission, StoreRefresh, STUCK_THRESHOLD_ATTEMPTS,
 };
 
-pub use mutations::{patch_config_components_on, set_default_agent_on};
+pub use mutations::{apply_config_components_on, patch_config_components_on, set_default_agent_on};
 pub use mutations::{ConfigEditorDocument, ConfigEditorRevision};
 pub use mutations::{PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 pub use observe::{

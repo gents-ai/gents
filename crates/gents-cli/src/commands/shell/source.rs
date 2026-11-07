@@ -1,30 +1,34 @@
 use std::cmp::Reverse;
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, Utc};
 use futures_util::stream::BoxStream;
 use futures_util::{Stream, StreamExt};
 use gents::session::mailbox::MailboxItem;
-use gents::store::config_client::SubscribeError;
+use gents::store::config_client::{ConfigAccess, SubscribeError};
 use gents_codex_protocol as codex;
 use gents_shell::app::ChatLine;
 use gents_shell::sample::{MenuId, Opens, RunState, Running, Tone};
 use gents_shell::source::{
-    BackgroundCall, Change, Connection, Input, Intent, Job, MenuAct, Prompt, Session, Update,
+    BackgroundCall, Change, Connection, Input, Intent, Job, MenuAct, Prompt, SavedAccount, Session,
+    Update,
 };
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use serde_json::Value;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use super::client::{Client, ClientError, ClientEvent};
 use super::tree::git_changes;
 use super::work::{self, Work};
-use super::{items, menus};
+use super::{items, menus, setup};
+use crate::commands::accounts::account_rows;
 use crate::commands::codex::relay::agent_route_target;
 use crate::commands::codex::{resolve_endpoint, runtime_identity_at, RemoteEndpoint};
 use crate::commands::codex_shim::RuntimeIdentity;
@@ -155,6 +159,8 @@ enum Watched {
     Read(Box<Read>),
     Asked(Box<Asked>),
     Tree(Result<Vec<Change>, String>),
+    /// A sign-in's answer, with the token `CancelSignIn` cancels for it.
+    SignedIn(CancellationToken, Result<SavedAccount, String>),
 }
 
 /// One reread of the work views, done off the chat loop.
@@ -335,6 +341,8 @@ struct Source {
     told: RapidHashMap<String, Vec<Prompt>>,
     /// Listed subagents with an open question or approval, which their parent's row names.
     waiting: RapidHashSet<String>,
+    /// The waiting sign-in's token, which `CancelSignIn` takes and cancels. Its answer clears it.
+    signing_in: Option<CancellationToken>,
 }
 
 impl Source {
@@ -369,6 +377,7 @@ impl Source {
             tree_again: None,
             told: RapidHashMap::new(),
             waiting: RapidHashSet::new(),
+            signing_in: None,
         }
     }
 
@@ -415,7 +424,103 @@ impl Source {
             Intent::WorkingTree { agent } => self.read_tree(agent),
             Intent::ReadMenu(menu) => self.read_menu(menu),
             Intent::Act { menu, act } => self.act(menu, act),
+            Intent::ReadSetup => self.answer_setup(Update::Setup, |access, node| async move {
+                let rows = account_rows(&access, &node, None, Utc::now()).await;
+                rows.map(|rows| setup::catalog(&rows))
+                    .map_err(|error| format!("{error:#}"))
+            }),
+            Intent::SignIn {
+                provider,
+                method,
+                label,
+            } => self.sign_in(provider, method, label),
+            Intent::CancelSignIn => {
+                if let Some(waiting) = self.signing_in.take() {
+                    waiting.cancel();
+                }
+            }
+            Intent::Discover(connection) => {
+                let asked = connection.clone();
+                let models = move |found| Update::Models {
+                    connection: asked,
+                    found,
+                };
+                self.answer_setup(models, |access, node| async move {
+                    setup::discover(&access, &node, &connection).await
+                });
+            }
+            Intent::Recommend { connection, model } => {
+                let model = setup::recommend(&connection, &model);
+                self.tell(Update::Recommended { connection, model });
+            }
+            Intent::SaveBackend {
+                connection,
+                model,
+                settings,
+            } => self.answer_setup(Update::Saved, |access, node| async move {
+                setup::save(&access, &node, &connection, &model, &settings).await
+            }),
         }
+    }
+
+    /// Off the chat loop, as `read_menu` reads: `answer` gets the node's access and DID, and
+    /// with `work` off the update says why.
+    fn answer_setup<T, U, A, F>(&self, update: U, answer: A)
+    where
+        T: 'static,
+        U: FnOnce(Result<T, String>) -> Update + Send + 'static,
+        A: FnOnce(ConfigAccess, String) -> F + Send + 'static,
+        F: Future<Output = Result<T, String>> + Send + 'static,
+    {
+        let (work, node) = (self.work.clone(), self.principal.clone());
+        let updates = self.updates.clone();
+        self.runtime.spawn(async move {
+            let answered = match work {
+                Ok(work) => answer(work.access(), node).await,
+                Err(off) => Err(off),
+            };
+            let _ = updates.send(Input::Runtime(update(answered)));
+        });
+    }
+
+    /// One sign-in waits at a time. Its URL is told from its run.
+    fn sign_in(&mut self, provider: String, method: String, label: Option<String>) {
+        if self.signing_in.is_some() {
+            let refused = setup::ALREADY_WAITING.to_string();
+            return self.tell(Update::SignedIn(Err(refused)));
+        }
+        let work = match &self.work {
+            Ok(work) => work.clone(),
+            Err(off) => return self.tell(Update::SignedIn(Err(off.clone()))),
+        };
+        let (node, told) = (self.principal.clone(), self.updates.clone());
+        self.start_sign_in(move |cancel, run| async move {
+            let on_url = move |url| {
+                if !cancel.is_cancelled() {
+                    let _ = told.send(Input::Runtime(Update::SignInUrl { url }));
+                }
+            };
+            let access = work.access();
+            setup::sign_in(&access, &node, &provider, &method, label, on_url, &run).await
+        });
+    }
+
+    /// `login` gets the token `CancelSignIn` cancels and `run`, its child, which the login and
+    /// its timer stop on: a timeout stops the login and its answer is still told. The answer
+    /// reaches the shell through `watched`, on the loop `CancelSignIn` runs on, so a cancelled
+    /// run's late answer is never taken for a newer sign-in's.
+    fn start_sign_in<L, F>(&mut self, login: L)
+    where
+        L: FnOnce(CancellationToken, CancellationToken) -> F + Send + 'static,
+        F: Future<Output = Result<SavedAccount, String>> + Send + 'static,
+    {
+        let cancel = CancellationToken::new();
+        self.signing_in = Some(cancel.clone());
+        let done = self.watching.clone();
+        self.runtime.spawn(async move {
+            let signed = login(cancel.clone(), cancel.child_token()).await;
+            let _ = done.send(Watched::SignedIn(cancel, signed));
+        });
     }
 
     /// Off the chat loop, as `read_menu` reads, and then `menu` is reread to show what changed.
@@ -575,6 +680,14 @@ impl Source {
                 self.tell(Update::WorkingTree(tree));
                 if let Some(agent) = self.tree_again.take() {
                     self.read_tree(agent);
+                }
+            }
+            // Uncancelled, it is the waiting sign-in's: only its answer or a cancel frees the
+            // slot a newer one would need.
+            Watched::SignedIn(cancel, signed) => {
+                if !cancel.is_cancelled() {
+                    self.signing_in = None;
+                    self.tell(Update::SignedIn(signed));
                 }
             }
         }
@@ -1012,7 +1125,7 @@ mod tests {
 
     use super::super::tests::{
         agents_a_and_b, connect, quiet, resumes_of, thread, thread_answer, turn, user_message,
-        FakeRuntime,
+        within, FakeRuntime,
     };
     use super::*;
     use crate::commands::eval::testing::test_runtime_handle;
@@ -1069,6 +1182,118 @@ mod tests {
         assert_eq!(told[0], running, "ctrl-c can stop the answer: {told:?}");
         let pick = Update::Notice(PICK_AGAIN.to_string());
         assert_eq!(told.last(), Some(&pick), "{told:?}");
+    }
+
+    const OFF: &str = "jobs are off";
+
+    /// A source with `work` off, so no intent can start a real sign-in, and the updates it
+    /// tells and the events its loop would read.
+    fn idle_source() -> (
+        Source,
+        std::sync::mpsc::Receiver<Input>,
+        mpsc::UnboundedReceiver<Watched>,
+    ) {
+        let (updates, told) = std::sync::mpsc::channel();
+        let (watching, watched) = mpsc::unbounded_channel();
+        let off = Err(OFF.to_string());
+        let runtime = test_runtime_handle();
+        let source = Source::new(updates, off, PathBuf::new(), runtime, watching);
+        (source, told, watched)
+    }
+
+    fn sign_in() -> Intent {
+        Intent::SignIn {
+            provider: "anthropic".to_string(),
+            method: "claude_oauth".to_string(),
+            label: None,
+        }
+    }
+
+    fn signed_in(told: &std::sync::mpsc::Receiver<Input>) -> Vec<Result<SavedAccount, String>> {
+        let told = told.try_iter().filter_map(|input| match input {
+            Input::Runtime(Update::SignedIn(signed)) => Some(signed),
+            _ => None,
+        });
+        told.collect()
+    }
+
+    #[tokio::test]
+    async fn a_second_sign_in_waits_its_turn() {
+        let (mut source, told, _watched) = idle_source();
+        let waiting = CancellationToken::new();
+        source.signing_in = Some(waiting.clone());
+
+        source.handle(sign_in()).await;
+
+        let refused = "A sign-in is already waiting. Finish or cancel it first.";
+        assert_eq!(signed_in(&told), [Err(refused.to_string())]);
+        assert!(!waiting.is_cancelled(), "the waiting sign-in is left alone");
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_right_after_a_cancel_starts() {
+        let (mut source, told, _watched) = idle_source();
+        let waiting = CancellationToken::new();
+        source.signing_in = Some(waiting.clone());
+
+        source.handle(Intent::CancelSignIn).await;
+        source.handle(sign_in()).await;
+
+        assert!(waiting.is_cancelled());
+        // Taken, not refused: with `work` off it answers why it cannot sign in.
+        assert_eq!(signed_in(&told), [Err(OFF.to_string())]);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_sign_in_never_answers_for_the_next() {
+        let (mut source, told, mut watched) = idle_source();
+        let old = SavedAccount {
+            label: "Old".to_string(),
+            account_ref: "old".to_string(),
+        };
+        let (returned, drained) = tokio::sync::oneshot::channel();
+        // As a login draining after its stop, whose tokens were already issued.
+        source.start_sign_in(move |_, run| async move {
+            run.cancelled().await;
+            let _ = returned.send(());
+            Ok(old)
+        });
+        source.handle(Intent::CancelSignIn).await;
+        source.start_sign_in(|_, _| std::future::pending());
+
+        // The run answers in the poll its login returns in, so by now it has.
+        within(drained).await.expect("the old login returned");
+        while let Ok(answered) = watched.try_recv() {
+            source.watched(answered);
+        }
+
+        assert_eq!(signed_in(&told), []);
+        let newer = source.signing_in.as_ref().expect("the newer sign-in waits");
+        assert!(!newer.is_cancelled());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_sign_in_past_its_wait_says_it_timed_out() {
+        let (mut source, told, mut watched) = idle_source();
+        let (returned, stopped) = tokio::sync::oneshot::channel();
+        source.start_sign_in(|_, run| async move {
+            let login = async {
+                run.cancelled().await;
+                let _ = returned.send(());
+                Err::<SavedAccount, _>(anyhow::anyhow!("Sign-in cancelled."))
+            };
+            setup::waited(login, &run, "Grok").await
+        });
+
+        // Paused, the clock jumps to the wait's end; the run answers as its login returns.
+        stopped.await.expect("the timer stopped the login");
+        while let Ok(answered) = watched.try_recv() {
+            source.watched(answered);
+        }
+
+        let timed_out = "Grok sign-in timed out waiting for the browser.";
+        assert_eq!(signed_in(&told), [Err(timed_out.to_string())]);
+        assert!(source.signing_in.is_none(), "the next sign-in may start");
     }
 
     #[tokio::test]

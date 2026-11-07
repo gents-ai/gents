@@ -120,26 +120,6 @@ pub fn inference_backend_recommendation(
     })
 }
 
-fn classify_discovery_failure(error: &anyhow::Error) -> (&'static str, bool, bool) {
-    let http_error = error.chain().find_map(|cause| {
-        cause.downcast_ref::<gents::inference::backends::provider::ModelDiscoveryHttpError>()
-    });
-    let is_decode = error
-        .chain()
-        .any(|cause| cause.downcast_ref::<serde_json::Error>().is_some());
-    if let Some(error) = http_error {
-        if error.is_auth() {
-            ("authentication", true, false)
-        } else {
-            ("http", true, true)
-        }
-    } else if is_decode {
-        ("decode", true, true)
-    } else {
-        ("connection", false, false)
-    }
-}
-
 pub async fn discover_inference_models_for_core(
     request: InferenceDiscoveryRequest,
     core: Option<&gents_desktop_core::client::ClientCore>,
@@ -247,7 +227,8 @@ pub async fn discover_inference_models_for_core(
             (true, models, None, false)
         }
         Err(error) => {
-            let (kind, reachable, manual_entry_allowed) = classify_discovery_failure(&error);
+            let (kind, reachable, manual_entry_allowed) =
+                gents_desktop_core::inference::classify_discovery_failure(&error);
             (
                 reachable,
                 Vec::new(),

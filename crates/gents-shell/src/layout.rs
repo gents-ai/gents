@@ -52,6 +52,7 @@ pub enum LayerKind {
     Keys,
     Sessions,
     Sidebar,
+    Setup,
 }
 
 pub fn sessions_can_dock(width: u16) -> bool {
@@ -137,6 +138,7 @@ fn size_of(kind: LayerKind, on_top: bool) -> (u16, u16) {
         LayerKind::Keys => (KEYS_FULL_W, 23),
         LayerKind::Sessions => (36, 15),
         LayerKind::Sidebar => (40, 20),
+        LayerKind::Setup => (72, 20),
     }
 }
 
@@ -148,7 +150,7 @@ pub fn layer_rect(kind: LayerKind, area: Rect, depth: u16, on_top: bool) -> Rect
     let center_y = ((area.height - h) / 2).min(5);
     let (x, y) = match kind {
         LayerKind::Sessions => (3, 2),
-        LayerKind::Picker => (center_x.saturating_sub(1), center_y + 2),
+        LayerKind::Picker | LayerKind::Setup => (center_x.saturating_sub(1), center_y + 2),
         LayerKind::Menu(_) => (center_x + 11, center_y + 3),
         LayerKind::Jump if !on_top => (center_x.saturating_sub(20), center_y.saturating_sub(1)),
         _ => (center_x, center_y),
@@ -245,13 +247,14 @@ mod tests {
         assert!(matches!(layout(u16::MAX, u16::MAX, ON), Screen::Shell(_)));
     }
 
-    const KINDS: [LayerKind; 6] = [
+    const KINDS: [LayerKind; 7] = [
         LayerKind::Jump,
         LayerKind::Picker,
         LayerKind::Menu(MenuId::Accounts),
         LayerKind::Keys,
         LayerKind::Sessions,
         LayerKind::Sidebar,
+        LayerKind::Setup,
     ];
 
     #[test]

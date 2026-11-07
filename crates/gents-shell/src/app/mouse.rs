@@ -60,7 +60,7 @@ impl App {
             LayerKind::Picker => self.click_picker(rect, at),
             LayerKind::Menu(id) => self.click_menu(id, rect, at),
             LayerKind::Jump => self.click_jump(rect, at),
-            LayerKind::Keys => {}
+            LayerKind::Keys | LayerKind::Setup => {}
         }
     }
 
