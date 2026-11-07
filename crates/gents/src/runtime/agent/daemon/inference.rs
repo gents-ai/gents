@@ -891,9 +891,15 @@ where
                                 error.cause(),
                                 max_turns_provenance,
                             );
-                            return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
-                                error_reason
-                            )));
+                            let error = if matches!(
+                                error.loop_verdict(),
+                                Some((gents_loop::error::LoopVerdict::BackendUnavailable, _))
+                            ) {
+                                anyhow::Error::new(error).context("agent stream failed")
+                            } else {
+                                anyhow!(error_reason)
+                            };
+                            return Ok(HandleRequestOutcome::FailedAfterResponse(error));
                         }
 
                         if processor.final_text.is_none() {

@@ -961,3 +961,62 @@ async fn empty_output_is_retried_through_the_owned_loop() {
     assert_eq!(answer, "recovered");
     assert_eq!(requests.lock().unwrap().len(), 2);
 }
+
+#[derive(Clone)]
+struct UnavailableModel;
+
+#[allow(refining_impl_trait)]
+impl CompletionModel for UnavailableModel {
+    type Response = ();
+    type StreamingResponse = ();
+    type Client = ();
+
+    fn make(_client: &Self::Client, _model: impl Into<String>) -> Self {
+        Self
+    }
+
+    async fn completion(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+        unreachable!("the owned loop only uses streaming")
+    }
+
+    async fn stream(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        let _ = crate::rendered_request::scope::claim_pending();
+        Err(CompletionError::ProviderError(
+            "HTTP status 503: unavailable".into(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn exhausted_backend_failure_retains_its_typed_availability_verdict() {
+    use futures::StreamExt;
+    let mut config = test_loop_config();
+    config.retry_policy = crate::completion_retry::CompletionRetryPolicy::no_retry();
+    let mut stream = Box::pin(crate::loop_stream::run_loop_stream::<
+        _,
+        crate::session_hook::NoopSessionHook,
+    >(
+        UnavailableModel,
+        None,
+        TaggedMessage::unassociated(Message::user("hello")),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        config,
+    ));
+    while let Some(item) = stream.next().await {
+        if let Err(error) = item {
+            assert!(matches!(
+                error.loop_verdict(),
+                Some((crate::error::LoopVerdict::BackendUnavailable, _))
+            ));
+            return;
+        }
+    }
+    panic!("unavailable provider must produce a typed failure");
+}
