@@ -117,6 +117,15 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
         &agent_binding.agent_did,
     )
     .await?;
+    // The runtime observes the bound Node through its `runtime_reader`
+    // relation and its node read permission; native ACP requires both.
+    for permission in [
+        acp::nac::NodePermission::DocumentRead,
+        acp::nac::NodePermission::CollectionGet,
+    ] {
+        node.add_nac_actor_relationship_as(&context, permission.as_str(), &runtime)
+            .await?;
+    }
     let endpoint =
         GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), user.did())
             .with_client_signing_capability(user.client_signing_capability()?)?
