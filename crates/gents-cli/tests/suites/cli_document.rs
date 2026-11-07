@@ -1,47 +1,51 @@
 use crate::support::*;
 
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use uuid::Uuid;
+
+/// `document create` publishes only application collections, signed by the
+/// held User against SDL it authored; canonical collections have their own
+/// publication owners.
+const NOTE_SDL: &str =
+    "type CliDocumentNote {\n    note_id: String\n    objective: String\n    status: String\n}\n";
+
+fn write_note_sdl(dir: &Path) -> Result<PathBuf> {
+    let path = dir.join("cli_document_note.graphql");
+    fs::write(&path, NOTE_SDL)?;
+    Ok(path)
+}
+
+fn apply_note_schema(home_dir: &Path, graphql: &str, sdl: &str) -> Result<()> {
+    run_cli_json(home_dir, &["schema", "apply", "--graphql", graphql, sdl])?;
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
+    let sdl = write_note_sdl(tempdir.path())?;
+    let sdl = sdl.to_str().context("utf-8 SDL path")?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-document-{}", Uuid::new_v4().simple());
     let init = run_init_json(&home_dir, &["--node-name", &agent_name])?;
     let node_did = node_did_from_init(&init)?;
-    let offline_fields = serde_json::json!({
-        "goal_id": "offline-goal",
-        "session_id": "offline-session",
-        "node_did": node_did,
-        "objective": "created before the server starts",
-        "status": "paused",
-        "created_at": "2026-07-16T00:00:00Z",
-    })
-    .to_string();
-    let offline = run_cli_json(
-        &home_dir,
-        &["document", "create", "Goal", "--json", &offline_fields],
-    )?;
-    assert!(offline["doc_id"].as_str().is_some(), "{offline}");
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
+    apply_note_schema(&home_dir, &graphql, sdl)?;
 
-    let goal_id = format!("goal-{}", Uuid::new_v4().simple());
+    let note_id = format!("note-{}", Uuid::new_v4().simple());
     let fields = serde_json::json!({
-        "goal_id": goal_id,
-        "session_id": "document-create-session",
-        "node_did": node_did,
+        "note_id": note_id,
         "objective": "created by the operator \"command\"",
         "status": "paused",
-        "created_at": "2026-07-16T00:00:00Z",
     })
     .to_string();
     let created = run_cli_json(
@@ -49,14 +53,16 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
         &[
             "document",
             "create",
-            "Goal",
+            "CliDocumentNote",
+            "--schema",
+            sdl,
             "--graphql",
             &graphql,
             "--json",
             &fields,
         ],
     )?;
-    assert_eq!(created["collection"], "Goal");
+    assert_eq!(created["collection"], "CliDocumentNote");
     let doc_id = created["doc_id"].as_str().context("doc_id")?;
 
     let rows = run_cli_json(
@@ -66,13 +72,13 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
             "--graphql",
             &graphql,
             "--collection",
-            "Goal",
+            "CliDocumentNote",
             "--field",
             "_docID",
             "--field",
             "objective",
             "--filter",
-            &format!(r#"{{"goal_id":{{"_eq":"{goal_id}"}}}}"#),
+            &format!(r#"{{"note_id":{{"_eq":"{note_id}"}}}}"#),
         ],
     )?;
     assert_eq!(rows["returned_count"], 1, "{rows}");
@@ -87,7 +93,9 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
         &[
             "document",
             "create",
-            "Goal",
+            "CliDocumentNote",
+            "--schema",
+            sdl,
             "--graphql",
             &graphql,
             "--json",
@@ -101,7 +109,9 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
         &[
             "document",
             "create",
-            "Goal",
+            "CliDocumentNote",
+            "--schema",
+            sdl,
             "--graphql",
             &graphql,
             "--json",
@@ -119,6 +129,8 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
             "document",
             "create",
             "NoSuchCollection",
+            "--schema",
+            sdl,
             "--graphql",
             &graphql,
             "--json",
@@ -130,6 +142,43 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
         "{unknown_collection}"
     );
 
+    let canonical = run_cli_failure_stderr(
+        &home_dir,
+        &[
+            "document",
+            "create",
+            "Goal",
+            "--schema",
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../gents-schemas/schemas/agent/goal.graphql"
+            ),
+            "--graphql",
+            &graphql,
+            "--json",
+            r#"{"goal_id":"g","objective":"o"}"#,
+        ],
+    )?;
+    assert!(
+        canonical.contains("dedicated publication owner"),
+        "{canonical}"
+    );
+
+    serve.child.kill()?;
+    serve.child.wait()?;
+    let offline = run_cli_failure_stderr(
+        &home_dir,
+        &[
+            "document",
+            "create",
+            "CliDocumentNote",
+            "--schema",
+            sdl,
+            "--json",
+            r#"{"note_id":"offline","objective":"o","status":"paused"}"#,
+        ],
+    )?;
+    assert!(offline.contains("running HTTP endpoint"), "{offline}");
     Ok(())
 }
 
@@ -140,6 +189,8 @@ async fn document_create_cannot_write_to_a_home_it_does_not_own() -> Result<()> 
     let other_dir = tempdir.path().join("other");
     fs::create_dir_all(&home_dir)?;
     fs::create_dir_all(&other_dir)?;
+    let sdl = write_note_sdl(tempdir.path())?;
+    let sdl = sdl.to_str().context("utf-8 SDL path")?;
     run_init_json(&other_dir, &["--node-name", "cli-document-other"])?;
     let init = run_init_json(&home_dir, &["--node-name", "cli-document-served"])?;
     let node_did = node_did_from_init(&init)?;
@@ -148,15 +199,13 @@ async fn document_create_cannot_write_to_a_home_it_does_not_own() -> Result<()> 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
+    apply_note_schema(&home_dir, &graphql, sdl)?;
 
-    let goal_id = format!("goal-{}", Uuid::new_v4().simple());
+    let note_id = format!("note-{}", Uuid::new_v4().simple());
     let fields = serde_json::json!({
-        "goal_id": goal_id,
-        "session_id": "document-create-foreign",
-        "node_did": node_did,
+        "note_id": note_id,
         "objective": "must not be written",
         "status": "paused",
-        "created_at": "2026-07-16T00:00:00Z",
     })
     .to_string();
     let refusal = run_cli_failure_stderr(
@@ -164,7 +213,9 @@ async fn document_create_cannot_write_to_a_home_it_does_not_own() -> Result<()> 
         &[
             "document",
             "create",
-            "Goal",
+            "CliDocumentNote",
+            "--schema",
+            sdl,
             "--graphql",
             &graphql,
             "--json",
@@ -172,8 +223,11 @@ async fn document_create_cannot_write_to_a_home_it_does_not_own() -> Result<()> 
         ],
     )?;
 
+    // A User the Node has not admitted is refused by node access control,
+    // before or at the signed create.
     assert!(
-        refusal.contains("not authorized to perform operation"),
+        refusal.contains("not authorized to perform operation")
+            || refusal.contains("401 Unauthorized"),
         "{refusal}"
     );
 
@@ -184,11 +238,11 @@ async fn document_create_cannot_write_to_a_home_it_does_not_own() -> Result<()> 
             "--graphql",
             &graphql,
             "--collection",
-            "Goal",
+            "CliDocumentNote",
             "--field",
             "_docID",
             "--filter",
-            &format!(r#"{{"goal_id":{{"_eq":"{goal_id}"}}}}"#),
+            &format!(r#"{{"note_id":{{"_eq":"{note_id}"}}}}"#),
         ],
     )?;
     assert_eq!(rows["returned_count"], 0, "{rows}");

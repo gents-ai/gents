@@ -48,12 +48,7 @@ pub async fn wait_for_runtime_ready(
                 }
             }
             Err(error)
-                if runtime_schema_is_starting(&error)
-                    || error.chain().any(|cause| {
-                        cause
-                            .downcast_ref::<reqwest::Error>()
-                            .is_some_and(reqwest::Error::is_connect)
-                    }) => {}
+                if runtime_schema_is_starting(&error) || runtime_http_is_starting(&error) => {}
 
             Err(error) => return Err(error),
         }
@@ -192,6 +187,16 @@ pub async fn wait_for_runtime_quiescence(
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+}
+
+/// The listener accepts connections before serve opens client access; until
+/// then its startup gate answers 503 to every path but the bind probe.
+fn runtime_http_is_starting(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.downcast_ref::<reqwest::Error>().is_some_and(|error| {
+            error.is_connect() || error.status() == Some(reqwest::StatusCode::SERVICE_UNAVAILABLE)
+        })
+    })
 }
 
 fn runtime_schema_is_starting(error: &anyhow::Error) -> bool {

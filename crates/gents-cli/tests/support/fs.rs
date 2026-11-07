@@ -201,14 +201,6 @@ pub async fn assert_runtime_init_state(
                 model_name
                 max_output_tokens
             }}
-            InferenceBackend(filter: {{ backend_id: {{ _eq: "{}" }} }}, limit: 1) {{
-                backend_id
-                provider_kind
-                endpoint
-                auth
-                enabled
-                probe_status
-            }}
             Tools(filter: {{ node_did: {{ _eq: "{}" }}, tools_id: {{ _eq: "{}" }} }}, limit: 1) {{
                 tools_id node_did host remote agents built_ins datastore integrations self_config tags
             }}
@@ -217,16 +209,26 @@ pub async fn assert_runtime_init_state(
         escape_graphql_string(node_did),
         escape_graphql_string(node_did),
         escape_graphql_string(&default_profile_id),
-        escape_graphql_string(backend_id),
         escape_graphql_string(node_did),
         escape_graphql_string(tools_id),
     );
     let response = graphql_query(graphql, &query).await?;
+    // Backends are published as User-visible metadata plus a secret
+    // credential document; there is no readable InferenceBackend row.
+    let backend_rows = graphql_query(
+        graphql,
+        &format!(
+            r#"{{ InferenceBackendMetadata(filter: {{ backend_id: {{ _eq: "{id}" }} }}, limit: 1) {{ backend_id provider_kind endpoint auth_kind credential_id environment_variable enabled }} InferenceBackendObservation(filter: {{ backend_id: {{ _eq: "{id}" }} }}, limit: 1) {{ backend_id probe_status }} }}"#,
+            id = escape_graphql_string(backend_id)
+        ),
+    )
+    .await?;
     let principal = first_graphql_row(&response, "Node")?;
     let agent = first_graphql_row(&response, "Agent")?;
     let context = first_graphql_row(&response, "AgentContext")?;
     let inference_profile = first_graphql_row(&response, "InferenceProfile")?;
-    let backend = first_graphql_row(&response, "InferenceBackend")?;
+    let backend = first_graphql_row(&backend_rows, "InferenceBackendMetadata")?;
+    let observation = first_graphql_row(&backend_rows, "InferenceBackendObservation")?;
     let tools = first_graphql_row(&response, "Tools")?;
 
     assert_eq!(
@@ -294,23 +296,40 @@ pub async fn assert_runtime_init_state(
         backend.get("provider_kind").and_then(Value::as_str),
         Some(expected_provider_kind)
     );
-    let auth = backend.get("auth").cloned().unwrap_or(Value::Null);
-    let auth = auth
-        .as_str()
-        .map(serde_json::from_str)
-        .transpose()?
-        .unwrap_or(auth);
+    let auth_kind = backend.get("auth_kind").and_then(Value::as_str);
     match (expected_api_key, expected_api_key_env_var) {
-        (Some(value), _) => assert_eq!(auth.get("key").and_then(Value::as_str), Some(value)),
-        (_, Some(name)) => assert_eq!(auth.get("variable").and_then(Value::as_str), Some(name)),
-        _ => assert_eq!(
-            auth.get("kind").and_then(Value::as_str),
-            Some("unauthenticated")
-        ),
+        (Some(value), _) => {
+            assert_eq!(auth_kind, Some("credential"), "{backend}");
+            let credential_id = backend
+                .get("credential_id")
+                .and_then(Value::as_str)
+                .context("credential-backed backend names its credential")?;
+            let credential = graphql_query(
+                graphql,
+                &format!(
+                    r#"{{ BackendCredential(filter: {{ credential_id: {{ _eq: "{}" }} }}, limit: 1) {{ credential_id secret }} }}"#,
+                    escape_graphql_string(credential_id)
+                ),
+            )
+            .await?;
+            let secret = first_graphql_row(&credential, "BackendCredential")?
+                .get("secret")
+                .map(Value::to_string)
+                .unwrap_or_default();
+            assert!(secret.contains(value), "credential must hold the raw key");
+        }
+        (_, Some(name)) => {
+            assert_eq!(auth_kind, Some("environment"), "{backend}");
+            assert_eq!(
+                backend.get("environment_variable").and_then(Value::as_str),
+                Some(name)
+            );
+        }
+        _ => assert_eq!(auth_kind, Some("unauthenticated"), "{backend}"),
     }
     assert_eq!(backend.get("enabled").and_then(Value::as_bool), Some(true));
     assert_eq!(
-        backend.get("probe_status").and_then(Value::as_str),
+        observation.get("probe_status").and_then(Value::as_str),
         Some("healthy")
     );
     assert_eq!(
