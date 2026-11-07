@@ -5,9 +5,14 @@ pub mod endpoint;
 pub mod engine;
 pub mod enrollment;
 pub mod enrollment_candidate;
+mod enrollment_exchange;
+pub mod enrollment_member_authority;
+mod enrollment_member_renewal;
 pub mod enrollment_offer;
+pub mod enrollment_projection;
 pub mod enrollment_reconcile;
 mod enrollment_renewal;
+pub mod enrollment_rows;
 pub mod enrollment_store;
 pub mod error_class;
 pub mod file_image_hydration;
@@ -40,6 +45,8 @@ pub use engine::{
     GraphqlPairingStateStore, LoadedPairingApplied, PairingStateStore, PairingTickOutcome,
     MAX_CONCURRENT_PEER_PREPARATIONS, PAIRING_SWEEP_INTERVAL,
 };
+pub use enrollment_exchange::consume_renewal_offer;
+pub use enrollment_member_renewal::run_client_member_renewals;
 pub use enrollment_offer::{EnrollmentOfferIssuer, EnrollmentOfferStatus};
 pub use enrollment_reconcile::{
     enrollment_authority_channel, run_enrollment_reconciler, EnrollmentAuthorityHandle,
@@ -47,7 +54,7 @@ pub use enrollment_reconcile::{
 };
 pub use enrollment_store::{
     ActiveEnrollment, DeniedEnrollment, EnrollmentDecisionOutcome, EnrollmentDecisionRefusal,
-    EnrollmentProjection, GraphqlEnrollmentStore, PendingEnrollment,
+    EnrollmentProjection, EnrollmentRenewalPolicy, GraphqlEnrollmentStore, PendingEnrollment,
 };
 pub use error_class::{classify_remote_admin_error, PairingErrorClass};
 pub use policy::{

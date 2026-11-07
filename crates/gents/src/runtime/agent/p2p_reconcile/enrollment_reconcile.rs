@@ -375,13 +375,16 @@ fn publish_failed(sender: &watch::Sender<EnrollmentAuthorityState>, error: &anyh
 
 /// Authority rows plus the applied pairing witness that a route receipt
 /// records.
-const ENROLLMENT_SWEEP_COLLECTIONS: [&str; 6] = [
+const ENROLLMENT_SWEEP_COLLECTIONS: [&str; 9] = [
     "Network",
     "NetworkEnrollmentRequest",
     "NetworkEnrollmentDecision",
     "NetworkAuthorizationRevision",
     "NetworkEnrollmentRouteReceipt",
     "PeerPairingApplied",
+    "EnrollmentRenewalPolicy",
+    "EnrollmentRenewalIntent",
+    "EnrollmentRenewalOffer",
 ];
 
 /// Run the sole durable enrollment projection/effect loop. This loop publishes
@@ -396,6 +399,10 @@ pub async fn run_enrollment_reconciler(
     let pairing_admin = EmbeddedRemoteP2pAdmin::new(node.clone());
     let mut delivered = BTreeSet::new();
     let mut renewal_notices = super::enrollment_renewal::RenewalNotices::default();
+    let mut renewal_intent_cursor = None;
+    let mut member_renewal = super::enrollment_member_renewal::MemberRenewalState::default();
+    let renewal_offer_id = super::resolve_embedded_collection_id(&node, "EnrollmentRenewalOffer")?
+        .context("renewal offer collection is unavailable")?;
     let mut subscription = crate::subscribe_collections(&node, ENROLLMENT_SWEEP_COLLECTIONS)?;
     let mut subscription_open = true;
     let mut interval = tokio::time::interval(super::intervals::sweep_interval());
@@ -410,6 +417,8 @@ pub async fn run_enrollment_reconciler(
             &owner.sender,
             &mut delivered,
             &mut renewal_notices,
+            &mut renewal_intent_cursor,
+            &mut member_renewal,
         );
         if !serve_authority_during_sweep(sweep, &store, &owner.sender, &mut owner.commands, &cancel)
             .await
@@ -421,15 +430,20 @@ pub async fn run_enrollment_reconciler(
                 biased;
                 _ = cancel.cancelled() => return Ok(()),
                 _ = interval.tick() => break,
+                _ = tokio::time::sleep(member_renewal.wait_duration()) => break,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(250)), if renewal_intent_cursor.is_some() => break,
                 command = owner.commands.recv() => {
                     let Some(command) = command else { return Ok(()); };
                     handle_authority_command(&store, &owner.sender, command).await;
                 }
                 batch = subscription.recv(), if subscription_open => {
-                    if batch.is_none() {
+                    let Some(batch) = batch else {
                         tracing::warn!("enrollment change subscription closed; continuing periodic sweeps");
                         subscription_open = false;
                         continue;
+                    };
+                    if batch.resync_required || batch.changes.iter().any(|change| change.collection_id == renewal_offer_id) {
+                        member_renewal.wake();
                     }
                     break;
                 }
@@ -634,18 +648,102 @@ async fn sweep_enrollment(
     sender: &watch::Sender<EnrollmentAuthorityState>,
     delivered: &mut BTreeSet<String>,
     renewal_notices: &mut super::enrollment_renewal::RenewalNotices,
+    renewal_intent_cursor: &mut Option<String>,
+    member_renewal: &mut super::enrollment_member_renewal::MemberRenewalState,
 ) {
     let projection = match store.load_projection().await {
         Ok(projection) => projection,
         Err(error) => {
+            member_renewal.defer_after_error();
+            *renewal_intent_cursor = None;
             publish_failed(sender, &error);
             tracing::warn!(error = %error, "enrollment projection read failed; authority remains fail closed");
             return;
         }
     };
     publish_ready(sender, projection.clone());
+    if member_renewal.due() {
+        if let Err(error) = super::enrollment_member_renewal::sweep_member_renewals(
+            node,
+            identity.as_ref(),
+            member_renewal,
+        )
+        .await
+        {
+            member_renewal.defer_after_error();
+            tracing::debug!(error = %error, "member enrollment renewal sweep did not complete");
+        }
+    }
+    let mut automatic_renewal_enabled = false;
+    if let Some(network) = &projection.network_id {
+        match store.renewal_policy(network).await {
+            Ok(policy) if policy.enabled => {
+                automatic_renewal_enabled = true;
+                match super::enrollment_exchange::read_intent_page(
+                    node,
+                    identity.did(),
+                    renewal_intent_cursor,
+                )
+                .await
+                {
+                    Ok(intents) => {
+                        for intent in intents {
+                            if let Err(error) =
+                                super::enrollment_exchange::respond_to_renewal_intent(
+                                    node,
+                                    identity.as_ref(),
+                                    store,
+                                    &intent,
+                                )
+                                .await
+                            {
+                                tracing::debug!(intent_id = %intent.intent_id(), error = %error, "renewal offer delivery did not complete");
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        *renewal_intent_cursor = None;
+                        tracing::warn!(error = %error, "could not read renewal intents");
+                    }
+                }
+                for pending in projection
+                    .pending
+                    .iter()
+                    .filter(|pending| pending.request.challenge.starts_with("renewal-v1-"))
+                    .filter(|pending| {
+                        projection
+                            .renewal_lease_for(
+                                &pending.request.request_id,
+                                true,
+                                policy.lease_seconds,
+                                Utc::now(),
+                            )
+                            .is_ok()
+                    })
+                    .take(4)
+                {
+                    match store
+                        .decide_automatic_renewal(&pending.request.request_id)
+                        .await
+                    {
+                        Ok(_) => return,
+                        Err(error) => {
+                            tracing::debug!(request_id = %pending.request.request_id, error = %error, "automatic enrollment renewal was not approved")
+                        }
+                    }
+                }
+            }
+            Ok(_) => *renewal_intent_cursor = None,
+            Err(error) => {
+                *renewal_intent_cursor = None;
+                tracing::warn!(error = %error, "enrollment renewal policy could not be read; automatic renewal is disabled")
+            }
+        }
+    } else {
+        *renewal_intent_cursor = None;
+    }
     for notice in renewal_notices.observe(&projection, Utc::now()) {
-        super::enrollment_renewal::log_renewal_notice(&notice);
+        super::enrollment_renewal::log_renewal_notice(&notice, automatic_renewal_enabled);
     }
 
     if let Err(error) = reconcile_data_plane(node, identity.did(), store, &projection).await {

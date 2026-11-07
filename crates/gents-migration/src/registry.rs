@@ -554,6 +554,21 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreihqgfh2e6gc73zftjp6d2qlyba7hxsc3ab6mhgfb7jn4yydvdihaq"
     ),
     baseline_entry!(
+        gents_protocol::schemas::ENROLLMENT_RENEWAL_POLICY_NAME,
+        gents_protocol::schemas::ENROLLMENT_RENEWAL_POLICY,
+        "bafyreicdkf2dtwcfn2bgnirzo3xrlbvmwill5v52s3dutzh6volhgg2hiq"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::ENROLLMENT_RENEWAL_INTENT_NAME,
+        gents_protocol::schemas::ENROLLMENT_RENEWAL_INTENT,
+        "bafyreiektx52grsgqj73clz5xefszc4brhizpsgkm5duxzvua5e5h3z4vm"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::ENROLLMENT_RENEWAL_OFFER_NAME,
+        gents_protocol::schemas::ENROLLMENT_RENEWAL_OFFER,
+        "bafyreidatwit33tzjpf7nppfoueh23n3mslccditz7cztvrznypk525ck4"
+    ),
+    baseline_entry!(
         gents_protocol::schemas::SESSION_HYDRATION_REQUEST_NAME,
         gents_protocol::schemas::SESSION_HYDRATION_REQUEST,
         "bafyreiebw7lxwzdcmltfz6khjz6e32utfpfwpxydnqwcnnsbtj4qqhxcmq"

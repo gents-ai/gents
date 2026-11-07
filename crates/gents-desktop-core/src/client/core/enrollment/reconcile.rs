@@ -17,19 +17,9 @@ use super::authority::load_status_enrollment_approvals;
 use super::map_p2p_error;
 use crate::client::peer_directory::RemovalCause;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::client::core) struct ApprovedStatusEnrollment {
-    pub(in crate::client::core) network_id: String,
-    pub(in crate::client::core) request_id: String,
-    pub(in crate::client::core) server_peer: String,
-    pub(in crate::client::core) server_ticket: String,
-    pub(in crate::client::core) admin_did: String,
-    pub(in crate::client::core) owner_node: String,
-    pub(in crate::client::core) request_digest: String,
-    pub(in crate::client::core) authorization_sequence: u64,
-    pub(in crate::client::core) authorization_expires_at: String,
-    pub(in crate::client::core) decided_at: String,
-}
+pub(in crate::client::core) use gents::runtime::agent::p2p_reconcile::enrollment_projection::ApprovedStatusEnrollment;
+#[cfg(test)]
+pub(super) use gents::runtime::agent::p2p_reconcile::enrollment_projection::DesktopApprovalProjection;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::client::core) struct EnrollmentAuthorizationGeneration {
@@ -51,17 +41,7 @@ impl EnrollmentAuthorizationGeneration {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::client::core) enum EnrollmentAuthorityOutcome {
-    Current(ApprovedStatusEnrollment),
-    Conflicted { reason: String },
-}
-
-pub(super) enum DesktopApprovalProjection {
-    Routed(Box<ApprovedStatusEnrollment>),
-    CurrentWithoutRoute,
-    Absent,
-}
+pub(in crate::client::core) use gents::runtime::agent::p2p_reconcile::enrollment_member_authority::EnrollmentAuthorityOutcome;
 
 pub(super) fn prioritized_current_approvals(
     outcomes: &BTreeMap<String, EnrollmentAuthorityOutcome>,

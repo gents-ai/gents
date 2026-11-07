@@ -29,6 +29,106 @@ use super::enrollment_store::RequestRow;
 /// cannot keep the request or its replicator cleanup waiting indefinitely.
 pub const ENROLLMENT_P2P_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Request a fresh offer only from an already pinned, authenticated owner.
+pub async fn request_renewal_offer(
+    node: &Arc<EmbeddedNode>,
+    identity: &dyn NodeIdentity,
+    network_id: &str,
+    admin_did: &str,
+    server_peer: &str,
+    server_ticket: &str,
+    predecessor_sequence: u64,
+) -> Result<gents_protocol::enrollment::RenewalIntent> {
+    anyhow::ensure!(
+        node.node_identity_did() == Some(identity.did()),
+        "renewal requires the local node identity"
+    );
+    let network = escape_graphql_string(network_id);
+    let query = format!(
+        r#"{{ NetworkAdminPin(filter: {{ network_id: {{ _eq: "{network}" }} }}) {{ admin_did }} }}"#
+    );
+    let pins = graphql_with_transaction_retry(node, &query, "read renewal admin pin").await?;
+    anyhow::ensure!(
+        matches!(rows::<AdminPinRow>(&pins, "NetworkAdminPin")?.as_slice(), [pin] if pin.admin_did == admin_did),
+        "renewal owner is not pinned"
+    );
+    let p2p = crate::store::identity::node_p2p(node).context("this node has no P2P transport")?;
+    let (ticket_peer, _) = parse_public_peer_addr(server_ticket)?;
+    anyhow::ensure!(
+        ticket_peer.to_string() == server_peer,
+        "renewal server ticket does not match its peer"
+    );
+    timeout(ENROLLMENT_P2P_TIMEOUT, p2p.connect_peer(server_ticket))
+        .await?
+        .map_err(anyhow::Error::msg)?;
+    let peer = TransportPeerId::new(server_peer.to_owned()).map_err(anyhow::Error::msg)?;
+    let resolved = timeout(ENROLLMENT_P2P_TIMEOUT, p2p.resolve_peer_identity(&peer))
+        .await?
+        .map_err(anyhow::Error::msg)?
+        .context("renewal server has no authenticated identity")?;
+    validate_authenticated_server_did(admin_did, resolved.as_ref())?;
+    let member_peer = timeout(ENROLLMENT_P2P_TIMEOUT, p2p.local_peer_id())
+        .await?
+        .map_err(anyhow::Error::msg)?;
+    let now = Utc::now();
+    let mut intent = gents_protocol::enrollment::RenewalIntent {
+        network_id: network_id.to_owned(),
+        admin_did: admin_did.to_owned(),
+        server_peer: server_peer.to_owned(),
+        member_did: identity.did().to_owned(),
+        member_peer,
+        predecessor_sequence,
+        issued_at: now.to_rfc3339_opts(SecondsFormat::Secs, true),
+        expires_at: (now
+            + chrono::Duration::seconds(
+                gents_protocol::enrollment::RENEWAL_INTENT_VALIDITY_SECONDS,
+            ))
+        .to_rfc3339_opts(SecondsFormat::Secs, true),
+        nonce: Uuid::new_v4().simple().to_string(),
+        member_sig: Vec::new(),
+    };
+    intent.member_sig = identity.sign(&intent.signing_payload()).await?;
+    intent.validate_at(Utc::now())?;
+    let f = |value: &str| escape_graphql_string(value);
+    let intent_id = intent.intent_id();
+    let signature = bs58::encode(&intent.member_sig).into_string();
+    let mutation = format!(
+        r#"mutation {{ create_EnrollmentRenewalIntent(input: {{
+        intent_id: "{}", network_id: "{}", admin_did: "{}", server_peer: "{}",
+        member_did: "{}", member_peer: "{}", predecessor_sequence: {},
+        issued_at: "{}", expires_at: "{}", nonce: "{}", member_sig: "{}"
+    }}) {{ _docID }} }}"#,
+        f(&intent_id),
+        f(&intent.network_id),
+        f(&intent.admin_did),
+        f(&intent.server_peer),
+        f(&intent.member_did),
+        f(&intent.member_peer),
+        intent.predecessor_sequence,
+        f(&intent.issued_at),
+        f(&intent.expires_at),
+        f(&intent.nonce),
+        f(&signature)
+    );
+    let response =
+        ConfigAccess::write_local(node, "enrollment.create_renewal_intent", &mutation).await?;
+    let doc_id =
+        gents_protocol::graphql::extract_mutation_doc_id(&response, "EnrollmentRenewalIntent")
+            .context("renewal intent mutation returned no document ID")?;
+    push_enrollment_document(
+        &p2p,
+        server_ticket,
+        server_peer,
+        admin_did,
+        "EnrollmentRenewalIntent",
+        "intent_id",
+        &intent_id,
+        &doc_id,
+    )
+    .await?;
+    Ok(intent)
+}
+
 const REQUEST_FIELDS: &str = "_docID protocol_version request_id request_digest offer_id offer_token challenge network_id admin_did server_peer candidate_did candidate_peer candidate_ticket owner_agent profile client_nonce issued_at expires_at candidate_sig";
 
 /// Author (or reuse) this node's request for `offer_token` and deliver it to
@@ -399,28 +499,49 @@ pub async fn push_enrollment_request(
     request_id: &str,
     document_id: &str,
 ) -> Result<()> {
-    const COLLECTION: &str = "NetworkEnrollmentRequest";
+    push_enrollment_document(
+        p2p,
+        &offer.server_ticket,
+        &offer.server_peer,
+        &offer.admin_did,
+        "NetworkEnrollmentRequest",
+        "request_id",
+        request_id,
+        document_id,
+    )
+    .await
+}
 
+pub(super) async fn push_enrollment_document(
+    p2p: &Arc<dyn P2POperations>,
+    server_ticket: &str,
+    server_peer: &str,
+    admin_did: &str,
+    collection: &str,
+    filter_field: &str,
+    filter_value: &str,
+    document_id: &str,
+) -> Result<()> {
     // Before approval there is no authority-backed data route, so install the
     // smallest possible bootstrap route (one authenticated server, one
     // immutable enrollment request) and remove it before this operation
     // returns; the signed enrollment reconciler owns every durable route
     // after approval.
     let mut conditions = Map::new();
-    conditions.insert("request_id".to_string(), json!({ "_eq": request_id }));
+    conditions.insert(filter_field.to_string(), json!({ "_eq": filter_value }));
     let filters = BTreeMap::from([(
-        COLLECTION.to_string(),
+        collection.to_string(),
         ReplicationFilter::predicate(conditions),
     )]);
-    let collections = vec![COLLECTION.to_string()];
+    let collections = vec![collection.to_string()];
     let install = timeout(
         ENROLLMENT_P2P_TIMEOUT,
         p2p.add_replicator(
             collections.clone(),
-            Some(&offer.server_ticket),
+            Some(server_ticket),
             filters,
             Vec::new(),
-            Some(&offer.admin_did),
+            Some(admin_did),
         ),
     )
     .await;
@@ -439,9 +560,9 @@ pub async fn push_enrollment_request(
         match timeout(
             ENROLLMENT_P2P_TIMEOUT,
             p2p.push_documents_to_peer(
-                &offer.server_peer,
+                server_peer,
                 vec![P2pDocumentRequest {
-                    collection: COLLECTION.to_string(),
+                    collection: collection.to_string(),
                     doc_id: document_id.to_string(),
                 }],
             ),
@@ -462,7 +583,7 @@ pub async fn push_enrollment_request(
 
     let cleanup_error = match timeout(
         ENROLLMENT_P2P_TIMEOUT,
-        p2p.remove_replicator(collections, Some(&offer.server_ticket)),
+        p2p.remove_replicator(collections, Some(server_ticket)),
     )
     .await
     {
