@@ -76,6 +76,32 @@ Denies the desktop_agent_save command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-agent-workspace-root-select`
+
+</td>
+<td>
+
+Enables the desktop_agent_workspace_root_select command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-agent-workspace-root-select`
+
+</td>
+<td>
+
+Denies the desktop_agent_workspace_root_select command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-allowed-dirs-add`
 
 </td>
