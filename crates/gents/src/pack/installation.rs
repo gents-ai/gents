@@ -106,10 +106,12 @@ async fn dependency_snapshot_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     coordinate: &str,
-    digest: &str,
+    digest: Option<&str>,
 ) -> Result<Option<InstalledDependencySnapshot>> {
     let record = read_record(txn, owner, coordinate).await?;
-    if record.doc_id.is_none() || record.digest.as_deref() != Some(digest) {
+    if record.doc_id.is_none()
+        || digest.is_some_and(|digest| record.digest.as_deref() != Some(digest))
+    {
         return Ok(None);
     }
     let mut grouped: BTreeMap<Collection, Vec<&str>> = BTreeMap::new();

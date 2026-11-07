@@ -100,7 +100,8 @@ async fn installed_dependency_snapshot_retains_values_and_detects_concurrent_edi
     let snapshot = access
         .transact_readonly("test.dependency.snapshot", |txn| {
             Box::pin(async move {
-                dependency_snapshot_in_txn(txn, OWNER, "acme/demo", &identity("1").digest).await
+                dependency_snapshot_in_txn(txn, OWNER, "acme/demo", Some(&identity("1").digest))
+                    .await
             })
         })
         .await
@@ -114,7 +115,8 @@ async fn installed_dependency_snapshot_retains_values_and_detects_concurrent_edi
     let changed = access
         .transact_readonly("test.dependency.snapshot_changed", |txn| {
             Box::pin(async move {
-                dependency_snapshot_in_txn(txn, OWNER, "acme/demo", &identity("1").digest).await
+                dependency_snapshot_in_txn(txn, OWNER, "acme/demo", Some(&identity("1").digest))
+                    .await
             })
         })
         .await
@@ -124,7 +126,8 @@ async fn installed_dependency_snapshot_retains_values_and_detects_concurrent_edi
     assert!(access
         .transact_readonly("test.dependency.snapshot_other_artifact", |txn| {
             Box::pin(async move {
-                dependency_snapshot_in_txn(txn, OWNER, "acme/demo", &identity("2").digest).await
+                dependency_snapshot_in_txn(txn, OWNER, "acme/demo", Some(&identity("2").digest))
+                    .await
             })
         })
         .await
@@ -1400,6 +1403,7 @@ fn prepared() -> PreparedDocumentPackInstall {
         },
         dependency_inference: BTreeMap::new(),
         dependencies: Vec::new(),
+        root_snapshot: None,
     }
 }
 
@@ -2147,6 +2151,103 @@ async fn installing_a_dependent_preserves_the_installed_dependency_environment()
         .unwrap();
     assert_eq!(rows["data"]["Agent"][0]["description"], "explicit");
     assert_eq!(rows["data"]["Agent"][0]["display_name"], "old name");
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn upgrading_a_pack_preserves_omitted_install_values() {
+    let (node, access) = dependency_fixture().await;
+    let (_guard, dir) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+    let config_path = dir.join("pack_config.json");
+    let mut source: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    source["agents"][0]["description"] = json!("${UPGRADE_LABEL:-new default}");
+    std::fs::write(&config_path, serde_json::to_vec(&source).unwrap()).unwrap();
+    let pack = || {
+        let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
+        crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap()
+    };
+    let first = pack();
+    let requested = BTreeMap::from([("worker".to_owned(), "glm:inference".to_owned())]);
+    let options = crate::pack::PackInstallOptions {
+        node_did: OWNER.into(),
+    };
+    let original = |name: &str| (name == "UPGRADE_LABEL").then(|| "original".to_owned());
+    let load = |archive: &crate::pack::archive::PackArchive,
+                env: &dyn Fn(&str) -> Option<String>| {
+        crate::pack::load_pack_config(
+            archive.manifest(),
+            &options,
+            &|path| Ok(archive.asset(path)?.to_vec()),
+            env,
+        )
+        .unwrap()
+    };
+    let prepared = prepare_document_pack_install(
+        &access,
+        OWNER,
+        first.manifest(),
+        &load(&first, &original),
+        &requested,
+        &[],
+        crate::pack::InstalledVia::Operator,
+        None,
+        Some(&first),
+        &original,
+    )
+    .await
+    .unwrap();
+    install_prepared_document_pack(
+        &access,
+        OWNER,
+        &first,
+        &[],
+        &prepared,
+        None,
+        false,
+        crate::pack::InstalledVia::Operator,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let manifest_path = dir.join("manifest.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["version"] = json!("1.0.1");
+    std::fs::write(manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let next = pack();
+    let unset = |_: &str| None;
+    let prepared = prepare_document_pack_install(
+        &access,
+        OWNER,
+        next.manifest(),
+        &load(&next, &unset),
+        &requested,
+        &[],
+        crate::pack::InstalledVia::Operator,
+        None,
+        Some(&next),
+        &unset,
+    )
+    .await
+    .unwrap();
+    install_prepared_document_pack(
+        &access,
+        OWNER,
+        &next,
+        &[],
+        &prepared,
+        None,
+        false,
+        crate::pack::InstalledVia::Operator,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let rows = access
+        .execute(r#"{ Agent(filter: {agent_id: {_eq: "fixture-dependee"}}) { description } }"#)
+        .await
+        .unwrap();
+    assert_eq!(rows["data"]["Agent"][0]["description"], "original");
     node.shutdown().await;
 }
 
@@ -3196,6 +3297,7 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
         explicit: true,
         snapshot: None,
         reconfigure: false,
+        reuse_plugins: false,
     };
     let initial = vec![
         stage(&dependency, "1", empty.clone(), Some(old_bytes), vec![]),

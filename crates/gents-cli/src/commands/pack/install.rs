@@ -288,7 +288,11 @@ pub(crate) async fn install_documents_pack_resolved(
                     source.manifest().metadata.namespace,
                     source.manifest().name
                 );
-                if let Some(config) = prepared.reused_dependency_config(&coordinate) {
+                if std::ptr::eq(source, pack) && prepared.preserves_root_values() {
+                    let mut value = reused_variable_preview(source, &prepared.config)?;
+                    value["kind"] = json!("upgrade");
+                    Ok(value)
+                } else if let Some(config) = prepared.reused_dependency_config(&coordinate) {
                     reused_variable_preview(source, config)
                 } else if let Some(values) = overrides.get(&coordinate) {
                     install_variable_preview_with(source, owner, &|name| {
