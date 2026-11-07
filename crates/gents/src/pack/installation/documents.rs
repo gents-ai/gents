@@ -168,11 +168,21 @@ fn override_dependency_config(
     let authored: serde_json::Value = serde_json::from_slice(archive.asset(path)?)?;
     let mut installed = serde_json::to_value(snapshot.config(owner)?)?;
     let lookup_installed = installed.clone();
-    let locate = |path: &str| {
+    let locate = |path: &str, value: &str| {
         let mut parts = path.trim_start_matches('/').splitn(3, '/');
         let field = parts.next()?;
         let index: usize = parts.next()?.parse().ok()?;
         let suffix = parts.next()?;
+        if value.starts_with("./")
+            && (matches!(
+                (field, suffix),
+                ("contexts", "system_prompt")
+                    | ("skills", "instructions")
+                    | ("tasks", "prompt_template")
+            ) || (field == "eval_definitions" && suffix.starts_with("cases/")))
+        {
+            return None;
+        }
         let collection = crate::Collection::ALL
             .iter()
             .copied()

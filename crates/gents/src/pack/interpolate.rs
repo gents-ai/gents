@@ -84,7 +84,7 @@ pub fn override_installed_literals(
     installed: &mut serde_json::Value,
     overrides: &std::collections::BTreeMap<String, Option<String>>,
     known: &std::collections::BTreeMap<String, Option<String>>,
-    locate: &dyn Fn(&str) -> Option<String>,
+    locate: &dyn Fn(&str, &str) -> Option<String>,
 ) -> anyhow::Result<()> {
     let uses = inspect_install_variables(authored, &|_| Some("inspection".to_owned())).map_err(
         |names| anyhow::anyhow!("cannot inspect install variables: {}", names.join(", ")),
@@ -120,12 +120,7 @@ pub fn override_installed_literals(
                 .flatten()
         })
         .map_err(|names| anyhow::anyhow!("unset variables: {}", names.join(", ")))?;
-        anyhow::ensure!(
-            !value.starts_with("./"),
-            "field {} resolves to a sidecar; reinstall the dependency explicitly",
-            entry.path
-        );
-        let target = locate(&entry.path).ok_or_else(|| {
+        let target = locate(&entry.path, &value).ok_or_else(|| {
             anyhow::anyhow!(
                 "cannot identify installed field {}; reinstall the dependency explicitly",
                 entry.path
@@ -162,7 +157,7 @@ mod install_variable_conformance {
             &mut installed,
             &override_values,
             &Default::default(),
-            &|path| Some(path.into()),
+            &|path, _| Some(path.into()),
         )
         .unwrap();
         assert_eq!(
@@ -176,10 +171,61 @@ mod install_variable_conformance {
             &mut installed,
             &override_values,
             &Default::default(),
-            &|path| Some(path.into())
+            &|path, _| Some(path.into())
         )
         .is_err());
         assert_eq!(installed, before);
+    }
+
+    #[test]
+    fn overridden_fields_follow_the_executable_model() {
+        use serde_json::json;
+        let output = std::process::Command::new("lake")
+            .args([
+                "env",
+                "lean",
+                "--run",
+                "Proofs/Conformance/PackInstallFields.lean",
+            ])
+            .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("proofs"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let cases: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(cases.len(), 4);
+        for case in cases {
+            let affected = case["affected"].as_bool().unwrap();
+            let replacement = case["replacement"].as_str();
+            let first = if affected && replacement.is_none() {
+                "${FIRST}-${UNKNOWN}"
+            } else if affected {
+                "${FIRST}"
+            } else {
+                "${OTHER}"
+            };
+            let authored = json!({"first": first, "second": "${FIRST}"});
+            let mut installed = json!({"first": "old first", "second": "old second"});
+            let overrides =
+                std::collections::BTreeMap::from([("FIRST".into(), Some("new first".into()))]);
+            let result = override_installed_literals(
+                &authored,
+                &mut installed,
+                &overrides,
+                &Default::default(),
+                &|path, _| Some(path.into()),
+            );
+            match case["result"].as_str() {
+                Some(expected) => {
+                    result.unwrap();
+                    assert_eq!(installed["first"], expected);
+                }
+                None => assert!(result.is_err()),
+            }
+        }
     }
 
     #[test]
