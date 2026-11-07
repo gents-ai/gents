@@ -13,26 +13,24 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gents::defra_node::Node as EmbeddedNode;
 use gents::inference::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
-use gents::{CompactionStrategy, Gents, NodeIdentity, ToolCeiling};
+use gents::{CompactionStrategy, ConfigAccess, NodeIdentity, ToolCeiling};
 use serde_json::Value;
 
-use crate::support::fixtures::test_identity;
-use crate::support::interrupt::{
-    create_runtime_request, wait_for_request_lifecycle_state, wait_for_runtime_ready, BootedAgent,
+use crate::support::agent_requests::RequestActors;
+use crate::support::builder_runtime::{
+    builder_actors, fixture_agent, runtime_builder, spawn_runtime, submit_request,
 };
+use crate::support::interrupt::{wait_for_request_lifecycle_state, BootedAgent};
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
-use crate::support::{test_db, TestDb};
+use crate::support::{test_db, ManagedAgentFixture, TestDb};
 
 const MODEL: &str = "budget-model";
 const BACKEND_ID: &str = "budget-backend";
-const AGENT_DID: &str = "budget-agent";
 const TOOL: &str = "audit_probe";
 
 const SESSIONS: usize = 3;
@@ -101,28 +99,27 @@ async fn per_request_store_growth_follows_new_content_not_history() {
     let started = Instant::now();
     let backend = MockStreamingBackend::start_with_plans(MODEL, workload_plans()).unwrap();
     let mut db = test_db("storage-budget").await;
-    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("storage-budget"));
-    install_backend(&db.node, identity.did(), backend.endpoint()).await;
+    let fixture = into_fixture(builder_actors(&db, BACKEND_ID, backend.endpoint(), MODEL, 4).await);
     db.simulate_process_crash().await.expect("flush baseline");
+    let actors = reopen_actors(&db, fixture).await;
     let baseline_disk = dir_bytes(db.data_path());
-    let agent = boot_agent(&db, identity.clone()).await;
+    let agent = boot_agent(&db, &actors).await;
 
     let mut samples = Vec::new();
-    let mut before = Snapshot::take(&db).await;
+    let mut before = Snapshot::take(&db, actors.agent().as_ref()).await;
     for session in 0..SESSIONS {
         for turn in 0..TURNS {
             let marker = turn_marker(session, turn);
-            let doc_id = create_runtime_request(
-                db.node.as_ref(),
-                &agent.node_did,
-                AGENT_DID,
+            let doc_id = submit_request(
+                &actors,
                 &format!("req-{marker}"),
                 &session_id(session),
+                "interactive",
                 &prompt(&marker),
             )
             .await;
-            wait_for_request_lifecycle_state(db.node.as_ref(), &doc_id, "completed").await;
-            let after = Snapshot::take(&db).await;
+            wait_for_request_lifecycle_state(&actors, &doc_id, "completed").await;
+            let after = Snapshot::take(&db, actors.agent().as_ref()).await;
             let mut sample = Sample::between(session, turn, &before, &after);
             sample.history_bytes = backend
                 .observed_completion_bodies()
@@ -133,13 +130,14 @@ async fn per_request_store_growth_follows_new_content_not_history() {
         }
     }
 
-    let calibration = calibrate_segments(&db, &agent, &backend).await;
+    let calibration = calibrate_segments(&actors, &backend).await;
     let bodies = backend.observed_completion_bodies();
-    let transcripts = load_transcripts(&db, &agent.node_did).await;
+    let transcripts = load_transcripts(&actors, &agent.node_did).await;
 
     agent.shutdown().await;
+    let fixture = into_fixture(actors);
     db.simulate_process_crash().await.expect("flush workload");
-    let final_snapshot = Snapshot::take(&db).await;
+    let final_snapshot = Snapshot::take(&db, fixture.agent.as_ref()).await;
     let disk = dir_bytes(db.data_path()).saturating_sub(baseline_disk);
     let report = Report {
         samples,
@@ -257,25 +255,23 @@ fn text_fragments(marker: &str, count: usize, width: usize) -> Vec<String> {
 }
 
 async fn calibrate_segments(
-    db: &TestDb,
-    agent: &BootedAgent,
+    actors: &RequestActors,
     backend: &MockStreamingBackend,
 ) -> Vec<(String, usize, usize)> {
     let mut rows = Vec::new();
     for (marker, chunks) in calibration_streams() {
-        let before = count(db.node.as_ref(), "AgentOutputSegment").await;
-        let doc_id = create_runtime_request(
-            db.node.as_ref(),
-            &agent.node_did,
-            AGENT_DID,
+        let before = count(&actors.agent_access, "AgentOutputSegment").await;
+        let doc_id = submit_request(
+            actors,
             &format!("req-{marker}"),
             &format!("session-{marker}"),
+            "interactive",
             &format!("{marker}: answer without tools."),
         )
         .await;
-        wait_for_request_lifecycle_state(db.node.as_ref(), &doc_id, "completed").await;
+        wait_for_request_lifecycle_state(actors, &doc_id, "completed").await;
         assert_eq!(backend.observed_chunks(marker), chunks, "{marker}");
-        let segments = count(db.node.as_ref(), "AgentOutputSegment").await - before;
+        let segments = count(&actors.agent_access, "AgentOutputSegment").await - before;
         rows.push((marker.to_string(), chunks, segments));
     }
     rows
@@ -383,18 +379,14 @@ fn assert_transcripts_reconstruct_streams(transcripts: &[String]) {
     }
 }
 
-async fn load_transcripts(db: &TestDb, node_did: &str) -> Vec<String> {
+async fn load_transcripts(actors: &RequestActors, node_did: &str) -> Vec<String> {
     let mut transcripts = Vec::new();
-    let access = gents::ConfigAccess::local_as(
-        db.node.clone(),
-        identity::Did::new(node_did).expect("authenticated transcript requester"),
-    );
     for session in 0..SESSIONS {
         let messages = gents::observe::trace_export::load_trace_transcript(
-            &access,
+            &actors.agent_access,
             &session_id(session),
             node_did,
-            Some(node_did),
+            Some(actors.agent_did()),
             None,
             None,
             None,
@@ -423,14 +415,22 @@ struct Snapshot {
 }
 
 impl Snapshot {
-    async fn take(db: &TestDb) -> Self {
+    /// Reads as the working Agent on the database's current process, which a
+    /// simulated crash replaces.
+    async fn take(db: &TestDb, agent: &dyn NodeIdentity) -> Self {
+        let reader = ConfigAccess::local_managed_agent(
+            db.node.clone(),
+            agent.did().parse().expect("Agent DID"),
+            agent,
+        )
+        .expect("working Agent reader");
         let mut counts = BTreeMap::new();
         for collection in COLLECTIONS {
-            counts.insert(collection, count(db.node.as_ref(), collection).await);
+            counts.insert(collection, count(&reader, collection).await);
         }
         Self {
             counts,
-            blocks: blocks(db.node.as_ref()).await,
+            blocks: blocks(&reader).await,
             disk: dir_bytes(db.data_path()),
         }
     }
@@ -625,12 +625,12 @@ impl std::fmt::Display for Report {
     }
 }
 
-async fn count(node: &EmbeddedNode, collection: &str) -> usize {
-    rows(node, collection, "_docID").await.len()
+async fn count(reader: &ConfigAccess, collection: &str) -> usize {
+    rows(reader, collection, "_docID").await.len()
 }
 
-async fn blocks(node: &EmbeddedNode) -> BTreeMap<String, u64> {
-    rows(node, "RenderedRequestBlock", "_docID payload")
+async fn blocks(reader: &ConfigAccess) -> BTreeMap<String, u64> {
+    rows(reader, "RenderedRequestBlock", "_docID payload")
         .await
         .iter()
         .filter_map(|row| {
@@ -641,19 +641,14 @@ async fn blocks(node: &EmbeddedNode) -> BTreeMap<String, u64> {
         .collect()
 }
 
-async fn rows(node: &EmbeddedNode, collection: &str, fields: &str) -> Vec<Value> {
-    let response = node
+async fn rows(reader: &ConfigAccess, collection: &str, fields: &str) -> Vec<Value> {
+    let response = reader
         .execute(&format!("query {{ {collection} {{ {fields} }} }}"))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "{collection} query failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .and_then(|data| data.get(collection).cloned())
-        .and_then(|value| value.as_array().cloned())
+        .await
+        .unwrap_or_else(|error| panic!("{collection} query failed: {error:#}"));
+    response["data"][collection]
+        .as_array()
+        .cloned()
         .unwrap_or_default()
 }
 
@@ -707,79 +702,36 @@ impl ToolDyn for AuditProbe {
     }
 }
 
-async fn boot_agent(db: &TestDb, identity: Arc<dyn NodeIdentity>) -> BootedAgent {
-    let agent = Gents::builder()
-        .node(db.node.clone())
-        .identity(identity)
-        .default_agent_did(AGENT_DID)
-        .tool_ceiling(ToolCeiling::meta_only())
-        .agent(AGENT_DID)
-        .backend_id(BACKEND_ID)
-        .model_name(MODEL)
-        .stream_batch_ms(STREAM_BATCH_MS)
-        .deadline_duration_secs(60)
-        .context_window(CONTEXT_WINDOW)
-        .compaction_threshold(COMPACTION_THRESHOLD)
-        .compaction_strategy(CompactionStrategy::StripToolResults)
-        .custom_tool(AuditProbe)
-        .done()
-        .build()
-        .await
-        .expect("build storage budget agent");
-    let node_did = agent.node_did().to_string();
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(db.node.as_ref(), &node_did).await;
-    BootedAgent::new(shutdown_tx, handle, node_did)
+async fn boot_agent(db: &TestDb, actors: &RequestActors) -> BootedAgent {
+    let runtime = fixture_agent(
+        runtime_builder(db, actors).tool_ceiling(ToolCeiling::meta_only()),
+        actors,
+        "budget-agent",
+    )
+    .backend_id(BACKEND_ID)
+    .model_name(MODEL)
+    .stream_batch_ms(STREAM_BATCH_MS)
+    .deadline_duration_secs(60)
+    .context_window(CONTEXT_WINDOW)
+    .compaction_threshold(COMPACTION_THRESHOLD)
+    .compaction_strategy(CompactionStrategy::StripToolResults)
+    .custom_tool(AuditProbe)
+    .done()
+    .build()
+    .await
+    .expect("build storage budget agent");
+    spawn_runtime(db, runtime).await
 }
 
-async fn install_backend(node: &Arc<EmbeddedNode>, owner: &str, endpoint: &str) {
-    use gents::store::config_client::{
-        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
-    gents::ensure_node(node, owner).await.unwrap();
-    let profile_id = format!("{AGENT_DID}:inference");
-    let documents = [
-        (
-            gents::Collection::InferenceBackend,
-            serde_json::json!({"node_did":owner,"backend_id":BACKEND_ID,"name":BACKEND_ID,
-                "provider_kind":"OpenAiCompatible","openai_wire_api":"chat_completions",
-                "endpoint":endpoint,"auth":{"kind":"unauthenticated"},
-                "max_concurrent":4,"max_queue_depth":100}),
-        ),
-        (
-            gents::Collection::InferenceProfile,
-            serde_json::json!({"node_did":owner,"profile_id":profile_id,
-                "backend_id":BACKEND_ID,"model_name":MODEL}),
-        ),
-        (
-            gents::Collection::Agent,
-            serde_json::json!({"node_did":owner,"agent_did":AGENT_DID,
-                "inference_profile_id":profile_id}),
-        ),
-    ];
-    let plan = DesiredStateApplyPlan::new(
-        documents
-            .into_iter()
-            .map(|(collection, value)| DesiredStateApplyDocument {
-                collection,
-                add: value.clone(),
-                update: value,
-            })
-            .collect(),
-    )
-    .unwrap();
-    ConfigAccess::transact_local_write(node, None, "test.install_budget_backend", |txn| {
-        let plan = &plan;
-        Box::pin(
-            async move { gents::store::config_client::apply_desired_state_plan(txn, plan).await },
-        )
-    })
-    .await
-    .unwrap();
-    gents::inference::backends::registry::set_backend_probe_status(
-        node, owner, BACKEND_ID, "healthy",
-    )
-    .await
-    .unwrap();
+/// Releases the actors' handles on the current process, keeping the User and
+/// Agent identities for the next one.
+fn into_fixture(actors: RequestActors) -> ManagedAgentFixture {
+    actors.fixture
+}
+
+/// The User and Agent keep their identities across a process restart; only
+/// their accesses bind the reopened database.
+async fn reopen_actors(db: &TestDb, mut fixture: ManagedAgentFixture) -> RequestActors {
+    fixture.access = db.client_access(&fixture.user);
+    RequestActors::from_fixture(db, fixture).await
 }

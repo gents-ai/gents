@@ -27,16 +27,29 @@ impl Drop for Stop {
     }
 }
 
-async fn rows(db: &TestDb, collection: &str, filter: &str, fields: &str) -> Vec<serde_json::Value> {
+fn runtime_access(db: &TestDb) -> ConfigAccess {
     ConfigAccess::local_as(
         db.node.clone(),
         ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
     )
-    .execute(&format!(
-        "{{ {collection}(filter: {filter}) {{ {fields} }} }}"
-    ))
-    .await
-    .unwrap()["data"][collection]
+}
+
+async fn rows(db: &TestDb, collection: &str, filter: &str, fields: &str) -> Vec<serde_json::Value> {
+    rows_as(&runtime_access(db), collection, filter, fields).await
+}
+
+async fn rows_as(
+    access: &ConfigAccess,
+    collection: &str,
+    filter: &str,
+    fields: &str,
+) -> Vec<serde_json::Value> {
+    access
+        .execute(&format!(
+            "{{ {collection}(filter: {filter}) {{ {fields} }} }}"
+        ))
+        .await
+        .unwrap()["data"][collection]
         .as_array()
         .unwrap()
         .clone()
@@ -50,10 +63,29 @@ async fn wait_row(
     fields: &str,
     required: &str,
 ) -> serde_json::Value {
+    wait_row_as(
+        &runtime_access(db),
+        collection,
+        field,
+        value,
+        fields,
+        required,
+    )
+    .await
+}
+
+async fn wait_row_as(
+    access: &ConfigAccess,
+    collection: &str,
+    field: &str,
+    value: &str,
+    fields: &str,
+    required: &str,
+) -> serde_json::Value {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let found = rows(
-            db,
+        let found = rows_as(
+            access,
             collection,
             &format!(
                 "{{ {field}: {{ _eq: \"{}\" }} }}",
@@ -720,34 +752,34 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     use gents::NodeIdentity as _;
     let mut db = support::test_db("input-edit-reopen").await;
     let did = db.node_identity.did().to_owned();
-    let agent = support::managed_agent(&db).await;
-    let user =
-        gents::KeyIdentity::load_or_create(db.data_path().join("edit-user.key"), None).unwrap();
-    let owner = ConfigAccess::local_as(db.node.clone(), ::identity::Did::new(&did).unwrap());
-    let agents = owner
-        .execute("{ Agent { _docID agent_did } }")
-        .await
-        .unwrap();
-    let agent_doc = agents["data"]["Agent"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["agent_did"] == agent.did())
-        .unwrap()["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    owner
-        .add_actor_relationship(
-            "Agent",
-            &agent_doc,
-            "session_writer",
-            &::identity::Did::new(user.did()).unwrap(),
-        )
+    // The enrolled User created this Agent and edits its own queued input.
+    let support::ManagedAgentFixture {
+        user,
+        access: mut client,
+        agent,
+        ..
+    } = support::managed_agent_fixture(&db).await;
+    let agent_doc = client
+        .transact_readonly("test.input_edit.agent", |txn| {
+            let did = &did;
+            let agent_did = agent.did();
+            Box::pin(async move {
+                Ok::<_, anyhow::Error>(
+                    gents::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        gents::Collection::Agent,
+                        did,
+                        agent_did,
+                    )
+                    .await?
+                    .expect("fixture Agent")
+                    .0,
+                )
+            })
+        })
         .await
         .unwrap();
     let session = "edit-reopen-session";
-    let mut client = db.client_access(&user);
     let mut original = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "reopen-original",
@@ -836,6 +868,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         .unwrap();
     db.simulate_process_crash().await.unwrap();
     assert_eq!(db.node_identity.did(), did);
+    client = db.client_access(&user);
     let cancel = CancellationToken::new();
     let _stop = Stop(cancel.clone());
     let task = tokio::spawn(run_session_command_reconciler(
@@ -844,8 +877,8 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         support::fixtures::session_command_agent_snapshot(&db).await,
         cancel.clone(),
     ));
-    let row = wait_row(
-        &db,
+    let row = wait_row_as(
+        &client,
         "AgentSessionInputEdit",
         "command_id",
         &command.command_id,
@@ -869,7 +902,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     cancel.cancel();
     task.await.unwrap().unwrap();
     let fields = "_docID request_id content lifecycle_state superseded_by_request_doc_id";
-    let before = rows(&db, "AgentRequest", "{}", fields).await;
+    let before = rows_as(&client, "AgentRequest", "{}", fields).await;
     assert_eq!(before.len(), 2);
     let old = before
         .iter()
@@ -925,8 +958,8 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         support::fixtures::session_command_agent_snapshot(&db).await,
         cancel.clone(),
     ));
-    let rejected = wait_row(
-        &db,
+    let rejected = wait_row_as(
+        &client,
         "AgentSessionInputEdit",
         "command_id",
         &stale.command_id,
@@ -943,10 +976,10 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         .await
         .unwrap());
     assert_eq!(rejected.outcome, SessionInputEditOutcome::Rejected);
-    let after = rows(&db, "AgentRequest", "{}", fields).await;
+    let after = rows_as(&client, "AgentRequest", "{}", fields).await;
     assert_eq!(after, before);
-    let replay = wait_row(
-        &db,
+    let replay = wait_row_as(
+        &client,
         "AgentSessionInputEdit",
         "command_id",
         &command.command_id,
@@ -957,7 +990,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     assert_eq!(replay["receipt_json"], receipt_json);
     cancel.cancel();
     task.await.unwrap().unwrap();
-    assert_eq!(rows(&db, "AgentRequest", "{}", fields).await, before);
+    assert_eq!(rows_as(&client, "AgentRequest", "{}", fields).await, before);
 }
 
 async fn local_edit_command(db: &TestDb, suffix: &str) -> (SessionInputEdit, String) {

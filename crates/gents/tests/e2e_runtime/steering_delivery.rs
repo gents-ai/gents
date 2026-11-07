@@ -154,10 +154,12 @@ async fn steering_case(hold_tool: bool, promote: bool) {
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let runtime = Gents::builder()
         .node(db.node.clone())
+        .backend_admission(db.home.backend_admission())
         .identity(identity)
         .default_agent_did(agent_did)
         .tool_ceiling(gents::ToolCeiling::meta_only())
         .agent(agent_did)
+        .identity_binding(fixture.binding.clone())
         .backend_id(BACKEND)
         .model_name(MODEL)
         .stream_batch_ms(0)
