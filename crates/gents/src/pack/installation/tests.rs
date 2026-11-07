@@ -1689,6 +1689,7 @@ async fn pack_job_block_is_refused_on_a_self_config_install() {
         "digest": format!("sha256:{}", "a".repeat(64)), "language": "rust", "declaration": declaration,
     })).unwrap();
     crate::plugin::store::write_record(home.path(), &record).unwrap();
+    let overrides = Default::default();
     let prepare = |via| {
         prepare_document_pack_install(
             &access,
@@ -1701,7 +1702,7 @@ async fn pack_job_block_is_refused_on_a_self_config_install() {
             Some(home.path()),
             None,
             &|_| None,
-            &Default::default(),
+            &overrides,
         )
     };
     let refused = prepare(crate::pack::InstalledVia::SelfConfig).await;
