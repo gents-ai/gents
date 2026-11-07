@@ -38,7 +38,7 @@ pub use engine::{
     observe_owned_pairing_live_matches, reconcile_peer_tick, run_pairing_reconciler,
     teardown_owned_replicators_at_endpoint, update_applied_after_success, EnrollmentEndpointEntry,
     GraphqlPairingStateStore, LoadedPairingApplied, PairingStateStore, PairingTickOutcome,
-    MAX_CONCURRENT_PEER_PREPARATIONS, PAIRING_SWEEP_INTERVAL,
+    MAX_CONCURRENT_PEER_PREPARATIONS,
 };
 pub use enrollment_offer::{EnrollmentOfferIssuer, EnrollmentOfferStatus};
 pub use enrollment_reconcile::{

@@ -62,8 +62,22 @@ impl ClientRouteManager {
         last_run_elapsed: Option<Duration>,
         force: bool,
     ) -> bool {
+        Self::reconcile_due_with_interval(
+            pairing_ready,
+            last_run_elapsed,
+            force,
+            gents::runtime::agent::p2p_reconcile::intervals::sweep_interval(),
+        )
+    }
+
+    fn reconcile_due_with_interval(
+        pairing_ready: bool,
+        last_run_elapsed: Option<Duration>,
+        force: bool,
+        sweep_interval: Duration,
+    ) -> bool {
         let interval = if pairing_ready {
-            gents::runtime::agent::p2p_reconcile::PAIRING_SWEEP_INTERVAL
+            sweep_interval
         } else {
             UNREADY_ROUTE_RETRY_INTERVAL
         };
@@ -633,6 +647,43 @@ impl ClientRouteManager {
                 authorization_expires_at,
             },
         ))
+    }
+}
+
+#[cfg(test)]
+mod reconcile_interval_tests {
+    use super::*;
+
+    #[test]
+    fn ready_routes_use_configured_sweep_and_unready_routes_keep_fast_retry() {
+        let sweep = Duration::from_secs(60);
+        assert!(!ClientRouteManager::reconcile_due_with_interval(
+            true,
+            Some(Duration::from_secs(30)),
+            false,
+            sweep
+        ));
+        assert!(ClientRouteManager::reconcile_due_with_interval(
+            true,
+            Some(sweep),
+            false,
+            sweep
+        ));
+        assert!(ClientRouteManager::reconcile_due_with_interval(
+            false,
+            Some(Duration::from_secs(5)),
+            false,
+            sweep
+        ));
+        assert!(ClientRouteManager::reconcile_due_with_interval(
+            true,
+            Some(Duration::ZERO),
+            true,
+            sweep
+        ));
+        assert!(ClientRouteManager::reconcile_due_with_interval(
+            true, None, false, sweep
+        ));
     }
 }
 
