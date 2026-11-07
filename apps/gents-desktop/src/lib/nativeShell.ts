@@ -229,3 +229,56 @@ export async function listenFileDrop(
       });
   });
 }
+
+/* ---- the browser panel's pages, native views beneath the app's webview
+   (bridge/browser.rs). A command that changes what shows carries the
+   window's increasing `seq`, so one arriving late is dropped. ---- */
+
+export type BrowserRect = { x: number; y: number; width: number; height: number };
+export type BrowserPlacement = {
+  bounds: BrowserRect;
+  open: BrowserRect;
+  solids: BrowserRect[];
+  radius: number;
+};
+
+/** Loads an address, a search result or a local file into a tab, making
+    the tab if it's new; rejects with why it can't, such as a missing file. */
+export function browserOpen(tab: string, url: string): Promise<void> {
+  return invoke("browser_open", { tab, url });
+}
+
+export function browserSelect(tab: string | null, seq: number): Promise<void> {
+  return invoke("browser_select", { tab, seq });
+}
+
+export function browserPlace(placement: BrowserPlacement, seq: number): Promise<void> {
+  return invoke("browser_place", { placement, seq });
+}
+
+export function browserHide(seq: number): Promise<void> {
+  return invoke("browser_hide", { seq });
+}
+
+export function browserGo(
+  tab: string,
+  action: "back" | "forward" | "reload" | "stop",
+): Promise<void> {
+  return invoke("browser_go", { tab, action });
+}
+
+export function browserCloseTab(tab: string, seq: number): Promise<void> {
+  return invoke("browser_close_tab", { tab, seq });
+}
+
+export function browserClose(seq: number): Promise<void> {
+  return invoke("browser_close", { seq });
+}
+
+/** One file to open, picked in the system's dialog. */
+export async function pickFile(title: string): Promise<string | null> {
+  if (!inNativeShell()) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const picked = await open({ multiple: false, directory: false, title });
+  return typeof picked === "string" ? picked : null;
+}

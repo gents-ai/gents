@@ -12,11 +12,10 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
 import { cn } from "@gents/ui/lib/utils";
-import { inNativeShell } from "../../../lib/nativeShell";
+import { inNativeShell, pickFile } from "../../../lib/nativeShell";
 import type { SurfaceContext } from "@/app/surfaces";
 import { seeThrough } from "./seeThrough";
 import {
@@ -50,10 +49,8 @@ function destination(text: string) {
 
 /* a page from this machine, picked in the system's own dialog */
 async function openFile() {
-  const picked = await openDialog({ multiple: false, directory: false }).catch(
-    () => null,
-  );
-  if (typeof picked === "string") open(picked);
+  const picked = await pickFile("Open in the browser").catch(() => null);
+  if (picked) open(picked);
 }
 
 function tabName(tab: Tab) {

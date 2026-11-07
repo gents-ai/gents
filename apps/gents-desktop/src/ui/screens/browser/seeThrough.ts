@@ -8,7 +8,7 @@
 
    The app also reports what it draws over the page, so clicks there stay
    with the app; every other click in the hole goes to the page. */
-import { invoke } from "@tauri-apps/api/core";
+import { browserHide, browserPlace } from "../../../lib/nativeShell";
 import { nextSeq } from "./order";
 
 export type Rect = { x: number; y: number; width: number; height: number };
@@ -221,7 +221,7 @@ export function seeThrough(el: HTMLElement): () => void {
       if (shown) {
         shown = false;
         restore();
-        void invoke("browser_hide", { seq: nextSeq() }).catch(() => {});
+        void browserHide(nextSeq()).catch(() => {});
       }
       return;
     }
@@ -230,10 +230,7 @@ export function seeThrough(el: HTMLElement): () => void {
       lift();
     }
     paint(open);
-    void invoke("browser_place", {
-      placement: { bounds, open, solids, radius },
-      seq: nextSeq(),
-    }).catch(() => {});
+    void browserPlace({ bounds, open, solids, radius }, nextSeq()).catch(() => {});
   };
 
   snapshot();
@@ -244,6 +241,6 @@ export function seeThrough(el: HTMLElement): () => void {
     cancelAnimationFrame(frame);
     theme.disconnect();
     if (shown) restore();
-    void invoke("browser_hide", { seq: nextSeq() }).catch(() => {});
+    void browserHide(nextSeq()).catch(() => {});
   };
 }
