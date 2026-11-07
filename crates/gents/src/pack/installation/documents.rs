@@ -298,6 +298,133 @@ fn preserve_root_upgrade_config(
     serde_json::from_value(next).context("decode upgraded pack configuration")
 }
 
+/// Restores recorded literals before decoding when an upgrade omits a required
+/// variable. Only fields that can be matched to an existing document qualify.
+pub async fn load_pack_upgrade_config(
+    access: &ConfigAccess,
+    owner: &str,
+    archive: &PackArchive,
+    environment: &(dyn Fn(&str) -> Option<String> + Sync),
+) -> Result<Option<PackConfig>> {
+    let coordinate = format!(
+        "{}/{}",
+        archive.manifest().metadata.namespace,
+        archive.manifest().name
+    );
+    let snapshot = access
+        .transact_readonly("pack.upgrade.load_snapshot", |txn| {
+            let coordinate = &coordinate;
+            Box::pin(async move {
+                super::dependency_snapshot_in_txn(txn, owner, coordinate, None).await
+            })
+        })
+        .await?;
+    let Some(snapshot) = snapshot else {
+        return Ok(None);
+    };
+    let path = archive
+        .manifest()
+        .config
+        .as_deref()
+        .context("pack has no config")?;
+    let authored: serde_json::Value = serde_json::from_slice(archive.asset(path)?)?;
+    let previous = serde_json::to_value(snapshot.config(owner)?)?;
+    let mut restored = authored.clone();
+    let lookup = |name: &str| {
+        if name == "GENTS_PACK_NODE_DID" {
+            Some(owner.to_owned())
+        } else {
+            environment(name)
+        }
+    };
+    let locate = |path: &str| {
+        let mut parts = path.trim_start_matches('/').splitn(3, '/');
+        let field = parts.next()?;
+        let index: usize = parts.next()?.parse().ok()?;
+        let suffix = parts.next()?;
+        let collection = crate::Collection::ALL
+            .iter()
+            .copied()
+            .find(|c| c.dir_name() == Some(field))?;
+        if suffix == collection.unique_field() || suffix == "node_did" {
+            return None;
+        }
+        let id = authored
+            .get(field)?
+            .get(index)?
+            .get(collection.unique_field())?
+            .as_str()?;
+        let id = super::super::interpolate::interpolate_with(id, &lookup).ok()?;
+        let old_index = previous.get(field)?.as_array()?.iter().position(|row| {
+            row.get(collection.unique_field())
+                .and_then(serde_json::Value::as_str)
+                == Some(id.as_str())
+        })?;
+        Some((format!("/{field}/{old_index}/{suffix}"), path.to_owned()))
+    };
+    super::super::interpolate::preserve_omitted_upgrade_literals(
+        &authored,
+        &previous,
+        &mut restored,
+        &lookup,
+        &locate,
+    )?;
+    let uses = super::super::interpolate::inspect_install_variables(&authored, &|_| {
+        Some("inspection".into())
+    })
+    .map_err(|names| anyhow::anyhow!("cannot inspect install variables: {}", names.join(", ")))?;
+    for entry in uses {
+        if !entry.variables.keys().all(|name| lookup(name).is_none()) {
+            continue;
+        }
+        let Some((old_path, new_path)) = locate(&entry.path) else {
+            continue;
+        };
+        let Some(value) = previous
+            .pointer(&old_path)
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        let mut parts = entry.path.trim_start_matches('/').splitn(3, '/');
+        let field = parts.next().unwrap_or_default();
+        let _index = parts.next();
+        let suffix = parts.next().unwrap_or_default();
+        anyhow::ensure!(
+            !(value.starts_with("./")
+                && (matches!(
+                    (field, suffix),
+                    ("contexts", "system_prompt")
+                        | ("skills", "instructions")
+                        | ("tasks", "prompt_template")
+                ) || (field == "eval_definitions" && suffix.starts_with("cases/")))),
+            "installed field {} cannot be safely decoded as a literal; supply its variable",
+            entry.path
+        );
+        *restored
+            .pointer_mut(&new_path)
+            .context("restored upgrade field is missing")? =
+            serde_json::Value::String(value.replace('$', "$$"));
+    }
+    let bytes = serde_json::to_vec(&restored)?;
+    let options = PackInstallOptions {
+        node_did: owner.to_owned(),
+    };
+    let config = super::super::load_pack_config(
+        archive.manifest(),
+        &options,
+        &|asset| {
+            if asset == path {
+                Ok(bytes.clone())
+            } else {
+                Ok(archive.asset(asset)?.to_vec())
+            }
+        },
+        environment,
+    )?;
+    Ok(Some(config))
+}
+
 pub struct PreparedDocumentPackInstall {
     pub config: PackConfig,
     pub inference: PackInferenceBindingPreview,

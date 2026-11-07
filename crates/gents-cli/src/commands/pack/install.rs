@@ -247,6 +247,12 @@ pub(crate) async fn install_documents_pack_resolved(
         (authored, report) =
             crate::desired_state::load_manifest_root_for_owner(temp.path(), Some(owner));
     }
+    if authored.is_none() {
+        authored = gents::pack::load_pack_upgrade_config(access, owner, pack.archive(), &|name| {
+            std::env::var(name).ok()
+        })
+        .await?;
+    }
     anyhow::ensure!(
         authored.is_some(),
         "invalid pack configuration: {:?}",

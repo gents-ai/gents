@@ -2160,7 +2160,7 @@ async fn upgrading_a_pack_preserves_omitted_install_values() {
     let (_guard, dir) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
     let config_path = dir.join("pack_config.json");
     let mut source: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
-    source["agents"][0]["description"] = json!("${UPGRADE_LABEL:-new default}");
+    source["agents"][0]["description"] = json!("${UPGRADE_LABEL}");
     std::fs::write(&config_path, serde_json::to_vec(&source).unwrap()).unwrap();
     let pack = || {
         let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
@@ -2216,11 +2216,15 @@ async fn upgrading_a_pack_preserves_omitted_install_values() {
     std::fs::write(manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     let next = pack();
     let unset = |_: &str| None;
+    let authored = load_pack_upgrade_config(&access, OWNER, &next, &unset)
+        .await
+        .unwrap()
+        .unwrap();
     let prepared = prepare_document_pack_install(
         &access,
         OWNER,
         next.manifest(),
-        &load(&next, &unset),
+        &authored,
         &requested,
         &[],
         crate::pack::InstalledVia::Operator,
