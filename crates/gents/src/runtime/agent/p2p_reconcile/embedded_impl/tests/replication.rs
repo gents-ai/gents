@@ -48,6 +48,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     }
     for node in [candidate_node, admin_node] {
         node.add_collection(gents_protocol::schemas::AGENT_SESSION).await?;
+        node.add_collection(gents_protocol::schemas::PEER_REGISTRY).await?;
     }
     admin_node
         .add_collection(gents_protocol::schemas::NODE)

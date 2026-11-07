@@ -1098,6 +1098,21 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+        // Enrollment publication needs the receiver's own Node, written as the
+        // runtime identity so the document is owned by that identity.
+        crate::store::config_client::ConfigAccess::local_as(
+            receiver.clone(),
+            ::identity::Did::new(admin.did()).unwrap(),
+        )
+        .write(
+            "test.enrollment.admin_node",
+            &format!(
+                r#"mutation {{ create_Node(input: {{node_did: "{}"}}) {{_docID}} }}"#,
+                escape_graphql_string(admin.did())
+            ),
+        )
+        .await
+        .unwrap();
         authorize_enrollment_peer(
             receiver.clone(),
             admin.clone(),
