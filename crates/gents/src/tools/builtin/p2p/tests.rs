@@ -349,12 +349,26 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
         &address,
     )
     .await;
+    // Overlay reads are signed by the invoking Agent, never by the node.
+    let agent_binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+    let agent =
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent_binding).unwrap();
+    // No projection pass runs here, so the node admin grants the baseline
+    // every live Agent document projects.
+    crate::store::identity::GrantSet::AgentBaseline
+        .grant(
+            &ConfigAccess::local_as(local.node.clone(), identity.did().parse().unwrap()),
+            &agent_binding.agent_did.parse().unwrap(),
+        )
+        .await
+        .unwrap();
     let tool = P2pTool::new(
         local.node.clone(),
         Some(identity.clone()),
         true,
         EndpointScope::<String, ()>::only_units(["DeploymentNote".into()]),
-    );
+    )
+    .with_invoking_agent(Some(agent));
     let options = json!({"peer_id":peer_id,"peer_did":remote.node_identity.did(),"collections":["DeploymentNote"]});
     // Application collections are refused for preview and apply alike.
     let preview = Tool::call(
@@ -551,7 +565,7 @@ async fn p2p_rejects_foreign_actor_and_preserves_another_overlays_owner() {
     )
     .await
     .unwrap_err();
-    assert!(result.to_string().contains("another owner"));
+    assert!(result.to_string().contains("another owner"), "{result}");
     assert!(tool.overlay("foreign-route").await.unwrap().is_some());
     access.write("test.p2p.mixed", &format!("mutation {{create_DataPlanePairingDesired(input: {{peer_id: \"mixed-route\", node_did: {}, source: \"engineer\", collections: [\"DeploymentNote\", \"PrivateNote\"], replicator_addresses: null, template: \"app-collections\"}}) {{_docID}}}}", quoted(db.node_identity.did()))).await.unwrap();
     let scoped = P2pTool::new(
