@@ -1,175 +1,105 @@
-use std::sync::Arc;
-
 use gents::session::canonical_rows::{
-    decode_transcript_message_row, output_segment_create_variables,
-    transcript_message_create_variables, AGENT_MESSAGE_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
-    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    decode_transcript_message_row, TranscriptMessageRow, AGENT_MESSAGE_FIELDS,
 };
-use gents::session::{fork, fork_via_http, ForkError, ForkParams};
+use gents::session::{fork_on, fork_via_http, ForkError, ForkOutcome, ForkParams};
 use gents::store::graphql::escape_graphql_string;
+use gents::NodeIdentity;
 use gents_protocol::output::*;
 
+use crate::support::agent_requests::{canonical_now, RequestActors, RequestSeed};
+use crate::support::agent_transcript::{self, Imported, Source};
 use crate::support::snapshots::{
     fetch_compaction_entry_snapshots_for_session, fetch_session_snapshot,
 };
-use crate::support::{
-    create_agent, create_agent_session, create_agent_tool_call, create_compaction_entry,
-    create_request, test_db, AGENT_NAME, NODE_DID,
-};
+use crate::support::{test_db, TestDb};
 
-#[derive(Debug)]
-struct Imported {
-    header: String,
-    close: Option<String>,
+/// The Agent authors its own transcript: every session, request, segment,
+/// header, tool row and compaction cursor below is written by the fixture
+/// Agent's managed signer, and the fork runs as that same Agent.
+struct Fixture {
+    db: TestDb,
+    actors: RequestActors,
 }
 
-async fn import_message(
-    node: &defra_node::Node,
-    session: &str,
-    sequence: u32,
-    role: MessageRole,
-    text: &str,
-    valid_ref: bool,
-) -> Imported {
-    import_scoped_message(node, session, sequence, role, text, valid_ref, None).await
-}
-
-async fn import_scoped_message(
-    node: &defra_node::Node,
-    session: &str,
-    sequence: u32,
-    role: MessageRole,
-    text: &str,
-    valid_ref: bool,
-    requester_did: Option<&str>,
-) -> Imported {
-    let request = format!("fixture-request:{session}:{sequence}");
-    let close = if valid_ref {
-        let segment = OutputSegment {
-            node_did: NODE_DID.into(),
-            requester_did: requester_did.map(str::to_owned),
-            session_id: session.into(),
-            request_doc_id: request.clone(),
-            source: if role == MessageRole::Assistant {
-                OutputSource::ProviderTurn {
-                    scope: gents_protocol::rendered_request::CaptureScope {
-                        kind: gents_protocol::rendered_request::CaptureScopeKind::Inference,
-                        seq: u64::from(sequence),
-                    },
-                    turn_index: 0,
-                    attempt: 0,
-                }
-            } else {
-                OutputSource::Authored {
-                    key: format!("fixture:{sequence}"),
-                }
-            },
-            writer: OutputWriter::RequestExecution {
-                execution_generation: "fixture-generation".into(),
-            },
-            ordinal: Some(0),
-            runs: vec![SegmentRun {
-                stream: 0,
-                bytes: text.len().try_into().unwrap(),
-                declaration: Some(StreamDeclaration {
-                    block_index: 0,
-                    part_index: 0,
-                    payload: StreamPayload::Text,
-                }),
-            }],
-            payload: text.into(),
-            close: Some(SourceClose::Closed {
-                outcome: OutputOutcome::Complete,
-                segments: 1,
-                stream_bytes: vec![text.len() as u64],
-            }),
-            created_at: format!("2026-04-21T10:00:{sequence:02}Z"),
-        };
-        let response = node
-            .execute_request(
-                defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
-                    .with_variables(output_segment_create_variables(&segment).unwrap()),
-            )
-            .await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        Some(created_id(&response, "create_AgentOutputSegment"))
-    } else {
-        None
-    };
-    let message = TranscriptMessage {
-        native_request_id: None,
-        message_key: format!("fixture:{session}:{sequence}"),
-        session_id: session.into(),
-        node_did: NODE_DID.into(),
-        requester_did: requester_did.map(str::to_owned),
-        request_doc_id: Some(request),
-        publication: MessagePublication::RequestExecution {
-            execution_generation: "fixture-generation".into(),
-        },
-        outcome: OutputOutcome::Complete,
-        sequence,
-        role,
-        native_id: (role == MessageRole::Assistant).then(|| format!("native-{sequence}")),
-        blocks: vec![MessageBlock::Text {
-            text: PresentedPayload {
-                output: PayloadRef {
-                    close_doc_id: close.clone().unwrap_or_else(|| "missing-close".into()),
-                    stream: 0,
-                },
-                presentation: PayloadPresentation::Full,
-            },
-        }],
-        created_at: format!("2026-04-21T10:00:{sequence:02}Z"),
-    };
-    let response = node
-        .execute_request(
-            defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
-                .with_variables(transcript_message_create_variables(&message).unwrap()),
-        )
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    Imported {
-        header: created_id(&response, "create_AgentMessage"),
-        close,
+impl Fixture {
+    async fn new(name: &str) -> Self {
+        let db = test_db(name).await;
+        let actors = RequestActors::new(&db).await;
+        Self { db, actors }
     }
-}
 
-fn created_id(response: &defra_node::QueryResponse, collection: &str) -> String {
-    gents::store::graphql::single_mutation_document(response, collection)
-        .unwrap()
-        .unwrap()["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned()
-}
+    fn node_did(&self) -> &str {
+        self.actors.node_did()
+    }
 
-async fn headers(
-    node: &defra_node::Node,
-    session: &str,
-) -> Vec<gents::session::canonical_rows::TranscriptMessageRow> {
-    let session = escape_graphql_string(session);
-    let response = node.execute(&format!(r#"{{ AgentMessage(filter: {{session_id: {{_eq: "{session}"}}}}, order: {{sequence: ASC}}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#)).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    response.data.unwrap()["AgentMessage"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|row| decode_transcript_message_row(row).unwrap())
-        .collect()
-}
+    fn agent_did(&self) -> &str {
+        self.actors.agent_did()
+    }
 
-async fn setup(node: &defra_node::Node, session: &str) {
-    create_agent_session(node, session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
-    create_agent(node, AGENT_NAME, NODE_DID).await;
-}
+    async fn source(&self, session: &str) -> Source {
+        agent_transcript::source(&self.actors, session).await
+    }
 
-fn params(session: &str, turn: u32) -> ForkParams<'_> {
-    ForkParams {
-        source_session_id: session,
-        boundary: gents::session::ForkBoundary::UserTurn(turn),
-        caller_node_did: NODE_DID,
-        caller_requester_did: None,
-        target_agent_did: None,
+    async fn import(
+        &self,
+        source: &Source,
+        sequence: u32,
+        role: MessageRole,
+        text: &str,
+        valid_ref: bool,
+    ) -> Imported {
+        agent_transcript::import(&self.actors, source, sequence, role, text, valid_ref).await
+    }
+
+    fn params<'a>(&'a self, source: &'a str, requester: &'a str, turn: u32) -> ForkParams<'a> {
+        ForkParams {
+            source_session_id: source,
+            boundary: gents::session::ForkBoundary::UserTurn(turn),
+            caller_node_did: self.node_did(),
+            caller_requester_did: Some(requester),
+            target_agent_did: None,
+        }
+    }
+
+    fn own<'a>(&'a self, source: &'a str, turn: u32) -> ForkParams<'a> {
+        self.params(source, self.agent_did(), turn)
+    }
+
+    async fn fork(&self, params: ForkParams<'_>) -> Result<ForkOutcome, ForkError> {
+        fork_on(&self.actors.agent_access, params).await
+    }
+
+    async fn rows(&self, query: &str) -> serde_json::Value {
+        let mut response = self
+            .actors
+            .agent_access
+            .execute(query)
+            .await
+            .expect("read as the forking Agent");
+        response["data"].take()
+    }
+
+    async fn headers(&self, session: &str) -> Vec<TranscriptMessageRow> {
+        let session = escape_graphql_string(session);
+        let data = self.rows(&format!(r#"{{ AgentMessage(filter: {{session_id: {{_eq: "{session}"}}}}, order: {{sequence: ASC}}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#)).await;
+        data["AgentMessage"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| decode_transcript_message_row(row).unwrap())
+            .collect()
+    }
+
+    async fn body(&self, header: &str, requester: &str) -> String {
+        let (_, native) = gents::session::load_canonical_message(
+            &self.actors.agent_access,
+            header,
+            self.node_did(),
+            Some(requester),
+        )
+        .await
+        .unwrap();
+        gents_protocol::transcript::present_message(&native).body_markdown
     }
 }
 
@@ -185,18 +115,14 @@ fn origin(
 
 #[tokio::test]
 async fn fork_copies_exact_header_prefix_by_reference() {
-    let db = test_db("fork-prefix").await;
-    setup(&db.node, "parent").await;
-    let one = import_message(&db.node, "parent", 1, MessageRole::User, "u1", true).await;
-    let two = import_message(&db.node, "parent", 2, MessageRole::Assistant, "a1", true).await;
-    import_message(&db.node, "parent", 3, MessageRole::User, "u2", true).await;
-    let outcome = fork(
-        &db.node,
-        &identity::Did::new(NODE_DID).unwrap(),
-        params("parent", 1),
-    )
-    .await
-    .unwrap();
+    let f = Fixture::new("fork-prefix").await;
+    let parent = f.source("parent").await;
+    let one = f.import(&parent, 1, MessageRole::User, "u1", true).await;
+    let two = f
+        .import(&parent, 2, MessageRole::Assistant, "a1", true)
+        .await;
+    f.import(&parent, 3, MessageRole::User, "u2", true).await;
+    let outcome = f.fork(f.own("parent", 1)).await.unwrap();
     assert_eq!(
         (
             outcome.copied_messages,
@@ -205,14 +131,15 @@ async fn fork_copies_exact_header_prefix_by_reference() {
         ),
         (2, 0, 0)
     );
-    let copied = headers(&db.node, &outcome.session_id).await;
-    let unchanged_parent = headers(&db.node, "parent").await;
+    let copied = f.headers(&outcome.session_id).await;
+    let unchanged_parent = f.headers("parent").await;
     assert_eq!(unchanged_parent.len(), 3);
     assert!(matches!(
         &unchanged_parent[0].message.publication,
         MessagePublication::RequestExecution { .. }
     ));
     assert_eq!(copied.len(), 2);
+    let mut referenced = Vec::new();
     for (copy, source) in copied.iter().zip([one, two]) {
         assert_eq!(copy.message.request_doc_id, None);
         assert!(
@@ -222,85 +149,52 @@ async fn fork_copies_exact_header_prefix_by_reference() {
             panic!("text")
         };
         assert_eq!(&text.output.close_doc_id, source.close.as_ref().unwrap());
+        referenced.push(source.close.unwrap());
     }
-    let (_, native) = gents::session::load_canonical_message_from_node(
-        &db.node,
-        &copied[0].doc_id,
-        NODE_DID,
-        None,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        gents_protocol::transcript::present_message(&native).body_markdown,
-        "u1"
-    );
-    let (_, assistant) = gents::session::load_canonical_message_from_node(
-        &db.node,
-        &copied[1].doc_id,
-        NODE_DID,
-        None,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        gents_protocol::transcript::present_message(&assistant).body_markdown,
-        "a1"
-    );
-    let segments = db
-        .node
-        .execute("{ AgentOutputSegment { session_id } }")
-        .await
-        .data
-        .unwrap();
+    assert_eq!(f.body(&copied[0].doc_id, f.agent_did()).await, "u1");
+    assert_eq!(f.body(&copied[1].doc_id, f.agent_did()).await, "a1");
+    // The source keeps its three closures; the fork holds its own copy of
+    // exactly the two closures its retained headers reference, keyed by the
+    // logical source closing record.
+    let segments = f
+        .rows("{ AgentOutputSegment { session_id request_doc_id } }")
+        .await;
     let segments = segments["AgentOutputSegment"].as_array().unwrap();
-    assert_eq!(segments.len(), 3);
-    assert!(segments.iter().all(|row| row["session_id"] == "parent"));
+    assert_eq!(
+        segments
+            .iter()
+            .filter(|row| row["session_id"] == "parent")
+            .count(),
+        3
+    );
+    let mut child = segments
+        .iter()
+        .filter(|row| row["session_id"] == outcome.session_id.as_str())
+        .map(|row| row["request_doc_id"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    child.sort();
+    referenced.sort();
+    assert_eq!(child, referenced);
+    assert_eq!(segments.len(), 5);
 }
 
 #[tokio::test]
 async fn fork_via_http_uses_same_header_contract() {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    drop(listener);
-    let directory = tempfile::tempdir().unwrap();
-    let identity =
-        gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(gents::NodeIdentity::did(&identity))
-            .with_http(defra_node::HttpConfig::with_addr(address))
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents::ensure_runtime_schemas(&node).await.unwrap();
-    let endpoint = format!("http://{address}/api/v0/graphql");
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
-            if reqwest::Client::new()
-                .post(&endpoint)
-                .json(&serde_json::json!({"query":"{__typename}"}))
-                .send()
-                .await
-                .is_ok()
-            {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap();
-    setup(&node, "parent-http").await;
-    let source = import_message(&node, "parent-http", 1, MessageRole::User, "u", true).await;
-    let outcome = fork_via_http(
-        &gents::store::config_client::GraphqlEndpoint::anonymous(endpoint),
-        params("parent-http", 1),
+    let f = Fixture::new("fork-http").await;
+    let parent = f.source("parent-http").await;
+    let source = f.import(&parent, 1, MessageRole::User, "u", true).await;
+    let agent = f.actors.agent();
+    let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+        f.db.client_endpoint(),
+        agent.did(),
     )
-    .await
-    .unwrap();
-    let copied = headers(&node, &outcome.session_id).await;
+    .with_client_signing_capability(agent.client_signing_capability().unwrap())
+    .unwrap()
+    .with_client_signed_agent_creates();
+    let outcome = fork_via_http(&endpoint, f.own("parent-http", 1))
+        .await
+        .unwrap();
+    let copied = f.headers(&outcome.session_id).await;
     assert!(
         matches!(&copied[0].message.publication, MessagePublication::Fork { origin_message_doc_id } if origin_message_doc_id == &source.header)
     );
@@ -308,64 +202,37 @@ async fn fork_via_http_uses_same_header_contract() {
 
 #[tokio::test]
 async fn fork_preserves_exact_requester_scope_and_denies_cross_requester_access() {
-    let db = test_db("fork-requester-scope").await;
-    let requester = "did:key:requester-a";
-    let mut session =
-        crate::support::session_document("requester-parent", AGENT_NAME, "2026-04-21T10:00:00Z");
-    session.requester_did = Some(requester.into());
-    crate::support::create_session_document(&db.node, &session).await;
-    create_agent(&db.node, AGENT_NAME, NODE_DID).await;
-    let source = import_scoped_message(
-        &db.node,
-        "requester-parent",
-        1,
-        MessageRole::User,
-        "tenant-bound",
-        true,
-        Some(requester),
-    )
-    .await;
-    let outcome = fork(
-        &db.node,
-        &identity::Did::new(NODE_DID).unwrap(),
-        ForkParams {
-            caller_requester_did: Some(requester),
-            ..params("requester-parent", 1)
-        },
-    )
-    .await
-    .unwrap();
-    let child_session = fetch_session_snapshot(&db.node, &outcome.session_id)
+    let f = Fixture::new("fork-requester-scope").await;
+    let requester = f.agent_did().to_owned();
+    let parent = f.source("requester-parent").await;
+    let source = f
+        .import(&parent, 1, MessageRole::User, "tenant-bound", true)
+        .await;
+    let outcome = f
+        .fork(f.params("requester-parent", &requester, 1))
         .await
         .unwrap();
-    assert_eq!(child_session.requester_did.as_deref(), Some(requester));
-    let copied = headers(&db.node, &outcome.session_id).await;
-    assert_eq!(copied[0].message.requester_did.as_deref(), Some(requester));
+    let child_session = fetch_session_snapshot(&f.actors, &outcome.session_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        child_session.requester_did.as_deref(),
+        Some(requester.as_str())
+    );
+    let copied = f.headers(&outcome.session_id).await;
+    assert_eq!(
+        copied[0].message.requester_did.as_deref(),
+        Some(requester.as_str())
+    );
     assert!(
         matches!(&copied[0].message.publication, MessagePublication::Fork { origin_message_doc_id } if origin_message_doc_id == &source.header)
     );
-    let (_, native) = gents::session::load_canonical_message_from_node(
-        &db.node,
-        &copied[0].doc_id,
-        NODE_DID,
-        Some(requester),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        gents_protocol::transcript::present_message(&native).body_markdown,
-        "tenant-bound"
-    );
-    let denied = fork(
-        &db.node,
-        &identity::Did::new(NODE_DID).unwrap(),
-        ForkParams {
-            caller_requester_did: Some("did:key:requester-b"),
-            ..params("requester-parent", 1)
-        },
-    )
-    .await
-    .unwrap_err();
+    assert_eq!(f.body(&copied[0].doc_id, &requester).await, "tenant-bound");
+    let other_requester = f.actors.fixture.user.did().to_owned();
+    let denied = f
+        .fork(f.params("requester-parent", &other_requester, 1))
+        .await
+        .unwrap_err();
     assert!(matches!(
         denied,
         ForkError::ForkSourceNotFound(_) | ForkError::ForkNotSameAgent
@@ -374,94 +241,39 @@ async fn fork_preserves_exact_requester_scope_and_denies_cross_requester_access(
 
 #[tokio::test]
 async fn fork_never_copies_executable_tool_rows() {
-    let db = test_db("fork-no-tools").await;
-    setup(&db.node, "parent-tools").await;
-    import_message(&db.node, "parent-tools", 1, MessageRole::User, "u", true).await;
-    create_agent_tool_call(
-        &db.node,
-        "parent-tools",
-        1,
-        "call",
-        "read_file",
-        "completed",
-        "2026-04-21T10:00:01Z",
-        "2026-04-21T10:00:02Z",
-    )
-    .await;
-    let outcome = fork(
-        &db.node,
-        &identity::Did::new(NODE_DID).unwrap(),
-        params("parent-tools", 1),
-    )
-    .await
-    .unwrap();
+    let f = Fixture::new("fork-no-tools").await;
+    let parent = f.source("parent-tools").await;
+    f.import(&parent, 1, MessageRole::User, "u", true).await;
+    agent_transcript::tool_call(&f.actors, &parent, 1, "call").await;
+    let outcome = f.fork(f.own("parent-tools", 1)).await.unwrap();
     assert_eq!(
         (outcome.copied_tool_calls, outcome.copied_tool_results),
         (0, 0)
     );
+    let source_tools = f
+        .rows(r#"{ AgentToolCall(filter: {session_id: {_eq: "parent-tools"}}) {_docID} }"#)
+        .await;
+    assert_eq!(source_tools["AgentToolCall"].as_array().unwrap().len(), 1);
     let child = escape_graphql_string(&outcome.session_id);
-    let response = db
-        .node
-        .execute(&format!(
+    let response = f
+        .rows(&format!(
             r#"{{ AgentToolCall(filter: {{session_id: {{_eq: "{child}"}}}}) {{_docID}} }}"#
         ))
         .await;
-    assert!(response.data.unwrap()["AgentToolCall"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert!(response["AgentToolCall"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn fork_copies_only_compaction_cursors_in_retained_prefix() {
-    let db = test_db("fork-compaction").await;
-    setup(&db.node, "parent-compaction").await;
-    import_message(
-        &db.node,
-        "parent-compaction",
-        1,
-        MessageRole::User,
-        "u1",
-        true,
-    )
-    .await;
-    import_message(
-        &db.node,
-        "parent-compaction",
-        2,
-        MessageRole::User,
-        "u2",
-        true,
-    )
-    .await;
-    create_compaction_entry(
-        &db.node,
-        "parent-compaction",
-        1,
-        "early",
-        1,
-        1,
-        "2026-04-21T10:00:03Z",
-    )
-    .await;
-    create_compaction_entry(
-        &db.node,
-        "parent-compaction",
-        2,
-        "late",
-        2,
-        2,
-        "2026-04-21T10:00:04Z",
-    )
-    .await;
-    let outcome = fork(
-        &db.node,
-        &identity::Did::new(NODE_DID).unwrap(),
-        params("parent-compaction", 1),
-    )
-    .await
-    .unwrap();
-    let rows = fetch_compaction_entry_snapshots_for_session(&db.node, &outcome.session_id).await;
+    let f = Fixture::new("fork-compaction").await;
+    let parent = f.source("parent-compaction").await;
+    f.import(&parent, 1, MessageRole::User, "u1", true).await;
+    f.import(&parent, 2, MessageRole::User, "u2", true).await;
+    agent_transcript::compaction(&f.actors, &parent, 1, "early", 1, 1).await;
+    agent_transcript::compaction(&f.actors, &parent, 2, "late", 2, 2).await;
+    let outcome = f.fork(f.own("parent-compaction", 1)).await.unwrap();
+    assert_eq!(outcome.copied_compaction_entries, 1);
+    let rows = fetch_compaction_entry_snapshots_for_session(&f.actors, &outcome.session_id).await;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].summary, "early");
     assert_eq!(rows[0].compacted_through_sequence, Some(1));
@@ -470,33 +282,21 @@ async fn fork_copies_only_compaction_cursors_in_retained_prefix() {
 
 #[tokio::test]
 async fn fork_boundaries_and_provenance_are_exact() {
-    let db = test_db("fork-boundaries").await;
-    setup(&db.node, "parent-boundaries").await;
+    let f = Fixture::new("fork-boundaries").await;
+    let parent = f.source("parent-boundaries").await;
     for (seq, role) in [
         (1, MessageRole::User),
         (2, MessageRole::Assistant),
         (3, MessageRole::User),
         (4, MessageRole::Assistant),
     ] {
-        import_message(&db.node, "parent-boundaries", seq, role, "text", true).await;
+        f.import(&parent, seq, role, "text", true).await;
     }
-    let empty = fork(
-        &db.node,
-        &identity::Did::new(NODE_DID).unwrap(),
-        params("parent-boundaries", 0),
-    )
-    .await
-    .unwrap();
-    let full = fork(
-        &db.node,
-        &identity::Did::new(NODE_DID).unwrap(),
-        params("parent-boundaries", 2),
-    )
-    .await
-    .unwrap();
+    let empty = f.fork(f.own("parent-boundaries", 0)).await.unwrap();
+    let full = f.fork(f.own("parent-boundaries", 2)).await.unwrap();
     assert_eq!(empty.copied_messages, 0);
     assert_eq!(full.copied_messages, 4);
-    let session = fetch_session_snapshot(&db.node, &empty.session_id)
+    let session = fetch_session_snapshot(&f.actors, &empty.session_id)
         .await
         .unwrap();
     assert_eq!(origin(&session).source_session_id, "parent-boundaries");
@@ -505,41 +305,14 @@ async fn fork_boundaries_and_provenance_are_exact() {
 
 #[tokio::test]
 async fn fork_rejects_invalid_cut_and_rolls_back_invalid_reference() {
-    let db = test_db("fork-invalid").await;
-    setup(&db.node, "parent-invalid").await;
-    import_message(
-        &db.node,
-        "parent-invalid",
-        1,
-        MessageRole::User,
-        "valid",
-        true,
-    )
-    .await;
-    let range = fork(
-        &db.node,
-        &identity::Did::new(NODE_DID).unwrap(),
-        params("parent-invalid", 2),
-    )
-    .await
-    .unwrap_err();
+    let f = Fixture::new("fork-invalid").await;
+    let parent = f.source("parent-invalid").await;
+    f.import(&parent, 1, MessageRole::User, "valid", true).await;
+    let range = f.fork(f.own("parent-invalid", 2)).await.unwrap_err();
     assert!(matches!(range, ForkError::ForkAtUserTurnOutOfRange(2, 1)));
-    import_message(
-        &db.node,
-        "parent-invalid",
-        2,
-        MessageRole::Assistant,
-        "invalid",
-        false,
-    )
-    .await;
-    let missing = fork(
-        &db.node,
-        &identity::Did::new(NODE_DID).unwrap(),
-        params("parent-invalid", 1),
-    )
-    .await
-    .unwrap_err();
+    f.import(&parent, 2, MessageRole::Assistant, "invalid", false)
+        .await;
+    let missing = f.fork(f.own("parent-invalid", 1)).await.unwrap_err();
     let ForkError::ForkCopyFailed(cause) = missing else {
         panic!("missing closure must reject the copy step: {missing:?}");
     };
@@ -548,19 +321,9 @@ async fn fork_rejects_invalid_cut_and_rolls_back_invalid_reference() {
         missing_detail.contains("unresolved closing segment missing-close"),
         "fixture's only defect must be its missing closure: {missing_detail}"
     );
-    let sessions = db
-        .node
-        .execute("{ AgentSession { session_id } }")
-        .await
-        .data
-        .unwrap();
+    let sessions = f.rows("{ AgentSession { session_id } }").await;
     assert_eq!(sessions["AgentSession"].as_array().unwrap().len(), 1);
-    let messages = db
-        .node
-        .execute("{ AgentMessage { session_id } }")
-        .await
-        .data
-        .unwrap();
+    let messages = f.rows("{ AgentMessage { session_id } }").await;
     assert!(messages["AgentMessage"]
         .as_array()
         .unwrap()
@@ -570,44 +333,36 @@ async fn fork_rejects_invalid_cut_and_rolls_back_invalid_reference() {
 
 #[tokio::test]
 async fn fork_rejects_cross_agent_source_references() {
-    let db = test_db("fork-behavior").await;
-    setup(&db.node, "parent-behavior").await;
-    create_agent(&db.node, "alternate", NODE_DID).await;
-    create_agent(&db.node, "foreign", "did:key:foreign").await;
-    import_message(&db.node, "parent-behavior", 1, MessageRole::User, "u", true).await;
-    let error = fork(
-        &db.node,
-        &identity::Did::new(NODE_DID).unwrap(),
+    let f = Fixture::new("fork-behavior").await;
+    let parent = f.source("parent-behavior").await;
+    let (alternate, _) = crate::support::install_managed_agent(
+        &f.db,
+        &f.actors.fixture.access,
+        &f.actors.fixture.user,
+        "Alternate agent",
+    )
+    .await;
+    f.import(&parent, 1, MessageRole::User, "u", true).await;
+    // Selecting another Agent is the configuring User's choice, made through
+    // its client as `gents session fork --agent` does.
+    let error = fork_on(
+        &f.actors.fixture.access,
         ForkParams {
-            target_agent_did: Some("alternate"),
-            ..params("parent-behavior", 1)
+            target_agent_did: Some(alternate.did()),
+            ..f.own("parent-behavior", 1)
         },
     )
     .await
     .unwrap_err();
-    assert!(matches!(error, ForkError::CrossAgentForkUnavailable));
+    assert!(
+        matches!(error, ForkError::CrossAgentForkUnavailable),
+        "{error:?}"
+    );
     assert!(matches!(
-        fork(
-            &db.node,
-            &identity::Did::new(NODE_DID).unwrap(),
-            ForkParams {
-                target_agent_did: Some("missing"),
-                ..params("parent-behavior", 1)
-            }
-        )
-        .await
-        .unwrap_err(),
-        ForkError::ForkAgentNotFound(_)
-    ));
-    assert!(matches!(
-        fork(
-            &db.node,
-            &identity::Did::new(NODE_DID).unwrap(),
-            ForkParams {
-                target_agent_did: Some("foreign"),
-                ..params("parent-behavior", 1)
-            }
-        )
+        f.fork(ForkParams {
+            target_agent_did: Some("missing"),
+            ..f.own("parent-behavior", 1)
+        })
         .await
         .unwrap_err(),
         ForkError::ForkAgentNotFound(_)
@@ -616,77 +371,41 @@ async fn fork_rejects_cross_agent_source_references() {
 
 #[tokio::test]
 async fn concurrent_forks_are_disjoint() {
-    let db = test_db("fork-concurrent").await;
-    setup(&db.node, "parent-concurrent").await;
-    import_message(
-        &db.node,
-        "parent-concurrent",
-        1,
-        MessageRole::User,
-        "u",
-        true,
-    )
-    .await;
-    let actor = identity::Did::new(NODE_DID).unwrap();
+    let f = Fixture::new("fork-concurrent").await;
+    let parent = f.source("parent-concurrent").await;
+    f.import(&parent, 1, MessageRole::User, "u", true).await;
     let (left, right) = tokio::join!(
-        fork(&db.node, &actor, params("parent-concurrent", 1)),
-        fork(&db.node, &actor, params("parent-concurrent", 1))
+        f.fork(f.own("parent-concurrent", 1)),
+        f.fork(f.own("parent-concurrent", 1))
     );
     let (left, right) = (left.unwrap(), right.unwrap());
     assert_ne!(left.session_id, right.session_id);
-    let left = headers(&db.node, &left.session_id).await.remove(0);
-    let right = headers(&db.node, &right.session_id).await.remove(0);
+    let left = f.headers(&left.session_id).await.remove(0);
+    let right = f.headers(&right.session_id).await.remove(0);
     assert_ne!(left.doc_id, right.doc_id);
     assert_ne!(left.message.message_key, right.message.message_key);
 }
 
 #[tokio::test]
 async fn fork_of_fork_names_immediate_origin_and_hydrates() {
-    let db = test_db("fork-ancestry").await;
-    setup(&db.node, "grandparent").await;
-    import_message(
-        &db.node,
-        "grandparent",
-        1,
-        MessageRole::User,
-        "ancestry",
-        true,
-    )
-    .await;
-    let child = fork(
-        &db.node,
-        &identity::Did::new(NODE_DID).unwrap(),
-        params("grandparent", 1),
-    )
-    .await
-    .unwrap();
-    let child_header = headers(&db.node, &child.session_id).await.remove(0);
-    let grandchild = fork(
-        &db.node,
-        &identity::Did::new(NODE_DID).unwrap(),
-        params(&child.session_id, 1),
-    )
-    .await
-    .unwrap();
-    let grandchild_header = headers(&db.node, &grandchild.session_id).await.remove(0);
+    let f = Fixture::new("fork-ancestry").await;
+    let parent = f.source("grandparent").await;
+    f.import(&parent, 1, MessageRole::User, "ancestry", true)
+        .await;
+    let child = f.fork(f.own("grandparent", 1)).await.unwrap();
+    let child_header = f.headers(&child.session_id).await.remove(0);
+    let grandchild = f.fork(f.own(&child.session_id, 1)).await.unwrap();
+    let grandchild_header = f.headers(&grandchild.session_id).await.remove(0);
     assert!(
         matches!(&grandchild_header.message.publication, MessagePublication::Fork { origin_message_doc_id } if origin_message_doc_id == &child_header.doc_id)
     );
-    let (_, native) = gents::session::load_canonical_message_from_node(
-        &db.node,
-        &grandchild_header.doc_id,
-        NODE_DID,
-        None,
-    )
-    .await
-    .unwrap();
     assert_eq!(
-        gents_protocol::transcript::present_message(&native).body_markdown,
+        f.body(&grandchild_header.doc_id, f.agent_did()).await,
         "ancestry"
     );
     assert_eq!(
         origin(
-            &fetch_session_snapshot(&db.node, &grandchild.session_id)
+            &fetch_session_snapshot(&f.actors, &grandchild.session_id)
                 .await
                 .unwrap()
         )
@@ -697,48 +416,30 @@ async fn fork_of_fork_names_immediate_origin_and_hydrates() {
 
 #[tokio::test]
 async fn fork_rejects_busy_wrong_principal_and_missing_source() {
-    let db = test_db("fork-rejections").await;
-    setup(&db.node, "parent-rejections").await;
-    create_request(
-        &db.node,
-        "pending",
-        "parent-rejections",
-        "pending",
-        "2026-04-21T10:00:01Z",
-    )
-    .await;
-    assert!(matches!(
-        fork(
-            &db.node,
-            &identity::Did::new(NODE_DID).unwrap(),
-            params("parent-rejections", 0)
+    let f = Fixture::new("fork-rejections").await;
+    f.source("parent-rejections").await;
+    f.actors
+        .create_request(
+            RequestSeed::new("pending", "parent-rejections", &canonical_now()).state("pending"),
         )
-        .await
-        .unwrap_err(),
+        .await;
+    assert!(matches!(
+        f.fork(f.own("parent-rejections", 0)).await.unwrap_err(),
         ForkError::ForkSourceBusy
     ));
-    let wrong = fork(
-        &db.node,
-        &identity::Did::new(NODE_DID).unwrap(),
-        ForkParams {
+    let wrong = f
+        .fork(ForkParams {
             caller_node_did: "did:key:foreign",
-            ..params("parent-rejections", 0)
-        },
-    )
-    .await
-    .unwrap_err();
+            ..f.own("parent-rejections", 0)
+        })
+        .await
+        .unwrap_err();
     assert!(matches!(
         wrong,
         ForkError::ForkSourceNotFound(_) | ForkError::ForkNotSameAgent
     ));
     assert!(matches!(
-        fork(
-            &db.node,
-            &identity::Did::new(NODE_DID).unwrap(),
-            params("absent", 0)
-        )
-        .await
-        .unwrap_err(),
+        f.fork(f.own("absent", 0)).await.unwrap_err(),
         ForkError::ForkSourceNotFound(_)
     ));
 }
