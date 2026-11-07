@@ -58,18 +58,12 @@ async fn configure_session_chain(
     max_turns: Option<i64>,
 ) -> (String, String) {
     let node_did = db.node_identity.did();
-    let access = ConfigAccess::local_as(db.node.clone(), owner.did().parse().unwrap());
+    let access = db.client_access(owner);
     let admin = ConfigAccess::local_as(db.node.clone(), node_did.parse().unwrap());
-    for permission in [
-        NodePermission::DocumentRead,
-        NodePermission::DocumentUpdate,
-        NodePermission::DacRelationAdd,
-    ] {
-        admin
-            .grant_node_permission(&owner.did().parse().unwrap(), permission)
-            .await
-            .expect("grant user node permission");
-    }
+    gents::store::identity::GrantSet::OperatorUser
+        .grant(&admin, &owner.did().parse().unwrap())
+        .await
+        .expect("grant user operator access");
     let node = json!({"node_did": node_did, "enabled": true});
     let node_plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: Collection::Node,
@@ -258,7 +252,13 @@ async fn wait_for_terminal_child(
                 );
                 assert_eq!(child.agent_doc_id.as_deref(), agents[0]["_docID"].as_str());
                 let user: identity::Did = access.actor_did().unwrap().parse().unwrap();
-                let permissions = access
+                // ACP decisions are observed on the embedded node; the
+                // client-signed HTTP transport carries no authorization probe.
+                let observer = ConfigAccess::local_as(
+                    db.node.clone(),
+                    db.node_identity.did().parse().unwrap(),
+                );
+                let permissions = observer
                     .transact_readonly("test.child_session_control", |txn| {
                         let doc_id = doc_id.clone();
                         let user = user.clone();
@@ -349,7 +349,7 @@ async fn start_child_session(
     let user = test_identity("session-limit-user");
     let (parent_did, child_did) =
         configure_session_chain(db, &user, backend.endpoint(), max_turns).await;
-    let access = ConfigAccess::local_as(db.node.clone(), user.did().parse().unwrap());
+    let access = db.client_access(&user);
     let request = build_signed_client_request(
         &access,
         RequestSpec::new(
