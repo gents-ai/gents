@@ -46,9 +46,10 @@ structure SourceInput where
   tools : List Tool
   projections : List Projection
   boundary : ReadBoundary
+  sessionOwner : String := ""
 
 def SourceInput.model (input : SourceInput) : Source :=
-  ⟨input.catalog.model, input.tools, input.projections, input.boundary⟩
+  ⟨input.catalog.model, input.tools, input.projections, input.boundary, input.sessionOwner⟩
 
 def catalog (ids : List Nat) : CatalogInput :=
   { appliedPairingRoutes := [appliedPairingRoute admission]
@@ -59,7 +60,8 @@ def catalog (ids : List Nat) : CatalogInput :=
 
 def source (count : Nat) : SourceInput :=
   let ids := (List.range count).map (· + 1)
-  ⟨catalog ids, ids.map tool, ids.map projection, .atomicExhaustive⟩
+  { catalog := catalog ids, tools := ids.map tool, projections := ids.map projection
+  , boundary := .atomicExhaustive }
 
 inductive Summary where
   | rejected
@@ -114,8 +116,8 @@ def selectionCases : List SelectionCase :=
   , ⟨"duplicate_capture_projection", {source 1 with projections := [projection 1, projection 1]}, .rejected⟩
   , ⟨"uncommitted_capture_before_terminal", {source 1 with tools := [{tool 1 with state := .running}]}, .rejected⟩
   , ⟨"projection_wrong_request", {source 1 with projections := [{projection 1 with request := 99}]}, .rejected⟩
-  , ⟨"projection_wrong_actual_session", {source 1 with projections :=
-        [{projection 1 with scope := {scope with session := "foreign"}}]}, .rejected⟩
+  , ⟨"projection_in_another_session_is_not_this_inventory", {source 1 with projections :=
+        [{projection 1 with scope := {scope with session := "foreign"}}]}, .selected 0 0 1 false⟩
   , ⟨"projection_wrong_actual_requester", {source 1 with projections :=
         [{projection 1 with scope := {scope with requester := "foreign"}}]}, .rejected⟩
   , ⟨"projection_wrong_actual_node", {source 1 with projections :=
@@ -223,18 +225,57 @@ def forkInput : ClosureInput :=
     access := [⟨.agentRequest, 10⟩, ⟨.agentMessage, 220⟩, ⟨.agentMessage, 221⟩,
       ⟨.agentToolCall, 300⟩, ⟨.agentOutputSegment, 301⟩].map fun key =>
         ⟨forkRequest.authorizationScope, key, .authorized⟩ }
+def forkScope : FileImages.Scope := { scope with session := forkRequest.session }
+def forkOwner : String := "fork-creator"
+/-- The origin session's own projection of the inherited tool. -/
+def originProjection : Projection := {(projection 300) with request := 10}
+/-- The fork's copy: the same projected facts, in the fork session, owned by
+the fork's creating actor. -/
+def forkCopy : Projection := {originProjection with id := 3600, scope := forkScope, owner := forkOwner}
 def forkSource : SourceInput :=
   let originTool : Tool := ⟨300, 10, scope, "agent-1", true, .completed⟩
-  let retained := {(projection 300) with request := 10}
   { source 0 with
     tools := [originTool, tool 99]
-    projections := [retained, projection 99]
+    projections := [originProjection, forkCopy, projection 99]
+    sessionOwner := forkOwner
     catalog := { catalog [] with
       sessions := [ownedSession forkRequest]
       closureInputs := [forkInput] } }
 
 theorem fork_retains_only_authorized_physical_origin :
     summary forkSource forkRequest = .selected 1 0 0 false := by native_decide
+
+theorem fork_entries_are_scoped_to_the_fork :
+    (snapshot forkSource.model forkRequest).toOption.any (fun value =>
+      value.entries.all (fun entry => entry.scope == forkScope && entry.projection == forkCopy.id) &&
+        !value.entries.isEmpty) = true := by native_decide
+
+/-- Deleting the origin's projections does not change the fork's inventory. -/
+theorem fork_copy_is_retained_without_its_source_projection :
+    (snapshot {forkSource with projections := [forkCopy]}.model forkRequest).toOption =
+      (snapshot forkSource.model forkRequest).toOption := by native_decide
+
+theorem fork_does_not_read_its_source_projection :
+    summary {forkSource with projections := [originProjection, projection 99]} forkRequest =
+      .selected 0 0 1 false := by native_decide
+
+theorem fork_copy_requires_the_fork_owner :
+    summary {forkSource with projections := [{forkCopy with owner := "agent-1"}]} forkRequest =
+      .rejected ∧
+    summary {forkSource with sessionOwner := ""} forkRequest = .rejected := by native_decide
+
+theorem fork_copy_cannot_cross_requester :
+    summary {forkSource with projections :=
+      [{forkCopy with scope := {forkScope with requester := "foreign"}}]} forkRequest =
+      .rejected := by native_decide
+
+theorem fork_copies_in_other_sessions_do_not_conflict :
+    summary {forkSource with projections :=
+      forkSource.projections ++ [{forkCopy with id := 3700, scope := {forkScope with session := "other-fork"}}]}
+      forkRequest = .selected 1 0 0 false ∧
+    summary {source 1 with projections := [projection 1,
+      {projection 1 with id := 3601, scope := forkScope, owner := forkOwner}]} =
+      .selected 1 0 0 false := by native_decide
 
 def getSnapshot (value : SourceInput) : Snapshot :=
   (snapshot value.model admission).toOption.getD ⟨admission, [], [], []⟩

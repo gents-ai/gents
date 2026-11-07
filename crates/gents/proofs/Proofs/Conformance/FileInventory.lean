@@ -236,7 +236,7 @@ def sourceProjectionCasesJson : String :=
      "unchanged_claim_cannot_retain_image_identity", "unchanged_claim_cannot_precede_terminal",
      "accepted_terminal_capture", "legacy_missing_capture_is_unknown",
      "active_missing_capture_is_pending", "uncommitted_capture_before_terminal",
-     "projection_wrong_request", "projection_wrong_actual_session",
+     "projection_wrong_request", "projection_in_another_session_is_not_this_inventory",
      "projection_wrong_actual_requester", "projection_wrong_actual_node",
      "projection_foreign_stored_owner", "invalid_empty_capture_not_empty_inventory",
      "duplicate_paths_in_capture"].contains value.name

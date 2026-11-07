@@ -203,22 +203,42 @@ def resolutionCases : List (String × List Window) :=
   , ("duplicate_tool", [⟨90, 1, 3⟩, ⟨90, 5, 7⟩])
   , ("reversed_window", [⟨90, 3, 1⟩]) ]
 
+def forkRequest : Request := { admission with session := "fork-session", nativeSession := 2 }
+
+/-- A fork's inventory facts are its own projection copies in the fork
+session, owned by the fork's creator; the inherited tools keep their origin
+scope and their canonical windows come from the fork's selected headers. -/
+def forkCopy : ToolFact → ToolFact
+  | ⟨selectedTool, .observed projection⟩ =>
+      let copyScope : FileImages.Scope := { projection.scope with session := forkRequest.session }
+      let copy : Projection :=
+        { projection with id := projection.id + 100, owner := "fork-creator", scope := copyScope }
+      ⟨selectedTool, .observed copy⟩
+  | fact => fact
+
 def repeatedFork (includeSecond includeDelivery : Bool) : Snapshot × ClosureInput :=
   let selectedHeaders := sequentialHeaders.filter fun message =>
     message.header.id < 12 || (includeSecond && (includeDelivery || message.header.id != 13))
   let replayed : List MessageEnvelope := selectedHeaders.map fun message =>
     { message with header := forkHeader message.header (message.header.id + 20) 2 }
-  let request := { admission with nativeSession := 2 }
+  let request := forkRequest
   let closure := { input (sequentialHeaders ++ replayed) with request }
   let selected : Snapshot := { capturedSnapshot with
     admission := request
     documents := (replayed.map fun message => ⟨.agentMessage, message.header.id⟩)
-    tools := (capturedSnapshot.tools.filter fun fact => includeSecond || fact.tool.id == tool.id) }
+    tools := (capturedSnapshot.tools.filter fun fact =>
+      includeSecond || fact.tool.id == tool.id).map forkCopy }
   ({ selected with ordering := selected.tools.map fun fact => window selected closure fact.tool }, closure)
 
 theorem inherited_repeated_edits_use_the_selected_session_order :
     let selected := repeatedFork true true
     comparison selected.1 selected.2 "node" "workspace" "file.rs" = some [90, 2] := by
+  native_decide
+
+theorem forked_entries_name_only_the_fork_session :
+    let selected := repeatedFork true true
+    selected.1.entries.all (fun entry =>
+      entry.scope.session == forkRequest.session && entry.projection > 900 + 90) = true := by
   native_decide
 
 theorem later_parent_edits_do_not_widen_the_selected_fork :

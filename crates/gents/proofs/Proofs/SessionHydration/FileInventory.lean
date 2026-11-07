@@ -94,8 +94,10 @@ def Observation.wellFormed (observation : Observation) : Bool :=
 
 /-- `accepted` is supplied by the existing physical tool acceptance owner,
 including its coordinator block and direct/spawn/plugin provenance checks.
-The actual scope is retained for origins; it is not rewritten to the fork's
-target session. Canonical closure authorization decides origin membership. -/
+A fork does not copy physical tools: the actual scope is retained for origins
+and is not rewritten to the fork's target session. Canonical closure
+authorization decides origin membership; the fork's own projection copies,
+not the origin's projections, supply its inventory facts. -/
 structure Tool where
   id : DocId
   request : DocId
@@ -312,6 +314,11 @@ structure Source where
   tools : List Tool
   projections : List Projection
   boundary : ReadBoundary
+  /-- DefraDB's current authenticated owner of the admission's physical session
+  document, observed in the same read as the projections. It is not an authored
+  session field; empty means unobserved. A fork's creating actor owns the fork
+  session and the projection copies it published in the same transaction. -/
+  sessionOwner : String := ""
   deriving DecidableEq
 
 /-- An independent reader cannot reuse the source's privileged observations.
@@ -333,28 +340,51 @@ inductive Error where
 def validScope (scope : FileImages.Scope) : Bool :=
   [scope.requester, scope.node, scope.session].all (fun value => !value.isEmpty)
 
-def Projection.matches (projection : Projection) (tool : Tool) : Bool :=
+/-- A published fork is self-contained (user decision): it carries copies of
+the file-inventory projections of the selected tools it inherits, published in
+the fork's creating transaction, scoped to the fork session and owned by the
+fork's destination owner. It never reads its source session's projections, so
+a copy is retained when the source's projections or session are deleted, and
+the desktop keeps listing the files a forked conversation touched. Physical
+tool, request and observation IDs remain identities, not session references.
+
+A session's own native tool keeps its producing Agent as projection owner.
+An inherited tool's fact is the copy in the admission's session, with the
+origin's node and requester (forks never cross them), owned by the observed
+`sessionOwner`. Copy contents are the fork writer's obligation: it copies the
+exact source projection it read in that transaction; the reader cannot
+re-check a deleted source. A copy is metadata only and grants no image read:
+retained images stay bound to the producing tool's scope. -/
+def Projection.matches (projection : Projection) (tool : Tool) (session sessionOwner : String) :
+    Bool :=
   projection.tool == tool.id && projection.request == tool.request &&
-    projection.scope == tool.scope && !tool.agentDid.isEmpty && projection.owner == tool.agentDid &&
+    projection.scope == { tool.scope with session := session } && !tool.agentDid.isEmpty &&
+    (if tool.scope.session == session then projection.owner == tool.agentDid
+     else !sessionOwner.isEmpty && projection.owner == sessionOwner) &&
     (if projection.verifiedUnchanged then
       projection.observation.isNone && projection.changes.isEmpty
      else projection.observation.isSome && !projection.changes.isEmpty) &&
     projection.changes.all (fun change => !change.root.isEmpty && !change.path.isEmpty) &&
     (projection.changes.map (fun change => (change.root, change.path))).Nodup
 
-def toolFact (source : Source) (id : DocId) : Except Error ToolFact := do
+/-- Only projections in the admission's own session are its facts. Another
+session's projection of the same tool, such as a fork's copy or the origin of
+an inherited tool, belongs to that session's inventory and is neither evidence
+nor a conflict here. -/
+def toolFact (source : Source) (session : String) (id : DocId) : Except Error ToolFact := do
   let tool ← match source.tools.filter (fun tool => tool.id == id) with
     | [] => .error .unknown
     | [tool] => .ok tool
     | _ => .error .rejected
   if !tool.accepted || !validScope tool.scope then .error .rejected else pure ()
-  let projections := source.projections.filter (fun projection => projection.tool == id)
+  let projections := source.projections.filter (fun projection =>
+    projection.tool == id && projection.scope.session == session)
   if !decide (HasTerminal.isTerminal tool.state) then
     if projections.isEmpty then .ok ⟨tool, .pending⟩ else .error .rejected
   else match projections with
     | [] => .ok ⟨tool, .unknown⟩
     | [projection] =>
-      if projection.matches tool then .ok ⟨tool, .observed projection⟩ else .error .rejected
+      if projection.matches tool session source.sessionOwner then .ok ⟨tool, .observed projection⟩ else .error .rejected
     | _ => .error .rejected
 
 def selectedManifest (catalog : Catalog) (admission : Request) :
@@ -396,7 +426,7 @@ private def assembleSnapshot (source : Source) (admission : Request) : Except Er
   if !source.completeRead admission then .error .unknown else pure ()
   let selected ← selectedManifest source.catalog admission
   let toolIds := (selected.filter (fun key => key.collection == .agentToolCall)).map (·.id)
-  let tools ← toolIds.mapM (toolFact source)
+  let tools ← toolIds.mapM (toolFact source admission.session)
   let observed := tools.filterMap fun fact => match fact.capture with
     | .observed projection => some projection
     | _ => none
@@ -456,6 +486,8 @@ def Snapshot.requestCoverage (value : Snapshot) (scope : FileImages.Scope)
 structure Entry where
   tool : DocId
   request : DocId
+  /-- The scope of the selected projection: the admission's own session, also
+  for a fork's inherited tool. -/
   scope : FileImages.Scope
   projection : DocId
   observation : DocId
@@ -469,7 +501,7 @@ def Snapshot.rawEntries (value : Snapshot) : List Entry :=
     | .observed projection => match projection.observation with
         | none => []
         | some observation => projection.changes.map fun change =>
-            ⟨fact.tool.id, fact.tool.request, fact.tool.scope,
+            ⟨fact.tool.id, fact.tool.request, projection.scope,
               projection.id, observation, change, .unresolved,
               some (value.requestCoverage fact.tool.scope fact.tool.request)⟩
     | _ => []
