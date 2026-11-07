@@ -1256,7 +1256,7 @@ mod tests {
     use crate::tools::background::job::admit::RootCall;
     use crate::tools::background::job::driver::read_step_row;
     use crate::tools::background::job::input::tests::{
-        live_settings, new_job, node_did, resume_block, set_lifecycle, Job,
+        agent_did, live_settings, new_job, node_did, resume_block, set_lifecycle, Job,
     };
     use crate::tools::call::lifecycle::admission_fixture::fixture_job_pin;
     use gents_protocol::job::{JobOrigin, JobPolicy};
@@ -1296,7 +1296,8 @@ mod tests {
             request_id: "request-1".to_owned(),
             session_id: "session-1".to_owned(),
             node_did: node_did().to_owned(),
-            requester_did: None,
+            // The caller is the Agent's own local-self request.
+            requester_did: Some(agent_did().to_owned()),
         }
     }
 

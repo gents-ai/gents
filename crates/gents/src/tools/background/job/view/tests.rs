@@ -15,7 +15,7 @@ use crate::tools::background::job::admit::Refusal;
 use crate::tools::background::job::driver::tests::{pinned_job_row, settle_row, start_running};
 use crate::tools::background::job::driver::{load_lifecycle, settle_plugin_job, Settlement};
 use crate::tools::background::job::input::tests::{
-    insert_as, live_settings, new_job, node_did, request_as, Job,
+    agent_did, insert_as, live_settings, new_job, node_did, request_as, Job,
 };
 use crate::tools::background::job::keys::{job_session_id, job_spawn_key};
 use crate::tools::background::job::records::{read_pin, read_progress, write_pin_in_txn};
@@ -147,7 +147,7 @@ async fn running_job_view_has_address_state_pin_summary_progress_and_children() 
             session_id: "session-1".into(),
             request_id: "request-1".into(),
             node_did: node_did().into(),
-            requester_did: None,
+            requester_did: Some(agent_did().into()),
         }
     );
     assert_eq!(loaded.handle, pin.handle);
@@ -343,7 +343,7 @@ async fn job_read_errors_are_returned_per_class_and_classified_by_is_transient()
         session_id: "session-1".into(),
         tool_call_id: "call-2".into(),
     };
-    for reader in [None, Some(scope("session-1", None))] {
+    for reader in [None, Some(scope("session-1", Some(agent_did())))] {
         let loaded = read(reader.clone(), JobKey::RowDocId(pinned.clone()))
             .await
             .unwrap();

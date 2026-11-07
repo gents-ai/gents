@@ -829,7 +829,7 @@ pub(crate) mod tests {
             .unwrap()
     }
 
-    async fn doc_id_of(
+    pub(crate) async fn doc_id_of(
         access: &ConfigAccess,
         collection: &str,
         field: &str,
@@ -1775,7 +1775,7 @@ pub(crate) mod tests {
         let session_doc = insert_as(
             &owner,
             "AgentSession",
-            json!({"session_id": "session-1", "node_did": node_did(), "requester_did": null,
+            json!({"session_id": "session-1", "node_did": node_did(), "requester_did": agent_did(),
                    "agent_did": agent_did(), "created_at": now}),
         )
         .await;
@@ -1793,18 +1793,31 @@ pub(crate) mod tests {
             )
             .await
             .unwrap();
-        let mut value = json!({
-            "request_id": "request-1", "purpose": "normal", "node_did": node_did(),
-            "agent_did": agent_did(), "session_id": "session-1",
-            "retry_parent_request": "", "retry_root_request": "request-1",
-            "superseded_by_request": "", "content": "spawn", "lifecycle_state": "pending",
-            "backend_id": "", "execution_origin": "interactive", "failure_reason": "",
-            "created_at": now, "retry_count": 0, "max_retries": 3, "request_hop": 0,
-        });
-        if let Some(cwd) = request_cwd {
-            value["input"] = json!({ "cwd": cwd });
-        }
-        insert_as(&agent, "AgentRequest", value).await;
+        // The caller is a local-self request its Agent signed, so a job child
+        // can verify it as the parent receipt.
+        let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            "request-1",
+            node_did(),
+            agent_did(),
+            agent_did(),
+            "session-1",
+            "spawn",
+            "interactive",
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent_did()),
+        );
+        create.input.cwd = request_cwd.map(str::to_owned);
+        crate::sign_agent_request_create(managed_agent().as_ref(), &mut create)
+            .await
+            .unwrap();
+        agent
+            .write(
+                "test.job.caller_request",
+                &create.graphql_mutation().unwrap(),
+            )
+            .await
+            .unwrap();
         let response = agent
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "request-1" }} }}) {{ {} }} }}"#,

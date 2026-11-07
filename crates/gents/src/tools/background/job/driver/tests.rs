@@ -866,6 +866,24 @@ async fn stepper_wat(wat: &str) -> Stepper {
             &job_owner(&job),
         )
         .await;
+        // The job's Agent may open sessions on each target, as an operator
+        // grants through the target Agent's `session_writer` relation.
+        let target_doc = super::super::input::tests::doc_id_of(
+            &job_owner(&job),
+            "Agent",
+            "agent_did",
+            &binding.agent_did,
+        )
+        .await;
+        job_owner(&job)
+            .add_actor_relationship(
+                "Agent",
+                &target_doc,
+                "session_writer",
+                &super::super::input::tests::agent_actor(),
+            )
+            .await
+            .unwrap();
         insert_as(
             &job_owner(&job),
             "AgentTarget",
