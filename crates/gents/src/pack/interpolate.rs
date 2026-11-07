@@ -148,10 +148,109 @@ pub fn override_installed_literals(
     Ok(())
 }
 
+/// Preserve an installed literal when every variable used by that field was
+/// omitted. The caller maps authored paths to the old and new documents.
+pub fn preserve_omitted_upgrade_literals(
+    authored: &serde_json::Value,
+    previous: &serde_json::Value,
+    next: &mut serde_json::Value,
+    environment: &dyn Fn(&str) -> Option<String>,
+    locate: &dyn Fn(&str) -> Option<(String, String)>,
+) -> anyhow::Result<()> {
+    let uses = inspect_install_variables(authored, &|_| Some("inspection".to_owned())).map_err(
+        |names| anyhow::anyhow!("cannot inspect install variables: {}", names.join(", ")),
+    )?;
+    let mut staged = next.clone();
+    for entry in uses {
+        let Some((previous_path, next_path)) = locate(&entry.path) else {
+            continue;
+        };
+        let Some(old) = previous.pointer(&previous_path) else {
+            continue;
+        };
+        let mut supplied = 0;
+        let mut omitted = 0;
+        for name in entry.variables.keys() {
+            if environment(name).is_some() {
+                supplied += 1
+            } else {
+                omitted += 1
+            }
+        }
+        if omitted == 0 {
+            continue;
+        }
+        anyhow::ensure!(
+            supplied == 0,
+            "field {} combines supplied and omitted variables; supply each value explicitly",
+            entry.path
+        );
+        let target = staged
+            .pointer_mut(&next_path)
+            .ok_or_else(|| anyhow::anyhow!("upgrade field {} is missing", entry.path))?;
+        *target = old.clone();
+    }
+    *next = staged;
+    Ok(())
+}
+
 #[cfg(test)]
 mod install_variable_conformance {
-    use super::{inspect_install_variables, override_installed_literals, resolve_install_variable};
+    use super::{
+        inspect_install_variables, override_installed_literals, preserve_omitted_upgrade_literals,
+        resolve_install_variable,
+    };
     use serde_json::Value;
+
+    #[test]
+    fn omitted_upgrade_literals_follow_the_executable_model() {
+        use serde_json::json;
+        let output = std::process::Command::new("lake")
+            .args([
+                "env",
+                "lean",
+                "--run",
+                "Proofs/Conformance/PackInstallUpgrade.lean",
+            ])
+            .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("proofs"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let cases: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(cases.len(), 4);
+        for case in cases {
+            let authored = json!({"field": "${VALUE:-new}"});
+            let previous = case["previous"]
+                .as_str()
+                .map_or(json!({}), |value| json!({"field": value}));
+            let mut next = json!({"field": "new"});
+            let supplied = case["supplied"].as_bool().unwrap();
+            preserve_omitted_upgrade_literals(
+                &authored,
+                &previous,
+                &mut next,
+                &|_| supplied.then(|| "new".to_owned()),
+                &|path| Some((path.into(), path.into())),
+            )
+            .unwrap();
+            assert_eq!(next["field"], case["result"]);
+        }
+        let authored = json!({"field": "${FIRST}-${SECOND}"});
+        let mut next = json!({"field": "new"});
+        assert!(preserve_omitted_upgrade_literals(
+            &authored,
+            &json!({"field": "old"}),
+            &mut next,
+            &|name| (name == "FIRST").then(|| "set".into()),
+            &|path| Some((path.into(), path.into()))
+        )
+        .is_err());
+        assert_eq!(next["field"], "new");
+    }
 
     #[test]
     fn overriding_one_field_preserves_other_installed_literals() {
