@@ -5,8 +5,6 @@ use serde_json::{json, Value};
 
 use crate::inference::llm::message::Message;
 use crate::store::graphql::escape_graphql_string;
-#[cfg(test)]
-use crate::store::graphql::graphql_with_transaction_retry;
 use gents_loop::claude_messages_body::{prepare_replay_checkpoint, ReplayTag, TaggedAssistantRow};
 use gents_loop::loop_stream::TaggedMessage;
 
@@ -1348,9 +1346,24 @@ mod tests {
         (node, node_did, signer)
     }
 
+    /// Reads of Agent-owned reduction rows must be bound to the owning Agent:
+    /// native ACP denies an unauthenticated node read of these documents.
+    fn agent_access(
+        node: &Arc<EmbeddedNode>,
+        signer: &crate::store::identity::ManagedAgentSigner,
+    ) -> crate::ConfigAccess {
+        crate::ConfigAccess::local_with_agent_signer(
+            node.clone(),
+            identity::Did::new(signer.did()).unwrap(),
+            signer.clone(),
+        )
+        .unwrap()
+    }
+
     #[tokio::test]
     async fn durable_chain_is_idempotent_conflict_visible_and_restartable() {
         let (node, node_did, signer) = reduction_fixture(Some("did:key:user")).await;
+        let reader = agent_access(&node, &signer);
         let agent_did = signer.did().to_owned();
         let escaped_node_did = escape_graphql_string(&node_did);
         let prefix = vec![Message::user("old")];
@@ -1478,7 +1491,7 @@ mod tests {
         assert!(conflict.to_string().contains("conflicting immutable facts"));
 
         let restored = load_unconsumed_for_request(
-            &crate::store::config_client::ConfigAccess::local(node.clone()),
+            &reader,
             "request-doc",
         )
         .await
@@ -1529,7 +1542,7 @@ mod tests {
         .await
         .unwrap();
         let chain = load_for_request(
-            &crate::store::config_client::ConfigAccess::local(node.clone()),
+            &reader,
             "request-doc",
         )
         .await
@@ -1540,7 +1553,7 @@ mod tests {
             Some(first.reduction_key.as_str())
         );
         let restored = load_unconsumed_for_request(
-            &crate::store::config_client::ConfigAccess::local(node.clone()),
+            &reader,
             "request-doc",
         )
         .await
@@ -1588,14 +1601,12 @@ mod tests {
                 created_at: "2200-08-14T00:00:00Z"
             }}) {{ _docID }} }}"#
         );
-        let response = node.execute(&title_capture).await;
-        assert!(
-            !response.has_errors(),
-            "title seed failed: {:?}",
-            response.errors
-        );
+        reader
+            .write("test.title_capture", &title_capture)
+            .await
+            .expect("title seed failed");
         assert!(load_unconsumed_for_request(
-            &crate::store::config_client::ConfigAccess::local(node.clone()),
+            &reader,
             "request-doc"
         )
         .await
@@ -1655,15 +1666,13 @@ mod tests {
             created_at: "2026-08-14T00:00:01Z"
         }) { _docID } }"#
             .replace("NODE_DID_PLACEHOLDER", &escaped_node_did);
-        let response = node.execute(&missing_provenance_capture).await;
-        assert!(
-            !response.has_errors(),
-            "missing-provenance inference seed failed: {:?}",
-            response.errors
-        );
+        reader
+            .write("test.missing_provenance_capture", &missing_provenance_capture)
+            .await
+            .expect("missing-provenance inference seed failed");
         assert!(
             load_unconsumed_for_request(
-                &crate::store::config_client::ConfigAccess::local(node.clone()),
+                &reader,
                 "request-doc"
             )
             .await
@@ -1672,21 +1681,31 @@ mod tests {
             "unsupported and incomplete captures are not consumption evidence"
         );
 
-        let coexistence = node
+        let compactions = node
             .execute(
-                r#"{ CompactionEntry(filter: { session_id: { _eq: "session" } }) { compaction_key }
-                    ProviderContextReduction(filter: { session_id: { _eq: "session" } }) { reduction_key } }"#,
+                r#"{ CompactionEntry(filter: { session_id: { _eq: "session" } }) { compaction_key } }"#,
             )
             .await;
         assert!(
-            !coexistence.has_errors(),
+            !compactions.has_errors(),
             "coexistence query failed: {:?}",
-            coexistence.errors
+            compactions.errors
         );
-        let coexistence = coexistence.data.unwrap();
-        assert_eq!(coexistence["CompactionEntry"].as_array().unwrap().len(), 1);
         assert_eq!(
-            coexistence["ProviderContextReduction"]
+            compactions.data.unwrap()["CompactionEntry"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let reductions = reader
+            .execute(
+                r#"{ ProviderContextReduction(filter: { session_id: { _eq: "session" } }) { reduction_key } }"#,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            reductions["data"]["ProviderContextReduction"]
                 .as_array()
                 .unwrap()
                 .len(),
@@ -1725,21 +1744,19 @@ mod tests {
                 created_at: "1900-08-14T00:00:00Z"
             }}) {{ _docID }} }}"#
         );
-        let response = node.execute(&rendered).await;
-        assert!(
-            !response.has_errors(),
-            "rendered seed failed: {:?}",
-            response.errors
-        );
+        reader
+            .write("test.rendered_capture", &rendered)
+            .await
+            .expect("rendered seed failed");
         assert!(load_unconsumed_for_request(
-            &crate::store::config_client::ConfigAccess::local(node.clone()),
+            &reader,
             "request-doc"
         )
         .await
         .unwrap()
         .is_none());
         let durable_lineage = load_for_request(
-            &crate::store::config_client::ConfigAccess::local(node.clone()),
+            &reader,
             "request-doc",
         )
         .await
@@ -1747,7 +1764,7 @@ mod tests {
         assert_eq!(durable_lineage.len(), 2);
 
         assert!(load_for_request(
-            &crate::store::config_client::ConfigAccess::local(node.clone()),
+            &reader,
             "fork-request-doc"
         )
         .await
@@ -2110,6 +2127,7 @@ mod tests {
     async fn shared_reduction_snapshots_reload_exactly_and_reuse_pinned_blocks() {
         let (node, node_did, signer) = reduction_fixture(None).await;
         let agent_did = signer.did().to_owned();
+        let reader = agent_access(&node, &signer);
         let prefix = vec![Message::user("prefix 🦀 ".repeat(2400))];
         let suffix = vec![Message::user("retained suffix ".repeat(2400))];
         let associations = ReplayAssociations {
@@ -2145,15 +2163,10 @@ mod tests {
             compacted_tokens: 10000,
         };
         let block_ids = || async {
-            graphql_with_transaction_retry(
-                &node,
-                "{ RenderedRequestBlock { _docID } }",
-                "test reduction blocks",
-            )
-            .await
-            .unwrap()
-            .data
-            .unwrap()["RenderedRequestBlock"]
+            reader
+                .execute("{ RenderedRequestBlock { _docID } }")
+                .await
+                .unwrap()["data"]["RenderedRequestBlock"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -2168,17 +2181,14 @@ mod tests {
         assert_eq!(first.checkpoint_messages().unwrap(), suffix);
         let blocks = block_ids().await;
         assert!(!blocks.is_empty());
-        let raw = graphql_with_transaction_retry(
-            &node,
-            "{ ProviderContextReduction { compacted_prefix_json retained_suffix_json } }",
-            "test reduction storage",
-        )
-        .await
-        .unwrap()
-        .data
-        .unwrap();
+        let raw = reader
+            .execute("{ ProviderContextReduction { compacted_prefix_json retained_suffix_json } }")
+            .await
+            .unwrap();
         for field in ["compacted_prefix_json", "retained_suffix_json"] {
-            let encoded = raw["ProviderContextReduction"][0][field].as_str().unwrap();
+            let encoded = raw["data"]["ProviderContextReduction"][0][field]
+                .as_str()
+                .unwrap();
             assert!(encoded.len() < 1024);
             assert!(encoded.contains("\"kind\":\"tree\""));
         }
@@ -2188,7 +2198,7 @@ mod tests {
         assert_eq!(block_ids().await, blocks);
         for request_doc_id in ["request-doc", "request-doc-2"] {
             let loaded = load_for_request(
-                &crate::store::config_client::ConfigAccess::local(node.clone()),
+                &reader,
                 request_doc_id,
             )
             .await
@@ -2197,18 +2207,18 @@ mod tests {
             assert_eq!(loaded[0].retained_suffix_json, first.retained_suffix_json);
         }
 
-        crate::store::config_client::ConfigAccess::write_local_response(
-            &node,
-            "test.delete_reduction_block",
-            &format!(
-                "mutation {{ delete_RenderedRequestBlock(docID: \"{}\") {{ _docID }} }}",
-                escape_graphql_string(blocks.first().unwrap())
-            ),
-        )
-        .await
-        .unwrap();
+        reader
+            .write(
+                "test.delete_reduction_block",
+                &format!(
+                    "mutation {{ delete_RenderedRequestBlock(docID: \"{}\") {{ _docID }} }}",
+                    escape_graphql_string(blocks.first().unwrap())
+                ),
+            )
+            .await
+            .unwrap();
         assert!(load_for_request(
-            &crate::store::config_client::ConfigAccess::local(node.clone()),
+            &reader,
             "request-doc"
         )
         .await
