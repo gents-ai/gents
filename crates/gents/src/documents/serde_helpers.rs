@@ -14,24 +14,6 @@ where
     Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
-#[cfg(test)]
-pub(super) fn default_display_name_for_did(node_did: &str) -> String {
-    node_did
-        .rsplit(':')
-        .next()
-        .filter(|segment| !segment.trim().is_empty())
-        .unwrap_or(node_did)
-        .to_string()
-}
-
-#[cfg(test)]
-pub(super) fn normalize_optional_string(value: Option<&str>) -> Option<&str> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then_some(trimmed)
-    })
-}
-
 pub(super) fn deserialize_optional_string_vec<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Option<Vec<String>>, D::Error>
