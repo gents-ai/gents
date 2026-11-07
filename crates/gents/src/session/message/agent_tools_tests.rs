@@ -44,6 +44,29 @@ fn owner(message: &PublishedSessionMessage) -> ConfigAccess {
     message.admission.tool.access().unwrap()
 }
 
+/// The calling Agent's DID, which signs the session-message interrupt checks.
+fn caller_agent_did(message: &PublishedSessionMessage) -> String {
+    message.admission.tool.actor().to_string()
+}
+
+/// Goal rows are Agent-owned, so the calling Agent reads the canonical goal.
+async fn canonical_goal(
+    message: &PublishedSessionMessage,
+    node_did: &str,
+    session_id: &str,
+) -> Option<crate::goal::GoalDocument> {
+    let (node_did, session_id) = (node_did.to_owned(), session_id.to_owned());
+    owner(message)
+        .transact_readonly("test.canonical_goal", move |txn| {
+            let (node_did, session_id) = (node_did.clone(), session_id.clone());
+            Box::pin(async move {
+                crate::goal::load_canonical_goal_in_txn(txn, &node_did, &session_id).await
+            })
+        })
+        .await
+        .unwrap()
+}
+
 /// `commit` already materializes the caused session; this is the idempotent
 /// re-check, which must read the session through its owning Agent.
 async fn materialize_session(access: &ConfigAccess, caused: &crate::AgentRequest) {
@@ -190,7 +213,7 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
         )
         .await
         .unwrap();
-        let cause = super::hop_tests::cause(&message, caller.request_hop);
+        let cause = super::hop_tests::cause(&message, caller.request_hop).await;
         let target = SessionMessageTarget {
             node_did: caused.node_did.clone(),
             agent_did: caused.agent_did.clone(),
@@ -290,9 +313,8 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
             None
         };
         assert_eq!(actual, case.expected, "{case:?}, rows={rows:?}");
-        let goal = crate::goal::load_canonical_goal(&node, &caused.node_did, &caused.session_id)
+        let goal = canonical_goal(&message, &caused.node_did, &caused.session_id)
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(
             goal.parsed_status() == Some(crate::goal::GoalStatus::Paused),
@@ -313,18 +335,8 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
     let (message, caller, caused) = started("agent-steer-head-change").await;
     let node = message.admission.node.clone();
     set_state(&owner(&message), &caused.doc_id, "processing").await;
-    let cause = SessionMessageCause {
-        caller_node_did: caller.node_did.clone(),
-        caller_agent_did: caller.agent_did.clone(),
-        caller_session_id: caller.session_id.clone(),
-        caller_requester_did: caller.requester_did.clone(),
-        caller_request_id: caller.request_id.clone(),
-        caller_request_doc_id: caller.doc_id.clone(),
-        caller_hop: caller.request_hop,
-        tool_call_id: "steer-tool".to_owned(),
-        tool_call_doc_id: "steer-tool-doc".to_owned(),
-        correlation: None,
-    };
+    // Staging verifies the source edge, so the cause must name the accepted tool row.
+    let cause = super::hop_tests::cause(&message, caller.request_hop).await;
     let target = SessionMessageTarget {
         node_did: caused.node_did.clone(),
         agent_did: caused.agent_did.clone(),
@@ -496,8 +508,7 @@ async fn only_the_starting_session_may_interrupt() {
     let target = SessionScope::of_request(&caused);
     assert!(interrupt_refusal(
         &node,
-        node.node_identity_did()
-            .expect("fixture has a registered signing principal"),
+        &caller_agent_did(&message),
         &caller,
         &target
     )
@@ -510,8 +521,7 @@ async fn only_the_starting_session_may_interrupt() {
     };
     assert!(interrupt_refusal(
         &node,
-        node.node_identity_did()
-            .expect("fixture has a registered signing principal"),
+        &caller_agent_did(&message),
         &another,
         &target
     )
@@ -520,8 +530,7 @@ async fn only_the_starting_session_may_interrupt() {
     .is_some());
     assert!(interrupt_refusal(
         &node,
-        node.node_identity_did()
-            .expect("fixture has a registered signing principal"),
+        &caller_agent_did(&message),
         &target,
         &caller
     )
@@ -583,8 +592,7 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
     assert!(session.provenance.unwrap().creation_receipt.is_some());
     assert!(interrupt_refusal(
         &node,
-        node.node_identity_did()
-            .expect("fixture has a registered signing principal"),
+        &caller_agent_did(&message),
         &source,
         &target
     )
@@ -600,8 +608,7 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
         .unwrap();
     assert!(interrupt_refusal(
         &node,
-        node.node_identity_did()
-            .expect("fixture has a registered signing principal"),
+        &caller_agent_did(&message),
         &source,
         &target
     )
@@ -628,8 +635,7 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
     );
     assert!(interrupt_refusal(
         &node,
-        node.node_identity_did()
-            .expect("fixture has a registered signing principal"),
+        &caller_agent_did(&message),
         &source,
         &target
     )
@@ -642,17 +648,15 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
 
 #[tokio::test]
 async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() {
-    use crate::store::identity::NodeIdentity;
     use crate::tools::call::lifecycle::admission_fixture::{
-        materialize_session_message, published_admission_with_owner, test_p2p_config,
+        materialize_session_message, published_admission_with_owner,
     };
-    use defra_p2p_adapter::P2pDocumentRequest;
-    use std::time::Duration;
 
+    // P2P carries only discovery and enrollment, so a session message to another
+    // runtime is refused at planning and no request is replicated to the target.
     let (mut source, owner) = published_admission_with_owner(PublishedAdmissionOptions {
         name: "remote-delayed-creation".into(),
         real_identity: true,
-        p2p: true,
         await_mode: AwaitMode::Background,
         tool_name: Some(crate::tools::native::AGENT_NEW_TOOL_NAME.into()),
         start_running: false,
@@ -660,254 +664,21 @@ async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() 
     })
     .await
     .unwrap();
-    let target_dir = tempfile::tempdir().unwrap();
-    let target_identity =
-        crate::KeyIdentity::load_or_create(target_dir.path().join("target.key"), None).unwrap();
-    let target = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(target_dir.path())
-            .with_node_identity_did(target_identity.did())
-            .with_p2p(test_p2p_config())
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::ensure_runtime_schemas(&target).await.unwrap();
-    let receipt = materialize_session_message(
+    let error = materialize_session_message(
         &source.node,
         &owner,
         &mut source.tool,
-        target_identity.did(),
+        "did:key:remote-runtime",
         "remote work",
     )
     .await
-    .unwrap();
-
-    async fn address(node: &EmbeddedNode) -> String {
-        tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                if let Some(address) = node
-                    .p2p()
-                    .unwrap()
-                    .listen_addresses()
-                    .await
-                    .unwrap()
-                    .into_iter()
-                    .find(|a| a.starts_with("127.0.0.1:") || a.starts_with("[::1]:"))
-                {
-                    break address;
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        })
-        .await
-        .expect("P2P loopback address")
-    }
-    let source_address = address(&source.node).await;
-    let target_address = address(&target).await;
-    let mut source_connections = source.node.subscribe(&[events::EventName::PeerConnection]);
-    let mut target_connections = target.subscribe(&[events::EventName::PeerConnection]);
-    source
-        .node
-        .p2p()
-        .unwrap()
-        .connect_peer(&target_address)
-        .await
-        .unwrap();
-    for (node, connections) in [
-        (&source.node, &mut source_connections),
-        (&target, &mut target_connections),
-    ] {
-        tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                if !node
-                    .p2p()
-                    .unwrap()
-                    .connected_peers()
-                    .await
-                    .unwrap()
-                    .is_empty()
-                {
-                    break;
-                }
-                connections
-                    .recv()
-                    .await
-                    .expect("peer connection event stream");
-            }
-        })
-        .await
-        .expect("P2P peer connection");
-    }
-    for (node, peer_address) in [(&source.node, &target_address), (&target, &source_address)] {
-        node.p2p()
-            .unwrap()
-            .add_replicator(
-                vec!["Network".into()],
-                Some(peer_address),
-                Default::default(),
-                Vec::new(),
-                None,
-            )
-            .await
-            .unwrap();
-    }
-    let peer = target.p2p().unwrap().local_peer_id().await.unwrap();
-    async fn push(
-        source: &EmbeddedNode,
-        target: &Arc<EmbeddedNode>,
-        peer: &str,
-        collection: &str,
-        docs: &[String],
-    ) {
-        if docs.is_empty() {
-            return;
-        }
-        source
-            .p2p()
-            .unwrap()
-            .push_documents_to_peer(
-                peer,
-                docs.iter()
-                    .map(|doc_id| P2pDocumentRequest {
-                        collection: collection.into(),
-                        doc_id: doc_id.clone(),
-                    })
-                    .collect(),
-            )
-            .await
-            .unwrap();
-        tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                let mut present = true;
-                for doc in docs {
-                    let query = format!(
-                        "{{{collection}(filter: {{_docID: {{_eq: \"{}\"}}}}) {{_docID}}}}",
-                        escape_graphql_string(doc)
-                    );
-                    let response = ConfigAccess::local(target.clone())
-                        .execute(&query)
-                        .await
-                        .unwrap();
-                    present &= response["data"][collection]
-                        .as_array()
-                        .is_some_and(|rows| rows.len() == 1);
-                }
-                if present {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-        })
-        .await
-        .expect("exact P2P documents arrive");
-    }
-    push(
-        &source.node,
-        &target,
-        &peer,
-        "AgentRequest",
-        std::slice::from_ref(&receipt.request_doc_id),
-    )
-    .await;
-    let query = format!(
-        "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
-        escape_graphql_string(&receipt.request_doc_id),
-        crate::request::watcher::AGENT_REQUEST_FIELDS
-    );
-    let response = ConfigAccess::local(target.clone())
-        .execute(&query)
-        .await
-        .unwrap();
-    let row: gents_protocol::row::AgentRequestRow =
-        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    let mut child = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
-        target.clone(),
-        "general",
-        target_identity.did(),
-        row.try_into().unwrap(),
-        60,
-    );
-    assert_eq!(
-        child.claim().await.unwrap(),
-        crate::request::lifecycle::ClaimOutcome::Claimed
-    );
-    let caller = SessionScope::of_request(owner.request());
-    let child_scope = SessionScope::of_request(child.request());
-    assert!(ConfigAccess::local(target.clone())
-        .execute("{AgentToolCall {_docID}}")
-        .await
-        .unwrap()["data"]["AgentToolCall"]
-        .as_array()
-        .unwrap()
-        .is_empty());
-    assert!(interrupt_refusal(
-        &target,
-        target
-            .node_identity_did()
-            .expect("fixture has a registered signing principal"),
-        &caller,
-        &child_scope
-    )
-    .await
-    .unwrap()
-    .is_some());
-
-    for collection in [
-        "AgentRequest",
-        "AgentToolCall",
-        "AgentMessage",
-        "AgentOutputSegment",
-    ] {
-        let response = ConfigAccess::local(source.node.clone())
-            .execute(&format!("{{{collection} {{_docID}}}}"))
-            .await
-            .unwrap();
-        let docs: Vec<String> = response["data"][collection]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|row| row["_docID"].as_str().map(str::to_owned))
-            .filter(|doc| doc != &receipt.request_doc_id)
-            .collect();
-        push(&source.node, &target, &peer, collection, &docs).await;
-    }
-    assert!(interrupt_refusal(
-        &target,
-        target
-            .node_identity_did()
-            .expect("fixture has a registered signing principal"),
-        &caller,
-        &child_scope
-    )
-    .await
-    .unwrap()
-    .is_none());
-    assert_eq!(
-        interrupt_session(
-            &target,
-            target
-                .node_identity_did()
-                .expect("fixture has a registered signing principal"),
-            &child_scope
-        )
-        .await
-        .unwrap(),
-        Some(child.request().request_id.clone())
-    );
-    let observed = ConfigAccess::local(target.clone())
-        .execute(&format!(
-            "{{AgentRequest(docID: \"{}\") {{interrupt_requested_at}}}}",
-            escape_graphql_string(&receipt.request_doc_id),
-        ))
-        .await
-        .unwrap();
+    .unwrap_err();
     assert!(
-        observed["data"]["AgentRequest"][0]["interrupt_requested_at"]
-            .as_str()
-            .is_some()
+        error.to_string().contains(
+            "cross-runtime agent delivery requires the authenticated HTTP delivery path"
+        ),
+        "{error:#}"
     );
-    target.shutdown().await.expect("shut down test node");
     source.node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&source.path).unwrap();
 }
@@ -951,8 +722,7 @@ async fn forged_descriptive_provenance_and_altered_creation_receipt_cannot_grant
         .unwrap();
     assert!(interrupt_refusal(
         &node,
-        node.node_identity_did()
-            .expect("fixture has a registered signing principal"),
+        &caller_agent_did(&message),
         &caller_scope,
         &target_scope
     )
@@ -986,8 +756,7 @@ async fn forged_descriptive_provenance_and_altered_creation_receipt_cannot_grant
     };
     assert!(interrupt_refusal(
         &node,
-        node.node_identity_did()
-            .expect("fixture has a registered signing principal"),
+        &caller_agent_did(&message),
         &caller_scope,
         &human_scope
     )
@@ -1037,8 +806,7 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
     assert_eq!(
         interrupt_session(
             &node,
-            node.node_identity_did()
-                .expect("fixture has a registered signing principal"),
+            &caller_agent_did(&message),
             &scope
         )
         .await
@@ -1046,9 +814,8 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
         None
     );
     assert_eq!(
-        crate::goal::load_canonical_goal(&node, &caused.node_did, &caused.session_id)
+        canonical_goal(&message, &caused.node_did, &caused.session_id)
             .await
-            .unwrap()
             .unwrap()
             .parsed_status(),
         Some(crate::goal::GoalStatus::Paused),
@@ -1103,8 +870,7 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
     assert_eq!(
         interrupt_session(
             &node,
-            node.node_identity_did()
-                .expect("fixture has a registered signing principal"),
+            &caller_agent_did(&message),
             &scope
         )
         .await
@@ -1142,8 +908,7 @@ async fn explicit_stop_drains_pending_work_and_rejects_late_admission() {
 
     let receipt = crate::session::stop_session(
         &node,
-        node.node_identity_did()
-            .expect("fixture has a registered signing principal"),
+        &caller_agent_did(&message),
         &caused.node_did,
         &caused.session_id,
         caused.requester_did.as_deref(),
@@ -1162,9 +927,8 @@ async fn explicit_stop_drains_pending_work_and_rejects_late_admission() {
     .await
     .unwrap());
     assert_eq!(
-        crate::goal::load_canonical_goal(&node, &caused.node_did, &caused.session_id)
+        canonical_goal(&message, &caused.node_did, &caused.session_id)
             .await
-            .unwrap()
             .unwrap()
             .parsed_status(),
         Some(crate::goal::GoalStatus::Paused)
@@ -1415,10 +1179,12 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
     };
     let mut candidates = Vec::new();
     for (name, owner, requester, parent) in [
+        // A same-node session with no parent link is messageable only when its
+        // requester is the calling Agent, which is how trigger runs record it.
         (
             "trigger-worker",
             caller.node_did.as_str(),
-            caller.node_did.as_str(),
+            caller.agent_did.as_str(),
             None,
         ),
         ("other-requester", caller.node_did.as_str(), "other", None),
@@ -1529,8 +1295,8 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
     let cause = crate::request::lifecycle::SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
         caller_agent_did: caller.agent_did.clone(),
-        caller_session_id: "caller-session".to_owned(),
-        caller_requester_did: None,
+        caller_session_id: caller.session_id.clone(),
+        caller_requester_did: caller.requester_did.clone(),
         caller_request_id: caller.request_id.clone(),
         caller_request_doc_id: caller.doc_id.clone(),
         caller_hop: caller.request_hop,

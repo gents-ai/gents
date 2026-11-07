@@ -306,7 +306,30 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                     root_request_doc_id: root_doc,
                 });
             assert_eq!(selected.unwrap(), expected, "{name}");
-            {
+            if remote {
+                // Cross-runtime delivery is refused until the authenticated HTTP path exists,
+                // so a remote caller's goal input is never planned or signed here.
+                let signer = caller_agent.managed_agent_signer().unwrap();
+                let source_node = foreign_source.as_ref().map_or(&f.node, |(node, _)| node);
+                let refused = plan(
+                    source_node,
+                    &cause,
+                    &target,
+                    RenderedBody {
+                        content: "Follow up".into(),
+                        goal: None,
+                    },
+                    None,
+                    false,
+                    &signer,
+                )
+                .await
+                .unwrap();
+                assert!(
+                    refused.is_err_and(|error| error.contains("cross-runtime agent delivery")),
+                    "{name}: remote delivery must be refused"
+                );
+            } else {
                 let signer = caller_agent.managed_agent_signer().unwrap();
                 let source_node = foreign_source.as_ref().map_or(&f.node, |(node, _)| node);
                 let source_access = ConfigAccess::local_managed_agent(
