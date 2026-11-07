@@ -52,8 +52,8 @@ use support::snapshots::{
     fetch_session_snapshot, RequestLineageSnapshot, RequestSnapshot,
 };
 use support::{
-    build_request, first_optional_row, first_row, set_interrupt_requested_at,
-    set_request_lifecycle_state, test_db, AGENT_NAME, BACKEND_ID, DEADLINE_SECS, NODE_DID,
+    build_request, first_optional_row, first_row, test_db, AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
+    NODE_DID,
 };
 
 #[path = "conformance/backend_health.rs"]
