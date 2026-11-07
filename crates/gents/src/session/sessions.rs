@@ -528,58 +528,6 @@ pub(crate) async fn stage_session_relationships_in_txn(
     Ok(())
 }
 
-#[cfg(test)]
-async fn create_session_with_agent_did_and_requester_did(
-    node: &std::sync::Arc<EmbeddedNode>,
-    session_id: &str,
-    node_did: &str,
-    agent_did: &str,
-    requester_did: Option<&str>,
-) -> Result<()> {
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "session.create",
-        move |txn| {
-            Box::pin(async move {
-                ensure_session_in_txn(
-                    txn,
-                    session_id,
-                    node_did,
-                    agent_did,
-                    requester_did,
-                    None,
-                    None,
-                    &chrono::Utc::now().to_rfc3339(),
-                )
-                .await?;
-                Ok::<bool, anyhow::Error>(true)
-            })
-        },
-    )
-    .await
-    .map(|_| ())
-}
-
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn ensure_session_with_agent_did_and_requester_did(
-    node: &std::sync::Arc<EmbeddedNode>,
-    session_id: &str,
-    node_did: &str,
-    agent_did: &str,
-    requester_did: Option<&str>,
-) -> Result<()> {
-    create_session_with_agent_did_and_requester_did(
-        node,
-        session_id,
-        node_did,
-        agent_did,
-        requester_did,
-    )
-    .await
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn ensure_session_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,

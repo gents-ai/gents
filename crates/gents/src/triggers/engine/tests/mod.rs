@@ -626,6 +626,79 @@ pub(super) fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> 
     })
 }
 
+/// A signed fixture Node whose default Agent is derived from the node's own
+/// runtime key, so the materializer can act as that Agent's managed signer.
+pub(super) async fn signed_materializer_agent(
+    name: &str,
+) -> (
+    crate::support::TestDb,
+    crate::KeyIdentity,
+    crate::ConfigAccess,
+    Arc<ResolvedAgent>,
+) {
+    let (db, user, access, binding) = crate::test_support::signed_test_node(name).await;
+    let template = tokio::task::spawn_blocking(|| integration_test_agent("materializer-template"))
+        .await
+        .expect("build test agent template");
+    let identity =
+        crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+            .expect("derive the fixture's held Agent from its runtime key");
+    let mut agent = (*template).clone();
+    agent.agent_did = binding.agent_did.clone();
+    agent.agent_identity = identity;
+    agent.node = Arc::new(crate::store::identity::RuntimeNode {
+        node_did: db.node_identity.did().to_owned(),
+        identity: db.node_identity.clone(),
+        default_agent_did: binding.agent_did,
+        display_name: None,
+        enabled: true,
+    });
+    (db, user, access, Arc::new(agent))
+}
+
+/// The fixture Agent's managed access, which owns and reads its rows.
+pub(super) fn agent_access(
+    node: &Arc<defra_node::Node>,
+    agent: &ResolvedAgent,
+) -> crate::ConfigAccess {
+    crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent.agent_did.parse().unwrap(),
+        agent.agent_identity.as_ref(),
+    )
+    .unwrap()
+}
+
+/// Applies `config` as the operator User, who owns configuration, and returns
+/// the document identity of `trigger_id`.
+pub(super) async fn apply_user_config(
+    client: &crate::ConfigAccess,
+    config: &crate::documents::PackConfig,
+    trigger_id: &str,
+) -> String {
+    let owner = config.node.node_did.clone();
+    let plan = crate::store::config_client::DesiredStateApplyPlan::from_pack_config(config).unwrap();
+    client
+        .transact_write("test.trigger_config", |txn| {
+            let plan = &plan;
+            let owner = &owner;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await?;
+                let (id, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Trigger,
+                    owner,
+                    trigger_id,
+                )
+                .await?
+                .expect("created trigger");
+                Ok::<_, anyhow::Error>(id)
+            })
+        })
+        .await
+        .unwrap()
+}
+
 pub(super) fn snapshot_with_agent_and_schedules(
     behavior: Arc<ResolvedAgent>,
     schedules: RapidHashMap<String, ResolvedSchedule>,

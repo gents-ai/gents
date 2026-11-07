@@ -65,6 +65,32 @@ impl ConfigApplyTxn<'_> {
         .await
     }
 
+    /// A session administrator's signed deletion of an Agent-written session
+    /// child, for fixtures that remove receipts beneath a delivered session.
+    #[cfg(test)]
+    pub(crate) async fn delete_session_child_for_native_fixture(
+        &self,
+        collection: &str,
+        doc_id: &str,
+    ) -> Result<()> {
+        use gents_protocol::schemas;
+        let schema = match collection {
+            schemas::TRIGGER_FIRE_NAME => schemas::TRIGGER_FIRE,
+            schemas::GOAL_NAME => schemas::GOAL,
+            schemas::GOAL_CREATION_CLAIM_NAME => schemas::GOAL_CREATION_CLAIM,
+            _ => return Err(ConfigClientError::ClientConfigurationDeleteInvalid),
+        };
+        let TxnBackend::Http { endpoint, .. } = &self.backend else {
+            return Err(ConfigClientError::ClientConfigurationDeleteInvalid);
+        };
+        if !endpoint.client_signed_agent_creates || endpoint.pack_replay.is_some() {
+            return Err(ConfigClientError::ClientConfigurationDeleteInvalid);
+        }
+        endpoint.held_client_signing_capability()?;
+        self.delete_document_with_schema(collection, doc_id, schema)
+            .await
+    }
+
     /// A requester's own signed deletion of its AgentRequest, for fixtures that
     /// observe a request removed beneath its working Agent.
     #[cfg(test)]
