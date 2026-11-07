@@ -58,7 +58,9 @@ async fn fetch_terminal_request(
 #[tokio::test]
 async fn offline_replay_of_stale_requests_does_not_call_backend() {
     let db = test_db("offline-replay-stale").await;
-    let past = (chrono::Utc::now() - chrono::Duration::seconds(10)).to_rfc3339();
+    let actors = crate::support::agent_requests::RequestActors::new(&db).await;
+    let past = (chrono::Utc::now() - chrono::Duration::seconds(10))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let created_at = crate::support::agent_requests::canonical_now();
 
     const BATCH: usize = 20;
@@ -66,24 +68,23 @@ async fn offline_replay_of_stale_requests_does_not_call_backend() {
     for _ in 0..BATCH {
         let request_id = uuid::Uuid::new_v4().to_string();
         let session_id = uuid::Uuid::new_v4().to_string();
-        let doc_id = create_request_with_valid_until(
-            &db.node,
-            &request_id,
-            &session_id,
-            "pending",
-            &created_at,
-            Some(&past),
-        )
-        .await;
+        let doc_id = actors
+            .create_request(
+                crate::support::agent_requests::RequestSeed::new(
+                    &request_id,
+                    &session_id,
+                    &created_at,
+                )
+                .state("pending")
+                .valid_until(Some(&past)),
+            )
+            .await;
         request_doc_ids.push((doc_id, request_id, session_id));
     }
 
     for (doc_id, request_id, session_id) in request_doc_ids.clone() {
-        let request = build_request(doc_id, request_id, session_id, created_at.clone());
-        let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-            db.node.clone(),
-            AGENT_NAME,
-            NODE_DID,
+        let request = actors.build_request(doc_id, request_id, session_id, created_at.clone());
+        let mut lifecycle = actors.lifecycle(
             request,
             DEADLINE_SECS,
             ExecutionOrigin::Interactive,
@@ -93,7 +94,7 @@ async fn offline_replay_of_stale_requests_does_not_call_backend() {
     }
 
     for (doc_id, _, _) in &request_doc_ids {
-        let snap = fetch_request_snapshot(&db.node, doc_id).await;
+        let snap = fetch_request_snapshot(&actors, doc_id).await;
         assert_eq!(snap.lifecycle_state, RequestLifecycleState::Dead);
         assert_eq!(snap.failure_reason, "Stale");
         assert_eq!(
@@ -110,32 +111,33 @@ async fn offline_replay_of_stale_requests_does_not_call_backend() {
 #[tokio::test]
 async fn resend_from_stale_populates_retry_chain() {
     let db = test_db("resend-chain").await;
+    let actors = crate::support::agent_requests::RequestActors::new(&db).await;
 
     let created_at = crate::support::agent_requests::canonical_now();
-    let past = (chrono::Utc::now() - chrono::Duration::seconds(10)).to_rfc3339();
+    let past = (chrono::Utc::now() - chrono::Duration::seconds(10))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
     let original_request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
-    let original_doc_id = create_request_with_valid_until(
-        &db.node,
-        &original_request_id,
-        &session_id,
-        "pending",
-        &created_at,
-        Some(&past),
-    )
-    .await;
+    let original_doc_id = actors
+        .create_request(
+            crate::support::agent_requests::RequestSeed::new(
+                &original_request_id,
+                &session_id,
+                &created_at,
+            )
+            .state("pending")
+            .valid_until(Some(&past)),
+        )
+        .await;
 
-    let request = build_request(
+    let request = actors.build_request(
         original_doc_id.clone(),
         original_request_id.clone(),
         session_id.clone(),
         created_at.clone(),
     );
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        NODE_DID,
+    let mut lifecycle = actors.lifecycle(
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -144,35 +146,32 @@ async fn resend_from_stale_populates_retry_chain() {
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Expired);
 
     let resend_1_id = uuid::Uuid::new_v4().to_string();
-    let resend_1_created_at = chrono::Utc::now().to_rfc3339();
-    let resend_1_doc_id = create_retry_request(
-        &db.node,
-        &RetryRequestSpec {
-            request_id: &resend_1_id,
-            session_id: &session_id,
-            retry_parent_request: &original_request_id,
-            retry_root_request: &original_request_id,
-            content: "hello",
-            created_at: &resend_1_created_at,
-            valid_until: Some(&past),
-        },
-    )
-    .await;
+    let resend_1_created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let resend_1_doc_id = actors
+        .create_request(crate::support::agent_requests::RequestSeed {
+            retry_parent_request: Some(&original_request_id),
+            retry_root_request: Some(&original_request_id),
+            content: Some("hello"),
+            ..crate::support::agent_requests::RequestSeed::new(
+                &resend_1_id,
+                &session_id,
+                &resend_1_created_at,
+            )
+            .valid_until(Some(&past))
+        })
+        .await;
 
-    let snap_1 = fetch_request_snapshot(&db.node, &resend_1_doc_id).await;
+    let snap_1 = fetch_request_snapshot(&actors, &resend_1_doc_id).await;
     assert_eq!(snap_1.retry_parent_request, original_request_id);
     assert_eq!(snap_1.retry_root_request, original_request_id);
 
-    let request_1 = build_request(
+    let request_1 = actors.build_request(
         resend_1_doc_id.clone(),
         resend_1_id.clone(),
         session_id.clone(),
         resend_1_created_at.clone(),
     );
-    let mut lifecycle_1 = RequestLifecycle::new_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        NODE_DID,
+    let mut lifecycle_1 = actors.lifecycle(
         request_1,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -181,22 +180,22 @@ async fn resend_from_stale_populates_retry_chain() {
     assert_eq!(lifecycle_1.claim().await.unwrap(), ClaimOutcome::Expired);
 
     let resend_2_id = uuid::Uuid::new_v4().to_string();
-    let resend_2_created_at = chrono::Utc::now().to_rfc3339();
-    let resend_2_doc_id = create_retry_request(
-        &db.node,
-        &RetryRequestSpec {
-            request_id: &resend_2_id,
-            session_id: &session_id,
-            retry_parent_request: &resend_1_id,
-            retry_root_request: &original_request_id,
-            content: "hello",
-            created_at: &resend_2_created_at,
-            valid_until: None,
-        },
-    )
-    .await;
+    let resend_2_created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let resend_2_doc_id = actors
+        .create_request(crate::support::agent_requests::RequestSeed {
+            retry_parent_request: Some(&resend_1_id),
+            retry_root_request: Some(&original_request_id),
+            content: Some("hello"),
+            ..crate::support::agent_requests::RequestSeed::new(
+                &resend_2_id,
+                &session_id,
+                &resend_2_created_at,
+            )
+            .valid_until(None)
+        })
+        .await;
 
-    let snap_2 = fetch_request_snapshot(&db.node, &resend_2_doc_id).await;
+    let snap_2 = fetch_request_snapshot(&actors, &resend_2_doc_id).await;
     assert_eq!(snap_2.retry_parent_request, resend_1_id);
     assert_eq!(
         snap_2.retry_root_request, original_request_id,

@@ -411,6 +411,60 @@ impl RequestActors {
             .expect("seed session observation as Agent");
     }
 
+    /// Projects `request_id` into its session's observation as the session's Agent.
+    pub async fn seed_session_observation_from_request(
+        &self,
+        session_id: &str,
+        request_id: &str,
+        preview: &str,
+    ) {
+        let response = self
+            .agent_access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID lifecycle_state created_at }} }}"#,
+                escape_graphql_string(session_id),
+                escape_graphql_string(request_id),
+            ))
+            .await
+            .expect("read request for observation");
+        let rows = response["data"]["AgentRequest"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(
+            rows.len(),
+            1,
+            "fixture needs an unambiguous physical request"
+        );
+        let row = &rows[0];
+        let observation = gents_protocol::session::SessionObservation {
+            reply_preview: None,
+            last_activity_at: row["created_at"]
+                .as_str()
+                .expect("creation time")
+                .to_owned(),
+            preview: Some(preview.to_owned()),
+            latest_request: Some(gents_protocol::session::SessionRequestObservation {
+                request_doc_id: row["_docID"].as_str().expect("physical request").to_owned(),
+                request_id: request_id.to_owned(),
+                lifecycle_state: serde_json::from_value(row["lifecycle_state"].clone())
+                    .expect("canonical lifecycle"),
+            }),
+        };
+        self.seed_session_observation(session_id, &observation)
+            .await;
+    }
+
+    /// Runs a read as the working Agent, shaped like a native query response.
+    pub async fn query(&self, query: &str) -> gents::defra_node::QueryResponse {
+        let response = self
+            .agent_access
+            .execute(query)
+            .await
+            .expect("query as working Agent");
+        serde_json::from_value(response).expect("query response shape")
+    }
+
     /// Reads one request row as the working Agent.
     pub async fn request_row(&self, doc_id: &str, fields: &str) -> serde_json::Value {
         let response = self
