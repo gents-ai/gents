@@ -41,6 +41,7 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.ParallelToolBatch,
   `Proofs.Conformance.ConfigurationAffected,
   `Proofs.Conformance.ResponsesTermination,
+  `Proofs.Conformance.NativeSpawn,
   `Proofs.Conformance.StorageWriteGateStreamWaiter]
 
 @[default_target]

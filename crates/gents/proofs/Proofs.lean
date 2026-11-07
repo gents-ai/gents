@@ -67,6 +67,7 @@ import Proofs.Lsp
 import Proofs.ToolExecution
 import Proofs.CompletionRetry
 import Proofs.ManagedExec
+import Proofs.NativeSpawn
 import Proofs.MCPHealth
 import Proofs.BackendHealth
 import Proofs.P2PBackpressure
