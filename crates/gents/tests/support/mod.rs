@@ -146,7 +146,7 @@ pub async fn load_managed_fixture_user(db: &TestDb) -> gents::KeyIdentity {
 
 pub async fn managed_agent_fixture(db: &TestDb) -> ManagedAgentFixture {
     use gents::store::config_client::{
-        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
+        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
 
     let user = managed_fixture_user(db).await;
@@ -157,17 +157,11 @@ pub async fn managed_agent_fixture(db: &TestDb) -> ManagedAgentFixture {
         db.node.clone(),
         identity::Did::new(runtime.did()).expect("valid runtime DID"),
     );
-    for permission in [
-        NodePermission::DocumentRead,
-        NodePermission::DocumentUpdate,
-        NodePermission::DacRelationAdd,
-        NodePermission::CollectionGet,
-    ] {
-        admin
-            .grant_node_permission(&user_did, permission)
-            .await
-            .expect("grant test user Node access");
-    }
+    // An enrolled User's grants bound what its Agent creation may project.
+    gents::store::identity::GrantSet::OperatorUser
+        .grant(&admin, &user_did)
+        .await
+        .expect("grant test user operator access");
     let access = db.client_access(&user);
     let node = serde_json::json!({"node_did": runtime.did()});
     let node_plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {

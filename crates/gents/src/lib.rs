@@ -517,6 +517,59 @@ pub(crate) mod test_support {
         (home, plugins)
     }
 
+    /// Create an Agent-owned session as that Agent and publish its Agent
+    /// relationships in the same transaction, so requests and Goals may bind it.
+    pub(crate) async fn create_agent_owned_session(
+        access: &crate::store::config_client::ConfigAccess,
+        node_did: &str,
+        session_id: &str,
+        requester_did: Option<&str>,
+    ) -> String {
+        let agent_did = access
+            .actor_did()
+            .expect("an Agent-owned session needs its Agent actor");
+        access
+            .transact_write("test.agent_owned_session", |txn| {
+                let agent_did = &agent_did;
+                Box::pin(async move {
+                    crate::session::ensure_session_in_txn(
+                        txn,
+                        session_id,
+                        node_did,
+                        agent_did,
+                        requester_did,
+                        None,
+                        None,
+                        "2020-01-01T00:00:00Z",
+                    )
+                    .await?;
+                    let session =
+                        crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+                            .await?
+                            .ok_or_else(|| anyhow::anyhow!("created session is not visible"))?;
+                    let (agent_doc, _) =
+                        crate::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            crate::Collection::Agent,
+                            node_did,
+                            agent_did,
+                        )
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("session Agent is not visible"))?;
+                    crate::session::stage_created_session_relationships_in_txn(
+                        txn,
+                        &session.doc_id,
+                        &agent_doc,
+                        &identity::Did::new(agent_did)?,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(session.doc_id)
+                })
+            })
+            .await
+            .unwrap()
+    }
+
     pub(crate) fn first_content<T>(items: &[T]) -> &T {
         items.first().expect("non-empty content")
     }
