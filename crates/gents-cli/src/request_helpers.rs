@@ -1384,7 +1384,7 @@ mod tests {
         let access = client.access.clone();
         let user = &client.user;
         let node_did = client.node_did().to_owned();
-        let binding = agent.binding.clone();
+        let binding = agent;
         let create = gents::request::lifecycle::build_signed_client_request(
             &access,
             gents::RequestSpec::new(

@@ -313,30 +313,12 @@ impl ClientHome {
         self.home.graphql_endpoint().unwrap()
     }
 
-    /// The node's runtime access, for runtime-owned state and native grants.
-    pub(crate) fn runtime(&self) -> gents::store::config_client::ConfigAccess {
-        gents::store::config_client::ConfigAccess::local_as(
-            self.home.node.clone(),
-            ::identity::Did::new(self.home.did()).unwrap(),
-        )
-    }
-
-    /// Makes the User the household owner `gents init` creates, the native
-    /// admin that installs packs and their collection schemas.
-    pub(crate) async fn grant_household_owner(&self) {
-        use gents::NodeIdentity as _;
-        gents::store::identity::GrantSet::HouseholdOwner
-            .grant(
-                &self.runtime(),
-                &::identity::Did::new(self.user.did()).unwrap(),
-            )
-            .await
-            .unwrap();
-    }
-
     /// Provisions a managed Agent and publishes it, with a placeholder
     /// backend and profile, as the User.
-    pub(crate) async fn agent(&self, display_name: &str) -> ManagedAgent {
+    pub(crate) async fn agent(
+        &self,
+        display_name: &str,
+    ) -> gents_protocol::agent_identity::AgentIdentityBinding {
         use gents::store::config_client::{
             apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
@@ -350,7 +332,6 @@ impl ClientHome {
         )
         .await
         .unwrap();
-        let identity = gents::store::identity::resolve_agent_identity(runtime, &binding).unwrap();
         let backend_id = format!("{}:backend", binding.agent_did);
         let profile_id = format!("{}:inference", binding.agent_did);
         let documents = [
@@ -396,34 +377,7 @@ impl ClientHome {
             })
             .await
             .unwrap();
-        let access = gents::store::config_client::ConfigAccess::local_managed_agent(
-            self.node().clone(),
-            identity.did().parse().unwrap(),
-            identity.as_ref(),
-        )
-        .unwrap();
-        ManagedAgent {
-            identity,
-            binding,
-            access,
-            profile_id,
-            backend_id,
-        }
-    }
-}
-
-/// A managed Agent of a [`ClientHome`] and its own signed access.
-pub(crate) struct ManagedAgent {
-    pub(crate) identity: std::sync::Arc<dyn gents::NodeIdentity>,
-    pub(crate) binding: gents_protocol::agent_identity::AgentIdentityBinding,
-    pub(crate) access: gents::store::config_client::ConfigAccess,
-    pub(crate) profile_id: String,
-    pub(crate) backend_id: String,
-}
-
-impl ManagedAgent {
-    pub(crate) fn did(&self) -> &str {
-        &self.binding.agent_did
+        binding
     }
 }
 
@@ -434,8 +388,6 @@ pub(crate) enum ProxyDecision {
     /// Forward the request, then answer with this response instead, as a
     /// transport that committed the write but lost its reply.
     ForwardThenRespond(axum::response::Response),
-    /// Answer without forwarding.
-    Respond(axum::response::Response),
 }
 
 pub(crate) type ProxyHook = std::sync::Arc<
@@ -502,9 +454,8 @@ async fn forward(
             .path_and_query()
             .map(|path| path.as_str().to_owned())
             .unwrap_or_default();
-        if let ProxyDecision::Respond(response) = hook(path, Default::default()).await {
-            return response;
-        }
+        // A conversation is observed when it opens; it always passes through.
+        hook(path, Default::default()).await;
         let upgrade = axum::extract::ws::WebSocketUpgrade::from_request_parts(&mut parts, &())
             .await
             .unwrap();
@@ -520,9 +471,6 @@ async fn forward(
         .map(|path| path.as_str().to_owned())
         .unwrap_or_default();
     let decision = hook(path.clone(), body.clone()).await;
-    if let ProxyDecision::Respond(response) = decision {
-        return response;
-    }
     let method = reqwest::Method::from_bytes(parts.method.as_str().as_bytes()).unwrap();
     let mut outbound = client.request(method, format!("{upstream}{path}"));
     for (name, value) in &parts.headers {
