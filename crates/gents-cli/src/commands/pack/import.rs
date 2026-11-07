@@ -218,7 +218,7 @@ fn import_parts(
     })?;
     import_markdown_dir(root, "commands", pack, report, |pack, id, body_path| {
         let agent = "commands".to_owned();
-        if !has(pack, "agents", "agent_did", &agent) {
+        if !has(pack, "agents", "agent_slot", &agent) {
             add(
                 pack,
                 PackAddCommand::Agent {

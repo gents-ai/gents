@@ -63,7 +63,7 @@ fn a_document_pack_materializes_a_valid_configuration() {
     let pack = test_support::fixture_pack_source("documents_fixture", home.path());
     let root = tempfile::tempdir().unwrap();
     gents::pack::materialize::materialize(pack.archive(), root.path()).unwrap();
-    let config = gents::pack::load_pack_config(
+    let config = gents::pack::load_pack_authoring_config(
         pack.manifest(),
         &gents::pack::PackInstallOptions {
             node_did: "did:key:zPackCatalogValidationOwner".into(),
@@ -72,7 +72,9 @@ fn a_document_pack_materializes_a_valid_configuration() {
         &|_| None,
     )
     .unwrap();
-    gents::store::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
+    assert!(config.agent("fixture-worker").is_some());
+    gents::store::config_client::DesiredStateApplyPlan::from_pack_config(&config.documents)
+        .unwrap();
 }
 
 #[tokio::test]
