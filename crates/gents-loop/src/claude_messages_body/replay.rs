@@ -541,3 +541,73 @@ pub fn select_replay(
     let kept = total - selection.candidates_before(kept_start);
     strip_first_reasoning(selection.rows, total - kept)
 }
+
+#[cfg(test)]
+mod recovered_prefix_tests {
+    use super::*;
+    use gents_protocol::message::{Reasoning, Text};
+
+    #[test]
+    fn recovered_projection_keeps_prefix_and_ordinary_content() {
+        let tag = ReplayTag {
+            request_doc_id: "request".into(),
+            source: OutputSource::ProviderTurn {
+                scope: "inference.1".parse().unwrap(),
+                turn_index: 0,
+                attempt: 0,
+            },
+        };
+        let thinking = |value: &str| {
+            AssistantContent::Reasoning(Reasoning {
+                id: None,
+                content: vec![ReasoningContent::Text {
+                    text: value.into(),
+                    signature: Some("sig".into()),
+                }],
+            })
+        };
+        let row = TaggedAssistantRow {
+            source: Some(tag),
+            physical_header: Some("header".into()),
+            id: None,
+            block_indices: vec![0, 1, 3, 4],
+            content: vec![
+                thinking("first"),
+                AssistantContent::Text(Text {
+                    text: "before".into(),
+                }),
+                thinking("after-gap"),
+                AssistantContent::Text(Text {
+                    text: "after".into(),
+                }),
+            ],
+        };
+        let evidence = ResolvedReplayEvidence {
+            origin: ReplayOrigin::RecoveredProvider,
+            reasoning: vec![],
+            issuer: ReplayIssuer {
+                family: "claude".into(),
+                endpoint: "messages".into(),
+            },
+            wire: ReplayWire::ClaudeMessages,
+            physical_header: "header".into(),
+            complete: false,
+            captured: None,
+        };
+        let result =
+            project_recovered_prefix(std::slice::from_ref(&row), |_| vec![evidence.clone()]);
+        assert_eq!(result[0].block_indices, [0, 1, 4]);
+        assert_eq!(
+            result[0].content,
+            [
+                row.content[0].clone(),
+                row.content[1].clone(),
+                row.content[3].clone()
+            ]
+        );
+        assert_eq!(
+            project_recovered_prefix(std::slice::from_ref(&row), |_| vec![]),
+            [row]
+        );
+    }
+}
