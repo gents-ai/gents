@@ -375,6 +375,15 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         .unwrap();
     lifecycle.set_execution_lease_duration(agent_config.stream_liveness_timeout);
     lifecycle.set_configured_max_total_tokens(agent_config.max_total_tokens);
+    let (_, client_claim) = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        agent_config.node_identity().clone(),
+        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+    )
+    .verify_fresh_for_claim_with_identity(&request, agent_config.agent_identity.as_ref())
+    .await
+    .expect("admit the fresh request at claim");
+    lifecycle.set_client_claim_admission(client_claim);
     assert_eq!(
         lifecycle
             .claim_with_identity()

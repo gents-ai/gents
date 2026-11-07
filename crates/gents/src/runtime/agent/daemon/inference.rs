@@ -1167,6 +1167,7 @@ pub(super) mod tests {
             String,
             String,
             crate::store::identity::ManagedAgentSigner,
+            Arc<dyn NodeIdentity>,
         )>,
     }
 
@@ -1217,13 +1218,14 @@ pub(super) mod tests {
                         inputs.len() == 1
                     };
                     if first {
-                        if let Some((node, request_id, did, signer)) = &self.successor {
-                            crate::tools::call::lifecycle::admission_fixture::complete_child_managed(
+                        if let Some((node, request_id, did, signer, runtime)) = &self.successor {
+                            crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
                                 node,
                                 request_id,
                                 did,
                                 "successor native output",
                                 signer,
+                                runtime.clone(),
                             )
                             .await;
                             assert_eq!(
@@ -1928,6 +1930,7 @@ pub(super) mod tests {
                         request,
                         admission.node_did.clone(),
                         signer.clone(),
+                        admission.runtime.clone(),
                     )
                 }),
             }),
