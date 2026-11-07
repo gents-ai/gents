@@ -408,7 +408,7 @@ pub(crate) async fn claimed_signed_request_with_trigger_correlation(
 pub(crate) async fn claimed_signed_request_create(
     node: &Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
-    mut create: gents_protocol::request_admission::AgentRequestCreate,
+    create: gents_protocol::request_admission::AgentRequestCreate,
 ) -> RequestLifecycle {
     let agent_identity = ensure_managed_fixture_session(
         node,

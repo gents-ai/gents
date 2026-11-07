@@ -200,7 +200,7 @@ async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
         parallel.action,
         "publish_once_dispatch_in_order_then_complete_each_parallel_result"
     );
-    let (node, hook, session, request) = fixture(&parallel.name).await;
+    let (_node, hook, session, request) = fixture(&parallel.name).await;
     publish_claimed_authored_input(
         &hook,
         &request,
@@ -246,7 +246,7 @@ async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
     }
 
     let pair = crate::lean_vocab_test::lean_transcript_case("completed_tool_pair_closed");
-    let (node, hook, session) = completed(&pair.name).await;
+    let (_node, hook, session) = completed(&pair.name).await;
     let id = format!("result-{}", pair.logical_result_id);
     assert_eq!(
         fetch_tool_call_row(&hook, &session, &id).await["lifecycle_state"].as_str(),
@@ -259,7 +259,7 @@ async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
     );
 
     let abandon = crate::lean_vocab_test::lean_transcript_case("drop_abandon_not_strong_drain");
-    let (node, hook, session, _) = fixture(&abandon.name).await;
+    let (_node, hook, session, _) = fixture(&abandon.name).await;
     let (_, ids) = accept_turn(
         &hook,
         &abandon.action_call_ids,

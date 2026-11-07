@@ -114,43 +114,6 @@ pub(crate) enum ReadToolOutputOutcome {
     NotBackgrounded,
 }
 
-#[cfg(test)]
-pub(crate) async fn handle_read_tool_output(
-    node: &EmbeddedNode,
-    caller: &ProcessControlScope,
-    live_outputs: &LiveToolOutputRegistry,
-    args: ReadToolOutputArgs,
-) -> Result<ReadToolOutputOutcome> {
-    read_tool_output_slice(
-        node,
-        caller,
-        live_outputs,
-        &args.tool_call_id,
-        args.offset,
-        args.validated_max_bytes(),
-    )
-    .await
-}
-
-pub(crate) async fn read_tool_output_slice(
-    node: &EmbeddedNode,
-    caller: &ProcessControlScope,
-    live_outputs: &LiveToolOutputRegistry,
-    tool_call_id: &str,
-    offset: u64,
-    max_bytes: usize,
-) -> Result<ReadToolOutputOutcome> {
-    read_tool_output_slice_inner(
-        StatusRead::Node(node),
-        caller,
-        live_outputs,
-        tool_call_id,
-        offset,
-        max_bytes,
-    )
-    .await
-}
-
 pub(crate) async fn handle_list_background_tools_with_access(
     access: &crate::ConfigAccess,
     caller: &ProcessControlScope,
@@ -267,11 +230,6 @@ pub(crate) async fn handle_read_tool_output_with_access(
     .await
 }
 
-enum StatusRead<'a> {
-    Node(&'a EmbeddedNode),
-    Actor(&'a crate::ConfigAccess),
-}
-
 pub(crate) async fn read_tool_output_slice_with_access(
     access: &crate::ConfigAccess,
     caller: &ProcessControlScope,
@@ -281,7 +239,7 @@ pub(crate) async fn read_tool_output_slice_with_access(
     max_bytes: usize,
 ) -> Result<ReadToolOutputOutcome> {
     read_tool_output_slice_inner(
-        StatusRead::Actor(access),
+        access,
         caller,
         live_outputs,
         tool_call_id,
@@ -292,7 +250,7 @@ pub(crate) async fn read_tool_output_slice_with_access(
 }
 
 async fn read_tool_output_slice_inner(
-    source: StatusRead<'_>,
+    access: &crate::ConfigAccess,
     caller: &ProcessControlScope,
     _live_outputs: &LiveToolOutputRegistry,
     tool_call_id: &str,
@@ -329,18 +287,7 @@ async fn read_tool_output_slice_inner(
             }}
         }}"#
     );
-    let data = match &source {
-        StatusRead::Node(node) => {
-            crate::store::graphql::graphql_with_transaction_retry(
-                node,
-                &query,
-                "read_tool_output_slice",
-            )
-            .await?
-            .data
-        }
-        StatusRead::Actor(access) => access.execute(&query).await?.get("data").cloned(),
-    };
+    let data = access.execute(&query).await?.get("data").cloned();
     let Some(row) = first_row::<ReadToolOutputRow>(data.as_ref(), "AgentToolCall") else {
         return Ok(ReadToolOutputOutcome::NotAuthorized);
     };
@@ -375,29 +322,16 @@ async fn read_tool_output_slice_inner(
         .node_did
         .as_deref()
         .context("tool output row lacks agent binding")?;
-    let combined = match &source {
-        StatusRead::Node(node) => {
-            canonical_tool_output(
-                node,
-                &row.doc_id,
-                request_doc_id,
-                session_id,
-                node_did,
-                row.requester_did.as_deref(),
-            )
-            .await?
-        }
-        StatusRead::Actor(access) => observe_canonical_tool_output_with_access(
-            access,
-            &row.doc_id,
-            request_doc_id,
-            session_id,
-            node_did,
-            row.requester_did.as_deref(),
-        )
-        .await?
-        .into_text(),
-    };
+    let combined = observe_canonical_tool_output_with_access(
+        access,
+        &row.doc_id,
+        request_doc_id,
+        session_id,
+        node_did,
+        row.requester_did.as_deref(),
+    )
+    .await?
+    .into_text();
     let slice = read_combined_output_slice(&combined, offset, max_bytes);
     let exit_code = None;
 

@@ -1234,24 +1234,6 @@ async fn bind_interruptible_request(
     bind_claimed_hook_request(hook, lifecycle, deadline_at).await;
 }
 
-async fn bind_signed_hook_request(
-    hook: &DefraSessionHook,
-    request_id: &str,
-    deadline_at: chrono::DateTime<chrono::Utc>,
-) {
-    let identity = crate::test_support::held_runtime_identity(&hook.node_did);
-    let session_id = hook.session_id().await.expect("hook session");
-    let lifecycle = crate::tools::call::lifecycle::admission_fixture::claimed_signed_request(
-        &hook.node,
-        request_id,
-        &session_id,
-        &identity,
-        None,
-    )
-    .await;
-    bind_claimed_hook_request(hook, lifecycle, deadline_at).await;
-}
-
 async fn bind_claimed_hook_request(
     hook: &DefraSessionHook,
     mut lifecycle: crate::request::lifecycle::RequestLifecycle,

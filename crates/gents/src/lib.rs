@@ -186,16 +186,6 @@ pub(crate) mod test_support {
         identity
     }
 
-    pub(crate) fn agent_did(node: &defra_node::Node) -> String {
-        let node_did = node
-            .node_identity_did()
-            .expect("fixture node has an identity");
-        let root = held_runtime_identity(node_did);
-        crate::store::identity::provision_agent_identity(&root)
-            .unwrap()
-            .agent_did
-    }
-
     /// Creates the fixture Node through the runtime owner's signed access.
     /// `ensure_node` only loads; production Nodes are created by an authenticated client.
     pub(crate) async fn ensure_test_node(
