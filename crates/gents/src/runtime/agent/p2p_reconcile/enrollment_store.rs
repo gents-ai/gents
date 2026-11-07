@@ -133,6 +133,53 @@ impl EnrollmentDecisionRefusal {
 }
 
 impl EnrollmentProjection {
+    pub(super) fn current_for_renewal_intent(
+        &self,
+        intent: &gents_protocol::enrollment::RenewalIntent,
+        now: DateTime<Utc>,
+    ) -> Result<&ActiveEnrollment> {
+        use gents_protocol::enrollment::{AuthorizationLease, AuthorizationLeaseState};
+        intent.validate_at(now)?;
+        anyhow::ensure!(
+            self.conflict.is_none(),
+            "enrollment authority is conflicted"
+        );
+        let scope = (intent.network_id.clone(), intent.member_did.clone());
+        anyhow::ensure!(
+            !self.scoped_conflicts.contains_key(&scope),
+            "member authority is conflicted"
+        );
+        let active = self
+            .active
+            .iter()
+            .find(|active| {
+                active.request.network_id == intent.network_id
+                    && active.request.candidate_did == intent.member_did
+            })
+            .context("member has no active enrollment")?;
+        anyhow::ensure!(
+            active.request.admin_did == intent.admin_did
+                && active.request.server_peer == intent.server_peer
+                && active.request.candidate_peer == intent.member_peer
+                && active.revision.sequence == intent.predecessor_sequence,
+            "renewal intent changes the current enrollment"
+        );
+        let next = intent
+            .predecessor_sequence
+            .checked_add(1)
+            .context("authorization sequence exhausted")?;
+        anyhow::ensure!(
+            self.next_authorization_sequences.get(&scope) == Some(&next),
+            "enrollment generation changed"
+        );
+        anyhow::ensure!(
+            AuthorizationLease::at(&active.revision.authorization_expires_at, now).state
+                == AuthorizationLeaseState::RenewalDue,
+            "enrollment is not within its live renewal window"
+        );
+        Ok(active)
+    }
+
     fn conflicted(network_id: Option<String>, error: impl std::fmt::Display) -> Self {
         Self {
             network_id,
@@ -159,6 +206,96 @@ impl EnrollmentProjection {
                 request_id: request_id.to_string(),
             })
     }
+
+    /// Evaluate a pending renewal against the current verified projection.
+    /// The approval owner must hold its decision lock, authenticate the live
+    /// candidate and read the operator policy under the same lock before use.
+    pub fn renewal_lease_for(
+        &self,
+        request_id: &str,
+        enabled: bool,
+        configured_limit: Option<u64>,
+        now: DateTime<Utc>,
+    ) -> Result<Duration> {
+        use gents_protocol::enrollment::{
+            renewal_challenge_matches, AuthorizationLease, AuthorizationLeaseState,
+            MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
+        };
+
+        anyhow::ensure!(enabled, "automatic enrollment renewal is disabled");
+        anyhow::ensure!(
+            self.conflict.is_none(),
+            "enrollment authority is conflicted"
+        );
+        let pending = self.pending_for_decision(request_id)?;
+        let request = &pending.request;
+        let scope = (request.network_id.clone(), request.candidate_did.clone());
+        anyhow::ensure!(
+            !self.scoped_conflicts.contains_key(&scope),
+            "enrollment member authority is conflicted"
+        );
+        let request_issued = DateTime::parse_from_rfc3339(&request.issued_at)?.with_timezone(&Utc);
+        let request_expires =
+            DateTime::parse_from_rfc3339(&request.expires_at)?.with_timezone(&Utc);
+        anyhow::ensure!(
+            request_issued <= now && now < request_expires,
+            "renewal request is not currently fresh"
+        );
+        let active = self
+            .active
+            .iter()
+            .find(|entry| {
+                entry.request.network_id == request.network_id
+                    && entry.request.candidate_did == request.candidate_did
+            })
+            .context("no active enrollment for renewal")?;
+        let next_sequence = active
+            .revision
+            .sequence
+            .checked_add(1)
+            .context("enrollment authorization sequence exhausted")?;
+        anyhow::ensure!(
+            self.next_authorization_sequences.get(&scope) == Some(&next_sequence),
+            "enrollment authorization generation changed or is incomplete"
+        );
+        anyhow::ensure!(
+            active.request.candidate_peer == request.candidate_peer
+                && active.request.owner_agent == request.owner_agent
+                && active.request.profile == request.profile
+                && active.request.admin_did == request.admin_did
+                && active.request.server_peer == request.server_peer,
+            "renewal changes the current enrollment scope"
+        );
+        anyhow::ensure!(
+            AuthorizationLease::at(&active.revision.authorization_expires_at, now).state
+                == AuthorizationLeaseState::RenewalDue,
+            "enrollment is not within its live renewal window"
+        );
+        anyhow::ensure!(
+            renewal_challenge_matches(
+                &request.challenge,
+                &request.network_id,
+                &request.candidate_did,
+                &request.candidate_peer,
+                active.revision.sequence,
+            ),
+            "renewal offer does not bind the current enrollment generation"
+        );
+        let issued = DateTime::parse_from_rfc3339(&active.decision.decided_at)?;
+        let expires = DateTime::parse_from_rfc3339(&active.revision.authorization_expires_at)?;
+        let original = u64::try_from((expires - issued).num_seconds())
+            .context("current enrollment lease is invalid")?;
+        anyhow::ensure!(
+            (1..=MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS).contains(&original),
+            "current enrollment lease is outside the protocol limit"
+        );
+        let lease = configured_limit.unwrap_or(original);
+        anyhow::ensure!(
+            (1..=MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS).contains(&lease),
+            "renewal lease is outside the protocol limit"
+        );
+        Ok(Duration::from_secs(lease))
+    }
 }
 
 #[derive(Clone)]
@@ -167,6 +304,20 @@ pub struct GraphqlEnrollmentStore {
     identity: Arc<dyn NodeIdentity>,
     decision_lock: Arc<Mutex<()>>,
     fail_closed: Arc<FailClosedLog>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EnrollmentRenewalPolicy {
+    pub enabled: bool,
+    pub lease_seconds: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct RenewalPolicyRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    enabled: Option<bool>,
+    lease_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,6 +372,164 @@ fn enrollment_decision_gate(node: &EmbeddedNode) -> Arc<Mutex<()>> {
 }
 
 impl GraphqlEnrollmentStore {
+    pub async fn issue_renewal_offer(
+        &self,
+        intent: &gents_protocol::enrollment::RenewalIntent,
+    ) -> Result<gents_protocol::enrollment::RenewalOfferResponse> {
+        let _guard = self.decision_lock.lock().await;
+        let policy = self.renewal_policy(&intent.network_id).await?;
+        anyhow::ensure!(policy.enabled, "automatic enrollment renewal is disabled");
+        let projection = self.load_projection().await?;
+        let active = projection
+            .current_for_renewal_intent(intent, Utc::now())?
+            .clone();
+        anyhow::ensure!(
+            self.identity
+                .verify(
+                    &intent.member_did,
+                    &intent.signing_payload(),
+                    &intent.member_sig
+                )
+                .await?,
+            "renewal intent signature is invalid"
+        );
+        let p2p =
+            crate::store::identity::node_p2p(&self.node).context("runtime P2P is unavailable")?;
+        let local_peer = timeout(Duration::from_secs(20), p2p.local_peer_id())
+            .await?
+            .map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(
+            local_peer == intent.server_peer,
+            "renewal intent targets another server"
+        );
+        timeout(
+            Duration::from_secs(20),
+            p2p.connect_peer(&active.request.candidate_ticket),
+        )
+        .await?
+        .map_err(anyhow::Error::msg)?;
+        let peer = TransportPeerId::new(intent.member_peer.clone()).map_err(anyhow::Error::msg)?;
+        let resolved = timeout(Duration::from_secs(20), p2p.resolve_peer_identity(&peer))
+            .await?
+            .map_err(anyhow::Error::msg)?
+            .context("member has no authenticated transport identity")?;
+        anyhow::ensure!(
+            resolved.to_string() == intent.member_did,
+            "renewal transport identity mismatch"
+        );
+        let issuer = super::enrollment_offer::EnrollmentOfferIssuer::new(
+            self.identity.clone(),
+            p2p,
+            intent.network_id.clone(),
+            active.request.owner_agent.clone(),
+            active.request.profile.clone(),
+        );
+        let offer = issuer
+            .mint_renewal(
+                &intent.member_did,
+                &intent.member_peer,
+                intent.predecessor_sequence,
+            )
+            .await?;
+        let latest = self.load_projection().await?;
+        anyhow::ensure!(
+            latest.current_for_renewal_intent(intent, Utc::now())? == &active,
+            "enrollment generation changed while issuing renewal offer"
+        );
+        let mut response = gents_protocol::enrollment::RenewalOfferResponse {
+            intent_id: intent.intent_id(),
+            member_did: intent.member_did.clone(),
+            offer_token: offer.token,
+            admin_did: self.identity.did().to_owned(),
+            admin_sig: Vec::new(),
+        };
+        response.admin_sig = self.identity.sign(&response.signing_payload()).await?;
+        response.validate_for(intent, Utc::now())?;
+        Ok(response)
+    }
+
+    async fn read_renewal_policy_row(&self, network_id: &str) -> Result<Option<RenewalPolicyRow>> {
+        let network = crate::store::graphql::escape_graphql_string(network_id);
+        let query = format!(
+            r#"{{ EnrollmentRenewalPolicy(filter: {{ network_id: {{ _eq: "{network}" }} }}) {{ _docID enabled lease_seconds }} }}"#
+        );
+        let response = crate::store::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "load local enrollment renewal policy",
+        )
+        .await?;
+        let mut policies = rows::<RenewalPolicyRow>(&response, "EnrollmentRenewalPolicy")?;
+        anyhow::ensure!(
+            policies.len() <= 1,
+            "conflicting enrollment renewal policies"
+        );
+        Ok(policies.pop())
+    }
+
+    /// Callers must first authenticate the operator. Policy writes share the
+    /// enrollment decision lock so a disable cannot race an automatic grant.
+    pub async fn set_renewal_policy(&self, policy: EnrollmentRenewalPolicy) -> Result<()> {
+        if let Some(lease) = policy.lease_seconds {
+            anyhow::ensure!(
+                (1..=gents_protocol::enrollment::MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS)
+                    .contains(&lease),
+                "renewal lease is outside the protocol limit"
+            );
+        }
+        let _guard = self.decision_lock.lock().await;
+        let projection = self.load_projection().await?;
+        anyhow::ensure!(
+            projection.conflict.is_none(),
+            "enrollment authority is conflicted"
+        );
+        let network_id = projection.network_id.context("no enrollment network")?;
+        let current = self.read_renewal_policy_row(&network_id).await?;
+        let lease = policy
+            .lease_seconds
+            .map_or_else(|| "null".to_owned(), |value| value.to_string());
+        let fields = format!("enabled: {}, lease_seconds: {lease}", policy.enabled);
+        let mutation = match current {
+            Some(row) => format!(
+                r#"mutation {{ update_EnrollmentRenewalPolicy(docID: "{}", input: {{ {fields} }}) {{ _docID }} }}"#,
+                crate::store::graphql::escape_graphql_string(&row.doc_id)
+            ),
+            None => format!(
+                r#"mutation {{ create_EnrollmentRenewalPolicy(input: {{ network_id: "{}", {fields} }}) {{ _docID }} }}"#,
+                crate::store::graphql::escape_graphql_string(&network_id)
+            ),
+        };
+        crate::store::config_client::ConfigAccess::write_local(
+            &self.node,
+            "enrollment.set_renewal_policy",
+            &mutation,
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub(super) async fn renewal_policy(&self, network_id: &str) -> Result<EnrollmentRenewalPolicy> {
+        let Some(row) = self.read_renewal_policy_row(network_id).await? else {
+            return Ok(EnrollmentRenewalPolicy::default());
+        };
+        let lease_seconds = row
+            .lease_seconds
+            .map(u64::try_from)
+            .transpose()
+            .context("invalid enrollment renewal lease")?;
+        if let Some(lease) = lease_seconds {
+            anyhow::ensure!(
+                (1..=gents_protocol::enrollment::MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS)
+                    .contains(&lease),
+                "renewal lease is outside the protocol limit"
+            );
+        }
+        Ok(EnrollmentRenewalPolicy {
+            enabled: row.enabled.unwrap_or(false),
+            lease_seconds,
+        })
+    }
+
     pub fn new(node: Arc<EmbeddedNode>, identity: Arc<dyn NodeIdentity>) -> Self {
         let decision_lock = enrollment_decision_gate(node.as_ref());
         Self {
@@ -249,6 +558,24 @@ impl GraphqlEnrollmentStore {
         request_id: &str,
         kind: WireDecisionKind,
         lease: Duration,
+    ) -> Result<EnrollmentDecisionOutcome> {
+        self.decide_request_inner(request_id, kind, Some(lease))
+            .await
+    }
+
+    pub async fn decide_automatic_renewal(
+        &self,
+        request_id: &str,
+    ) -> Result<EnrollmentDecisionOutcome> {
+        self.decide_request_inner(request_id, WireDecisionKind::Approved, None)
+            .await
+    }
+
+    async fn decide_request_inner(
+        &self,
+        request_id: &str,
+        kind: WireDecisionKind,
+        operator_lease: Option<Duration>,
     ) -> Result<EnrollmentDecisionOutcome> {
         let _guard = self.decision_lock.lock().await;
         let projection = self.load_projection().await?;
@@ -312,7 +639,34 @@ impl GraphqlEnrollmentStore {
         }
         let pending = projection.pending_for_decision(request_id)?;
 
-        let decided_at = self.verify_live_candidate(&pending.request).await?;
+        let mut decided_at = self.verify_live_candidate(&pending.request).await?;
+        let lease = match operator_lease {
+            Some(lease) => lease,
+            None => {
+                let policy = self.renewal_policy(&pending.request.network_id).await?;
+                let latest = self.load_projection().await?;
+                anyhow::ensure!(
+                    latest.pending_for_decision(request_id)?.request == pending.request,
+                    "renewal request changed during authorization"
+                );
+                let scope = (
+                    pending.request.network_id.clone(),
+                    pending.request.candidate_did.clone(),
+                );
+                anyhow::ensure!(
+                    latest.next_authorization_sequences.get(&scope)
+                        == projection.next_authorization_sequences.get(&scope),
+                    "enrollment generation changed during authorization"
+                );
+                decided_at = Utc::now();
+                latest.renewal_lease_for(
+                    request_id,
+                    policy.enabled,
+                    policy.lease_seconds,
+                    decided_at,
+                )?
+            }
+        };
         let sequence = match kind {
             WireDecisionKind::Approved => projection
                 .next_authorization_sequences

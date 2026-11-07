@@ -303,6 +303,24 @@ async fn node_requested_enrollment_is_approved_and_paired_by_the_offering_node()
     .unwrap_err()
     .to_string()
     .contains("mutations are disabled"));
+    assert!(Tool::call(
+        &server_readonly,
+        serde_json::from_value(json!({"action":"enrollment_renewal_policy", "auto_renew":true}))
+            .unwrap()
+    )
+    .await
+    .unwrap_err()
+    .to_string()
+    .contains("mutations are disabled"));
+    let policy = call(&server_tool, json!({"action":"enrollment_renewal_policy", "auto_renew":true, "lease_seconds": 60 * 86400})).await;
+    assert_eq!(policy["outcome"]["auto_renew"], true);
+    assert_eq!(policy["outcome"]["lease_seconds"], 60 * 86400);
+    let disabled = call(
+        &server_tool,
+        json!({"action":"enrollment_renewal_policy", "auto_renew":false}),
+    )
+    .await;
+    assert_eq!(disabled["outcome"]["auto_renew"], false);
     let offer = call(&server_tool, json!({"action":"enrollment_offer"})).await;
     assert_eq!(offer["outcome"]["peer_id"], server_peer);
     assert_eq!(offer["outcome"]["peer_did"], server.node_identity.did());
@@ -348,6 +366,21 @@ async fn node_requested_enrollment_is_approved_and_paired_by_the_offering_node()
         );
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
+    for invalid in [json!(0), json!(7_776_001), json!(-1), json!(1.5)] {
+        let error = Tool::call(
+            &server_tool,
+            serde_json::from_value(json!({
+                "action": "enrollment_approve", "request_id": request_id, "lease_seconds": invalid
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("lease_seconds"), "{error}");
+    }
+    let mut approve = approve;
+    approve["lease_seconds"] = json!(7_776_000);
     let approved = call(&server_tool, approve).await;
     assert_eq!(approved["outcome"]["request_id"], request_id);
     let history = call(&server_readonly, json!({"action":"enrollment_history"})).await;
@@ -357,6 +390,12 @@ async fn node_requested_enrollment_is_approved_and_paired_by_the_offering_node()
     assert_eq!(entry["peer_did"], candidate.node_identity.did());
     assert_eq!(entry["decided_by"], server.node_identity.did());
     assert!(entry["decided_at"].is_string());
+    let decided =
+        chrono::DateTime::parse_from_rfc3339(entry["decided_at"].as_str().unwrap()).unwrap();
+    let expires =
+        chrono::DateTime::parse_from_rfc3339(entry["authorization_expires_at"].as_str().unwrap())
+            .unwrap();
+    assert_eq!((expires - decided).num_seconds(), 7_776_000);
     let applied = call(
         &server_tool,
         json!({"action":"pairings_apply","peer_id":candidate_peer,"peer_did":candidate.node_identity.did(),"collections":["DeploymentNote"]}),

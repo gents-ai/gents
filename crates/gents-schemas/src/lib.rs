@@ -151,6 +151,15 @@ pub const NETWORK_ENROLLMENT_ROUTE_RECEIPT: &str =
 pub const ENROLLMENT_OPERATOR_NONCE_NAME: &str = "EnrollmentOperatorNonce";
 pub const ENROLLMENT_OPERATOR_NONCE: &str =
     include_str!("../schemas/agent/enrollment_operator_nonce.graphql");
+pub const ENROLLMENT_RENEWAL_POLICY_NAME: &str = "EnrollmentRenewalPolicy";
+pub const ENROLLMENT_RENEWAL_POLICY: &str =
+    include_str!("../schemas/agent/enrollment_renewal_policy.graphql");
+pub const ENROLLMENT_RENEWAL_INTENT_NAME: &str = "EnrollmentRenewalIntent";
+pub const ENROLLMENT_RENEWAL_INTENT: &str =
+    include_str!("../schemas/agent/enrollment_renewal_intent.graphql");
+pub const ENROLLMENT_RENEWAL_OFFER_NAME: &str = "EnrollmentRenewalOffer";
+pub const ENROLLMENT_RENEWAL_OFFER: &str =
+    include_str!("../schemas/agent/enrollment_renewal_offer.graphql");
 pub const FILE_IMAGE_HYDRATION_REQUEST_NAME: &str = "FileImageHydrationRequest";
 pub const FILE_IMAGE_HYDRATION_REQUEST: &str =
     include_str!("../schemas/agent/file_image_hydration_request.graphql");
@@ -246,6 +255,9 @@ pub const ALL: &[&str] = &[
     NETWORK_AUTHORIZATION_REVISION,
     NETWORK_ENROLLMENT_ROUTE_RECEIPT,
     ENROLLMENT_OPERATOR_NONCE,
+    ENROLLMENT_RENEWAL_POLICY,
+    ENROLLMENT_RENEWAL_INTENT,
+    ENROLLMENT_RENEWAL_OFFER,
     SESSION_HYDRATION_REQUEST,
     FILE_IMAGE_HYDRATION_REQUEST,
     FILE_INVENTORY_IMAGE_REQUEST,
@@ -326,6 +338,9 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     NETWORK_AUTHORIZATION_REVISION_NAME,
     NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
     ENROLLMENT_OPERATOR_NONCE_NAME,
+    ENROLLMENT_RENEWAL_POLICY_NAME,
+    ENROLLMENT_RENEWAL_INTENT_NAME,
+    ENROLLMENT_RENEWAL_OFFER_NAME,
     SESSION_HYDRATION_REQUEST_NAME,
     FILE_IMAGE_HYDRATION_REQUEST_NAME,
     FILE_INVENTORY_IMAGE_REQUEST_NAME,
@@ -369,6 +384,8 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
 /// Whole-collection subscriptions would bypass the file-review selection
 /// boundary. These records use filtered control routes or document-scoped push.
 pub const EXPLICIT_DELIVERY_COLLECTION_NAMES: &[&str] = &[
+    ENROLLMENT_RENEWAL_INTENT_NAME,
+    ENROLLMENT_RENEWAL_OFFER_NAME,
     FILE_INVENTORY_REQUEST_NAME,
     FILE_INVENTORY_PAGE_NAME,
     TOOL_FILE_CHANGE_NAME,
@@ -397,6 +414,7 @@ pub const LOCAL_AUDIT_COLLECTION_NAMES: &[&str] = &[
 pub const LOCAL_ONLY_COLLECTION_NAMES: &[&str] = &[
     NETWORK_ADMIN_PIN_NAME,
     ENROLLMENT_OPERATOR_NONCE_NAME,
+    ENROLLMENT_RENEWAL_POLICY_NAME,
     FILE_INVENTORY_REPLY_NAME,
     FILE_INVENTORY_PROGRESS_NAME,
     FILE_IMAGE_HYDRATION_RECEIPT_NAME,

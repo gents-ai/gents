@@ -1,5 +1,7 @@
 #[derive(Debug, thiserror::Error)]
 pub enum EnrollmentError {
+    #[error("invalid or expired enrollment renewal intent")]
+    RenewalIntentInvalid,
     #[error("unsupported enrollment request version {version}")]
     UnsupportedRequestVersion { version: u8 },
     #[error("request offer_id mismatch")]

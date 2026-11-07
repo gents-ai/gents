@@ -21,6 +21,7 @@ mod error;
 mod lease;
 mod offer;
 mod operator;
+mod renewal_intent;
 mod request;
 mod revision;
 mod route_receipt;
@@ -36,11 +37,14 @@ pub use decision::{
 };
 pub use error::EnrollmentError;
 pub use lease::{AuthorizationLease, AuthorizationLeaseState, ENROLLMENT_RENEWAL_WINDOW_SECONDS};
-pub use offer::{decode_offer, encode_offer, EnrollmentOfferRecord};
+pub use offer::{
+    decode_offer, encode_offer, renewal_challenge, renewal_challenge_matches, EnrollmentOfferRecord,
+};
 pub use operator::{
     EnrollmentOperatorAction, EnrollmentOperatorDecisionCommand, EnrollmentOperatorQuery,
     EnrollmentOperatorQueryCommand,
 };
+pub use renewal_intent::{RenewalIntent, RenewalOfferResponse, RENEWAL_INTENT_VALIDITY_SECONDS};
 pub use request::EnrollmentRequestRecord;
 pub use revision::{derive_revision_id, AuthorizationRevisionKind, AuthorizationRevisionRecord};
 pub use route_receipt::{
