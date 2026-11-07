@@ -211,8 +211,7 @@ export type DesktopApiAdapter = {
     request: JoinRequestDecideRequest,
   ) => Promise<JoinRequestDecisionView>;
   /** who has access to the node this desktop runs, and what was decided; the
-   *  bridge answers `unsupported` for any other node, and for a runtime too
-   *  old to answer */
+   *  bridge answers `unsupported` for any other node */
   listJoinMembers?: (nodeDid: string) => Promise<JoinMemberView[]>;
   readJoinHistory?: (nodeDid: string) => Promise<JoinHistoryView>;
   /** Opens a URL in the person's browser. The bridge strips the packaged
