@@ -4,8 +4,11 @@ import Mathlib.Data.Nat.Basic
 namespace CompletionRetry.CountCarrier
 open ToolPolicy.WriteInput
 
+/-- `docId` is a DefraDB `ID` field. Its wire input is text, but DefraDB
+accepts only a well-formed document ID there and rejects a decimal count as a
+malformed document ID, so it stores no count. -/
 inductive Field where
-  | integer | number | text | json | dateTime | boolean | list | relation | unsupported
+  | integer | number | text | docId | json | dateTime | boolean | list | relation | unsupported
   deriving DecidableEq, Repr
 
 inductive Encoding where
@@ -19,14 +22,14 @@ def encodingKind : Encoding → Kind
 def inputKinds : Field → List Kind
   | .integer => [.integer]
   | .number => [.number]
-  | .text | .dateTime => [.text]
+  | .text | .docId | .dateTime => [.text]
   | .json => [.object, .array, .text, .number, .boolean]
   | .boolean => [.boolean]
   | .list => [.array]
   | .relation | .unsupported => []
 
 def storageAdmits (field : Field) (_encoding : Encoding) : Bool :=
-  field != .dateTime
+  field != .dateTime && field != .docId
 
 def admitsEncoding (field : Field) (encoding : Encoding) : Bool :=
   (inputKinds field).any (fun expected => compatible expected (encodingKind encoding)) &&
@@ -102,6 +105,8 @@ theorem admission_iff_wire_witness (field : Field) (maximum : Nat) (h : 10 ≤ m
     cases encoding <;> simp_all [canCarry]
 
 theorem datetime_has_no_count : canCarry .dateTime = false := by decide
+
+theorem docid_has_no_count : canCarry .docId = false := by decide
 
 theorem noncanonical_has_no_count (value maximum : Nat) :
     parseCount none value maximum = none := by simp [parseCount]

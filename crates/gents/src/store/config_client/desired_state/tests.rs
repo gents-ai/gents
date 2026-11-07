@@ -1386,6 +1386,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
         ("required_tags", "LIST"),
         ("observed_at", "DateTime"),
         ("required_observed_at", "DateTime!"),
+        ("marker", "ID"),
     ] {
         let cases = &crate::lean_vocab_test::lean_contract_snapshot().count_carrier_cases["fields"];
         let case = cases
@@ -1472,7 +1473,6 @@ async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> 
         ("float64-count", "amount"),
         ("json-count", "payload"),
         ("blob-count", "attachment"),
-        ("id-count", "marker"),
         ("non-null-int-count", "required_total"),
         ("non-null-string-count", "required_label"),
     ];
@@ -1760,6 +1760,7 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
         ("tags", "LIST"),
         ("observed_at", "DateTime"),
         ("required_observed_at", "DateTime!"),
+        ("marker", "ID"),
     ] {
         let cases = &crate::lean_vocab_test::lean_contract_snapshot().count_carrier_cases["fields"];
         let case = cases
@@ -1846,7 +1847,6 @@ async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Resul
         ("float64-count", "amount"),
         ("json-count", "payload"),
         ("blob-count", "attachment"),
-        ("id-count", "marker"),
     ];
     for (id, count_field) in count_fields {
         if let Err(error) = apply(
