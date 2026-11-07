@@ -69,7 +69,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
             &serde_json::json!({"input":{"node_did":runtime.did()}}), gents_protocol::schemas::NODE).await?;
         let node_doc = crate::store::graphql::created_doc_id(&node_result, "Node")?;
         let agent_result = txn.execute_client_signed_create("mutation($input: AgentMutationInputArg!) { create_Agent(input:$input) {_docID} }",
-            &serde_json::json!({"input":{"node_did":runtime.did(),"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"enabled":true}}), gents_protocol::schemas::AGENT).await?;
+            &serde_json::json!({"input":{"node_did":runtime.did(),"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"enabled":true,"inference_profile_id":"profile"}}), gents_protocol::schemas::AGENT).await?;
         let agent_doc = crate::store::graphql::created_doc_id(&agent_result, "Agent")?;
         Ok::<_, anyhow::Error>((node_doc, agent_doc))
     })).await.unwrap();
@@ -78,7 +78,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
             let response = txn.execute_client_signed_create(
                 "mutation($input: AgentMutationInputArg!) { create_Agent(input:$input) {_docID} }",
                 &serde_json::json!({"input":{"node_did":runtime.did(), "agent_did":target.agent_did,
-                    "creation_nonce":target.creation_nonce, "enabled":true}}), gents_protocol::schemas::AGENT).await?;
+                    "creation_nonce":target.creation_nonce, "enabled":true, "inference_profile_id":"profile"}}), gents_protocol::schemas::AGENT).await?;
             let doc = crate::store::graphql::created_doc_id(&response, "Agent")?;
             txn.add_resource_relationship("Agent", &doc, "parent", "nodes", &node_doc).await?;
             txn.add_actor_relationship("Agent", &doc, "executor", &target.agent_did.parse()?).await?;
@@ -265,13 +265,17 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
             "{case}"
         );
     }
-    let commits = crate::store::graphql::composite_commits(
-        &node,
-        repository_doc,
-        "test quickstart repository signature",
-    )
-    .await
-    .unwrap();
+    // Commit history is read as the signing User; the node has no fallback.
+    let history = operator
+        .execute(&format!(
+            r#"{{ _commits(docID: "{}") {{ cid height fieldName signature {{ identity type }} }} }}"#,
+            crate::store::graphql::escape_graphql_string(repository_doc)
+        ))
+        .await
+        .unwrap();
+    let commits =
+        crate::store::graphql::composite_commits_at(history["data"].get("_commits"), "_commits")
+            .unwrap();
     let genesis = commits.iter().min_by_key(|commit| commit.height).unwrap();
     let user_signer = crate::store::identity::commit_signer_identity_for_did(user.did()).unwrap();
     assert_eq!(
