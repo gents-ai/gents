@@ -619,13 +619,13 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
             }
             let notify_scope = notification_scope.clone();
             let notify_home = home.clone();
-            let result = gents::pack::plugin_lifecycle::install_with_source(
+            let result = gents::pack::plugin_lifecycle::install(
                 &home,
                 &pack.archive,
                 args.grant_authority,
                 slot_owner.as_deref(),
                 &requested,
-                Some(pack.provenance()),
+                pack.provenance(),
                 move |identity, changes| {
                     let home = notify_home;
                     async move {

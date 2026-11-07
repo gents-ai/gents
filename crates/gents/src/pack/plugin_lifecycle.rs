@@ -14,8 +14,7 @@ pub struct PluginStageChanges {
     pub(crate) installed: Vec<store::InstalledPlugin>,
 }
 
-/// A local publication and its node notification are driven by one owned task,
-/// so cancellation cannot mistake an unconfirmed commit for a refusal.
+/// A local publication and its node notification share one owned task.
 #[allow(clippy::too_many_arguments)]
 pub async fn install<F>(
     home: &Path,
@@ -23,23 +22,8 @@ pub async fn install<F>(
     consent: bool,
     owner: Option<&str>,
     bindings: &BTreeMap<String, String>,
+    source: super::PackSource,
     notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
-) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)>
-where
-    F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
-{
-    install_with_source(home, archive, consent, owner, bindings, None, notify).await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn install_with_source<F>(
-    home: &Path,
-    archive: &crate::pack::archive::PackArchive,
-    consent: bool,
-    owner: Option<&str>,
-    bindings: &BTreeMap<String, String>,
-    source: Option<super::PackSource>,
-    notify: impl FnOnce(PackIdentity) -> F + Send + 'static,
 ) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)>
 where
     F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
@@ -62,21 +46,8 @@ pub async fn install_plugin<F>(
     home: &Path,
     archive: &crate::pack::archive::PackArchive,
     consent: bool,
+    source: super::PackSource,
     notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
-) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)>
-where
-    F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
-{
-    install_plugin_with_source(home, archive, consent, None, notify).await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn install_plugin_with_source<F>(
-    home: &Path,
-    archive: &crate::pack::archive::PackArchive,
-    consent: bool,
-    source: Option<super::PackSource>,
-    notify: impl FnOnce(PackIdentity) -> F + Send + 'static,
 ) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)>
 where
     F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
@@ -106,7 +77,7 @@ async fn install_owned<F>(
     owner: Option<&str>,
     bindings: &BTreeMap<String, String>,
     operator: bool,
-    source: Option<super::PackSource>,
+    source: super::PackSource,
     notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
 ) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)>
 where
@@ -141,7 +112,7 @@ where
             plugins: plugins.iter().map(|plugin| InstalledPackPlugin { name: plugin.name.clone(), digest: plugin.digest.clone() }).collect(),
             installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             ux: manifest.metadata.ux.clone(), installed_via: operator.then_some(super::InstalledVia::Operator),
-            source, source_history: Vec::new(),
+            source: Some(source), source_history: Vec::new(),
         };
         let publish_home = home.clone();
         let mut publish_record = record.clone();
@@ -293,24 +264,24 @@ pub(crate) mod tests {
         let (_old, _, old_archive) = fixture("1.0.0", false);
         let (_new, _, new_archive) = fixture("2.0.0", false);
         let local = super::super::PackSource::local(Path::new("/private/pack.gents"));
-        install_with_source(
+        install(
             home.path(),
             &old_archive,
             false,
             None,
             &BTreeMap::new(),
-            Some(local.clone()),
+            local.clone(),
             |_| async { Ok(()) },
         )
         .await
         .unwrap();
-        let (installed, _) = install_with_source(
+        let (installed, _) = install(
             home.path(),
             &new_archive,
             false,
             None,
             &BTreeMap::new(),
-            Some(super::super::PackSource::Store),
+            super::super::PackSource::Store,
             |_| async { Ok(()) },
         )
         .await
@@ -334,6 +305,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::from([("model".into(), "profile".into())]),
+            super::super::PackSource::Local { file_name: None },
             |_, _| async { panic!("refused install must not notify") },
         )
         .await
@@ -407,6 +379,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            super::super::PackSource::Local { file_name: None },
             |_, _| async {
                 Err(super::super::PluginStoreChangeError::Unconfirmed(
                     anyhow::anyhow!("notification failed"),
@@ -429,6 +402,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            super::super::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) },
         )
         .await
@@ -453,6 +427,7 @@ pub(crate) mod tests {
                     false,
                     None,
                     &BTreeMap::new(),
+                    super::super::PackSource::Local { file_name: None },
                     move |_, _| async move {
                         reached.notify_one();
                         release.notified().await;
@@ -493,6 +468,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            super::super::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) }
         )
         .await
@@ -505,6 +481,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            super::super::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) },
         )
         .await
@@ -518,6 +495,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            super::super::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) }
         )
         .await

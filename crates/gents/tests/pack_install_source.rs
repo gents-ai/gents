@@ -113,13 +113,13 @@ async fn asset_install_keeps_portable_source_across_reinstall() {
     let home = tempfile::tempdir().unwrap();
     let local = PackSource::local(Path::new("/private/folder/assets.pack"));
     for source in [local.clone(), PackSource::Store] {
-        gents::pack::plugin_lifecycle::install_with_source(
+        gents::pack::plugin_lifecycle::install(
             home.path(),
             &archive,
             false,
             None,
             &BTreeMap::new(),
-            Some(source),
+            source,
             |_| async { Ok(()) },
         )
         .await
