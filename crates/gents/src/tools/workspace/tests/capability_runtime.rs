@@ -186,6 +186,7 @@ async fn runtime_seal_case(unowned: bool) {
             .enable_signing()
             .data_path(db_dir.path().join("db"))
             .with_node_identity_did(did)
+            .with_node_acp_owner(did.to_owned())
             .build()
             .await
             .unwrap(),
