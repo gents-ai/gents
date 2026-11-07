@@ -106,14 +106,16 @@ pub(crate) async fn load_goal_creation_claim_fingerprint_in_txn(
     let session = crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
         .await?
         .context("goal claim requires a visible physical session")?;
+    // Read through the transaction's own backend: client creates reconcile a
+    // lost race over HTTP, where an embedded-only response is unavailable.
     let response = txn
-        .execute_local_response(&goal_creation_claim_query(
+        .execute(&goal_creation_claim_query(
             node_did,
             session_id,
             &session.doc_id,
         ))
         .await?;
-    goal_creation_claim_fingerprint(&response)
+    goal_creation_claim_fingerprint(&serde_json::from_value(response)?)
 }
 
 fn goal_creation_claim_query(node_did: &str, session_id: &str, session_doc_id: &str) -> String {
