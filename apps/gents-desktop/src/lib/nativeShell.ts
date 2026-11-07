@@ -25,6 +25,16 @@ export async function windowOpen(label: string): Promise<boolean> {
   return (await Window.getByLabel(label)) !== null;
 }
 
+/** Closes plugin `pluginId`'s own window, when one is open. */
+export async function closePluginWindow(pluginId: string) {
+  await (await Window.getByLabel(pluginWindowLabel(pluginId)))?.close();
+}
+
+/** Sent to the main view when a plugin's own window opens or closes
+    (`PLUGIN_WINDOW_EVENT` in `bridge/plugin_window.rs`). */
+export const PLUGIN_WINDOW_EVENT = "desktop://plugin-window";
+export type PluginWindowChange = { pluginId: string; open: boolean };
+
 export function sendAppOpened() {
   if (inNativeShell() && windowLabel() === "main") {
     void invoke("product_telemetry_app_opened").catch(() => {});
