@@ -879,8 +879,8 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
         Some(caused.request_id.clone())
     );
     assert!(
-        crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id(
-            &node,
+        crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+            &owner(&message),
             &message.caused_request_doc_id
         )
         .await
@@ -1485,41 +1485,42 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
     let root = crate::KeyIdentity::load_existing(admission.path.join("node.key"), None).unwrap();
     let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
     let target = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
-    let agent_input = serde_json::json!({
-        "node_did": caller.node_did,
-        "agent_did": binding.agent_did,
-        "creation_nonce": binding.creation_nonce,
-        "display_name": "nested Goal target",
-        "inference_profile_id": "nested-goal-profile",
-        "enabled": true,
-    });
-    let rendered = gents_protocol::graphql::graphql_input_literal(&agent_input).unwrap();
-    let created = caller_access
-        .write(
-            "test.nested_goal_target",
-            &format!("mutation {{ create_Agent(input: {rendered}) {{ _docID }} }}",),
-        )
+    // Agent configuration is authored by the User; a managed Agent cannot
+    // publish another Agent's configuration document.
+    crate::test_support::install_test_agent_binding_with_access(
+        &caller.node_did,
+        "nested Goal target",
+        &binding,
+        &admission.client,
+    )
+    .await;
+    let target_rows = admission
+        .client
+        .execute(&format!(
+            r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
+            escape_graphql_string(&binding.agent_did)
+        ))
         .await
         .unwrap();
-    let target_doc = crate::store::graphql::created_doc_id(&created, "Agent").unwrap();
-    caller_access
-        .add_actor_relationship(
-            "Agent",
-            &target_doc,
-            "session_writer",
-            &identity::Did::new(&caller.agent_did).unwrap(),
-        )
-        .await
-        .unwrap();
-    caller_access
-        .add_actor_relationship(
-            "Agent",
-            &target_doc,
-            "executor",
-            &identity::Did::new(target.did()).unwrap(),
-        )
-        .await
-        .unwrap();
+    let target_doc = target_rows["data"]["Agent"][0]["_docID"]
+        .as_str()
+        .expect("installed nested Goal target")
+        .to_owned();
+    for (relation, actor) in [
+        ("session_writer", caller.agent_did.as_str()),
+        ("executor", target.did()),
+    ] {
+        admission
+            .client
+            .add_actor_relationship(
+                "Agent",
+                &target_doc,
+                relation,
+                &identity::Did::new(actor).unwrap(),
+            )
+            .await
+            .unwrap();
+    }
 
     let cause = SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
