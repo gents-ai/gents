@@ -469,15 +469,19 @@ mod tests {
         node: &Arc<EmbeddedNode>,
         request_id: &str,
         session_id: &str,
-        node_did: &str,
+        node_did_raw: &str,
         requester_did: Option<&str>,
     ) -> RequestLifecycle {
         let now = crate::store::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let request_id = crate::store::graphql::escape_graphql_string(request_id);
         let session_id = crate::store::graphql::escape_graphql_string(session_id);
-        let node_did = crate::store::graphql::escape_graphql_string(node_did);
+        let node_did = crate::store::graphql::escape_graphql_string(node_did_raw);
+        // Request rows carry a validated Agent DID; the fixture's Agent is
+        // installed under the node and its DID is the one the row names.
+        let agent = crate::test_support::install_test_agent(node, node_did_raw, "general").await;
+        let agent_did = crate::store::graphql::escape_graphql_string(&agent.agent_did);
         let requester_did_field = crate::session::requester_did_create_field(requester_did);
-        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_did: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "query fixture", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0, {requester_did_field} }}) {{ _docID }} }}"#)).await;
+        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_did: "{agent_did}", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "query fixture", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0, {requester_did_field} }}) {{ _docID }} }}"#)).await;
         assert!(!created.has_errors(), "{:#?}", created.errors);
         let row = crate::store::graphql::graphql_with_transaction_retry(node, &format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
@@ -489,7 +493,7 @@ mod tests {
                 .unwrap();
         let mut lifecycle = RequestLifecycle::new_with_node_did(
             node.clone(),
-            "general",
+            &agent.agent_did,
             &node_did,
             row.try_into().unwrap(),
             60,
