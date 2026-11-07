@@ -210,6 +210,18 @@ fn document(value: Value) -> DesiredStateApplyDocument {
     }
 }
 
+/// An out-of-band row for an InferenceBackend identity. Backends are stored as
+/// `InferenceBackendMetadata` (their credential lives apart), so an injected
+/// duplicate or drift targets that physical collection.
+fn backend_metadata_mutation(owner: &str, id: &str, name: &str) -> String {
+    format!(
+        r#"mutation {{ create_InferenceBackendMetadata(input: {{node_did: "{}", backend_id: "{}", name: "{}", provider_kind: "OpenAiCompatible", endpoint: "http://127.0.0.1:8000/v1", auth_kind: "unauthenticated", enabled: true}}) {{ _docID }} }}"#,
+        escape_graphql_string(owner),
+        escape_graphql_string(id),
+        escape_graphql_string(name),
+    )
+}
+
 async fn register_config_schemas(node: &EmbeddedNode) -> Result<()> {
     register_config_schemas_dropping_unique_indexes(node, &[]).await
 }
@@ -351,22 +363,14 @@ async fn unchanged_desired_state_replay_does_not_add_document_commit() -> Result
     let created = apply_with_counts(&access, vec![document.clone()]).await?;
     assert_eq!(created.get(Collection::InferenceBackend), 1);
     let query = format!(
-        r#"{{ InferenceBackend(filter: {{ node_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
+        r#"{{ InferenceBackendMetadata(filter: {{ node_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
         crate::store::graphql::escape_graphql_string(owner),
         crate::store::graphql::escape_graphql_string(backend_id),
     );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node.as_ref(),
-        &query,
-        "test.desired_state_replay.read_backend",
-    )
-    .await?;
-    let doc_id = crate::store::graphql::first_row::<Value>(&response, "InferenceBackend")?
-        .and_then(|row| {
-            row.get("_docID")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
+    let response = access.execute(&query).await?;
+    let doc_id = response["data"]["InferenceBackendMetadata"][0]["_docID"]
+        .as_str()
+        .map(ToOwned::to_owned)
         .context("created backend is missing _docID")?;
     let before = crate::store::graphql::composite_commits(
         node.as_ref(),
@@ -486,14 +490,13 @@ async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> R
         vec![document(backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "z_duplicate"))],
     )
     .await?;
-    let mut duplicate = backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "z_duplicate");
-    duplicate["name"] = "Distinct document".into();
     access
         .write(
             "test.desired.duplicate",
-            &format!(
-                "mutation {{ create_InferenceBackend(input:{}){{_docID}} }}",
-                gents_protocol::graphql::graphql_input_literal(&duplicate)?
+            &backend_metadata_mutation(
+                "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                "z_duplicate",
+                "Distinct document",
             ),
         )
         .await?;
@@ -506,10 +509,10 @@ async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> R
     )
     .await
     .is_err());
-    let response = node.execute("{InferenceBackend{backend_id name}}").await;
-    assert!(!response.has_errors());
-    let rows = response.data.unwrap();
-    let rows = rows["InferenceBackend"].as_array().unwrap();
+    let rows = access
+        .execute("{InferenceBackendMetadata{backend_id name}}")
+        .await?;
+    let rows = rows["data"]["InferenceBackendMetadata"].as_array().unwrap();
     assert_eq!(rows.len(), 2);
     assert!(rows.iter().all(|row| row["backend_id"] == "z_duplicate"));
     assert!(rows.iter().any(|row| row["name"] == "Distinct document"));
@@ -607,15 +610,10 @@ async fn read_records_rejects_duplicate_live_documents_naming_them() -> Result<(
     let access = runtime_access(&node)?;
     let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
     apply(&access, vec![document(backend(owner, "dup"))]).await?;
-    let mut duplicate = backend(owner, "dup");
-    duplicate["name"] = "Second".into();
     access
         .write(
             "test.read_records.duplicate",
-            &format!(
-                "mutation {{ create_InferenceBackend(input:{}){{_docID}} }}",
-                gents_protocol::graphql::graphql_input_literal(&duplicate)?
-            ),
+            &backend_metadata_mutation(owner, "dup", "Second"),
         )
         .await?;
     let error = access
@@ -628,7 +626,7 @@ async fn read_records_rejects_duplicate_live_documents_naming_them() -> Result<(
         .unwrap_err();
     let message = format!("{error:#}");
     assert!(
-        message.contains("multiple live InferenceBackend documents"),
+        message.contains("multiple live InferenceBackendMetadata documents"),
         "{message}"
     );
     assert!(message.contains("dup"), "{message}");
@@ -876,14 +874,11 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
         .await?;
-    let remaining = node
-        .execute("{Agent{node_did} InferenceBackend{node_did}}")
-        .await;
-    assert!(!remaining.has_errors());
-    for collection in ["Agent", "InferenceBackend"] {
-        let rows = remaining.data.as_ref().unwrap()[collection]
-            .as_array()
-            .unwrap();
+    let remaining = access
+        .execute("{Agent{node_did} InferenceBackendMetadata{node_did}}")
+        .await?;
+    for collection in ["Agent", "InferenceBackendMetadata"] {
+        let rows = remaining["data"][collection].as_array().unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["node_did"], "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR");
     }
@@ -914,12 +909,16 @@ async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Resu
     .await
     .unwrap_err();
     assert!(format!("{error:#}").contains("multiple live AgentContext"));
-    let rows = node
-        .execute("{InferenceBackend{backend_id}}")
-        .await
-        .data
-        .unwrap();
-    assert_eq!(rows["InferenceBackend"].as_array().unwrap().len(), 1);
+    let rows = access
+        .execute("{InferenceBackendMetadata{backend_id}}")
+        .await?;
+    assert_eq!(
+        rows["data"]["InferenceBackendMetadata"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     Ok(())
 }
 
@@ -949,7 +948,7 @@ async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Resu
         "capture and validation each read all three identities in one page"
     );
 
-    access.write("test.drift", r#"mutation { update_InferenceBackend(filter:{node_did:{_eq:"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"},backend_id:{_eq:"packaged"}},input:{name:"out-of-band"}){_docID} }"#).await?;
+    access.write("test.drift", r#"mutation { update_InferenceBackendMetadata(filter:{node_did:{_eq:"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"},backend_id:{_eq:"packaged"}},input:{name:"out-of-band"}){_docID} }"#).await?;
     let error = access
         .transact_write("test.verify.drifted", |txn| {
             let plan = &matching;
