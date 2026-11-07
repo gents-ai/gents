@@ -1304,6 +1304,7 @@ fn demo_identity(dependencies: Vec<String>) -> PackIdentity {
         plugins: vec![],
         dependencies,
         explicit: true,
+        snapshot: None,
     }
 }
 

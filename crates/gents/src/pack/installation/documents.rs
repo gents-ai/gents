@@ -165,6 +165,7 @@ pub struct PreparedDependency {
     pub(crate) manifest: super::super::PackManifest,
     pub(crate) digest: String,
     pub(crate) assets: BTreeMap<String, Vec<u8>>,
+    pub(super) snapshot: Option<super::InstalledDependencySnapshot>,
 }
 
 pub struct PreparedDocumentPackInstall {
@@ -248,6 +249,14 @@ impl PreparedDocumentPackInstall {
             plugin_digests,
             operator_ux_digests,
         })
+    }
+}
+
+impl PreparedDocumentPackInstall {
+    pub fn reuses_dependency(&self, coordinate: &str) -> bool {
+        self.dependencies
+            .iter()
+            .any(|dependency| dependency.coordinate == coordinate && dependency.snapshot.is_some())
     }
 }
 
@@ -664,6 +673,24 @@ async fn prepare_document_pack_install_inner(
     let mut dependency_inference = BTreeMap::new();
     let mut prepared_dependencies = Vec::new();
     for archive in dependencies {
+        let coordinate = format!(
+            "{}/{}",
+            archive.manifest().metadata.namespace,
+            archive.manifest().name
+        );
+        let snapshot = access
+            .transact_readonly("pack.dependency.snapshot", |txn| {
+                let coordinate = &coordinate;
+                Box::pin(async move {
+                    let record = super::read_record(txn, owner, coordinate).await?;
+                    anyhow::ensure!(record.doc_id.is_none() || record.digest.as_deref() == Some(archive.digest()),
+                        "installed dependency {coordinate} has a different artifact; update it explicitly before installing its dependent");
+                    super::dependency_snapshot_in_txn(txn, owner, coordinate, archive.digest()).await
+                })
+            })
+            .await?;
+        anyhow::ensure!(snapshot.is_none() || selected(archive.manifest()).is_empty(),
+            "installed dependency {coordinate} has explicit inference selections; update it explicitly before installing its dependent");
         let preview = super::super::preview_pack_inference_bindings_with_node_binding(
             access,
             archive.manifest(),
@@ -676,11 +703,6 @@ async fn prepare_document_pack_install_inner(
             node_did: owner.to_owned(),
         };
         let prepared = {
-            let coordinate = format!(
-                "{}/{}",
-                archive.manifest().metadata.namespace,
-                archive.manifest().name
-            );
             let authored = match preloaded.remove(&coordinate) {
                 Some(loaded) => loaded,
                 None => {
@@ -695,15 +717,19 @@ async fn prepare_document_pack_install_inner(
                     .await?
                 }
             };
-            let bound_manifest = super::super::agent_bindings::manifest_with_agent_bindings(
-                archive.manifest(),
-                &authored.agent_bindings,
-            );
-            let config = super::super::bind_pack_install_config(
-                &bound_manifest,
-                &authored.config,
-                &preview.bindings,
-            )?;
+            let config = if let Some(snapshot) = &snapshot {
+                snapshot.config(owner)?
+            } else {
+                let bound_manifest = super::super::agent_bindings::manifest_with_agent_bindings(
+                    archive.manifest(),
+                    &authored.agent_bindings,
+                );
+                super::super::bind_pack_install_config(
+                    &bound_manifest,
+                    &authored.config,
+                    &preview.bindings,
+                )?
+            };
             let mut schemas = Vec::new();
             let mut assets = BTreeMap::new();
             for path in document_pack_schema_paths(archive.manifest())? {
@@ -737,6 +763,7 @@ async fn prepare_document_pack_install_inner(
                 manifest: archive.manifest().clone(),
                 digest: archive.digest().to_owned(),
                 assets,
+                snapshot,
             }
         };
         dependency_inference.insert(archive.manifest().name.clone(), preview);
@@ -966,6 +993,7 @@ pub async fn install_prepared_document_pack(
         prepared
             .dependencies
             .iter()
+            .filter(|dependency| dependency.snapshot.is_none())
             .map(|dependency| &dependency.manifest),
     );
     for manifest in all {
@@ -1193,6 +1221,7 @@ pub(super) fn document_graph_stages(
             dependencies: Vec::new(),
             explicit: false,
             source: prepared.sources.get(&dependency.coordinate).cloned(),
+            snapshot: dependency.snapshot.clone(),
         });
     }
     let mut assets = BTreeMap::new();
@@ -1221,6 +1250,7 @@ pub(super) fn document_graph_stages(
                 archive.manifest().name
             ))
             .cloned(),
+        snapshot: None,
     });
     Ok(stages)
 }
@@ -1237,6 +1267,7 @@ pub(super) struct DocumentPackStage {
     pub(super) dependencies: Vec<String>,
     pub(super) explicit: bool,
     pub(super) source: Option<super::PackSource>,
+    pub(super) snapshot: Option<super::InstalledDependencySnapshot>,
 }
 
 /// The same document graph reconstructed by the host and the client.
@@ -1245,6 +1276,7 @@ pub struct HostedDocumentGraph {
     identities: Vec<PackIdentity>,
     documents: Vec<Vec<crate::store::config_client::DesiredStateApplyDocument>>,
     sources: Vec<Option<super::PackSource>>,
+    snapshots: Vec<Option<super::InstalledDependencySnapshot>>,
     node_binding: Option<crate::store::config_client::ConfigurationNodeBinding>,
     plugin_root: bool,
 }
@@ -1265,6 +1297,7 @@ pub(super) fn hosted_document_graph_from_stages(
     let mut identities = Vec::new();
     let mut documents = Vec::new();
     let mut sources = Vec::new();
+    let mut snapshots = Vec::new();
     for stage in stages {
         let mut plugins = Vec::new();
         for plugin in &stage.manifest.metadata.plugins {
@@ -1285,11 +1318,13 @@ pub(super) fn hosted_document_graph_from_stages(
         identities.push(identity);
         documents.push(super::installable_documents(&stage.config)?);
         sources.push(stage.source.clone());
+        snapshots.push(stage.snapshot.clone());
     }
     Ok(HostedDocumentGraph {
         identities,
         documents,
         sources,
+        snapshots,
         node_binding: prepared.node_binding.clone(),
         plugin_root: stages.last().is_some_and(|stage| {
             matches!(
@@ -1313,6 +1348,7 @@ pub async fn apply_hosted_document_graph(
             &graph.identities,
             graph.documents.clone(),
             &graph.sources,
+            &graph.snapshots,
             policy,
             graph.node_binding.as_ref(),
         )
@@ -1330,6 +1366,10 @@ pub async fn apply_hosted_document_graph(
         .sources
         .split_last()
         .context("hosted plugin graph missing")?;
+    let (_, dependency_snapshots) = graph
+        .snapshots
+        .split_last()
+        .context("hosted plugin graph missing")?;
     anyhow::ensure!(
         root_documents.is_empty(),
         "plugin root cannot replace pack documents"
@@ -1340,6 +1380,7 @@ pub async fn apply_hosted_document_graph(
         dependencies,
         dependency_documents.to_vec(),
         dependency_sources,
+        dependency_snapshots,
         policy,
         graph.node_binding.as_ref(),
     )
@@ -1370,7 +1411,7 @@ pub(super) async fn stage_document_plugins(
 ) -> Result<Option<crate::plugin::install::StagedPluginInstall>> {
     let input = stages
         .iter()
-        .filter(|stage| !stage.manifest.metadata.plugins.is_empty())
+        .filter(|stage| stage.snapshot.is_none() && !stage.manifest.metadata.plugins.is_empty())
         .map(|stage| crate::plugin::install::PluginStageInput {
             manifest: stage.manifest.clone(),
             digest: stage.digest.clone(),
@@ -1407,15 +1448,30 @@ pub(super) async fn apply_document_graph_in_txn(
     identities: &[PackIdentity],
     documents: Vec<Vec<crate::store::config_client::DesiredStateApplyDocument>>,
     sources: &[Option<super::PackSource>],
+    snapshots: &[Option<super::InstalledDependencySnapshot>],
     policy: DriftPolicy,
     node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
 ) -> Result<Vec<InstallReport>> {
     anyhow::ensure!(
-        sources.len() == identities.len(),
+        sources.len() == identities.len() && snapshots.len() == identities.len(),
         "pack source count does not match the document graph"
     );
     let mut reports = Vec::new();
-    for ((identity, documents), source) in identities.iter().zip(documents).zip(sources) {
+    for (((identity, documents), source), snapshot) in
+        identities.iter().zip(documents).zip(sources).zip(snapshots)
+    {
+        if let Some(snapshot) = snapshot {
+            let current =
+                super::dependency_snapshot_in_txn(txn, owner, &identity.coordinate, &identity.digest)
+                    .await?;
+            anyhow::ensure!(
+                current.as_ref() == Some(snapshot),
+                "installed dependency {} changed during preparation; retry the install",
+                identity.coordinate
+            );
+            reports.push(InstallReport::default());
+            continue;
+        }
         reports.push(
             super::install_in_txn(
                 txn,
@@ -1522,6 +1578,7 @@ pub(super) async fn install_document_graph(
             .iter()
             .map(|stage| stage.source.clone())
             .collect::<Vec<_>>();
+        let snapshots = stages.iter().map(|stage| stage.snapshot.clone()).collect::<Vec<_>>();
         let result = access
             .transact_write_with_finality("pack.document_graph.install", |txn| {
                 let documents = documents.clone();
@@ -1534,6 +1591,7 @@ pub(super) async fn install_document_graph(
                 let staged_plugins = plugins.clone();
                 let previous_plugins = previous_plugins.clone();
                 let node_binding = node_binding.clone();
+                let snapshots = &snapshots;
                 Box::pin(async move {
                     txn.stage_plugin_delete_roots(
                         &previous_plugins
@@ -1569,6 +1627,7 @@ pub(super) async fn install_document_graph(
                         identities,
                         documents,
                         sources,
+                        snapshots,
                         policy,
                         node_binding.as_ref(),
                     )
@@ -1639,6 +1698,7 @@ pub async fn install_documents_with_plugins(
         dependencies,
         explicit,
         source: None,
+        snapshot: None,
     };
     let (mut reports, plugins) =
         install_document_graph(access, owner, vec![stage], policy, home, consent, None).await?;
