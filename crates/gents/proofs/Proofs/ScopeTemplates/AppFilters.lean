@@ -30,6 +30,20 @@ def validate (collections : List String) (schema : List FieldAuthority)
   if filters.all (permitted collections schema) && names.eraseDups.length == names.length
   then some filters else none
 
+def subscriptions (collections : List String) (filters : List FieldFilter) : List String :=
+  collections.filter (fun collection => !(filters.map FieldFilter.collection).contains collection)
+
+theorem filtered_collection_not_subscribed (collections : List String)
+    (filters : List FieldFilter) (collection : String)
+    (h : collection ∈ filters.map FieldFilter.collection) :
+    collection ∉ subscriptions collections filters := by
+  intro member
+  have condition := (List.mem_filter.mp member).2
+  have present : (filters.map FieldFilter.collection).contains collection = true := by
+    simpa using h
+  rw [present] at condition
+  contradiction
+
 inductive PairingMode where
   | unfiltered
   | filtered

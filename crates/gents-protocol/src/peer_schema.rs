@@ -70,6 +70,21 @@ pub fn resolve_app_pairing_filters(
     }
 }
 
+pub fn app_pairing_subscriptions(
+    collections: &BTreeSet<String>,
+    filters: &[AppPairingFilter],
+) -> BTreeSet<String> {
+    let filtered: BTreeSet<&str> = filters
+        .iter()
+        .map(|filter| filter.collection.as_str())
+        .collect();
+    collections
+        .iter()
+        .filter(|collection| !filtered.contains(collection.as_str()))
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod app_pairing_filter_conformance {
     use super::*;
@@ -134,6 +149,16 @@ mod app_pairing_filter_conformance {
                 "{}",
                 case["label"]
             );
+            if let Some(filters) = actual {
+                let expected: BTreeSet<String> =
+                    serde_json::from_value(case["subscriptions"].clone()).unwrap();
+                assert_eq!(
+                    app_pairing_subscriptions(&collections, &filters),
+                    expected,
+                    "{}",
+                    case["label"]
+                );
+            }
         }
     }
 }
