@@ -54,6 +54,36 @@ async fn pairing_filters_require_immutable_selected_fields() {
 }
 
 #[tokio::test]
+async fn pairing_inspection_reports_stale_filters() {
+    let db = crate::support::test_p2p_db("pairing-stale-filter").await;
+    let access = ConfigAccess::local(db.node.clone());
+    access
+        .add_collection("type FilteredPost @branchable { to_host: String @immutable text: String }")
+        .await
+        .unwrap();
+    let filters =
+        json!([{"collection":"FilteredPost","field":"to_host","value":"x","version":"outdated"}])
+            .to_string();
+    access.write("test.pairing_stale_filter", &format!(
+        "mutation {{create_DataPlanePairingFilter(input: {{peer_id: \"peer-filter\", node_did: {}, filters: {}}}) {{_docID}}}}",
+        quoted(db.node_identity.did()), quoted(&filters)
+    )).await.unwrap();
+    let tool = P2pTool::new(
+        db.node.clone(),
+        Some(db.node_identity.clone()),
+        true,
+        EndpointScope::all(),
+    );
+    let result = call(&tool, json!({"action":"pairings_list"})).await;
+    let row = &result["outcome"]["desired_filters"][0];
+    assert_eq!(row["status"], "stale");
+    assert!(row["recovery"]
+        .as_str()
+        .unwrap()
+        .contains("Apply the pairing"));
+}
+
+#[tokio::test]
 async fn replacing_a_filtered_overlay_requires_explicit_filter_choice() {
     let db = crate::support::test_p2p_db("pairing-filter-replace").await;
     let actor = db.node_identity.did();

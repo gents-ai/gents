@@ -560,7 +560,34 @@ impl P2pTool {
                     let parsed = row["filters"]
                         .as_str()
                         .and_then(|raw| serde_json::from_str::<Vec<AppPairingFilter>>(raw).ok());
+                    let mut status = "valid";
+                    if let Some(filters) = &parsed {
+                        for filter in filters {
+                            match ConfigAccess::local(self.node.clone())
+                                .collection_version(&filter.collection).await
+                            {
+                                Ok(Some(version)) => {
+                                    if version.get("VersionID").and_then(Value::as_str)
+                                        != Some(filter.version.as_str())
+                                        || crate::runtime::agent::p2p_reconcile::templates::validate_app_filter(&version, filter).is_err()
+                                    {
+                                        status = "stale";
+                                        break;
+                                    }
+                                }
+                                Ok(None) => { status = "stale"; break; }
+                                Err(_) => { status = "unavailable"; break; }
+                            }
+                        }
+                    } else {
+                        status = "invalid";
+                    }
                     row["filters"] = parsed.map_or(Value::Null, |filters| json!(filters));
+                    row["status"] = json!(status);
+                    if status == "stale" || status == "invalid" {
+                        row["recovery"] =
+                            json!("Apply the pairing again with current collection filters.");
+                    }
                 }
                 let applied = self
                     .rows(
