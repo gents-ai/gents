@@ -667,10 +667,13 @@ pub struct CompactionEntrySnapshot {
     pub created_at: String,
 }
 
-pub async fn fetch_compaction_entry_snapshots_for_session(
-    node: &EmbeddedNode,
+pub async fn fetch_compaction_entry_snapshots_for_session<R>(
+    node: &R,
     session_id: &str,
-) -> Vec<CompactionEntrySnapshot> {
+) -> Vec<CompactionEntrySnapshot>
+where
+    R: SnapshotReader + ?Sized,
+{
     let session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
@@ -682,12 +685,6 @@ pub async fn fetch_compaction_entry_snapshots_for_session(
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
-    assert!(
-        !resp.has_errors(),
-        "fetch_compaction_entry_snapshots failed: {:?}",
-        resp.errors
-    );
-    let data = resp.data.expect("data");
+    let data = node.read_data(&query).await;
     serde_json::from_value(data["CompactionEntry"].clone()).expect("parse CompactionEntrySnapshot")
 }

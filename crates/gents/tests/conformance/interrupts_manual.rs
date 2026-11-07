@@ -5,22 +5,13 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 #[tokio::test]
 async fn fork_does_not_transition_parent_lifecycle_state() {
-    use gents::session::{fork, ForkParams};
-    use support::{create_agent, create_agent_message, create_agent_session};
+    use gents::session::{fork_on, ForkParams};
+    use gents_protocol::output::MessageRole;
 
     let db = test_db("fork-no-lifecycle-transition").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
 
     let parent_session = uuid::Uuid::new_v4().to_string();
-    create_agent_session(
-        &db.node,
-        &parent_session,
-        AGENT_NAME,
-        "2026-04-21T10:00:00Z",
-    )
-    .await;
-    create_agent(&db.node, AGENT_NAME, NODE_DID).await;
-
     let request_id = uuid::Uuid::new_v4().to_string();
     let request_doc_id = actors
         .create_request(
@@ -32,37 +23,37 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
             .state("completed"),
         )
         .await;
-    create_agent_message(
-        &db.node,
-        &parent_session,
-        1,
-        "user",
-        "u1",
-        "2026-04-21T10:00:01Z",
-    )
-    .await;
-    create_agent_message(
-        &db.node,
-        &parent_session,
-        2,
-        "assistant",
-        "a1",
-        "2026-04-21T10:00:03Z",
-    )
-    .await;
+    actors
+        .publish_history_message(
+            &parent_session,
+            1,
+            MessageRole::User,
+            "u1",
+            "2026-04-21T10:00:01Z",
+        )
+        .await;
+    actors
+        .publish_history_message(
+            &parent_session,
+            2,
+            MessageRole::Assistant,
+            "a1",
+            "2026-04-21T10:00:03Z",
+        )
+        .await;
 
     let before_request = fetch_request_snapshot(&actors, &request_doc_id).await;
-    let before_output = canonical_session_output(&db.node, &parent_session).await;
+    let before_output = canonical_session_output(&actors, &parent_session).await;
     let before_session = fetch_session_snapshot(&actors, &parent_session).await;
 
-    let _ = fork(
-        &db.node,
-        &::identity::Did::new(NODE_DID).unwrap(),
+    // The session's working Agent forks its own session.
+    let _ = fork_on(
+        &actors.agent_access,
         ForkParams {
             source_session_id: &parent_session,
             boundary: gents::session::ForkBoundary::UserTurn(0),
-            caller_node_did: NODE_DID,
-            caller_requester_did: None,
+            caller_node_did: actors.node_did(),
+            caller_requester_did: Some(actors.agent_did()),
             target_agent_did: None,
         },
     )
@@ -70,7 +61,7 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
     .expect("fork succeeds on idle parent");
 
     let after_request = fetch_request_snapshot(&actors, &request_doc_id).await;
-    let after_output = canonical_session_output(&db.node, &parent_session).await;
+    let after_output = canonical_session_output(&actors, &parent_session).await;
     let after_session = fetch_session_snapshot(&actors, &parent_session).await;
 
     assert_eq!(
@@ -87,11 +78,14 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
     );
 }
 
-async fn canonical_session_output(node: &EmbeddedNode, session_id: &str) -> serde_json::Value {
+async fn canonical_session_output(
+    actors: &support::agent_requests::RequestActors,
+    session_id: &str,
+) -> serde_json::Value {
     use gents::session::canonical_rows::{AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS};
     let session_id = escape_graphql_string(session_id);
-    let response = node
-        .execute(&format!(
+    let response = actors
+        .query(&format!(
             r#"{{
                 AgentMessage(filter: {{session_id: {{_eq: "{session_id}"}}}}, order: {{_docID: ASC}}) {{ {AGENT_MESSAGE_FIELDS} }}
                 AgentOutputSegment(filter: {{session_id: {{_eq: "{session_id}"}}}}, order: {{_docID: ASC}}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}
@@ -103,7 +97,13 @@ async fn canonical_session_output(node: &EmbeddedNode, session_id: &str) -> serd
         "canonical output snapshot: {:?}",
         response.errors
     );
-    response.data.expect("canonical output snapshot data")
+    let data = response.data.expect("canonical output snapshot data");
+    assert_eq!(
+        data["AgentMessage"].as_array().map(Vec::len),
+        Some(2),
+        "the parent session's history is visible to its Agent"
+    );
+    data
 }
 #[tokio::test]
 async fn pending_tie_break_prefers_interrupt_over_expire() {
