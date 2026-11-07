@@ -135,37 +135,31 @@ fn layered_desired_merge_prefers_signed_data_plane_filter() {
     );
 }
 
+/// Lean `data_plane_none_base_no_subscription`: a data-plane layer replicates
+/// but never subscribes, whatever template supplied it.
 #[test]
-fn merge_preserves_app_collections_subscription_only() {
-    let app_layer = PairingDesired {
-        collections: set(&["ChangeProposed"]),
-        replicator_addresses: set(&["addr-b"]),
-        replicator_collections: set(&["ChangeProposed"]),
-        replicator_filter: Default::default(),
-        template_ids: set(&["app-collections"]),
-    };
-    let merged = merge_desired(None, Some(app_layer)).expect("merged");
-    assert!(
-        merged.collections.contains("ChangeProposed"),
-        "app-collections subscription must survive the merge: {merged:?}"
-    );
-
-    let nc_layer = PairingDesired {
-        collections: set(&["AgentRequest"]),
-        replicator_addresses: set(&["addr-b"]),
-        replicator_collections: set(&["AgentRequest"]),
-        replicator_filter: Default::default(),
-        template_ids: set(&["explicit-control"]),
-    };
-    let merged_nc = merge_desired(None, Some(nc_layer)).expect("merged nc");
-    assert!(
-        merged_nc.collections.is_empty(),
-        "non-app-collections data-plane subscription must be cleared: {merged_nc:?}"
-    );
+fn data_plane_layer_never_subscribes() {
+    for template in ["explicit-control", "app-collections"] {
+        let layer = PairingDesired {
+            collections: set(&["ChangeProposed"]),
+            replicator_addresses: set(&["addr-b"]),
+            replicator_collections: set(&["ChangeProposed"]),
+            replicator_filter: Default::default(),
+            template_ids: set(&[template]),
+        };
+        let merged = merge_desired(None, Some(layer)).expect("merged");
+        assert!(
+            merged.collections.is_empty(),
+            "{template}: a data-plane subscription must be cleared: {merged:?}"
+        );
+        assert!(merged.replicator_collections.contains("ChangeProposed"));
+    }
 }
 
+/// Lean `data_plane_subscription_eq_base` and `base_preserved`: merging keeps
+/// the control layer's subscriptions exactly and adds only replication.
 #[test]
-fn app_collections_coexists_with_control_pairing() {
+fn data_plane_layer_adds_replication_beside_control_pairing() {
     let base = PairingDesired {
         collections: set(&["ControlA", "ControlB"]),
         replicator_addresses: set(&["addr-b"]),
@@ -173,17 +167,15 @@ fn app_collections_coexists_with_control_pairing() {
         replicator_filter: Default::default(),
         template_ids: set(&["explicit-control"]),
     };
-    let app_layer = PairingDesired {
+    let data_plane = PairingDesired {
         collections: set(&["ChangeProposed"]),
         replicator_addresses: set(&["addr-b"]),
         replicator_collections: set(&["ChangeProposed"]),
         replicator_filter: Default::default(),
         template_ids: set(&["app-collections"]),
     };
-    let merged = merge_desired(Some(base), Some(app_layer)).expect("merged");
-    assert!(merged.collections.contains("ControlA"));
-    assert!(merged.collections.contains("ControlB"));
-    assert!(merged.collections.contains("ChangeProposed"));
+    let merged = merge_desired(Some(base.clone()), Some(data_plane)).expect("merged");
+    assert_eq!(merged.collections, base.collections);
     assert!(merged.replicator_collections.contains("ControlA"));
     assert!(merged.replicator_collections.contains("ChangeProposed"));
     assert!(
@@ -191,7 +183,6 @@ fn app_collections_coexists_with_control_pairing() {
         "both layers unscoped => no filter"
     );
     assert!(merged.template_ids.contains("explicit-control"));
-    assert!(merged.template_ids.contains("app-collections"));
 }
 
 impl LeanPairingReconcileSnapshot {
