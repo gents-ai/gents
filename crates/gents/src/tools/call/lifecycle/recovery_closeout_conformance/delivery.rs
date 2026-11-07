@@ -144,15 +144,33 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     let did = message.admission.node_did.clone();
     let session_id = message.admission.tool.session_id().to_owned();
     let caller_doc_id = message.admission.tool.request_doc_id().unwrap().to_owned();
-    crate::documents::ensure_node(&node, &did).await.unwrap();
-    crate::ConfigAccess::local(node.clone())
-        .write(
-            "fixture.node.max_request_hop",
-            &format!(
-                r#"mutation {{ update_Node(filter: {{ node_did: {{ _eq: "{}" }} }}, input: {{ max_request_hop: 1 }}) {{ _docID }} }}"#,
-                crate::store::graphql::escape_graphql_string(&did)
-            ),
-        )
+    // Node is configuration: its owning User signs the hop bound.
+    message
+        .admission
+        .client
+        .transact_write("fixture.node.max_request_hop", |txn| {
+            let did = did.as_str();
+            Box::pin(async move {
+                let (_, mut node_input) =
+                    crate::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Node,
+                        did,
+                        did,
+                    )
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("owned Node is unavailable"))?;
+                node_input["max_request_hop"] = serde_json::json!(1);
+                let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+                    crate::store::config_client::DesiredStateApplyDocument {
+                        collection: crate::Collection::Node,
+                        add: node_input.clone(),
+                        update: node_input,
+                    },
+                ])?;
+                crate::store::config_client::apply_desired_state_plan(txn, &plan).await
+            })
+        })
         .await
         .expect("raise the node's request hop bound");
     let identity: Arc<dyn NodeIdentity> = Arc::new(
@@ -163,15 +181,17 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         identity,
         crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
     );
-    let pending_wakes = |node: Arc<crate::defra_node::Node>, session: String| async move {
-        let response = node
+    // Wakes and the caller are Agent-owned rows: read them as the Agent.
+    let agent_access = message.admission.tool.access().unwrap();
+    let pending_wakes = |access: crate::ConfigAccess, session: String| async move {
+        let response = access
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }}, execution_origin: {{ _eq: "scheduled" }}, lifecycle_state: {{ _eq: "pending" }} }}) {{ _docID }} }}"#,
                 crate::store::graphql::escape_graphql_string(&session)
             ))
-            .await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        response.data.unwrap()["AgentRequest"]
+            .await
+            .unwrap();
+        response["data"]["AgentRequest"]
             .as_array()
             .unwrap()
             .iter()
@@ -180,13 +200,15 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     };
     let admit = |doc_id: String| {
         let node = node.clone();
+        let access = agent_access.clone();
         let verifier = &verifier;
         let signer = &signer;
         async move {
-            let request = crate::request::binding::load_agent_request_by_doc_id(&node, &doc_id)
-                .await
-                .unwrap()
-                .unwrap();
+            let request =
+                crate::request::binding::load_agent_request_by_doc_id_with_access(&access, &doc_id)
+                    .await
+                    .unwrap()
+                    .unwrap();
             let admitted = crate::runtime::agent::daemon::verify_request_at_claim_boundary(
                 verifier,
                 node.clone(),
@@ -194,14 +216,13 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
                 request,
             )
             .await;
-            let row = node
+            let row = access
                 .execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ request_hop lifecycle_state failure_reason }} }}"#,
                     crate::store::graphql::escape_graphql_string(&doc_id)
                 ))
                 .await
-                .data
-                .unwrap()["AgentRequest"][0]
+                .unwrap()["data"]["AgentRequest"][0]
                 .clone();
             (admitted.is_some(), row)
         }
@@ -235,11 +256,12 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     .await;
     assert_eq!(notifications.len(), 1, "{notifications:?}");
     assert!(notifications[0].contains("result at the bound"));
-    let wakes = pending_wakes(node.clone(), session_id.clone()).await;
+    let wakes = pending_wakes(agent_access.clone(), session_id.clone()).await;
     assert_eq!(wakes.len(), 1);
 
-    let caller = crate::request::binding::load_agent_request_by_doc_id(&node, &caller_doc_id)
-        .await
+    let caller =
+        crate::request::binding::load_agent_request_by_doc_id_with_access(&agent_access, &caller_doc_id)
+            .await
         .unwrap()
         .unwrap();
     let native =
@@ -266,7 +288,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         .await
         .unwrap();
     assert!(!native.created_request);
-    assert_eq!(pending_wakes(node.clone(), session_id.clone()).await, wakes);
+    assert_eq!(pending_wakes(agent_access.clone(), session_id.clone()).await, wakes);
     let (admitted, row) = admit(wakes[0].clone()).await;
     assert!(admitted, "{row}");
     assert_eq!(row["request_hop"], caller.request_hop);
@@ -334,20 +356,21 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     ToolCallLifecycle::reconcile_background_completion_side_effects(&node, &did, &identities)
         .await
         .unwrap();
-    let response = node
+    let agent_access = message.admission.tool.access().unwrap();
+    let response = agent_access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }}, execution_origin: {{ _eq: "scheduled" }} }}) {{ _docID }} }}"#,
             crate::store::graphql::escape_graphql_string(&session_id)
         ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let wakes = response.data.unwrap()["AgentRequest"]
+        .await
+        .unwrap();
+    let wakes = response["data"]["AgentRequest"]
         .as_array()
         .unwrap()
         .clone();
     assert_eq!(wakes.len(), 1, "{wakes:?}");
-    let wake = crate::request::binding::load_agent_request_by_doc_id(
-        &node,
+    let wake = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &agent_access,
         wakes[0]["_docID"].as_str().unwrap(),
     )
     .await
@@ -400,11 +423,12 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
         lifecycle.claim_with_identity().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed
     );
-    crate::tools::call::hook::DefraSessionHook::resume_with_identity_policy(
+    crate::tools::call::hook::DefraSessionHook::resume_with_actor_policy(
         node.clone(),
         &session_id,
         &did,
         verified.requester_did.as_deref(),
+        identity::Did::new(&wake.agent_did).unwrap(),
         crate::tools::call::hook::FailurePolicy::FailClosed,
     )
     .await

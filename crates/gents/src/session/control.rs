@@ -10,17 +10,6 @@ pub struct SessionStopReceipt {
     pub drained_request_ids: Vec<String>,
 }
 
-pub async fn stop_session(
-    node: &Arc<EmbeddedNode>,
-    caller_agent_did: &str,
-    node_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-) -> Result<SessionStopReceipt> {
-    let access = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(caller_agent_did)?);
-    stop_session_with_access(node, &access, node_did, session_id, requester_did).await
-}
-
 pub async fn stop_session_with_access(
     node: &Arc<EmbeddedNode>,
     access: &crate::ConfigAccess,
@@ -112,28 +101,6 @@ pub async fn stop_session_with_access(
 /// Resume uses the target node runtime's existing execution registry and job driver as quiescence
 /// witnesses; callers must not substitute fresh owners. This relies on the one-active-runtime-per-
 /// node operating convention while process and job ownership is checked with the session latch.
-pub async fn resume_session(
-    node: &Arc<EmbeddedNode>,
-    caller_agent_did: &str,
-    node_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-    background_executions: crate::tools::call::hook::BackgroundExecutionRegistry,
-    job_driver: Arc<crate::tools::background::job::driver::JobDriver>,
-) -> Result<()> {
-    let access = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(caller_agent_did)?);
-    resume_session_with_access(
-        node,
-        &access,
-        node_did,
-        session_id,
-        requester_did,
-        background_executions,
-        job_driver,
-    )
-    .await
-}
-
 pub async fn resume_session_with_access(
     node: &Arc<EmbeddedNode>,
     access: &crate::ConfigAccess,

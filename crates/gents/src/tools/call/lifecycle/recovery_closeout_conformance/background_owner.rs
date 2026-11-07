@@ -169,18 +169,18 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 r#"lifecycle_state: "completed""#,
             )
             .await;
-            crate::session::stop_session(
+            crate::session::stop_session_with_access(
                 &node,
-                &agent_did,
+                &tool.access().unwrap(),
                 &node_did,
                 &session_id,
                 tool.requester_did(),
             )
             .await
             .unwrap();
-            let first_resume = crate::session::resume_session(
+            let first_resume = crate::session::resume_session_with_access(
                 &node,
-                &agent_did,
+                &tool.access().unwrap(),
                 &node_did,
                 &session_id,
                 tool.requester_did(),
@@ -232,9 +232,9 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
             deleted.name
         );
         if session_stopped {
-            crate::session::resume_session(
+            crate::session::resume_session_with_access(
                 &node,
-                &agent_did,
+                &tool.access().unwrap(),
                 &node_did,
                 &session_id,
                 tool.requester_did(),
@@ -298,7 +298,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         .iter()
         .find(|case| case["name"] == "resume_waits_for_owned_background")
         .expect("Lean session-control model includes owned-background settlement");
-    let (admission, request_owner) = published_admission_with_owner(PublishedAdmissionOptions {
+    let (admission, _request_owner) = published_admission_with_owner(PublishedAdmissionOptions {
         name: "resume-live-terminal-tool".to_owned(),
         real_identity: true,
         await_mode: AwaitMode::Background,
@@ -311,7 +311,6 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     let tool_call_id = admission.tool.tool_call_id().to_owned();
     let session_id = admission.tool.session_id().to_owned();
     let node_did = admission.node_did.clone();
-    let agent_did = request_owner.request().agent_did.clone();
     let mut tool = admission.tool;
     update_request(
         &tool.access().unwrap(),
@@ -357,9 +356,9 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     );
     release_reservation_tx.send(()).unwrap();
     reservation_released_rx.await.unwrap();
-    let stop = crate::session::stop_session(
+    let stop = crate::session::stop_session_with_access(
         &admission.node,
-        &agent_did,
+        &tool.access().unwrap(),
         &node_did,
         &session_id,
         tool.requester_did(),
@@ -398,9 +397,9 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
             tool_root: None,
         },
     );
-    let blocked = crate::session::resume_session(
+    let blocked = crate::session::resume_session_with_access(
         &admission.node,
-        &agent_did,
+        &tool.access().unwrap(),
         &node_did,
         &session_id,
         tool.requester_did(),
@@ -419,17 +418,30 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     );
 
     let other_session = format!("unrelated-{}", uuid::Uuid::new_v4());
-    crate::session::create_session_with_id(
+    let other_agent = tool.actor().as_ref().to_owned();
+    tool.access()
+        .unwrap()
+        .transact_write("fixture.session.create_unrelated", |txn| {
+            let (other_session, node_did, other_agent) = (&other_session, &node_did, &other_agent);
+            Box::pin(async move {
+                crate::session::ensure_session_in_txn(
+                    txn,
+                    other_session,
+                    node_did,
+                    other_agent,
+                    None,
+                    None,
+                    None,
+                    &chrono::Utc::now().to_rfc3339(),
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    crate::session::resume_session_with_access(
         &admission.node,
-        &other_session,
-        tool.actor().as_ref(),
-        &node_did,
-    )
-    .await
-    .unwrap();
-    crate::session::resume_session(
-        &admission.node,
-        &agent_did,
+        &tool.access().unwrap(),
         &node_did,
         &other_session,
         None,
@@ -455,9 +467,9 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         process.observe(),
         crate::tools::exec::ownership::ProcessObservation::Running
     );
-    crate::session::resume_session(
+    crate::session::resume_session_with_access(
         &admission.node,
-        &agent_did,
+        &tool.access().unwrap(),
         &node_did,
         &session_id,
         tool.requester_did(),

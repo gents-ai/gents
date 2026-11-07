@@ -35,12 +35,15 @@ pub(super) async fn update_request(access: &crate::ConfigAccess, doc_id: &str, f
     .await;
 }
 
+/// The parent is client-owned, so only its client may delete it, and a
+/// client endpoint deletes through its signed native graph.
 pub(super) async fn remove_parent(client: &crate::ConfigAccess, doc_id: &str) {
-    let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
-    execute_fixture_write(client, "fixture.request.remove_parent", &format!(
-        r#"mutation {{ delete_AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{ _docID }} }}"#
-    ))
-    .await;
+    client
+        .transact_signed_conflict_rebuild("fixture.request.remove_parent", |txn| {
+            Box::pin(async move { txn.delete_request_for_native_fixture(doc_id).await })
+        })
+        .await
+        .expect("client deletes its parent request");
 }
 
 pub(super) async fn completion_obligations(

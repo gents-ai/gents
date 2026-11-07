@@ -100,20 +100,25 @@ fn assert_notification_reason(
 /// goal controller tests use, producing an unreadable assignment observation
 /// (`parsed_status` resolves the document but cannot parse the status).
 async fn seed_goal_status(
-    node: &crate::defra_node::Node,
+    access: &crate::ConfigAccess,
     goal: &crate::goal::GoalDocument,
     fields: &str,
 ) {
     let doc_id = crate::store::graphql::escape_graphql_string(&goal.doc_id);
     let node_did = crate::store::graphql::escape_graphql_string(&goal.node_did);
-    let response = node.execute(&format!(
-        r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
-    ))
-    .await;
-    assert!(
-        !response.has_errors(),
-        "seed Goal status: {:?}",
-        response.errors
+    let response = access
+        .write(
+            "fixture.goal.seed_status",
+            &format!(
+                r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
+            ),
+        )
+        .await
+        .expect("seed Goal status as its owning Agent");
+    assert_eq!(
+        response["data"]["update_Goal"].as_array().map(Vec::len),
+        Some(1),
+        "seed Goal status must change the Agent's Goal: {response}"
     );
 }
 
@@ -342,7 +347,11 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                         )
                         .await
                         .expect("persist a Goal in the caused session");
-                        seed_goal_status(&admission.node, &goal, r#"status: "corrupted-status""#)
+                        seed_goal_status(
+                            &admission.tool.access().unwrap(),
+                            &goal,
+                            r#"status: "corrupted-status""#,
+                        )
                             .await;
                     }
                     "session_message_request_completed_live_goal_to_completed" => {
@@ -524,12 +533,9 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
             .await;
         }
         if case.owner_session_stopped == Some(true) {
-            crate::session::stop_session(
+            crate::session::stop_session_with_access(
                 &admission.node,
-                admission
-                    .node
-                    .node_identity_did()
-                    .expect("fixture has a registered signing principal"),
+                &admission.tool.access().unwrap(),
                 &admission.node_did,
                 admission.tool.session_id(),
                 admission.tool.requester_did(),

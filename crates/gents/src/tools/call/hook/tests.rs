@@ -920,7 +920,8 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
                 let row = fetch_tool_call_row(&hook, &session, "control-call").await;
                 assert_eq!(
                     row["lifecycle_state"].as_str() == Some("running"),
-                    replay.expected[0].running
+                    replay.expected[0].running,
+                    "{row}"
                 );
                 let again = hook
                     .on_tool_call("create_goal", None, "control-call", &args)

@@ -529,27 +529,6 @@ pub(crate) async fn stage_session_relationships_in_txn(
 }
 
 #[cfg(test)]
-pub(crate) async fn create_session_with_id(
-    node: &std::sync::Arc<EmbeddedNode>,
-    session_id: &str,
-    agent_did: &str,
-    node_did: &str,
-) -> Result<()> {
-    create_session_with_agent_did(node, session_id, node_did, agent_did).await
-}
-
-#[cfg(test)]
-pub(crate) async fn create_session_with_agent_did(
-    node: &std::sync::Arc<EmbeddedNode>,
-    session_id: &str,
-    node_did: &str,
-    agent_did: &str,
-) -> Result<()> {
-    create_session_with_agent_did_and_requester_did(node, session_id, node_did, agent_did, None)
-        .await
-}
-
-#[cfg(test)]
 async fn create_session_with_agent_did_and_requester_did(
     node: &std::sync::Arc<EmbeddedNode>,
     session_id: &str,

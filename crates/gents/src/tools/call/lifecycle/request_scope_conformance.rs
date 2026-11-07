@@ -1,7 +1,7 @@
 use super::AwaitMode;
 use crate::store::identity::NodeIdentity;
 use crate::tools::call::lifecycle::admission_fixture::{
-    claimed_signed_request, complete_child_managed, materialize_session_message,
+    claimed_signed_request, complete_child_managed_verified, materialize_session_message,
     publish_accepted_on_claimed_request,
 };
 use defra_node::Node as EmbeddedNode;
@@ -142,12 +142,15 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
     )
     .unwrap();
     for (index, caused_request_id) in children.iter().enumerate() {
-        complete_child_managed(
+        complete_child_managed_verified(
             &node,
             caused_request_id,
             node_did,
             &format!("child {} complete", index + 1),
             &agent_signer,
+            Arc::new(
+                crate::KeyIdentity::load_existing(path.join("queue-agent.key"), None).unwrap(),
+            ),
         )
         .await;
     }

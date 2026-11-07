@@ -65,6 +65,25 @@ impl ConfigApplyTxn<'_> {
         .await
     }
 
+    /// External native deletion of a client-owned request row models a
+    /// parent that disappears under its accepted tool calls.
+    #[cfg(test)]
+    pub(crate) async fn delete_request_for_native_fixture(&self, doc_id: &str) -> Result<()> {
+        let TxnBackend::Http { endpoint, .. } = &self.backend else {
+            return Err(ConfigClientError::ClientConfigurationDeleteInvalid);
+        };
+        if !endpoint.client_signed_agent_creates || endpoint.pack_replay.is_some() {
+            return Err(ConfigClientError::ClientConfigurationDeleteInvalid);
+        }
+        endpoint.held_client_signing_capability()?;
+        self.delete_document_with_schema(
+            gents_protocol::schemas::AGENT_REQUEST_NAME,
+            doc_id,
+            gents_protocol::schemas::AGENT_REQUEST,
+        )
+        .await
+    }
+
     async fn delete_document_with_schema(
         &self,
         collection: &str,

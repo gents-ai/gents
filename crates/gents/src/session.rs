@@ -52,7 +52,7 @@ pub(crate) use compaction_entries::{
     save_exact_compaction_entry, NewExactSessionCompaction, StaleCompactionGeneration,
 };
 pub use control::{
-    resume_session, resume_session_with_access, stop_session, stop_session_with_access,
+    resume_session_with_access, stop_session_with_access,
     SessionStopReceipt,
 };
 pub use fork::{
@@ -116,9 +116,7 @@ pub use sessions::close_session;
 pub use sessions::load_agent_session_owner_in_txn;
 pub use sessions::load_agent_session_row_in_txn;
 #[cfg(test)]
-pub(crate) use sessions::{
-    create_session_with_id, ensure_session_with_agent_did_and_requester_did,
-};
+pub(crate) use sessions::ensure_session_with_agent_did_and_requester_did;
 pub(crate) use sessions::{
     ensure_reserved_session_in_txn, ensure_session_in_txn, finalize_agent_new_session_in_txn,
     finalize_plugin_job_session_in_txn, finalize_reserved_runtime_session_in_txn,
