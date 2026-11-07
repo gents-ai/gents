@@ -185,7 +185,7 @@ impl ConfigCommandTool {
         let parsed = ParsedArgs::parse(&argv[1..])?;
         ensure_options(&parsed, verb)?;
         let call = self.policy_call(&parsed, verb).await?;
-        let access = self.core.managed_access()?;
+        let access = self.core.access()?;
         match verb {
             "get" => self.policy_get(&access, &parsed, &call).await,
             "check" | "explain" => self.policy_answer(&access, &call, verb == "explain").await,

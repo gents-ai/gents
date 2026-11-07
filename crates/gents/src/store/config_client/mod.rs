@@ -449,7 +449,7 @@ impl ConfigAccess {
     }
 
     #[cfg(test)]
-    fn has_managed_agent_signer(&self) -> bool {
+    pub(crate) fn has_managed_agent_signer(&self) -> bool {
         matches!(self, Self::Local(local) if local.has_agent_signer())
     }
 
