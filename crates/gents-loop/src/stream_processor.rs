@@ -268,9 +268,23 @@ where
                 if self.provider_profile != ProviderInputProfile::ClaudeMessages {
                     return Err(StreamProcessorError::AuditWrongProfile);
                 }
-                if self
+                let changed = self
                     .assistant_turn
-                    .apply_provider_audit(&observation.event)?
+                    .apply_provider_audit(&observation.event)?;
+                if let Some(block_index) = self
+                    .assistant_turn
+                    .reasoning_stop_index(&observation.event)?
+                {
+                    let snapshot = self
+                        .assistant_turn
+                        .message_snapshot()
+                        .ok_or(StreamProcessorError::AuditWithoutReasoning)?;
+                    self.stream_writer
+                        .flush_reasoning_stop(self.lifecycle, &snapshot, block_index)
+                        .await
+                        .map_err(StreamProcessorError::writer)?;
+                }
+                if changed
                     && self
                         .stream_writer
                         .mark_pending_output(
@@ -603,6 +617,7 @@ pub struct AssistantTurnAccumulator {
     content: Vec<AssistantMessageContent>,
     next_provider_block: u32,
     provider_block: Option<crate::provider_audit::ClaudeBlockKind>,
+    provider_block_stopped: bool,
 }
 
 impl AssistantTurnAccumulator {
@@ -626,7 +641,11 @@ impl AssistantTurnAccumulator {
         if !(self.next_provider_block.checked_sub(1) == Some(index)) {
             return Err(StreamProcessorError::AuditBlockMismatch);
         }
+        if self.provider_block_stopped {
+            return Err(StreamProcessorError::AuditBlockMismatch);
+        }
         if matches!(event, ClaudeAuditEvent::BlockStop { .. }) {
+            self.provider_block_stopped = true;
             return Ok(false);
         }
         let Some(AssistantMessageContent::Reasoning(reasoning)) = self.content.last_mut() else {
@@ -674,6 +693,7 @@ impl AssistantTurnAccumulator {
             .checked_add(1)
             .ok_or(StreamProcessorError::ProviderBlockIndexOverflow)?;
         self.provider_block = Some(kind.clone());
+        self.provider_block_stopped = false;
         match kind {
             ClaudeBlockKind::Text => {
                 self.content
@@ -700,6 +720,35 @@ impl AssistantTurnAccumulator {
             ClaudeBlockKind::ToolUse { .. } => {}
         }
         Ok(())
+    }
+
+    fn reasoning_stop_index(
+        &self,
+        event: &crate::provider_audit::ClaudeAuditEvent,
+    ) -> Result<Option<u32>, StreamProcessorError> {
+        use crate::provider_audit::{ClaudeAuditEvent, ClaudeBlockKind};
+        let ClaudeAuditEvent::BlockStop { index } = event else {
+            return Ok(None);
+        };
+        if !matches!(
+            self.provider_block,
+            Some(ClaudeBlockKind::Thinking | ClaudeBlockKind::RedactedThinking)
+        ) {
+            return Ok(None);
+        }
+        let position = self
+            .content
+            .len()
+            .checked_sub(1)
+            .ok_or(StreamProcessorError::AuditWithoutReasoning)?;
+        if !matches!(
+            self.content.get(position),
+            Some(AssistantMessageContent::Reasoning(_))
+        ) || u32::try_from(position).ok() != Some(*index)
+        {
+            return Err(StreamProcessorError::AuditBlockMismatch);
+        }
+        Ok(Some(*index))
     }
 
     pub fn push_text(&mut self, text: &str) {
