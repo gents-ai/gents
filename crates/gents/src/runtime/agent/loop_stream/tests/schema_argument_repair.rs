@@ -99,10 +99,10 @@ async fn generated_schema_argument_repair_cases_drive_owned_loop() {
     .await;
     assert!(collected.error.is_none(), "{:?}", collected.error);
     assert_eq!(calls.load(Ordering::SeqCst), cases.len());
-    let rows = tool_call_rows(&node).await;
+    let rows = tool_call_rows(&lifecycle.access().unwrap()).await;
     assert_eq!(rows.len(), cases.len());
     assert!(rows.iter().all(|row| row["lifecycle_state"] == "completed"));
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let access = lifecycle.access().unwrap();
     for (index, case) in cases.iter().enumerate() {
         let row = rows
             .iter()
@@ -113,7 +113,7 @@ async fn generated_schema_argument_repair_cases_drive_owned_loop() {
             row["_docID"].as_str().unwrap(),
             &lifecycle.request().node_did,
             &lifecycle.request().session_id,
-            None,
+            lifecycle.request().requester_did.as_deref(),
         )
         .await
         .unwrap();
@@ -225,7 +225,7 @@ async fn config_container_repairs_preserve_native_validation_and_the_invalid_bud
     .await;
     assert!(collected.error.is_none(), "{:?}", collected.error);
     assert_eq!(collected.tool_results.len(), 11);
-    let rows = tool_call_rows(&node).await;
+    let rows = tool_call_rows(&lifecycle.access().unwrap()).await;
     assert_eq!(rows.len(), 11);
     for index in 0..10 {
         let row = rows

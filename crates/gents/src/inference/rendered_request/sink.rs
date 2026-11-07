@@ -860,11 +860,21 @@ pub(crate) fn defra_rendered_request_capture_factory_for_agent(
     )?))
 }
 
+/// Fixture factory for a claimed request whose lifecycle holds the Agent's
+/// managed signer; captures persist as that Agent, as in production.
 #[cfg(test)]
-pub(crate) fn defra_rendered_request_capture_factory(
+pub(crate) fn defra_rendered_request_capture_factory_for_signer(
     node: Arc<EmbeddedNode>,
-) -> RenderedRequestCaptureFactory {
-    capture_factory(DefraRenderedRequestSink::new(node))
+    signer: crate::store::identity::ManagedAgentSigner,
+) -> Result<RenderedRequestCaptureFactory> {
+    anyhow::ensure!(
+        node.node_identity_did() == Some(signer.node_did()),
+        "capture signer differs from the node"
+    );
+    Ok(capture_factory(DefraRenderedRequestSink {
+        node,
+        agent_signer: Some(signer),
+    }))
 }
 
 fn capture_factory(sink: DefraRenderedRequestSink) -> RenderedRequestCaptureFactory {

@@ -84,7 +84,7 @@ async fn generated_authored_input_is_durable_before_provider_stream_entry() {
         case.name
     );
 
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (_node, hook, writer, mut lifecycle) = owned_test_hook().await;
     let doc_id = lifecycle.request().doc_id.clone();
     let node_did = lifecycle.request().node_did.clone();
     let requester_did = lifecycle.request().requester_did.clone();
@@ -107,7 +107,8 @@ async fn generated_authored_input_is_durable_before_provider_stream_entry() {
     let query = format!(
         r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{scoped_doc_id}" }} }}) {{ _docID message_key }} }}"#
     );
-    let before = node.execute(&query).await;
+    let reader = lifecycle.access().unwrap();
+    let before = agent_response(&reader, &query).await;
     assert!(!before.has_errors(), "{}: {:?}", case.name, before.errors);
     assert!(before.data.unwrap()["AgentMessage"]
         .as_array()
@@ -135,7 +136,7 @@ async fn generated_authored_input_is_durable_before_provider_stream_entry() {
             },
             async {
                 gate.entered.notified().await;
-                let observed = node.execute(&query).await;
+                let observed = agent_response(&reader, &query).await;
                 assert!(
                     !observed.has_errors(),
                     "{}: {:?}",
@@ -160,8 +161,8 @@ async fn generated_authored_input_is_durable_before_provider_stream_entry() {
                     case.name
                 );
                 let header_id = header["_docID"].as_str().unwrap();
-                let (_, native) = crate::session::load_canonical_message_from_node(
-                    &node,
+                let (_, native) = crate::session::load_canonical_message(
+                    &reader,
                     header_id,
                     &node_did,
                     requester_did.as_deref(),
@@ -630,7 +631,7 @@ async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
         }
     }
 
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (_node, hook, writer, mut lifecycle) = owned_test_hook().await;
 
     let model = ScriptedModel::new_turns(vec![
         vec![
@@ -670,9 +671,7 @@ async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
         collected.error
     );
 
-    let resp = node
-        .execute("query { AgentToolCall { tool_name lifecycle_state tool_failure_class } }")
-        .await;
+    let resp = agent_response(&lifecycle.access().unwrap(), "query { AgentToolCall { tool_name lifecycle_state tool_failure_class } }").await;
     assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
     let rows = resp
         .data
@@ -1148,7 +1147,7 @@ async fn drive_generated_turn_input(
         config.compaction_threshold = 0.25;
         let saw = compactor_saw.clone();
         let published_before_reduction = published_before_reduction.clone();
-        let compaction_node = node.clone();
+        let compaction_reader = lifecycle.access().unwrap();
         let request_doc_id = head.doc_id.clone();
         config.turn_compactor = Some(Arc::new(move |request| {
             *saw.lock().unwrap() = request
@@ -1157,15 +1156,13 @@ async fn drive_generated_turn_input(
                 .map(|row| row.message.clone())
                 .collect();
             let published_before_reduction = published_before_reduction.clone();
-            let node = compaction_node.clone();
+            let reader = compaction_reader.clone();
             let request_doc_id = request_doc_id.clone();
             Box::pin(async move {
-                let observed = node
-                    .execute(&format!(
+                let observed = agent_response(&reader, &format!(
                         r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }}, role: {{ _eq: "user" }} }}) {{ _docID }} }}"#,
                         crate::store::graphql::escape_graphql_string(&request_doc_id)
-                    ))
-                    .await;
+                    )).await;
                 *published_before_reduction.lock().unwrap() = observed.data.unwrap()
                     ["AgentMessage"]
                     .as_array()
@@ -1244,11 +1241,9 @@ async fn drive_generated_turn_input(
     }
 
     let scoped_doc_id = crate::store::graphql::escape_graphql_string(&head.doc_id);
-    let observed = node
-        .execute(&format!(
+    let observed = agent_response(&lifecycle.access().unwrap(), &format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{scoped_doc_id}" }}, role: {{ _eq: "user" }} }}, order: {{ sequence: ASC }}) {{ _docID message_key }} }}"#
-        ))
-        .await;
+        )).await;
     assert!(!observed.has_errors(), "{:?}", observed.errors);
     let observed = observed.data.unwrap();
     let headers = observed["AgentMessage"].as_array().unwrap();
@@ -1268,8 +1263,8 @@ async fn drive_generated_turn_input(
             "{}",
             case.name
         );
-        let (_, native) = crate::session::load_canonical_message_from_node(
-            &node,
+        let (_, native) = crate::session::load_canonical_message(
+                    &lifecycle.access().unwrap(),
             header["_docID"].as_str().unwrap(),
             &head.node_did,
             head.requester_did.as_deref(),
@@ -1284,17 +1279,15 @@ async fn drive_generated_turn_input(
         );
     }
     for doc in docs.values() {
-        let response = crate::store::graphql::graphql_with_transaction_retry(
-            &node,
+        let response = agent_query(
+            &lifecycle.access().unwrap(),
             &format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state superseded_by_request_doc_id }} }}"#,
                 crate::store::graphql::escape_graphql_string(doc)
             ),
-            "folded request",
         )
-        .await
-        .unwrap();
-        let row = &response.data.unwrap()["AgentRequest"][0];
+        .await;
+        let row = &response["data"]["AgentRequest"][0];
         assert_eq!(row["lifecycle_state"], "superseded", "{}", case.name);
         assert_eq!(
             row["superseded_by_request_doc_id"],

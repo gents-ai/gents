@@ -771,10 +771,19 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
     .unwrap()
     .request
     .expect("background wake request");
+    // The parent published the background call's owned assistant header, so
+    // its terminal output selects that header rather than NoMessage.
+    let header = fixture
+        .tool
+        .accepted_header_doc_id()
+        .expect("published background call header")
+        .to_owned();
     parent
         .terminalize_owned(
             RequestTerminalOutcome::Completed,
-            gents_protocol::output::TerminalOutput::NoMessage,
+            gents_protocol::output::TerminalOutput::Message {
+                message_doc_id: header,
+            },
             None,
         )
         .await

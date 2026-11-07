@@ -50,8 +50,8 @@ impl ToolDyn for RepeatProbe {
     }
 }
 
-async fn tool_call_rows(node: &Arc<defra_node::Node>) -> Vec<serde_json::Value> {
-    let response = crate::store::config_client::ConfigAccess::local(node.clone())
+async fn tool_call_rows(reader: &crate::ConfigAccess) -> Vec<serde_json::Value> {
+    let response = reader
         .execute(
             "query { AgentToolCall { _docID tool_call_id lifecycle_state tool_failure_class } }",
         )
@@ -170,7 +170,7 @@ async fn generated_repeated_tool_failure_cases_drive_owned_loop() {
             actions.len() + usize::from(ending.is_none()),
             "{name}: provider requests"
         );
-        let rows = tool_call_rows(&node).await;
+        let rows = tool_call_rows(&lifecycle.access().unwrap()).await;
         let mut charged = 0;
         for (index, action) in actions.iter().enumerate() {
             if *action == "stop" {
@@ -189,16 +189,7 @@ async fn generated_repeated_tool_failure_cases_drive_owned_loop() {
             if *action == "suppress" {
                 assert_eq!(row["lifecycle_state"], "failed", "{name}: {row}");
                 assert_eq!(row["tool_failure_class"], "policyDenied", "{name}: {row}");
-                let output = crate::tools::background::status::canonical_tool_output(
-                    &node,
-                    row["_docID"].as_str().unwrap(),
-                    &lifecycle.request().doc_id,
-                    &lifecycle.request().session_id,
-                    &lifecycle.request().node_did,
-                    None,
-                )
-                .await
-                .unwrap();
+                let output = agent_tool_output(&lifecycle, row["_docID"].as_str().unwrap()).await;
                 assert!(
                     output.contains("repeated_tool_call_not_run"),
                     "{name}: durable notice {output}"
@@ -219,7 +210,7 @@ async fn generated_repeated_tool_failure_cases_drive_owned_loop() {
                 )
                 .await
                 .expect("terminal owner settles the accepted, undispatched repeat");
-            let stop = tool_call_rows(&node)
+            let stop = tool_call_rows(&lifecycle.access().unwrap())
                 .await
                 .into_iter()
                 .find(|row| row["tool_call_id"] == format!("repeat-{}", actions.len() - 1))

@@ -535,17 +535,16 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
     let cases = crate::lean_vocab_test::lean_rendered_capture_cases();
     assert!(!cases.is_empty(), "Lean emitted no rendered-capture cases");
 
+    // Captures are owned by the capturing Agent, so they are read as it.
     async fn rendered_rows(
-        node: &Arc<defra_node::Node>,
+        reader: &crate::ConfigAccess,
         capture_key: &str,
     ) -> Vec<serde_json::Value> {
         let query = format!(
             r#"{{ RenderedRequest(filter: {{ capture_key: {{ _eq: "{}" }} }}) {{ capture_key capture_version request_json }} }}"#,
             escape_graphql_string(capture_key),
         );
-        let response = node.execute(&query).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        response.data.unwrap()["RenderedRequest"]
+        agent_query(reader, &query).await["data"]["RenderedRequest"]
             .as_array()
             .cloned()
             .expect("RenderedRequest row array")
@@ -686,7 +685,7 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
             }
             other => panic!("{}: unknown capture outcome {other}", case.name),
         }
-        let rows = rendered_rows(&node, &delivery_key).await;
+        let rows = rendered_rows(&agent_access, &delivery_key).await;
         assert_eq!(
             rows.len(),
             usize::from(case.durable_after.is_some()),
@@ -699,8 +698,8 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
                 .and_then(|value| u32::try_from(value).ok())
                 .expect("numeric capture version");
             Some(
-                crate::inference::rendered_request::decode_capture_json_embedded(
-                    node.as_ref(),
+                crate::inference::rendered_request::decode_capture_json(
+                    &agent_access,
                     version,
                     row["request_json"].as_str().expect("request_json string"),
                     crate::inference::rendered_request::CapturePayloadKind::RequestBody,

@@ -38,8 +38,6 @@ pub use crate::triggers::engine::durable::request_arrival_order;
 #[cfg(test)]
 pub(crate) use execution_lease::revoke_execution_preserving_output_at_with_access;
 #[cfg(test)]
-pub(crate) use execution_lease::terminalize_owned_at;
-#[cfg(test)]
 pub(crate) use execution_lease::terminalize_owned_at_with_access;
 pub(crate) use execution_lease::{ExecutionOwnershipLost, RequestExecutionLease};
 pub use execution_lease::{RequestTerminalOutcome, TerminalizeResult};

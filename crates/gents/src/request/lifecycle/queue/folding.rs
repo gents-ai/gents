@@ -412,8 +412,11 @@ pub(crate) async fn ensure_folded_consumed_in_txn(
     Ok(())
 }
 
+/// Reads as the claimed Agent through `access`, which carries its managed
+/// signer: the arrival read runs in a local write transaction, and a local
+/// non-node transaction without that signer is refused.
 pub(crate) async fn load_consumed_folded_inputs(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     head: &AgentRequest,
 ) -> Result<Vec<FoldedInput>> {
     if !heads_user_turn(head) {
@@ -433,10 +436,11 @@ pub(crate) async fn load_consumed_folded_inputs(
         escape_graphql_string(FOLDED_REASON),
         superseded = RequestLifecycleState::Superseded.as_str()
     );
-    let actor = identity::Did::new(head.agent_did.clone())?;
-    let observed = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor.clone())
-        .execute(&query)
-        .await?;
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(head.agent_did.as_str()),
+        "folded inputs are read by the claimed Agent"
+    );
+    let observed = access.execute(&query).await?;
     let rows: Vec<AgentRequestRow> =
         serde_json::from_value(observed["data"]["AgentRequest"].clone())
             .context("decode folded requests")?;
@@ -444,9 +448,7 @@ pub(crate) async fn load_consumed_folded_inputs(
         return Ok(Vec::new());
     }
     let query = &query;
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        Some(actor),
+    access.transact_write(
         "lifecycle.load_folded_inputs",
         move |txn| {
             Box::pin(async move {

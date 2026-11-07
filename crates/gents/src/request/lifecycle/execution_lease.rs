@@ -425,32 +425,6 @@ pub(crate) async fn revoke_execution_preserving_output_at_with_access(
 }
 
 #[cfg(test)]
-pub(crate) async fn terminalize_owned_at(
-    node: &std::sync::Arc<EmbeddedNode>,
-    request_doc_id: &str,
-    generation: &str,
-    outcome: RequestTerminalOutcome,
-    selection: TerminalOutput,
-    now: DateTime<Utc>,
-) -> Result<TerminalizeResult> {
-    terminalize_execution_with_time(
-        node,
-        identity::Did::new("did:test:agent".to_owned())?,
-        TerminalizeSpec {
-            request_doc_id,
-            authority: TerminalAuthority::Owner(generation),
-            outcome,
-            selection: Some(selection),
-            reason: "",
-            fixture_now: Some(now),
-            fixture_fresh_generation: None,
-            pending_fence: None,
-        },
-    )
-    .await
-}
-
-#[cfg(test)]
 pub(crate) async fn terminalize_owned_at_with_access(
     access: &crate::ConfigAccess,
     request_doc_id: &str,
@@ -484,16 +458,6 @@ struct TerminalizeSpec<'a> {
     fixture_now: Option<DateTime<Utc>>,
     fixture_fresh_generation: Option<&'a str>,
     pending_fence: Option<(&'a [String], Option<DateTime<Utc>>)>,
-}
-
-#[cfg(test)]
-async fn terminalize_execution_with_time(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor: identity::Did,
-    spec: TerminalizeSpec<'_>,
-) -> Result<TerminalizeResult> {
-    let access = crate::ConfigAccess::local_as(node.clone(), actor);
-    terminalize_execution_with_access(&access, spec).await
 }
 
 async fn terminalize_execution_with_access(

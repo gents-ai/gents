@@ -665,11 +665,26 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
 
     tokio::task::yield_now().await;
 
+    // Under document ACP the WorkspaceRoot policy is always explicit, so host
+    // tools need a User-published root the Agent is granted to read.
+    let root = tempfile::tempdir().unwrap();
+    let root_path = std::fs::canonicalize(root.path()).unwrap();
+    let root_text = root_path.to_string_lossy().into_owned();
+    crate::tools::surface::set_workspace_root_with_readers(
+        &user_access,
+        agent.node_did(),
+        &root_text,
+        None,
+        true,
+        &[agent.default_agent_did().to_owned()],
+    )
+    .await
+    .unwrap();
     let tools: Tools = serde_json::from_value(serde_json::json!({
         "tools_id": format!("{}:tools", agent.default_agent_did()),
         "node_did": agent.node_did(),
         "display_name": "Read tools",
-        "host": {"files": {"mode": "ReadOnly"}}
+        "host": {"files": {"mode": "ReadOnly"}, "root": root_text}
     }))
     .unwrap();
     crate::store::config_client::write_tools_document(&user_access, &tools)

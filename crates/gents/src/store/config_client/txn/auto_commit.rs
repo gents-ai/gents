@@ -73,6 +73,21 @@ impl ConfigAccess {
         document: &str,
         operation: &str,
     ) -> Result<defra_node::QueryResponse> {
+        #[cfg(test)]
+        if let Some(reached) = SUCCESSFUL_MUTATION_FAULT
+            .try_with(|fault| {
+                fault
+                    .read_pause
+                    .as_ref()
+                    .filter(|(marker, _)| document.contains(marker))
+                    .map(|(_, reached)| Arc::clone(reached))
+            })
+            .ok()
+            .flatten()
+        {
+            reached.notify_one();
+            std::future::pending::<()>().await;
+        }
         let document = document.to_owned();
         let operation = operation.to_owned();
         let identity = local.identity().cloned();
