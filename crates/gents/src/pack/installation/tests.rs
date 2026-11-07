@@ -2044,6 +2044,48 @@ async fn installing_a_dependent_preserves_the_installed_dependency_environment()
     )
     .await
     .unwrap();
+    access.transact_write("test.dependency.concurrent_edit", |txn| {
+        Box::pin(async move {
+            let result = txn.execute(r#"mutation { update_Agent(filter: { agent_id: {_eq: "fixture-dependee"}, node_did: {_eq: "did:key:zPackInstallOwner"} }, input: { description: "concurrent edit" }) { _docID } }"#).await?;
+            anyhow::ensure!(result.get("errors").is_none_or(Value::is_null), "edit failed");
+            Ok::<_, anyhow::Error>(())
+        })
+    }).await.unwrap();
+    let error = install_prepared_document_pack(
+        &access,
+        OWNER,
+        &dependent,
+        &[&dependee],
+        &prepared,
+        None,
+        false,
+        crate::pack::InstalledVia::Operator,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("changed during preparation"));
+    access.transact_write("test.dependency.restore", |txn| {
+        Box::pin(async move {
+            let result = txn.execute(r#"mutation { update_Agent(filter: { agent_id: {_eq: "fixture-dependee"}, node_did: {_eq: "did:key:zPackInstallOwner"} }, input: { description: "original" }) { _docID } }"#).await?;
+            anyhow::ensure!(result.get("errors").is_none_or(Value::is_null), "restore failed");
+            Ok::<_, anyhow::Error>(())
+        })
+    }).await.unwrap();
+    let prepared = prepare_document_pack_install(
+        &access,
+        OWNER,
+        dependent.manifest(),
+        &authored,
+        &requested,
+        &[&dependee],
+        crate::pack::InstalledVia::Operator,
+        None,
+        None,
+        &changed,
+    )
+    .await
+    .unwrap();
     install_prepared_document_pack(
         &access,
         OWNER,
