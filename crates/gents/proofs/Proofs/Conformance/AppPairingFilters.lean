@@ -52,6 +52,8 @@ private def routeCaseJson (value : String × PairingMode × Option (List FieldFi
     ",\"filters\":" ++ (match filters with
       | none => "null"
       | some values => jsonArray (values.map filterJson)) ++
+    ",\"collections\":" ++ jsonStringArray ["Post"] ++
+    ",\"authority\":" ++ jsonArray (authority.map authorityJson) ++
     ",\"accepted\":" ++
     (if (resolve mode ["Post"] authority filters).isSome then "true" else "false") ++ "}"
 

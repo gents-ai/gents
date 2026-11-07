@@ -46,9 +46,42 @@ pub fn admit_app_pairing_filters(
     })
 }
 
+pub fn resolve_app_pairing_filters(
+    filtered: bool,
+    collections: &BTreeSet<String>,
+    immutable_fields: &BTreeSet<(String, String)>,
+    filters: Option<&[AppPairingFilter]>,
+) -> Option<Vec<AppPairingFilter>> {
+    match (filtered, filters) {
+        (false, None) => Some(Vec::new()),
+        (true, Some(filters))
+            if !filters.is_empty()
+                && admit_app_pairing_filters(collections, immutable_fields, filters) =>
+        {
+            Some(filters.to_vec())
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod app_pairing_filter_conformance {
     use super::*;
+
+    fn fields(case: &Value) -> BTreeSet<(String, String)> {
+        case["authority"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|field| field["immutable"].as_bool() == Some(true))
+            .map(|field| {
+                (
+                    field["collection"].as_str().unwrap().to_owned(),
+                    field["field"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    }
 
     #[test]
     fn admission_matches_executable_model() {
@@ -60,21 +93,37 @@ mod app_pairing_filter_conformance {
                 serde_json::from_value(case["collections"].clone()).unwrap();
             let filters: Vec<AppPairingFilter> =
                 serde_json::from_value(case["filters"].clone()).unwrap();
-            let immutable = case["authority"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|field| field["immutable"].as_bool() == Some(true))
-                .map(|field| {
-                    (
-                        field["collection"].as_str().unwrap().to_owned(),
-                        field["field"].as_str().unwrap().to_owned(),
-                    )
-                })
-                .collect();
+            let immutable = fields(case);
             assert_eq!(
                 admit_app_pairing_filters(&collections, &immutable, &filters),
                 case["valid"].as_bool().unwrap(),
+                "{}",
+                case["label"]
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_matches_executable_model() {
+        let snapshot: Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        let cases = snapshot["app_pairing_filter_route_cases"]
+            .as_array()
+            .unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let collections: BTreeSet<String> =
+                serde_json::from_value(case["collections"].clone()).unwrap();
+            let filters: Option<Vec<AppPairingFilter>> =
+                serde_json::from_value(case["filters"].clone()).unwrap();
+            let actual = resolve_app_pairing_filters(
+                case["mode"] == "filtered",
+                &collections,
+                &fields(case),
+                filters.as_deref(),
+            );
+            assert_eq!(
+                actual.is_some(),
+                case["accepted"].as_bool().unwrap(),
                 "{}",
                 case["label"]
             );
