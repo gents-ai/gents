@@ -12,10 +12,10 @@ use gents::store::config_client::GraphqlEndpoint;
 use gents_codex_protocol as codex;
 use gents_shell::app::{App, ChatLine};
 use gents_shell::keys::KeySet;
-use gents_shell::sample::{Opens, RunState, Running, Tone, View};
+use gents_shell::sample::{MenuId, Opens, RunState, Running, Tone, View};
 use gents_shell::source::{
     Answer as PromptAnswer, BackgroundCall, Change, ChangeKind, Connection, Input, Intent, Job,
-    JobEnd, Prompt, PromptKind, Session, Update,
+    JobEnd, MenuAct, MenuRow, Prompt, PromptKind, Session, Update,
 };
 use rapidhash::RapidHashMap;
 use ratatui::buffer::Buffer;
@@ -629,13 +629,11 @@ fn open_shell_with(
     let endpoint = GraphqlEndpoint::with_delegated_authorization(fake.graphql(), "Bearer shell")
         .expect("a bearer");
     let home = std::path::PathBuf::new();
-    open_shell_on(
-        fake,
-        agent,
-        prompt,
-        answer_wait,
-        Ok(Work { endpoint, home }),
-    )
+    let work = Work {
+        endpoint,
+        home: home.clone(),
+    };
+    open_shell_on(fake, agent, prompt, answer_wait, Ok(work), home)
 }
 
 fn open_shell_on(
@@ -644,6 +642,7 @@ fn open_shell_on(
     prompt: Option<&str>,
     answer_wait: Duration,
     work: Result<Work, String>,
+    home: std::path::PathBuf,
 ) -> Shell {
     let runtime = test_runtime_handle();
     let (intents, intended) = mpsc::unbounded_channel();
@@ -653,6 +652,7 @@ fn open_shell_on(
         agent: agent.map(str::to_string),
         prompt: prompt.map(str::to_string),
         work,
+        home,
     };
     runtime.spawn(source::run(
         opening,
@@ -2008,7 +2008,8 @@ fn work_for_turns_off_when_the_endpoint_would_be_anonymous() {
 async fn an_unavailable_graphql_is_told_once_and_the_shell_still_opens() {
     let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
     let off = "jobs and the mailbox are off: no runtime".to_string();
-    let shell = open_shell_on(&fake, None, None, ANSWER_WAIT, Err(off.clone()));
+    let home = std::path::PathBuf::new();
+    let shell = open_shell_on(&fake, None, None, ANSWER_WAIT, Err(off.clone()), home);
 
     shell.opened().await;
     assert_eq!(shell.next().await, Update::Notice(off));
@@ -2748,7 +2749,14 @@ async fn changes_during_a_reread_read_exactly_once_more() {
 }
 
 /// An open mailbox item on `session` for node `node`, created `at` minutes past noon.
-fn mailbox_item(id: &str, session: &str, kind: &str, action: &str, node: &str, at: u32) -> Value {
+pub(super) fn mailbox_item(
+    id: &str,
+    session: &str,
+    kind: &str,
+    action: &str,
+    node: &str,
+    at: u32,
+) -> Value {
     json!({
         "_docID": id,
         "item_key": format!("key:{id}"),
@@ -3102,6 +3110,152 @@ async fn an_ended_mailbox_subscription_is_told_and_the_next_turn_subscribes_agai
         .filter(|query| *query == source::MAILBOX_WATCHED)
         .count();
     assert_eq!(watched, 2, "{:?}", fake.queries());
+}
+
+fn is_menu(update: &Update) -> bool {
+    matches!(update, Update::Menu { .. })
+}
+
+#[tokio::test]
+async fn reading_the_mailbox_menu_lists_every_open_item() {
+    let items = [
+        mailbox_item("i2", "s1", "ask", "ack", "did:key:z", 2),
+        mailbox_item("i1", "s1", "finished", "ack", "did:key:z", 1),
+    ];
+    let fake = with_mailbox(move |query| mailbox_answer(query, &items)).await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+
+    shell.intend(Intent::ReadMenu(MenuId::Mailbox));
+
+    let read = shell.until(is_menu).await;
+    let row = |text: &str, tone, item: &str| MenuRow {
+        text: text.to_string(),
+        tone,
+        enter: Some(MenuAct::OpenSession {
+            session: "s1".to_string(),
+        }),
+        d: Some(MenuAct::Dismiss {
+            item: item.to_string(),
+        }),
+    };
+    let rows = vec![
+        row(" ! ask: i2 title", Tone::Warn, "i2"),
+        row(" · finished: i1 title", Tone::Plain, "i1"),
+    ];
+    let listed = Update::Menu {
+        menu: MenuId::Mailbox,
+        rows: Ok(rows),
+    };
+    assert_eq!(read.last(), Some(&listed));
+}
+
+/// The installed workflows are read from the home alone.
+#[tokio::test]
+async fn a_menu_without_work_says_why() {
+    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
+    let off = "jobs and the mailbox are off: no runtime".to_string();
+    let home = tempfile::tempdir().unwrap();
+    let work = Err(off.clone());
+    let shell = open_shell_on(&fake, None, None, ANSWER_WAIT, work, home.path().into());
+    shell.opened().await;
+
+    shell.intend(Intent::ReadMenu(MenuId::Mailbox));
+    let read = shell.until(is_menu).await;
+    let why = Update::Menu {
+        menu: MenuId::Mailbox,
+        rows: Err(off),
+    };
+    assert_eq!(read.last(), Some(&why));
+
+    shell.intend(Intent::ReadMenu(MenuId::Workflows));
+    let read = shell.until(is_menu).await;
+    let installed = Update::Menu {
+        menu: MenuId::Workflows,
+        rows: Ok(Vec::new()),
+    };
+    assert_eq!(read.last(), Some(&installed));
+}
+
+fn dismiss_from_the_mailbox(item: &str) -> Intent {
+    Intent::Act {
+        menu: MenuId::Mailbox,
+        act: MenuAct::Dismiss {
+            item: item.to_string(),
+        },
+    }
+}
+
+#[tokio::test]
+async fn an_act_notices_and_rereads_its_menu() {
+    let gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let dismissed = gone.clone();
+    let fake = with_mailbox(move |query| {
+        if query.contains("update_MailboxItem") {
+            dismissed.store(true, std::sync::atomic::Ordering::SeqCst);
+            return json!({ "data": { "update_MailboxItem": [{ "_docID": "i1" }] } });
+        }
+        let mut item = mailbox_item("i1", "s1", "finished", "ack", "did:key:z", 1);
+        if dismissed.load(std::sync::atomic::Ordering::SeqCst) {
+            item["status"] = json!("dismissed");
+        }
+        mailbox_answer(query, &[item])
+    })
+    .await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+
+    shell.intend(dismiss_from_the_mailbox("i1"));
+
+    let reread = Update::Menu {
+        menu: MenuId::Mailbox,
+        rows: Ok(Vec::new()),
+    };
+    assert_eq!(
+        shell.until(is_menu).await,
+        [Update::Notice("dismissed".to_string()), reread]
+    );
+    assert!(gone.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn a_refused_act_notices_why_and_rereads() {
+    let fake = with_mailbox(|query| {
+        let mut question = mailbox_item("i1", "s1", "ask", "start_request", "did:key:z", 1);
+        question["payload"] = json!(r#"{"version":2}"#);
+        mailbox_answer(query, &[question])
+    })
+    .await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+
+    shell.intend(dismiss_from_the_mailbox("i1"));
+
+    let read = shell.until(is_menu).await;
+    let [Update::Notice(why), reread] = &read[..] else {
+        panic!("{read:?}");
+    };
+    assert!(why.starts_with("could not dismiss it: "), "{why}");
+    let still_open = MenuRow {
+        text: " ! ask: i1 title".to_string(),
+        tone: Tone::Warn,
+        enter: Some(MenuAct::OpenSession {
+            session: "s1".to_string(),
+        }),
+        d: Some(MenuAct::Dismiss {
+            item: "i1".to_string(),
+        }),
+    };
+    let listed = Update::Menu {
+        menu: MenuId::Mailbox,
+        rows: Ok(vec![still_open]),
+    };
+    assert_eq!(reread, &listed);
+    let wrote = fake
+        .queries()
+        .iter()
+        .any(|query| query.contains("update_MailboxItem"));
+    assert!(!wrote, "{:?}", fake.queries());
 }
 
 fn read_tree(agent: &str) -> Intent {

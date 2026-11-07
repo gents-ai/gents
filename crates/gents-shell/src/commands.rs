@@ -21,6 +21,9 @@ pub struct Command {
     pub aliases: &'static [&'static str],
     pub about: &'static str,
     pub effect: Effect,
+    /// The quick-jump bar lists it; commands that act on this tab's
+    /// conversation stay in `/`.
+    pub jump: bool,
 }
 
 const fn command(
@@ -36,6 +39,19 @@ const fn command(
         aliases,
         about,
         effect,
+        jump: true,
+    }
+}
+
+const fn slash_only(
+    slash: &'static str,
+    label: &'static str,
+    about: &'static str,
+    effect: Effect,
+) -> Command {
+    Command {
+        jump: false,
+        ..command(Some(slash), label, &[], about, effect)
     }
 }
 
@@ -44,16 +60,15 @@ const SIDEBAR_VIEW: &str = "right sidebar view";
 /// The one list both `/` and the quick-jump bar read.
 #[rustfmt::skip]
 pub const COMMANDS: &[Command] = &[
-    command(Some("agent"), "/agent", &[], "open an agent in a new tab", Effect::OpenPicker),
+    slash_only("agent", "/agent", "open an agent in a new tab", Effect::OpenPicker),
     command(Some("new"), "New tab", &["tabnew", "new"], "open a new tab", Effect::OpenPicker),
     command(None, "Close tab", &["close", "tabclose", "tabc"], "close this tab", Effect::CloseTab),
-    command(Some("model"), "/model", &[], "pick a model for this agent", Effect::NotWired),
-    command(Some("goal"), "/goal", &[], "set or check this session's goal", Effect::NotWired),
-    command(Some("clear"), "/clear", &[], "clear this tab's view", Effect::ClearTab),
-    command(Some("jobs"), "/jobs", &[], "show background jobs", Effect::ShowSidebar(View::Agents)),
+    slash_only("goal", "/goal", "set or check this session's goal", Effect::NotWired),
+    slash_only("clear", "/clear", "clear this tab's view", Effect::ClearTab),
+    slash_only("jobs", "/jobs", "show background jobs", Effect::ShowSidebar(View::Agents)),
     command(Some("help"), "/help", &[], "show the keys", Effect::OpenKeys),
     command(Some("quit"), "Quit", &["q", "q!", "qa", "wq"], "quit", Effect::Quit),
-    command(Some("dismiss"), "/dismiss", &[], "dismiss the prompt above", Effect::DismissPrompt),
+    slash_only("dismiss", "/dismiss", "dismiss the prompt above", Effect::DismissPrompt),
     command(None, "Switch key set", &["vim", "emacs", "keys"], "vim to emacs or back", Effect::SwitchKeys),
     command(Some("diff"), "Sidebar: Diff", &["diff", "changes"], SIDEBAR_VIEW, Effect::ShowDiff(Scope::Session)),
     command(Some("workflows"), "Sidebar: This session's workflows", &["workflows"], SIDEBAR_VIEW, Effect::ShowSidebar(View::Workflows)),

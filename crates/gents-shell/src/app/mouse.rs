@@ -8,7 +8,7 @@ use crate::draw::layers::list_start;
 use crate::draw::sidebar::{first_diff_row, scope_at};
 use crate::keys::Action;
 use crate::layout::{running_area, sidebar_rows_area, Right};
-use crate::sample::{menu, MenuId, SidebarRow, Tone, View};
+use crate::sample::{MenuId, SidebarRow, Tone, View};
 
 impl App {
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent) {
@@ -90,12 +90,13 @@ impl App {
             height: area.height - 3,
             ..area
         };
+        let rows = self.menu_rows(id).0;
         let Some(top) = self.layers.last_mut().filter(|_| list.contains(at)) else {
             return;
         };
         let first = list_start(top.selected, usize::from(list.height));
         let index = first + usize::from(at.y - list.y);
-        if menu(id).0.get(index).is_some_and(SidebarRow::selectable) {
+        if rows.get(index).is_some_and(SidebarRow::selectable) {
             top.selected = index;
             self.submit_layer();
         }

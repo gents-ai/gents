@@ -3,7 +3,7 @@ use std::io;
 use ratatui::crossterm::event::Event;
 
 use crate::app::ChatLine;
-use crate::sample::{Running, Tone};
+use crate::sample::{MenuId, Running, Tone};
 
 /// What the shell asks of its source.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +41,12 @@ pub enum Intent {
     /// The Diff view shows the working tree: `agent`'s connection reads its tool root's.
     WorkingTree {
         agent: String,
+    },
+    /// A menu is shown: the source answers its rows with `Update::Menu`.
+    ReadMenu(MenuId),
+    Act {
+        menu: MenuId,
+        act: MenuAct,
     },
 }
 
@@ -116,6 +122,45 @@ pub enum Update {
     },
     /// The working tree's changes in git's order, replaced whole, or why it could not be read.
     WorkingTree(Result<Vec<Change>, String>),
+    /// A menu's rows, replaced whole, or why they could not be read.
+    Menu {
+        menu: MenuId,
+        rows: Result<Vec<MenuRow>, String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MenuRow {
+    pub text: String,
+    pub tone: Tone,
+    pub enter: Option<MenuAct>,
+    pub d: Option<MenuAct>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MenuAct {
+    SetDefaultAgent {
+        agent: String,
+        name: String,
+    },
+    RunTask {
+        task: String,
+    },
+    SetTaskEnabled {
+        task: String,
+        enabled: bool,
+    },
+    Dismiss {
+        item: String,
+    },
+    /// Handled by the shell.
+    OpenSession {
+        session: String,
+    },
+    /// Handled by the shell: the active tab's message box gets `text`.
+    Insert {
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

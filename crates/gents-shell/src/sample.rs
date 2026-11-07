@@ -1,9 +1,9 @@
 use std::borrow::Cow;
 
-use crate::app::{sample_chat, ChatLine};
+use crate::app::{sample_chat, ChatLine, NOT_WIRED};
 use crate::source::{
-    Agent, Answer, BackgroundCall, Change, ChangeKind, Day, Intent, Job, Prompt, PromptKind,
-    Session, SessionState, Update,
+    Agent, Answer, BackgroundCall, Change, ChangeKind, Day, Intent, Job, MenuAct, MenuRow, Prompt,
+    PromptKind, Session, SessionState, Update,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +32,8 @@ pub enum RowAction {
     OpenDiff(usize),
     /// A position in `App.jobs`.
     OpenJob(usize),
+    /// A position in the menu's rows as the source read them.
+    MenuRow(usize),
     NotWired,
 }
 
@@ -65,7 +67,7 @@ pub enum Scope {
     Tree,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MenuId {
     Accounts,
     Agents,
@@ -75,6 +77,7 @@ pub enum MenuId {
     Status,
     NodeSettings,
     AppSettings,
+    Workflows,
 }
 
 impl MenuId {
@@ -88,6 +91,7 @@ impl MenuId {
             MenuId::Status => "Status",
             MenuId::NodeSettings => "Node settings",
             MenuId::AppSettings => "App settings",
+            MenuId::Workflows => "Workflows",
         }
     }
 }
@@ -497,8 +501,41 @@ pub fn answer(intent: &Intent) -> Vec<Update> {
             },
         ],
         Intent::WorkingTree { .. } => vec![Update::WorkingTree(Ok(Vec::new()))],
+        Intent::ReadMenu(id) => vec![Update::Menu {
+            menu: *id,
+            rows: Ok(menu_rows(*id)),
+        }],
+        Intent::Act { .. } => vec![Update::Notice(NOT_WIRED.to_string())],
         Intent::Interrupt { .. } | Intent::Refresh => Vec::new(),
     }
+}
+
+/// Today's static rows, which take no act, and two installed workflows.
+fn menu_rows(id: MenuId) -> Vec<MenuRow> {
+    let row = |text: &str, tone, enter| MenuRow {
+        text: text.to_string(),
+        tone,
+        enter,
+        d: None,
+    };
+    if id != MenuId::Workflows {
+        let rows = menu(id).0.iter();
+        return rows
+            .map(|shown| row(&shown.text, shown.tone, None))
+            .collect();
+    }
+    [
+        (
+            " review_changes   Review a diff with three readers",
+            "review_changes",
+        ),
+        (" release_notes   promoted", "release_notes"),
+    ]
+    .map(|(text, name)| {
+        let prompt = format!("use the {name} workflow: ");
+        row(text, Tone::Plain, Some(MenuAct::Insert { text: prompt }))
+    })
+    .into()
 }
 
 pub const PICKER_FOOTER: &str = " enter open in a new tab · esc back";
@@ -539,7 +576,11 @@ const NODE_SETTINGS: &[SidebarRow] = &[
     item(" Triggers", Tone::Plain),
     item(" Schedules", Tone::Plain),
     item(" Event sources", Tone::Plain),
-    item(" Workflows", Tone::Plain),
+    row(
+        " Workflows",
+        Tone::Plain,
+        RowAction::OpenMenu(MenuId::Workflows),
+    ),
     note(" TOOLS", Tone::Label),
     row(" Tools", Tone::Plain, RowAction::OpenMenu(MenuId::Tools)),
     item(" Remote Tools", Tone::Plain),
@@ -590,14 +631,15 @@ const STATUS: &[SidebarRow] = &[
 
 pub fn menu(id: MenuId) -> (&'static [SidebarRow], &'static str) {
     match id {
-        MenuId::Accounts => (ACCOUNTS, " enter sign in · d disable · esc back"),
-        MenuId::Agents => (AGENTS_MENU, " enter open · esc back"),
-        MenuId::Tools => (TOOLS, " enter open · esc back"),
-        MenuId::Tasks => (TASKS, " enter open · esc back"),
-        MenuId::Mailbox => (MAILBOX, " enter open   d dismiss"),
-        MenuId::Status => (STATUS, " sample data: nothing here is wired"),
+        MenuId::Accounts => (ACCOUNTS, " gents accounts login signs in · esc back"),
+        MenuId::Agents => (AGENTS_MENU, " enter make default · esc back"),
+        MenuId::Tools => (TOOLS, " esc back"),
+        MenuId::Tasks => (TASKS, " enter run now · d on/off · esc back"),
+        MenuId::Mailbox => (MAILBOX, " enter open its session · d dismiss · esc back"),
+        MenuId::Status => (STATUS, " esc back"),
         MenuId::NodeSettings => (NODE_SETTINGS, " enter open · esc back"),
         MenuId::AppSettings => (APP_SETTINGS, " enter open · esc back"),
+        MenuId::Workflows => (&[], " enter use it · esc back"),
     }
 }
 

@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::fmt;
 use std::sync::mpsc::Sender;
 
+use rapidhash::{HashMapExt, RapidHashMap};
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -23,18 +24,18 @@ use crate::layout::{
     Right, Screen, Wanted,
 };
 use crate::sample::{
-    answer, changes, note, row, Opens, RowAction, Running, Scope, SidebarRow, Tone, View, CHAT,
-    START_SESSION, SUBAGENT_MARK,
+    answer, changes, note, row, MenuId, Opens, RowAction, Running, Scope, SidebarRow, Tone, View,
+    CHAT, START_SESSION, SUBAGENT_MARK,
 };
 use crate::source::{
-    Agent, BackgroundCall, Change, Connection, Day, Intent, Job, Prompt, Session, SessionState,
-    Update,
+    Agent, BackgroundCall, Change, Connection, Day, Intent, Job, MenuRow, Prompt, Session,
+    SessionState, Update,
 };
 use input::LineInput;
 use layers::{Layer, LayerKind};
 use search::Search;
 
-const NOT_WIRED: &str = "not wired yet";
+pub(crate) const NOT_WIRED: &str = "not wired yet";
 const SOURCE_GONE: &str = "the runtime source stopped: reopen the shell";
 const CONNECTING: &str = "still connecting to the runtime";
 const STOPPING: &str = "stopping the turn";
@@ -378,6 +379,8 @@ pub struct App {
     pub background_as_of: String,
     /// Every tab's tools share one root, so its working tree is the app's. `None` until read.
     pub working_tree: Option<Result<Vec<Change>, String>>,
+    /// Each menu's rows as last read; a menu not read yet has none.
+    pub menus: RapidHashMap<MenuId, Result<Vec<MenuRow>, String>>,
     /// Without a source, the sample answers each intent at once.
     intents: Option<Sender<Intent>>,
     pub connection: Connection,
@@ -439,6 +442,7 @@ impl App {
             background: crate::sample::background(),
             background_as_of: String::new(),
             working_tree: None,
+            menus: RapidHashMap::new(),
             intents: None,
             connection: Connection::Sample,
             clipboard: None,
@@ -564,6 +568,7 @@ impl App {
             Update::Background { calls, as_of } => self.set_background(calls, as_of),
             Update::Begin { agent, prompt } => self.begin(agent, prompt),
             Update::WorkingTree(tree) => self.set_working_tree(tree),
+            Update::Menu { menu, rows } => self.set_menu(menu, rows),
         }
     }
 
@@ -3479,7 +3484,7 @@ mod tests {
         for _ in 0..20 {
             press(&mut app, "ctrl-n");
         }
-        assert_eq!(app.slash, Some(10));
+        assert_eq!(app.slash, Some(9));
         type_text(&mut app, "c");
         assert_eq!(app.slash, Some(0));
         press(&mut app, "enter");
@@ -3590,10 +3595,10 @@ mod tests {
         assert_eq!(top(&jobs), Some(LayerKind::Sidebar));
 
         assert_eq!(top(&run(132, 36, "/help")), Some(LayerKind::Keys));
-        for text in ["/model", "/goal"] {
-            let app = run(132, 36, text);
-            assert_eq!(app.notice.as_deref(), Some("not wired yet"), "{text}");
-        }
+        assert_eq!(
+            run(132, 36, "/goal").notice.as_deref(),
+            Some("not wired yet")
+        );
         assert!(run(132, 36, "/quit").should_quit());
     }
 
@@ -3613,7 +3618,7 @@ mod tests {
         let s = screen(&app);
         assert_eq!(find(&s, " Commands "), Some((3, 4)));
         assert_eq!(find(&s, "/quit"), None);
-        for _ in 0..7 {
+        for _ in 0..6 {
             press(&mut app, "ctrl-n");
         }
         let s = screen(&app);
@@ -3630,7 +3635,7 @@ mod tests {
     fn switch_key_set_is_not_a_slash_command() {
         let mut app = with_right_pane(App::new(Vim, 132, 36));
         type_text(&mut app, "/");
-        assert_eq!(app.slash_matches().len(), 11);
+        assert_eq!(app.slash_matches().len(), 10);
         type_text(&mut app, "switch");
         assert!(app.slash_matches().is_empty());
         assert!(find(&screen(&app), "no matches").is_some());

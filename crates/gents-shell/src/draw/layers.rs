@@ -12,7 +12,7 @@ use crate::app::App;
 use crate::jump;
 use crate::keys::KeySet;
 use crate::layout::{keys_rows_area, layer_rect, KEYS_FULL_W};
-use crate::sample::{menu, note, MenuId, SidebarRow, Tone, KEY_ROWS, PICKER_FOOTER};
+use crate::sample::{note, MenuId, SidebarRow, Tone, KEY_ROWS, PICKER_FOOTER};
 
 const KEYS_FOOTNOTE: &str = "Sample bindings to react to. Switch sets from the jump bar.";
 const KEYS_FOOTNOTE_VIM: &str = "Sample bindings to react to. Switch sets from the jump bar. \
@@ -47,7 +47,7 @@ fn inner(rect: Rect) -> Rect {
 
 fn draw_menu(app: &App, layer: &Layer, id: MenuId, rect: Rect, focused: bool, buf: &mut Buffer) {
     pane_box(buf, rect, id.name(), focused);
-    let (rows, footer) = menu(id);
+    let (rows, footer) = app.menu_rows(id);
     let area = inner(rect);
     let list = Rect {
         height: area.height - 3,

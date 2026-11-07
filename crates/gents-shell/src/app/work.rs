@@ -422,7 +422,11 @@ mod tests {
             (app, intended)
         };
         let refreshes = |intended: &Receiver<Intent>| {
-            let intents: Vec<_> = intended.try_iter().collect();
+            let bar = Intent::ReadMenu(sample::MenuId::Workflows);
+            let intents: Vec<_> = intended
+                .try_iter()
+                .filter(|intent| *intent != bar)
+                .collect();
             assert!(
                 intents.iter().all(|intent| *intent == Intent::Refresh),
                 "{intents:?}"

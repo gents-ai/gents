@@ -9,6 +9,29 @@ pub(crate) fn node_builder() -> defra_node::NodeBuilder {
     defra_node::Node::builder().with_node_identity_did(identity.did())
 }
 
+/// A node holding `config`, and the URL of the GraphQL it serves as a home's runtime does.
+pub(crate) async fn served_config(
+    config: Value,
+) -> (std::sync::Arc<defra_node::EmbeddedNode>, String) {
+    use gents::store::config_client::{apply_desired_state_plan, DesiredStateApplyPlan};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let graphql = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+    let http = defra_node::HttpConfig::with_listener(listener).unwrap();
+    let node = std::sync::Arc::new(node_builder().with_http(http).build().await.unwrap());
+    gents::ensure_runtime_schemas(&node).await.unwrap();
+    let plan =
+        DesiredStateApplyPlan::from_pack_config(&serde_json::from_value(config).unwrap()).unwrap();
+    gents::store::config_client::ConfigAccess::local(node.clone())
+        .transact_write("test.served_config.seed", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .unwrap();
+    (node, graphql)
+}
+
 /// A node whose runtime is the deterministic fixture signer
 /// (`caused_sessions::fixtures::FIXTURE_DID`), whose key this process holds.
 pub(crate) fn fixture_node_builder() -> defra_node::NodeBuilder {

@@ -1,5 +1,6 @@
 mod client;
 mod items;
+mod menus;
 mod source;
 mod tree;
 mod work;
@@ -24,8 +25,9 @@ pub(crate) async fn open(
     runtime: Handle,
 ) -> anyhow::Result<()> {
     let home = home.to_path_buf();
+    let reading = home.clone();
     let work = runtime
-        .spawn_blocking(move || work::work_for(&home))
+        .spawn_blocking(move || work::work_for(&reading))
         .await
         .context("reading this home's GraphQL endpoint")?;
     let (updates, inputs) = std::sync::mpsc::channel();
@@ -44,6 +46,7 @@ pub(crate) async fn open(
         agent,
         prompt,
         work,
+        home,
     };
     let source = runtime.spawn(source::run(
         opening,

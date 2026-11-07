@@ -12,7 +12,7 @@ use crate::request_helpers::resolve_dual_id;
 use crate::{graphql_rows, print_json, resolve_config_access};
 
 #[derive(Clone, Copy)]
-pub(super) struct ConfigDocumentSpec {
+pub(crate) struct ConfigDocumentSpec {
     pub(super) noun: &'static str,
     pub(super) collection: Collection,
 }
@@ -27,7 +27,7 @@ pub(super) const AGENT_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     collection: Collection::Agent,
 };
 
-pub(super) const TOOLS_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+pub(crate) const TOOLS_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     noun: "tools",
     collection: Collection::Tools,
 };
@@ -203,7 +203,7 @@ async fn live_manifest_for_delete(
     desired_state::manifest_from_export_bundle(&bundle)
 }
 
-pub(super) async fn query_collection(
+pub(crate) async fn query_collection(
     access: &ConfigAccess,
     spec: ConfigDocumentSpec,
     node_did: &str,
@@ -329,7 +329,7 @@ fn remove_target(
     Ok(())
 }
 
-fn sort_rows(rows: &mut [Value], id_field: &str) {
+pub(crate) fn sort_rows(rows: &mut [Value], id_field: &str) {
     rows.sort_by(|a, b| {
         a.get(id_field)
             .and_then(Value::as_str)

@@ -1,6 +1,7 @@
 use ratatui::layout::Rect;
 
 use super::input::LineInput;
+use super::work::{in_range, item};
 use super::{first_selectable, step_row, stepped, App};
 use crate::commands::COMMANDS;
 use crate::filter::subsequence;
@@ -8,8 +9,8 @@ use crate::jump::{self, Target};
 use crate::keys::{Action, Dir, KeyCtx};
 pub use crate::layout::LayerKind;
 use crate::layout::{keys_rows_area, layer_rect, sessions_can_dock, sidebar_can_dock};
-use crate::sample::{menu, RowAction, KEY_ROWS};
-use crate::source::Agent;
+use crate::sample::{menu, note, MenuId, RowAction, SidebarRow, Tone, KEY_ROWS};
+use crate::source::{Agent, Connection, Intent, MenuAct, MenuRow};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layer {
@@ -18,7 +19,90 @@ pub struct Layer {
     pub selected: usize,
 }
 
+const NOT_LISTED: &str = "that session is not in the list";
+
 impl App {
+    /// Node settings and App settings are static; every other menu shows its rows as last read.
+    /// A lost source drops the reads still out, so a menu not read by then says why.
+    pub fn menu_rows(&self, id: MenuId) -> (Vec<SidebarRow>, &'static str) {
+        let (rows, footer) = menu(id);
+        let rows = match (id, self.menus.get(&id), &self.connection) {
+            (MenuId::NodeSettings | MenuId::AppSettings, ..) => rows.to_vec(),
+            (_, Some(Err(why)), _) | (_, None, Connection::Lost(why)) => {
+                vec![item(
+                    format!(" could not read: {why}"),
+                    Tone::Warn,
+                    RowAction::None,
+                )]
+            }
+            (_, None, _) => vec![note(" reading…", Tone::Label)],
+            (_, Some(Ok(read)), _) if read.is_empty() => vec![note(" none", Tone::Label)],
+            (_, Some(Ok(read)), _) => read
+                .iter()
+                .enumerate()
+                .map(|(index, row)| item(row.text.clone(), row.tone, RowAction::MenuRow(index)))
+                .collect(),
+        };
+        (rows, footer)
+    }
+
+    /// The layer showing the menu, on top or beneath, keeps its selection in range; rows read
+    /// for another menu move nothing. A menu is in the stack at most once.
+    pub(super) fn set_menu(&mut self, id: MenuId, rows: Result<Vec<MenuRow>, String>) {
+        self.menus.insert(id, rows);
+        let shown = self.menu_rows(id).0;
+        let showing = self
+            .layers
+            .iter_mut()
+            .find(|layer| layer.kind == LayerKind::Menu(id));
+        if let Some(layer) = showing {
+            layer.selected = in_range(&shown, layer.selected);
+        }
+    }
+
+    /// A lost source reads no more intents, so the menu says why at once.
+    fn read_menu(&mut self, id: MenuId) {
+        match &self.connection {
+            Connection::Lost(why) => self.set_menu(id, Err(why.clone())),
+            _ => self.emit(Intent::ReadMenu(id)),
+        }
+    }
+
+    /// Enter, or with `d` the `d` key, on the menu's `row`th row as read. A row without that act
+    /// does nothing.
+    pub(super) fn run_row(&mut self, menu: MenuId, row: usize, d: bool) {
+        let Some(Ok(rows)) = self.menus.get(&menu) else {
+            return;
+        };
+        let act = rows
+            .get(row)
+            .and_then(|row| if d { &row.d } else { &row.enter }.clone());
+        match act {
+            Some(MenuAct::OpenSession { session }) => {
+                let rows = self.session_rows();
+                let listed = rows.iter().position(|row| match row.action {
+                    RowAction::OpenSession(index) => self.sessions[index].id == session,
+                    _ => false,
+                });
+                match listed {
+                    Some(row) => self.open_session(row),
+                    None => self.notice = Some(NOT_LISTED.to_string()),
+                }
+            }
+            Some(MenuAct::Insert { text }) => {
+                self.layers.clear();
+                self.act(Action::EnterInput);
+                self.slash = None;
+                let input = &mut self.tabs[self.active].input;
+                input.home();
+                input.paste_inline(&text);
+                input.end();
+            }
+            Some(act) if !self.says_lost() => self.emit(Intent::Act { menu, act }),
+            _ => {}
+        }
+    }
+
     pub fn picker_matches(&self, query: &str) -> Vec<&Agent> {
         self.agents
             .iter()
@@ -27,7 +111,8 @@ impl App {
     }
 
     /// A kind already in the stack comes to the top. The bar looks only at the top, because
-    /// opening it again over a menu is how depth grows.
+    /// opening it again over a menu is how depth grows. A menu is read again as it comes up,
+    /// and the bar reads the installed workflows.
     pub fn push_layer(&mut self, kind: LayerKind) {
         let from = match kind {
             LayerKind::Jump => self.layers.len().saturating_sub(1),
@@ -37,17 +122,23 @@ impl App {
         if let Some(offset) = found {
             let layer = self.layers.remove(from + offset);
             self.layers.push(layer);
-            return;
+        } else {
+            let selected = match kind {
+                LayerKind::Menu(id) => first_selectable(&self.menu_rows(id).0),
+                _ => 0,
+            };
+            self.layers.push(Layer {
+                kind,
+                filter: LineInput::default(),
+                selected,
+            });
         }
-        let selected = match kind {
-            LayerKind::Menu(id) => first_selectable(menu(id).0),
-            _ => 0,
-        };
-        self.layers.push(Layer {
-            kind,
-            filter: LineInput::default(),
-            selected,
-        });
+        match kind {
+            LayerKind::Menu(MenuId::NodeSettings | MenuId::AppSettings) => {}
+            LayerKind::Menu(id) => self.read_menu(id),
+            LayerKind::Jump => self.read_menu(MenuId::Workflows),
+            _ => {}
+        }
     }
 
     pub(super) fn toggle_layer(&mut self, kind: LayerKind) {
@@ -96,7 +187,15 @@ impl App {
             Action::MoveFocus(_) | Action::NextPane => self.layers.rotate_right(1),
             Action::Next => self.step_layer(true),
             Action::Prev => self.step_layer(false),
-            Action::NotWired if matches!(top.kind, LayerKind::Menu(_)) => self.not_wired(),
+            Action::SecondAct => {
+                if let LayerKind::Menu(id) = top.kind {
+                    let selected = top.selected;
+                    let action = self.menu_rows(id).0.get(selected).map(|row| row.action);
+                    if let Some(RowAction::MenuRow(row)) = action {
+                        self.run_row(id, row, true);
+                    }
+                }
+            }
             Action::ClosePane => {
                 self.layers.pop();
             }
@@ -126,10 +225,14 @@ impl App {
                     self.open_tab_with_agent(agent);
                 }
             }
-            LayerKind::Menu(id) => match menu(id).0[top.selected].action {
-                RowAction::OpenMenu(next) => self.push_layer(LayerKind::Menu(next)),
-                _ => self.not_wired(),
-            },
+            LayerKind::Menu(id) => {
+                match self.menu_rows(id).0.get(top.selected).map(|row| row.action) {
+                    Some(RowAction::OpenMenu(next)) => self.push_layer(LayerKind::Menu(next)),
+                    Some(RowAction::MenuRow(row)) => self.run_row(id, row, false),
+                    Some(RowAction::NotWired) => self.not_wired(),
+                    _ => {}
+                }
+            }
             LayerKind::Sessions => self.activate_session_row(),
             LayerKind::Sidebar => self.activate_view_row(),
             LayerKind::Jump => self.submit_jump(top.selected),
@@ -149,6 +252,7 @@ impl App {
             Target::Session(row) => self.open_session(row),
             Target::Agent(agent) => self.open_tab_with_agent(agent),
             Target::Menu(id) => self.push_layer(LayerKind::Menu(id)),
+            Target::Workflow(row) => self.run_row(MenuId::Workflows, row, false),
             Target::Command(index) => self.run_effect(COMMANDS[index].effect),
         }
     }
@@ -171,7 +275,12 @@ impl App {
                     top.selected = stepped(top.selected, forward, max);
                 }
             }
-            LayerKind::Menu(id) => top.selected = step_row(menu(id).0, top.selected, forward),
+            LayerKind::Menu(id) => {
+                let rows = self.menu_rows(id).0;
+                if let Some(top) = self.layers.last_mut() {
+                    top.selected = step_row(&rows, top.selected, forward);
+                }
+            }
             LayerKind::Keys => {
                 if let Some(rect) = rect {
                     let height = usize::from(keys_rows_area(rect).height);
@@ -193,11 +302,14 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc::{channel, Receiver};
+
     use super::*;
     use crate::app::{Mode, Pane};
     use crate::draw::theme;
     use crate::keys::KeySet::{Emacs, Vim};
-    use crate::sample::MenuId;
+    use crate::sample::{self, MENUS};
+    use crate::source::Update;
     use crate::testing::{
         buffer, find, kinds, press, screen, type_text, with_right_pane, with_sample_session,
     };
@@ -207,6 +319,47 @@ mod tests {
 
     const ACCOUNTS: LayerKind = LayerKind::Menu(MenuId::Accounts);
     const TOOLS: LayerKind = LayerKind::Menu(MenuId::Tools);
+    const TASKS: LayerKind = LayerKind::Menu(MenuId::Tasks);
+
+    fn connected() -> (App, Receiver<Intent>) {
+        let (intents, intended) = channel();
+        (App::connected(Vim, 132, 36, intents), intended)
+    }
+
+    fn menu_row(text: &str, enter: Option<MenuAct>, d: Option<MenuAct>) -> MenuRow {
+        MenuRow {
+            text: text.to_string(),
+            tone: Tone::Plain,
+            enter,
+            d,
+        }
+    }
+
+    fn plain(texts: &[&str]) -> Vec<MenuRow> {
+        texts
+            .iter()
+            .map(|text| menu_row(text, None, None))
+            .collect()
+    }
+
+    fn read(app: &mut App, menu: MenuId, rows: Vec<MenuRow>) {
+        app.apply(Update::Menu {
+            menu,
+            rows: Ok(rows),
+        });
+    }
+
+    fn shown(app: &App, id: MenuId) -> Vec<(String, Tone)> {
+        let rows = app.menu_rows(id).0;
+        rows.iter()
+            .map(|row| (row.text.to_string(), row.tone))
+            .collect()
+    }
+
+    fn selected_text(app: &App, id: MenuId) -> String {
+        let top = app.layers.last().expect("a layer");
+        app.menu_rows(id).0[top.selected].text.to_string()
+    }
 
     fn top(app: &App) -> LayerKind {
         app.layers.last().expect("a layer").kind
@@ -513,7 +666,7 @@ mod tests {
     }
 
     #[test]
-    fn d_says_not_wired_only_in_a_menu() {
+    fn d_does_nothing_outside_a_menu() {
         for kind in [LayerKind::Keys, LayerKind::Sessions, LayerKind::Sidebar] {
             let mut app = App::new(Vim, 70, 24);
             app.push_layer(kind);
@@ -523,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn menu_actions_say_not_wired() {
+    fn a_sample_menu_row_takes_no_act() {
         let mut app = App::new(Vim, 132, 36);
         app.push_layer(ACCOUNTS);
         assert!(find(&screen(&app), "signed in").is_some());
@@ -531,43 +684,66 @@ mod tests {
         assert_eq!(app.layers[0].selected, 1);
         for key in ["enter", "d"] {
             press(&mut app, key);
-            assert_eq!(app.notice.as_deref(), Some("not wired yet"), "{key}");
+            assert_eq!(app.notice, None, "{key}");
             assert_eq!(kinds(&app), [ACCOUNTS]);
         }
     }
 
     #[test]
-    fn menu_rows_skip_blanks_and_clamp() {
+    fn menu_rows_skip_headers_and_clamp() {
         let mut app = App::new(Vim, 132, 36);
-        app.push_layer(LayerKind::Menu(MenuId::Agents));
-        press(&mut app, "j j j");
-        assert_eq!(app.layers[0].selected, 4);
-        press(&mut app, "j j");
-        assert_eq!(app.layers[0].selected, 4);
+        app.push_layer(NODE);
+        assert_eq!(
+            app.layers[0].selected,
+            row_named(MenuId::NodeSettings, "Node")
+        );
+        press(&mut app, "j j j j");
+        assert_eq!(
+            app.layers[0].selected,
+            row_named(MenuId::NodeSettings, "Tasks")
+        );
+        press(&mut app, "k");
+        assert_eq!(
+            app.layers[0].selected,
+            row_named(MenuId::NodeSettings, "Providers")
+        );
         press(&mut app, "k k k k k");
-        assert_eq!(app.layers[0].selected, 0);
+        assert_eq!(
+            app.layers[0].selected,
+            row_named(MenuId::NodeSettings, "Node")
+        );
+        for _ in 0..20 {
+            press(&mut app, "j");
+        }
+        let last = menu(MenuId::NodeSettings).0.len() - 1;
+        assert_eq!(app.layers[0].selected, last);
     }
 
     #[test]
     fn every_menu_shows_its_rows_and_footer() {
         for (id, text, footer) in [
-            (MenuId::Accounts, "Claude    subscription", "enter sign in"),
-            (MenuId::Agents, "+ New agent", "enter open"),
-            (MenuId::Tools, "code review pack   3 tools", "enter open"),
-            (MenuId::Tasks, "nightly eval     02:00", "enter open"),
-            (MenuId::Mailbox, "approve: cargo test", "d dismiss"),
             (
-                MenuId::Status,
-                "runtime    not connected",
-                "nothing here is wired",
+                MenuId::Accounts,
+                "Claude    subscription",
+                " gents accounts login",
             ),
+            (MenuId::Agents, "+ New agent", " enter make default"),
+            (MenuId::Tools, "code review pack   3 tools", " esc back"),
+            (MenuId::Tasks, "nightly eval     02:00", " enter run now"),
+            (
+                MenuId::Mailbox,
+                "approve: cargo test",
+                " enter open its session",
+            ),
+            (MenuId::Status, "runtime    not connected", " esc back"),
         ] {
             let mut app = App::new(Vim, 60, 16);
             app.push_layer(LayerKind::Menu(id));
             let s = screen(&app);
+            let above_status = &s[..s.len() - 1];
             assert!(find(&s, id.name()).is_some(), "{id:?}");
             assert!(find(&s, text).is_some(), "{id:?}");
-            assert!(find(&s, footer).is_some(), "{id:?}");
+            assert!(find(above_status, footer).is_some(), "{id:?}");
         }
     }
 
@@ -575,12 +751,12 @@ mod tests {
     fn footers_name_the_active_key_set() {
         let mut app = App::new(Vim, 132, 36);
         app.push_layer(ACCOUNTS);
-        assert!(find(&screen(&app), "d disable · esc back").is_some());
+        assert!(find(&screen(&app), "signs in · esc back").is_some());
 
         let mut app = App::new(Emacs, 132, 36);
         app.push_layer(ACCOUNTS);
         let s = screen(&app);
-        assert!(find(&s, "d disable · ctrl-g back").is_some());
+        assert!(find(&s, "signs in · ctrl-g back").is_some());
         assert_eq!(find(&s, "esc"), None);
     }
 
@@ -1066,5 +1242,238 @@ mod tests {
         press(&mut app, "ctrl-c");
         assert_eq!(app.tabs[0].input.text(), "hi");
         assert_eq!(app.notice.as_deref(), Some("ctrl-x ctrl-c to quit"));
+    }
+
+    #[test]
+    fn opening_a_menu_asks_the_source_for_it() {
+        let (mut app, intended) = connected();
+        app.push_layer(TASKS);
+        let sent: Vec<_> = intended.try_iter().collect();
+        assert_eq!(sent, [Intent::ReadMenu(MenuId::Tasks)]);
+
+        app.push_layer(NODE);
+        assert!(intended.try_recv().is_err(), "Node settings reads nothing");
+
+        app.layers.clear();
+        press(&mut app, "ctrl-p");
+        assert_eq!(kinds(&app), [LayerKind::Jump]);
+        let sent: Vec<_> = intended.try_iter().collect();
+        assert_eq!(sent, [Intent::ReadMenu(MenuId::Workflows)]);
+    }
+
+    #[test]
+    fn a_menu_shows_reading_then_its_rows_or_why_not() {
+        let (mut app, _intended) = connected();
+        app.push_layer(TASKS);
+        assert_eq!(
+            shown(&app, MenuId::Tasks),
+            [(" reading…".to_string(), Tone::Label)]
+        );
+        let s = screen(&app);
+        assert!(find(&s, " reading…").is_some());
+        assert!(find(&s, " enter run now · d on/off · esc back").is_some());
+
+        read(&mut app, MenuId::Tasks, Vec::new());
+        assert_eq!(
+            shown(&app, MenuId::Tasks),
+            [(" none".to_string(), Tone::Label)]
+        );
+
+        let why = " could not read: jobs and the mailbox are off: x";
+        app.apply(Update::Menu {
+            menu: MenuId::Tasks,
+            rows: Err("jobs and the mailbox are off: x".to_string()),
+        });
+        assert_eq!(shown(&app, MenuId::Tasks), [(why.to_string(), Tone::Warn)]);
+        assert!(find(&screen(&app), why).is_some());
+    }
+
+    #[test]
+    fn enter_and_d_run_the_rows_acts() {
+        let (mut app, intended) = connected();
+        app.push_layer(TASKS);
+        let run = MenuAct::RunTask {
+            task: "t".to_string(),
+        };
+        let off = MenuAct::SetTaskEnabled {
+            task: "t".to_string(),
+            enabled: false,
+        };
+        let rows = vec![
+            menu_row(" t     02:00", Some(run.clone()), Some(off.clone())),
+            menu_row(" u      idle", None, None),
+        ];
+        read(&mut app, MenuId::Tasks, rows);
+        intended.try_iter().for_each(drop);
+
+        let act = |act| Intent::Act {
+            menu: MenuId::Tasks,
+            act,
+        };
+        press(&mut app, "enter");
+        assert_eq!(intended.try_iter().collect::<Vec<_>>(), [act(run)]);
+        press(&mut app, "d");
+        assert_eq!(intended.try_iter().collect::<Vec<_>>(), [act(off)]);
+
+        press(&mut app, "j");
+        for key in ["enter", "d"] {
+            press(&mut app, key);
+            assert!(intended.try_recv().is_err(), "{key}");
+            assert_eq!(app.notice, None, "{key}");
+            assert_eq!(kinds(&app), [TASKS], "{key}");
+        }
+    }
+
+    #[test]
+    fn a_mailbox_row_opens_its_session() {
+        let mailbox = LayerKind::Menu(MenuId::Mailbox);
+        let open = |session: &str| {
+            let session = session.to_string();
+            Some(MenuAct::OpenSession { session })
+        };
+        let rows = vec![
+            menu_row(" ! approve: cargo test", open("flaky recovery test"), None),
+            menu_row(" ! from an unlisted session", open("gone"), None),
+        ];
+        let mut app = App::new(Vim, 132, 36);
+        app.push_layer(mailbox);
+        read(&mut app, MenuId::Mailbox, rows.clone());
+        press(&mut app, "enter");
+        assert!(app.layers.is_empty());
+        let tab = &app.tabs[app.active];
+        assert_eq!(tab.session.as_deref(), Some("flaky recovery test"));
+        assert_eq!(tab.name, "flaky");
+
+        app.push_layer(mailbox);
+        read(&mut app, MenuId::Mailbox, rows);
+        press(&mut app, "j enter");
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("that session is not in the list")
+        );
+        assert_eq!(kinds(&app), [mailbox]);
+    }
+
+    #[test]
+    fn node_settings_workflows_opens_the_installed_list() {
+        let mut app = App::new(Vim, 132, 36);
+        app.push_layer(NODE);
+        app.layers[0].selected = row_named(MenuId::NodeSettings, "Workflows");
+        press(&mut app, "enter");
+        assert_eq!(kinds(&app), [NODE, LayerKind::Menu(MenuId::Workflows)]);
+    }
+
+    #[test]
+    fn a_menu_on_a_lost_shell_says_why_without_asking() {
+        let (mut app, intended) = connected();
+        app.apply(Update::Connection(Connection::Lost("gone".to_string())));
+        app.push_layer(LayerKind::Menu(MenuId::Status));
+        assert!(intended.try_recv().is_err());
+        assert!(find(&screen(&app), " could not read: gone").is_some());
+    }
+
+    #[test]
+    fn rows_for_another_menu_leave_the_open_one_alone() {
+        let (mut app, _intended) = connected();
+        app.push_layer(TASKS);
+        read(&mut app, MenuId::Tasks, plain(&[" a", " b", " c"]));
+        press(&mut app, "j");
+        assert_eq!(selected_text(&app, MenuId::Tasks), " b");
+
+        read(&mut app, MenuId::Mailbox, plain(&[" m"]));
+        assert_eq!(kinds(&app), [TASKS]);
+        assert_eq!(app.layers[0].selected, 1);
+        assert_eq!(selected_text(&app, MenuId::Tasks), " b");
+        assert_eq!(app.menus.get(&MenuId::Mailbox), Some(&Ok(plain(&[" m"]))));
+    }
+
+    #[test]
+    fn a_reread_with_fewer_rows_keeps_the_selection_in_range() {
+        let (mut app, _intended) = connected();
+        app.push_layer(TASKS);
+        read(&mut app, MenuId::Tasks, plain(&[" a", " b", " c"]));
+        press(&mut app, "j j");
+        assert_eq!(selected_text(&app, MenuId::Tasks), " c");
+
+        read(&mut app, MenuId::Tasks, plain(&[" a"]));
+        assert_eq!(app.layers[0].selected, 0);
+        assert_eq!(selected_text(&app, MenuId::Tasks), " a");
+    }
+
+    #[test]
+    fn a_menu_beneath_the_bar_keeps_its_selection_in_range() {
+        let (mut app, intended) = connected();
+        let mailbox = LayerKind::Menu(MenuId::Mailbox);
+        app.push_layer(mailbox);
+        read(&mut app, MenuId::Mailbox, plain(&[" a", " b", " c", " d"]));
+        press(&mut app, "j j j :");
+        assert_eq!(kinds(&app), [mailbox, LayerKind::Jump]);
+
+        let dismiss = MenuAct::Dismiss {
+            item: "a".to_string(),
+        };
+        let left = menu_row(" a", None, Some(dismiss.clone()));
+        read(&mut app, MenuId::Mailbox, vec![left]);
+        assert_eq!(app.layers[0].selected, 0);
+        screen(&app);
+        press(&mut app, "esc");
+        assert_eq!(kinds(&app), [mailbox]);
+        intended.try_iter().for_each(drop);
+
+        press(&mut app, "d");
+        let sent: Vec<_> = intended.try_iter().collect();
+        let act = Intent::Act {
+            menu: MenuId::Mailbox,
+            act: dismiss,
+        };
+        assert_eq!(sent, [act]);
+        press(&mut app, "k j");
+        assert_eq!(selected_text(&app, MenuId::Mailbox), " a");
+    }
+
+    #[test]
+    fn a_read_still_out_when_the_connection_is_lost_says_why() {
+        let (mut app, intended) = connected();
+        app.push_layer(LayerKind::Menu(MenuId::Status));
+        let sent: Vec<_> = intended.try_iter().collect();
+        assert_eq!(sent, [Intent::ReadMenu(MenuId::Status)]);
+
+        let lost = Connection::Lost("no runtime".to_string());
+        app.apply(Update::Connection(lost));
+        let why = " could not read: no runtime";
+        assert_eq!(shown(&app, MenuId::Status), [(why.to_string(), Tone::Warn)]);
+        assert!(find(&screen(&app), why).is_some());
+    }
+
+    #[test]
+    fn sample_menus_keep_their_rows() {
+        for id in MENUS {
+            let mut app = App::new(Vim, 132, 36);
+            app.push_layer(LayerKind::Menu(id));
+            let rows = app.menu_rows(id).0;
+            let first = &menu(id).0[0];
+            assert_eq!(rows[0].text, first.text, "{id:?}");
+            assert_eq!(rows[0].action, RowAction::MenuRow(0), "{id:?}");
+            assert!(find(&screen(&app), first.text.trim()).is_some(), "{id:?}");
+        }
+
+        let mut app = App::new(Vim, 132, 36);
+        press(&mut app, "ctrl-p");
+        type_text(&mut app, "review_c");
+        let s = screen(&app);
+        let (header, _) = find(&s, " WORKFLOWS").expect("the group");
+        let listed = find(&s, "review_changes").map(|(row, _)| row);
+        assert_eq!(listed, Some(header + 1));
+
+        let act = Intent::Act {
+            menu: MenuId::Tasks,
+            act: MenuAct::RunTask {
+                task: "t".to_string(),
+            },
+        };
+        assert_eq!(
+            sample::answer(&act),
+            vec![Update::Notice("not wired yet".to_string())]
+        );
     }
 }

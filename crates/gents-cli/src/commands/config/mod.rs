@@ -6,7 +6,7 @@ pub(crate) mod apply;
 pub(crate) mod backend;
 pub(crate) mod behavior;
 pub(crate) mod binding;
-mod crud;
+pub(crate) mod crud;
 pub(crate) mod diff;
 pub(crate) mod export;
 pub(crate) mod profile;

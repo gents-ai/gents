@@ -9,6 +9,7 @@ pub enum Group {
     Tabs,
     Sessions,
     Agents,
+    Workflows,
     Menus,
     Commands,
 }
@@ -20,6 +21,7 @@ impl Group {
             Group::Tabs => "TABS",
             Group::Sessions => "SESSIONS",
             Group::Agents => "AGENTS",
+            Group::Workflows => "WORKFLOWS",
             Group::Menus => "MENUS",
             Group::Commands => "COMMANDS",
         }
@@ -32,6 +34,8 @@ pub enum Target {
     Session(usize),
     /// A position in `App.agents`.
     Agent(usize),
+    /// A position in the Workflows menu's rows.
+    Workflow(usize),
     Menu(MenuId),
     Command(usize),
 }
@@ -101,6 +105,23 @@ pub fn items(app: &App, query: &str) -> Vec<JumpItem> {
             rank(query, &agent.name, &[]),
         );
     }
+    if let Some(Ok(rows)) = app.menus.get(&MenuId::Workflows) {
+        let installed = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.enter.is_some());
+        for (index, row) in installed {
+            let label = row.text.trim();
+            let matched = rank(query, label, &[]);
+            add(
+                Group::Workflows,
+                label.to_string(),
+                "",
+                Target::Workflow(index),
+                matched,
+            );
+        }
+    }
     for id in MENUS {
         let name = id.name();
         let matched = rank(query, name, &[]);
@@ -120,7 +141,7 @@ pub fn items(app: &App, query: &str) -> Vec<JumpItem> {
         Target::Menu(MenuId::Tools),
         rank(query, pack, &[]),
     );
-    for (index, command) in COMMANDS.iter().enumerate() {
+    for (index, command) in COMMANDS.iter().enumerate().filter(|(_, c)| c.jump) {
         add(
             Group::Commands,
             command.label.to_string(),
@@ -146,7 +167,8 @@ mod tests {
     use crate::commands::Effect;
     use crate::draw::theme;
     use crate::keys::KeySet::{self, Emacs, Vim};
-    use crate::sample::View;
+    use crate::sample::{Tone, View};
+    use crate::source::{MenuAct, MenuRow, Update};
     use crate::testing::{
         buffer, find, kinds, press, screen, session_row, type_text, with_right_pane,
         with_sample_session,
@@ -240,7 +262,23 @@ mod tests {
         assert_eq!(count(Group::Sessions), 7);
         assert_eq!(count(Group::Agents), 4);
         assert_eq!(count(Group::Menus), 7);
-        assert_eq!(count(Group::Commands), COMMANDS.len());
+        assert_eq!(
+            count(Group::Commands),
+            COMMANDS.iter().filter(|c| c.jump).count()
+        );
+    }
+
+    #[test]
+    fn the_bar_leaves_conversation_commands_to_slash() {
+        let app = with_tabs(Vim, 132, 36);
+        for query in ["/agent", "/goal", "/clear", "/jobs", "/dismiss"] {
+            assert!(
+                items(&app, query).iter().all(|item| item.label != query),
+                "{query}"
+            );
+        }
+        assert_eq!(items(&app, "new tab")[0].label, "New tab");
+        assert_eq!(items(&app, "/help")[0].label, "/help");
     }
 
     #[test]
@@ -302,8 +340,10 @@ mod tests {
         assert_eq!(find(&s, "yesterday"), Some((12, 70)));
         assert_eq!(find(&s, " AGENTS"), Some((13, 31)));
         assert_eq!(find(&s, "open in a new tab"), Some((14, 70)));
-        assert_eq!(find(&s, " MENUS"), Some((15, 31)));
-        assert_eq!(find(&s, "3 tools"), Some((16, 70)));
+        assert_eq!(find(&s, " WORKFLOWS"), Some((15, 31)));
+        assert_eq!(find(&s, " review_changes   Review"), Some((16, 31)));
+        assert_eq!(find(&s, " MENUS"), Some((17, 31)));
+        assert_eq!(find(&s, "3 tools"), Some((18, 70)));
         assert_eq!(find(&s, "COMMANDS"), None);
         let footer = " enter jump · ctrl-n/ctrl-p move · esc back";
         assert_eq!(find(&s, footer), Some((21, 31)));
@@ -336,7 +376,7 @@ mod tests {
         assert_eq!(find(&s, " Accounts"), Some((8, 27)));
         assert_eq!(find(&s[9..], " Accounts "), Some((1, 58)));
         assert_eq!(find(&s, "enter jump"), None);
-        assert!(find(&s, "enter sign in").is_some());
+        assert!(find(&s, "gents accounts login").is_some());
         assert_eq!(find(&s[35..], "MENU"), Some((0, 1)));
     }
 
@@ -579,6 +619,60 @@ mod tests {
         assert_eq!(app.view, View::Workflows);
         assert_eq!(kinds(&app), [LayerKind::Sidebar]);
         assert!(find(&screen(&app), "2 running").is_some());
+    }
+
+    #[test]
+    fn the_jump_bar_lists_installed_workflows_and_enter_inserts_the_prompt() {
+        let (intents, _intended) = std::sync::mpsc::channel();
+        let mut app = App::connected(Vim, 132, 36, intents);
+        press(&mut app, "esc :");
+        let prompt = "use the review_changes workflow: ";
+        let row = MenuRow {
+            text: " review_changes   Review a diff".to_string(),
+            tone: Tone::Plain,
+            enter: Some(MenuAct::Insert {
+                text: prompt.to_string(),
+            }),
+            d: None,
+        };
+        app.apply(Update::Menu {
+            menu: MenuId::Workflows,
+            rows: Ok(vec![row]),
+        });
+        let s = screen(&app);
+        assert!(find(&s, " WORKFLOWS").is_some());
+        assert!(find(&s, "review_changes").is_some());
+
+        type_text(&mut app, "review");
+        press(&mut app, "enter");
+        assert_eq!(app.tabs[0].input.text(), prompt);
+        assert_eq!(app.mode, Mode::Input);
+        assert!(app.layers.is_empty());
+        type_text(&mut app, "x");
+        assert_eq!(
+            app.tabs[0].input.text(),
+            format!("{prompt}x"),
+            "the cursor is at the end"
+        );
+    }
+
+    #[test]
+    fn a_workflow_is_put_in_front_of_the_draft() {
+        let mut app = App::new(Vim, 132, 36);
+        type_text(&mut app, "the flaky test in ci");
+        press(&mut app, "esc :");
+        type_text(&mut app, "review_c");
+        press(&mut app, "enter");
+        let typed = "use the review_changes workflow: the flaky test in ci";
+        assert_eq!(app.tabs[0].input.text(), typed);
+        assert_eq!(app.mode, Mode::Input);
+        assert!(app.layers.is_empty());
+        type_text(&mut app, "!");
+        assert_eq!(
+            app.tabs[0].input.text(),
+            format!("{typed}!"),
+            "the cursor is at the end"
+        );
     }
 
     #[test]

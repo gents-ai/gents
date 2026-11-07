@@ -4858,6 +4858,7 @@ version = "1.0.0-rc1"
 name = "gents-shell"
 version = "1.0.0-rc1"
 dependencies = [
+ "rapidhash",
  "ratatui",
  "tui-test-rs",
 ]

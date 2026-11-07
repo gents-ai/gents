@@ -1,4 +1,5 @@
 use std::cmp::Reverse;
+use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,9 +12,9 @@ use gents::session::mailbox::MailboxItem;
 use gents::store::config_client::SubscribeError;
 use gents_codex_protocol as codex;
 use gents_shell::app::ChatLine;
-use gents_shell::sample::{Opens, RunState, Running, Tone};
+use gents_shell::sample::{MenuId, Opens, RunState, Running, Tone};
 use gents_shell::source::{
-    BackgroundCall, Change, Connection, Input, Intent, Job, Prompt, Session, Update,
+    BackgroundCall, Change, Connection, Input, Intent, Job, MenuAct, Prompt, Session, Update,
 };
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use serde_json::Value;
@@ -21,9 +22,9 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
 use super::client::{Client, ClientError, ClientEvent};
-use super::items;
 use super::tree::git_changes;
 use super::work::{self, Work};
+use super::{items, menus};
 use crate::commands::codex::relay::agent_route_target;
 use crate::commands::codex::{resolve_endpoint, runtime_identity_at, RemoteEndpoint};
 use crate::commands::codex_shim::RuntimeIdentity;
@@ -35,6 +36,7 @@ pub(super) struct Opening {
     pub(super) agent: Option<String>,
     pub(super) prompt: Option<String>,
     pub(super) work: Result<Work, String>,
+    pub(super) home: PathBuf,
 }
 
 /// Feeds the shell from the runtime at `remote`, over one connection per agent, waiting
@@ -55,13 +57,11 @@ pub(super) async fn run(
         agent,
         prompt,
         work,
+        home,
     } = opening;
-    let (work, off) = match work {
-        Ok(work) => (Some(work), None),
-        Err(off) => (None, Some(off)),
-    };
+    let off = work.as_ref().err().cloned();
     let (watching, mut watched) = mpsc::unbounded_channel();
-    let mut source = Source::new(updates, work, runtime.clone(), watching);
+    let mut source = Source::new(updates, work, home, runtime.clone(), watching);
     let Some(identity) = runtime_identity_at(&remote).await else {
         return source.lost(format!(
             "no runtime: check `gents status`, then reopen the shell (could not read this home's runtime at {remote})"
@@ -308,7 +308,9 @@ struct Source {
     resumed: RapidHashSet<String>,
     /// Each listed session's subagent rows, which its running rows lead with.
     children: RapidHashMap<String, Vec<Running>>,
-    work: Option<Work>,
+    work: Result<Work, String>,
+    /// This home, whose installed workflows a menu lists even when `work` is off.
+    home: PathBuf,
     runtime: Handle,
     watching: mpsc::UnboundedSender<Watched>,
     /// Whether the tool-call subscription is open, so the views need no reread until it says.
@@ -338,7 +340,8 @@ struct Source {
 impl Source {
     fn new(
         updates: Sender<Input>,
-        work: Option<Work>,
+        work: Result<Work, String>,
+        home: PathBuf,
         runtime: Handle,
         watching: mpsc::UnboundedSender<Watched>,
     ) -> Source {
@@ -350,6 +353,7 @@ impl Source {
             resumed: RapidHashSet::new(),
             children: RapidHashMap::new(),
             work,
+            home,
             runtime,
             watching,
             live: false,
@@ -409,7 +413,35 @@ impl Source {
                 text,
             } => self.reply(session, &agent, &item, &text).await,
             Intent::WorkingTree { agent } => self.read_tree(agent),
+            Intent::ReadMenu(menu) => self.read_menu(menu),
+            Intent::Act { menu, act } => self.act(menu, act),
         }
+    }
+
+    /// Off the chat loop, as `read_menu` reads, and then `menu` is reread to show what changed.
+    fn act(&self, menu: MenuId, act: MenuAct) {
+        let (work, home) = (self.work.clone(), self.home.clone());
+        let (principal, updates) = (self.principal.clone(), self.updates.clone());
+        self.runtime.spawn(async move {
+            let done = match &work {
+                Ok(live) => menus::act(live, &home, &principal, &act).await,
+                Err(message) => Err(message.clone()),
+            };
+            let (Ok(notice) | Err(notice)) = done;
+            let _ = updates.send(Input::Runtime(Update::Notice(notice)));
+            let rows = menus::read_menu(&work, &home, &principal, menu).await;
+            let _ = updates.send(Input::Runtime(Update::Menu { menu, rows }));
+        });
+    }
+
+    /// Off the chat loop, so a slow owner holds up no other intent.
+    fn read_menu(&self, menu: MenuId) {
+        let (work, home) = (self.work.clone(), self.home.clone());
+        let (principal, updates) = (self.principal.clone(), self.updates.clone());
+        self.runtime.spawn(async move {
+            let rows = menus::read_menu(&work, &home, &principal, menu).await;
+            let _ = updates.send(Input::Runtime(Update::Menu { menu, rows }));
+        });
     }
 
     /// One read at a time, off the chat loop, as `reread_work` reads: a slow git diff holds up
@@ -486,7 +518,7 @@ impl Source {
 
     /// One reread at a time, off the chat loop: a change while one is out asks for one more.
     fn reread_work(&mut self) {
-        let Some(work) = &self.work else {
+        let Ok(work) = &self.work else {
             return;
         };
         if self.reading {
@@ -504,7 +536,7 @@ impl Source {
 
     /// The open sessions' prompts, read as `reread_work` reads the views.
     fn reread_prompts(&mut self) {
-        let Some(work) = self.work.clone().filter(|_| !self.open.is_empty()) else {
+        let Some(work) = self.work.clone().ok().filter(|_| !self.open.is_empty()) else {
             return;
         };
         if self.asking {
@@ -828,7 +860,7 @@ impl Source {
 
     /// Through the served mailbox owner, which refuses a question that needs an answer.
     async fn dismiss(&mut self, item: &str) {
-        let Some(work) = &self.work else {
+        let Ok(work) = &self.work else {
             return;
         };
         let dismissed = gents::session::mailbox::dismiss_mailbox_item_on(&work.access(), item).await;
@@ -842,7 +874,7 @@ impl Source {
     /// request, so the session is resumed once to show the reply, and its answer when it is
     /// already there.
     async fn reply(&mut self, session: String, agent: &str, item: &str, text: &str) {
-        let Some(work) = self.work.clone() else {
+        let Ok(work) = self.work.clone() else {
             return;
         };
         let replied = async {
@@ -1002,7 +1034,14 @@ mod tests {
         let client = connect(&fake, "a", events).await;
         let (updates, told) = std::sync::mpsc::channel();
         let (watching, _watched) = mpsc::unbounded_channel();
-        let mut source = Source::new(updates, None, test_runtime_handle(), watching);
+        let off = Err(String::new());
+        let mut source = Source::new(
+            updates,
+            off,
+            PathBuf::new(),
+            test_runtime_handle(),
+            watching,
+        );
         source.clients.push(("a".to_string(), Arc::new(client)));
 
         source.replied("s1".to_string(), "a").await;
