@@ -318,6 +318,18 @@ async fn assert_stopped(job: &LiveJob, route: &str) {
     );
 }
 
+/// The owning Agent's managed access; its tool calls are invisible to and
+/// unwritable by any other actor.
+fn agent_access(job: &LiveJob) -> gents::ConfigAccess {
+    let agent = job.h.actors.fixture.agent.as_ref();
+    gents::ConfigAccess::local_managed_agent(
+        job.h.db.node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent,
+    )
+    .unwrap()
+}
+
 fn parent_scope(h: &JobHarness) -> ProcessControlScope {
     let did = h.db.node_identity.did().to_string();
     ProcessControlScope {
@@ -333,9 +345,8 @@ async fn operator_cancel_client_cancel_and_non_job_stop_each_end_the_row_cancell
     // Operator cancel.
     let job = live_job("plugin-job-kill-operator").await;
     let outcome = cancel_background_tool_call(
-        job.h.db.node.clone(),
+        &agent_access(&job),
         &BackgroundExecutionRegistry::default(),
-        job.h.actors.fixture.agent.did(),
         &job.session_id,
         TOOL_CALL,
     )
@@ -352,9 +363,8 @@ async fn operator_cancel_client_cancel_and_non_job_stop_each_end_the_row_cancell
     let job = live_job("plugin-job-kill-client").await;
     let did = job.h.db.node_identity.did().to_string();
     let outcome = cancel_session_background_process(
-        job.h.db.node.clone(),
+        &agent_access(&job),
         &BackgroundExecutionRegistry::default(),
-        job.h.actors.fixture.agent.did(),
         &did,
         Some(job.h.actors.fixture.user.did()),
         &job.session_id,

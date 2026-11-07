@@ -88,7 +88,7 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
         tool_call_doc_id: row["_docID"].as_str().unwrap().to_owned(),
     };
     let outcome = crate::tools::call::control::operator_process_control(
-        harness.node.clone(),
+        &harness.access,
         &executions,
         Some(&key.node_did),
         &request,

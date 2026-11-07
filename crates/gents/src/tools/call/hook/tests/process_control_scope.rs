@@ -255,9 +255,8 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
         reason
     );
     crate::tools::call::control::cancel_session_background_process(
-        node.clone(),
+        &hook.actor_access().unwrap(),
         &executions,
-        hook.actor.as_ref().expect("hook Agent").as_str(),
         identity.did(),
         hook.active_requester_did().await.as_deref(),
         &session_id,
@@ -394,9 +393,8 @@ async fn accepted_cross_agent_process_controls_preserve_the_owners_running_job()
         );
     }
     let denied = crate::tools::call::control::cancel_session_background_process(
-        node.clone(),
+        &foreign.actor_access().unwrap(),
         &BackgroundExecutionRegistry::default(),
-        &foreign_agent,
         &foreign_did,
         Some(foreign_agent.as_str()),
         &session_id,
@@ -969,9 +967,8 @@ mod job_control {
         let evidence = hook.persist_evidence(&row).await;
         let child = hook.live_child(&row).await;
         let outcome = cancel_background_tool_call(
-            hook.node.clone(),
+            &hook.access(),
             &hook.executions,
-            hook.agent(),
             &hook.session_id,
             "job-operator",
         )
@@ -999,9 +996,8 @@ mod job_control {
         let evidence = hook.persist_evidence(&row).await;
         let child = hook.live_child(&row).await;
         let denied = cancel_session_background_process(
-            hook.node.clone(),
+            &hook.access(),
             &hook.executions,
-            hook.agent(),
             &hook.owner.node_did,
             Some("did:key:another-requester"),
             &hook.session_id,
@@ -1015,9 +1011,8 @@ mod job_control {
             "running"
         );
         let outcome = cancel_session_background_process(
-            hook.node.clone(),
+            &hook.access(),
             &hook.executions,
-            hook.agent(),
             &hook.owner.node_did,
             Some(hook.agent()),
             &hook.session_id,
@@ -1048,9 +1043,8 @@ mod job_control {
         hook.settle("job-late", Settlement::Refused(Refusal::TimedOut))
             .await;
         let outcome = cancel_background_tool_call(
-            hook.node.clone(),
+            &hook.access(),
             &hook.executions,
-            hook.agent(),
             &hook.session_id,
             "job-late",
         )

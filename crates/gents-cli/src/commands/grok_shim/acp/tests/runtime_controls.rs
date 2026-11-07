@@ -65,6 +65,11 @@ async fn runtime_control_fixture_with_plan_builder(
         node: node.clone(),
         node_did: Arc::from(node_did.as_str()),
         agent_did: Arc::from(agent_did.as_str()),
+        agent_signer: gents::NodeIdentity::managed_agent_signer(
+            gents::store::identity::resolve_agent_identity(identity.as_ref(), &binding)
+                .unwrap()
+                .as_ref(),
+        ),
         current_model: bound_model(),
         grok_home: None,
         plugin_home: std::path::PathBuf::new(),

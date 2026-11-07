@@ -12,6 +12,7 @@ async fn test_service_with_graphql(node: Arc<EmbeddedNode>, graphql: String) -> 
         node,
         node_did: Arc::from(node_did.as_str()),
         agent_did: Arc::from(agent_did.as_str()),
+        agent_signer: None,
         current_model: bound_model(),
         grok_home: None,
         plugin_home: std::path::PathBuf::new(),

@@ -34,6 +34,8 @@ pub(crate) struct GrokShimBindArgs {
     pub(crate) background_executions: gents::tools::call::hook::BackgroundExecutionRegistry,
     pub(crate) node: Arc<EmbeddedNode>,
     pub(crate) actor: identity::Did,
+    /// Runtime root that derives the bound Agent's managed signer.
+    pub(crate) runtime_identity: Arc<dyn gents::NodeIdentity>,
     pub(crate) graphql: gents::store::config_client::GraphqlEndpoint,
     pub(crate) agent_did: Option<String>,
     pub(crate) node_did: String,
@@ -67,7 +69,26 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
         socket = %args.socket_path.display(),
         "grok shim leader binding"
     );
+    let agent_signer = match crate::commands::inference_binding::load_bound_agent_signer(
+        args.runtime_identity.as_ref(),
+        &node,
+        &args.node_did,
+        &agent_did,
+    )
+    .await
+    {
+        Ok(signer) => Some(signer),
+        Err(error) => {
+            tracing::warn!(
+                agent_did = %agent_did,
+                error = %format!("{error:#}"),
+                "Grok shim has no managed Agent signer; task control is refused"
+            );
+            None
+        }
+    };
     let factory_inputs = AcpDelegateFactoryInputs {
+        agent_signer,
         background_executions: args.background_executions.clone(),
         node: args.node.clone(),
         actor: args.actor.clone(),
@@ -96,6 +117,7 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
 
 #[derive(Clone)]
 struct AcpDelegateFactoryInputs {
+    agent_signer: Option<gents::store::identity::ManagedAgentSigner>,
     background_executions: gents::tools::call::hook::BackgroundExecutionRegistry,
     node: Arc<EmbeddedNode>,
     actor: identity::Did,
@@ -143,6 +165,7 @@ impl AcpDelegateFactoryInputs {
                 node: inputs.node.clone(),
                 node_did: Arc::from(inputs.node_did.as_str()),
                 agent_did: Arc::from(inputs.agent_did.as_str()),
+                agent_signer: inputs.agent_signer.clone(),
                 current_model: crate::commands::grok_shim::acp::BoundModel {
                     model_id: inputs.bound.model_id.clone(),
                     name: inputs.bound.model_name.clone(),

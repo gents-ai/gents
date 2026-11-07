@@ -18,24 +18,7 @@ pub(super) async fn load_bound_inference_profile_id(
         .profile_id)
 }
 
-/// Derives the bound Agent's own signer from the runtime root. Steering writes
-/// as the Agent, so the node identity never stands in for it.
-pub(super) async fn load_bound_agent_signer(
-    runtime: &dyn gents::NodeIdentity,
-    node: &Arc<EmbeddedNode>,
-    node_did: &str,
-    agent_did: &str,
-) -> Result<gents::store::identity::ManagedAgentSigner> {
-    use anyhow::Context as _;
-    use gents::NodeIdentity as _;
-    let binding =
-        crate::commands::inference_binding::load_bound_agent_binding(node, node_did, agent_did)
-            .await?;
-    let identity = gents::store::identity::resolve_agent_identity(runtime, &binding)?;
-    identity
-        .managed_agent_signer()
-        .context("bound Agent identity has no managed signer")
-}
+pub(super) use crate::commands::inference_binding::load_bound_agent_signer;
 
 pub(super) async fn load_bound_model_selection_id(
     node: &Arc<EmbeddedNode>,

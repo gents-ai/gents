@@ -6,15 +6,16 @@ use super::{AwaitMode, ToolCallLifecycle};
 use crate::tools::call::control::operator_process_control;
 use crate::tools::call::hook::BackgroundExecutionRegistry;
 
+/// Loads as the owning Agent and binds its signer, as the runtime's tool owner does.
 async fn load_as_agent(
-    node: std::sync::Arc<defra_node::Node>,
-    actor: identity::Did,
+    owner: &crate::request::lifecycle::RequestLifecycle,
     request: &OperatorProcessControlRequest,
     requester_did: Option<&str>,
 ) -> ToolCallLifecycle {
-    ToolCallLifecycle::load_by_doc_id_as(
-        node,
-        actor,
+    let access = owner.access().unwrap();
+    let mut lifecycle = ToolCallLifecycle::load_by_doc_id_as(
+        access.local_node().cloned().expect("embedded request owner"),
+        owner.actor_did().unwrap(),
         &request.tool_call_doc_id,
         &request.node_did,
         &request.session_id,
@@ -22,7 +23,11 @@ async fn load_as_agent(
     )
     .await
     .unwrap()
-    .expect("selected agent can read its tool call")
+    .expect("selected agent can read its tool call");
+    lifecycle
+        .bind_agent_signer(owner.managed_agent_signer())
+        .unwrap();
+    lifecycle
 }
 
 #[cfg(unix)]
@@ -37,7 +42,7 @@ async fn operator_cancel_races_completion_without_replacing_terminal_state() {
     .await
     .unwrap();
     let requester_did = request_owner.request().requester_did.clone();
-    let agent = request_owner.actor_did().unwrap();
+    let agent_access = request_owner.access().unwrap();
     let node = admission.node.clone();
     let mut tool = admission.tool;
     let request = OperatorProcessControlRequest {
@@ -46,10 +51,7 @@ async fn operator_cancel_races_completion_without_replacing_terminal_state() {
         tool_call_id: tool.tool_call_id().to_owned(),
         tool_call_doc_id: tool.doc_id().unwrap().to_owned(),
     };
-    let mut stale = load_as_agent(
-        node.clone(),
-        agent.clone(),
-        &request,
+    let mut stale = load_as_agent(&request_owner, &request,
         requester_did.as_deref(),
     )
     .await;
@@ -76,13 +78,10 @@ async fn operator_cancel_races_completion_without_replacing_terminal_state() {
             drop(reservation);
             result
         },
-        operator_process_control(node.clone(), &registry, Some(&admission.node_did), &request),
+        operator_process_control(&agent_access, &registry, Some(&admission.node_did), &request),
     );
     let cancelled = cancelled.unwrap();
-    let row = load_as_agent(
-        node.clone(),
-        agent.clone(),
-        &request,
+    let row = load_as_agent(&request_owner, &request,
         requester_did.as_deref(),
     )
     .await;
@@ -105,7 +104,7 @@ async fn operator_cancel_races_completion_without_replacing_terminal_state() {
         .to_string()
         .contains("terminal raw tool result is not an exact extension"));
     let repeated =
-        operator_process_control(node.clone(), &registry, Some(&admission.node_did), &request)
+        operator_process_control(&agent_access, &registry, Some(&admission.node_did), &request)
             .await
             .unwrap();
     assert_eq!(
@@ -114,10 +113,7 @@ async fn operator_cancel_races_completion_without_replacing_terminal_state() {
             state: terminal.clone()
         }
     );
-    let reloaded = load_as_agent(
-        node.clone(),
-        agent.clone(),
-        &request,
+    let reloaded = load_as_agent(&request_owner, &request,
         requester_did.as_deref(),
     )
     .await;
@@ -141,7 +137,7 @@ async fn operator_cancel_and_completion_preserve_each_winning_terminal() {
             .await
             .unwrap();
         let requester_did = request_owner.request().requester_did.clone();
-        let agent = request_owner.actor_did().unwrap();
+        let agent_access = request_owner.access().unwrap();
         let node = admission.node.clone();
         let mut tool = admission.tool;
         let request = OperatorProcessControlRequest {
@@ -172,8 +168,7 @@ async fn operator_cancel_and_completion_preserve_each_winning_terminal() {
                 drop(reservation);
             });
             assert_eq!(
-                operator_process_control(
-                    node.clone(),
+                operator_process_control(&agent_access,
                     &registry,
                     Some(&admission.node_did),
                     &request
@@ -193,8 +188,7 @@ async fn operator_cancel_and_completion_preserve_each_winning_terminal() {
             tool.complete("first completion").await.unwrap();
             drop(reservation);
             assert_eq!(
-                operator_process_control(
-                    node.clone(),
+                operator_process_control(&agent_access,
                     &registry,
                     Some(&admission.node_did),
                     &request
@@ -211,10 +205,7 @@ async fn operator_cancel_and_completion_preserve_each_winning_terminal() {
         } else {
             "completed"
         };
-        let row = load_as_agent(
-            node.clone(),
-            agent.clone(),
-            &request,
+        let row = load_as_agent(&request_owner, &request,
             requester_did.as_deref(),
         )
         .await;
@@ -236,7 +227,7 @@ async fn operator_unverified_stop_preserves_running_tool() {
     .await
     .unwrap();
     let requester_did = request_owner.request().requester_did.clone();
-    let agent = request_owner.actor_did().unwrap();
+    let agent_access = request_owner.access().unwrap();
     let node = admission.node.clone();
     let tool = admission.tool;
     let request = OperatorProcessControlRequest {
@@ -261,10 +252,13 @@ async fn operator_unverified_stop_preserves_running_tool() {
         .find(|case| case.before == "running" && case.after == "running")
         .expect("Lean running process observation");
     let mut control = tokio::spawn({
-        let node = node.clone();
+        let agent_access = agent_access.clone();
         let registry = registry.clone();
         let request = request.clone();
-        async move { operator_process_control(node, &registry, Some(&request.node_did), &request).await }
+        async move {
+            operator_process_control(&agent_access, &registry, Some(&request.node_did), &request)
+                .await
+        }
     });
     tokio::select! {
         result = &mut control => panic!("control ended before signalling the live execution: {result:?}"),
@@ -276,10 +270,7 @@ async fn operator_unverified_stop_preserves_running_tool() {
     tokio::time::resume();
     let outcome = control.await.unwrap().unwrap();
     assert_eq!(outcome, ProcessControlOutcome::Unverified);
-    let row = load_as_agent(
-        node.clone(),
-        agent.clone(),
-        &request,
+    let row = load_as_agent(&request_owner, &request,
         requester_did.as_deref(),
     )
     .await;
@@ -302,7 +293,7 @@ async fn operator_cancels_released_native_future_without_process_record() {
     .await
     .unwrap();
     let requester_did = request_owner.request().requester_did.clone();
-    let agent = request_owner.actor_did().unwrap();
+    let agent_access = request_owner.access().unwrap();
     let node = admission.node.clone();
     let tool = admission.tool;
     let request = OperatorProcessControlRequest {
@@ -325,7 +316,7 @@ async fn operator_cancels_released_native_future_without_process_record() {
         drop(reservation);
     });
     let outcome =
-        operator_process_control(node.clone(), &registry, Some(&admission.node_did), &request)
+        operator_process_control(&agent_access, &registry, Some(&admission.node_did), &request)
             .await
             .unwrap();
     assert_eq!(
@@ -335,10 +326,7 @@ async fn operator_cancels_released_native_future_without_process_record() {
         },
     );
     worker.await.unwrap();
-    let row = load_as_agent(
-        node.clone(),
-        agent.clone(),
-        &request,
+    let row = load_as_agent(&request_owner, &request,
         requester_did.as_deref(),
     )
     .await;

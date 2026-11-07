@@ -1341,6 +1341,7 @@ async fn serve_foreground(
                         node: node.clone(),
                         actor: identity::Did::new(identity.did().to_owned())
                             .context("server node DID is not ACP-addressable")?,
+                        runtime_identity: identity.clone(),
                         graphql: runtime_graphql.clone(),
                         agent_did: args.grok_shim_agent_did.clone(),
                         node_did: identity.did().to_string(),

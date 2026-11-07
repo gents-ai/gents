@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents::CancelBackgroundToolCallOutcome;
@@ -270,10 +270,17 @@ pub(super) async fn cancel_projected_background_tool_key(
     tool_call_key: &str,
 ) -> Result<CancelBackgroundToolCallOutcome> {
     let (session_id, tool_call_id) = background_tool_address(state, tool_call_key).await?;
-    let outcome = gents::cancel_background_tool_call(
+    let signer = state.agent_signer.as_ref().context(
+        "GENTS background cancellation requires the bound Agent's managed signer, which this shim does not hold",
+    )?;
+    let agent = ConfigAccess::local_managed_agent(
         state.node.clone(),
+        identity::Did::new(state.agent_did.as_ref())?,
+        signer,
+    )?;
+    let outcome = gents::cancel_background_tool_call(
+        &agent,
         &state.background_execution_registry,
-        &state.agent_did,
         &session_id,
         &tool_call_id,
     )

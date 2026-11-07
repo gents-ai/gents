@@ -1,12 +1,10 @@
 //! Stock task-button control, delegated to the runtime's process owner.
 use anyhow::{Context, Result};
-use defra_node::Node as EmbeddedNode;
 use gents::{
     store::graphql::escape_graphql_string, tools::call::hook::BackgroundExecutionRegistry,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::sync::Arc;
 
 use crate::caused_sessions::{load_caused_sessions_as, SessionScope};
 
@@ -27,16 +25,15 @@ pub(super) enum KillSource {
     Teardown,
 }
 
+/// `access` is the bound Agent's managed access: it reads and settles the
+/// Agent's own tool calls.
 pub(super) async fn kill(
-    node: Arc<EmbeddedNode>,
+    access: &gents::ConfigAccess,
     executions: &BackgroundExecutionRegistry,
     principal: &str,
-    agent_did: &str,
     sessions: &[String],
     request: KillTaskRequest,
 ) -> Result<Value> {
-    let actor = identity::Did::new(agent_did)?;
-    let access = gents::ConfigAccess::local_as(node.clone(), actor);
     let parent_addressed = sessions.contains(&request.session_id);
     let roots = if parent_addressed {
         std::slice::from_ref(&request.session_id)
@@ -61,7 +58,7 @@ pub(super) async fn kill(
             requester_did: Some(principal.to_owned()),
         })
         .collect::<Vec<_>>();
-    for caused in load_caused_sessions_as(&access, &scopes).await? {
+    for caused in load_caused_sessions_as(access, &scopes).await? {
         if !parent_addressed && caused.scope.session_id != request.session_id {
             continue;
         }
@@ -96,9 +93,8 @@ pub(super) async fn kill(
     let outcome = if let Some((owner_session, agent, requester)) = scope {
         use gents::CancelBackgroundToolCallOutcome as Outcome;
         match gents::tools::call::control::cancel_session_background_process(
-            node,
+            access,
             executions,
-            agent_did,
             &agent,
             requester.as_deref(),
             &owner_session,

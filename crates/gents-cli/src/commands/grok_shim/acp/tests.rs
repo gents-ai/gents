@@ -39,6 +39,7 @@ async fn config() -> (tempfile::TempDir, AcpServiceConfig) {
             node,
             node_did: Arc::from("did:test:grok-shim"),
             agent_did: Arc::from("did:test:grok-shim:default"),
+            agent_signer: None,
             current_model: bound_model(),
             grok_home: None,
             plugin_home,

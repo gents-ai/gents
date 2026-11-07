@@ -1514,9 +1514,13 @@ async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() 
     );
     assert_eq!(row.cancel_cause.as_deref(), None);
     gents::tools::call::control::cancel_session_background_process(
-        turn.db.node.clone(),
+        &gents::ConfigAccess::local_managed_agent(
+            turn.db.node.clone(),
+            identity::Did::new(turn.agent_identity.did()).unwrap(),
+            turn.agent_identity.as_ref(),
+        )
+        .unwrap(),
         &turn.executions,
-        turn.agent_identity.did(),
         turn.db.node_identity.did(),
         Some(turn.fixture.user.did()),
         &turn.session_id,

@@ -4,8 +4,7 @@ use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::job::{JobControlKind, JobControlOutcome, JobReadError};
 
-#[cfg(test)]
-use crate::store::config_client::ConfigAccess;
+use crate::store::config_client::{ConfigAccess, ConfigClientError};
 use crate::tools::background::job::control::control_by_doc_id;
 use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::hook::BackgroundExecutionRegistry;
@@ -37,11 +36,12 @@ pub fn operator_process_authorized(
 /// revalidates the displayed invocation before signalling its existing guard.
 #[cfg(test)]
 pub async fn operator_process_control(
-    node: Arc<EmbeddedNode>,
+    agent: &ConfigAccess,
     executions: &BackgroundExecutionRegistry,
     actor: Option<&str>,
     request: &gents_protocol::process_control::OperatorProcessControlRequest,
 ) -> Result<CancelBackgroundToolCallOutcome> {
+    let (node, agent_did, signer) = managed_agent_parts(agent)?;
     let executing = node
         .node_identity_did()
         .context("runtime has no node identity")?;
@@ -54,7 +54,7 @@ pub async fn operator_process_control(
         ),
         "runtime operator authorization is required"
     );
-    let response = ConfigAccess::local(node.clone()).execute(&format!(
+    let response = agent.execute(&format!(
         "{{AgentToolCall(filter: {{_docID: {{_eq: \"{}\"}}, node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, tool_call_id: {{_eq: \"{}\"}}}}, limit: 2) {{requester_did}}}}",
         crate::store::graphql::escape_graphql_string(&request.tool_call_doc_id),
         crate::store::graphql::escape_graphql_string(&request.node_did),
@@ -70,8 +70,9 @@ pub async fn operator_process_control(
     let [scope] = scopes.as_slice() else {
         return Ok(CancelBackgroundToolCallOutcome::NotFound);
     };
-    let Some(lifecycle) = ToolCallLifecycle::load_by_doc_id(
+    let Some(mut lifecycle) = ToolCallLifecycle::load_by_doc_id_as(
         node.clone(),
+        agent_did,
         &request.tool_call_doc_id,
         &request.node_did,
         &request.session_id,
@@ -81,6 +82,7 @@ pub async fn operator_process_control(
     else {
         return Ok(CancelBackgroundToolCallOutcome::NotFound);
     };
+    lifecycle.bind_agent_signer(Some(signer))?;
     let native = matches!(lifecycle.kind(), ToolRowKind::Native);
     let physical = lifecycle
         .doc_id()
@@ -99,17 +101,18 @@ pub async fn operator_process_control(
     cancel_loaded_background_tool_call(node, executions, lifecycle, "explicit_cancel").await
 }
 
+/// `agent` is the owning Agent's managed access: ACP hides the Agent's tool
+/// calls from every other actor and their writes require its signer.
 pub async fn cancel_session_background_process(
-    node: Arc<EmbeddedNode>,
+    agent: &ConfigAccess,
     executions: &BackgroundExecutionRegistry,
-    actor: &str,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
     tool_call_id: &str,
 ) -> Result<CancelBackgroundToolCallOutcome> {
-    let Some(lifecycle) =
-        load_owned_background_call(node.clone(), actor, session_id, tool_call_id).await?
+    let Some((node, lifecycle)) =
+        load_owned_background_call(agent, session_id, tool_call_id).await?
     else {
         return Ok(CancelBackgroundToolCallOutcome::NotFound);
     };
@@ -130,15 +133,16 @@ pub async fn cancel_session_background_process(
     cancel_loaded_background_tool_call(node, executions, lifecycle, "explicit_cancel").await
 }
 
+/// `agent` is the owning Agent's managed access; see
+/// [`cancel_session_background_process`].
 pub async fn cancel_background_tool_call(
-    node: Arc<EmbeddedNode>,
+    agent: &ConfigAccess,
     background_executions: &BackgroundExecutionRegistry,
-    actor: &str,
     session_id: &str,
     tool_call_id: &str,
 ) -> Result<CancelBackgroundToolCallOutcome> {
-    let Some(lifecycle) =
-        load_owned_background_call(node.clone(), actor, session_id, tool_call_id).await?
+    let Some((node, lifecycle)) =
+        load_owned_background_call(agent, session_id, tool_call_id).await?
     else {
         return Ok(CancelBackgroundToolCallOutcome::NotFound);
     };
@@ -147,16 +151,41 @@ pub async fn cancel_background_tool_call(
         .await
 }
 
+/// Splits the owning Agent's embedded managed access into the parts a tool
+/// lifecycle binds; an access without the Agent's signer cannot write its rows.
+fn managed_agent_parts(
+    agent: &ConfigAccess,
+) -> Result<(
+    Arc<EmbeddedNode>,
+    identity::Did,
+    crate::store::identity::ManagedAgentSigner,
+)> {
+    let node = agent
+        .local_node()
+        .cloned()
+        .ok_or(ConfigClientError::EmbeddedAccessRequired)?;
+    let signer = agent
+        .managed_agent_signer()
+        .ok_or(ConfigClientError::ManagedAgentSignerRequired)?;
+    let actor = identity::Did::new(signer.did())?;
+    Ok((node, actor, signer))
+}
+
 async fn load_owned_background_call(
-    node: Arc<EmbeddedNode>,
-    actor: &str,
+    agent: &ConfigAccess,
     session_id: &str,
     tool_call_id: &str,
-) -> Result<Option<ToolCallLifecycle>> {
-    let actor = identity::Did::new(actor)?;
-    let lifecycle =
-        ToolCallLifecycle::load_as(node, actor.clone(), session_id, tool_call_id).await?;
-    Ok(lifecycle.filter(|lifecycle| lifecycle.actor() == &actor))
+) -> Result<Option<(Arc<EmbeddedNode>, ToolCallLifecycle)>> {
+    let (node, actor, signer) = managed_agent_parts(agent)?;
+    let Some(mut lifecycle) =
+        ToolCallLifecycle::load_as(node.clone(), actor.clone(), session_id, tool_call_id)
+            .await?
+            .filter(|lifecycle| lifecycle.actor() == &actor)
+    else {
+        return Ok(None);
+    };
+    lifecycle.bind_agent_signer(Some(signer))?;
+    Ok(Some((node, lifecycle)))
 }
 
 pub(crate) async fn cancel_loaded_background_tool_call(
@@ -440,7 +469,6 @@ fn outcome_for_process(
 mod tests {
     #[tokio::test]
     async fn cancellation_uses_the_selected_agent_and_native_access() {
-        use crate::store::identity::NodeIdentity;
         use crate::tools::call::lifecycle::admission_fixture::{
             published_admission, PublishedAdmissionOptions,
         };
@@ -454,32 +482,64 @@ mod tests {
         .await
         .unwrap();
         let actor = admission.tool.actor().clone();
-        let foreign = crate::store::identity::KeyIdentity::load_or_create(
-            admission.path.join("foreign-control.key"),
-            None,
+        // A second managed Agent of the same node: ACP hides the owner's rows.
+        let binding =
+            crate::store::identity::provision_agent_identity(admission.runtime.as_ref()).unwrap();
+        crate::test_support::install_test_agent_binding(
+            &admission.node,
+            admission.runtime.did(),
+            "foreign control Agent",
+            &binding,
+        )
+        .await;
+        let foreign =
+            crate::store::identity::resolve_agent_identity(admission.runtime.as_ref(), &binding)
+                .unwrap();
+        let foreign_access = super::ConfigAccess::local_managed_agent(
+            admission.node.clone(),
+            identity::Did::new(foreign.did()).unwrap(),
+            foreign.as_ref(),
         )
         .unwrap();
-        let foreign_did = identity::Did::new(foreign.did()).unwrap();
         let registry = super::BackgroundExecutionRegistry::default();
         let denied = super::cancel_background_tool_call(
-            admission.node.clone(),
+            &foreign_access,
             &registry,
-            foreign_did.as_str(),
             admission.tool.session_id(),
             admission.tool.tool_call_id(),
         )
         .await
         .unwrap();
         assert_eq!(denied, super::CancelBackgroundToolCallOutcome::NotFound);
-        assert!(super::load_owned_background_call(
-            admission.node.clone(),
-            actor.as_str(),
+        // The owning Agent without its signer cannot settle its own rows.
+        let unsigned = super::ConfigAccess::local_as(admission.node.clone(), actor.clone());
+        let error = super::cancel_background_tool_call(
+            &unsigned,
+            &registry,
             admission.tool.session_id(),
-            admission.tool.tool_call_id()
+            admission.tool.tool_call_id(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(
+                gents_protocol::error_chain::find_source::<super::ConfigClientError>(
+                    error.as_ref()
+                ),
+                Some(super::ConfigClientError::ManagedAgentSignerRequired)
+            ),
+            "{error:#}"
+        );
+        let (_, owned) = super::load_owned_background_call(
+            &admission.tool.access().unwrap(),
+            admission.tool.session_id(),
+            admission.tool.tool_call_id(),
         )
         .await
         .unwrap()
-        .is_some());
+        .expect("the owning Agent sees its tool call");
+        assert_eq!(owned.actor(), &actor);
+        assert!(owned.access().unwrap().has_managed_agent_signer());
     }
     use super::*;
     use crate::ensure_runtime_schemas;
@@ -524,7 +584,7 @@ mod tests {
 
     /// Reads the row as its owning Agent: ACP hides agent-owned rows from the node identity.
     async fn reload(child: &ToolCallLifecycle, node: &Arc<EmbeddedNode>) -> ToolCallLifecycle {
-        ToolCallLifecycle::load_by_doc_id_as(
+        let mut reloaded = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
             child.actor().clone(),
             child.doc_id().unwrap(),
@@ -534,7 +594,9 @@ mod tests {
         )
         .await
         .unwrap()
-        .unwrap()
+        .unwrap();
+        reloaded.inherit_signer(child).unwrap();
+        reloaded
     }
 
     /// Adapted from Ivan's #3264 stop races onto the owning cancellation path.
@@ -736,6 +798,8 @@ mod tests {
         )
         .await;
         let agent = identity::Did::new(request.request().agent_did.as_str()).unwrap();
+        let agent_access = request.access().unwrap();
+        assert!(agent_access.has_managed_agent_signer());
         let writer =
             DefraStreamWriter::new_for_lifecycle(node.clone(), &request, Duration::from_millis(1))
                 .unwrap();
@@ -834,9 +898,8 @@ mod tests {
         };
 
         let denied = cancel_session_background_process(
-            node.clone(),
+            &agent_access,
             &registry,
-            node_did,
             node_did,
             Some("foreign"),
             "session-1",
@@ -857,7 +920,7 @@ mod tests {
             tool_call_doc_id: physical,
         };
         assert!(
-            operator_process_control(node.clone(), &registry, Some("foreign"), &command)
+            operator_process_control(&agent_access, &registry, Some("foreign"), &command)
                 .await
                 .is_err()
         );
@@ -867,14 +930,14 @@ mod tests {
         mismatches[2].tool_call_doc_id = "missing-physical-row".into();
         for wrong in mismatches {
             assert_eq!(
-                operator_process_control(node.clone(), &registry, Some(node_did), &wrong)
+                operator_process_control(&agent_access, &registry, Some(node_did), &wrong)
                     .await
                     .unwrap(),
                 CancelBackgroundToolCallOutcome::NotFound
             );
         }
         assert!(!token.is_cancelled());
-        let outcome = operator_process_control(node.clone(), &registry, Some(node_did), &command)
+        let outcome = operator_process_control(&agent_access, &registry, Some(node_did), &command)
             .await
             .unwrap();
 
@@ -898,7 +961,7 @@ mod tests {
             .expect("tool row");
         assert!(row.is_cancelled());
         assert!(matches!(
-            operator_process_control(node.clone(), &registry, Some(node_did), &command)
+            operator_process_control(&agent_access, &registry, Some(node_did), &command)
                 .await
                 .unwrap(),
             CancelBackgroundToolCallOutcome::AlreadyTerminal { .. }
@@ -956,9 +1019,8 @@ mod tests {
                 None
             };
             let outcome = cancel_background_tool_call(
-                admission.node.clone(),
+                &admission.tool.access().unwrap(),
                 &registry,
-                admission.tool.actor().as_str(),
                 admission.tool.session_id(),
                 admission.tool.tool_call_id(),
             )

@@ -3,7 +3,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use futures_util::future::BoxFuture;
 use gents::defra_node::Node as EmbeddedNode;
 use serde_json::{json, Value};
@@ -111,6 +111,8 @@ pub(crate) struct AcpServiceConfig {
     pub(crate) node: Arc<EmbeddedNode>,
     pub(crate) node_did: Arc<str>,
     pub(crate) agent_did: Arc<str>,
+    /// The bound Agent's managed signer; its tool calls are writable only with it.
+    pub(crate) agent_signer: Option<gents::store::identity::ManagedAgentSigner>,
     pub(crate) current_model: BoundModel,
     pub(crate) grok_home: Option<std::path::PathBuf>,
     /// Gents home the plugin catalogs of `x.ai/workflows/list` are read under.
@@ -401,11 +403,18 @@ impl AcpService {
                     .keys()
                     .cloned()
                     .collect::<Vec<_>>();
-                let result = super::task_control::kill(
+                let signer = self.config.agent_signer.as_ref().context(
+                    "task kill requires the bound Agent's managed signer, which this shim does not hold",
+                )?;
+                let agent = gents::ConfigAccess::local_managed_agent(
                     self.config.node.clone(),
+                    ::identity::Did::new(self.config.agent_did.as_ref())?,
+                    signer,
+                )?;
+                let result = super::task_control::kill(
+                    &agent,
                     &self.projections.background_executions,
                     &self.config.node_did,
-                    &self.config.agent_did,
                     &sessions,
                     params,
                 )
