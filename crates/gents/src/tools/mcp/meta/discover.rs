@@ -232,15 +232,21 @@ mod tests {
         seed_registry_service(&node, "x-data", "elsewhere", 9198).await;
         seed_registry_service(&node, "hf-data", "strangenas", 9200).await;
 
+        // Both services must finish their native route reads before the clock
+        // pauses: a paused clock auto-advances past the storage watchdog while
+        // DefraDB work runs off the runtime.
         let blackholed = Arc::new(tokio::sync::Notify::new());
-        let handler_entered = Arc::clone(&blackholed);
+        let answered = Arc::new(tokio::sync::Notify::new());
+        let (handler_entered, handler_answered) = (Arc::clone(&blackholed), Arc::clone(&answered));
         let pool = McpPool::new_with_list_tools_handler(move |service_id, _endpoint| {
             let handler_entered = Arc::clone(&handler_entered);
+            let handler_answered = Arc::clone(&handler_answered);
             async move {
                 if service_id == "hf-data" {
                     handler_entered.notify_one();
                     std::future::pending::<()>().await;
                 }
+                handler_answered.notify_one();
                 Ok(ListToolsResult::with_all_items(vec![stub_tool(
                     "search_posts",
                 )]))
@@ -250,9 +256,11 @@ mod tests {
         let tool = DiscoverToolsTool::new(test_context(node, pool, ServiceHealthMap::new()));
         let discovery =
             tokio::spawn(async move { tool.call(DiscoverToolsArgs { query: None }).await });
-        tokio::time::timeout(Duration::from_secs(10), blackholed.notified())
-            .await
-            .expect("discovery reaches the blackholed endpoint after its native reads");
+        tokio::time::timeout(Duration::from_secs(30), async {
+            tokio::join!(blackholed.notified(), answered.notified())
+        })
+        .await
+        .expect("discovery reaches both endpoints after their native reads");
         tokio::time::pause();
         let output = tokio::time::timeout(Duration::from_secs(3600), discovery)
             .await
@@ -331,33 +339,39 @@ mod tests {
         }
     }
 
-    #[tokio::test(start_paused = true)]
+    /// Each service's list_tools waits until the other has also been
+    /// contacted, so a serial fan-out can never complete. Discovery reads
+    /// storage through DefraDB workers, so this runs on the real clock.
+    #[tokio::test]
     async fn discover_fans_out_to_services_concurrently() {
         let (node, _runtime) = super::super::tests::test_node().await;
         seed_registry_service(&node, "x-data", "elsewhere", 9198).await;
         seed_registry_service(&node, "web-research-mcp", "studio-2", 9213).await;
 
-        let pool = McpPool::new_with_list_tools_handler(|_service_id, _endpoint| async move {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            Ok(ListToolsResult::with_all_items(vec![stub_tool(
-                "search_posts",
-            )]))
+        let rendezvous = Arc::new(tokio::sync::Barrier::new(2));
+        let pool = McpPool::new_with_list_tools_handler(move |_service_id, _endpoint| {
+            let rendezvous = Arc::clone(&rendezvous);
+            async move {
+                rendezvous.wait().await;
+                Ok(ListToolsResult::with_all_items(vec![stub_tool(
+                    "search_posts",
+                )]))
+            }
         });
 
         let tool = DiscoverToolsTool::new(test_context(node, pool, ServiceHealthMap::new()));
 
-        let started = tokio::time::Instant::now();
         let output = tool
             .call(DiscoverToolsArgs { query: None })
             .await
             .expect("discover returns model-readable text");
-        let elapsed = started.elapsed();
 
         assert!(output.contains("x-data") && output.contains("web-research-mcp"));
-        assert!(
-            elapsed < Duration::from_secs(9),
-            "per-service list_tools must fan out concurrently; two 5s services \
-             took {elapsed:?} (serial would be ~10s)"
+        assert_eq!(
+            output.matches("  - search_posts:").count(),
+            2,
+            "per-service list_tools must fan out concurrently; a serial \
+             fan-out leaves the first service waiting for the second: {output}"
         );
     }
 }

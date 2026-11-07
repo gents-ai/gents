@@ -407,7 +407,9 @@ async fn disabled_and_duplicate_registry_identity_fail_before_dispatch() {
     );
 }
 
-#[tokio::test(start_paused = true)]
+/// Dispatch reads storage through DefraDB workers, so timeouts run on the real
+/// clock: a paused clock would auto-advance past the storage watchdog.
+#[tokio::test]
 async fn configured_discovery_timeout_cannot_fall_through_to_mutating_dispatch() {
     let (node, _runtime) = remote_node().await;
     let calls = Arc::new(AtomicUsize::new(0));
@@ -427,7 +429,7 @@ async fn configured_discovery_timeout_cannot_fall_through_to_mutating_dispatch()
     );
     let mut context = remote_context(node, pool);
     context.remote_tools.services[0].discovery_timeout_secs = Some(2);
-    let started = tokio::time::Instant::now();
+    let started = std::time::Instant::now();
     let error = CallToolTool::new(context)
         .call(CallToolArgs {
             service_id: "shared".into(),
@@ -436,12 +438,20 @@ async fn configured_discovery_timeout_cannot_fall_through_to_mutating_dispatch()
         })
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("service_unavailable"));
-    assert!(started.elapsed() <= std::time::Duration::from_secs(2));
+    let elapsed = started.elapsed();
+    let text = format!("{error:#}");
+    assert!(text.contains("service_unavailable"), "{text}");
+    assert!(
+        text.contains("timed out after 2s"),
+        "the configured discovery limit must bound preflight: {text}"
+    );
+    assert!(elapsed >= std::time::Duration::from_secs(2), "{elapsed:?}");
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
-#[tokio::test(start_paused = true)]
+/// Dispatch reads storage through DefraDB workers, so timeouts run on the real
+/// clock: a paused clock would auto-advance past the storage watchdog.
+#[tokio::test]
 async fn stale_limit_intersects_normal_call_timeout() {
     let (node, _runtime) = remote_node().await;
     for (normal, stale, expected) in [(3, 10, 3), (10, 2, 2)] {
@@ -466,7 +476,7 @@ async fn stale_limit_intersects_normal_call_timeout() {
                 },
             )
             .await;
-        let start = tokio::time::Instant::now();
+        let start = std::time::Instant::now();
         let result = CallToolTool::new(context)
             .call(CallToolArgs {
                 service_id: "shared".into(),
@@ -474,7 +484,15 @@ async fn stale_limit_intersects_normal_call_timeout() {
                 arguments: serde_json::json!({"value":1}),
             })
             .await;
-        assert!(result.unwrap_err().to_string().contains("timed out"));
-        assert_eq!(start.elapsed(), std::time::Duration::from_secs(expected));
+        let elapsed = start.elapsed();
+        let text = format!("{:#}", result.unwrap_err());
+        assert!(
+            text.contains(&format!("timed out after {expected}s")),
+            "normal {normal}s and stale {stale}s must select {expected}s: {text}"
+        );
+        assert!(
+            elapsed >= std::time::Duration::from_secs(expected),
+            "{elapsed:?}"
+        );
     }
 }
