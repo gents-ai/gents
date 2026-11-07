@@ -353,8 +353,37 @@ fn exercise_concurrent_spawns(root: &Path, permission_search: bool) {
 /// Darwin's posix_spawn file actions reject dup2 sources at or above OPEN_MAX
 /// with EBADF. The CLI raises the soft descriptor limit above that bound, so
 /// the owner must still spawn with piped stdio once pipes land past it.
+/// The probe holds descriptors past that bound process-wide, so it runs in its
+/// own test process: concurrent tests that spawn without the owner would
+/// otherwise inherit the exhausted descriptor table and fail with EBADF.
 #[tokio::test]
 async fn spawn_succeeds_when_pipes_exceed_open_max() {
+    #[cfg(target_os = "macos")]
+    {
+        const FIXTURE: &str = "GENTS_SPAWN_OPEN_MAX_FIXTURE";
+        if let Some(root) = std::env::var_os(FIXTURE) {
+            exercise_spawn_succeeds_when_pipes_exceed_open_max().await;
+            tokio::fs::write(PathBuf::from(root).join("verified"), b"complete")
+                .await
+                .unwrap();
+            return;
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let mut environment = std::env::vars().collect::<RapidHashMap<_, _>>();
+        environment.insert(FIXTURE.into(), root.path().to_string_lossy().into_owned());
+        run_isolated_capture_test(
+            "tools::exec::process::spawn::tests::spawn_succeeds_when_pipes_exceed_open_max",
+            root.path(),
+            environment,
+        )
+        .await;
+    }
+    #[cfg(not(target_os = "macos"))]
+    exercise_spawn_succeeds_when_pipes_exceed_open_max().await;
+}
+
+async fn exercise_spawn_succeeds_when_pipes_exceed_open_max() {
     const OPEN_MAX: usize = 10_240;
     let mut limits = libc::rlimit {
         rlim_cur: 0,
