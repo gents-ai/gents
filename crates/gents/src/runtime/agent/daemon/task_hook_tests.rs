@@ -1217,7 +1217,12 @@ impl Harness {
 
 #[tokio::test]
 async fn revocation_during_a_before_hook_cancels_it_and_still_cleans_up() {
-    let harness = Harness::new().await;
+    let mut harness = Harness::new().await;
+    // A revocation writes no interrupt latch; the execution observes it at its
+    // next lease renewal poll (a quarter of the lease), inside the 25s bound.
+    Arc::get_mut(&mut harness.agent_config)
+        .unwrap()
+        .stream_liveness_timeout = Duration::from_secs(8);
     let held = format!(
         "{}; sleep 30; {}",
         harness.touch("prepare-started"),
@@ -1252,7 +1257,12 @@ async fn revocation_during_a_before_hook_cancels_it_and_still_cleans_up() {
 
 #[tokio::test]
 async fn revocation_during_an_after_success_hook_cancels_it_and_still_cleans_up() {
-    let harness = Harness::new().await;
+    let mut harness = Harness::new().await;
+    // A revocation writes no interrupt latch; the execution observes it at its
+    // next lease renewal poll (a quarter of the lease), inside the 25s bound.
+    Arc::get_mut(&mut harness.agent_config)
+        .unwrap()
+        .stream_liveness_timeout = Duration::from_secs(8);
     let held = format!(
         "{}; sleep 30; {}",
         harness.touch("verify-started"),
