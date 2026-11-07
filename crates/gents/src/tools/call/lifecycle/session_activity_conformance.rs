@@ -6,7 +6,7 @@ use super::{
     delivery::{RawPresentation, TerminalFields},
     AwaitMode, ToolCallState,
 };
-use crate::{store::config_client::ConfigAccess, store::graphql::escape_graphql_string};
+use crate::store::graphql::escape_graphql_string;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use gents_protocol::{output::PayloadPresentation, session::SessionObservation};
 use serde_json::Value;
@@ -73,17 +73,20 @@ async fn tool_publications_follow_lean_session_activity() {
             epoch,
         );
         let session = escape_graphql_string(&session_id);
-        let before_session = ConfigAccess::transact_local_write(&admission.node, None, "test.seed_tool_activity", |txn| {
+        // The session's Agent owns it; ACP hides it from any other writer.
+        let requester = admission.tool.requester_did().map(str::to_owned);
+        let before_session = admission.tool.access().unwrap().transact_write("test.seed_tool_activity", |txn| {
             let before = before.clone();
             let session = session.clone();
             let session_id = session_id.clone();
             let agent = admission.node_did.clone();
+            let requester = requester.clone();
             Box::pin(async move {
                 txn.execute_with_variables(
                     &format!(r#"mutation($input: AgentSessionMutationInputArg!) {{ update_AgentSession(filter: {{ session_id: {{ _eq: "{session}" }} }}, input: $input) {{ _docID }} }}"#),
                     &serde_json::json!({"input":{"observation":before}}),
                 ).await?;
-                Ok::<_, anyhow::Error>(crate::session::load_agent_session_row_in_txn(txn, &agent, &session_id, None)
+                Ok::<_, anyhow::Error>(crate::session::load_agent_session_row_in_txn(txn, &agent, &session_id, requester.as_deref())
                     .await?.unwrap().session)
             })
         }).await.unwrap();
@@ -125,20 +128,19 @@ async fn tool_publications_follow_lean_session_activity() {
                 .await
                 .unwrap();
             assert_eq!(changed, published, "{name} turn {turn}");
-            let after = ConfigAccess::transact_local_write(
-                &admission.node,
-                None,
+            let after = admission.tool.access().unwrap().transact_readonly(
                 "test.read_tool_activity",
                 |txn| {
                     let agent = admission.node_did.clone();
                     let session_id = session_id.clone();
+                    let requester = requester.clone();
                     Box::pin(async move {
                         Ok::<_, anyhow::Error>(
                             crate::session::load_agent_session_row_in_txn(
                                 txn,
                                 &agent,
                                 &session_id,
-                                None,
+                                requester.as_deref(),
                             )
                             .await?
                             .unwrap()

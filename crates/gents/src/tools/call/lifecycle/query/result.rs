@@ -1090,11 +1090,12 @@ mod tests {
                 child.doc_id().unwrap(),
                 parent.node_did(),
                 parent.session_id(),
-                None,
+                parent.requester_did(),
             )
             .await
             .unwrap()
             .unwrap();
+            replay.inherit_signer(&child).unwrap();
             child
                 .complete_raw_with_presentation("abc", "error: bc", presentation.clone())
                 .await
@@ -1115,11 +1116,11 @@ mod tests {
                     .is_ok()
             } else {
                 load_tool_call_presentation(
-                    &ConfigAccess::local(node.clone()),
+                    &child.access().unwrap(),
                     child.doc_id().unwrap(),
                     parent.node_did(),
                     parent.session_id(),
-                    None,
+                    parent.requester_did(),
                 )
                 .await
                 .unwrap()
@@ -1163,9 +1164,10 @@ mod tests {
         let child_doc = child.doc_id().unwrap().to_owned();
         let node_did = parent.node_did().to_owned();
         let session_id = parent.session_id().to_owned();
+        let requester = parent.requester_did().map(str::to_owned);
         let access = ConfigAccess::local_as(node.clone(), child.actor().clone());
         assert_eq!(
-            load_tool_call_arguments(&access, &child_doc, &node_did, &session_id, None)
+            load_tool_call_arguments(&access, &child_doc, &node_did, &session_id, requester.as_deref())
                 .await
                 .unwrap(),
             arguments
@@ -1177,11 +1179,12 @@ mod tests {
             &child_doc,
             &node_did,
             &session_id,
-            None,
+            requester.as_deref(),
         )
         .await
         .unwrap()
         .unwrap();
+        replay.inherit_signer(&child).unwrap();
         child
             .complete_raw_with_presentation(
                 "effect result",
@@ -1221,19 +1224,19 @@ mod tests {
             .is_err());
         parent.complete("parent result").await.unwrap();
         let presentation =
-            load_tool_call_presentation(&access, &child_doc, &node_did, &session_id, None)
+            load_tool_call_presentation(&access, &child_doc, &node_did, &session_id, requester.as_deref())
                 .await
                 .unwrap();
         assert_eq!(presentation.arguments, arguments);
         assert_eq!(presentation.result.as_deref(), Some("[bounded effect]"));
         let read =
-            ConfigAccess::transact_local_write(&node, None, "test.plugin_child_read", |txn| {
+            child.access().unwrap().transact_write("test.plugin_child_read", |txn| {
                 Box::pin(load_tool_call_read_in_txn(
                     txn,
                     &child_doc,
                     &node_did,
                     &session_id,
-                    None,
+                    requester.as_deref(),
                 ))
             })
             .await
@@ -1244,7 +1247,7 @@ mod tests {
             "[bounded effect]"
         );
         let headers =
-            scoped_canonical_headers(ReadSource::Access(&access), &node_did, &session_id, None)
+            scoped_canonical_headers(ReadSource::Access(&access), &node_did, &session_id, requester.as_deref())
                 .await
                 .unwrap();
         assert!(headers.iter().all(|row| !matches!(&row.message.publication,
@@ -1253,7 +1256,7 @@ mod tests {
             output: child.arguments.clone().unwrap(),
             presentation: gents_protocol::output::PayloadPresentation::Full,
         };
-        ConfigAccess::transact_local_write(&node, None, "test.forged_child_output_reference", |txn| {
+        child.access().unwrap().transact_write("test.forged_child_output_reference", |txn| {
             let foreign = foreign.clone();
             let doc = escape_graphql_string(&child_doc);
             Box::pin(async move {
@@ -1264,7 +1267,7 @@ mod tests {
             })
         }).await.unwrap();
         assert!(
-            load_tool_call_result(&access, &child_doc, &node_did, &session_id, None)
+            load_tool_call_result(&access, &child_doc, &node_did, &session_id, requester.as_deref())
                 .await
                 .is_err()
         );
@@ -1303,9 +1306,8 @@ mod tests {
         let child_doc = child.doc_id().unwrap().to_owned();
         let node_did = child.node_did().to_owned();
         let session_id = child.session_id().to_owned();
-        let read = ConfigAccess::transact_local_write(
-            &node,
-            Some(child.actor().clone()),
+        let requester = child.requester_did().map(str::to_owned);
+        let read = child.access().unwrap().transact_write(
             "test.plugin_child_timeout",
             |txn| {
                 Box::pin(load_tool_call_read_in_txn(
@@ -1313,7 +1315,7 @@ mod tests {
                     &child_doc,
                     &node_did,
                     &session_id,
-                    None,
+                    requester.as_deref(),
                 ))
             },
         )
@@ -1397,15 +1399,16 @@ mod tests {
         let doc_id = tool.doc_id().unwrap().to_owned();
         let node_did = tool.node_did().to_owned();
         let session_id = tool.session_id().to_owned();
+        let requester = tool.requester_did().map(str::to_owned);
         let request_doc_id = tool.request_doc_id().unwrap().to_owned();
         let actor = tool.actor().clone();
-        let read = ConfigAccess::transact_local_write(&node, Some(actor.clone()), "tool_result.txn_read", |txn| {
+        let read = tool.access().unwrap().transact_write("tool_result.txn_read", |txn| {
             Box::pin(load_tool_call_read_in_txn(
                 txn,
                 &doc_id,
                 &node_did,
                 &session_id,
-                None,
+                requester.as_deref(),
             ))
         })
         .await
@@ -1423,10 +1426,10 @@ mod tests {
         );
         assert_eq!(read.raw_result.as_deref(), Some(raw));
 
-        ConfigAccess::transact_local_write(&node, Some(actor), "tool_result.ambiguous_reply", |txn| {
+        tool.access().unwrap().transact_write("tool_result.ambiguous_reply", |txn| {
             Box::pin(async {
                 let headers =
-                    scoped_canonical_headers(ReadSource::Txn(txn), &node_did, &session_id, None)
+                    scoped_canonical_headers(ReadSource::Txn(txn), &node_did, &session_id, requester.as_deref())
                         .await?;
                 let mut duplicate = headers
                     .iter()
@@ -1443,7 +1446,7 @@ mod tests {
                     )?,
                 )
                 .await?;
-                let error = load_tool_call_read_in_txn(txn, &doc_id, &node_did, &session_id, None)
+                let error = load_tool_call_read_in_txn(txn, &doc_id, &node_did, &session_id, requester.as_deref())
                     .await
                     .unwrap_err();
                 assert!(error.to_string().contains("ambiguous invocation reply"));
@@ -1464,10 +1467,11 @@ mod tests {
         let doc_id = tool.doc_id().unwrap().to_owned();
         let node_did = tool.node_did().to_owned();
         let session_id = tool.session_id().to_owned();
-        ConfigAccess::transact_local_write(&node, Some(tool.actor().clone()), "tool_result.malformed_reply", |txn| {
+        let requester = tool.requester_did().map(str::to_owned);
+        tool.access().unwrap().transact_write("tool_result.malformed_reply", |txn| {
             Box::pin(async {
                 let headers =
-                    scoped_canonical_headers(ReadSource::Txn(txn), &node_did, &session_id, None)
+                    scoped_canonical_headers(ReadSource::Txn(txn), &node_did, &session_id, requester.as_deref())
                         .await?;
                 let mut malformed = headers
                     .iter()
@@ -1487,7 +1491,7 @@ mod tests {
                     )?,
                 )
                 .await?;
-                let error = load_tool_call_read_in_txn(txn, &doc_id, &node_did, &session_id, None)
+                let error = load_tool_call_read_in_txn(txn, &doc_id, &node_did, &session_id, requester.as_deref())
                     .await
                     .unwrap_err();
                 assert!(error.to_string().contains("carries no native tool-result"));

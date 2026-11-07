@@ -3,38 +3,62 @@ use crate::store::config_client::ConfigAccess;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission, PublishedAdmission, PublishedAdmissionOptions,
 };
-use defra_node::Node as EmbeddedNode;
 
-async fn lifecycle_row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
-    let response = node
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID lifecycle_state cancel_cause tool_failure_class request_doc_id deadline_at }} }}"#,
-            crate::store::graphql::escape_graphql_string(doc_id)
-        ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let rows = response.data.unwrap()["AgentToolCall"]
-        .as_array()
-        .unwrap()
-        .clone();
-    assert_eq!(rows.len(), 1, "physical lifecycle identity must be unique");
+/// The admission's Agent owns its request and tool rows; ACP hides them
+/// from any other reader.
+fn owner(admission: &PublishedAdmission) -> ConfigAccess {
+    admission.tool.access().expect("admission carries its Agent access")
+}
+
+async fn single_row(admission: &PublishedAdmission, query: String, collection: &str) -> serde_json::Value {
+    let response = owner(admission).execute(&query).await.unwrap();
+    let rows = response["data"][collection].as_array().unwrap().clone();
+    assert_eq!(rows.len(), 1, "physical {collection} identity must be unique");
     rows.into_iter().next().unwrap()
 }
 
-async fn request_row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
-    let response = node
-        .execute(&format!(
+async fn lifecycle_row(admission: &PublishedAdmission, doc_id: &str) -> serde_json::Value {
+    single_row(
+        admission,
+        format!(
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID lifecycle_state cancel_cause tool_failure_class request_doc_id deadline_at }} }}"#,
+            crate::store::graphql::escape_graphql_string(doc_id)
+        ),
+        "AgentToolCall",
+    )
+    .await
+}
+
+async fn request_row(admission: &PublishedAdmission, doc_id: &str) -> serde_json::Value {
+    single_row(
+        admission,
+        format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID lifecycle_state deadline execution_generation }} }}"#,
             crate::store::graphql::escape_graphql_string(doc_id)
-        ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let rows = response.data.unwrap()["AgentRequest"]
-        .as_array()
-        .unwrap()
-        .clone();
-    assert_eq!(rows.len(), 1, "physical request identity must be unique");
-    rows.into_iter().next().unwrap()
+        ),
+        "AgentRequest",
+    )
+    .await
+}
+
+async fn owner_update(admission: &PublishedAdmission, collection: &str, doc_id: &str, fields: &str) {
+    let response = owner(admission)
+        .write(
+            "test.composed_conformance.update",
+            &format!(
+                r#"mutation {{ update_{collection}(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#,
+                crate::store::graphql::escape_graphql_string(doc_id),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response["data"][format!("update_{collection}")]
+            .as_array()
+            .map(Vec::len),
+        Some(1),
+        "{collection} {doc_id} update must reach its row"
+    );
 }
 
 async fn prepare_expired_composed_boundary(
@@ -42,27 +66,15 @@ async fn prepare_expired_composed_boundary(
     tool_doc_id: &str,
     request_doc_id: &str,
 ) {
-    let past = (chrono::Utc::now() - chrono::Duration::seconds(5)).to_rfc3339();
-    let tool = admission.node.execute(&format!(
-        r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ deadline_at: "{}" }}) {{ _docID }} }}"#,
-        crate::store::graphql::escape_graphql_string(tool_doc_id),
-        crate::store::graphql::escape_graphql_string(&past),
-    )).await;
-    assert!(!tool.has_errors(), "{:?}", tool.errors);
-    let request = admission.node.execute(&format!(
-        r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ deadline: "{}" }}) {{ _docID }} }}"#,
-        crate::store::graphql::escape_graphql_string(request_doc_id),
-        crate::store::graphql::escape_graphql_string(&past),
-    )).await;
-    assert!(!request.has_errors(), "{:?}", request.errors);
+    let past = crate::store::graphql::escape_graphql_string(
+        &(chrono::Utc::now() - chrono::Duration::seconds(5)).to_rfc3339(),
+    );
+    owner_update(admission, "AgentToolCall", tool_doc_id, &format!(r#"deadline_at: "{past}""#)).await;
+    owner_update(admission, "AgentRequest", request_doc_id, &format!(r#"deadline: "{past}""#)).await;
 }
 
 async fn interrupt_request(admission: &PublishedAdmission, request_doc_id: &str) {
-    let response = admission.node.execute(&format!(
-        r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "interrupted" }}) {{ _docID }} }}"#,
-        crate::store::graphql::escape_graphql_string(request_doc_id),
-    )).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    owner_update(admission, "AgentRequest", request_doc_id, r#"lifecycle_state: "interrupted""#).await;
 }
 
 async fn teardown(admission: PublishedAdmission) {
@@ -133,16 +145,16 @@ async fn generated_composed_invariants_use_canonical_admission_owner() {
                 .unwrap();
         }
 
-        let row = lifecycle_row(&admission.node, &tool_doc_id).await;
-        let request = request_row(&admission.node, &request_doc_id).await;
+        let row = lifecycle_row(&admission, &tool_doc_id).await;
+        let request = request_row(&admission, &request_doc_id).await;
         assert_eq!(row["request_doc_id"], request_doc_id);
         let session_id = format!("session-composed-{}", witness.tool_call_id);
         let arguments = super::load_tool_call_arguments(
-            &ConfigAccess::local(admission.node.clone()),
+            &owner(&admission),
             &tool_doc_id,
             &admission.node_did,
             &session_id,
-            None,
+            admission.tool.requester_did(),
         )
         .await
         .expect("persisted tool must resolve through its canonical accepted header");
