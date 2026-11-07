@@ -1125,7 +1125,9 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         )
         .await
         .unwrap();
-    crate::request::lifecycle::queue::persist_background_completion_with_message(
+    // The parent Agent's own managed access supplies the signer the atomic write requires.
+    crate::request::lifecycle::queue::persist_background_completion_with_message_waking_with_access(
+        &access,
         &node,
         &notification_request,
         "<tool-notification status=\"completed\" />",
@@ -1133,6 +1135,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         "Review background completion",
         queue,
         None,
+        crate::request::lifecycle::RequestHopCause::Continuation,
     )
     .await
     .unwrap();

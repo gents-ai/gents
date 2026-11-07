@@ -1172,27 +1172,23 @@ struct RuntimeStatusRow {
 }
 
 async fn fetch_runtime_status(node: &Arc<defra_node::Node>, node_did: &str) -> RuntimeStatusRow {
-    let node_did = escape_graphql_string(node_did);
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(node_did).unwrap(),
+    );
+    let escaped_node_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
-            NodeRuntime(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, limit: 1) {{
+            NodeRuntime(filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }}, limit: 1) {{
                 reconcile_phase
                 last_reconcile_result
                 last_reconcile_error
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "NodeRuntime query failed: {:?}",
-        response.errors
-    );
-    let value = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("NodeRuntime"))
-        .and_then(|rows| rows.as_array())
+    let response = access.execute(&query).await.expect("NodeRuntime query");
+    let value = response["data"]["NodeRuntime"]
+        .as_array()
         .and_then(|rows| rows.first())
         .cloned()
         .expect("NodeRuntime row");
@@ -1224,6 +1220,8 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let node_did = node.node_identity_did().expect("fixture node has an identity");
+    // The NodeRuntime status row publishes under a visible, registered Node parent.
+    crate::test_support::ensure_test_node(&node, node_did).await;
     let runtime_status = runtime_status_handle(&node, node_did);
 
     let starts = Arc::new(StdMutex::new(RapidHashMap::<String, usize>::new()));
@@ -1373,6 +1371,8 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let node_did = node.node_identity_did().expect("fixture node has an identity");
+    // The NodeRuntime status row publishes under a visible, registered Node parent.
+    crate::test_support::ensure_test_node(&node, node_did).await;
     let runtime_status = runtime_status_handle(&node, node_did);
 
     let lineage = AgentLineage::provision("general");
