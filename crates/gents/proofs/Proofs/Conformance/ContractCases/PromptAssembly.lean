@@ -1822,6 +1822,8 @@ def promptAssemblyReasoningSuffixCases : List PromptAssemblyReasoningSuffixCase 
       complete := false, captured := some (replayCaseAssemble .claudeMessages context []) }
   let recoveredEvidence : PromptAssemblyClaudeCheckpointResolution :=
     { tag := checkpointTag 5, evidence := recoveredWitness }
+  let recoveredOnly : PromptAssembly.ClaudeMap.TaggedReplayRow :=
+    { recovered with blockIndices := [2], blocks := recovered.blocks.take 1 }
   let laterBlock : PromptAssembly.ClaudeMap.TaggedReplayRow :=
     { source := shapeTwoBlockRow.source, physicalHeader := shapeTwoBlockRow.physicalHeader,
       blockIndices := [1],
@@ -1841,6 +1843,10 @@ def promptAssemblyReasoningSuffixCases : List PromptAssemblyReasoningSuffixCase 
         captured := some (replayCaseAssemble .claudeMessages context prior) } }
   [ reasoningSuffixCase "recovered-stopped-block-with-original-index" context claude .claudeMessages
       [recovered] [recoveredEvidence]
+  , reasoningSuffixCase "recovered-stopped-reasoning-only" context claude .claudeMessages
+      [recoveredOnly] [recoveredEvidence]
+  , reasoningSuffixCase "recovered-reasoning-only-without-stop-witness" context claude .claudeMessages
+      [recoveredOnly] [{ recoveredEvidence with evidence := { recoveredEvidence.evidence with reasoning := [] } }]
   , reasoningSuffixCase "recovered-block-without-stop-witness" context claude .claudeMessages
       [recovered] [{ recoveredEvidence with evidence := { recoveredEvidence.evidence with reasoning := [] } }]
   , reasoningSuffixCase "recovered-origin-cannot-claim-complete" context claude .claudeMessages

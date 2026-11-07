@@ -1175,7 +1175,11 @@ def turnHeaderOffset : ReplayWire → Nat
 def turnBase (issuer : ReplayIssuer) (wire : ReplayWire)
     (resolve : ReplayTag → List ResolvedReplayEvidence)
     (candidates : List ReasoningCandidate) (group : TurnGroup) : Bool :=
-  !group.candidates.isEmpty && (wire == .responses || group.ordinary) &&
+  let recovered := group.candidates.head?.bind (·.source) |>.any fun tag =>
+    match resolve tag with
+    | [evidence] => evidence.origin == .recoveredProvider && !evidence.complete
+    | _ => false
+  !group.candidates.isEmpty && (wire == .responses || group.ordinary || recovered) &&
     group.candidates.all (validForReplayProjection issuer wire resolve candidates)
 
 def turnCaptured (resolve : ReplayTag → List ResolvedReplayEvidence)
