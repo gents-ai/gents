@@ -249,7 +249,7 @@ fn preserve_root_upgrade_config(
             .find(|c| c.dir_name() == Some(field))
         {
             if suffix == collection.unique_field() {
-                anyhow::ensure!(entry.variables.keys().all(|name| name == "GENTS_PACK_NODE_DID" || environment(name).is_some()),
+                anyhow::ensure!(entry.variables.keys().all(|name| name == "GENTS_PACK_NODE_DID" || environment(name).is_some_and(|value| !value.is_empty())),
                     "document identity {} uses an omitted install variable; supply it explicitly before upgrading", entry.path);
             }
         }
@@ -374,7 +374,11 @@ pub async fn load_pack_upgrade_config(
     })
     .map_err(|names| anyhow::anyhow!("cannot inspect install variables: {}", names.join(", ")))?;
     for entry in uses {
-        if !entry.variables.keys().all(|name| lookup(name).is_none()) {
+        if !entry
+            .variables
+            .keys()
+            .all(|name| lookup(name).is_none_or(|value| value.is_empty()))
+        {
             continue;
         }
         let Some((old_path, new_path)) = locate(&entry.path) else {
@@ -404,7 +408,7 @@ pub async fn load_pack_upgrade_config(
         *restored
             .pointer_mut(&new_path)
             .context("restored upgrade field is missing")? =
-            serde_json::Value::String(value.replace('$', "$$"));
+            serde_json::Value::String(super::super::interpolate::escape(value));
     }
     let bytes = serde_json::to_vec(&restored)?;
     let options = PackInstallOptions {
