@@ -86,6 +86,7 @@ pub fn override_installed_literals(
     known: &std::collections::BTreeMap<String, Option<String>>,
     locate: &dyn Fn(&str, &str) -> Option<String>,
 ) -> anyhow::Result<()> {
+    let mut staged = installed.clone();
     let uses = inspect_install_variables(authored, &|_| Some("inspection".to_owned())).map_err(
         |names| anyhow::anyhow!("cannot inspect install variables: {}", names.join(", ")),
     )?;
@@ -126,7 +127,7 @@ pub fn override_installed_literals(
                 entry.path
             )
         })?;
-        let slot = installed
+        let slot = staged
             .pointer_mut(&target)
             .ok_or_else(|| anyhow::anyhow!("installed field {} is missing", entry.path))?;
         *slot = serde_json::Value::String(value);
@@ -137,6 +138,7 @@ pub fn override_installed_literals(
             "dependency does not use variable {name:?}"
         );
     }
+    *installed = staged;
     Ok(())
 }
 
@@ -164,7 +166,7 @@ mod install_variable_conformance {
             installed,
             json!({"first": "new first", "second": "old second"})
         );
-        let ambiguous = json!({"first": "${FIRST}-${SECOND}"});
+        let ambiguous = json!({"first": "${FIRST}", "second": "${FIRST}-${SECOND}"});
         let before = installed.clone();
         assert!(override_installed_literals(
             &ambiguous,
