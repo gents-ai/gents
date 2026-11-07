@@ -1287,18 +1287,19 @@ async fn overlapping_native_workspace_fences_conflict(
             .as_str()
             .context("native binding physical ID missing")?;
         let parent = format!("workspaces:\"{}\"", workspace_doc);
-        anyhow::ensure!(
-            node.add_dac_actor_relationship_for_in_txn(
+        // DefraDB reports whether the relationship already existed; a fresh
+        // binding must receive a new parent edge.
+        let existed = node
+            .add_dac_actor_relationship_for_in_txn(
                 handle,
                 &context,
                 "WorkspaceBinding",
                 doc,
                 "parent",
-                &parent
+                &parent,
             )
-            .await?,
-            "native binding parent grant failed"
-        );
+            .await?;
+        anyhow::ensure!(!existed, "native binding parent edge already existed");
     }
     node.commit_transaction(&first).await?;
     let conflict = node.commit_transaction(&second).await;
