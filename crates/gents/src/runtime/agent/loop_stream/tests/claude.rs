@@ -195,7 +195,7 @@ async fn claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop(
 
     let scope_kind = gents_protocol::rendered_request::CaptureScopeKind::Inference;
     let ClaudeFixtureRun {
-        node,
+        node: _,
         lifecycle,
         collected,
         request_commit_cid,

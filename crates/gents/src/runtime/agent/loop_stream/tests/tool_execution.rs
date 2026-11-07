@@ -1412,7 +1412,7 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
     assert!(collected.error.is_none(), "{:?}", collected.error);
     assert_eq!(collected.final_text.as_deref(), Some("seen"));
     let output: serde_json::Value = serde_json::from_str(&collected.tool_results[0]).unwrap();
-    assert_eq!(output["tool_results"]["slow"]["result"], "slow done");
+    assert_eq!(output["tool_results"]["slow"]["result"], "slow done", "{output}");
     assert_eq!(
         output["tool_results"]["late"]["error"],
         "late timed out after 50ms"
