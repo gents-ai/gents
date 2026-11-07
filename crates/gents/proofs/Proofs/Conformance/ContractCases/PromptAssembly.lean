@@ -1836,6 +1836,12 @@ def promptAssemblyReasoningSuffixCases : List PromptAssemblyReasoningSuffixCase 
   let gapAfterPrefixEvidence : PromptAssemblyClaudeCheckpointResolution :=
     { recoveredEvidence with evidence := { recoveredWitness with
       reasoning := PromptAssembly.ClaudeMap.originalReasoningWitness gapAfterPrefix } }
+  let gapWithTail : PromptAssembly.ClaudeMap.TaggedReplayRow :=
+    { gapAfterPrefix with blockIndices := [0, 1, 3, 4]
+                          blocks := gapAfterPrefix.blocks ++ [.text (utf8Bytes "retained text")] }
+  let gapWithTailEvidence : PromptAssemblyClaudeCheckpointResolution :=
+    { recoveredEvidence with evidence := { recoveredWitness with
+      reasoning := PromptAssembly.ClaudeMap.originalReasoningWitness gapWithTail } }
   let laterBlock : PromptAssembly.ClaudeMap.TaggedReplayRow :=
     { source := shapeTwoBlockRow.source, physicalHeader := shapeTwoBlockRow.physicalHeader,
       blockIndices := [1],
@@ -1861,6 +1867,8 @@ def promptAssemblyReasoningSuffixCases : List PromptAssemblyReasoningSuffixCase 
       [recoveredGap] [gapEvidence]
   , reasoningSuffixCase "recovered-reasoning-prefix-before-omitted-block" context claude .claudeMessages
       [gapAfterPrefix] [gapAfterPrefixEvidence]
+  , reasoningSuffixCase "recovered-gap-keeps-subsequent-ordinary-text" context claude .claudeMessages
+      [gapWithTail] [gapWithTailEvidence]
   , reasoningSuffixCase "recovered-reasoning-only-without-stop-witness" context claude .claudeMessages
       [recoveredOnly] [{ recoveredEvidence with evidence := { recoveredEvidence.evidence with reasoning := [] } }]
   , reasoningSuffixCase "recovered-reasoning-only-with-foreign-issuer" context claude .claudeMessages
