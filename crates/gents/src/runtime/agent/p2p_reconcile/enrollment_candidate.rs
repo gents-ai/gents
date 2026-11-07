@@ -41,7 +41,7 @@ pub async fn request_enrollment(
     let p2p = crate::store::identity::node_p2p(node).context("this node has no P2P transport")?;
     let offer = decode_offer(offer_token).context("decoding server enrollment offer")?;
     verify_enrollment_offer(&p2p, identity, &offer).await?;
-    verify_offer_live_schema(node, &offer, false).await?;
+    verify_offer_live_schema(node, &offer).await?;
     confirm_network_admin_pin(node, &offer).await?;
     let candidate_peer = p2p.local_peer_id().await.map_err(anyhow::Error::msg)?;
     let candidate_ticket = local_enrollment_ticket(&p2p, &candidate_peer).await?;
@@ -84,15 +84,8 @@ pub async fn request_enrollment(
 pub async fn verify_offer_live_schema(
     node: &Arc<EmbeddedNode>,
     offer: &EnrollmentOfferRecord,
-    required: bool,
 ) -> Result<()> {
-    let Some(expected) = offer.live_schema_digest.as_deref() else {
-        anyhow::ensure!(
-            !required,
-            "invite does not contain signed live schema evidence"
-        );
-        return Ok(());
-    };
+    let expected = offer.live_schema_digest.as_str();
     let local = super::read_client_replicated_schema(Arc::clone(node)).await?;
     let actual =
         gents_protocol::peer_schema::replicated_schema_digest(super::CLIENT_COLLECTIONS, &local)?;

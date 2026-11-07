@@ -21,8 +21,7 @@ pub struct EnrollmentOfferRecord {
     pub owner_agent: String,
     pub profile: String,
     pub schema_fingerprint: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub live_schema_digest: Option<String>,
+    pub live_schema_digest: String,
     pub issued_at: String,
     pub expires_at: String,
     pub admin_sig: Vec<u8>,
@@ -45,10 +44,8 @@ impl EnrollmentOfferRecord {
             &self.issued_at,
             &self.expires_at,
         ];
-        if let Some(digest) = self.live_schema_digest.as_deref() {
-            fields.push("live-schema-v1");
-            fields.push(digest);
-        }
+        fields.push("live-schema-v1");
+        fields.push(&self.live_schema_digest);
         canonical_domain_payload(OFFER_SIGNATURE_DOMAIN, fields)
     }
 }
@@ -112,7 +109,8 @@ pub fn decode_offer(encoded: &str) -> Result<EnrollmentOfferRecord> {
     if offer.profile != "client" {
         return Err(EnrollmentError::UnsupportedOfferProfile);
     }
-    if let Some(digest) = &offer.live_schema_digest {
+    {
+        let digest = &offer.live_schema_digest;
         let hex = digest
             .strip_prefix("sha256:")
             .ok_or(EnrollmentError::InvalidLiveSchemaDigest)?;
@@ -164,23 +162,29 @@ mod link_tests {
             owner_agent: "did:key:owner".into(),
             profile: "client".into(),
             schema_fingerprint: "schema".into(),
-            live_schema_digest: None,
+            live_schema_digest: format!("sha256:{}", "a".repeat(64)),
             issued_at: "2030-01-01T00:00:00Z".into(),
             expires_at: "2030-01-01T01:00:00Z".into(),
             admin_sig: vec![1; 64],
         };
         let token = encode_offer(&offer).unwrap();
+        let mut missing_schema = serde_json::to_value(&offer).unwrap();
+        missing_schema
+            .as_object_mut()
+            .unwrap()
+            .remove("live_schema_digest");
+        assert!(serde_json::from_value::<EnrollmentOfferRecord>(missing_schema).is_err());
         assert!(token.len() <= MAX_LINKABLE_OFFER_CHARACTERS);
         assert!(token.bytes().all(|byte| byte.is_ascii_alphanumeric()));
         assert_eq!(decode_offer(&token).unwrap(), offer);
         let mut with_schema = offer.clone();
-        with_schema.live_schema_digest = Some(format!("sha256:{}", "a".repeat(64)));
+        with_schema.live_schema_digest = format!("sha256:{}", "b".repeat(64));
         assert_ne!(offer.signing_payload(), with_schema.signing_payload());
         let with_schema_token = encode_offer(&with_schema).unwrap();
         assert_eq!(decode_offer(&with_schema_token).unwrap(), with_schema);
         for invalid in ["", "sha256:abc", &format!("sha256:{}", "A".repeat(64))] {
             let mut malformed = with_schema.clone();
-            malformed.live_schema_digest = Some(invalid.to_owned());
+            malformed.live_schema_digest = invalid.to_owned();
             let token = encode_offer(&malformed).unwrap();
             assert!(matches!(
                 decode_offer(&token),

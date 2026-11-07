@@ -130,7 +130,7 @@ impl EnrollmentOfferIssuer {
             owner_agent: self.owner_agent.clone(),
             profile: self.profile.clone(),
             schema_fingerprint: enrollment_schema_fingerprint(),
-            live_schema_digest: Some(live_schema_digest),
+            live_schema_digest,
             issued_at,
             expires_at,
             admin_sig: Vec::new(),

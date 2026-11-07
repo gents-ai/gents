@@ -24,15 +24,11 @@ def schemaEvidenceMatches (signedDigest localDigest : Option String) : Bool :=
   | some signed, some observed => signed != "" && signed == observed
   | _, _ => false
 
-/-- The optional live digest is a distinct signed field. An absent legacy
-field has a different payload from any offer that includes schema evidence. -/
-def schemaEvidenceFields : Option String → List String
-  | none => []
-  | some digest => ["live-schema-v1", digest]
+def schemaEvidenceFields (digest : String) : List String :=
+  ["live-schema-v1", digest]
 
-theorem stripping_schema_evidence_changes_fields (digest : String) :
-    schemaEvidenceFields (some digest) ≠ schemaEvidenceFields none := by
-  simp [schemaEvidenceFields]
+theorem schema_evidence_is_signed (digest : String) :
+    schemaEvidenceFields digest = ["live-schema-v1", digest] := by rfl
 
 theorem missing_schema_evidence_rejected (observed : Option String) :
     schemaEvidenceMatches none observed = false := by rfl

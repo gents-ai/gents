@@ -314,7 +314,7 @@ impl GraphqlEnrollmentStore {
 
         if kind == WireDecisionKind::Approved {
             let offer = decode_offer(&pending.request.offer_token)?;
-            super::enrollment_candidate::verify_offer_live_schema(&self.node, &offer, false)
+            super::enrollment_candidate::verify_offer_live_schema(&self.node, &offer)
                 .await
                 .context("checking invitation schema before approval")?;
         }

@@ -217,7 +217,13 @@ pub(in crate::runtime::agent::p2p_reconcile) async fn authorize_enrollment_peer(
         owner_agent: admin_identity.did().to_string(),
         profile: "client".to_string(),
         schema_fingerprint: enrollment_schema_fingerprint(),
-        live_schema_digest: None,
+        live_schema_digest: gents_protocol::peer_schema::replicated_schema_digest(
+            crate::runtime::agent::p2p_reconcile::CLIENT_COLLECTIONS,
+            &crate::runtime::agent::p2p_reconcile::read_client_replicated_schema(node.clone())
+                .await
+                .unwrap(),
+        )
+        .unwrap(),
         issued_at: issued_at.clone(),
         expires_at: expires_at.clone(),
         admin_sig: Vec::new(),

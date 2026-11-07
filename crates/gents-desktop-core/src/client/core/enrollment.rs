@@ -121,7 +121,7 @@ impl ClientCore {
             .compare_runtime_schema(&self.node, &offer.owner_agent, status)
             .await
             .context("refusing to enroll with an incompatible runtime")?;
-        self.request_offer_enrollment(offer_token, offer, Some(status), advertised_label, false)
+        self.request_offer_enrollment(offer_token, offer, Some(status), advertised_label)
             .await
     }
 
@@ -130,7 +130,7 @@ impl ClientCore {
         offer_token: &str,
     ) -> Result<EnrollmentRequestResult> {
         let offer = decode_offer(offer_token).context("decoding enrollment invite")?;
-        self.request_offer_enrollment(offer_token, offer, None, None, true)
+        self.request_offer_enrollment(offer_token, offer, None, None)
             .await
     }
 
@@ -140,14 +140,11 @@ impl ClientCore {
         offer: gents_protocol::enrollment::EnrollmentOfferRecord,
         status: Option<&Value>,
         advertised_label: Option<&str>,
-        require_live_schema: bool,
     ) -> Result<EnrollmentRequestResult> {
         let _lifecycle = self.route_manager.lock().await;
         verify_enrollment_offer(&self.p2p, &self.node_identity, &offer).await?;
         gents::runtime::agent::p2p_reconcile::enrollment_candidate::verify_offer_live_schema(
-            &self.node,
-            &offer,
-            require_live_schema,
+            &self.node, &offer,
         )
         .await?;
         confirm_network_admin_pin(&self.node, &offer).await?;
