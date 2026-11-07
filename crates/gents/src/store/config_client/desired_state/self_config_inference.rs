@@ -505,6 +505,7 @@ mod tests {
                         txn,
                         std::slice::from_ref(change),
                         |_| true,
+                        false,
                     )
                     .await?;
                     Ok::<_, anyhow::Error>(())

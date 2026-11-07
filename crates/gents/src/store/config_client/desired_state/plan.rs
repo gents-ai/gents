@@ -65,6 +65,7 @@ pub struct DesiredStateApplyPlan {
     documents: Vec<DesiredStateApplyDocument>,
     removals: Vec<(Collection, String, String)>,
     expected: Vec<DesiredStateExpectation>,
+    repair_dangling_selections: bool,
 }
 impl DesiredStateApplyPlan {
     pub fn from_pack_config(config: &crate::documents::PackConfig) -> Result<Self> {
@@ -131,6 +132,7 @@ impl DesiredStateApplyPlan {
             documents,
             removals: Vec::new(),
             expected: Vec::new(),
+            repair_dangling_selections: false,
         })
     }
     pub fn with_removals(mut self, removals: Vec<(Collection, String, String)>) -> Result<Self> {
@@ -157,6 +159,18 @@ impl DesiredStateApplyPlan {
 
     pub fn removals(&self) -> &[(Collection, String, String)] {
         &self.removals
+    }
+
+    /// Request the explicit dangling-selection repair
+    /// (`Identity.Configuration.repairUsersetSelection`). Publication refuses
+    /// it unless the transaction actor is the native admin.
+    pub fn with_dangling_selection_repair(mut self) -> Self {
+        self.repair_dangling_selections = true;
+        self
+    }
+
+    pub fn repairs_dangling_selections(&self) -> bool {
+        self.repair_dangling_selections
     }
 
     pub fn documents(&self) -> &[DesiredStateApplyDocument] {

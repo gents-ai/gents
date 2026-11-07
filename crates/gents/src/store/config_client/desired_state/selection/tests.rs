@@ -557,7 +557,7 @@ async fn modeled_inference_selection_changes_stage_shared_native_edges() -> anyh
             Box::pin(async move {
                 apply_selection_changes(txn, changes, |collection| {
                     collection != Collection::InferenceBackend
-                })
+                }, false)
                 .await
             })
         })
@@ -589,7 +589,7 @@ async fn modeled_inference_selection_changes_stage_shared_native_edges() -> anyh
                     Box::pin(async move {
                         apply_selection_changes(txn, change, |collection| {
                             collection != Collection::InferenceBackend
-                        })
+                        }, false)
                         .await
                     })
                 })
@@ -718,7 +718,7 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
             Box::pin(async move {
                 apply_selection_changes(txn, changes, |collection| {
                     collection != Collection::InferenceProfile
-                })
+                }, false)
                 .await
             })
         })
@@ -907,7 +907,7 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
             Box::pin(async move {
                 apply_selection_changes(txn, changes, |collection| {
                     collection != Collection::InferenceProfile
-                })
+                }, false)
                 .await
             })
         })
@@ -942,7 +942,7 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
             Box::pin(async move {
                 apply_selection_changes(txn, changes, |collection| {
                     collection != Collection::InferenceProfile
-                })
+                }, false)
                 .await
             })
         })

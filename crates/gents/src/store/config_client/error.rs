@@ -150,6 +150,8 @@ pub enum ConfigClientError {
     NodePermissionActorRequired,
     #[error("invalid node operation identity")]
     NodePermissionIdentity(#[source] identity::Error),
+    #[error("native admin status could not be observed")]
+    NativeAdminObservation(#[source] db::nac::Error),
     #[error("node permission grant failed ({status}): {body}")]
     NodePermissionStatus {
         status: reqwest::StatusCode,

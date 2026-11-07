@@ -499,6 +499,29 @@ impl SelfConfigFixture {
         self.db.node_identity.did()
     }
 
+    /// Make the fixture User the native admin, as init makes the init User
+    /// (`Identity.GrantSets.only_init_user_is_admin`).
+    pub(super) async fn grant_user_native_admin(&self) {
+        let owner = crate::ConfigAccess::local_as(
+            self.db.node.clone(),
+            identity::Did::new(self.db.node_identity.did()).unwrap(),
+        );
+        owner
+            .grant_node_admin(&identity::Did::new(self.user_access.actor_did().unwrap()).unwrap())
+            .await
+            .unwrap();
+    }
+
+    /// The fixture Agent's own signed access.
+    pub(super) fn agent_access(&self) -> crate::ConfigAccess {
+        crate::ConfigAccess::local_managed_agent(
+            self.db.node.clone(),
+            identity::Did::new(&self.agent_did).unwrap(),
+            self.agent.as_ref(),
+        )
+        .unwrap()
+    }
+
     pub(super) fn user_access(&self) -> &crate::ConfigAccess {
         &self.user_access
     }
@@ -7692,14 +7715,51 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
     .with_agent_signer(sibling_signer.managed_agent_signer())
     .with_runtime_identity(Some(fixture.db.node_identity.clone()))
     .with_node_binding(Some(fixture.node_binding.clone()));
-    no_grant
+    // The own-only grant leaves the sibling with the Agent baseline and no NAC
+    // relation operation, so the held-bounded rule refuses each new tool
+    // source; an edit that projects no new source needs no relation authority.
+    let household = &crate::lean_vocab_test::lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .expect("configuration model");
+    let own_edit = household
+        .own_tool_edit_cases
+        .iter()
+        .find(|case| case["name"] == "own-only-goal")
+        .expect("own-only goal edit model")["accepted"]
+        .as_bool()
+        .unwrap();
+    let no_source_change = household
+        .tool_source_change_cases
+        .iter()
+        .find(|case| case["name"] == "present-noop")
+        .expect("source no-op model")["allowed"]
+        .as_bool()
+        .unwrap();
+    let goal = no_grant
         .apply(tools_request(
             &no_grant,
             vec![("built_ins".into(), Some(json!({"enable_goal_tools":true})))],
         ))
-        .await
-        .unwrap();
-    no_grant.apply(tools_request(&no_grant, vec![("self_config".into(), Some(json!({"enable_self_config":true,"enable_pack_install":true,"self_config_preview":true})))])).await.unwrap();
+        .await;
+    assert_eq!(goal.is_ok(), own_edit, "{goal:?}");
+    if let Err(error) = goal {
+        assert!(
+            format!("{error:#}").contains("source projection requires an authorized actor"),
+            "{error:#}"
+        );
+    }
+    // Self-config and pack install are already selected; preview adds no source.
+    let preview = no_grant
+        .apply(tools_request(
+            &no_grant,
+            vec![(
+                "self_config".into(),
+                Some(json!({"enable_self_config":true,"enable_pack_install":true,"self_config_preview":true})),
+            )],
+        ))
+        .await;
+    assert_eq!(preview.is_ok(), no_source_change, "{preview:?}");
 }
 
 #[tokio::test]

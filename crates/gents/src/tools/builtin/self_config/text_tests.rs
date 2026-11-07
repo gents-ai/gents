@@ -1615,11 +1615,83 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_accep
     assert_eq!(invalid["errors"][0]["missing"]["id"], "absent-tools");
     assert_eq!(before, access.execute(&query).await.unwrap());
     ok(&tools, invalid["errors"][0]["inspect_with"].clone()).await;
-    ok(
+    // An ordinary edit away from the dangling source fails closed.
+    let refused_edit = refused(
         &tools,
         json!({"argv":["context","update"],"target_id":context_id,"set":{"tools_id":tools_id}}),
     )
     .await;
+    assert!(refused_edit.contains("is unavailable"), "{refused_edit}");
+    assert_eq!(before, access.execute(&query).await.unwrap());
+    fixture.grant_user_native_admin().await;
+    let modeled = &crate::lean_vocab_test::lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .expect("configuration model")
+        .dangling_selection_repair_cases;
+    assert_eq!(modeled.len(), 4);
+    let agent_access = fixture.agent_access();
+    // Refused cases run against the dangling state; the accepted one runs last.
+    let mut ordered = modeled.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|case| case["applied"].as_bool());
+    for case in ordered {
+        let (actor_access, actor) = match case["actor"].as_str().unwrap() {
+            "user" => (access, fixture.user_access().actor_did().unwrap()),
+            "agent" => (&agent_access, fixture.agent_did().to_owned()),
+            other => panic!("unmodeled repair actor {other}"),
+        };
+        let repair = case["repair"].as_bool().unwrap();
+        let applied = actor_access
+            .transact_write("test.saved_audit.repair", |txn| {
+                let context_id = &context_id;
+                let tools_id = &tools_id;
+                let actor = &actor;
+                let node_did = fixture.node_did();
+                Box::pin(async move {
+                    assert_eq!(
+                        txn.actor_is_native_admin().await?,
+                        case["admin"].as_bool().unwrap(),
+                        "{actor}"
+                    );
+                    let (_, mut context) =
+                        crate::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            crate::Collection::AgentContext,
+                            node_did,
+                            context_id,
+                        )
+                        .await?
+                        .expect("saved context exists");
+                    context
+                        .as_object_mut()
+                        .unwrap()
+                        .retain(|key, _| !key.starts_with('_'));
+                    context["tools_id"] = json!(tools_id);
+                    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+                        crate::store::config_client::DesiredStateApplyDocument {
+                            collection: crate::Collection::AgentContext,
+                            add: context.clone(),
+                            update: context,
+                        },
+                    ])?;
+                    let plan = if repair {
+                        plan.with_dangling_selection_repair()
+                    } else {
+                        plan
+                    };
+                    crate::store::config_client::apply_desired_state_plan(txn, &plan).await
+                })
+            })
+            .await;
+        assert_eq!(
+            applied.is_ok(),
+            case["applied"].as_bool().unwrap(),
+            "{case}: {applied:?}"
+        );
+        if applied.is_err() {
+            assert_eq!(before, access.execute(&query).await.unwrap(), "{case}");
+        }
+    }
     assert_eq!(
         ok(&tools, json!({"argv":["validate"]})).await["valid"],
         true

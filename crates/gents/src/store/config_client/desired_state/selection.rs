@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::Value;
 
 use super::read::read_record;
@@ -62,11 +62,17 @@ pub(super) fn context_hierarchy_enabled(bound: fn(Collection) -> bool) -> bool {
 /// Only a changed selection may add or remove an edge. Native relation
 /// management and all document writes share the caller's transaction; an
 /// inaccessible source or rejected edge aborts the complete publication.
+/// `repair` is the explicit dangling-selection repair
+/// (`Identity.Configuration.repairUsersetSelection`): only the native admin,
+/// to whom an unreadable source is an absent one, may drop a removed source
+/// that no longer exists.
 pub(super) async fn apply_selection_changes(
     txn: &ConfigApplyTxn<'_>,
     changes: &[Change],
     bound: fn(Collection) -> bool,
+    repair: bool,
 ) -> Result<()> {
+    let mut repair_admin = None;
     for change in changes
         .iter()
         .filter(|change| selects_configuration(change.collection))
@@ -101,11 +107,24 @@ pub(super) async fn apply_selection_changes(
                 (after.difference(before), true),
             ] {
                 for id in ids {
-                    let (source_doc, _) = read_record(txn, source, &change.node_did, id)
-                        .await?
-                        .with_context(|| {
-                            format!("selected {} {id:?} is unavailable", source.graphql_type())
-                        })?;
+                    let Some((source_doc, _)) =
+                        read_record(txn, source, &change.node_did, id).await?
+                    else {
+                        let unavailable =
+                            format!("selected {} {id:?} is unavailable", source.graphql_type());
+                        if add || !repair {
+                            anyhow::bail!(unavailable);
+                        }
+                        let admin = match repair_admin {
+                            Some(admin) => admin,
+                            None => *repair_admin.insert(txn.actor_is_native_admin().await?),
+                        };
+                        anyhow::ensure!(
+                            admin,
+                            "{unavailable}; only the native admin may repair a dangling selection"
+                        );
+                        continue;
+                    };
                     if add {
                         txn.add_entity_set_relationship(
                             source.graphql_type(),

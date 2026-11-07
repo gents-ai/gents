@@ -439,13 +439,18 @@ pub(crate) async fn apply_desired_state_plan_with_node_binding(
             }
         }
     }
-    selection::apply_selection_changes(txn, &selection_changes, |collection| {
-        gents_protocol::schemas::IDENTITY_POLICY_BINDINGS
-            .iter()
-            .any(|(name, resource)| {
-                *name == collection.graphql_type() && *resource == "configuration"
-            })
-    })
+    selection::apply_selection_changes(
+        txn,
+        &selection_changes,
+        |collection| {
+            gents_protocol::schemas::IDENTITY_POLICY_BINDINGS
+                .iter()
+                .any(|(name, resource)| {
+                    *name == collection.graphql_type() && *resource == "configuration"
+                })
+        },
+        plan.repairs_dangling_selections(),
+    )
     .await?;
     if gents_protocol::schemas::identity_policy_resource("Task") == Some("configuration") {
         task_selection::apply_task_selections(txn, &selection_changes).await?;

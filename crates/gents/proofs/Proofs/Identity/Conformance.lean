@@ -1495,6 +1495,53 @@ theorem native_admin_can_grant_schema_atomically :
     result.enabled = schemaToolSources ∧ result.grants = schemaToolSources ∧
       Configuration.configureToolGrantGroup initial toolGrantorHousehold schemaToolSources userDid true false = initial := by
   native_decide
+
+/-- The tool sources one Tools edit enables, as `toolOperationSources` derives
+them for the configuring Agent. -/
+def editToolSources (surface : ToolPolicy.Surface) (pack : Bool) : List Configuration.ToolGrantSource :=
+  (Configuration.toolOperationSources surface pack).map fun (purpose, permission) =>
+    ⟨"tools-doc", agentDid, purpose, permission⟩
+
+def selfConfigPackSurface : ToolPolicy.Surface :=
+  { ToolPolicy.ContractCases.secureMinimal with selfConfig := true, selfConfigCategories := .all }
+
+/-- Whether an Agent configuring its own Tools may enable `surface` while
+holding `sets` directly. An Agent with only the User's own-only self-config
+grant holds the Agent baseline: no NAC relation operation, so the held-bounded
+rule refuses every source it would project, even one for a held baseline
+permission. The Engineer's policy delegate set admits a source it holds. -/
+def ownToolEditCaseJson (name : String) (sets : List GrantSets.GrantSet)
+    (surface : ToolPolicy.Surface) (pack : Bool) : Json :=
+  let sources := editToolSources surface pack
+  let initial : Configuration.ToolGrantProjection :=
+    { admins := [userDid],
+      direct := (sets.flatMap GrantSets.GrantSet.permissions).map (agentDid, ·) }
+  let result := Configuration.configureToolGrantGroup initial toolGrantorHousehold
+    sources agentDid true true
+  Json.mkObj [("name", toJson name), ("sets", toJson (sets.map GrantSets.GrantSet.name)),
+    ("sources", toJson (sources.map toolSourceJson)),
+    ("accepted", toJson (!sources.isEmpty && result != initial))]
+
+def ownToolEditCases : List Json :=
+  [ownToolEditCaseJson "own-only-goal" [.agentBaseline] ToolPolicy.ContractCases.agentGoalOnly false,
+   ownToolEditCaseJson "engineer-goal" [.agentBaseline, .policyDelegate]
+     ToolPolicy.ContractCases.agentGoalOnly false]
+
+theorem own_only_grant_cannot_enable_tool_sources :
+    let initial : Configuration.ToolGrantProjection :=
+      { admins := [userDid],
+        direct := GrantSets.GrantSet.agentBaseline.permissions.map (agentDid, ·) }
+    [ToolPolicy.ContractCases.agentGoalOnly, selfConfigPackSurface].all fun surface =>
+      !(editToolSources surface true).isEmpty &&
+        Configuration.configureToolGrantGroup initial toolGrantorHousehold
+          (editToolSources surface true) agentDid true true == initial := by
+  native_decide
+
+/-- Conformance input for `Configuration.repairUsersetSelection`: who asks,
+whether that actor is the native admin, and whether repair was requested. -/
+def danglingRepairCaseJson (actor : String) (admin repair : Bool) : Json :=
+  Json.mkObj [("actor", toJson actor), ("admin", toJson admin), ("repair", toJson repair),
+    ("applied", toJson (Configuration.danglingRepairApplied actor admin repair))]
 def callbackState : State :=
   { objects := [⟨"nodes", "home", userDid⟩,
       ⟨"configuration", "binding", userDid⟩,
@@ -1748,6 +1795,10 @@ def json : Json := Json.mkObj
       sessionToolCaseJson "foreign" false true false])),
    ("tool_grantor_cases", toJson ([toolGrantorCaseJson userDid true,
       toolGrantorCaseJson agentDid true, toolGrantorCaseJson userDid false])),
+   ("own_tool_edit_cases", toJson ownToolEditCases),
+   ("dangling_selection_repair_cases", toJson ([danglingRepairCaseJson "user" true true,
+      danglingRepairCaseJson "user" true false, danglingRepairCaseJson "agent" false true,
+      danglingRepairCaseJson "agent" false false])),
    ("tool_source_change_cases", toJson ([
       toolSourceChangeCaseJson "present-noop" true false false,
       toolSourceChangeCaseJson "absent-noop" false true false,

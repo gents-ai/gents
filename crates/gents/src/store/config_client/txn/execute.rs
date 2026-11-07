@@ -672,6 +672,45 @@ impl ConfigApplyTxn<'_> {
         .map_err(native_observation_error)
     }
 
+    /// Whether this transaction's actor is the native admin: the NAC owner or
+    /// an `admin` relation, as native NAC reports it. Only the explicit
+    /// dangling-selection repair consults this; it confers no authority, and
+    /// every write it gates is still checked natively.
+    pub(crate) async fn actor_is_native_admin(&self) -> Result<bool> {
+        let actor = identity::Did::new(
+            self.actor_did()
+                .ok_or(ConfigClientError::NodePermissionActorRequired)?,
+        )
+        .map_err(ConfigClientError::NodePermissionIdentity)?;
+        match &self.backend {
+            TxnBackend::Embedded {
+                node,
+                native_operations,
+                ..
+            } => {
+                let node = Arc::clone(node);
+                execute_owned_native(
+                    async move { node.nac_manager().is_admin(&actor).await },
+                    Arc::clone(native_operations),
+                    self.operation,
+                )
+                .await?
+                .map_err(ConfigClientError::NativeAdminObservation)
+            }
+            TxnBackend::Http { endpoint, .. } => {
+                let provenance = super::super::ConfigAccess::Graphql((*endpoint).clone())
+                    .explain_node_subject(&actor)
+                    .await?;
+                Ok(provenance.iter().any(|grant| {
+                    matches!(
+                        grant.via,
+                        acp::nac::PermissionVia::Owner | acp::nac::PermissionVia::Admin
+                    )
+                }))
+            }
+        }
+    }
+
     /// Execute exactly once inside this snapshot; conflict replay is the outer `transact` owner's job.
     pub async fn execute(&self, document: &str) -> Result<Value> {
         self.execute_with_variables(document, &json!({})).await

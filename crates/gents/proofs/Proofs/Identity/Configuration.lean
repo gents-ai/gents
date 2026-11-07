@@ -1071,6 +1071,72 @@ theorem unchanged_userset_selection_preserves_revocation :
     updateUsersetSelection inferenceUsersetFixture "sampling-owner" "configuration" "profile" "selected_by"
       ["sampling"] ["sampling"] true = inferenceUsersetFixture := by rfl
 
+/-- Whether `id` names a physical configuration document. To the native
+admin, which bypasses document ACP, an unreadable source is an absent one. -/
+def configurationPresent (state : State) (id : String) : Bool :=
+  state.objects.any fun object => object.resource == "configuration" && object.id == id
+
+/-- Dangling-reference repair (decision 2026-11-07). A saved selection can
+name a source document that no longer exists. An ordinary update leaves that
+source in `removed`, where `mayManage` of an absent object is false, so the
+whole update aborts: the default stays fail-closed, because for a non-admin an
+unreadable source is indistinguishable from an absent one and skipping its
+edge could retain a live grant. The repair is an explicit request, and only the
+native admin may perform it: the client key, i.e. the User DID that desktop
+and CLI share (`GrantSets.only_init_user_is_admin`). The admin reads past
+document ACP, so a source it cannot read is absent and has no edge left to
+revoke; the repair drops exactly those sources from `removed`. Every present
+source, and every added one, still goes through `updateUsersetSelection`. A
+repair requested by anyone else, or not requested, is the ordinary update. -/
+def repairUsersetSelection (state : State) (manager : String) (admin repair : Bool)
+    (targetResource targetId targetRelation : String) (before after : List String)
+    (committed : Bool) : State :=
+  let retained := if repair && admin then before.filter (configurationPresent state) else before
+  updateUsersetSelection state manager targetResource targetId targetRelation retained after committed
+
+theorem unrequested_repair_is_the_ordinary_update (state : State)
+    (manager targetResource targetId targetRelation : String) (admin : Bool)
+    (before after : List String) (committed : Bool) :
+    repairUsersetSelection state manager admin false targetResource targetId targetRelation
+      before after committed =
+    updateUsersetSelection state manager targetResource targetId targetRelation before after committed := by
+  simp [repairUsersetSelection]
+
+theorem non_admin_repair_is_the_ordinary_update (state : State)
+    (manager targetResource targetId targetRelation : String) (repair : Bool)
+    (before after : List String) (committed : Bool) :
+    repairUsersetSelection state manager false repair targetResource targetId targetRelation
+      before after committed =
+    updateUsersetSelection state manager targetResource targetId targetRelation before after committed := by
+  simp [repairUsersetSelection]
+
+/-- A Context whose saved Tools selection names the deleted `gone`, owned by
+the User, with the Engineer-style Agent holding only its executor. -/
+def danglingSelectionFixture : State :=
+  { objects := [⟨"agents", "agent", "user"⟩, ⟨"configuration", "context", "user"⟩,
+      ⟨"configuration", "tools", "user"⟩],
+    relations := [⟨"agents", "agent", "executor", .actor "agent"⟩,
+      ⟨"configuration", "context", "selected_by", .entitySet "agents" "agent" "executor"⟩],
+    enrolled := [] }
+
+def danglingRepairResult (actor : String) (admin repair : Bool) : State :=
+  repairUsersetSelection danglingSelectionFixture actor admin repair
+    "configuration" "context" "selected_by" ["gone"] ["tools"] true
+
+/-- The repair is applied iff it changed the selection edges. -/
+def danglingRepairApplied (actor : String) (admin repair : Bool) : Bool :=
+  (danglingRepairResult actor admin repair).relations.length !=
+    danglingSelectionFixture.relations.length
+
+theorem dangling_selection_fails_closed_without_admin_repair :
+    [danglingRepairApplied "user" true false, danglingRepairApplied "agent" false false,
+     danglingRepairApplied "agent" false true] = [false, false, false] := by native_decide
+
+theorem admin_repair_drops_only_the_absent_source :
+    let repaired := danglingRepairResult "user" true true
+    danglingRepairApplied "user" true true = true ∧
+      allowed 8 repaired "agent" "configuration" "tools" "read" = true := by native_decide
+
 /-- A Skill's instructions may enter a fresh provider input only while the
 executing Agent can read the exact Skill selected by its exact AgentContext.
 The source edge is separate from a direct reader grant. -/

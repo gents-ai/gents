@@ -171,7 +171,7 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
             Box::pin(async move {
                 apply_selection_changes(txn, graph, |collection| {
                     collection != Collection::InferenceProfile
-                })
+                }, false)
                 .await?;
                 apply_task_selections(txn, first).await
             })
@@ -248,7 +248,7 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
                         txn.execute(update).await?;
                         apply_selection_changes(txn, changes, |collection| {
                             collection != Collection::InferenceProfile
-                        })
+                        }, false)
                         .await
                     })
                 })
