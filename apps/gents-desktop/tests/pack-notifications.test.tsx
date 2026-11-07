@@ -20,7 +20,9 @@ import {
   NOTIFY_RATE_COUNT,
   NOTIFY_RATE_WINDOW,
   type PluginNotifyDeps,
+  speaksHere,
 } from "@/lib/notify/plugins";
+import { pluginWindowLabel } from "../src/lib/nativeShell";
 import { clickRouter, type Notice, type NotifyPlatform } from "@/lib/notify/platform";
 import { createTeller } from "@/lib/notify/watch";
 import {
@@ -84,6 +86,27 @@ describe("the kinds a plugin's module declares", () => {
       Array.from({ length: 9 }, (_, i) => ({ kind: `k${i}`, label: "x" })),
     ])
       expect(parseNotificationKinds(bad), JSON.stringify(bad)).toHaveProperty("error");
+  });
+});
+
+describe("the window that speaks for a plugin", () => {
+  const open = (labels: string[]) => async (label: string) => labels.includes(label);
+
+  it("names a plugin's own window as the shell does", () => {
+    expect(pluginWindowLabel("a/b")).toBe("gents-plugin-612f62");
+    expect(pluginWindowLabel("é")).toBe("gents-plugin-c3a9");
+  });
+
+  it("is the plugin's own window while it's open, and the main window otherwise", async () => {
+    const own = pluginWindowLabel("board");
+    expect(await speaksHere("board", "main", open([]))).toBe(true);
+    expect(await speaksHere("board", "main", open([own]))).toBe(false);
+    expect(await speaksHere("board", own, open([own]))).toBe(true);
+    expect(await speaksHere("board", pluginWindowLabel("other"), open([own]))).toBe(
+      false,
+    );
+    expect(await speaksHere("board", "gents-view-1", open([]))).toBe(false);
+    expect(await speaksHere("other", "main", open([own]))).toBe(true);
   });
 });
 
@@ -164,7 +187,7 @@ describe("the owner of plugins' notifications", () => {
     expect(told).toEqual([]);
   });
 
-  it("refuses while the experimental features are off, and outside the main window", async () => {
+  it("refuses while the experimental features are off, and in a window that doesn't speak for the plugin", async () => {
     enabled = false;
     await expect(
       notifier()(BOARD, { kind: "task-assigned", title: "x" }),
@@ -173,7 +196,7 @@ describe("the owner of plugins' notifications", () => {
     speaks = false;
     await expect(
       notifier()(BOARD, { kind: "task-assigned", title: "x" }),
-    ).rejects.toThrow(/only the app's main window/);
+    ).rejects.toThrow(/another window shows this plugin's notifications/);
     expect(told).toEqual([]);
   });
 

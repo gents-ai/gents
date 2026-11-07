@@ -29,6 +29,7 @@
         "default",
         "desktop-runtime-admin",
         "native-windows",
+        "notifications",
         "open-links",
         "plugin-window"
       ]

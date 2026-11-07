@@ -2,7 +2,7 @@
    the client package. */
 import { invoke } from "@tauri-apps/api/core";
 import { homeDir } from "@tauri-apps/api/path";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, Window } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { ZoomAction } from "../ui/lib/zoom";
@@ -11,6 +11,19 @@ export const inNativeShell = () =>
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 export const windowLabel = () => getCurrentWindow().label;
+
+/** The label of a plugin's own window, spelled as the shell spells it
+    (`label_for` in `bridge/plugin_window.rs`): the id's UTF-8 bytes in hex,
+    so every label matches the plugin windows' capability glob. */
+export const pluginWindowLabel = (pluginId: string) =>
+  `gents-plugin-${Array.from(new TextEncoder().encode(pluginId), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("")}`;
+
+/** whether a window with this label is open */
+export async function windowOpen(label: string): Promise<boolean> {
+  return (await Window.getByLabel(label)) !== null;
+}
 
 export function sendAppOpened() {
   if (inNativeShell() && windowLabel() === "main") {
