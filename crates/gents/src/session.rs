@@ -60,6 +60,7 @@ pub use fork::{
     fork, fork_edit_on, fork_on, fork_via_http, is_user_turn, publish_fork_relationships,
     ForkBoundary, ForkError, ForkOutcome, ForkParams, ForkRelationshipIntent,
 };
+pub(crate) use fork::message_tool_references;
 #[cfg(test)]
 pub(crate) use history::load_history_with_access;
 pub use history::{load_history, sequence_message_key};

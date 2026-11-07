@@ -53,9 +53,10 @@ pub(super) async fn retain_inventory(
         "changes": changes, "verified_unchanged": verified_unchanged,
     });
     let existing = txn.execute(&format!(
-        r#"{{ ToolFileInventory(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{
+        r#"{{ ToolFileInventory(filter: {{ tool_call_doc_id: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, limit: 2) {{
         _docID tool_call_doc_id observation_doc_id request_doc_id node_did session_id requester_did changes verified_unchanged }} }}"#,
         escape_graphql_string(tool_call_doc_id),
+        escape_graphql_string(&scope.session_id),
     )).await?;
     let rows = existing["data"]["ToolFileInventory"]
         .as_array()

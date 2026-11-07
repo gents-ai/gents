@@ -239,6 +239,19 @@ fn selection(case: &Value) -> HydrationSelection {
         .map(document)
         .collect::<Vec<_>>();
     let expected = admission(&selected["admission"]);
+    let output_segments = case["closure"]["segments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| segment(value, selected))
+        .collect::<Vec<_>>();
+    let observed_segments = output_segments
+        .iter()
+        .map(|row| gents_protocol::output::reconstruction::ObservedSegment {
+            doc_id: &row.doc_id,
+            segment: &row.segment,
+        })
+        .collect::<Vec<_>>();
     let mut publications = Vec::new();
     for row in &documents {
         if row.collection != SessionHydrationCollection::AgentMessage {
@@ -251,6 +264,22 @@ fn selection(case: &Value) -> HydrationSelection {
             &expected.request.node_did,
             Some(&expected.request.requester_did),
         );
+        // A fork with destination-owned copies is its own publication origin.
+        if let Ok(loaded) = &loaded {
+            if gents_protocol::output::reconstruction::fork_copy_observations(
+                loaded.message,
+                &observed_segments,
+            )
+            .is_some()
+            {
+                publications.push(CanonicalPublicationOrigin {
+                    header_doc_id: row.doc_id.clone(),
+                    origin_doc_id: row.doc_id.clone(),
+                    sequence: loaded.message.sequence,
+                });
+                continue;
+            }
+        }
         let origin = resolve_origin(
             &observed,
             &denied,
@@ -270,15 +299,11 @@ fn selection(case: &Value) -> HydrationSelection {
             });
         }
     }
+    drop(observed_segments);
     HydrationSelection {
         documents,
         headers,
-        output_segments: case["closure"]["segments"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|value| segment(value, selected))
-            .collect(),
+        output_segments,
         publications,
     }
 }

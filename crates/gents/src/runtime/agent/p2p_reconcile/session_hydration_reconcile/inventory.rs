@@ -3,6 +3,7 @@ use super::{selection::load_canonical_selection_in_txn, *};
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::required_rows;
 use crate::tools::call::lifecycle::query::load_tool_call_read_in_txn;
+use crate::tools::call::lifecycle::ToolCallState;
 use gents_protocol::enrollment::canonical_domain_payload;
 use gents_protocol::file_image_hydration::FileImageScope;
 use gents_protocol::file_inventory::{
@@ -98,8 +99,8 @@ struct ToolFact {
     request_doc_id: String,
     scope: FileImageScope,
     state: String,
-    accepted_header_doc_id: String,
-    execution_generation: String,
+    accepted_header_doc_id: Option<String>,
+    execution_generation: Option<String>,
     capture: Capture,
     order: Option<super::inventory_order::Window>,
 }
@@ -128,6 +129,164 @@ async fn require_reader_visibility(
     Ok(())
 }
 
+/// DefraDB's current owner of the admission's session document, observed in the
+/// read transaction as its reader; never an authored session field.
+async fn observed_session_owner(
+    txn: &ConfigApplyTxn<'_>,
+    reader: Option<&identity::Did>,
+    session_doc_id: &str,
+) -> Result<Option<String>> {
+    let ids = [session_doc_id.to_owned()];
+    let observed = if let Some(reader) = reader {
+        txn.document_owners_as(reader, "AgentSession", &ids).await?
+    } else {
+        txn.document_owners("AgentSession", &ids).await?
+    };
+    Ok(observed
+        .into_iter()
+        .find(|row| row.doc_id == session_doc_id)
+        .and_then(|row| row.owner)
+        .map(|owner| owner.as_str().to_owned()))
+}
+
+struct CopiedFactsInput<'a> {
+    reader: Option<&'a identity::Did>,
+    owner: &'a str,
+    scope: &'a crate::session::origin::SessionScope,
+    selected: &'a HydrationSelection,
+    native: &'a [ToolFact],
+}
+
+/// Refines `FileInventory.copiedFacts`: a self-contained fork's inherited
+/// facts are the projections in its own session, owned by its observed owner,
+/// for tools its selected headers name but its canonical closure does not
+/// select. Another owner's projection of an unselected tool is unselected work.
+async fn load_copied_facts(
+    txn: &ConfigApplyTxn<'_>,
+    input: CopiedFactsInput<'_>,
+) -> Result<Vec<(ToolFact, Projection)>> {
+    let session_id = &input.scope.session_id;
+    let requester = input
+        .scope
+        .requester_did
+        .as_deref()
+        .context("file inventory session omitted its requester")?;
+    let retained = input
+        .selected
+        .documents
+        .iter()
+        .filter(|document| {
+            document.collection == SessionHydrationCollection::AgentMessage
+                && document.session_id == *session_id
+        })
+        .map(|document| document.doc_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let named = input
+        .selected
+        .headers
+        .iter()
+        .filter(|row| retained.contains(row.doc_id.as_str()))
+        .flat_map(|row| crate::session::message_tool_references(&row.message))
+        .filter(|tool| !input.native.iter().any(|fact| fact.tool_call_doc_id == *tool))
+        .collect::<std::collections::BTreeSet<_>>();
+    if named.is_empty() {
+        return Ok(Vec::new());
+    }
+    let response = txn
+        .execute_local_response(&format!(
+            r#"{{ ToolFileInventory(filter: {{ session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }} }}) {{
+                _docID tool_call_doc_id observation_doc_id request_doc_id node_did session_id requester_did changes verified_unchanged
+            }} }}"#,
+            escape_graphql_string(session_id),
+            escape_graphql_string(&input.scope.node_did),
+        ))
+        .await?;
+    let candidates = required_rows::<Projection>(&response, "ToolFileInventory")?
+        .into_iter()
+        .filter(|projection| named.contains(&projection.tool_call_doc_id))
+        .collect::<Vec<_>>();
+    let mut owned = Vec::new();
+    for chunk in candidates.chunks(query::owners::MAX_OWNER_OBSERVATIONS) {
+        let ids = chunk
+            .iter()
+            .map(|projection| projection.doc_id.clone())
+            .collect::<Vec<_>>();
+        let owners = if let Some(reader) = input.reader {
+            txn.document_owners_as(reader, "ToolFileInventory", &ids)
+                .await?
+        } else {
+            txn.document_owners("ToolFileInventory", &ids).await?
+        };
+        anyhow::ensure!(
+            owners.len() == ids.len() && owners.iter().zip(&ids).all(|(row, id)| row.doc_id == *id),
+            InventoryRejection("file inventory owner observation lost its projection binding")
+        );
+        owned.extend(
+            chunk
+                .iter()
+                .zip(owners)
+                .filter(|(_, row)| {
+                    row.owner
+                        .as_ref()
+                        .is_some_and(|owner| owner.as_str() == input.owner)
+                })
+                .map(|(projection, _)| projection.doc_id.clone()),
+        );
+    }
+    let copies = candidates
+        .into_iter()
+        .filter(|projection| owned.contains(&projection.doc_id))
+        .collect::<Vec<_>>();
+    let mut facts = Vec::with_capacity(copies.len());
+    for projection in &copies {
+        anyhow::ensure!(
+            copies
+                .iter()
+                .filter(|other| other.tool_call_doc_id == projection.tool_call_doc_id)
+                .count()
+                == 1
+                && !projection.doc_id.is_empty()
+                && !projection.request_doc_id.is_empty()
+                && projection.node_did == input.scope.node_did
+                && projection.session_id == *session_id
+                && projection.requester_did == requester
+                && if projection.verified_unchanged == Some(true) {
+                    projection.observation_doc_id.is_none() && projection.changes.is_empty()
+                } else {
+                    projection
+                        .observation_doc_id
+                        .as_ref()
+                        .is_some_and(|id| !id.is_empty())
+                        && !projection.changes.is_empty()
+                },
+            InventoryRejection("file inventory copy conflicts with its fork session")
+        );
+    }
+    for projection in copies {
+        let scope = FileImageScope {
+            node_did: projection.node_did.clone(),
+            session_id: projection.session_id.clone(),
+            requester_did: projection.requester_did.clone(),
+        };
+        facts.push((
+            ToolFact {
+                tool_call_doc_id: projection.tool_call_doc_id.clone(),
+                request_doc_id: projection.request_doc_id.clone(),
+                scope,
+                state: ToolCallState::Completed.as_str().to_owned(),
+                accepted_header_doc_id: None,
+                execution_generation: None,
+                capture: Capture::Unknown,
+                order: None,
+            },
+            projection,
+        ));
+    }
+    Ok(facts)
+}
+
+/// Coverage groups by the physical tool's own scope and request; an inherited
+/// entry's scope is the fork's, so it is joined through its tool.
 fn apply_request_coverage(facts: &[ToolFact], entries: &mut [FileInventoryEntry]) {
     let mut coverage = rapidhash::RapidHashMap::default();
     let key = |scope: &FileImageScope, request: &str| {
@@ -155,8 +314,10 @@ fn apply_request_coverage(facts: &[ToolFact], entries: &mut [FileInventoryEntry]
         }
     }
     for entry in entries {
-        entry.request_coverage = coverage
-            .get(&key(&entry.scope, &entry.request_doc_id))
+        entry.request_coverage = facts
+            .iter()
+            .find(|fact| fact.tool_call_doc_id == entry.tool_call_doc_id)
+            .and_then(|fact| coverage.get(&key(&fact.scope, &fact.request_doc_id)))
             .cloned();
     }
 }
@@ -313,6 +474,9 @@ impl FileInventorySnapshot {
                 .await?;
             }
         }
+        // A fork's inherited tools are covered only by the fork's own projection
+        // copies, owned by the fork session's current ACP owner.
+        let mut session_owner: Option<Option<String>> = None;
         let mut facts = Vec::new();
         let mut admissions = Vec::new();
         let mut entries = Vec::new();
@@ -349,11 +513,13 @@ impl FileInventorySnapshot {
                 session_id: document.session_id.clone(),
                 requester_did: document.requester_did.clone(),
             };
+            let inherited = document.session_id != request.session_id;
             let query = format!(
-                r#"{{ ToolFileInventory(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{
+                r#"{{ ToolFileInventory(filter: {{ tool_call_doc_id: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, limit: 2) {{
                     _docID tool_call_doc_id observation_doc_id request_doc_id node_did session_id requester_did changes verified_unchanged
                 }} }}"#,
                 escape_graphql_string(&document.doc_id),
+                escape_graphql_string(&request.session_id),
             );
             let response = txn.execute_local_response(&query).await?;
             let mut projections = required_rows::<Projection>(&response, "ToolFileInventory")?;
@@ -374,7 +540,7 @@ impl FileInventorySnapshot {
                         && projection.tool_call_doc_id == document.doc_id
                         && projection.request_doc_id == request_doc_id
                         && projection.node_did == scope.node_did
-                        && projection.session_id == scope.session_id
+                        && projection.session_id == request.session_id
                         && projection.requester_did == scope.requester_did
                         && if projection.verified_unchanged == Some(true) {
                             projection.observation_doc_id.is_none() && projection.changes.is_empty()
@@ -396,24 +562,40 @@ impl FileInventorySnapshot {
                 } else {
                     txn.document_owners("ToolFileInventory", ids).await?
                 };
+                let expected_owner = if inherited {
+                    if session_owner.is_none() {
+                        session_owner = Some(
+                            observed_session_owner(txn, reader.as_ref(), &session.doc_id).await?,
+                        );
+                    }
+                    session_owner.clone().flatten()
+                } else {
+                    Some(agent_did.clone())
+                };
                 anyhow::ensure!(
                     owners.len() == 1
                         && owners[0].doc_id == projection.doc_id
-                        && owners[0]
-                            .owner
-                            .as_ref()
-                            .is_some_and(|owner| owner.as_str() == agent_did),
+                        && expected_owner.as_deref().is_some_and(|expected| {
+                            owners[0]
+                                .owner
+                                .as_ref()
+                                .is_some_and(|owner| owner.as_str() == expected)
+                        }),
                     InventoryRejection(
-                        "file inventory projection is not owned by its selected agent"
+                        "file inventory projection is not owned by its session's owner"
                     )
                 );
+                let entry_scope = FileImageScope {
+                    session_id: projection.session_id.clone(),
+                    ..scope.clone()
+                };
                 entries.extend(projection.changes.iter().map(|change| {
                     FileInventoryEntry {
                         request_coverage: None,
                         order: None,
                         tool_call_doc_id: document.doc_id.clone(),
                         request_doc_id: request_doc_id.clone(),
-                        scope: scope.clone(),
+                        scope: entry_scope.clone(),
                         projection_doc_id: projection.doc_id.clone(),
                         observation_doc_id: projection
                             .observation_doc_id
@@ -435,8 +617,8 @@ impl FileInventorySnapshot {
                 request_doc_id,
                 scope,
                 state: tool.lifecycle_state.as_str().to_owned(),
-                accepted_header_doc_id: tool.accepted_header_doc_id,
-                execution_generation: tool.execution_generation,
+                accepted_header_doc_id: Some(tool.accepted_header_doc_id),
+                execution_generation: Some(tool.execution_generation),
                 capture,
                 order: None,
             });
@@ -450,6 +632,56 @@ impl FileInventorySnapshot {
                 state: tool.lifecycle_state,
                 accepted: true,
             });
+        }
+        if session_owner.is_none() {
+            session_owner =
+                Some(observed_session_owner(txn, reader.as_ref(), &session.doc_id).await?);
+        }
+        if let Some(owner) = session_owner.flatten() {
+            let copied = load_copied_facts(
+                txn,
+                CopiedFactsInput {
+                    reader: reader.as_ref(),
+                    owner: &owner,
+                    scope: &scope,
+                    selected: &selected,
+                    native: &facts,
+                },
+            )
+            .await?;
+            for (fact, projection) in copied {
+                entries.extend(projection.changes.iter().map(|change| FileInventoryEntry {
+                    request_coverage: None,
+                    order: None,
+                    tool_call_doc_id: fact.tool_call_doc_id.clone(),
+                    request_doc_id: fact.request_doc_id.clone(),
+                    scope: fact.scope.clone(),
+                    projection_doc_id: projection.doc_id.clone(),
+                    observation_doc_id: projection
+                        .observation_doc_id
+                        .clone()
+                        .expect("validated image projection"),
+                    change: change.clone(),
+                }));
+                admissions.push(super::inventory_order::Admission {
+                    document: fact.tool_call_doc_id.clone(),
+                    request: fact.request_doc_id.clone(),
+                    scope: fact.scope.clone(),
+                    state: ToolCallState::Completed,
+                    accepted: true,
+                });
+                facts.push(ToolFact {
+                    capture: Capture::Observed {
+                        projection: Box::new(projection),
+                        owner: owner.clone(),
+                    },
+                    ..fact
+                });
+            }
+            let mut paired = facts.into_iter().zip(admissions).collect::<Vec<_>>();
+            paired.sort_by(|left, right| left.0.tool_call_doc_id.cmp(&right.0.tool_call_doc_id));
+            (facts, admissions) = paired.into_iter().unzip();
+            entries.sort_by(|left, right| left.tool_call_doc_id.cmp(&right.tool_call_doc_id));
         }
         let actual = FileInventoryAdmission {
             request: request.clone(),
