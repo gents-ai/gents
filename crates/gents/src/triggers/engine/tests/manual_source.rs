@@ -447,11 +447,11 @@ async fn production_schedule_materialization_passes_final_exact_config_admission
 #[tokio::test]
 async fn production_materializer_rejects_incoherent_source_document_lineage() {
     let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
-    let snapshot =
-        snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
+    let agent = integration_test_agent("general");
+    let task = resolved_task_for_test("task-lineage-input", &agent.agent_did, "body");
+    let snapshot = snapshot_with_agent_and_schedules(agent, RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node, rx);
-    let task = resolved_task_for_test("task-lineage-input", "general", "body");
 
     let missing = materializer
         .materialize(
@@ -470,7 +470,10 @@ async fn production_materializer_rejects_incoherent_source_document_lineage() {
         )
         .await
         .expect_err("Event materialization without a source document must fail closed");
-    assert!(missing.to_string().contains("requires source_doc_id"));
+    assert!(
+        missing.to_string().contains("requires source_doc_id"),
+        "{missing:#}"
+    );
 
     let misplaced = materializer
         .materialize(
@@ -489,7 +492,7 @@ async fn production_materializer_rejects_incoherent_source_document_lineage() {
         )
         .await
         .expect_err("non-Event materialization must reject source document lineage");
-    assert!(misplaced.to_string().contains("Only Event"));
+    assert!(misplaced.to_string().contains("Only Event"), "{misplaced:#}");
 }
 
 #[tokio::test]

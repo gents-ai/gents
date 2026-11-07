@@ -28,14 +28,54 @@ async fn signed_materializer_agent(
     (db, user, access, Arc::new(agent))
 }
 
-async fn materializer_with_node() -> (Arc<defra_node::Node>, ProductionMaterializer) {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let snapshot =
-        snapshot_with_agent_and_schedules(spy_test_agent(), RapidHashMap::new());
-    let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
-    let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
-    (node, materializer)
+/// A materializer whose snapshot runs `trigger_ids` as event triggers of the
+/// signed fixture Agent, with that Agent's managed access for its own rows.
+async fn signed_trigger_materializer(
+    name: &str,
+    trigger_ids: &[&str],
+) -> (
+    crate::support::TestDb,
+    Arc<ResolvedAgent>,
+    crate::ConfigAccess,
+    ProductionMaterializer,
+) {
+    let (db, _user, _client_access, agent) = signed_materializer_agent(name).await;
+    let mut task = resolved_task("work");
+    task.agent_did = agent.agent_did.clone();
+    let triggers = trigger_ids
+        .iter()
+        .map(|id| {
+            (
+                (*id).to_owned(),
+                resolved_event_trigger_with_concurrency(id, task.clone(), ConcurrencyMode::Parallel),
+            )
+        })
+        .collect();
+    let snapshot = Arc::new(
+        ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+            agent.agent_did.clone(),
+            vec![agent.clone()],
+            RapidHashMap::new(),
+            RapidHashMap::new(),
+            RapidHashMap::new(),
+        )
+        .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+            event_triggers: triggers,
+            ..Default::default()
+        })
+        .with_node(agent.node.clone())
+        .with_local_did(agent.node_did().to_owned())
+        .activate(1, RapidHashMap::new()),
+    );
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(db.node.clone(), rx);
+    let access = crate::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.agent_did.parse().unwrap(),
+        agent.agent_identity.as_ref(),
+    )
+    .unwrap();
+    (db, agent, access, materializer)
 }
 
 #[tokio::test]
@@ -1120,8 +1160,9 @@ async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id(
     node.shutdown().await.unwrap();
 }
 
+/// Writes a runtime request as `access`'s Agent, which owns it.
 async fn create_request(
-    node: &defra_node::Node,
+    access: &crate::ConfigAccess,
     request_id: &str,
     node_did: &str,
     lifecycle_state: &str,
@@ -1131,7 +1172,7 @@ async fn create_request(
 ) {
     let request_id = escape_graphql_string(request_id);
     let node_did = escape_graphql_string(node_did);
-    let agent_did = escape_graphql_string(&spy_test_agent().agent_did);
+    let agent_did = escape_graphql_string(&access.actor_did().expect("Agent access"));
     let lifecycle_state = escape_graphql_string(lifecycle_state);
     let trigger_id = escape_graphql_string(trigger_id);
     let correlation = escape_graphql_string(correlation);
@@ -1162,12 +1203,10 @@ async fn create_request(
         }}"#,
         trigger_kind = trigger_kind.as_str(),
     );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "creating AgentRequest {request_id} failed: {:?}",
-        response.errors
-    );
+    access
+        .write("test.create_marker_request", &mutation)
+        .await
+        .unwrap_or_else(|error| panic!("creating AgentRequest {request_id} failed: {error:#}"));
 }
 
 #[tokio::test]
@@ -1380,14 +1419,15 @@ async fn group_marker_is_read_by_selected_held_agent_without_node_visibility() {
 
 #[tokio::test]
 async fn durable_group_marker_preserves_generation_owner_and_goal_mode() {
-    let (node, materializer) = materializer_with_node().await;
-    let owner = "did:key:z-marker-owner";
     let trigger = "review-\"verify";
+    let (_db, agent, access, materializer) =
+        signed_trigger_materializer("durable-group-marker", &[trigger, "other-trigger"]).await;
+    let owner = agent.node_did();
     let correlation = "run-\"42";
     let old = crate::triggers::engine::durable_fire_key("event-group", &["old-membership"]);
     let next = crate::triggers::engine::durable_fire_key("event-group", &["new-membership"]);
     create_request(
-        &node,
+        &access,
         &old,
         owner,
         "completed",
@@ -1417,7 +1457,7 @@ async fn durable_group_marker_preserves_generation_owner_and_goal_mode() {
         .unwrap());
     let goal = crate::goal::task_goal_fire_identity(owner, "old-task-name", &next);
     create_request(
-        &node,
+        &access,
         &goal.request_id,
         owner,
         "completed",
@@ -1490,11 +1530,12 @@ async fn materializer_rejects_workspace_from_different_explicit_owner() {
 
 #[tokio::test]
 async fn trigger_wide_gate_and_supersede_survive_kind_change_and_preserve_exclusion() {
-    let (node, materializer) = materializer_with_node().await;
-    let owner = "did:key:z-concurrency-owner";
     let trigger = "review-verify";
+    let (_db, agent, access, materializer) =
+        signed_trigger_materializer("trigger-wide-gate", &[trigger, "other-trigger"]).await;
+    let owner = agent.node_did();
     create_request(
-        &node,
+        &access,
         "old-schedule",
         owner,
         "pending",
@@ -1511,7 +1552,7 @@ async fn trigger_wide_gate_and_supersede_survive_kind_change_and_preserve_exclus
         "changing Trigger.source to Event cannot forget a prior Schedule request"
     );
     create_request(
-        &node,
+        &access,
         "new-event",
         owner,
         "pending",
@@ -1521,7 +1562,7 @@ async fn trigger_wide_gate_and_supersede_survive_kind_change_and_preserve_exclus
     )
     .await;
     create_request(
-        &node,
+        &access,
         "terminal",
         owner,
         "completed",
@@ -1531,7 +1572,7 @@ async fn trigger_wide_gate_and_supersede_survive_kind_change_and_preserve_exclus
     )
     .await;
     create_request(
-        &node,
+        &access,
         "foreign-owner",
         "other-owner",
         "pending",
@@ -1541,7 +1582,7 @@ async fn trigger_wide_gate_and_supersede_survive_kind_change_and_preserve_exclus
     )
     .await;
     create_request(
-        &node,
+        &access,
         "foreign-trigger",
         owner,
         "pending",
@@ -2022,11 +2063,13 @@ async fn unique_read_write_denial_does_not_leave_claimable_request() {
 
 async fn claimed_trigger_request(
     node: &Arc<defra_node::Node>,
+    agent: &ResolvedAgent,
+    access: &crate::ConfigAccess,
     request_id: &str,
     node_did: &str,
 ) -> crate::request::lifecycle::RequestLifecycle {
     create_request(
-        node,
+        access,
         request_id,
         node_did,
         "pending",
@@ -2035,25 +2078,26 @@ async fn claimed_trigger_request(
         request_id,
     )
     .await;
-    let result = node
+    let result = access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
             escape_graphql_string(request_id),
             crate::request::watcher::AGENT_REQUEST_FIELDS,
         ))
-        .await;
-    assert!(!result.has_errors(), "{:?}", result.errors);
+        .await
+        .unwrap();
     let row: gents_protocol::row::AgentRequestRow =
-        crate::store::graphql::first_row(&result, "AgentRequest")
-            .unwrap()
-            .unwrap();
+        serde_json::from_value(result["data"]["AgentRequest"][0].clone()).unwrap();
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
-        spy_test_agent().agent_did.as_str(),
+        agent.agent_did.as_str(),
         node_did,
         row.try_into().unwrap(),
         60,
     );
+    lifecycle
+        .bind_managed_agent(agent.agent_identity.as_ref())
+        .unwrap();
     assert_eq!(
         lifecycle.claim().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed
@@ -2062,7 +2106,7 @@ async fn claimed_trigger_request(
 }
 
 async fn canonical_partial_streams(
-    node: &defra_node::Node,
+    access: &crate::ConfigAccess,
     row: &gents_protocol::row::AgentRequestRow,
 ) -> (String, String) {
     use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
@@ -2071,15 +2115,15 @@ async fn canonical_partial_streams(
     use gents_protocol::output::StreamPayload;
 
     let doc_id = row.doc_id.as_deref().unwrap();
-    let result = node
+    let result = access
         .execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             escape_graphql_string(doc_id),
             AGENT_OUTPUT_SEGMENT_FIELDS,
         ))
-        .await;
-    assert!(!result.has_errors(), "{:?}", result.errors);
-    let segments = result.data.as_ref().unwrap()["AgentOutputSegment"]
+        .await
+        .unwrap();
+    let segments = result["data"]["AgentOutputSegment"]
         .as_array()
         .unwrap()
         .iter()
@@ -2120,16 +2164,20 @@ async fn canonical_partial_streams(
 
 #[tokio::test]
 async fn latest_only_revokes_live_execution_and_terminalizes_response_atomically() {
-    let (node, materializer) = materializer_with_node().await;
-    let node_did = "did:key:z-execution-owner";
+    let (db, agent, access, materializer) =
+        signed_trigger_materializer("latest-only-revokes", &["latest"]).await;
+    let node = db.node.clone();
+    let node_did = agent.node_did();
     for state in ["claimed", "processing"] {
         let request_id = format!("live-{state}");
-        let mut lifecycle = claimed_trigger_request(&node, &request_id, node_did).await;
-        let writer = crate::request::streaming::DefraStreamWriter::new(
+        let mut lifecycle =
+            claimed_trigger_request(&node, &agent, &access, &request_id, node_did).await;
+        let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
             node.clone(),
-            node_did,
+            &lifecycle,
             std::time::Duration::ZERO,
-        );
+        )
+        .unwrap();
         if state == "processing" {
             lifecycle.begin_owned_execution(&writer).await.unwrap();
             let doc_id = lifecycle.request().doc_id.clone();
@@ -2163,7 +2211,7 @@ async fn latest_only_revokes_live_execution_and_terminalizes_response_atomically
                 .unwrap(),
             1
         );
-        let result = node
+        let result = access
             .execute(&format!(
                 r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{
@@ -2172,9 +2220,9 @@ async fn latest_only_revokes_live_execution_and_terminalizes_response_atomically
             }}
         }}"#
             ))
-            .await;
-        assert!(!result.has_errors(), "{:?}", result.errors);
-        let data = result.data.as_ref().unwrap();
+            .await
+            .unwrap();
+        let data = &result["data"];
         assert_eq!(data["AgentRequest"][0]["lifecycle_state"], "superseded");
         let terminal: gents_protocol::row::AgentRequestRow =
             serde_json::from_value(data["AgentRequest"][0].clone()).unwrap();
@@ -2184,7 +2232,7 @@ async fn latest_only_revokes_live_execution_and_terminalizes_response_atomically
             Some(gents_protocol::output::TerminalOutput::NoMessage)
         );
         if state == "processing" {
-            let (text, reasoning) = canonical_partial_streams(&node, &terminal).await;
+            let (text, reasoning) = canonical_partial_streams(&access, &terminal).await;
             assert_eq!(text, "durable partial text");
             assert_eq!(reasoning, "durable reasoning");
         }
