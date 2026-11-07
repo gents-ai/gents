@@ -75,8 +75,8 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         creation_policy: "git_worktree_diff".into(),
         adapter: "git_worktree".into(),
         owner_node_did: did.into(),
-        writer_principal: did.into(),
-        integrator_principal: did.into(),
+        writer_principal: agent_did.into(),
+        integrator_principal: agent_did.into(),
         instruction_manifest: "{}".into(),
         seal_hash: None,
         lifecycle_state: "ready".into(),
@@ -95,16 +95,54 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         provisioning_state: "ready".into(),
         observed_tree_hash: String::new(),
     };
-    for mutation in [
-        crate::tools::workspace::isolated_workspace_upsert_mutation(&workspace),
-        crate::tools::workspace::workspace_placement_upsert_mutation(
-            &placement,
-            "2026-09-01T00:00:00Z",
-        ),
-    ] {
-        let result = node.execute(&mutation).await;
-        assert!(!result.has_errors(), "{:?}", result.errors);
+    fn upserted_doc_id(response: &serde_json::Value, field: &str) -> anyhow::Result<String> {
+        let rows = crate::store::graphql::mutation_documents(response, field)?
+            .ok_or_else(|| anyhow::anyhow!("{field} omitted its document"))?;
+        anyhow::ensure!(rows.len() == 1, "{field} affected {} documents", rows.len());
+        Ok(rows[0]["_docID"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("{field} omitted _docID"))?
+            .to_owned())
     }
+    // The selected Agent publishes and reads its workspace and local placement.
+    access
+        .transact_write("test.workspace_recovery_workspace", |txn| {
+            let workspace = &workspace;
+            let placement = &placement;
+            Box::pin(async move {
+                let response = txn
+                    .execute(&crate::tools::workspace::isolated_workspace_upsert_mutation(
+                        workspace,
+                    ))
+                    .await?;
+                let workspace_doc = upserted_doc_id(&response, "upsert_IsolatedWorkspace")?;
+                txn.add_actor_relationship(
+                    "IsolatedWorkspace",
+                    &workspace_doc,
+                    "writer",
+                    &workspace.writer_principal.parse()?,
+                )
+                .await?;
+                let response = txn
+                    .execute(&crate::tools::workspace::workspace_placement_upsert_mutation(
+                        placement,
+                        "2026-09-01T00:00:00Z",
+                    ))
+                    .await?;
+                let placement_doc = upserted_doc_id(&response, "upsert_WorkspacePlacement")?;
+                txn.add_resource_relationship(
+                    "WorkspacePlacement",
+                    &placement_doc,
+                    "parent",
+                    "workspaces",
+                    &workspace_doc,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "workspace-recovery-parent",

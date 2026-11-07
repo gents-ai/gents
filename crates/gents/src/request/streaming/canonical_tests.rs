@@ -709,6 +709,48 @@ async fn publication_and_replay_read_only_the_selected_source() {
     drop(path);
 }
 
+/// Observes the request's published children with their session-parent markers.
+async fn published_children(
+    node: &Arc<EmbeddedNode>,
+    lifecycle: &RequestLifecycle,
+) -> serde_json::Value {
+    let request_doc_id = crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id);
+    let response = fixture_query(&fixture_access(node, lifecycle), &format!(
+        r#"{{
+            AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID parent_linked }}
+            AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID parent_linked }}
+            AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID parent_linked }}
+            AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc_id}" }} }}, limit: 1) {{
+                {}
+            }}
+        }}"#,
+        crate::request::watcher::AGENT_REQUEST_FIELDS,
+    )).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    response.data.unwrap()
+}
+
+fn child_ids(children: &serde_json::Value) -> Vec<String> {
+    ["AgentOutputSegment", "AgentToolCall", "AgentMessage"]
+        .iter()
+        .flat_map(|collection| children[*collection].as_array().unwrap().iter())
+        .map(|row| row["_docID"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+fn child_links(children: &serde_json::Value) -> Vec<bool> {
+    ["AgentOutputSegment", "AgentToolCall", "AgentMessage"]
+        .iter()
+        .flat_map(|collection| children[*collection].as_array().unwrap().iter())
+        .map(|row| row["parent_linked"].as_bool().unwrap())
+        .collect()
+}
+
+/// The publication transaction commits its rows together; their session parent
+/// grants follow as the detached child-relationship phase that the creator
+/// recovers (`Identity.SessionChild.recoverSessionChild`). A failure inside the
+/// transaction leaves nothing; a failure after it leaves committed, unlinked
+/// children that the next unfaulted attempt replays and links exactly once.
 #[tokio::test]
 async fn every_successful_publication_mutation_rolls_back_if_the_transaction_fails() {
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
@@ -725,33 +767,74 @@ async fn every_successful_publication_mutation_rolls_back_if_the_transaction_fai
             additional_params: None,
         })],
     };
-    let (node, path, lifecycle, _writer) = fixture("mutation-rollback").await;
-    let request_doc_id = crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id);
-    let rows = || async {
-        let response = fixture_query(&fixture_access(&node, &lifecycle), &format!(
-            r#"{{
-                AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }}
-                AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }}
-                AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }}
-                AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc_id}" }} }}, limit: 1) {{
-                    {}
-                }}
-            }}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
-        )).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        response.data.unwrap()
-    };
-    let (_, writes) =
-        crate::store::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
-            || publish_tool_turn_for_rollback_test(&node, &lifecycle, &message),
-            rows,
-        )
-        .await;
+    let mut current = fixture("mutation-rollback-0").await;
+    let mut transactional = None;
+    let mut index = 1;
+    loop {
+        let (node, _, lifecycle, _) = &current;
+        let before = published_children(node, lifecycle).await;
+        let (result, observed) =
+            crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+                Some(index),
+                publish_tool_turn_for_rollback_test(node, lifecycle, &message),
+            )
+            .await;
+        let after = published_children(node, lifecycle).await;
+        let error = match result {
+            Ok(published) => {
+                assert_eq!(observed, index - 1, "a committed attempt must not pass the injected position");
+                assert!(child_links(&after).iter().all(|linked| *linked));
+                assert_eq!(after["AgentMessage"][0]["_docID"], published.message_doc_id.as_str());
+                break;
+            }
+            Err(error) => error,
+        };
+        let detail = format!("{error:?}");
+        assert!(
+            detail.contains(&format!("injected failure after successful transaction mutation {index}"))
+                || detail.contains(&format!("InjectedMutationFailure {{ count: {index} }}")),
+            "unexpected failure at mutation {index}: {detail}"
+        );
+        assert_eq!(observed, index, "injection must fire exactly once");
+        if after == before {
+            assert!(
+                transactional.is_none(),
+                "mutation {index} rolled back after the publication transaction committed"
+            );
+        } else {
+            let committed = *transactional.get_or_insert(index - 1);
+            assert!(committed >= 3, "tool-bearing publication must have multiple writes");
+            let links = child_links(&after);
+            assert_eq!(links.len(), 3, "mutation {index}: the publication commits every child together");
+            assert!(
+                links.iter().any(|linked| !linked),
+                "mutation {index}: a failed relationship phase must leave a recoverable child"
+            );
+            let replayed = publish_tool_turn_for_rollback_test(node, lifecycle, &message)
+                .await
+                .unwrap();
+            let recovered = published_children(node, lifecycle).await;
+            assert!(child_links(&recovered).iter().all(|linked| *linked));
+            assert_eq!(child_ids(&recovered), child_ids(&after), "mutation {index}: replay adds no child");
+            assert_eq!(recovered["AgentRequest"], after["AgentRequest"]);
+            assert_eq!(
+                recovered["AgentMessage"][0]["_docID"],
+                replayed.message_doc_id.as_str()
+            );
+            let (node, path, _, _) = std::mem::replace(
+                &mut current,
+                fixture(&format!("mutation-rollback-{index}")).await,
+            );
+            node.shutdown().await.expect("shut down test node");
+            drop(path);
+        }
+        index += 1;
+    }
     assert!(
-        writes >= 3,
-        "tool-bearing publication must have multiple writes"
+        transactional.is_some(),
+        "tool-bearing publication must publish its session parent relationships"
     );
+    let (node, path, _, _) = current;
     node.shutdown().await.expect("shut down test node");
     drop(path);
 }
@@ -817,6 +900,31 @@ async fn recovery_receipt_fixture(
     (node, path, lifecycle, writer, observed, expiry)
 }
 
+async fn recovery_snapshot(
+    node: &Arc<EmbeddedNode>,
+    lifecycle: &RequestLifecycle,
+    doc_id: &str,
+) -> serde_json::Value {
+    let escaped = crate::store::graphql::escape_graphql_string(doc_id);
+    let response = fixture_query(&fixture_access(node, lifecycle), &format!(
+        r#"{{
+            AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ _docID parent_linked }}
+            AgentMessage(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ _docID parent_linked }}
+            AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ _docID parent_linked }}
+            AgentSession {{ _docID observation }}
+            AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ {} }}
+        }}"#,
+        crate::request::watcher::AGENT_REQUEST_FIELDS,
+    )).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    response.data.unwrap()
+}
+
+/// Recovery commits close, publication, generation swap and session refresh in
+/// one transaction; the published children's parent grants follow as the
+/// detached, creator-recovered relationship phase. A failure inside the
+/// transaction leaves nothing; a failure after it is converged by the caller's
+/// replay, which adds no transactional mutation.
 #[tokio::test]
 async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mutations() {
     use crate::request::lifecycle::{
@@ -824,58 +932,111 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
     };
     use crate::store::config_client::ConfigApplyTxn;
 
-    let (node, path, lifecycle, _writer, observed, expiry) =
-        recovery_receipt_fixture("recovery-mutation-rollback").await;
-    let access = fixture_access(&node, &lifecycle);
-    let doc_id = observed.doc_id.as_deref().unwrap();
-    let escaped = crate::store::graphql::escape_graphql_string(doc_id);
-    let snapshot = || async {
-        let response = fixture_query(&fixture_access(&node, &lifecycle), &format!(
-            r#"{{
-                AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ _docID }}
-                AgentMessage(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ _docID }}
-                AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ _docID }}
-                AgentSession {{ _docID observation }}
-                AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ {} }}
-            }}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
-        )).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        response.data
-    };
-    let before = snapshot().await;
-    let generation = observed.execution_generation.as_deref().unwrap();
-    let now = chrono::Utc::now();
-    let recover = || {
+    async fn recover(
+        node: &Arc<EmbeddedNode>,
+        lifecycle: &RequestLifecycle,
+        observed: &gents_protocol::row::AgentRequestRow,
+        expiry: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<RecoveryResult> {
         recover_expired_generation_with_access_for_test(
-            &access,
-            &observed,
-            generation,
-            &expiry,
+            &fixture_access(node, lifecycle),
+            observed,
+            observed.execution_generation.as_deref().unwrap(),
+            expiry,
             "recovery-atomicity-generation".into(),
             now,
             None,
             None,
         )
-    };
-    let (recovered, mutation_count) =
-        ConfigApplyTxn::assert_every_mutation_rolls_back(recover, snapshot).await;
-    assert_eq!(recovered, RecoveryResult::Won { published: 1 });
+        .await
+    }
+
+    let mut current = recovery_receipt_fixture("recovery-mutation-rollback-0").await;
+    let mut transactional = None;
+    let mut index = 1;
+    loop {
+        let (node, _, lifecycle, _, observed, expiry) = &current;
+        // Each fixture expires its own lease; recovery observes time after it.
+        let now = chrono::Utc::now();
+        let doc_id = observed.doc_id.as_deref().unwrap();
+        let before = recovery_snapshot(node, lifecycle, doc_id).await;
+        let (result, count) = ConfigApplyTxn::with_successful_mutation_failure_at(
+            Some(index),
+            recover(node, lifecycle, observed, expiry, now),
+        )
+        .await;
+        let after = recovery_snapshot(node, lifecycle, doc_id).await;
+        let error = match result {
+            Ok(recovered) => {
+                assert_eq!(count, index - 1, "a committed attempt must not pass the injected position");
+                assert_eq!(recovered, RecoveryResult::Won { published: 1 });
+                assert!(child_links(&after).iter().all(|linked| *linked));
+                assert_ne!(
+                    after["AgentSession"], before["AgentSession"],
+                    "successful recovery must update the session observation"
+                );
+                let (replay, writes) = ConfigApplyTxn::with_successful_mutation_failure_at(
+                    None,
+                    recover(node, lifecycle, observed, expiry, now),
+                )
+                .await;
+                assert_eq!(replay.unwrap(), RecoveryResult::Won { published: 1 });
+                assert_eq!(writes, 0);
+                assert_eq!(recovery_snapshot(node, lifecycle, doc_id).await, after);
+                break;
+            }
+            Err(error) => error,
+        };
+        let detail = format!("{error:?}");
+        assert!(
+            detail.contains(&format!("injected failure after successful transaction mutation {index}"))
+                || detail.contains(&format!("InjectedMutationFailure {{ count: {index} }}")),
+            "unexpected failure at mutation {index}: {detail}"
+        );
+        assert_eq!(count, index, "injection must fire exactly once");
+        if after == before {
+            assert!(
+                transactional.is_none(),
+                "mutation {index} rolled back after the recovery transaction committed"
+            );
+        } else {
+            let committed = *transactional.get_or_insert(index - 1);
+            assert!(
+                committed >= 4,
+                "recovery must close, publish, swap generation and refresh the session"
+            );
+            assert_ne!(after["AgentSession"], before["AgentSession"]);
+            assert!(
+                child_links(&after).iter().any(|linked| !linked),
+                "mutation {index}: a failed relationship phase must leave a recoverable child"
+            );
+            let (replay, writes) = ConfigApplyTxn::with_successful_mutation_failure_at(
+                None,
+                recover(node, lifecycle, observed, expiry, now),
+            )
+            .await;
+            assert_eq!(replay.unwrap(), RecoveryResult::Won { published: 1 });
+            assert!(writes > 0, "mutation {index}: replay must link the pending children");
+            let recovered = recovery_snapshot(node, lifecycle, doc_id).await;
+            assert!(child_links(&recovered).iter().all(|linked| *linked));
+            assert_eq!(child_ids(&recovered), child_ids(&after), "mutation {index}: replay adds no child");
+            assert_eq!(recovered["AgentRequest"], after["AgentRequest"]);
+            assert_eq!(recovered["AgentSession"], after["AgentSession"]);
+            let (node, path, ..) = std::mem::replace(
+                &mut current,
+                recovery_receipt_fixture(&format!("recovery-mutation-rollback-{index}")).await,
+            );
+            node.shutdown().await.expect("shut down test node");
+            drop(path);
+        }
+        index += 1;
+    }
     assert!(
-        mutation_count >= 4,
-        "recovery must close, publish, swap generation and refresh the session"
+        transactional.is_some(),
+        "recovery must publish its children's session parent relationships"
     );
-    let committed = snapshot().await;
-    assert_ne!(
-        committed.as_ref().unwrap()["AgentSession"],
-        before.as_ref().unwrap()["AgentSession"],
-        "successful recovery must update the session observation"
-    );
-    let (replay, writes) =
-        ConfigApplyTxn::with_successful_mutation_failure_at(None, recover()).await;
-    assert_eq!(replay.unwrap(), RecoveryResult::Won { published: 1 });
-    assert_eq!(writes, 0);
-    assert_eq!(snapshot().await, committed);
+    let (node, path, ..) = current;
     node.shutdown().await.expect("shut down test node");
     drop(path);
 }
@@ -1528,17 +1689,13 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
         identity::Did::new(&lifecycle.request().node_did).unwrap(),
     )
     .grant_node_permission(
-        &identity::Did::new(lifecycle.request().requester_did.as_deref().unwrap()).unwrap(),
+        &lifecycle.actor_did().unwrap(),
         crate::store::config_client::NodePermission::DocumentDelete,
     )
     .await
     .unwrap();
-    // The requester holds DocumentDelete above; a Local access bound to it is the signed
-    // route, since the client-signed endpoint refuses ordinary mutations by design.
-    let deleted = crate::ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(lifecycle.request().requester_did.as_deref().unwrap()).unwrap(),
-    )
+    // The Agent created the header, so its own signed access removes it.
+    let deleted = fixture_access(&node, &lifecycle)
     .write("test.remove_imported_header", &format!(
             r#"mutation {{ delete_AgentMessage(filter: {{ _docID: {{ _eq: "{escaped_message}" }} }}) {{ _docID }} }}"#
         ))

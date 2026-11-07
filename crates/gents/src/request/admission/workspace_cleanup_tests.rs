@@ -23,6 +23,7 @@ pub(crate) struct Fixture {
     pub(crate) binding: WorkspaceBindingDoc,
     pub(crate) access: ConfigAccess,
     agent: Arc<dyn NodeIdentity>,
+    _workspace_dir: tempfile::TempDir,
     _home: crate::support::TestDb,
 }
 
@@ -46,18 +47,83 @@ impl Fixture {
             .unwrap();
         let access =
             ConfigAccess::local_managed_agent(node.clone(), agent_did, agent.as_ref()).unwrap();
-        // The workspace must exist before the request is claim-verified.
+        // Claim verification of a ReadWrite request loads the complete
+        // workspace and its local placement, as the workspace owner publishes them.
+        let workspace_dir = tempfile::tempdir().unwrap();
+        let workspace = crate::tools::workspace::IsolatedWorkspaceDoc {
+            path_capability: crate::tools::workspace::WorkspacePathCapability::exact_paths(vec![])
+                .unwrap(),
+            workspace_id: "cleanup-workspace".into(),
+            work_unit_id: "cleanup-work-unit".into(),
+            repository_id: "cleanup-repository".into(),
+            base_sha: "base".into(),
+            branch: "cleanup-branch".into(),
+            creation_policy: "git_worktree_diff".into(),
+            adapter: "git_worktree".into(),
+            owner_node_did: identity.did().into(),
+            writer_principal: agent.did().into(),
+            integrator_principal: agent.did().into(),
+            instruction_manifest: "{}".into(),
+            seal_hash: None,
+            lifecycle_state: "ready".into(),
+            caused_by_invocation_id: "cleanup-invocation".into(),
+            caused_by_correlation: "cleanup-correlation".into(),
+        };
+        let placement = crate::tools::workspace::WorkspacePlacementDoc {
+            workspace_id: workspace.workspace_id.clone(),
+            owner_node_did: identity.did().into(),
+            host_path: workspace_dir.path().to_string_lossy().into_owned(),
+            repository_placement_id: "cleanup-repository-placement".into(),
+            adapter: "git_worktree".into(),
+            adapter_version: "1".into(),
+            dirty_base: false,
+            dirty_base_summary: String::new(),
+            provisioning_state: "ready".into(),
+            observed_tree_hash: String::new(),
+        };
         let workspace_doc = access
             .transact_write("test.workspace_rejection_workspace", |txn| {
-                let agent_did = agent.did();
-                let node_did = identity.did();
+                let workspace = &workspace;
+                let placement = &placement;
                 Box::pin(async move {
-                    let response = txn.execute(&format!(
-                        r#"mutation {{ create_IsolatedWorkspace(input: {{workspace_id:"cleanup-workspace", owner_node_did:"{}", writer_principal:"{}", integrator_principal:"{}", lifecycle_state:"ready"}}) {{_docID}} }}"#,
-                        escape_graphql_string(node_did), escape_graphql_string(agent_did), escape_graphql_string(agent_did),
-                    )).await?;
-                    let doc = crate::store::graphql::created_doc_id(&response, "IsolatedWorkspace")?;
-                    txn.add_actor_relationship("IsolatedWorkspace", &doc, "writer", &agent_did.parse()?).await?;
+                    let response = txn
+                        .execute(&crate::tools::workspace::isolated_workspace_upsert_mutation(
+                            workspace,
+                        ))
+                        .await?;
+                    let doc = crate::store::graphql::mutation_documents(
+                        &response,
+                        "upsert_IsolatedWorkspace",
+                    )?
+                    .and_then(|rows| rows.first().and_then(|row| row["_docID"].as_str()).map(str::to_owned))
+                    .expect("workspace physical ID");
+                    txn.add_actor_relationship(
+                        "IsolatedWorkspace",
+                        &doc,
+                        "writer",
+                        &workspace.writer_principal.parse()?,
+                    )
+                    .await?;
+                    let response = txn
+                        .execute(&crate::tools::workspace::workspace_placement_upsert_mutation(
+                            placement,
+                            "2026-09-01T00:00:00Z",
+                        ))
+                        .await?;
+                    let placement_doc = crate::store::graphql::mutation_documents(
+                        &response,
+                        "upsert_WorkspacePlacement",
+                    )?
+                    .and_then(|rows| rows.first().and_then(|row| row["_docID"].as_str()).map(str::to_owned))
+                    .expect("placement physical ID");
+                    txn.add_resource_relationship(
+                        "WorkspacePlacement",
+                        &placement_doc,
+                        "parent",
+                        "workspaces",
+                        &doc,
+                    )
+                    .await?;
                     Ok::<_, anyhow::Error>(doc)
                 })
             })
@@ -108,6 +174,7 @@ impl Fixture {
             binding,
             access,
             agent,
+            _workspace_dir: workspace_dir,
             _home: home,
         };
         fixture.write_binding(&fixture.binding).await;
