@@ -616,25 +616,14 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
 
     let mock_a = MockModelEndpoint::start("default").unwrap();
     let mock_b = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        &db_a.node,
-        &did_a,
-        "backend-app-collection-a",
-        mock_a.endpoint(),
-    )
-    .await;
-    bind_default_agent_backend(
-        &db_b.node,
-        &did_b,
-        "backend-app-collection-b",
-        mock_b.endpoint(),
-    )
-    .await;
+    bind_default_agent_backend(&db_a, "backend-app-collection-a", mock_a.endpoint()).await;
+    bind_default_agent_backend(&db_b, "backend-app-collection-b", mock_b.endpoint()).await;
 
     let agent_a = Gents::from_default_agent_documents(
         db_a.node.clone(),
         identity_a.clone(),
         DocumentRuntimeOptions {
+            backend_admission: Some(db_a.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -645,6 +634,7 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
         db_b.node.clone(),
         identity_b.clone(),
         DocumentRuntimeOptions {
+            backend_admission: Some(db_b.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -868,17 +858,17 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
     let identity_a = db_a.node_identity.clone();
     let identity_b = db_b.node_identity.clone();
     let did_a = identity_a.did().to_string();
-    let did_b = identity_b.did().to_string();
 
     let mock_a = MockModelEndpoint::start("default").unwrap();
     let mock_b = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(&db_a.node, &did_a, "backend-soft-a", mock_a.endpoint()).await;
-    bind_default_agent_backend(&db_b.node, &did_b, "backend-soft-b", mock_b.endpoint()).await;
+    bind_default_agent_backend(&db_a, "backend-soft-a", mock_a.endpoint()).await;
+    bind_default_agent_backend(&db_b, "backend-soft-b", mock_b.endpoint()).await;
 
     let agent_a = Gents::from_default_agent_documents(
         db_a.node.clone(),
         identity_a.clone(),
         DocumentRuntimeOptions {
+            backend_admission: Some(db_a.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -889,6 +879,7 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
         db_b.node.clone(),
         identity_b.clone(),
         DocumentRuntimeOptions {
+            backend_admission: Some(db_b.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -1091,20 +1082,32 @@ async fn matching_document_packs_sync_over_explicit_app_collection_pairing() {
     let did_b = b.node_identity.did().to_string();
     let mock_a = MockModelEndpoint::start("default").unwrap();
     let mock_b = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(&a.node, &did_a, "fixture-a-backend", mock_a.endpoint()).await;
-    bind_default_agent_backend(&b.node, &did_b, "fixture-b-backend", mock_b.endpoint()).await;
+    bind_default_agent_backend(&a, "fixture-a-backend", mock_a.endpoint()).await;
+    bind_default_agent_backend(&b, "fixture-b-backend", mock_b.endpoint()).await;
     let options = || DocumentRuntimeOptions {
         tool_ceiling: ToolCeiling::meta_only(),
         ..Default::default()
     };
-    let runtime_a =
-        Gents::from_default_agent_documents(a.node.clone(), a.node_identity.clone(), options())
-            .await
-            .unwrap();
-    let runtime_b =
-        Gents::from_default_agent_documents(b.node.clone(), b.node_identity.clone(), options())
-            .await
-            .unwrap();
+    let runtime_a = Gents::from_default_agent_documents(
+        a.node.clone(),
+        a.node_identity.clone(),
+        gents::DocumentRuntimeOptions {
+            backend_admission: Some(a.home.backend_admission()),
+            ..options()
+        },
+    )
+    .await
+    .unwrap();
+    let runtime_b = Gents::from_default_agent_documents(
+        b.node.clone(),
+        b.node_identity.clone(),
+        gents::DocumentRuntimeOptions {
+            backend_admission: Some(b.home.backend_admission()),
+            ..options()
+        },
+    )
+    .await
+    .unwrap();
     let (stop_a, receiver_a) = tokio::sync::watch::channel(false);
     let (stop_b, receiver_b) = tokio::sync::watch::channel(false);
     let task_a = tokio::spawn(runtime_a.run(receiver_a));

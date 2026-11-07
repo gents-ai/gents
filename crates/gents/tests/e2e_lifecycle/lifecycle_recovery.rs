@@ -42,7 +42,8 @@ async fn grant_recovery_agent(
     doc_id: &str,
     agent_did: &str,
 ) {
-    gents::ConfigAccess::local(db.node.clone())
+    // The runtime root authored the recovery fixture rows and relates their Agent.
+    runtime_access(db)
         .add_actor_relationship(
             collection,
             doc_id,
@@ -53,12 +54,22 @@ async fn grant_recovery_agent(
         .expect("grant recovery fixture to selected Agent");
 }
 
+fn runtime_access(db: &crate::support::TestDb) -> gents::ConfigAccess {
+    gents::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(db.node_identity.did()).unwrap(),
+    )
+}
+
 async fn grant_recovery_request(db: &crate::support::TestDb, request_id: &str, agent_did: &str) {
     let request_id = gents::store::graphql::escape_graphql_string(request_id);
-    let response = db.node.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ _docID }} }}"#,
-    )).await;
-    let row = first_row::<serde_json::Value>(&response, "AgentRequest");
+    let response = runtime_access(db)
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ _docID }} }}"#,
+        ))
+        .await
+        .expect("read recovery fixture request as its author");
+    let row = response["data"]["AgentRequest"][0].clone();
     grant_recovery_agent(
         db,
         "AgentRequest",
@@ -173,7 +184,7 @@ async fn boot_running_recovery_bash(
     .await;
     grant_recovery_request(db, &request_id, agent_did).await;
     configure_agent_tools(
-        &db.node,
+        &db,
         db.node_identity.did(),
         agent_did,
         None,
@@ -198,6 +209,7 @@ async fn boot_running_recovery_bash(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: gents::ToolCeiling::readonly(),
             ..Default::default()
         },
@@ -658,7 +670,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
     prepared.backend.enable_dynamic_followups("continue");
     prepared.backend.enable_dynamic_followups(WAKE_INPUT_MARKER);
     configure_agent_tools(
-        &db.node,
+        &db,
         db.node_identity.did(),
         agent_did,
         None,
@@ -684,6 +696,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: gents::ToolCeiling::readonly(),
             ..Default::default()
         },
@@ -1937,7 +1950,7 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
     .await;
     grant_recovery_request(&db, "tool-notification-req", agent_did).await;
     configure_agent_tools(
-        &db.node,
+        &db,
         &node_did,
         agent_did,
         None,
@@ -1963,6 +1976,7 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: gents::ToolCeiling::readonly(),
             ..Default::default()
         },

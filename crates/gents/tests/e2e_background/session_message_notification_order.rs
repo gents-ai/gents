@@ -150,6 +150,7 @@ async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -166,8 +167,7 @@ async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
     )
     .expect("start resume backend");
     bind_agent_backend(
-        &db.node,
-        db.node_identity.did(),
+        &db,
         PARENT_AGENT_DID,
         RESUME_BACKEND_ID,
         resume_backend.endpoint(),
@@ -188,6 +188,7 @@ async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },

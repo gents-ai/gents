@@ -452,7 +452,10 @@ async fn signed_request_cannot_forge_another_requests_queue_slot() {
     let agent = Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
-        gents::DocumentRuntimeOptions::default(),
+        gents::DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
+            ..Default::default()
+        },
     )
     .await
     .unwrap();
@@ -532,7 +535,7 @@ async fn signed_agent_steer_passes_a_queued_turn_after_a_held_tool() {
         ],
     )
     .unwrap();
-    bind_agent_backend(&db.node, did, AGENT, BACKEND, backend.endpoint(), MODEL).await;
+    bind_agent_backend(&db, AGENT, BACKEND, backend.endpoint(), MODEL).await;
     let mut session = session_document(name, AGENT, &chrono::Utc::now().to_rfc3339());
     session.node_did = did.into();
     session.requester_did = Some(did.into());

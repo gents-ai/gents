@@ -8,7 +8,7 @@ use std::time::Duration;
 use gents::defra_node::Node as EmbeddedNode;
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
-use gents::{DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
+use gents::{DocumentRuntimeOptions, Gents, ToolCeiling};
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::Value;
@@ -356,8 +356,7 @@ async fn p2p_replicated_doc_fires_event_trigger() {
     let identity = Arc::new(test_identity("event-trigger-p2p-agent"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(
-        &db_agent.node,
-        identity.did(),
+        &db_agent,
         "backend-event-trigger-p2p",
         mock_endpoint.endpoint(),
     )
@@ -367,6 +366,7 @@ async fn p2p_replicated_doc_fires_event_trigger() {
         db_agent.node.clone(),
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db_agent.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },

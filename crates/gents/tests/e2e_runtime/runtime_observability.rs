@@ -127,6 +127,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             process_state_observer: Some(observer.clone()),
             runtime_snapshot_observer: Some(observer),

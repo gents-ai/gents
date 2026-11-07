@@ -378,6 +378,7 @@ async fn boot_goal_background_handoff_with_plans(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: gents::ToolCeiling::readonly(),
             ..Default::default()
         },

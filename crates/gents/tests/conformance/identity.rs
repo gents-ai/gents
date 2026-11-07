@@ -874,6 +874,11 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
                     ..
                 },
             )) if status.is_client_error() => "denied",
+            Err(gents::store::config_client::AgentSelfConfigPermissionError::Access(error))
+                if error.is_permission_denied() =>
+            {
+                "denied"
+            }
             Err(error) => return Err(error.into()),
         };
         assert_eq!(

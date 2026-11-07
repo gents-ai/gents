@@ -1,13 +1,9 @@
 use gents::request::lifecycle::ClaimOutcome;
 use gents::request::watcher::{AgentRequest, DefraWatcher};
-use gents::RequestLifecycle;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::support::{
-    create_request, create_request_with_valid_until, first_row, set_interrupt_requested_at,
-    test_db, AGENT_NAME, NODE_DID,
-};
+use crate::support::{first_row, test_db, AGENT_NAME, NODE_DID};
 
 type StatusRow = AgentRequestRow;
 
@@ -16,25 +12,40 @@ type DeadlineRow = AgentRequestRow;
 #[tokio::test]
 async fn claim_queues_when_earlier_processing_request_exists() {
     let db = test_db("lifecycle-dedup").await;
+    let actors = crate::support::agent_requests::RequestActors::new(&db).await;
     let session_id = uuid::Uuid::new_v4().to_string();
-    let earlier = chrono::Utc::now().to_rfc3339();
+    let earlier = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-    create_request(&db.node, "req-earlier", &session_id, "processing", &earlier).await;
+    actors
+        .create_request(
+            crate::support::agent_requests::RequestSeed::new("req-earlier", &session_id, &earlier)
+                .state("processing"),
+        )
+        .await;
 
-    let later = (chrono::Utc::now() + chrono::Duration::seconds(1)).to_rfc3339();
-    let doc_id = create_request(&db.node, "req-later", &session_id, "pending", &later).await;
+    let later = (chrono::Utc::now() + chrono::Duration::seconds(1))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let doc_id = actors
+        .create_request(
+            crate::support::agent_requests::RequestSeed::new("req-later", &session_id, &later)
+                .state("pending"),
+        )
+        .await;
     let request = AgentRequest {
         content: "second".into(),
-        ..crate::support::build_request(doc_id, "req-later".into(), session_id, later)
+        ..actors.build_request(doc_id, "req-later".into(), session_id, later)
     };
 
-    let mut lifecycle =
-        RequestLifecycle::new_with_node_did(db.node.clone(), AGENT_NAME, NODE_DID, request, 300);
+    let mut lifecycle = actors.lifecycle(
+        request,
+        300,
+        gents::request::lifecycle::ExecutionOrigin::Interactive,
+        "",
+    );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Queued);
 
-    let resp = db
-        .node
-        .execute(
+    let resp = actors
+        .query(
             r#"{
                 AgentRequest(
                     filter: { request_id: { _eq: "req-later" } },
@@ -50,33 +61,40 @@ async fn claim_queues_when_earlier_processing_request_exists() {
 #[tokio::test]
 async fn queued_request_interrupt_wins_before_queue_block() {
     let db = test_db("lifecycle-queued-interrupt").await;
+    let actors = crate::support::agent_requests::RequestActors::new(&db).await;
     let session_id = uuid::Uuid::new_v4().to_string();
     let earlier = "2026-03-23T00:00:00Z";
 
-    create_request(
-        &db.node,
-        "req-earlier-active",
-        &session_id,
-        "processing",
-        earlier,
-    )
-    .await;
+    actors
+        .create_request(
+            crate::support::agent_requests::RequestSeed::new(
+                "req-earlier-active",
+                &session_id,
+                earlier,
+            )
+            .state("processing"),
+        )
+        .await;
 
     let later = "2026-03-23T00:00:01Z";
-    let doc_id = create_request(
-        &db.node,
-        "req-later-interrupted",
-        &session_id,
-        "pending",
-        later,
-    )
-    .await;
+    let doc_id = actors
+        .create_request(
+            crate::support::agent_requests::RequestSeed::new(
+                "req-later-interrupted",
+                &session_id,
+                later,
+            )
+            .state("pending"),
+        )
+        .await;
     let interrupt_at = chrono::Utc::now().to_rfc3339();
-    set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
+    actors
+        .set_interrupt_requested_at(&doc_id, &interrupt_at)
+        .await;
 
     let request = AgentRequest {
         content: "second".into(),
-        ..crate::support::build_request(
+        ..actors.build_request(
             doc_id,
             "req-later-interrupted".into(),
             session_id,
@@ -84,13 +102,16 @@ async fn queued_request_interrupt_wins_before_queue_block() {
         )
     };
 
-    let mut lifecycle =
-        RequestLifecycle::new_with_node_did(db.node.clone(), AGENT_NAME, NODE_DID, request, 300);
+    let mut lifecycle = actors.lifecycle(
+        request,
+        300,
+        gents::request::lifecycle::ExecutionOrigin::Interactive,
+        "",
+    );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Interrupted);
 
-    let resp = db
-        .node
-        .execute(
+    let resp = actors
+        .query(
             r#"{
                 AgentRequest(
                     filter: { request_id: { _eq: "req-later-interrupted" } },
@@ -109,47 +130,51 @@ async fn queued_request_interrupt_wins_before_queue_block() {
 #[tokio::test]
 async fn queued_request_valid_until_wins_before_queue_block() {
     let db = test_db("lifecycle-queued-valid-until").await;
+    let actors = crate::support::agent_requests::RequestActors::new(&db).await;
     let session_id = uuid::Uuid::new_v4().to_string();
     let earlier = "2026-03-23T00:00:00Z";
 
-    create_request(
-        &db.node,
-        "req-earlier-active",
-        &session_id,
-        "processing",
-        earlier,
-    )
-    .await;
+    actors
+        .create_request(
+            crate::support::agent_requests::RequestSeed::new(
+                "req-earlier-active",
+                &session_id,
+                earlier,
+            )
+            .state("processing"),
+        )
+        .await;
 
     let later = "2026-03-23T00:00:01Z";
-    let expired_at = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
-    let doc_id = create_request_with_valid_until(
-        &db.node,
-        "req-later-expired",
-        &session_id,
-        "pending",
-        later,
-        Some(&expired_at),
-    )
-    .await;
+    let expired_at = (chrono::Utc::now() - chrono::Duration::seconds(1))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let doc_id = actors
+        .create_request(
+            crate::support::agent_requests::RequestSeed::new(
+                "req-later-expired",
+                &session_id,
+                later,
+            )
+            .state("pending")
+            .valid_until(Some(&expired_at)),
+        )
+        .await;
 
     let request = AgentRequest {
         content: "second".into(),
-        ..crate::support::build_request(
-            doc_id,
-            "req-later-expired".into(),
-            session_id,
-            later.into(),
-        )
+        ..actors.build_request(doc_id, "req-later-expired".into(), session_id, later.into())
     };
 
-    let mut lifecycle =
-        RequestLifecycle::new_with_node_did(db.node.clone(), AGENT_NAME, NODE_DID, request, 300);
+    let mut lifecycle = actors.lifecycle(
+        request,
+        300,
+        gents::request::lifecycle::ExecutionOrigin::Interactive,
+        "",
+    );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Expired);
 
-    let resp = db
-        .node
-        .execute(
+    let resp = actors
+        .query(
             r#"{
                 AgentRequest(
                     filter: { request_id: { _eq: "req-later-expired" } },
@@ -164,26 +189,36 @@ async fn queued_request_valid_until_wins_before_queue_block() {
 #[tokio::test]
 async fn same_timestamp_queue_order_uses_request_id_tie_break() {
     let db = test_db("lifecycle-same-timestamp-order").await;
+    let actors = crate::support::agent_requests::RequestActors::new(&db).await;
     let session_id = uuid::Uuid::new_v4().to_string();
     let created_at = "2026-03-23T00:00:00Z";
-    let first_doc_id = create_request(&db.node, "req-a", &session_id, "pending", created_at).await;
-    let second_doc_id = create_request(&db.node, "req-b", &session_id, "pending", created_at).await;
+    let first_doc_id = actors
+        .create_request(
+            crate::support::agent_requests::RequestSeed::new("req-a", &session_id, created_at)
+                .state("pending"),
+        )
+        .await;
+    let second_doc_id = actors
+        .create_request(
+            crate::support::agent_requests::RequestSeed::new("req-b", &session_id, created_at)
+                .state("pending"),
+        )
+        .await;
 
     let second_request = AgentRequest {
         content: "second".into(),
-        ..crate::support::build_request(
+        ..actors.build_request(
             second_doc_id,
             "req-b".into(),
             session_id.clone(),
             created_at.into(),
         )
     };
-    let mut second_lifecycle = RequestLifecycle::new_with_node_did(
-        db.node.clone(),
-        AGENT_NAME,
-        NODE_DID,
+    let mut second_lifecycle = actors.lifecycle(
         second_request,
         300,
+        gents::request::lifecycle::ExecutionOrigin::Interactive,
+        "",
     );
     assert_eq!(
         second_lifecycle.claim().await.unwrap(),
@@ -192,14 +227,13 @@ async fn same_timestamp_queue_order_uses_request_id_tie_break() {
 
     let first_request = AgentRequest {
         content: "first".into(),
-        ..crate::support::build_request(first_doc_id, "req-a".into(), session_id, created_at.into())
+        ..actors.build_request(first_doc_id, "req-a".into(), session_id, created_at.into())
     };
-    let mut first_lifecycle = RequestLifecycle::new_with_node_did(
-        db.node.clone(),
-        AGENT_NAME,
-        NODE_DID,
+    let mut first_lifecycle = actors.lifecycle(
         first_request,
         300,
+        gents::request::lifecycle::ExecutionOrigin::Interactive,
+        "",
     );
     assert_eq!(
         first_lifecycle.claim().await.unwrap(),
@@ -209,6 +243,7 @@ async fn same_timestamp_queue_order_uses_request_id_tie_break() {
 #[tokio::test]
 async fn claim_rejects_an_agent_change_without_mutating_the_session() {
     let db = test_db("lifecycle-agent-pin").await;
+    let actors = crate::support::agent_requests::RequestActors::new(&db).await;
     let mutation = format!(
         r#"mutation {{
             session: create_AgentSession(input: {{
@@ -237,8 +272,8 @@ async fn claim_rejects_an_agent_change_without_mutating_the_session() {
     assert!(!response.has_errors(), "{:?}", response.errors);
 
     let doc_id = first_row::<crate::support::DocIdRow>(
-        &db.node
-            .execute(
+        &actors
+            .query(
                 r#"{
                     AgentRequest(filter: { request_id: { _eq: "req-switch" } }) { _docID }
                 }"#,
@@ -253,14 +288,17 @@ async fn claim_rejects_an_agent_change_without_mutating_the_session() {
         .await
         .unwrap()
         .expect("pending request");
-    let mut lifecycle =
-        RequestLifecycle::new_with_node_did(db.node.clone(), AGENT_NAME, NODE_DID, request, 300);
+    let mut lifecycle = actors.lifecycle(
+        request,
+        300,
+        gents::request::lifecycle::ExecutionOrigin::Interactive,
+        "",
+    );
     let error = lifecycle.claim().await.expect_err("agent switch must fail");
     assert!(error.to_string().contains("pinned to agent general"));
 
-    let request = db
-        .node
-        .execute(
+    let request = actors
+        .query(
             r#"{
                 AgentRequest(filter: { request_id: { _eq: "req-switch" } }) {
                     request_id
@@ -275,9 +313,8 @@ async fn claim_rejects_an_agent_change_without_mutating_the_session() {
         Some(RequestLifecycleState::Pending)
     );
 
-    let sessions = db
-        .node
-        .execute(
+    let sessions = actors
+        .query(
             r#"{
                 AgentSession(filter: { session_id: { _eq: "session-pinned" } }) { agent_did }
             }"#,
@@ -298,9 +335,10 @@ async fn claim_rejects_an_agent_change_without_mutating_the_session() {
 #[tokio::test]
 async fn claim_synthesizes_deadline_when_request_deadline_is_invalid() {
     let db = test_db("lifecycle-invalid-deadline").await;
+    let actors = crate::support::agent_requests::RequestActors::new(&db).await;
     let request_id = "req-invalid-deadline";
     let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
+    let created_at = crate::support::agent_requests::canonical_now();
     let invalid_deadline = "not-a-deadline";
     let escaped_session_id = gents::store::graphql::escape_graphql_string(&session_id);
     let mutation = format!(
@@ -334,8 +372,8 @@ async fn claim_synthesizes_deadline_when_request_deadline_is_invalid() {
     );
 
     let doc_id = first_row::<crate::support::DocIdRow>(
-        &db.node
-            .execute(
+        &actors
+            .query(
                 r#"{
                     AgentRequest(
                         filter: { request_id: { _eq: "req-invalid-deadline" } },
@@ -356,14 +394,17 @@ async fn claim_synthesizes_deadline_when_request_deadline_is_invalid() {
     assert_eq!(request.deadline.as_deref(), Some(invalid_deadline));
 
     let before_claim = chrono::Utc::now();
-    let mut lifecycle =
-        RequestLifecycle::new_with_node_did(db.node.clone(), AGENT_NAME, NODE_DID, request, 120);
+    let mut lifecycle = actors.lifecycle(
+        request,
+        120,
+        gents::request::lifecycle::ExecutionOrigin::Interactive,
+        "",
+    );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     let after_claim = chrono::Utc::now();
 
-    let resp = db
-        .node
-        .execute(
+    let resp = actors
+        .query(
             r#"{
                 AgentRequest(
                     filter: { request_id: { _eq: "req-invalid-deadline" } },

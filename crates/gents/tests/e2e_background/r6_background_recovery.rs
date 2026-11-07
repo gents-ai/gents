@@ -84,7 +84,7 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
         .backend
         .enable_dynamic_followups("start recovery background process");
     configure_agent_tools(
-        &db.node,
+        &db,
         &node_did,
         agent_did,
         None,
@@ -110,6 +110,7 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: gents::ToolCeiling::readonly(),
             ..Default::default()
         },

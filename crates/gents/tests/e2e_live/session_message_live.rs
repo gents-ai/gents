@@ -353,6 +353,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::readwrite(workspace.path()).with_command_timeout_secs(180),
             ..Default::default()
         },
@@ -3648,6 +3649,7 @@ async fn boot_document_agent(db: &TestDb, identity: Arc<dyn NodeIdentity>) -> Re
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -3673,6 +3675,7 @@ async fn boot_workspace_agent(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::readwrite(workspace)
                 .with_command_timeout_secs(BLOCKED_COMMAND_TIMEOUT_SECS),
             ..Default::default()

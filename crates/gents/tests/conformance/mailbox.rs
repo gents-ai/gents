@@ -71,6 +71,7 @@ async fn rust_mailbox_dismiss_owner_drives_only_lean_legal_transitions() {
         EmbeddedNode::builder()
             .enable_signing()
             .with_node_identity_did(gents::NodeIdentity::did(&identity))
+            .with_node_acp_enabled()
             .build()
             .await
             .expect("embedded node"),

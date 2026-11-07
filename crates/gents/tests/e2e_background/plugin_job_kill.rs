@@ -575,7 +575,10 @@ async fn paired_job(name: &str) -> (JobHarness, BootedAgent, TestDb, tempfile::T
     let agent_b = Gents::from_default_agent_documents(
         db_b.node.clone(),
         identity_b,
-        DocumentRuntimeOptions::default(),
+        gents::DocumentRuntimeOptions {
+            backend_admission: Some(db_b.home.backend_admission()),
+            ..Default::default()
+        },
     )
     .await
     .expect("build node B's runtime");
@@ -617,6 +620,7 @@ async fn paired_job(name: &str) -> (JobHarness, BootedAgent, TestDb, tempfile::T
         db_a.node.clone(),
         identity_a,
         DocumentRuntimeOptions {
+            backend_admission: Some(db_a.home.backend_admission()),
             plugin_home: Some(plugin_home.path().to_path_buf()),
             ..Default::default()
         },

@@ -4,7 +4,72 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
-use super::{first_optional_row, first_row};
+/// Snapshot readers run as a named actor: ACP-governed rows are visible only to
+/// their related actors. The raw node reader remains for unpoliced collections.
+pub trait SnapshotReader {
+    fn read_data(&self, query: &str) -> impl std::future::Future<Output = serde_json::Value>;
+}
+
+impl SnapshotReader for EmbeddedNode {
+    async fn read_data(&self, query: &str) -> serde_json::Value {
+        let response = self.execute(query).await;
+        assert!(
+            !response.has_errors(),
+            "snapshot query failed: {:?}",
+            response.errors
+        );
+        response.data.unwrap_or_default()
+    }
+}
+
+impl<T> SnapshotReader for std::sync::Arc<T>
+where
+    T: SnapshotReader + ?Sized,
+{
+    async fn read_data(&self, query: &str) -> serde_json::Value {
+        self.as_ref().read_data(query).await
+    }
+}
+
+impl SnapshotReader for gents::ConfigAccess {
+    async fn read_data(&self, query: &str) -> serde_json::Value {
+        let mut response = self.execute(query).await.expect("snapshot query as actor");
+        response["data"].take()
+    }
+}
+
+impl SnapshotReader for super::agent_requests::RequestActors {
+    async fn read_data(&self, query: &str) -> serde_json::Value {
+        self.agent_access.read_data(query).await
+    }
+}
+
+fn data_rows(data: &serde_json::Value, key: &str) -> Vec<serde_json::Value> {
+    data.get(key)
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn first_data_row<T>(data: &serde_json::Value, key: &str) -> T
+where
+    T: serde::de::DeserializeOwned,
+{
+    let row = data_rows(data, key)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("missing row for {key}"));
+    serde_json::from_value(row).unwrap_or_else(|err| panic!("decode {key} failed: {err}"))
+}
+
+fn first_optional_data_row<T>(data: &serde_json::Value, key: &str) -> Option<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    data_rows(data, key).into_iter().next().map(|row| {
+        serde_json::from_value(row).unwrap_or_else(|err| panic!("decode {key} failed: {err}"))
+    })
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestSnapshot {
@@ -83,7 +148,10 @@ struct RuntimeDiagnosticSnapshot {
     last_reconcile_error: String,
 }
 
-pub async fn fetch_request_snapshot(node: &EmbeddedNode, doc_id: &str) -> RequestSnapshot {
+pub async fn fetch_request_snapshot<R>(node: &R, doc_id: &str) -> RequestSnapshot
+where
+    R: SnapshotReader + ?Sized,
+{
     let doc_id = escape_graphql_string(doc_id);
     let query = format!(
         r#"{{
@@ -107,14 +175,14 @@ pub async fn fetch_request_snapshot(node: &EmbeddedNode, doc_id: &str) -> Reques
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
-    first_row::<AgentRequestRow>(&resp, "AgentRequest").into()
+    let data = node.read_data(&query).await;
+    first_data_row::<AgentRequestRow>(&data, "AgentRequest").into()
 }
 
-pub async fn fetch_request_lineage_snapshot(
-    node: &EmbeddedNode,
-    doc_id: &str,
-) -> RequestLineageSnapshot {
+pub async fn fetch_request_lineage_snapshot<R>(node: &R, doc_id: &str) -> RequestLineageSnapshot
+where
+    R: SnapshotReader + ?Sized,
+{
     let doc_id = escape_graphql_string(doc_id);
     let query = format!(
         r#"{{
@@ -128,19 +196,22 @@ pub async fn fetch_request_lineage_snapshot(
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
-    let row = first_row::<AgentRequestRow>(&resp, "AgentRequest");
+    let data = node.read_data(&query).await;
+    let row = first_data_row::<AgentRequestRow>(&data, "AgentRequest");
     RequestLineageSnapshot {
         caused_by_trigger_id: row.caused_by_trigger_id,
         caused_by_trigger_kind: row.caused_by_trigger_kind,
     }
 }
 
-pub async fn fetch_request_lineage_snapshot_by_tuple(
-    node: &EmbeddedNode,
+pub async fn fetch_request_lineage_snapshot_by_tuple<R>(
+    node: &R,
     trigger_id: &str,
     trigger_kind: &str,
-) -> Option<RequestLineageSnapshot> {
+) -> Option<RequestLineageSnapshot>
+where
+    R: SnapshotReader + ?Sized,
+{
     let trigger_id = escape_graphql_string(trigger_id);
     let trigger_kind = escape_graphql_string(trigger_kind);
     let query = format!(
@@ -160,10 +231,12 @@ pub async fn fetch_request_lineage_snapshot_by_tuple(
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
-    first_optional_row::<AgentRequestRow>(&resp, "AgentRequest").map(|row| RequestLineageSnapshot {
-        caused_by_trigger_id: row.caused_by_trigger_id,
-        caused_by_trigger_kind: row.caused_by_trigger_kind,
+    let data = node.read_data(&query).await;
+    first_optional_data_row::<AgentRequestRow>(&data, "AgentRequest").map(|row| {
+        RequestLineageSnapshot {
+            caused_by_trigger_id: row.caused_by_trigger_id,
+            caused_by_trigger_kind: row.caused_by_trigger_kind,
+        }
     })
 }
 
@@ -182,7 +255,10 @@ impl From<AgentRequestRow> for RequestSnapshotRaw {
     }
 }
 
-pub async fn fetch_request_snapshot_raw(node: &EmbeddedNode, doc_id: &str) -> RequestSnapshotRaw {
+pub async fn fetch_request_snapshot_raw<R>(node: &R, doc_id: &str) -> RequestSnapshotRaw
+where
+    R: SnapshotReader + ?Sized,
+{
     let doc_id = escape_graphql_string(doc_id);
     let query = format!(
         r#"{{
@@ -196,20 +272,23 @@ pub async fn fetch_request_snapshot_raw(node: &EmbeddedNode, doc_id: &str) -> Re
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
-    first_row::<AgentRequestRow>(&resp, "AgentRequest").into()
+    let data = node.read_data(&query).await;
+    first_data_row::<AgentRequestRow>(&data, "AgentRequest").into()
 }
 
 /// Fixture-only lookup: callers seed unique session labels; ambiguity fails
 /// instead of choosing a row. This is not a runtime scope/authorization
 /// selector.
-pub async fn fetch_session_snapshot(
-    node: &EmbeddedNode,
+pub async fn fetch_session_snapshot<R>(
+    node: &R,
     session_id: &str,
-) -> Option<gents_protocol::session::AgentSession> {
+) -> Option<gents_protocol::session::AgentSession>
+where
+    R: SnapshotReader + ?Sized,
+{
     let session_id = escape_graphql_string(session_id);
-    let response = node
-        .execute(&format!(
+    let data = node
+        .read_data(&format!(
             r#"{{
         AgentSession(filter: {{session_id: {{_eq: "{session_id}"}}}}, limit: 2) {{
             session_id node_did requester_did agent_did created_at closed_at tags
@@ -220,17 +299,7 @@ pub async fn fetch_session_snapshot(
     }}"#
         ))
         .await;
-    assert!(
-        !response.has_errors(),
-        "canonical session query: {:?}",
-        response.errors
-    );
-    let rows = response
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentSession"))
-        .and_then(|v| v.as_array())
-        .expect("session rows");
+    let rows = data_rows(&data, "AgentSession");
     assert!(
         rows.len() <= 1,
         "fixture expected one session label, found {}",

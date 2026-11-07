@@ -52,8 +52,7 @@ use support::snapshots::{
     fetch_session_snapshot, RequestLineageSnapshot, RequestSnapshot,
 };
 use support::{
-    build_request, create_request, create_request_with_signed_fields,
-    create_request_with_valid_until, first_optional_row, first_row, set_interrupt_requested_at,
+    build_request, first_optional_row, first_row, set_interrupt_requested_at,
     set_request_lifecycle_state, test_db, AGENT_NAME, BACKEND_ID, DEADLINE_SECS, NODE_DID,
 };
 
