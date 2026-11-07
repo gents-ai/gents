@@ -62,6 +62,9 @@ instance (s : State) (r : Request) (revision : AuthorizationRevision) : Decidabl
     (revokeAdmissible s r revision) := by
   unfold revokeAdmissible; infer_instance
 
+/-- Route removal here is the logical authorization transition. Physical
+transport teardown is asynchronous and has no guaranteed completion deadline;
+already delivered copies are outside the effect of revocation. -/
 def revoke (s : State) (r : Request) (revision : AuthorizationRevision) : State :=
   if revokeAdmissible s r revision then
     { s with
