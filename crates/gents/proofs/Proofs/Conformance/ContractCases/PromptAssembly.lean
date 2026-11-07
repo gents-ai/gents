@@ -1812,7 +1812,7 @@ def promptAssemblyReasoningSuffixCases : List PromptAssemblyReasoningSuffixCase 
   let unknown := checkpointRow none "unknown"
   let recovered : PromptAssembly.ClaudeMap.TaggedReplayRow :=
     { source := some (checkpointTag 5), physicalHeader := some "header",
-      blockIndices := [2, 3],
+      blockIndices := [0, 1],
       blocks := [.reasoning none [.text (utf8Bytes "finished") (some "sig-finished")],
         .text (utf8Bytes "partial answer")] }
   let recoveredWitness : PromptAssembly.ClaudeMap.ResolvedReplayEvidence :=
@@ -1823,7 +1823,12 @@ def promptAssemblyReasoningSuffixCases : List PromptAssemblyReasoningSuffixCase 
   let recoveredEvidence : PromptAssemblyClaudeCheckpointResolution :=
     { tag := checkpointTag 5, evidence := recoveredWitness }
   let recoveredOnly : PromptAssembly.ClaudeMap.TaggedReplayRow :=
-    { recovered with blockIndices := [2], blocks := recovered.blocks.take 1 }
+    { recovered with blockIndices := [0], blocks := recovered.blocks.take 1 }
+  let recoveredGap : PromptAssembly.ClaudeMap.TaggedReplayRow :=
+    { recoveredOnly with blockIndices := [2] }
+  let gapEvidence : PromptAssemblyClaudeCheckpointResolution :=
+    { recoveredEvidence with evidence := { recoveredWitness with
+      reasoning := PromptAssembly.ClaudeMap.originalReasoningWitness recoveredGap } }
   let laterBlock : PromptAssembly.ClaudeMap.TaggedReplayRow :=
     { source := shapeTwoBlockRow.source, physicalHeader := shapeTwoBlockRow.physicalHeader,
       blockIndices := [1],
@@ -1845,6 +1850,8 @@ def promptAssemblyReasoningSuffixCases : List PromptAssemblyReasoningSuffixCase 
       [recovered] [recoveredEvidence]
   , reasoningSuffixCase "recovered-stopped-reasoning-only" context claude .claudeMessages
       [recoveredOnly] [recoveredEvidence]
+  , reasoningSuffixCase "recovered-reasoning-after-omitted-block" context claude .claudeMessages
+      [recoveredGap] [gapEvidence]
   , reasoningSuffixCase "recovered-reasoning-only-without-stop-witness" context claude .claudeMessages
       [recoveredOnly] [{ recoveredEvidence with evidence := { recoveredEvidence.evidence with reasoning := [] } }]
   , reasoningSuffixCase "recovered-reasoning-only-with-foreign-issuer" context claude .claudeMessages

@@ -203,6 +203,7 @@ fn row_candidates(row: &TaggedAssistantRow) -> Vec<ReasoningCandidate<'_>> {
 struct TurnGroup<'a> {
     candidates: Vec<ReasoningCandidate<'a>>,
     ordinary: bool,
+    source_prefix: bool,
 }
 
 fn turn_groups(rows: &[TaggedAssistantRow]) -> Vec<TurnGroup<'_>> {
@@ -211,6 +212,7 @@ fn turn_groups(rows: &[TaggedAssistantRow]) -> Vec<TurnGroup<'_>> {
             let candidates = row_candidates(row);
             (!candidates.is_empty()).then(|| TurnGroup {
                 candidates,
+                source_prefix: row.block_indices.iter().copied().eq(0..row.content.len()),
                 ordinary: row.content.iter().any(|block| match block {
                     AssistantContent::Text(text) => !text.text.is_empty(),
                     AssistantContent::ToolCall(_) => true,
@@ -352,6 +354,7 @@ impl<'a> Selection<'a> {
             });
         !group.candidates.is_empty()
             && (self.wire == ReplayWire::Responses || group.ordinary || recovered)
+            && (!recovered || group.source_prefix)
             && group
                 .candidates
                 .iter()

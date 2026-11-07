@@ -1133,6 +1133,7 @@ theorem stripFirstReasoningRows_exact_candidates_of_valid (count : Nat)
 structure TurnGroup where
   candidates : List ReasoningCandidate
   ordinary : Bool
+  sourcePrefix : Bool
   deriving Repr
 
 def encodableOrdinary : CanonicalOutput.MessageBlock (List UInt8) → Bool
@@ -1144,7 +1145,9 @@ def turnGroups (rows : List TaggedReplayRow) : List TurnGroup :=
   rows.filterMap fun row =>
     match reasoningCandidates [row] with
     | [] => none
-    | group => some { candidates := group, ordinary := row.blocks.any encodableOrdinary }
+    | group => some { candidates := group
+                      , ordinary := row.blocks.any encodableOrdinary
+                      , sourcePrefix := row.blockIndices == List.range row.blocks.length }
 
 def groupCandidates (groups : List TurnGroup) : List ReasoningCandidate :=
   groups.flatMap (·.candidates)
@@ -1180,6 +1183,7 @@ def turnBase (issuer : ReplayIssuer) (wire : ReplayWire)
     | [evidence] => evidence.origin == .recoveredProvider && !evidence.complete
     | _ => false
   !group.candidates.isEmpty && (wire == .responses || group.ordinary || recovered) &&
+    (!recovered || group.sourcePrefix) &&
     group.candidates.all (validForReplayProjection issuer wire resolve candidates)
 
 def turnCaptured (resolve : ReplayTag → List ResolvedReplayEvidence)
