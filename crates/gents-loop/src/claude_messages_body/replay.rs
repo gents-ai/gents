@@ -342,8 +342,16 @@ impl<'a> Selection<'a> {
     }
 
     fn turn_base(&self, group: &TurnGroup<'_>) -> bool {
+        let recovered = group
+            .candidates
+            .first()
+            .and_then(|candidate| candidate.source)
+            .is_some_and(|tag| {
+                matches!(self.evidence(tag), [evidence]
+                if evidence.origin == ReplayOrigin::RecoveredProvider && !evidence.complete)
+            });
         !group.candidates.is_empty()
-            && (self.wire == ReplayWire::Responses || group.ordinary)
+            && (self.wire == ReplayWire::Responses || group.ordinary || recovered)
             && group
                 .candidates
                 .iter()
