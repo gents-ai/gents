@@ -221,9 +221,21 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 HookAction::Continue
             ));
             let session = hook.session_id().await.unwrap();
-            super::ensure_runtime_session(&node, &identity, &session)
+            // In this fixture the runtime identity is also the session's working
+            // Agent; Goal history is written and retired as that creator.
+            let agent_access = super::ensure_runtime_session(&node, &identity, &session)
                 .await
                 .unwrap();
+            let session_doc_id = agent_access
+                .execute(&format!(
+                    r#"{{AgentSession(filter: {{session_id: {{_eq: "{}"}}}}) {{_docID}}}}"#,
+                    crate::store::graphql::escape_graphql_string(&session)
+                ))
+                .await
+                .unwrap()["data"]["AgentSession"][0]["_docID"]
+                .as_str()
+                .unwrap()
+                .to_owned();
             let entry = &case["entry"];
             let entry_id = entry["doc"].as_u64().unwrap();
             let mut root_goals = BTreeMap::new();
@@ -293,12 +305,14 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     .creation_key
                 };
                 let input = json!({"goal_id":goal_id(identity.did(), &session, goal_identity), "creation_key": creation_key,
-                    "node_did":identity.did(), "session_id":session, "objective":"Original caller goal",
+                    "node_did":identity.did(), "session_id":session, "session_doc_id":session_doc_id,
+                    "agent_did":identity.did(), "creator_did":identity.did(), "requester_did":identity.did(),
+                    "parent_linked":true, "objective":"Original caller goal",
                     "status":version["status"], "assignment_root_request_doc_id":assignment["root"].as_u64().map(|root| &roots[&root]),
                     "tokens_used":317, "token_usage_baseline":0, "active_time_seconds":23,
                     "continuation_sequence":0, "updated_at":"2026-10-21T00:00:00Z"});
                 let doc = documents.get(&id).cloned();
-                let created = access.transact_write("test.goal_tool_history", |txn| {
+                let created = agent_access.transact_write("test.goal_tool_history", |txn| {
                     let doc=doc.clone();let input=input.clone();
                     Box::pin(async move {
                         if let Some(doc)=doc {
@@ -333,7 +347,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     crate::store::graphql::escape_graphql_string(identity.did()),crate::store::graphql::escape_graphql_string(&session))).await.unwrap();
             }
             for id in case["retire_documents"].as_array().unwrap() {
-                access
+                agent_access
                     .write(
                         "test.goal_tool_retire",
                         &format!(

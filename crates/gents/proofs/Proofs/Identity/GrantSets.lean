@@ -41,9 +41,11 @@ def GrantSet.name : GrantSet → String
 turn reads its configuration and session documents, writes its requests,
 outputs and tool calls, and links the documents it creates, all as its own
 signer, so no tool selection can be the removable source of these three.
-Session-history, goal and goal-create tool sources therefore add nothing
-beyond the baseline: removing those tools withdraws the tool surface, and
-document ACP still decides each document. Every other tool-derived
+Session-history and goal tool sources therefore add nothing beyond the
+baseline: removing those tools withdraws the tool surface, and document ACP
+still decides each document. Goal creation adds only `delete-document`, so a
+creator Agent can retire the Goals it owns
+(`Configuration.goal_creator_deletes_its_goal`). Every other tool-derived
 permission has the tool source as its only grant, so removing the tool
 removes the permission (`tool_removal_removes_permission`).
 
