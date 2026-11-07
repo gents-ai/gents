@@ -1688,6 +1688,42 @@ fn engine_style_pack_job_block_installs() {
 
 // --- Documents dependencies ---------------------------------------------
 
+#[test]
+fn captured_pack_variables_are_limited_to_referenced_values_and_resolved_once() {
+    let (_guard, root) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+    let path = root.join("pack_config.json");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    config["agents"][0]["description"] = json!("${LABEL}/${LABEL}/${ABSENT:-fallback}");
+    std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let (bytes, _) = crate::pack::archive::pack_dir(&root).unwrap();
+    let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
+    let calls = std::cell::Cell::new(0);
+    let (config, variables) = crate::pack::load_pack_config_with_variables(
+        archive.manifest(),
+        &crate::pack::PackInstallOptions {
+            node_did: OWNER.into(),
+        },
+        &|path| Ok(archive.asset(path)?.to_vec()),
+        &|name| {
+            calls.set(calls.get() + 1);
+            (name == "LABEL").then(|| "configured".to_owned())
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        config.agents[0].description.as_deref(),
+        Some("configured/configured/fallback")
+    );
+    assert_eq!(
+        variables,
+        BTreeMap::from([
+            ("ABSENT".to_owned(), None),
+            ("LABEL".to_owned(), Some("configured".to_owned())),
+        ])
+    );
+    assert_eq!(calls.get(), 2);
+}
+
 /// `dependent_fixture` rewired to depend on `dependee_fixture`, and
 /// `dependee_fixture` with the plugin `echo` when `dependee_plugin`; both
 /// Packed as an install reads them; a broken dependent plugin rejects the graph.
