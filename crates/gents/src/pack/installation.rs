@@ -81,7 +81,7 @@ struct RecordedDocument {
     created: bool,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct Record {
     doc_id: Option<String>,
     version: Option<String>,
@@ -93,6 +93,66 @@ struct Record {
     /// Missing legacy records default to explicit ownership.
     explicit: bool,
     plugin_store: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct InstalledDependencySnapshot {
+    record: Record,
+    documents: BTreeMap<(Collection, String), (String, Value)>,
+}
+
+async fn dependency_snapshot_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    coordinate: &str,
+    digest: &str,
+) -> Result<Option<InstalledDependencySnapshot>> {
+    let record = read_record(txn, owner, coordinate).await?;
+    if record.doc_id.is_none() || record.digest.as_deref() != Some(digest) {
+        return Ok(None);
+    }
+    let mut grouped: BTreeMap<Collection, Vec<&str>> = BTreeMap::new();
+    for document in record.documents.values() {
+        grouped
+            .entry(collection_named(&document.collection)?)
+            .or_default()
+            .push(&document.id);
+    }
+    let mut documents = BTreeMap::new();
+    for (collection, ids) in grouped {
+        let live = crate::store::config_client::read_desired_state_records_in_txn(
+            txn, collection, owner, &ids,
+        )
+        .await?;
+        anyhow::ensure!(
+            live.len() == ids.len(),
+            "installed dependency {coordinate} has missing configuration; reinstall it explicitly"
+        );
+        for (id, value) in live {
+            documents.insert((collection, id), value);
+        }
+    }
+    Ok(Some(InstalledDependencySnapshot { record, documents }))
+}
+
+impl InstalledDependencySnapshot {
+    fn config(&self, owner: &str) -> Result<PackConfig> {
+        let mut bundle = serde_json::Map::new();
+        bundle.insert("node".into(), json!({"node_did": owner}));
+        for ((collection, _), (_, value)) in &self.documents {
+            let field = collection
+                .dir_name()
+                .context("installed dependency cannot own a node document")?;
+            bundle
+                .entry(field.to_owned())
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .context("dependency configuration collection is not an array")?
+                .push(value.clone());
+        }
+        serde_json::from_value(Value::Object(bundle))
+            .context("decode installed dependency configuration")
+    }
 }
 
 #[derive(Debug, Default, Serialize)]
