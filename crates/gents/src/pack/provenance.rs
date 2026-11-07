@@ -251,6 +251,13 @@ mod ownership_tests {
     use serde_json::json;
 
     #[test]
+    fn pack_origins_require_a_full_coordinate() {
+        assert!(pack_origin_from_tags(&["gents:pack:game".into()]).is_err());
+        let tags = ["gents:pack:example/game".into()];
+        assert_eq!(pack_origin_from_tags(&tags).unwrap(), Some("example/game"));
+    }
+
+    #[test]
     fn document_ownership_matches_executable_model() {
         let cases = &crate::lean_vocab_test::lean_contract_snapshot().pack_document_ownership_cases;
         assert_eq!(cases.len(), 12);
