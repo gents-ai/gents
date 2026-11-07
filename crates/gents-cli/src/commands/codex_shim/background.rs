@@ -906,13 +906,10 @@ mod tests {
         assert_watcher_recovers_after_initial_observation("spawned-process", true, true).await;
     }
 
-    /// Job control authors as the node, so the node DID must be a registered
-    /// signing identity.
+    /// Job control authors as the node, whose fixture runtime key this
+    /// process holds.
     async fn job_test_state(dir: &std::path::Path) -> ShimState {
-        let mut state = super::super::turn_projection::tests::notification_test_state(dir).await;
-        let identity = gents::KeyIdentity::load_or_create(dir.join("actor.key"), None).unwrap();
-        state.node_did = Arc::from(gents::NodeIdentity::did(&identity));
-        state
+        super::super::turn_projection::tests::notification_test_state(dir).await
     }
 
     async fn seed_running_job(state: &ShimState, session: &str, call: &str) {

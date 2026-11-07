@@ -1,7 +1,5 @@
-use anyhow::Context as _;
 use clap::Parser;
 use gents::eval::checks::CheckRegistry;
-use gents::store::config_client::read_desired_state_record_in_txn;
 use gents::Collection;
 use tokio_util::sync::CancellationToken;
 
@@ -88,29 +86,21 @@ pub(crate) async fn accepted_job(fixture: &Fixture, job_id: &str) -> String {
 
 pub(crate) async fn delete_definition(fixture: &Fixture) {
     let owner = fixture.ctx.owner.as_str();
-    fixture
+    let deleted = fixture
         .ctx
         .access
         .transact_write("cli.optimization.test_delete_definition", |txn| {
             Box::pin(async move {
-                let (doc_id, _) = read_desired_state_record_in_txn(
+                crate::config_import::apply_delete_collection(
                     txn,
                     Collection::EvalDefinition,
                     owner,
-                    DEFINITION,
+                    &[DEFINITION.to_owned()],
                 )
-                .await?
-                .context("the fixture's eval definition")?;
-                txn.execute(&format!(
-                    r#"mutation {{ delete_{name}(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{ _docID }} }}"#,
-                    name = Collection::EvalDefinition.graphql_type(),
-                    doc_id = gents::store::graphql::escape_graphql_string(&doc_id),
-                ))
                 .await
-                .map(|_| ())
-                .map_err(anyhow::Error::from)
             })
         })
         .await
         .unwrap();
+    assert_eq!(deleted, 1, "the fixture's eval definition");
 }

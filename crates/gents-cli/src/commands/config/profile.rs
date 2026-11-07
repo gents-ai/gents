@@ -418,8 +418,8 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn profile_show_warns_when_an_xai_effort_will_not_be_sent() {
-        let owner = "did:key:owner";
-        let access = crate::shared::test_support::seed_unsent_xai_effort(owner).await;
+        let (access, owner) = crate::shared::test_support::seed_unsent_xai_effort().await;
+        let owner = owner.as_str();
         let mut row =
             super::super::crud::load_one(&access, super::super::crud::PROFILE_SPEC, owner, "grok")
                 .await
@@ -430,8 +430,19 @@ mod tests {
             .expect("warning");
         assert!(warning.contains("profile grok"), "{warning}");
     }
-    const DID: &str = "did:key:z6MkTestProfileAccounts";
+    const DID: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
     const CLAUDE: &str = "claude-subscription";
+
+    fn agent(name: &str) -> gents_protocol::agent_identity::AgentIdentityBinding {
+        crate::shared::test_support::fixture_agent_named(name)
+    }
+
+    /// The named fixture Agents' DIDs in DID order.
+    fn agent_dids<const N: usize>(names: [&str; N]) -> Vec<String> {
+        let mut dids: Vec<String> = names.iter().map(|name| agent(name).agent_did).collect();
+        dids.sort();
+        dids
+    }
 
     fn claude_sign_in(who: &str) -> gents::inference::auth::credential::OAuthCredential {
         gents::inference::auth::claude::credential_from_login_tokens(
@@ -474,13 +485,17 @@ mod tests {
     async fn seeded() -> (ConfigAccess, String, String) {
         use gents::inference::auth::credential::{set_account_enabled, store_sign_in};
         let node = std::sync::Arc::new(
-            crate::shared::test_support::node_builder()
+            crate::shared::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::local(node);
+        crate::shared::test_support::publish_test_node(&node).await;
+        let access = ConfigAccess::local_as(
+            node,
+            ::identity::Did::new(crate::caused_sessions::fixtures::FIXTURE_DID).unwrap(),
+        );
         for value in [
             backend(
                 "claude",
@@ -859,11 +874,11 @@ mod tests {
             ),
             (
                 gents::Collection::Agent,
-                json!({"node_did": DID, "agent_did": "x", "context_id": "context-x", "inference_profile_id": "p-original"}),
+                json!({"node_did": DID, "agent_did": agent("x").agent_did, "creation_nonce": agent("x").creation_nonce, "context_id": "context-x", "inference_profile_id": "p-original"}),
             ),
             (
                 gents::Collection::Agent,
-                json!({"node_did": DID, "agent_did": "y", "inference_profile_id": "p-original"}),
+                json!({"node_did": DID, "agent_did": agent("y").agent_did, "creation_nonce": agent("y").creation_nonce, "inference_profile_id": "p-original"}),
             ),
         ]
         .into_iter()
@@ -899,7 +914,7 @@ mod tests {
             output["account"],
             json!({"label": "Claude", "state": "enabled"})
         );
-        assert_eq!(output["agents"], json!(["x", "y"]));
+        assert_eq!(output["agents"], json!(agent_dids(["x", "y"])));
         assert_eq!(output["companions"], json!(["summ"]));
         assert_eq!(
             output["cost"],
@@ -942,7 +957,7 @@ mod tests {
             output["headline"],
             json!("Move profile p-original to label-b (used by 2 agents)")
         );
-        assert_eq!(output["agents"], json!(["x", "y"]));
+        assert_eq!(output["agents"], json!(agent_dids(["x", "y"])));
         assert_eq!(
             output["cost"],
             json!(gents::store::config_client::SWITCH_COST)

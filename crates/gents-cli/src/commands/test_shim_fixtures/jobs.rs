@@ -107,8 +107,8 @@ pub(crate) async fn seed_job_row(
 }
 
 /// A pending `local-self` request authored through the production request
-/// builder and signed by `node_did`'s registered identity, so readers that
-/// verify the owning request's admission accept the rows seeded under it.
+/// builder and signed by a managed Agent of the fixture runtime, so readers
+/// that verify the owning request's admission accept the rows seeded under it.
 async fn seed_signed_request(
     node: &EmbeddedNode,
     node_did: &str,
@@ -117,6 +117,7 @@ async fn seed_signed_request(
     created_at: &str,
 ) -> gents_protocol::row::AgentRequestRow {
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    let agent_did = crate::shared::test_support::fixture_agent().agent_did;
     let create = gents::build_signed_request(
         gents::RequestSpec::new(
             RequestPurpose::Normal,
@@ -124,13 +125,13 @@ async fn seed_signed_request(
                 request_id: request_id.into(),
                 node_did: node_did.into(),
                 requester_did: None,
-                agent_did: "test".into(),
+                agent_did: agent_did.clone(),
                 session_id: session_id.into(),
                 content: "test".into(),
                 execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
                 created_at: created_at.into(),
             },
-            AgentRequestAdmissionRecord::local_self(node_did),
+            AgentRequestAdmissionRecord::local_self(agent_did),
         ),
         gents::RequestSigner::RegisteredTarget,
     )

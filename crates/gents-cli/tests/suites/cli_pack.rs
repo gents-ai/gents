@@ -138,7 +138,7 @@ impl DependentHome {
             tempdir.path(),
             &["--node-name", node_name, "--home", home_arg],
         )?;
-        let owner_did = node_did_from_init(&initialized)?;
+        node_did_from_init(&initialized)?;
         run_cli_json(
             tempdir.path(),
             &[
@@ -159,7 +159,7 @@ impl DependentHome {
             "--registry",
             UNROUTABLE_REGISTRY,
             "--inference-slot",
-            &format!("worker={owner_did}:default-profile"),
+            &format!("worker={}", inference_profile_id_from_init(&initialized)?),
         ]
         .map(str::to_owned)
         .to_vec();
@@ -336,7 +336,7 @@ fn offline_pack_install_naming_an_unresolved_plugin_is_refused_before_writing() 
         scratch.path(),
         &["--node-name", "unresolved-plugin", "--home", home_arg],
     )?;
-    let owner_did = node_did_from_init(&initialized)?;
+    node_did_from_init(&initialized)?;
     let refusal = run_cli_failure_stderr(
         scratch.path(),
         &[
@@ -348,7 +348,7 @@ fn offline_pack_install_naming_an_unresolved_plugin_is_refused_before_writing() 
             "--registry",
             UNROUTABLE_REGISTRY,
             "--inference-slot",
-            &format!("worker={owner_did}:default-profile"),
+            &format!("worker={}", inference_profile_id_from_init(&initialized)?),
         ],
     )?;
     anyhow::ensure!(
@@ -464,7 +464,7 @@ fn wire_fixture_with(reviewed_job: bool, init_extra: &[&str]) -> Result<WireFixt
     let mut init_args = vec!["--node-name", "pack-wire", "--home", home_arg];
     init_args.extend_from_slice(init_extra);
     let initialized = run_init_json(scratch, &init_args)?;
-    let owner_did = node_did_from_init(&initialized)?;
+    node_did_from_init(&initialized)?;
     let agent = initialized["default_agent_did"]
         .as_str()
         .context("init output missing default_agent_did")?
@@ -502,7 +502,7 @@ fn wire_fixture_with(reviewed_job: bool, init_extra: &[&str]) -> Result<WireFixt
             &content_pack,
             vec![
                 "--inference-slot".to_owned(),
-                format!("worker={owner_did}:default-profile"),
+                format!("worker={}", inference_profile_id_from_init(&initialized)?),
             ],
         ),
     ] {

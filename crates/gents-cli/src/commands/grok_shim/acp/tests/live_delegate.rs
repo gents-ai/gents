@@ -1,8 +1,13 @@
 use super::*;
 
-async fn test_service_with_graphql(node: Arc<EmbeddedNode>, graphql: String) -> AcpService {
-    let identity_dir = tempfile::tempdir().expect("identity tempdir");
-    let identity = gents::KeyIdentity::load_or_create(identity_dir.path().join("agent.key"), None)
+/// `staging` holds the node's runtime key (`config`'s `actor.key`); the
+/// service's Node and Agent belong to that runtime.
+async fn test_service_with_graphql(
+    node: Arc<EmbeddedNode>,
+    graphql: String,
+    staging: &std::path::Path,
+) -> AcpService {
+    let identity = gents::KeyIdentity::load_or_create(staging.join("actor.key"), None)
         .expect("test signing identity");
     let node_did = gents::NodeIdentity::did(&identity).to_string();
     let actor = ::identity::Did::new(node_did.clone()).expect("fixture creator DID");
@@ -54,13 +59,13 @@ async fn test_service_with_graphql(node: Arc<EmbeddedNode>, graphql: String) -> 
 
 #[tokio::test]
 async fn delegate_streams_updates_live_before_the_response() {
-    let (_staging, config) = config().await;
+    let (staging, config) = config().await;
     gents::store::schema::ensure_runtime_schemas(config.node.as_ref())
         .await
         .expect("runtime schemas");
     let graphql = spawn_mock_graphql(config.node.clone()).await;
     let node = config.node.clone();
-    let service = test_service_with_graphql(node, graphql).await;
+    let service = test_service_with_graphql(node, graphql, staging.path()).await;
     let node_did = service.config.node_did.to_string();
 
     service

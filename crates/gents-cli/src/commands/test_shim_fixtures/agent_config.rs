@@ -20,103 +20,105 @@ pub(crate) async fn configure_runtime_agent(
 
     let agent_did = binding.agent_did.as_str();
     seed_test_agent_configuration(node, node_did, binding, agent_did, model, true).await;
-    gents::ConfigAccess::transact_local_write(node, None, "grok.runtime_fixture", |txn| {
-        Box::pin(async move {
-            use gents::store::config_client::read_desired_state_record_in_txn as read;
-            let (_, mut agent) = read(txn, Collection::Agent, node_did, agent_did)
-                .await?
-                .expect("fixture agent");
-            let profile_id = agent["inference_profile_id"]
-                .as_str()
-                .expect("fixture profile")
-                .to_owned();
-            let (_, mut profile) = read(txn, Collection::InferenceProfile, node_did, &profile_id)
-                .await?
-                .expect("fixture profile");
-            profile["backend_id"] = backend_id.into();
-            profile["model_name"] = model.into();
-            let tools_id = format!("{agent_did}:tools");
-            let context_id = format!("{agent_did}:context");
-            let mut tools = Tools {
-                tools_id: tools_id.clone(),
-                node_did: node_did.into(),
-                host: Some(HostTools {
-                    bash: Some(BashTools {
-                        mode: gents::BashMode::ReadOnly,
-                        read_only_commands: Some(vec!["sleep".into(), "printf".into()]),
-                        background_enabled: true,
+    runtime_access(node, node_did)
+        .transact_write("grok.runtime_fixture", |txn| {
+            Box::pin(async move {
+                use gents::store::config_client::read_desired_state_record_in_txn as read;
+                let (_, mut agent) = read(txn, Collection::Agent, node_did, agent_did)
+                    .await?
+                    .expect("fixture agent");
+                let profile_id = agent["inference_profile_id"]
+                    .as_str()
+                    .expect("fixture profile")
+                    .to_owned();
+                let (_, mut profile) =
+                    read(txn, Collection::InferenceProfile, node_did, &profile_id)
+                        .await?
+                        .expect("fixture profile");
+                profile["backend_id"] = backend_id.into();
+                profile["model_name"] = model.into();
+                let tools_id = format!("{agent_did}:tools");
+                let context_id = format!("{agent_did}:context");
+                let mut tools = Tools {
+                    tools_id: tools_id.clone(),
+                    node_did: node_did.into(),
+                    host: Some(HostTools {
+                        bash: Some(BashTools {
+                            mode: gents::BashMode::ReadOnly,
+                            read_only_commands: Some(vec!["sleep".into(), "printf".into()]),
+                            background_enabled: true,
+                            ..Default::default()
+                        }),
                         ..Default::default()
                     }),
                     ..Default::default()
-                }),
-                ..Default::default()
-            };
-            let target_id = format!("{agent_did}:self-target");
-            if agents_enabled {
-                tools.agents = Some(AgentTools {
-                    target_ids: vec![target_id.clone()],
-                    enabled: Some(true),
+                };
+                let target_id = format!("{agent_did}:self-target");
+                if agents_enabled {
+                    tools.agents = Some(AgentTools {
+                        target_ids: vec![target_id.clone()],
+                        enabled: Some(true),
+                    });
+                }
+                let context = AgentContext {
+                    context_id: context_id.clone(),
+                    node_did: node_did.into(),
+                    display_name: None,
+                    description: None,
+                    system_prompt: None,
+                    tools_id: Some(tools_id),
+                    compaction_id: None,
+                    skill_ids: Vec::new(),
+                    tags: Vec::new(),
+                };
+                agent["context_id"] = context_id.into();
+                let backend = serde_json::json!({
+                    "node_did": node_did,
+                    "backend_id": backend_id,
+                    "name": "grok runtime fixture",
+                    "provider_kind": "OpenAiCompatible",
+                    "openai_wire_api": "chat_completions",
+                    "endpoint": endpoint,
+                    "auth": {"kind":"unauthenticated"},
+                    "enabled": true
                 });
-            }
-            let context = AgentContext {
-                context_id: context_id.clone(),
-                node_did: node_did.into(),
-                display_name: None,
-                description: None,
-                system_prompt: None,
-                tools_id: Some(tools_id),
-                compaction_id: None,
-                skill_ids: Vec::new(),
-                tags: Vec::new(),
-            };
-            agent["context_id"] = context_id.into();
-            let backend = serde_json::json!({
-                "node_did": node_did,
-                "backend_id": backend_id,
-                "name": "grok runtime fixture",
-                "provider_kind": "OpenAiCompatible",
-                "openai_wire_api": "chat_completions",
-                "endpoint": endpoint,
-                "auth": {"kind":"unauthenticated"},
-                "enabled": true
-            });
-            let mut docs = vec![
-                (Collection::InferenceBackend, backend),
-                (Collection::InferenceProfile, profile),
-                (Collection::Tools, serde_json::to_value(tools)?),
-                (Collection::AgentContext, serde_json::to_value(context)?),
-                (Collection::Agent, agent),
-            ];
-            if agents_enabled {
-                docs.push((
-                    Collection::AgentTarget,
-                    serde_json::to_value(gents::AgentTargetDocument {
-                        target_id,
-                        node_did: node_did.into(),
-                        target_node_did: node_did.into(),
-                        agent_did: agent_did.into(),
-                        name: agent_did.into(),
-                        description: Some("self target for Grok control fixture".into()),
-                        tags: Vec::new(),
-                    })?,
-                ));
-            }
-            let plan = DesiredStateApplyPlan::new(
-                docs.into_iter()
-                    .map(|(collection, value)| DesiredStateApplyDocument {
-                        collection,
-                        add: value.clone(),
-                        update: value,
-                    })
-                    .collect(),
-            )?;
-            gents::store::config_client::apply_desired_state_plan(txn, &plan)
-                .await
-                .map(|_| ())
+                let mut docs = vec![
+                    (Collection::InferenceBackend, backend),
+                    (Collection::InferenceProfile, profile),
+                    (Collection::Tools, serde_json::to_value(tools)?),
+                    (Collection::AgentContext, serde_json::to_value(context)?),
+                    (Collection::Agent, agent),
+                ];
+                if agents_enabled {
+                    docs.push((
+                        Collection::AgentTarget,
+                        serde_json::to_value(gents::AgentTargetDocument {
+                            target_id,
+                            node_did: node_did.into(),
+                            target_node_did: node_did.into(),
+                            agent_did: agent_did.into(),
+                            name: agent_did.into(),
+                            description: Some("self target for Grok control fixture".into()),
+                            tags: Vec::new(),
+                        })?,
+                    ));
+                }
+                let plan = DesiredStateApplyPlan::new(
+                    docs.into_iter()
+                        .map(|(collection, value)| DesiredStateApplyDocument {
+                            collection,
+                            add: value.clone(),
+                            update: value,
+                        })
+                        .collect(),
+                )?;
+                gents::store::config_client::apply_desired_state_plan(txn, &plan)
+                    .await
+                    .map(|_| ())
+            })
         })
-    })
-    .await
-    .unwrap();
+        .await
+        .unwrap();
 }
 
 #[cfg(unix)]
@@ -129,14 +131,9 @@ pub(in crate::commands) async fn seed_test_agent_configuration(
     enabled: bool,
 ) {
     let agent_did = binding.agent_did.as_str();
-    gents::ensure_node(node, node_did)
-        .await
-        .expect("seed test principal");
-    gents::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "grok.test_agent_configuration",
-        |txn| {
+    crate::shared::test_support::publish_test_node_as(node, node_did).await;
+    runtime_access(node, node_did)
+        .transact_write("grok.test_agent_configuration", |txn| {
             Box::pin(async move {
                 use gents::store::config_client::{
                     apply_desired_state_plan, read_desired_state_record_in_txn,
@@ -199,8 +196,14 @@ pub(in crate::commands) async fn seed_test_agent_configuration(
                 )?;
                 apply_desired_state_plan(txn, &plan).await
             })
-        },
-    )
-    .await
-    .expect("seed canonical test agent configuration");
+        })
+        .await
+        .expect("seed canonical test agent configuration");
+}
+
+/// The fixture runtime's own local access, the actor that publishes fixture
+/// configuration.
+#[cfg(unix)]
+fn runtime_access(node: &Arc<EmbeddedNode>, node_did: &str) -> gents::ConfigAccess {
+    gents::ConfigAccess::local_as(node.clone(), ::identity::Did::new(node_did).unwrap())
 }

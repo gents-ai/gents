@@ -4527,12 +4527,14 @@ pub(crate) fn assert_lean_to_defradb_vocabulary_matches(spec: LeanVocabulary<'_>
 /// Mirrors the conformance build target and generator of `gents_lean_contract`.
 /// The proofs directory is anchored at compile time: the runtime
 /// `CARGO_MANIFEST_DIR` lookup in `gents_lean_contract::proofs_dir` is absent
-/// when this test binary runs outside cargo.
+/// when this test binary runs outside cargo. `gents-cli` compiles this file
+/// through `#[path]`, so the anchor names the `gents` crate as a sibling of
+/// whichever crate's manifest compiles it.
 const LEAN_CONTRACT_TARGET: &str = "Proofs.Conformance.Contracts:olean";
 const LEAN_CONTRACT_FILE: &str = "Proofs/Conformance/Contracts.lean";
 
 fn load_lean_contract_snapshot() -> LeanContractSnapshot {
-    let proofs_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("proofs");
+    let proofs_dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../gents/proofs"));
     let stdout = gents_lean_contract::run_prepared_generator(
         &proofs_dir,
         LEAN_CONTRACT_TARGET,

@@ -1,65 +1,64 @@
 use anyhow::{Context, Result};
 use gents::documents::SkillDocument;
 use gents::store::graphql::escape_graphql_string;
+use gents::Collection;
 use serde_json::{json, Value};
 
 use crate::cli::*;
 use crate::config_writes::ConfigAccess;
-use crate::{extract_mutation_doc_id, print_json, EXPORT_SKILL_FIELDS};
+use crate::{print_json, EXPORT_SKILL_FIELDS};
 
-fn gql_opt_string(name: &str, value: Option<&str>) -> String {
-    match value {
-        Some(value) => format!(r#"{name}: "{}""#, escape_graphql_string(value)),
-        None => format!("{name}: null"),
-    }
-}
-
-fn gql_string_list(values: &[String]) -> String {
-    let items = values
-        .iter()
-        .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("[{items}]")
-}
-
-/// On the upsert update path `null` clears a stale value that omitting it
-/// would leave.
+/// Applies `skill` through the desired-state owner, so a served endpoint
+/// signs it as the client. `null` fields clear stale values on update, and
+/// `created_at` is set only when the Skill is created.
 async fn upsert_skill(access: &ConfigAccess, skill: &SkillDocument) -> Result<String> {
-    let skill_id = escape_graphql_string(&skill.skill_id);
-    let tool_refs = if skill.tool_refs.is_empty() {
-        "tool_refs: null".to_string()
-    } else {
-        format!("tool_refs: {}", gql_string_list(&skill.tool_refs))
+    use gents::store::config_client::{
+        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
+        DesiredStateApplyPlan,
     };
-    let fields = vec![
-        gql_opt_string("node_did", Some(&skill.node_did)),
-        gql_opt_string("name", skill.name.as_deref()),
-        gql_opt_string("description", skill.description.as_deref()),
-        gql_opt_string("instructions", skill.instructions.as_deref()),
-        gql_opt_string("source_directory", skill.source_directory.as_deref()),
-        gql_opt_string("display_name", skill.display_name.as_deref()),
-        gql_opt_string("interface_json", skill.interface_json.as_deref()),
-        format!("enabled: {}", skill.enabled),
-        tool_refs,
-    ];
-    let mutable = fields.join(",\n                    ");
-    let created_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    let mutation = format!(
-        r#"mutation {{
-            upsert_Skill(
-                filter: {{ skill_id: {{ _eq: "{skill_id}" }} }},
-                add: {{
-                    skill_id: "{skill_id}",
-                    {mutable},
-                    created_at: "{created_at}"
-                }},
-                update: {{ {mutable} }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = access.write("cli.config.skill.upsert", &mutation).await?;
-    extract_mutation_doc_id(&response, "Skill")
+    let mut update = serde_json::to_value(skill)?;
+    let fields = update
+        .as_object_mut()
+        .context("Skill document is an object")?;
+    fields.remove("created_at");
+    if skill.tool_refs.is_empty() {
+        fields.insert("tool_refs".into(), Value::Null);
+    }
+    if skill.tags.is_empty() {
+        fields.insert("tags".into(), Value::Null);
+    }
+    let mut add = update.clone();
+    add["created_at"] = json!(chrono::Utc::now().to_rfc3339());
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::Skill,
+        add,
+        update,
+    }])?;
+    let (node_did, skill_id) = (skill.node_did.as_str(), skill.skill_id.as_str());
+    access
+        .transact_write("cli.config.skill.upsert", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                apply_desired_state_plan(txn, plan).await?;
+                let (doc_id, _) =
+                    read_desired_state_record_in_txn(txn, Collection::Skill, node_did, skill_id)
+                        .await?
+                        .context("the applied Skill is not readable")?;
+                Ok::<_, anyhow::Error>(doc_id)
+            })
+        })
+        .await
+}
+
+/// The Skill rows with `skill_id`, any owner.
+async fn find_skills(access: &ConfigAccess, skill_id: &str) -> Result<Vec<Value>> {
+    let skill_id = escape_graphql_string(skill_id);
+    let response = access
+        .execute(&format!(
+            r#"{{ Skill(filter: {{ skill_id: {{ _eq: "{skill_id}" }} }}) {{ {EXPORT_SKILL_FIELDS} }} }}"#
+        ))
+        .await?;
+    Ok(skill_rows(&response))
 }
 
 pub(super) async fn skill_add(args: SkillAddArgs) -> Result<()> {
@@ -142,17 +141,28 @@ pub(super) async fn skill_show(args: SkillShowArgs) -> Result<()> {
 
 pub(super) async fn skill_rm(args: SkillRefArgs) -> Result<()> {
     let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
-    let skill_id = escape_graphql_string(&args.skill_id);
-    let mutation = format!(
-        r#"mutation {{ delete_Skill(filter: {{ skill_id: {{ _eq: "{skill_id}" }} }}) {{ _docID }} }}"#
-    );
-    let response = access.write("cli.config.skill.delete", &mutation).await?;
-    let deleted = response
-        .get("data")
-        .and_then(|data| data.get("delete_Skill"))
-        .and_then(Value::as_array)
-        .map(|rows| rows.len())
-        .unwrap_or(0);
+    let mut deleted = 0;
+    for skill in find_skills(&access, &args.skill_id).await? {
+        let node_did = skill["node_did"]
+            .as_str()
+            .context("Skill row has no node_did")?
+            .to_owned();
+        let ids = [args.skill_id.clone()];
+        deleted += access
+            .transact_write("cli.config.skill.delete", |txn| {
+                let (node_did, ids) = (&node_did, &ids);
+                Box::pin(async move {
+                    crate::config_import::apply_delete_collection(
+                        txn,
+                        Collection::Skill,
+                        node_did,
+                        ids,
+                    )
+                    .await
+                })
+            })
+            .await?;
+    }
     if deleted == 0 {
         anyhow::bail!("no Skill document with skill_id {:?}", args.skill_id);
     }
@@ -162,24 +172,14 @@ pub(super) async fn skill_rm(args: SkillRefArgs) -> Result<()> {
 
 pub(super) async fn skill_set_enabled(args: SkillRefArgs, enabled: bool) -> Result<()> {
     let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
-    let skill_id = escape_graphql_string(&args.skill_id);
-    let mutation = format!(
-        r#"mutation {{
-            update_Skill(
-                filter: {{ skill_id: {{ _eq: "{skill_id}" }} }},
-                input: {{ enabled: {enabled} }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = access
-        .write("cli.config.skill.set_enabled", &mutation)
-        .await?;
-    let updated = response
-        .get("data")
-        .and_then(|data| data.get("update_Skill"))
-        .and_then(Value::as_array)
-        .map(|rows| rows.len())
-        .unwrap_or(0);
+    let mut updated = 0;
+    for row in find_skills(&access, &args.skill_id).await? {
+        let mut skill: SkillDocument =
+            serde_json::from_value(row).context("decoding the stored Skill")?;
+        skill.enabled = enabled;
+        upsert_skill(&access, &skill).await?;
+        updated += 1;
+    }
     if updated == 0 {
         anyhow::bail!("no Skill document with skill_id {:?}", args.skill_id);
     }

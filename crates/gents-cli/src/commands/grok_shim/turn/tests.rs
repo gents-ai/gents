@@ -135,7 +135,7 @@ async fn test_node() -> (tempfile::TempDir, Arc<EmbeddedNode>, String) {
     let binding = gents::store::identity::provision_agent_identity(&signer).unwrap();
     let agent_did = binding.agent_did.clone();
     let node = Arc::new(
-        crate::shared::test_support::node_builder()
+        crate::shared::test_support::fixture_node_builder()
             .data_path(tempdir.path().join("node"))
             .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
             .build()

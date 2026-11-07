@@ -331,9 +331,9 @@ mod tests {
         json!({
             "node": {"node_did": NODE},
             "agents": [
-                {"agent_did": "caller", "node_did": NODE, "context_id": "ctx", "inference_profile_id": "p"},
-                {"agent_did": "worker", "node_did": NODE, "inference_profile_id": "p"},
-                {"agent_did": "web", "node_did": NODE, "context_id": "ctx-web", "inference_profile_id": "p"},
+                {"agent_did": "caller", "node_did": NODE, "creation_nonce": "nonce", "context_id": "ctx", "inference_profile_id": "p"},
+                {"agent_did": "worker", "node_did": NODE, "creation_nonce": "nonce", "inference_profile_id": "p"},
+                {"agent_did": "web", "node_did": NODE, "creation_nonce": "nonce", "context_id": "ctx-web", "inference_profile_id": "p"},
             ],
             "contexts": [
                 {"context_id": "ctx", "node_did": NODE, "tools_id": "tools"},

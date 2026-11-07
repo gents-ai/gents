@@ -388,6 +388,7 @@ mod tests {
         json!({
             "agent_did": agent_did,
             "node_did": node_did,
+            "creation_nonce": "nonce",
             "context_id": context_id,
             "inference_profile_id": "profile",
         })

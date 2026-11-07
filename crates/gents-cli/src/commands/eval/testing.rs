@@ -56,6 +56,14 @@ impl Fixture {
         );
         let client_signing = evaluator.client_signing_capability().unwrap();
         home.set_evaluator(evaluator.clone(), client_signing.clone());
+        let admin = ConfigAccess::local_as(
+            home.node.clone(),
+            ::identity::Did::new(owner.clone()).unwrap(),
+        );
+        gents::store::identity::GrantSet::OperatorUser
+            .grant(&admin, &::identity::Did::new(evaluator.did()).unwrap())
+            .await
+            .unwrap();
         let access = home.client_access(evaluator.did()).unwrap();
         let pack = dirs.path().join("subject");
         write_pack(&pack);
@@ -70,14 +78,34 @@ impl Fixture {
         let binding =
             gents::store::identity::provision_agent_identity(home.identity.as_ref()).unwrap();
         let mut initial = vec![(Collection::Node, json!({"node_did": &owner}))];
-        initial.extend(documents(&owner, &binding));
+        let (client_documents, owner_documents): (Vec<_>, Vec<_>) =
+            documents(&owner).into_iter().partition(|(collection, _)| {
+                !matches!(collection, Collection::Tools | Collection::AgentContext)
+            });
+        initial.extend(client_documents);
         install(&ctx.access, initial).await;
+        // Tools and AgentContext are source-projected, so the Node owner writes
+        // them; the baseline Agent is installed with its recorded slot binding
+        // so optimization can prove the installed baseline.
+        install(&admin, owner_documents).await;
+        install_baseline(&admin, &owner, &pack, &binding).await;
+        set_default_agent(&ctx.access, &owner, &binding.agent_did).await;
         Self {
             ctx,
             pack,
             _home: home,
             _dirs: dirs,
         }
+    }
+
+    /// This home as a command sees it with no `gents server` running: its
+    /// configuration access is the embedded node rather than a served endpoint.
+    pub(crate) fn unserved(mut self) -> Self {
+        self.ctx.access = ConfigAccess::local_as(
+            self._home.node.clone(),
+            ::identity::Did::new(self.ctx.owner.clone()).unwrap(),
+        );
+        self
     }
 
     pub(crate) fn pack_arg(&self) -> String {
@@ -220,10 +248,7 @@ pub(crate) fn row<'a>(output: &'a str, first: &str, width: usize) -> Vec<&'a str
         .unwrap_or_else(|| panic!("no {width}-column row for {first} in\n{output}"))
 }
 
-fn documents(
-    owner: &str,
-    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
-) -> Vec<(Collection, Value)> {
+fn documents(owner: &str) -> Vec<(Collection, Value)> {
     let case = |case_id: &str, split: &str| {
         json!({
             "case_id": case_id,
@@ -300,18 +325,103 @@ fn documents(
                 "tools_id": "monitor-tools",
             }),
         ),
-        (
-            Collection::Agent,
-            json!({
-                "agent_did": binding.agent_did,
-                "creation_nonce": binding.creation_nonce,
-                "node_did": owner,
-                "display_name": "Monitor",
-                "context_id": "monitor-context",
-                "inference_profile_id": "local",
-            }),
-        ),
     ]
+}
+
+/// Installs the subject pack's Agent with its recorded slot binding, bound to
+/// the `local` profile, as the Node owner.
+async fn install_baseline(
+    owner_access: &ConfigAccess,
+    owner: &str,
+    pack: &Path,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+) {
+    let manifest: gents::pack::PackManifest =
+        serde_json::from_slice(&std::fs::read(pack.join("manifest.json")).unwrap()).unwrap();
+    let files: std::collections::BTreeMap<String, Vec<u8>> = gents::pack::declared_paths(&manifest)
+        .into_iter()
+        .map(|path| {
+            let bytes = std::fs::read(pack.join(&path)).unwrap();
+            (path, bytes)
+        })
+        .collect();
+    let read = |path: &str| {
+        files
+            .get(path)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("pack has no asset {path:?}"))
+    };
+    let digest = gents::pack::digest_declared_assets(&manifest, |path| {
+        files
+            .get(path)
+            .map(Vec::as_slice)
+            .ok_or_else(|| anyhow::anyhow!("pack has no asset {path:?}"))
+    })
+    .unwrap();
+    let authored = gents::pack::load_pack_authoring_config(
+        &manifest,
+        &gents::pack::PackInstallOptions {
+            node_did: owner.to_owned(),
+        },
+        &read,
+        &|_| None,
+    )
+    .unwrap();
+    let mut config = authored.documents.clone();
+    let mut agent = authored.agent("monitor").unwrap().clone();
+    let fields = agent.as_object_mut().unwrap();
+    fields.remove("agent_slot");
+    fields.insert("agent_did".into(), json!(binding.agent_did));
+    fields.insert("creation_nonce".into(), json!(binding.creation_nonce));
+    fields.insert("node_did".into(), json!(owner));
+    config.agents.push(serde_json::from_value(agent).unwrap());
+    let agent_bindings = std::collections::BTreeMap::from([("monitor".into(), binding.clone())]);
+    let config = gents::pack::BoundPackConfig {
+        installation_doc_id: None,
+        config,
+        agent_bindings: agent_bindings.clone(),
+    }
+    .bind_inference(
+        &manifest,
+        &std::collections::BTreeMap::from([("primary".into(), "local".into())]),
+    )
+    .unwrap();
+    let mut identity = gents::pack::PackIdentity::new(&manifest, digest, Vec::new());
+    identity.agent_bindings = agent_bindings;
+    gents::pack::install_pack_documents(
+        owner_access,
+        owner,
+        &identity,
+        &config,
+        gents::pack::DriftPolicy::Overwrite,
+    )
+    .await
+    .unwrap();
+}
+
+async fn set_default_agent(access: &ConfigAccess, owner: &str, agent_did: &str) {
+    access
+        .transact_write("cli.eval.test_default_agent", |txn| {
+            Box::pin(async move {
+                let (_, mut node) = gents::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    Collection::Node,
+                    owner,
+                    owner,
+                )
+                .await?
+                .expect("fixture Node");
+                node["default_agent_did"] = json!(agent_did);
+                let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                    collection: Collection::Node,
+                    add: node.clone(),
+                    update: node,
+                }])?;
+                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+            })
+        })
+        .await
+        .unwrap();
 }
 
 async fn install(access: &ConfigAccess, documents: Vec<(Collection, Value)>) {

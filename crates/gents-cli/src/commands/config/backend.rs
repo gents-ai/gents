@@ -268,7 +268,7 @@ mod tests {
     use super::*;
     use gents::inference::auth::credential::{set_account_enabled, store_sign_in};
 
-    const DID: &str = "did:key:z6MkTestBackendPool";
+    const DID: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
     const CLAUDE: &str = "claude-subscription";
 
     fn claude_sign_in(who: &str) -> gents::inference::auth::credential::OAuthCredential {
@@ -290,13 +290,17 @@ mod tests {
 
     async fn seeded() -> ConfigAccess {
         let node = std::sync::Arc::new(
-            crate::shared::test_support::node_builder()
+            crate::shared::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::local(node);
+        crate::shared::test_support::publish_test_node(&node).await;
+        let access = ConfigAccess::local_as(
+            node,
+            ::identity::Did::new(crate::caused_sessions::fixtures::FIXTURE_DID).unwrap(),
+        );
         for (id, kind, endpoint, auth) in [
             (
                 "claude",

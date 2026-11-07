@@ -193,7 +193,7 @@ pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> Result<
             check_id(&id)?;
             pack.require_new("tasks", "task_id", &id)?;
             anyhow::ensure!(
-                pack.has("agents", "agent_did", &agent),
+                pack.has("agents", "agent_slot", &agent),
                 "the pack has no agent {agent:?}; add it first"
             );
             let prompt = format!("tasks/{}/prompt.md", snake(&id));
@@ -201,7 +201,7 @@ pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> Result<
             pack.list("tasks")?.push(json!({
                 "task_id": id,
                 "display_name": title(&id),
-                "agent_did": agent,
+                "agent_did": gents::pack::agent_slot_reference(&agent),
                 "prompt_template": format!("./{prompt}"),
             }));
             Ok(())
@@ -284,12 +284,12 @@ fn super_snake(name: &str) -> String {
 
 fn add_agent(pack: &mut PackEdit, id: &str, slot: Option<&str>) -> Result<()> {
     check_id(id)?;
-    pack.require_new("agents", "agent_did", id)?;
+    pack.require_new("agents", "agent_slot", id)?;
     let slot = slot.map(str::to_owned).unwrap_or_else(|| snake(id));
     let prompt = format!("agents/{}/system_prompt.md", snake(id));
     pack.create_file(&prompt, format!("You are the {} agent.\n", title(id)))?;
     pack.list("agents")?.push(json!({
-        "agent_did": id,
+        "agent_slot": id,
         "display_name": title(id),
         "context_id": format!("{id}-context"),
         "inference_profile_id": format!("gents:inference-slot:{slot}"),
@@ -387,11 +387,12 @@ pub(crate) fn remove_part(args: PackRemovePartArgs) -> Result<()> {
     let id = args.id.as_str();
     match args.part {
         PackPart::Agent => {
-            let agent = pack.remove_row("agents", "agent_did", id)?;
+            let agent = pack.remove_row("agents", "agent_slot", id)?;
+            let reference = gents::pack::agent_slot_reference(id);
             anyhow::ensure!(
                 !pack.config.as_ref().is_some_and(|config| config["tasks"]
                     .as_array()
-                    .is_some_and(|tasks| tasks.iter().any(|task| task["agent_did"] == id))),
+                    .is_some_and(|tasks| tasks.iter().any(|task| task["agent_did"] == reference))),
                 "a task still runs agent {id:?}; remove it first"
             );
             if let Some(context_id) = agent["context_id"].as_str() {

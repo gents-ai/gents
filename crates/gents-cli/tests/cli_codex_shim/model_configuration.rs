@@ -207,7 +207,7 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let default_agent_did = format!("{node_did}:default");
+    let default_agent_did = agent_did_from_init(&init)?;
     let default_backend_id = default_backend_id(&node_did);
     let alt_model_name = format!("alt-model-{}", Uuid::new_v4().simple());
     let alt_model_selection = gents_model_selection_id(&default_backend_id, &alt_model_name);
@@ -312,8 +312,8 @@ async fn codex_shim_config_value_write_model_mutates_agent() -> Result<()> {
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let default_agent_did = format!("{node_did}:default");
-    let original_profile_id = format!("{node_did}:default-profile");
+    let default_agent_did = agent_did_from_init(&init)?;
+    let original_profile_id = inference_profile_id_from_init(&init)?;
     let alt_model_name = format!("mock-codex-shim-alt-model-{}", Uuid::new_v4().simple());
     let alt_endpoint = MockChatEndpoint::start(&alt_model_name, "irrelevant")?;
     let alt_backend_id = format!("alt-backend-{}", Uuid::new_v4().simple());
@@ -479,9 +479,9 @@ async fn codex_shim_config_value_write_rejects_unknown_model() -> Result<()> {
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let default_agent_did = format!("{node_did}:default");
+    let default_agent_did = agent_did_from_init(&init)?;
     let original_backend_id = format!("{node_did}:backend");
-    let original_profile_id = format!("{node_did}:default-profile");
+    let original_profile_id = inference_profile_id_from_init(&init)?;
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();

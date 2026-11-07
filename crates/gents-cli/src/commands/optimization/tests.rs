@@ -199,7 +199,7 @@ fn cli_tools_a_target_outside_the_pack_or_skills_are_refused() {
 
 #[tokio::test]
 async fn a_behavior_proposer_needs_a_served_home() {
-    let fixture = Fixture::new().await;
+    let fixture = Fixture::new().await.unserved();
     let pack = fixture.pack_arg();
     let proposer = format!(
         "agent:{}",

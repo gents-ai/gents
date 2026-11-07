@@ -2395,7 +2395,9 @@ mod tests {
             worker.execute("{ AgentRequest { _docID } }").await.unwrap()["data"]["AgentRequest"]
                 .is_array()
         );
-        let recipients = snapshot["identity_grant_recipient_cases"].as_array().unwrap();
+        let recipients = snapshot["identity_grant_recipient_cases"]
+            .as_array()
+            .unwrap();
         let modeled = |recipient: &str, kind: &str| -> Vec<GrantSet> {
             recipients
                 .iter()
