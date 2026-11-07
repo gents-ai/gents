@@ -4,6 +4,64 @@ use serde_json::Value;
 use super::{asset_path, interpolate, validate_pack_manifest, PackInstallOptions, PackManifest};
 use crate::documents::{EvalCase, PackConfig};
 
+/// Captures only values referenced by the authored configuration. A repeated
+/// variable is resolved once so one installation cannot observe two values.
+pub fn load_pack_config_with_variables(
+    manifest: &PackManifest,
+    options: &PackInstallOptions,
+    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> Result<(
+    PackConfig,
+    std::collections::BTreeMap<String, Option<String>>,
+)> {
+    let captured = std::cell::RefCell::new(std::collections::BTreeMap::new());
+    let config = load_pack_config(manifest, options, read_asset, &|name| {
+        let mut values = captured.borrow_mut();
+        values
+            .entry(name.to_owned())
+            .or_insert_with(|| environment(name))
+            .clone()
+    })?;
+    Ok((config, captured.into_inner()))
+}
+
+pub fn load_dependency_config_with_variables(
+    manifest: &PackManifest,
+    options: &PackInstallOptions,
+    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    installed: bool,
+    previous: &std::collections::BTreeMap<String, Option<String>>,
+    overrides: &std::collections::BTreeMap<String, Option<String>>,
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> Result<(
+    PackConfig,
+    std::collections::BTreeMap<String, Option<String>>,
+)> {
+    let unknown = std::cell::RefCell::new(std::collections::BTreeSet::new());
+    let result = load_pack_config_with_variables(manifest, options, read_asset, &|name| {
+        let prior = previous.get(name).cloned();
+        let explicit = overrides.get(name).cloned();
+        let ambient = if !installed && explicit.is_none() {
+            environment(name)
+        } else {
+            None
+        };
+        match interpolate::resolve_install_variable(true, installed, prior, explicit, ambient) {
+            Some(value) => value,
+            None => {
+                unknown.borrow_mut().insert(name.to_owned());
+                None
+            }
+        }
+    });
+    let unknown = unknown.into_inner();
+    anyhow::ensure!(unknown.is_empty(),
+        "installed dependency has unknown variable bindings: {}; explicitly configure them before reinstalling",
+        unknown.into_iter().collect::<Vec<_>>().join(", "));
+    result
+}
+
 pub fn load_pack_config(
     manifest: &PackManifest,
     options: &PackInstallOptions,

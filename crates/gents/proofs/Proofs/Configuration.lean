@@ -548,6 +548,92 @@ theorem backend_negative_queue_rejected (queue : Int) (h : queue < 0) :
   have hn : ¬ (0 : Int) ≤ queue := by omega
   simp [resolveBackendControls, defaultBackendControls, ConfigDefaults.resolveNat, hn]
 
+/-- An existing dependency retains its own install variable, including an
+explicitly unset value. Only a per-pack override may replace that value;
+ambient variables are consulted for a root install or a first installation. -/
+def resolvePackInstallVariable (dependency installed : Bool)
+    (previous override : Option (Option String)) (ambient : Option String) : Option (Option String) :=
+  match override with
+  | some value => some value
+  | none => if dependency && installed then previous else some ambient
+
+theorem dependency_variable_preserved (previous ambient : Option String) :
+    resolvePackInstallVariable true true (some previous) none ambient = some previous := by
+  rfl
+
+theorem explicit_pack_variable_wins (dependency installed : Bool) (previous : Option (Option String))
+    (override ambient : Option String) :
+    resolvePackInstallVariable dependency installed previous (some override) ambient = some override := by
+  rfl
+
+theorem first_dependency_uses_ambient (ambient : Option String) :
+    resolvePackInstallVariable true false none none ambient = some ambient := by
+  rfl
+
+theorem root_uses_current_environment (installed : Bool) (previous : Option (Option String)) (ambient : Option String) :
+    resolvePackInstallVariable false installed previous none ambient = some ambient := by
+  rfl
+
+/-- Older records without an observed binding do not authorize substituting
+the current caller's environment for an installed dependency. -/
+theorem unknown_dependency_binding_fails_closed (ambient : Option String) :
+    resolvePackInstallVariable true true none none ambient = none := by
+  rfl
+
+/-- An unrelated field keeps its installed value. A field touched by an
+override is replaced only when all variables needed to render it are known. -/
+def resolveInstalledPackField (previous : String) (affected : Bool)
+    (replacement : Option String) : Option String :=
+  if affected then replacement else some previous
+
+theorem unrelated_installed_field_preserved (previous : String) (replacement : Option String) :
+    resolveInstalledPackField previous false replacement = some previous := by rfl
+
+theorem ambiguous_affected_field_refused (previous : String) :
+    resolveInstalledPackField previous true none = none := by rfl
+
+/-- An upgrade retains the existing literal when its variable is omitted;
+new fields and fields with a supplied value use the newly rendered literal. -/
+def resolvePackUpgradeField (previous : Option String) (supplied : Bool)
+    (rendered : String) : String :=
+  if supplied then rendered else previous.getD rendered
+
+theorem omitted_upgrade_value_preserved (previous rendered : String) :
+    resolvePackUpgradeField (some previous) false rendered = previous := by rfl
+
+theorem new_upgrade_field_uses_rendered (supplied : Bool) (rendered : String) :
+    resolvePackUpgradeField none supplied rendered = rendered := by
+  cases supplied <;> rfl
+
+/-- Node identity comes from the installation scope, not from pack variables. -/
+def packVariableOverrideAllowed (name : String) : Bool :=
+  name != "GENTS_PACK_NODE_DID"
+
+theorem node_identity_override_refused :
+    packVariableOverrideAllowed "GENTS_PACK_NODE_DID" = false := by decide
+
+/-- An installed dependency can be reused without recovering its original
+environment only when the same artifact is requested and the caller has not
+explicitly selected replacement bindings. The snapshot is authoritative only
+if the installation record and every recorded document still match at commit. -/
+def reuseInstalledDependency (installed sameArtifact explicitOverride : Bool) : Bool :=
+  installed && sameArtifact && !explicitOverride
+
+def commitDependencySnapshot (sameRecord sameDocuments : Bool) : Bool :=
+  sameRecord && sameDocuments
+
+theorem replacement_binding_disallows_reuse (installed sameArtifact : Bool) :
+    reuseInstalledDependency installed sameArtifact true = false := by
+  simp [reuseInstalledDependency]
+
+theorem changed_dependency_snapshot_refused (sameRecord : Bool) :
+    commitDependencySnapshot sameRecord false = false := by
+  simp [commitDependencySnapshot]
+
+theorem changed_dependency_record_refused (sameDocuments : Bool) :
+    commitDependencySnapshot false sameDocuments = false := by
+  simp [commitDependencySnapshot]
+
 /-- Local pack preparation has the root and declared dependency manifests and
 an installed-plugin inventory. Every declared reference must resolve through
 those existing resources before configuration writes begin. -/

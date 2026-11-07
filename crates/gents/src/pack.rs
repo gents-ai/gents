@@ -37,16 +37,18 @@ pub use installation::{
     apply_prepared_dependency_schemas, document_pack_schema_paths, ensure_plugins_unreferenced,
     install_documents_with_plugins, install_prepared_document_graph,
     install_prepared_document_pack, installed_catalog, installed_pack_documents, installed_packs,
-    list_installed_packs, plugin_data_unique_keys, prepare_document_pack_install,
+    list_installed_packs, load_pack_upgrade_config, plugin_data_unique_keys,
+    prepare_document_pack_install, prepare_document_pack_install_with_dependency_variables,
     preview_installed_pack_scope, read_installed_pack, record_plugin_store_change,
-    record_plugin_store_change_as, referenced_pack_digests, remove_pack, DriftPolicy,
-    InstallReport, InstalledCatalogEntry, InstalledPack, InstalledPackPlugin,
-    InstalledPackScopePreview, PackIdentity, PluginStoreChangeError, PreparedDependency,
-    PreparedDocumentPackInstall, RemoveReport, Retained,
+    record_plugin_store_change_as, referenced_pack_digests, remove_pack,
+    DependencyVariableOverrides, DriftPolicy, InstallReport, InstalledCatalogEntry, InstalledPack,
+    InstalledPackPlugin, InstalledPackScopePreview, PackIdentity, PluginStoreChangeError,
+    PreparedDependency, PreparedDocumentPackInstall, RemoveReport, Retained,
 };
 pub use loader::{
     authored_document_schema, authored_pack_config_schema, decode_pack_config,
-    ensure_pack_leaves_default_unselected, load_pack_config, pin_pack_plugins,
+    ensure_pack_leaves_default_unselected, load_dependency_config_with_variables, load_pack_config,
+    load_pack_config_with_variables, pin_pack_plugins,
 };
 pub use manifest_validation::{validate_manifest, validate_pack_manifest};
 pub use plugin::{

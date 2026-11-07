@@ -9,6 +9,173 @@ use futures_util::StreamExt;
 use gents::pack::{PackKind, PackManifest};
 use serde_json::json;
 
+pub(super) fn has_plugin_references(config: &serde_json::Value) -> bool {
+    config
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|tools| {
+            tools.iter().any(|tool| {
+                tool.pointer("/integrations/plugins")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|plugins| !plugins.is_empty())
+            })
+        })
+}
+
+pub(super) fn parse_dependency_variables(
+    values: &[String],
+) -> Result<gents::pack::DependencyVariableOverrides> {
+    let mut result = gents::pack::DependencyVariableOverrides::new();
+    for item in values {
+        let (key, value) = item
+            .split_once('=')
+            .context("dependency variable must be NAMESPACE/PACK:NAME=VALUE")?;
+        let (coordinate, name) = key
+            .rsplit_once(':')
+            .context("dependency variable must include its pack coordinate and name")?;
+        anyhow::ensure!(
+            !coordinate.is_empty() && !name.is_empty(),
+            "dependency variable needs a pack coordinate and name"
+        );
+        anyhow::ensure!(
+            result
+                .entry(coordinate.to_owned())
+                .or_default()
+                .insert(name.to_owned(), Some(value.to_owned()))
+                .is_none(),
+            "dependency variable {key:?} was provided more than once"
+        );
+    }
+    Ok(result)
+}
+
+pub(super) fn reused_variable_preview(
+    pack: &PackSource,
+    config: &gents::documents::PackConfig,
+) -> Result<serde_json::Value> {
+    let path = pack
+        .manifest()
+        .config
+        .as_deref()
+        .context("pack has no configuration")?;
+    let authored: serde_json::Value = serde_json::from_slice(pack.asset(path)?)?;
+    let installed = serde_json::to_value(config)?;
+    let uses =
+        gents::pack::interpolate::inspect_install_variables(&authored, &|_| Some("preview".into()))
+            .map_err(|names| {
+                anyhow::anyhow!("cannot inspect install variables: {}", names.join(", "))
+            })?;
+    let uses = uses.into_iter().map(|entry| {
+        let mut parts = entry.path.trim_start_matches('/').splitn(3, '/');
+        let field = parts.next().unwrap_or_default();
+        let next = parts.next();
+        if field == "node" {
+            let resolved = installed.pointer(&entry.path).cloned();
+            return json!({"path": entry.path, "variables": entry.variables.keys().collect::<Vec<_>>(), "document": {"collection": "Node", "id": config.node.node_did}, "resolved": resolved});
+        }
+        let index = next.and_then(|value| value.parse::<usize>().ok());
+        let suffix = parts.next().map(|part| format!("/{part}")).unwrap_or_default();
+        let found = index.and_then(|index| {
+            let collection = gents::Collection::ALL.iter().copied().find(|collection| collection.dir_name() == Some(field))?;
+            let authored_id = authored.get(field)?.get(index)?.get(collection.unique_field())?.as_str()?;
+            if authored_id.contains('$') { return None; }
+            let row = installed.get(field)?.as_array()?.iter().find(|row| row.get(collection.unique_field()).and_then(serde_json::Value::as_str) == Some(authored_id))?;
+            Some((json!({"collection": collection.graphql_type(), "id": authored_id}), row.pointer(&suffix)?.clone()))
+        });
+        let (document, resolved) = found.map_or((None, None), |(document, value)| (Some(document), Some(value)));
+        json!({"path": entry.path, "variables": entry.variables.keys().collect::<Vec<_>>(), "document": document, "resolved": resolved})
+    }).collect::<Vec<_>>();
+    let runtime_environment = pack.manifest().metadata.plugins.iter().map(|plugin| {
+        let manifold = gents::plugin::authority::declared_manifold(plugin)?;
+        Ok(json!({"plugin": plugin.name, "declared": gents::plugin::authority::declared_environment(&manifold)}))
+    }).collect::<Result<Vec<_>>>()?;
+    Ok(
+        json!({"pack": format!("{}/{}", pack.manifest().metadata.namespace, pack.manifest().name), "kind": "existing_installation", "uses": uses, "runtime_environment": runtime_environment}),
+    )
+}
+
+pub(super) fn install_variable_preview(
+    pack: &PackSource,
+    owner: &str,
+) -> Result<serde_json::Value> {
+    install_variable_preview_with(pack, owner, &|name| std::env::var(name).ok())
+}
+
+fn install_variable_preview_with(
+    pack: &PackSource,
+    owner: &str,
+    lookup: &dyn Fn(&str) -> Option<String>,
+) -> Result<serde_json::Value> {
+    let path = pack
+        .manifest()
+        .config
+        .as_deref()
+        .context("pack has no configuration")?;
+    let authored: serde_json::Value = serde_json::from_slice(pack.asset(path)?)
+        .context("parsing pack config for variable preview")?;
+    let environment = |name: &str| {
+        if name == "GENTS_PACK_NODE_DID" {
+            Some(owner.to_owned())
+        } else {
+            lookup(name)
+        }
+    };
+    let uses = gents::pack::interpolate::inspect_install_variables(&authored, &environment)
+        .map_err(|missing| {
+            anyhow::anyhow!(
+                "pack config references unset environment variables: {}",
+                missing.join(", ")
+            )
+        })?;
+    let uses = uses
+        .into_iter()
+        .map(|entry| {
+            let mut value = serde_json::to_value(&entry)?;
+            let mut segments = entry.path.trim_start_matches('/').split('/');
+            let collection_name = segments.next().unwrap_or_default();
+            let document = if collection_name == "node" {
+                Some(json!({"collection": "Node", "id": owner}))
+            } else if let Some(collection) = gents::Collection::ALL
+                .iter()
+                .copied()
+                .find(|collection| collection.dir_name() == Some(collection_name))
+            {
+                segments
+                    .next()
+                    .and_then(|index| index.parse::<usize>().ok())
+                    .and_then(|index| authored.get(collection_name)?.get(index))
+                    .and_then(|row| row.get(collection.unique_field()))
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|id| {
+                        gents::pack::interpolate::interpolate_with(id, &environment).ok()
+                    })
+                    .map(|id| json!({"collection": collection.graphql_type(), "id": id}))
+            } else {
+                None
+            };
+            if let Some(document) = document {
+                value["document"] = document;
+            }
+            Ok(value)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let runtime_environment = pack
+        .manifest()
+        .metadata
+        .plugins
+        .iter()
+        .map(|plugin| {
+            let manifold = gents::plugin::authority::declared_manifold(plugin)?;
+            Ok(json!({"plugin": plugin.name,
+            "declared": gents::plugin::authority::declared_environment(&manifold)}))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(
+        json!({ "pack": format!("{}/{}", pack.manifest().metadata.namespace, pack.manifest().name),
+        "kind": "install_literal", "uses": uses, "runtime_environment": runtime_environment }),
+    )
+}
+
 /// The documents pack install: the CLI's single site that writes a documents
 /// pack and its dependencies. `explicit` is false only when the pack is
 /// installed as another pack's dependency.
@@ -36,21 +203,13 @@ pub(crate) async fn install_documents_pack(
                     needs_runtime_store = true;
                     break;
                 }
-                let config = gents::pack::load_pack_config(
-                    source.manifest(),
-                    &gents::pack::PackInstallOptions {
-                        node_did: owner.to_owned(),
-                    },
-                    &|path| Ok(source.asset(path)?.to_vec()),
-                    &|name| std::env::var(name).ok(),
-                )?;
-                if config.tools.iter().any(|tools| {
-                    tools
-                        .integrations
-                        .as_ref()
-                        .and_then(|integrations| integrations.plugins.as_ref())
-                        .is_some_and(|plugins| !plugins.is_empty())
-                }) {
+                let path = source
+                    .manifest()
+                    .config
+                    .as_deref()
+                    .context("document pack has no configuration")?;
+                let config: serde_json::Value = serde_json::from_slice(source.asset(path)?)?;
+                if has_plugin_references(&config) {
                     needs_runtime_store = true;
                     break;
                 }
@@ -88,6 +247,12 @@ pub(crate) async fn install_documents_pack_resolved(
         (authored, report) =
             crate::desired_state::load_manifest_root_for_owner(temp.path(), Some(owner));
     }
+    if authored.is_none() {
+        authored = gents::pack::load_pack_upgrade_config(access, owner, pack.archive(), &|name| {
+            std::env::var(name).ok()
+        })
+        .await?;
+    }
     anyhow::ensure!(
         authored.is_some(),
         "invalid pack configuration: {:?}",
@@ -99,7 +264,8 @@ pub(crate) async fn install_documents_pack_resolved(
         owner,
         args.force_rebind_concrete_did,
     )?;
-    let prepared = gents::pack::prepare_document_pack_install(
+    let overrides = parse_dependency_variables(&args.dependency_variables)?;
+    let prepared = gents::pack::prepare_document_pack_install_with_dependency_variables(
         access,
         owner,
         pack.manifest(),
@@ -113,12 +279,39 @@ pub(crate) async fn install_documents_pack_resolved(
         args.scope.graphql.is_none().then_some(home.as_path()),
         Some(pack.archive()),
         &|name| std::env::var(name).ok(),
+        &overrides,
     )
     .await?;
     let inference = prepared.inference.clone();
     let dependency_inference = prepared.dependency_inference.clone();
     let origin_tag = gents::pack::pack_origin_tag(&pack.manifest().name)?;
     if args.preview {
+        let variables = std::iter::once(pack)
+            .chain(dependencies.iter())
+            .map(|source| {
+                let coordinate = format!(
+                    "{}/{}",
+                    source.manifest().metadata.namespace,
+                    source.manifest().name
+                );
+                if std::ptr::eq(source, pack) && prepared.preserves_root_values() {
+                    let mut value = reused_variable_preview(source, &prepared.config)?;
+                    value["kind"] = json!("upgrade");
+                    Ok(value)
+                } else if let Some(config) = prepared.reused_dependency_config(&coordinate) {
+                    reused_variable_preview(source, config)
+                } else if let Some(values) = overrides.get(&coordinate) {
+                    install_variable_preview_with(source, owner, &|name| {
+                        values
+                            .get(name)
+                            .cloned()
+                            .unwrap_or_else(|| std::env::var(name).ok())
+                    })
+                } else {
+                    install_variable_preview(source, owner)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
         return Ok(json!({
             "pack": pack.manifest().name,
             "source": pack.label(),
@@ -128,6 +321,7 @@ pub(crate) async fn install_documents_pack_resolved(
             "dependency_inference": dependency_inference,
             "origin_tag": origin_tag,
             "dependencies": pack.manifest().metadata.dependencies,
+            "install_variables": variables,
             "would_write": false,
         }));
     }
@@ -364,6 +558,10 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
             install_documents_command(access, &pack, &args).await
         }
         PackKind::Assets | PackKind::Plugins => {
+            anyhow::ensure!(
+                args.dependency_variables.is_empty(),
+                "--dependency-variable applies only to document packs with dependencies"
+            );
             let requested = parse_inference_slot_bindings(&args.inference_slots)?;
             anyhow::ensure!(
                 args.scope.graphql.is_none()

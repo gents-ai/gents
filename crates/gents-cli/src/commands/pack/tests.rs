@@ -178,6 +178,100 @@ fn documents_pack_dir(version: &str) -> tempfile::TempDir {
     dir
 }
 
+#[test]
+fn document_pack_preview_shows_the_install_variable_and_its_target() {
+    let dir = documents_pack_dir("1.0.0");
+    let config_path = dir.path().join("pack_config.json");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    config["tasks"] =
+        json!([{ "task_id": "research", "prompt_template": "${GENTS_TEST_3317_UNSET:-fallback}" }]);
+    std::fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let (bytes, _) = gents::pack::archive::pack_dir(dir.path()).unwrap();
+    let archive = gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
+    let source = super::source::PackSource::received(archive);
+    let preview = super::install::install_variable_preview(&source, "did:key:node").unwrap();
+    assert_eq!(preview["kind"], "install_literal");
+    assert_eq!(preview["uses"][0]["path"], "/node/node_did");
+    assert_eq!(preview["uses"][0]["resolved"], "did:key:node");
+    assert_eq!(
+        preview["uses"][0]["document"],
+        json!({"collection": "Node", "id": "did:key:node"})
+    );
+    assert_eq!(
+        preview["uses"][0]["variables"]["GENTS_PACK_NODE_DID"],
+        "did:key:node"
+    );
+    let task = preview["uses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["path"] == "/tasks/0/prompt_template")
+        .unwrap();
+    assert_eq!(
+        task["document"],
+        json!({"collection": "Task", "id": "research"})
+    );
+    assert_eq!(task["resolved"], "fallback");
+}
+
+#[test]
+fn dependency_preview_reads_installed_literals_instead_of_the_current_environment() {
+    let dir = documents_pack_dir("1.0.0");
+    let config_path = dir.path().join("pack_config.json");
+    let mut authored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    authored["tools"][0]["display_name"] = json!("${DISPLAY_LABEL:-fallback}");
+    std::fs::write(config_path, serde_json::to_vec(&authored).unwrap()).unwrap();
+    let (bytes, _) = gents::pack::archive::pack_dir(dir.path()).unwrap();
+    let source = super::source::PackSource::received(
+        gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap(),
+    );
+    let config: gents::documents::PackConfig = serde_json::from_value(json!({
+        "node": {"node_did": "did:key:node"},
+        "tools": [{"node_did": "did:key:node", "tools_id": "demo-tools", "display_name": "installed value"}]
+    })).unwrap();
+    let preview = super::install::reused_variable_preview(&source, &config).unwrap();
+    let node = preview["uses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["path"] == "/node/node_did")
+        .unwrap();
+    assert_eq!(node["resolved"], "did:key:node");
+    let target = preview["uses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["path"] == "/tools/0/display_name")
+        .unwrap();
+    assert_eq!(target["resolved"], "installed value");
+    assert_eq!(target["variables"], json!(["DISPLAY_LABEL"]));
+    assert_eq!(
+        target["document"],
+        json!({"collection": "Tools", "id": "demo-tools"})
+    );
+}
+
+#[test]
+fn dependency_variable_overrides_are_scoped_and_reject_duplicates() {
+    let parse = super::install::parse_dependency_variables;
+    let values = parse(&["acme/alpha:HOST=one=two".into(), "acme/beta:HOST=".into()]).unwrap();
+    assert_eq!(values["acme/alpha"]["HOST"].as_deref(), Some("one=two"));
+    assert_eq!(values["acme/beta"]["HOST"].as_deref(), Some(""));
+    assert!(parse(&["acme/alpha:HOST=one".into(), "acme/alpha:HOST=two".into()]).is_err());
+    assert!(parse(&["HOST=one".into()]).is_err());
+}
+
+#[test]
+fn remote_plugin_routing_does_not_resolve_install_variables() {
+    let config = json!({"tools": [{"integrations": {"plugins": [{"plugin": "${UNSET_PLUGIN}"}]}}]});
+    assert!(super::install::has_plugin_references(&config));
+    assert!(!super::install::has_plugin_references(
+        &json!({"tools": [{"integrations": {"plugins": []}}]})
+    ));
+}
+
 async fn initialized_home() -> tempfile::TempDir {
     use clap::Parser;
     let home = tempfile::tempdir().unwrap();
@@ -227,6 +321,7 @@ fn document_install_args(
     PackInstallArgs {
         package: spec.to_str().unwrap().to_owned(),
         inference_slots,
+        dependency_variables: Vec::new(),
         preview: false,
         scope: ScopeArgs {
             home: Some(home.to_path_buf()),

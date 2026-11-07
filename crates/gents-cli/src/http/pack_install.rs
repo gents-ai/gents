@@ -68,6 +68,8 @@ struct InstallRequest {
     root: Archive,
     dependencies: Vec<Archive>,
     inference_slots: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dependency_variables: Vec<String>,
     overwrite: bool,
     keep: bool,
     preview: bool,
@@ -143,6 +145,7 @@ pub(crate) async fn install_remote(
         .collect::<Vec<_>>();
     let node_did = owner.to_owned();
     let inference_slots = args.inference_slots.clone();
+    let dependency_variables = args.dependency_variables.clone();
     let wire = args.wire.clone();
     let (overwrite, keep, preview, force_rebind, grant_authority) = (
         args.drift.overwrite,
@@ -157,6 +160,7 @@ pub(crate) async fn install_remote(
             root,
             dependencies,
             inference_slots,
+            dependency_variables,
             overwrite,
             keep,
             preview,
@@ -348,6 +352,7 @@ async fn install_owned(
     let args = PackInstallArgs {
         package: root.manifest().name.clone(),
         inference_slots: request.inference_slots,
+        dependency_variables: request.dependency_variables,
         preview: request.preview,
         scope: ScopeArgs {
             home: Some(home.clone()),

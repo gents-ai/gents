@@ -15,6 +15,15 @@ pub fn declared_manifold(plugin: &PackPlugin) -> Result<Manifold> {
     }
 }
 
+/// This is declared scope; effective access is still decided by the installed grant.
+pub fn declared_environment(manifold: &Manifold) -> serde_json::Value {
+    match &manifold.env {
+        EnvAccess::None => serde_json::json!({"scope": "none"}),
+        EnvAccess::AllowList(keys) => serde_json::json!({"scope": "allow_list", "names": keys}),
+        EnvAccess::Full => serde_json::json!({"scope": "full"}),
+    }
+}
+
 pub fn manifold_within(requested: &Manifold, granted: &Manifold) -> bool {
     super::narrow_manifold(requested, granted) == *requested
 }
@@ -128,6 +137,27 @@ pub(super) fn limits_consented(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn declared_environment_identifies_runtime_scope_without_reading_values() {
+        let mut manifold = Manifold::sealed();
+        assert_eq!(
+            declared_environment(&manifold),
+            serde_json::json!({"scope": "none"})
+        );
+        manifold.env = EnvAccess::AllowList(vec!["SERVICE_HOST".to_owned()]);
+        assert_eq!(
+            declared_environment(&manifold),
+            serde_json::json!({
+                "scope": "allow_list", "names": ["SERVICE_HOST"]
+            })
+        );
+        manifold.env = EnvAccess::Full;
+        assert_eq!(
+            declared_environment(&manifold),
+            serde_json::json!({"scope": "full"})
+        );
+    }
 
     fn plugin(manifold: Option<serde_json::Value>) -> PackPlugin {
         serde_json::from_value(serde_json::json!({

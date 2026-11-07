@@ -86,6 +86,55 @@ async fn install(
     super::super::install_pack_documents(access, OWNER, &identity(version), config, policy).await
 }
 
+#[tokio::test]
+async fn installed_dependency_snapshot_retains_values_and_detects_concurrent_edits() {
+    let access = access().await;
+    install(
+        &access,
+        "1",
+        &config(&[("tools-a", "original")]),
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let snapshot = access
+        .transact_readonly("test.dependency.snapshot", |txn| {
+            Box::pin(async move {
+                dependency_snapshot_in_txn(txn, OWNER, "acme/demo", Some(&identity("1").digest))
+                    .await
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let restored = snapshot.config(OWNER).unwrap();
+    assert_eq!(restored.tools.len(), 1);
+    assert_eq!(restored.tools[0].display_name.as_deref(), Some("original"));
+
+    edit_tools(&access, "tools-a", "changed").await;
+    let changed = access
+        .transact_readonly("test.dependency.snapshot_changed", |txn| {
+            Box::pin(async move {
+                dependency_snapshot_in_txn(txn, OWNER, "acme/demo", Some(&identity("1").digest))
+                    .await
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(snapshot, changed);
+    assert!(access
+        .transact_readonly("test.dependency.snapshot_other_artifact", |txn| {
+            Box::pin(async move {
+                dependency_snapshot_in_txn(txn, OWNER, "acme/demo", Some(&identity("2").digest))
+                    .await
+            })
+        })
+        .await
+        .unwrap()
+        .is_none());
+}
+
 async fn edit_tools(access: &ConfigAccess, id: &str, name: &str) {
     let edit =
         crate::store::config_client::DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -1354,6 +1403,7 @@ fn prepared() -> PreparedDocumentPackInstall {
         },
         dependency_inference: BTreeMap::new(),
         dependencies: Vec::new(),
+        root_snapshot: None,
     }
 }
 
@@ -1688,6 +1738,89 @@ fn engine_style_pack_job_block_installs() {
 
 // --- Documents dependencies ---------------------------------------------
 
+#[test]
+fn captured_pack_variables_are_limited_to_referenced_values_and_resolved_once() {
+    let (_guard, root) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+    let path = root.join("pack_config.json");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    config["agents"][0]["description"] = json!("${LABEL}/${LABEL}/${ABSENT:-fallback}");
+    std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let (bytes, _) = crate::pack::archive::pack_dir(&root).unwrap();
+    let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
+    let calls = std::cell::Cell::new(0);
+    let (config, variables) = crate::pack::load_pack_config_with_variables(
+        archive.manifest(),
+        &crate::pack::PackInstallOptions {
+            node_did: OWNER.into(),
+        },
+        &|path| Ok(archive.asset(path)?.to_vec()),
+        &|name| {
+            calls.set(calls.get() + 1);
+            (name == "LABEL").then(|| "configured".to_owned())
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        config.agents[0].description.as_deref(),
+        Some("configured/configured/fallback")
+    );
+    assert_eq!(
+        variables,
+        BTreeMap::from([
+            ("ABSENT".to_owned(), None),
+            ("LABEL".to_owned(), Some("configured".to_owned())),
+        ])
+    );
+    assert_eq!(calls.get(), 2);
+}
+
+#[test]
+fn dependency_loader_preserves_bindings_and_rejects_unknown_legacy_values() {
+    let (_guard, root) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+    let path = root.join("pack_config.json");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    config["agents"][0]["description"] = json!("${LABEL}/${ABSENT:-fallback}");
+    std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let (bytes, _) = crate::pack::archive::pack_dir(&root).unwrap();
+    let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
+    let options = crate::pack::PackInstallOptions {
+        node_did: OWNER.into(),
+    };
+    let prior = BTreeMap::from([
+        ("LABEL".into(), Some("original".into())),
+        ("ABSENT".into(), None),
+    ]);
+    let overrides = BTreeMap::from([("LABEL".into(), Some("override".into()))]);
+    let load = |prior: &BTreeMap<String, Option<String>>,
+                overrides: &BTreeMap<String, Option<String>>| {
+        crate::pack::load_dependency_config_with_variables(
+            archive.manifest(),
+            &options,
+            &|path| Ok(archive.asset(path)?.to_vec()),
+            true,
+            prior,
+            overrides,
+            &|_| panic!("an installed dependency must not read ambient values"),
+        )
+    };
+    let (preserved, bindings) = load(&prior, &BTreeMap::new()).unwrap();
+    assert_eq!(
+        preserved.agents[0].description.as_deref(),
+        Some("original/fallback")
+    );
+    assert_eq!(bindings, prior);
+    let (overridden, _) = load(&prior, &overrides).unwrap();
+    assert_eq!(
+        overridden.agents[0].description.as_deref(),
+        Some("override/fallback")
+    );
+    let error = load(&BTreeMap::new(), &BTreeMap::new())
+        .err()
+        .expect("unknown bindings must be rejected");
+    assert!(error.to_string().contains("ABSENT"));
+    assert!(error.to_string().contains("LABEL"));
+}
+
 /// `dependent_fixture` rewired to depend on `dependee_fixture`, and
 /// `dependee_fixture` with the plugin `echo` when `dependee_plugin`; both
 /// Packed as an install reads them; a broken dependent plugin rejects the graph.
@@ -1840,6 +1973,309 @@ async fn a_documents_dependency_installs_non_explicitly_before_its_dependent() {
         json!(["fixture/dependent_fixture"])
     );
     assert_eq!(row("fixture/dependent_fixture")["explicit"], true);
+}
+
+#[tokio::test]
+async fn installing_a_dependent_preserves_the_installed_dependency_environment() {
+    let (node, access) = dependency_fixture().await;
+    let (_dep_guard, dep_dir) =
+        crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+    let config_path = dep_dir.join("pack_config.json");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    config["agents"][0]["description"] = json!("${DEPENDEE_LABEL:-unset}");
+    config["agents"][0]["display_name"] = json!("${DEPENDEE_NAME:-old name}");
+    std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let (bytes, _) = crate::pack::archive::pack_dir(&dep_dir).unwrap();
+    let dependee = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
+    let (_guards, _, dependent) = documents_dependency_pair(false, false);
+    let options = crate::pack::PackInstallOptions {
+        node_did: OWNER.into(),
+    };
+    let requested = BTreeMap::from([("worker".to_owned(), "glm:inference".to_owned())]);
+    let original = |name: &str| (name == "DEPENDEE_LABEL").then(|| "original".to_owned());
+    let changed = |name: &str| (name == "DEPENDEE_LABEL").then(|| "dependent".to_owned());
+    let load = |archive: &crate::pack::archive::PackArchive,
+                environment: &dyn Fn(&str) -> Option<String>| {
+        crate::pack::load_pack_config(
+            archive.manifest(),
+            &options,
+            &|path| Ok(archive.asset(path)?.to_vec()),
+            environment,
+        )
+        .unwrap()
+    };
+    let authored = load(&dependee, &original);
+    let prepared = prepare_document_pack_install(
+        &access,
+        OWNER,
+        dependee.manifest(),
+        &authored,
+        &requested,
+        &[],
+        crate::pack::InstalledVia::Operator,
+        None,
+        None,
+        &original,
+    )
+    .await
+    .unwrap();
+    install_prepared_document_pack(
+        &access,
+        OWNER,
+        &dependee,
+        &[],
+        &prepared,
+        None,
+        false,
+        crate::pack::InstalledVia::Operator,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+
+    let authored = load(&dependent, &changed);
+    let prepared = prepare_document_pack_install(
+        &access,
+        OWNER,
+        dependent.manifest(),
+        &authored,
+        &requested,
+        &[&dependee],
+        crate::pack::InstalledVia::Operator,
+        None,
+        None,
+        &changed,
+    )
+    .await
+    .unwrap();
+    access.transact_write("test.dependency.concurrent_edit", |txn| {
+        Box::pin(async move {
+            let result = txn.execute(r#"mutation { update_Agent(filter: { agent_id: {_eq: "fixture-dependee"}, node_did: {_eq: "did:key:zPackInstallOwner"} }, input: { description: "concurrent edit" }) { _docID } }"#).await?;
+            anyhow::ensure!(result.get("errors").is_none_or(Value::is_null), "edit failed");
+            Ok::<_, anyhow::Error>(())
+        })
+    }).await.unwrap();
+    let error = install_prepared_document_pack(
+        &access,
+        OWNER,
+        &dependent,
+        &[&dependee],
+        &prepared,
+        None,
+        false,
+        crate::pack::InstalledVia::Operator,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("changed during preparation"));
+    access.transact_write("test.dependency.restore", |txn| {
+        Box::pin(async move {
+            let result = txn.execute(r#"mutation { update_Agent(filter: { agent_id: {_eq: "fixture-dependee"}, node_did: {_eq: "did:key:zPackInstallOwner"} }, input: { description: "original" }) { _docID } }"#).await?;
+            anyhow::ensure!(result.get("errors").is_none_or(Value::is_null), "restore failed");
+            Ok::<_, anyhow::Error>(())
+        })
+    }).await.unwrap();
+    let prepared = prepare_document_pack_install(
+        &access,
+        OWNER,
+        dependent.manifest(),
+        &authored,
+        &requested,
+        &[&dependee],
+        crate::pack::InstalledVia::Operator,
+        None,
+        None,
+        &changed,
+    )
+    .await
+    .unwrap();
+    install_prepared_document_pack(
+        &access,
+        OWNER,
+        &dependent,
+        &[&dependee],
+        &prepared,
+        None,
+        false,
+        crate::pack::InstalledVia::Operator,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let rows = access
+        .execute(r#"{ Agent(filter: {agent_id: {_eq: "fixture-dependee"}}) { description display_name } }"#)
+        .await
+        .unwrap();
+    assert_eq!(rows["data"]["Agent"][0]["description"], "original");
+    let coordinate = format!(
+        "{}/{}",
+        dependee.manifest().metadata.namespace,
+        dependee.manifest().name
+    );
+    let overrides = BTreeMap::from([(
+        coordinate,
+        BTreeMap::from([("DEPENDEE_LABEL".to_owned(), Some("explicit".to_owned()))]),
+    )]);
+    let prepared = prepare_document_pack_install_with_dependency_variables(
+        &access,
+        OWNER,
+        dependent.manifest(),
+        &authored,
+        &requested,
+        &[&dependee],
+        crate::pack::InstalledVia::Operator,
+        None,
+        None,
+        &changed,
+        &overrides,
+    )
+    .await
+    .unwrap();
+    install_prepared_document_pack(
+        &access,
+        OWNER,
+        &dependent,
+        &[&dependee],
+        &prepared,
+        None,
+        false,
+        crate::pack::InstalledVia::Operator,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let rows = access
+        .execute(r#"{ Agent(filter: {agent_id: {_eq: "fixture-dependee"}}) { description display_name } }"#)
+        .await
+        .unwrap();
+    assert_eq!(rows["data"]["Agent"][0]["description"], "explicit");
+    assert_eq!(rows["data"]["Agent"][0]["display_name"], "old name");
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn upgrading_a_pack_preserves_omitted_install_values() {
+    let (node, access) = dependency_fixture().await;
+    let (_guard, dir) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+    let config_path = dir.join("pack_config.json");
+    let mut source: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    source["agents"][0]["description"] = json!("${UPGRADE_LABEL}");
+    std::fs::write(&config_path, serde_json::to_vec(&source).unwrap()).unwrap();
+    let pack = || {
+        let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
+        crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap()
+    };
+    let first = pack();
+    let requested = BTreeMap::from([("worker".to_owned(), "glm:inference".to_owned())]);
+    let options = crate::pack::PackInstallOptions {
+        node_did: OWNER.into(),
+    };
+    let original = |name: &str| (name == "UPGRADE_LABEL").then(|| "original".to_owned());
+    let load = |archive: &crate::pack::archive::PackArchive,
+                env: &dyn Fn(&str) -> Option<String>| {
+        crate::pack::load_pack_config(
+            archive.manifest(),
+            &options,
+            &|path| Ok(archive.asset(path)?.to_vec()),
+            env,
+        )
+        .unwrap()
+    };
+    let prepared = prepare_document_pack_install(
+        &access,
+        OWNER,
+        first.manifest(),
+        &load(&first, &original),
+        &requested,
+        &[],
+        crate::pack::InstalledVia::Operator,
+        None,
+        Some(&first),
+        &original,
+    )
+    .await
+    .unwrap();
+    install_prepared_document_pack(
+        &access,
+        OWNER,
+        &first,
+        &[],
+        &prepared,
+        None,
+        false,
+        crate::pack::InstalledVia::Operator,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let manifest_path = dir.join("manifest.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["version"] = json!("1.0.1");
+    std::fs::write(manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let next = pack();
+    let unset = |_: &str| None;
+    let authored = load_pack_upgrade_config(&access, OWNER, &next, &unset)
+        .await
+        .unwrap()
+        .unwrap();
+    let prepared = prepare_document_pack_install(
+        &access,
+        OWNER,
+        next.manifest(),
+        &authored,
+        &requested,
+        &[],
+        crate::pack::InstalledVia::Operator,
+        None,
+        Some(&next),
+        &unset,
+    )
+    .await
+    .unwrap();
+    install_prepared_document_pack(
+        &access,
+        OWNER,
+        &next,
+        &[],
+        &prepared,
+        None,
+        false,
+        crate::pack::InstalledVia::Operator,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let rows = access
+        .execute(r#"{ Agent(filter: {agent_id: {_eq: "fixture-dependee"}}) { description } }"#)
+        .await
+        .unwrap();
+    assert_eq!(rows["data"]["Agent"][0]["description"], "original");
+    node.shutdown().await;
+}
+
+#[test]
+fn installed_dependency_inference_uses_recorded_agent_profile() {
+    let (_guards, dependee, _) = documents_dependency_pair(false, false);
+    let options = crate::pack::PackInstallOptions {
+        node_did: OWNER.into(),
+    };
+    let authored = crate::pack::load_pack_config(
+        dependee.manifest(),
+        &options,
+        &|path| Ok(dependee.asset(path)?.to_vec()),
+        &|_| None,
+    )
+    .unwrap();
+    let selected = BTreeMap::from([("worker".to_owned(), "glm:inference".to_owned())]);
+    let installed =
+        crate::pack::bind_pack_install_config(dependee.manifest(), &authored, &selected).unwrap();
+    assert_eq!(
+        documents::installed_dependency_bindings(dependee.manifest(), &installed, None, OWNER)
+            .unwrap(),
+        selected
+    );
 }
 
 #[tokio::test]
@@ -2863,6 +3299,9 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
         bindings: Default::default(),
         dependencies,
         explicit: true,
+        snapshot: None,
+        reconfigure: false,
+        reuse_plugins: false,
     };
     let initial = vec![
         stage(&dependency, "1", empty.clone(), Some(old_bytes), vec![]),

@@ -14,6 +14,7 @@ fn body(root: &PackArchive, dependencies: &[Arc<PackArchive>], node_did: &str) -
         root,
         dependencies,
         inference_slots: Vec::new(),
+        dependency_variables: Vec::new(),
         overwrite: false,
         keep: false,
         preview: false,
@@ -74,6 +75,21 @@ fn received_dependencies_are_exactly_the_root_dependency_list() {
             "{case}: {error}"
         );
     }
+}
+
+#[test]
+fn received_request_preserves_dependency_variable_overrides() {
+    let root = archive("dependent_fixture");
+    let dependee = archive("dependee_fixture");
+    let mut request: serde_json::Value =
+        serde_json::from_slice(&body(&root, &[dependee], NODE)).unwrap();
+    assert!(request.get("dependency_variables").is_none());
+    request["dependency_variables"] = serde_json::json!(["fixture/dependee_fixture:LABEL=value"]);
+    let received = decode_request(&serde_json::to_vec(&request).unwrap(), NODE).unwrap();
+    assert_eq!(
+        received.request.dependency_variables,
+        ["fixture/dependee_fixture:LABEL=value"]
+    );
 }
 
 #[test]

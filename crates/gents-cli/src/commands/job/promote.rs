@@ -240,6 +240,7 @@ pub async fn promote(
     let install = PackInstallArgs {
         package: dir.display().to_string(),
         inference_slots: Vec::new(),
+        dependency_variables: Vec::new(),
         preview: false,
         scope: ScopeArgs {
             home: Some(home.to_path_buf()),

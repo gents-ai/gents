@@ -277,6 +277,9 @@ pub(crate) struct PackInstallArgs {
         help = "Bind a declared inference slot to an existing node-owned profile; repeat for every slot"
     )]
     pub(crate) inference_slots: Vec<String>,
+    #[arg(long = "dependency-variable", value_name = "NAMESPACE/PACK:NAME=VALUE", action = clap::ArgAction::Append,
+        help = "Explicitly set an install variable for a dependency; repeat for each variable")]
+    pub(crate) dependency_variables: Vec<String>,
     #[arg(
         long,
         default_value_t = false,
