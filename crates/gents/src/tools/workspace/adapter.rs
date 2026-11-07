@@ -6,6 +6,8 @@ use std::process::{Command, Stdio};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::tools::exec::native_spawn::{output_std, spawn_std, status_std};
+
 use super::action_plan::CreateWorkspaceAction;
 use super::documents::ProvisioningObservation;
 use super::instructions::{InstructionFile, InstructionManifest, DEFAULT_INSTRUCTION_PATHS};
@@ -415,8 +417,7 @@ pub(crate) fn capture_instruction_manifest(repo: &Path, base_sha: &str) -> Resul
 
 fn git_show_blob(repo: &Path, base_sha: &str, path: &str) -> Result<Option<Vec<u8>>> {
     let spec = format!("{base_sha}:{path}");
-    let output = git_command(repo, &["show", &spec])
-        .output()
+    let output = output_std(&mut git_command(repo, &["show", &spec]))
         .with_context(|| format!("git show {spec} in {}", repo.display()))?;
     if output.status.success() {
         return Ok(Some(output.stdout));
@@ -821,8 +822,7 @@ fn git_apply_cached(cwd: &Path, index: &Path, diff: &[u8]) -> Result<()> {
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
-    let mut child = cmd
-        .spawn()
+    let mut child = spawn_std(&mut cmd)
         .with_context(|| format!("spawning git apply --cached in {}", cwd.display()))?;
     {
         let mut stdin = child
@@ -1099,22 +1099,14 @@ pub(crate) fn artifacts_complete(source: &Path, dest: &Path, artifacts: &[String
 
 fn clone_dir(src: &Path, dst: &Path, label: &str) -> Result<()> {
     tracing::info!(label, "cloning artifact directory");
-    let clonefile = crate::tools::exec::native_spawn::std_command("cp")
-        .args(["-Rc"])
-        .arg(src)
-        .arg(dst)
-        .status();
+    let clonefile = status_std(Command::new("cp").args(["-Rc"]).arg(src).arg(dst));
     match clonefile {
         Ok(status) if status.success() => return Ok(()),
         Ok(_) | Err(_) => {
             let _ = fs::remove_dir_all(dst);
         }
     }
-    let copied = crate::tools::exec::native_spawn::std_command("cp")
-        .args(["-R"])
-        .arg(src)
-        .arg(dst)
-        .status()
+    let copied = status_std(Command::new("cp").args(["-R"]).arg(src).arg(dst))
         .with_context(|| format!("copying {label}"))?;
     if copied.success() {
         Ok(())
@@ -1133,8 +1125,7 @@ fn git_run_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Result<()> {
 }
 
 fn git_run_inner(mut cmd: Command, cwd: &Path, args: &[&str]) -> Result<()> {
-    let output = cmd
-        .output()
+    let output = output_std(&mut cmd)
         .with_context(|| format!("running git {} in {}", args.join(" "), cwd.display()))?;
     if output.status.success() {
         Ok(())
@@ -1148,8 +1139,7 @@ fn git_run_inner(mut cmd: Command, cwd: &Path, args: &[&str]) -> Result<()> {
 }
 
 fn git_ok(cwd: &Path, args: &[&str]) -> bool {
-    git_command(cwd, args)
-        .status()
+    status_std(&mut git_command(cwd, args))
         .map(|status| status.success())
         .unwrap_or(false)
 }
@@ -1175,8 +1165,7 @@ fn git_output_inner(cmd: Command, cwd: &Path, args: &[&str]) -> Result<String> {
 }
 
 fn git_output_bytes_inner(mut cmd: Command, cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    let output = cmd
-        .output()
+    let output = output_std(&mut cmd)
         .with_context(|| format!("running git {} in {}", args.join(" "), cwd.display()))?;
     if !output.status.success() {
         bail!(
@@ -1201,7 +1190,7 @@ const GIT_ENV_SET: [(&str, &str); 3] = [
 ];
 
 fn git_command(cwd: &Path, args: &[&str]) -> Command {
-    let mut cmd = crate::tools::exec::native_spawn::std_command("git");
+    let mut cmd = Command::new("git");
     cmd.args(args).current_dir(cwd);
     for key in GIT_ENV_REMOVED {
         cmd.env_remove(key);

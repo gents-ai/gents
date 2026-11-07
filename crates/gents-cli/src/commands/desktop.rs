@@ -211,16 +211,17 @@ fn notify(message: &str) {
     tracing::info!(message, "desktop reset finished");
     #[cfg(target_os = "macos")]
     {
-        let _ = gents::tools::exec::native_spawn::std_command("/usr/bin/osascript")
-            .args([
-                "-e",
-                "on run argv\ndisplay alert \"Gents reset\" message (item 1 of argv)\nend run",
-                message,
-            ])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
+        let _ = gents::tools::exec::native_spawn::status_std(
+            std::process::Command::new("/usr/bin/osascript")
+                .args([
+                    "-e",
+                    "on run argv\ndisplay alert \"Gents reset\" message (item 1 of argv)\nend run",
+                    message,
+                ])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null()),
+        );
     }
 }
 
@@ -299,15 +300,17 @@ fn run_browser_helper(
     let mut stderr = tempfile::tempfile().context("creating browser clearing stderr capture")?;
     // Launch the executable directly so timeout cleanup owns the exact process,
     // including an older app that does not recognize the headless command.
-    let mut command = gents::tools::exec::native_spawn::std_command(executable);
+    let mut command = std::process::Command::new(executable);
     command.arg("__clear-browser-data");
     if matches!(helper, BrowserHelper::Check) {
         command.arg("--check");
     }
-    let mut child = command
+    command
         .arg(&receipt)
-        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(stderr.try_clone()?)
-        .spawn().context("starting Gents to clear browser data; install the matching Gents desktop app before resetting")?;
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(stderr.try_clone()?);
+    let mut child = gents::tools::exec::native_spawn::spawn_std(&mut command).context("starting Gents to clear browser data; install the matching Gents desktop app before resetting")?;
     let status = match child.wait_timeout(timeout) {
         Ok(Some(status)) => status,
         result => {

@@ -63,11 +63,11 @@ mod tests {
         // the component; a shim on PATH proves nothing (minimal profiles omit
         // rust-analyzer). Executing rustup here is fine: the production
         // constraint is only that ADMISSION never executes a helper.
-        let Ok(oracle) = crate::tools::exec::native_spawn::std_command(&proxy_target)
-            .args(["which", "rust-analyzer"])
-            .current_dir(&workspace)
-            .output()
-        else {
+        let Ok(oracle) = crate::tools::exec::native_spawn::output_std(
+            std::process::Command::new(&proxy_target)
+                .args(["which", "rust-analyzer"])
+                .current_dir(&workspace),
+        ) else {
             return;
         };
         if !oracle.status.success() {

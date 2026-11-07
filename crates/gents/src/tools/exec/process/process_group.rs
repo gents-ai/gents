@@ -133,14 +133,14 @@ mod tests {
 
     #[tokio::test]
     async fn leader_term_exit_does_not_leave_term_ignoring_child() {
-        let mut command =
-            tokio::process::Command::from(crate::tools::exec::native_spawn::std_command("/bin/sh"));
+        let mut command = tokio::process::Command::new("/bin/sh");
         command.args(["-c", "trap 'exit 0' TERM; (trap '' TERM; printf 'ready\\n'; while :; do sleep 60; done) & wait"])
             .process_group(0)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
-        let mut child = ManagedChild::new(command.spawn().unwrap());
+        let mut child =
+            ManagedChild::new(crate::tools::exec::native_spawn::spawn_tokio(&mut command).unwrap());
         let identity =
             crate::tools::exec::ownership::ProcessIdentity::of_live(child.pgid().unwrap()).unwrap();
         let stdout = child.inner.stdout.take().unwrap();
