@@ -1843,6 +1843,99 @@ async fn a_documents_dependency_installs_non_explicitly_before_its_dependent() {
 }
 
 #[tokio::test]
+async fn installing_a_dependent_preserves_the_installed_dependency_environment() {
+    let (node, access) = dependency_fixture().await;
+    let (_dep_guard, dep_dir) =
+        crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+    let config_path = dep_dir.join("pack_config.json");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    config["agents"][0]["description"] = json!("${DEPENDEE_LABEL:-unset}");
+    std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let (bytes, _) = crate::pack::archive::pack_dir(&dep_dir).unwrap();
+    let dependee = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
+    let (_guards, _, dependent) = documents_dependency_pair(false, false);
+    let options = crate::pack::PackInstallOptions {
+        node_did: OWNER.into(),
+    };
+    let requested = BTreeMap::from([("worker".to_owned(), "glm:inference".to_owned())]);
+    let original = |name: &str| (name == "DEPENDEE_LABEL").then(|| "original".to_owned());
+    let changed = |name: &str| (name == "DEPENDEE_LABEL").then(|| "dependent".to_owned());
+    let load = |archive: &crate::pack::archive::PackArchive,
+                environment: &dyn Fn(&str) -> Option<String>| {
+        crate::pack::load_pack_config(
+            archive.manifest(),
+            &options,
+            &|path| Ok(archive.asset(path)?.to_vec()),
+            environment,
+        )
+        .unwrap()
+    };
+    let authored = load(&dependee, &original);
+    let prepared = prepare_document_pack_install(
+        &access,
+        OWNER,
+        dependee.manifest(),
+        &authored,
+        &requested,
+        &[],
+        crate::pack::InstalledVia::Operator,
+        None,
+        None,
+        &original,
+    )
+    .await
+    .unwrap();
+    install_prepared_document_pack(
+        &access,
+        OWNER,
+        &dependee,
+        &[],
+        &prepared,
+        None,
+        false,
+        crate::pack::InstalledVia::Operator,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+
+    let authored = load(&dependent, &changed);
+    let prepared = prepare_document_pack_install(
+        &access,
+        OWNER,
+        dependent.manifest(),
+        &authored,
+        &requested,
+        &[&dependee],
+        crate::pack::InstalledVia::Operator,
+        None,
+        None,
+        &changed,
+    )
+    .await
+    .unwrap();
+    install_prepared_document_pack(
+        &access,
+        OWNER,
+        &dependent,
+        &[&dependee],
+        &prepared,
+        None,
+        false,
+        crate::pack::InstalledVia::Operator,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let rows = access
+        .execute(r#"{ Agent(filter: {agent_id: {_eq: "fixture-dependee"}}) { description } }"#)
+        .await
+        .unwrap();
+    assert_eq!(rows["data"]["Agent"][0]["description"], "original");
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_failing_dependent_does_not_publish_its_documents_dependency() {
     let (_node, access) = dependency_fixture().await;
     let (_guards, dependee, dependent) = documents_dependency_pair(false, true);
