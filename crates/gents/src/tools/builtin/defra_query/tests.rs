@@ -618,21 +618,29 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
     let alice =
         crate::store::identity::KeyIdentity::load_or_create(keys.path().join("alice.key"), None)
             .unwrap();
-    let bob =
-        crate::store::identity::KeyIdentity::load_or_create(keys.path().join("bob.key"), None)
-            .unwrap();
-    let alice_did = crate::store::identity::NodeIdentity::did(&alice);
-    let bob_did = crate::store::identity::NodeIdentity::did(&bob);
+    let alice_node_did = crate::store::identity::NodeIdentity::did(&alice).to_owned();
+    let alice_agent = crate::store::identity::resolve_agent_identity(
+        &alice,
+        &crate::store::identity::provision_agent_identity(&alice).unwrap(),
+    )
+    .unwrap();
+    let bob_agent = crate::store::identity::resolve_agent_identity(
+        &alice,
+        &crate::store::identity::provision_agent_identity(&alice).unwrap(),
+    )
+    .unwrap();
+    let alice_did = crate::store::identity::NodeIdentity::did(&*alice_agent).to_owned();
+    let bob_did = crate::store::identity::NodeIdentity::did(&*bob_agent).to_owned();
     let node = Arc::new(
         crate::defra_node::Node::builder()
-            .with_node_identity_did(alice_did.to_owned())
+            .with_node_identity_did(alice_node_did.clone())
             .build()
             .await
             .unwrap(),
     );
     let policy = node
         .add_dac_policy_as(
-            &defra_core::RequestContext::default().with_identity(Some(alice_did.to_owned())),
+            &defra_core::RequestContext::default().with_identity(Some(alice_node_did.clone())),
             "name: Private query rows\nresources:\n  - name: records\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n",
         )
         .await
@@ -643,29 +651,34 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
     ))
     .await
     .unwrap();
-    for (did, label) in [(alice_did, "Alice-only"), (bob_did, "Bob-only")] {
+    for (agent, label) in [(&alice_agent, "Alice-only"), (&bob_agent, "Bob-only")] {
         let mutation = format!(
             "mutation {{ add_PrivateRecord(input: {{label: \"{}\"}}) {{_docID}} }}",
             crate::store::graphql::escape_graphql_string(label)
         );
-        crate::store::config_client::ConfigAccess::transact_local_write(
-            &node,
-            Some(::identity::Did::new(did).unwrap()),
-            "seed_private_query",
-            |txn| Box::pin(async { txn.execute(&mutation).await }),
+        let access = crate::store::config_client::ConfigAccess::local_managed_agent(
+            node.clone(),
+            ::identity::Did::new(crate::store::identity::NodeIdentity::did(&**agent)).unwrap(),
+            agent.as_ref(),
         )
-        .await
         .unwrap();
+        access
+            .transact_write("seed_private_query", |txn| {
+                let mutation = &mutation;
+                Box::pin(async move { txn.execute(mutation).await })
+            })
+            .await
+            .unwrap();
     }
     let mut ids = rapidhash::RapidHashMap::default();
-    for (did, label) in [(alice_did, "Alice-only"), (bob_did, "Bob-only")] {
-        let actor = ::identity::Did::new(did).unwrap();
-        let rows = crate::store::config_client::ConfigAccess::transact_local_write(
-            &node,
-            Some(actor),
-            "test.private_field_ids",
-            |txn| Box::pin(async { txn.execute("{PrivateRecord {_docID label}}").await }),
+    for (did, label) in [(&alice_did, "Alice-only"), (&bob_did, "Bob-only")] {
+        let rows = crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            ::identity::Did::new(did.as_str()).unwrap(),
         )
+        .transact_readonly("test.private_field_ids", |txn| {
+            Box::pin(async move { txn.execute("{PrivateRecord {_docID label}}").await })
+        })
         .await
         .unwrap();
         ids.insert(

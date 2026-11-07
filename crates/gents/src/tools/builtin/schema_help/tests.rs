@@ -559,7 +559,15 @@ async fn inline_lens_migration_transforms_existing_rows_through_native_owner() {
         .unwrap()
         .to_owned();
     let patch=apply(&tool,json!({"argv":["collection","update"],"target_id":"FixtureDoc","options":{"patch":[{"op":"add","path":"/FixtureDoc/Fields/-","value":{"Name":"label","Kind":"String"}},{"op":"replace","path":"/FixtureDoc/IsActive","value":false}]}})).await;
-    let dest = patch["result"]["VersionID"].as_str().unwrap().to_owned();
+    assert!(patch["committed"].as_bool().unwrap_or(false), "{patch}");
+    let dest = access
+        .collection_version("FixtureDoc")
+        .await
+        .unwrap()
+        .unwrap()["VersionID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let lens = crate::defra_node::LensConfig::new(
         &source,
         &dest,
