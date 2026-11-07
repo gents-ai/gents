@@ -983,6 +983,7 @@ mod tests {
         .expect("seed applied pairing route");
         let (_authority, enrollment) = test_enrollment_authority(Some(fence));
         let store = Arc::new(GraphqlHydrationStore {
+            malformed_discovery_count: Default::default(),
             node: node.clone(),
             identity,
             enrollment,

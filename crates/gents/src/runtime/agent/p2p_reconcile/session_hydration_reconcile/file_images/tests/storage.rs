@@ -76,6 +76,7 @@ async fn fixture_with_reference(
     let document_id =
         crate::store::graphql::created_doc_id(&response, "FileImageHydrationRequest").unwrap();
     let store = GraphqlHydrationStore {
+        malformed_discovery_count: Default::default(),
         node,
         enrollment: crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
         identity,
@@ -232,6 +233,7 @@ async fn inventory_bound_receipt_roundtrips_and_refuses_a_changed_snapshot() {
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let store = GraphqlHydrationStore {
+        malformed_discovery_count: Default::default(),
         node,
         enrollment: crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
         identity,

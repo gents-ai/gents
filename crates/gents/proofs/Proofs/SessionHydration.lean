@@ -1,4 +1,5 @@
 import Proofs.SessionHydration.State
+import Proofs.SessionHydration.Discovery
 import Proofs.SessionHydration.Executable
 import Proofs.SessionHydration.Properties
 import Proofs.SessionHydration.Receiver
