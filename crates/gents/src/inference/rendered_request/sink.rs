@@ -860,13 +860,6 @@ pub(crate) fn defra_rendered_request_capture_factory_for_agent(
     )?))
 }
 
-#[cfg(test)]
-pub(crate) fn defra_rendered_request_capture_factory(
-    node: Arc<EmbeddedNode>,
-) -> RenderedRequestCaptureFactory {
-    capture_factory(DefraRenderedRequestSink::new(node))
-}
-
 /// Fixture factory for a claimed request whose lifecycle holds the Agent's
 /// managed signer; captures persist as that Agent, as in production.
 #[cfg(test)]

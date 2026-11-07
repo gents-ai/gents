@@ -460,16 +460,6 @@ struct TerminalizeSpec<'a> {
     pending_fence: Option<(&'a [String], Option<DateTime<Utc>>)>,
 }
 
-#[cfg(test)]
-async fn terminalize_execution_with_time(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor: identity::Did,
-    spec: TerminalizeSpec<'_>,
-) -> Result<TerminalizeResult> {
-    let access = crate::ConfigAccess::local_as(node.clone(), actor);
-    terminalize_execution_with_access(&access, spec).await
-}
-
 async fn terminalize_execution_with_access(
     access: &crate::ConfigAccess,
     spec: TerminalizeSpec<'_>,

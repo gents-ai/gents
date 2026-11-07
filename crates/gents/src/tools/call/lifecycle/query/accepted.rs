@@ -13,20 +13,8 @@ use crate::store::graphql::escape_graphql_string;
 use super::ToolCallLifecycle;
 
 impl ToolCallLifecycle {
-    #[cfg(test)]
-    pub(crate) async fn load_accepted_for_dispatch(
-        node: &std::sync::Arc<EmbeddedNode>,
-        tool_doc_id: &str,
-        node_did: &str,
-        session_id: &str,
-        requester_did: Option<&str>,
-    ) -> Result<AcceptedToolCall> {
-        Self::load_direct_binding(node, None, tool_doc_id, node_did, session_id, requester_did, true)
-            .await
-    }
-
-    /// [`Self::load_accepted_for_dispatch`] read as the owning Agent, which
-    /// alone sees its Agent-owned call rows.
+    /// The accepted dispatch binding of a direct call, read as the owning
+    /// Agent, which alone sees its Agent-owned call rows.
     #[cfg(test)]
     pub(crate) async fn load_accepted_for_dispatch_as(
         node: &std::sync::Arc<EmbeddedNode>,
@@ -38,7 +26,7 @@ impl ToolCallLifecycle {
     ) -> Result<AcceptedToolCall> {
         Self::load_direct_binding(
             node,
-            Some(actor),
+            actor,
             tool_doc_id,
             node_did,
             session_id,
@@ -51,7 +39,7 @@ impl ToolCallLifecycle {
     #[cfg(test)]
     async fn load_direct_binding(
         node: &std::sync::Arc<EmbeddedNode>,
-        actor: Option<identity::Did>,
+        actor: identity::Did,
         tool_doc_id: &str,
         node_did: &str,
         session_id: &str,
@@ -60,7 +48,7 @@ impl ToolCallLifecycle {
     ) -> Result<AcceptedToolCall> {
         ConfigAccess::transact_local_readonly(
             node,
-            actor,
+            Some(actor),
             "tool_call.load_direct_admission",
             |txn| {
                 Box::pin(Self::load_direct_binding_in_txn(
