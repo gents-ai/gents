@@ -724,6 +724,28 @@ def originalReasoningWitness (row : TaggedReplayRow) : ReasoningWitness :=
   (reasoningCandidates [row]).filterMap fun candidate =>
     candidate.blockIndex.map fun index => (index, candidate.parts)
 
+def sourcePrefixLength (row : TaggedReplayRow) : Nat :=
+  ((row.blockIndices.zip (List.range row.blocks.length)).takeWhile fun pair =>
+    pair.1 == pair.2).length
+
+def projectRecoveredPrefix (resolve : ReplayTag → List ResolvedReplayEvidence)
+    (row : TaggedReplayRow) : TaggedReplayRow :=
+  match row.source with
+  | none => row
+  | some tag =>
+      match resolve tag with
+      | [evidence] =>
+          if evidence.origin != .recoveredProvider || evidence.complete ||
+              !replayRowIndicesValid row then row
+          else
+            let cutoff := sourcePrefixLength row
+            let kept := (row.blockIndices.zip row.blocks).filter fun pair =>
+              pair.1 < cutoff || match pair.2 with
+                | .reasoning .. => false
+                | _ => true
+            { row with blockIndices := kept.map Prod.fst, blocks := kept.map Prod.snd }
+      | _ => row
+
 /-- Replayability is endpoint-family specific. This validates native payload
 shape only; acceptance and source closure remain external provenance premises. -/
 def replayableReasoning (wire : ReplayWire)
@@ -1147,7 +1169,8 @@ def turnGroups (rows : List TaggedReplayRow) : List TurnGroup :=
     | [] => none
     | group => some { candidates := group
                       , ordinary := row.blocks.any encodableOrdinary
-                      , sourcePrefix := row.blockIndices == List.range row.blocks.length }
+                      , sourcePrefix := group.all fun candidate =>
+                          candidate.blockIndex.any (· < sourcePrefixLength row) }
 
 def groupCandidates (groups : List TurnGroup) : List ReasoningCandidate :=
   groups.flatMap (·.candidates)

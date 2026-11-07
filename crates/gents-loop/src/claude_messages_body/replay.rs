@@ -57,6 +57,42 @@ pub struct TaggedAssistantRow {
     pub content: Vec<AssistantContent>,
 }
 
+pub fn project_recovered_prefix(
+    rows: &[TaggedAssistantRow],
+    mut resolve: impl FnMut(&ReplayTag) -> Vec<ResolvedReplayEvidence>,
+) -> Vec<TaggedAssistantRow> {
+    rows.iter()
+        .map(|row| {
+            let recovered = row.source.as_ref().is_some_and(|tag| {
+                matches!(resolve(tag).as_slice(),
+            [evidence] if evidence.origin == ReplayOrigin::RecoveredProvider && !evidence.complete)
+            });
+            let valid = row.block_indices.len() == row.content.len()
+                && row.block_indices.windows(2).all(|pair| pair[0] < pair[1]);
+            if !recovered || !valid {
+                return row.clone();
+            }
+            let prefix = row
+                .block_indices
+                .iter()
+                .copied()
+                .enumerate()
+                .take_while(|(expected, actual)| expected == actual)
+                .count();
+            let mut projected = row.clone();
+            projected.content.clear();
+            projected.block_indices.clear();
+            for (index, block) in row.block_indices.iter().copied().zip(&row.content) {
+                if index < prefix || !matches!(block, AssistantContent::Reasoning(_)) {
+                    projected.block_indices.push(index);
+                    projected.content.push(block.clone());
+                }
+            }
+            projected
+        })
+        .collect()
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReplayCheckpoint {
     pub required: Vec<ReplayTag>,
@@ -210,9 +246,19 @@ fn turn_groups(rows: &[TaggedAssistantRow]) -> Vec<TurnGroup<'_>> {
     rows.iter()
         .filter_map(|row| {
             let candidates = row_candidates(row);
+            let prefix = row
+                .block_indices
+                .iter()
+                .copied()
+                .enumerate()
+                .take_while(|(expected, actual)| expected == actual)
+                .count();
+            let source_prefix = candidates
+                .iter()
+                .all(|candidate| candidate.block_index.is_some_and(|index| index < prefix));
             (!candidates.is_empty()).then(|| TurnGroup {
                 candidates,
-                source_prefix: row.block_indices.iter().copied().eq(0..row.content.len()),
+                source_prefix,
                 ordinary: row.content.iter().any(|block| match block {
                     AssistantContent::Text(text) => !text.text.is_empty(),
                     AssistantContent::ToolCall(_) => true,

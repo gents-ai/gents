@@ -1584,10 +1584,11 @@ private def reasoningSuffixCase (name : String) (context : List UInt8)
     (resolutions : List PromptAssemblyClaudeCheckpointResolution) :
     PromptAssemblyReasoningSuffixCase :=
   let resolve := resolveFrom resolutions
-  let stage := PromptAssembly.ClaudeMap.replayStage rows issuer wire resolve
+  let projected := rows.map (PromptAssembly.ClaudeMap.projectRecoveredPrefix resolve)
+  let stage := PromptAssembly.ClaudeMap.replayStage projected issuer wire resolve
   { name, issuer, wire, rows, resolutions, stage,
     assembled := replayCaseAssemble wire context stage,
-    replay := PromptAssembly.ClaudeMap.restoreHistoricalReasoningSuffix rows issuer wire
+    replay := PromptAssembly.ClaudeMap.restoreHistoricalReasoningSuffix projected issuer wire
       resolve (replayCaseAssemble wire context) }
 
 private def turnStartsFrom (offset : Nat) (positions : List Nat) :
