@@ -974,6 +974,19 @@ mod tests {
 
     /// The fixture Agent's managed access, used for every lifecycle write a
     /// request performs (claim, begin, goal and requeue writes).
+    async fn load_agent_goal(
+        node: &Arc<EmbeddedNode>,
+        session: &str,
+    ) -> anyhow::Result<Option<crate::goal::GoalDocument>> {
+        agent_access(node)
+            .transact_readonly("test.claim_agent_goal", |txn| {
+                Box::pin(async move {
+                    crate::goal::load_canonical_goal_in_txn(txn, &test_node_did(), session).await
+                })
+            })
+            .await
+    }
+
     /// The working Agent owns the sessions its claims and goals observe.
     async fn ensure_agent_session(
         node: &Arc<EmbeddedNode>,
@@ -1448,9 +1461,8 @@ mod tests {
                 })
             })
             .collect::<Vec<_>>();
-        crate::store::config_client::ConfigAccess::transact_local_write(
-            &node,
-            None,
+        // The firing Agent stages each receipt beside the request it creates.
+        agent_access(&node).transact_write(
             "test.seed_serial_claim_receipts",
             |txn| {
                 let receipts = receipts.clone();
@@ -1540,7 +1552,7 @@ mod tests {
                     "goal_id": original.goal_id, "goal_objective": "perform next assignment",
                     "goal_token_budget": task_budget, "goal_assignment_applied": false,
                 });
-                crate::store::config_client::ConfigAccess::transact_local_write(&node, None, "test.task_assignment", |txn| {
+                agent_access(&node).transact_write("test.task_assignment", |txn| {
             let receipt = receipt.clone();
             Box::pin(async move {
                 txn.execute_with_variables("mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }",
@@ -1579,7 +1591,7 @@ mod tests {
                         .unwrap(),
                     DurableClaimOutcome::NotClaimed(ClaimOutcome::Queued)
                 ));
-                let unchanged = crate::goal::load_canonical_goal(&node, &test_node_did(), session)
+                let unchanged = load_agent_goal(&node, session)
                     .await
                     .unwrap()
                     .unwrap();
@@ -1625,7 +1637,7 @@ mod tests {
                     .await
                     .unwrap()
                     .was_claimed());
-                let assigned = crate::goal::load_canonical_goal(&node, &test_node_did(), session)
+                let assigned = load_agent_goal(&node, session)
                     .await
                     .unwrap()
                     .unwrap();
@@ -1648,11 +1660,7 @@ mod tests {
                     if stopped { 100 } else { 0 }
                 );
                 assert_eq!(
-                    crate::goal::refresh_goal_usage(
-                        &node,
-                        &identity::Did::new(test_agent_did()).unwrap(),
-                        &assigned
-                    )
+                    crate::goal::refresh_goal_usage_from_access(&agent_access(&node), &assigned)
                     .await
                     .unwrap(),
                     if stopped { 0 } else { 100 }
@@ -1702,8 +1710,8 @@ mod tests {
                 "queued_serial": true,
                 "goal_assignment_applied": false,
             });
-            crate::store::config_client::ConfigAccess::transact_local_write(
-                &node, None, "test.serial_claim_receipt", |txn| {
+            agent_access(&node).transact_write(
+                "test.serial_claim_receipt", |txn| {
                     let input = input.clone();
                     Box::pin(async move {
                         txn.execute_with_variables(
