@@ -881,7 +881,8 @@ async fn owned_test_hook_with_identity_policy(
         claimed_requester.clone(),
     )
     .await;
-    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
+    // The claimed execution deadline bounds the hook, as the daemon binds it.
+    hook.set_request_deadline_at(lifecycle.claimed_deadline_at())
         .await;
     // The loop's writes to the agent-owned request run as the claimed Agent.
     let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(

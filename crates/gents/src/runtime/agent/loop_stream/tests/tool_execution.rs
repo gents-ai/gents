@@ -1295,7 +1295,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
         assert_eq!(output, "output");
         assert_eq!(
             crate::tools::background::status::observe_canonical_tool_output_with_access(
-                &lifecycle.access().unwrap(),
+                &crate::store::config_client::ConfigAccess::local(node.clone()),
                 "tool-doc",
                 &request_id,
                 "session",
