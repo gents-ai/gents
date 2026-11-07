@@ -100,7 +100,7 @@ async fn create_event_trigger_with_filter(
         (gents::Collection::Trigger, serde_json::json!({
             "trigger_id": trigger_id, "node_did": owner, "task_id": task_id,
             "source": {"kind": "event", "event_source_id": trigger_id},
-            "enabled": true, "concurrency": "serial", "fire_count": 0,
+            "enabled": true, "concurrency": "serial",
         })),
     ]).await;
 }
@@ -243,6 +243,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     let db = test_db("event-trigger-e2e").await;
 
     let fixture = managed_agent_fixture(&db).await;
+    crate::support::grant_household_owner(&db, &fixture.user).await;
     register_webhook_event_schema(&fixture.access).await;
 
     let identity = db.node_identity.clone();

@@ -1,35 +1,28 @@
 //! Owns its own `ReplicatedEvent` source schema: the single-node
 //! `event_trigger_e2e.rs` uses `WebhookEvent` in the same process-global
 //! DefraDB schema registry.
+//!
+//! P2P carries only discovery and enrollment documents, so an application
+//! event source never reaches a peer's trigger; the single-node trigger path
+//! is covered by `event_source_trigger_e2e`.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::Node as EmbeddedNode;
-use gents::store::config_client::ConfigAccess;
+use gents::runtime::agent::p2p_reconcile::{
+    EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin, RemoteP2pAdminError,
+};
 use gents::store::graphql::escape_graphql_string;
-use gents::{DocumentRuntimeOptions, Gents, ToolCeiling};
-use gents_protocol::row::AgentRequestRow;
-use serde::Deserialize;
 use serde_json::Value;
 
-use crate::support::fixtures::{bind_default_agent_backend, test_identity};
-use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
-use crate::support::snapshots::{fetch_runtime_snapshot, is_routed_ready_after, RuntimeSnapshot};
 use crate::support::test_p2p_db;
 
-const TRIGGER_ID: &str = "trigger-p2p-signup";
-const TASK_ID: &str = "task-p2p-signup";
 const EXTERNAL_ID: &str = "wh-p2p-1";
-const PROMPT_TEMPLATE: &str = "fired for {{ doc.external_id }}";
 
 async fn register_replicated_event_schema(node: &EmbeddedNode) {
-    // The EventSource introspects the source collection's fields to hydrate
-    // `doc.*`. `kind` is indexed so the operator-authored filter
-    // (`{ kind: { _eq: "signup" } }`) passes DefraDB's limit-1 probe.
     let sdl = r#"
-        type ReplicatedEvent {
+        type ReplicatedEvent @branchable {
             external_id: String
             payload: String
             kind: String @index
@@ -40,475 +33,106 @@ async fn register_replicated_event_schema(node: &EmbeddedNode) {
         .expect("add_collection for ReplicatedEvent");
 }
 
-async fn create_task(
-    node: &Arc<EmbeddedNode>,
-    owner: &str,
-    task_id: &str,
-    agent_did: &str,
-    prompt_template: &str,
-) {
-    let escaped_owner = escape_graphql_string(owner);
-    let escaped_task_id = escape_graphql_string(task_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_prompt_template = escape_graphql_string(prompt_template);
-    let mutation = format!(
-        r#"mutation {{
-            create_Task(input: {{
-                node_did: "{escaped_owner}",
-                task_id: "{escaped_task_id}",
-                display_name: "{escaped_task_id}",
-                agent_did: "{escaped_agent_did}",
-                prompt_template: "{escaped_prompt_template}",
-                enabled: true
-            }}) {{ _docID }}
-        }}"#
-    );
-    ConfigAccess::write_local(node, "test.create_p2p_trigger_task", &mutation)
-        .await
-        .expect("create Task");
-}
-
-async fn create_event_trigger_with_filter(
-    node: &Arc<EmbeddedNode>,
-    owner: &str,
-    trigger_id: &str,
-    task_id: &str,
-    source_collection: &str,
-    event_kind: &str,
-    filter: &str,
-) {
-    let escaped_owner = escape_graphql_string(owner);
-    let escaped_trigger_id = escape_graphql_string(trigger_id);
-    let escaped_task_id = escape_graphql_string(task_id);
-    let escaped_source_collection = escape_graphql_string(source_collection);
-    let escaped_event_kind = escape_graphql_string(event_kind);
-    let escaped_filter = escape_graphql_string(filter);
-    let mutation = format!(
-        r#"mutation {{
-            create_EventSource(input: {{
-                event_source_id: "{escaped_trigger_id}",
-                node_did: "{escaped_owner}",
-                source_collection: "{escaped_source_collection}",
-                event_kind: "{escaped_event_kind}",
-                filter: "{escaped_filter}"
-            }}) {{ _docID }}
-            create_Trigger(input: {{
-                trigger_id: "{escaped_trigger_id}",
-                node_did: "{escaped_owner}",
-                task_id: "{escaped_task_id}",
-                source: {{ kind: "event", event_source_id: "{escaped_trigger_id}" }},
-                enabled: true,
-                concurrency: "serial",
-                fire_count: 0
-            }}) {{ _docID }}
-        }}"#
-    );
-    ConfigAccess::write_local(node, "test.create_p2p_event_trigger", &mutation)
-        .await
-        .expect("create Trigger");
-}
-
-async fn wait_for_runtime_snapshot<F>(
-    node: &EmbeddedNode,
-    node_did: &str,
-    predicate: F,
-) -> RuntimeSnapshot
-where
-    F: Fn(&RuntimeSnapshot) -> bool,
-{
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        let last_snapshot = fetch_runtime_snapshot(node, node_did).await;
-        if let Some(snapshot) = last_snapshot.as_ref() {
-            if predicate(snapshot) {
-                return snapshot.clone();
-            }
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for runtime snapshot for {node_did}; \
-             last_snapshot={last_snapshot:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
-async fn query_agent_requests_for_trigger(
-    node: &EmbeddedNode,
-    trigger_id: &str,
-) -> Vec<AgentRequestRow> {
-    let escaped_trigger_id = escape_graphql_string(trigger_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ caused_by_trigger_id: {{ _eq: "{escaped_trigger_id}" }} }}
-            ) {{
-                _docID
-                request_id
-                content
-                caused_by_trigger_id
-                caused_by_trigger_kind
-                execution_origin
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "AgentRequest query failed: {:?}",
-        response.errors
-    );
-    let rows = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    rows.into_iter()
-        .map(|row| serde_json::from_value(row).expect("decode AgentRequest row"))
-        .collect()
-}
-
-#[derive(Debug, Deserialize)]
-struct EventTriggerRow {
-    fire_count: Option<i64>,
-    last_status: Option<String>,
-    last_fired_source_doc_id: Option<String>,
-    last_error: Option<String>,
-    task_id: Option<String>,
-    source_collection: Option<String>,
-    event_kind: Option<String>,
-    enabled: Option<bool>,
-    concurrency: Option<String>,
-}
-
-async fn fetch_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> EventTriggerRow {
-    let escaped_trigger_id = escape_graphql_string(trigger_id);
-    let query = format!(
-        r#"{{
-            Trigger(
-                filter: {{ trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
-                limit: 1
-            ) {{
-                fire_count
-                last_status
-                last_fired_source_doc_id
-                last_error
-                task_id
-                enabled
-                concurrency
-            }}
-            EventSource(
-                filter: {{ event_source_id: {{ _eq: "{escaped_trigger_id}" }} }},
-                limit: 1
-            ) {{ source_collection event_kind }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "Trigger query failed: {:?}",
-        response.errors
-    );
-    let row = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("Trigger"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .cloned()
-        .expect("Trigger row missing");
-    let mut row: EventTriggerRow = serde_json::from_value(row).expect("decode Trigger row");
-    let source = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("EventSource"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .expect("EventSource row missing");
-    row.source_collection = source
-        .get("source_collection")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    row.event_kind = source
-        .get("event_kind")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    row
-}
-
-async fn write_replicated_event(node: &Arc<EmbeddedNode>, external_id: &str, kind: &str) -> String {
-    let escaped_external_id = escape_graphql_string(external_id);
-    let escaped_kind = escape_graphql_string(kind);
-    // Dynamically-added collections on DefraDB expose `add_<Collection>` as
-    // their insertion mutation alias (rather than `create_<Collection>`),
-    // returning an array of rows with `_docID`.
+async fn write_replicated_event(node: &EmbeddedNode, external_id: &str, kind: &str) -> String {
     let mutation = format!(
         r#"mutation {{
             add_ReplicatedEvent(input: {{
-                external_id: "{escaped_external_id}",
+                external_id: "{}",
                 payload: "{{}}",
-                kind: "{escaped_kind}"
+                kind: "{}"
             }}) {{ _docID }}
-        }}"#
+        }}"#,
+        escape_graphql_string(external_id),
+        escape_graphql_string(kind),
     );
-    let response = ConfigAccess::write_local(node, "test.add_p2p_replicated_event", &mutation)
-        .await
-        .expect("add ReplicatedEvent");
-    let data = response
-        .get("data")
-        .expect("add_ReplicatedEvent response missing data");
-    let field = data
-        .get("add_ReplicatedEvent")
-        .or_else(|| data.get("create_ReplicatedEvent"))
-        .unwrap_or_else(|| panic!("add_/create_ReplicatedEvent key missing; data={data:?}"));
-    field
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "add_ReplicatedEvent failed: {:?}",
+        response.errors
+    );
+    let created = &response.data.as_ref().expect("mutation data")["add_ReplicatedEvent"];
+    created
         .get("_docID")
+        .or_else(|| created.get(0).and_then(|row| row.get("_docID")))
         .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            field
-                .as_array()
-                .and_then(|rows| rows.first())
-                .and_then(|row| row.get("_docID"))
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
-        .unwrap_or_else(|| panic!("ReplicatedEvent mutation returned no _docID: {field}"))
+        .expect("ReplicatedEvent document ID")
+        .to_owned()
 }
 
-async fn query_replicated_events(node: &EmbeddedNode) -> Vec<Value> {
+async fn replicated_events(node: &EmbeddedNode) -> Vec<Value> {
     let response = node
-        .execute(r#"{ ReplicatedEvent { external_id kind } }"#)
+        .execute(r#"{ ReplicatedEvent { _docID external_id } }"#)
         .await;
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("ReplicatedEvent"))
-        .and_then(Value::as_array)
+    assert!(
+        !response.has_errors(),
+        "query ReplicatedEvent: {:?}",
+        response.errors
+    );
+    response.data.as_ref().expect("query data")["ReplicatedEvent"]
+        .as_array()
         .cloned()
         .unwrap_or_default()
 }
 
-async fn install_one_way_replicator(
-    sender: &EmbeddedNode,
-    receiver: &EmbeddedNode,
-    collections: &[&str],
-) {
-    let sender_addr = wait_for_listen_addr(sender).await;
-    let receiver_addr = wait_for_listen_addr(receiver).await;
-    let sender_p2p = sender.p2p().expect("sender p2p");
-    let receiver_p2p = receiver.p2p().expect("receiver p2p");
-
-    sender_p2p
-        .connect_peer(&receiver_addr)
-        .await
-        .expect("connect sender to receiver");
-    wait_for_connected_peer(sender).await;
-    wait_for_connected_peer(receiver).await;
-
-    let collection_names = collections
-        .iter()
-        .map(|name| (*name).to_string())
-        .collect::<Vec<_>>();
-    sender_p2p
-        .add_collections(collection_names.clone())
-        .await
-        .expect("add sender p2p collections");
-    receiver_p2p
-        .add_collections(collection_names.clone())
-        .await
-        .expect("add receiver p2p collections");
-    // DefraDB needs both the sender-side push target and the receiver-side
-    // authorization record. The data-flow under test remains sender -> receiver.
-    receiver_p2p
-        .add_replicator(
-            collection_names.clone(),
-            Some(&sender_addr),
-            Default::default(),
-            Vec::new(),
-            None,
-        )
-        .await
-        .expect("authorize sender as receiver-side replicator");
-    sender_p2p
-        .add_replicator(
-            collection_names,
-            Some(&receiver_addr),
-            Default::default(),
-            Vec::new(),
-            None,
-        )
-        .await
-        .expect("install sender to receiver replicator");
+fn refuses_runtime_local(result: Result<(), RemoteP2pAdminError>) -> bool {
+    matches!(
+        result,
+        Err(RemoteP2pAdminError::RuntimeLocalCollection(ref name)) if name == "ReplicatedEvent"
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn p2p_replicated_doc_fires_event_trigger() {
+async fn p2p_refuses_to_replicate_an_application_event_source() {
     let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
     let db_writer = test_p2p_db("event-trigger-p2p-writer").await;
     register_replicated_event_schema(db_writer.node.as_ref()).await;
-
     let db_agent = test_p2p_db("event-trigger-p2p-agent").await;
     register_replicated_event_schema(db_agent.node.as_ref()).await;
 
-    let identity = Arc::new(test_identity("event-trigger-p2p-agent"));
-    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        &db_agent,
-        "backend-event-trigger-p2p",
-        mock_endpoint.endpoint(),
-    )
-    .await;
+    let writer = EmbeddedRemoteP2pAdmin::new(db_writer.node.clone());
+    let agent = EmbeddedRemoteP2pAdmin::new(db_agent.node.clone());
+    let agent_addr = wait_for_listen_addr(db_agent.node.as_ref()).await;
+    writer
+        .connect(std::slice::from_ref(&agent_addr))
+        .await
+        .expect("connect writer to agent");
+    wait_for_connected_peer(db_writer.node.as_ref()).await;
 
-    let agent = Gents::from_default_agent_documents(
-        db_agent.node.clone(),
-        identity,
-        DocumentRuntimeOptions {
-            backend_admission: Some(db_agent.home.backend_admission()),
-            tool_ceiling: ToolCeiling::meta_only(),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    let node_did = agent.node_did().to_string();
-    let default_agent_did = agent.default_agent_did().to_string();
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.run(shutdown_rx));
-
-    let startup = wait_for_runtime_snapshot(db_agent.node.as_ref(), &node_did, |s| {
-        is_routed_ready_after(s, 0)
-    })
-    .await;
-    let initial_generation = startup.active_generation;
-
-    create_task(
-        &db_agent.node,
-        &node_did,
-        TASK_ID,
-        &default_agent_did,
-        PROMPT_TEMPLATE,
-    )
-    .await;
-    create_event_trigger_with_filter(
-        &db_agent.node,
-        &node_did,
-        TRIGGER_ID,
-        TASK_ID,
-        "ReplicatedEvent",
-        "created",
-        r#"{ kind: { _eq: "signup" } }"#,
-    )
-    .await;
-    wait_for_runtime_snapshot(db_agent.node.as_ref(), &node_did, |s| {
-        is_routed_ready_after(s, initial_generation)
-    })
-    .await;
-
-    install_one_way_replicator(
-        db_writer.node.as_ref(),
-        db_agent.node.as_ref(),
-        &["ReplicatedEvent"],
-    )
-    .await;
+    for admin in [&writer, &agent] {
+        assert!(
+            refuses_runtime_local(
+                admin
+                    .add_p2p_collections(&["ReplicatedEvent".to_owned()])
+                    .await
+            ),
+            "an application collection must not be subscribed"
+        );
+    }
+    assert!(
+        refuses_runtime_local(
+            writer
+                .add_replicator(
+                    std::slice::from_ref(&agent_addr),
+                    &["ReplicatedEvent".to_owned()],
+                    &PairingFilters::default(),
+                )
+                .await
+        ),
+        "an application collection must not be replicated to a peer"
+    );
 
     let source_doc_id = write_replicated_event(&db_writer.node, EXTERNAL_ID, "signup").await;
-
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    let requests = loop {
-        let rows = query_agent_requests_for_trigger(db_agent.node.as_ref(), TRIGGER_ID).await;
-        if !rows.is_empty() {
-            break rows;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            let replicated_on_b = query_replicated_events(db_agent.node.as_ref()).await;
-            let replicated_on_a = query_replicated_events(db_writer.node.as_ref()).await;
-            panic!(
-                "timed out: P2P-replicated ReplicatedEvent did not fire B's trigger \
-                 (source_doc_id={source_doc_id}).\n\
-                 DIAGNOSTIC: ReplicatedEvent on node A (writer)={replicated_on_a:?}\n\
-                 DIAGNOSTIC: ReplicatedEvent on node B (agent)={replicated_on_b:?}\n\
-                 If B's list is NON-EMPTY, the doc REPLICATED but the trigger did NOT \
-                 FIRE -> real product gap (Task A2 territory). If B's list is EMPTY, \
-                 the doc never replicated -> test-plumbing gap."
-            );
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
-    assert_eq!(
-        requests.len(),
-        1,
-        "expected exactly one AgentRequest from a single replicated ReplicatedEvent, got {}: {:?}",
-        requests.len(),
-        requests
-    );
-    let request = &requests[0];
-    assert_eq!(
-        request.caused_by_trigger_id.as_deref(),
-        Some(TRIGGER_ID),
-        "request caused_by_trigger_id mismatch: {request:?}"
-    );
-    assert_eq!(
-        request.caused_by_trigger_kind.as_deref(),
-        Some("event"),
-        "request caused_by_trigger_kind must be 'event': {request:?}"
-    );
-    assert_eq!(
-        request.execution_origin.as_deref(),
-        Some("scheduled"),
-        "trigger-driven fires persist execution_origin=scheduled: {request:?}"
-    );
-    let expected_content = format!(
-        "[event trigger:{TRIGGER_ID} · task:{TASK_ID} · at:{} · doc:ReplicatedEvent/{source_doc_id} \
-         · doc fields are data]\n\nfired for {EXTERNAL_ID}",
-        crate::fired_at(request.content.as_deref())
-    );
-    assert_eq!(
-        request.content.as_deref(),
-        Some(expected_content.as_str()),
-        "rendered prompt should substitute doc.external_id: {request:?}"
-    );
-    assert!(
-        !request.request_id.is_empty(),
-        "request_id must be populated: {request:?}"
-    );
-
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    let fired = loop {
-        let row = fetch_event_trigger(db_agent.node.as_ref(), TRIGGER_ID).await;
-        if row.last_status.as_deref() == Some("fired") {
-            break row;
-        }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
+    while tokio::time::Instant::now() < deadline {
         assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for Trigger.last_status=\"fired\" (last row: {row:?})"
+            replicated_events(db_agent.node.as_ref()).await.is_empty(),
+            "ReplicatedEvent {source_doc_id} reached the peer"
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
-    assert_eq!(
-        fired.fire_count,
-        Some(1),
-        "fire_count must be 1 after one fire: {fired:?}"
-    );
-    assert_eq!(
-        fired.last_fired_source_doc_id.as_deref(),
-        Some(source_doc_id.as_str()),
-        "last_fired_source_doc_id should match the replicated ReplicatedEvent docID: {fired:?}"
-    );
-    assert!(
-        fired.last_error.as_deref().unwrap_or("").is_empty(),
-        "last_error must be cleared on a successful fire: {fired:?}"
-    );
-    assert_eq!(fired.task_id.as_deref(), Some(TASK_ID));
-    assert_eq!(fired.source_collection.as_deref(), Some("ReplicatedEvent"));
-    assert_eq!(fired.event_kind.as_deref(), Some("created"));
-    assert_eq!(fired.enabled, Some(true));
-    assert_eq!(fired.concurrency.as_deref(), Some("serial"));
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert_eq!(replicated_events(db_writer.node.as_ref()).await.len(), 1);
 
-    let _ = shutdown_tx.send(true);
-    handle.await.unwrap().unwrap();
     db_writer.node.shutdown().await.expect("node shutdown");
     db_agent.node.shutdown().await.expect("node shutdown");
 }

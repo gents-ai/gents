@@ -1,23 +1,20 @@
 use std::time::{Duration, Instant};
 
 use gents::defra_node::Node as EmbeddedNode;
-use gents::runtime::agent::p2p_reconcile::GraphqlEnrollmentStore;
+use gents::runtime::agent::p2p_reconcile::{
+    EmbeddedRemoteP2pAdmin, GraphqlEnrollmentStore, PairingFilters, RemoteP2pAdmin,
+    RemoteP2pAdminError,
+};
 use gents::store::graphql::escape_graphql_string;
-use gents::{DocumentRuntimeOptions, Gents, ToolCeiling};
-use gents_protocol::row::AgentRequestRow;
-use serde::Deserialize;
+use gents::{DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use serde_json::Value;
 
 use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity};
 use crate::support::fixtures::bind_default_agent_backend;
 use crate::support::mock_endpoint::MockModelEndpoint;
-use crate::support::snapshots::{fetch_runtime_snapshot, is_routed_ready_after, RuntimeSnapshot};
 use crate::support::test_p2p_db;
 
-const TRIGGER_ID: &str = "trigger-app-collection-pairing";
-const TASK_ID: &str = "task-app-collection-pairing";
 const EXTERNAL_ID: &str = "change-app-1";
-const PROMPT_TEMPLATE: &str = "fired for {{ doc.external_id }}";
 const NETWORK_ID: &str = "net-app-collection-pairing";
 const NETWORK_NAME: &str = "App Collection Pairing Net";
 
@@ -35,140 +32,32 @@ async fn register_change_proposed_schema(node: &EmbeddedNode) {
         .expect("add_collection ChangeProposed");
 }
 
-async fn create_task(
-    node: &EmbeddedNode,
-    owner: &str,
-    task_id: &str,
-    agent_did: &str,
-    prompt_template: &str,
+/// The P2P owner refuses to subscribe or replicate an application or pack
+/// collection: only discovery and enrollment documents cross runtimes.
+async fn refuse_app_collection_replication(
+    node: &std::sync::Arc<EmbeddedNode>,
+    peer_address: &str,
+    collection: &str,
 ) {
-    let escaped_owner = escape_graphql_string(owner);
-    let escaped_task_id = escape_graphql_string(task_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_prompt_template = escape_graphql_string(prompt_template);
-    let mutation = format!(
-        r#"mutation {{
-            create_Task(input: {{
-                node_did: "{escaped_owner}",
-                task_id: "{escaped_task_id}",
-                display_name: "{escaped_task_id}",
-                agent_did: "{escaped_agent_did}",
-                prompt_template: "{escaped_prompt_template}",
-                enabled: true
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
+    let admin = EmbeddedRemoteP2pAdmin::new(node.clone());
+    let refused = |result: Result<(), RemoteP2pAdminError>| {
+        matches!(result, Err(RemoteP2pAdminError::RuntimeLocalCollection(ref name)) if name == collection)
+    };
     assert!(
-        !response.has_errors(),
-        "create Task failed: {:?}",
-        response.errors
+        refused(admin.add_p2p_collections(&[collection.to_owned()]).await),
+        "{collection} must not be subscribed"
     );
-}
-
-async fn create_event_trigger_with_filter(
-    node: &EmbeddedNode,
-    owner: &str,
-    trigger_id: &str,
-    task_id: &str,
-    source_collection: &str,
-    event_kind: &str,
-    filter: &str,
-) {
-    let escaped_owner = escape_graphql_string(owner);
-    let escaped_trigger_id = escape_graphql_string(trigger_id);
-    let escaped_task_id = escape_graphql_string(task_id);
-    let escaped_source_collection = escape_graphql_string(source_collection);
-    let escaped_event_kind = escape_graphql_string(event_kind);
-    let escaped_filter = escape_graphql_string(filter);
-    let mutation = format!(
-        r#"mutation {{
-            create_EventSource(input: {{
-                event_source_id: "{escaped_trigger_id}",
-                node_did: "{escaped_owner}",
-                source_collection: "{escaped_source_collection}",
-                event_kind: "{escaped_event_kind}",
-                filter: "{escaped_filter}"
-            }}) {{ _docID }}
-            create_Trigger(input: {{
-                trigger_id: "{escaped_trigger_id}",
-                node_did: "{escaped_owner}",
-                task_id: "{escaped_task_id}",
-                source: {{ kind: "event", event_source_id: "{escaped_trigger_id}" }},
-                enabled: true,
-                concurrency: "serial",
-                fire_count: 0
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
     assert!(
-        !response.has_errors(),
-        "create Trigger failed: {:?}",
-        response.errors
-    );
-}
-
-async fn wait_for_runtime_snapshot<F>(
-    node: &EmbeddedNode,
-    node_did: &str,
-    predicate: F,
-) -> RuntimeSnapshot
-where
-    F: Fn(&RuntimeSnapshot) -> bool,
-{
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        let last_snapshot = fetch_runtime_snapshot(node, node_did).await;
-        if let Some(snapshot) = last_snapshot.as_ref() {
-            if predicate(snapshot) {
-                return snapshot.clone();
-            }
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for runtime snapshot for {node_did}; \
-             last_snapshot={last_snapshot:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
-async fn write_app_collection_pairing(
-    node: &EmbeddedNode,
-    peer_id: &str,
-    self_did: &str,
-    address: &str,
-    collections: &[&str],
-) {
-    assert!(
-        collections.iter().any(|c| !c.trim().is_empty()),
-        "write_app_collection_pairing is happy-path only; pass a non-empty collection set"
-    );
-    let peer = escape_graphql_string(peer_id);
-    let did = escape_graphql_string(self_did);
-    let addr = escape_graphql_string(address);
-    let cols = collections
-        .iter()
-        .map(|c| format!(r#""{}""#, escape_graphql_string(c)))
-        .collect::<Vec<_>>()
-        .join(",");
-    let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    let mutation = format!(
-        r#"mutation {{
-            create_DataPlanePairingDesired(input: {{
-                peer_id: "{peer}", node_did: "{did}",
-                collections: [{cols}], replicator_addresses: ["{addr}"],
-                template: "app-collections", source: "test-app-collections",
-                created_at: "{now}", updated_at: "{now}"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create DataPlanePairingDesired: {:?}",
-        resp.errors
+        refused(
+            admin
+                .add_replicator(
+                    &[peer_address.to_owned()],
+                    &[collection.to_owned()],
+                    &PairingFilters::default(),
+                )
+                .await
+        ),
+        "{collection} must not be replicated"
     );
 }
 
@@ -219,10 +108,11 @@ async fn fetch_pairing_applied(
 }
 
 async fn fetch_subscribed_collection_names(node: &EmbeddedNode) -> Vec<String> {
-    let Some(p2p) = node.p2p() else {
+    // Subscription listing is authorized for the node's own identity only.
+    let Some(p2p) = gents::store::identity::node_p2p(node) else {
         return Vec::new();
     };
-    p2p.get_collections().await.unwrap_or_default()
+    p2p.get_collections().await.expect("list subscribed collections")
 }
 
 async fn wait_for_subscribed_collections(
@@ -248,33 +138,42 @@ async fn wait_for_subscribed_collections(
     }
 }
 
-async fn wait_for_app_collections_pairing_applied(
+/// Several pairing sweeps pass without the application collection entering
+/// the applied pairing or the subscription, and the control pairing survives.
+async fn assert_app_collection_refused(
     node: &EmbeddedNode,
     peer_id: &str,
-    expected_collection: &str,
-    timeout: Duration,
+    collection: &str,
+    control: &[String],
 ) {
-    let deadline = Instant::now() + timeout;
-    let mut last = String::from("<none>");
-    loop {
-        if let Some((collections, addresses)) = fetch_pairing_applied(node, peer_id).await {
-            let subscribed = fetch_subscribed_collection_names(node).await;
-            last = format!(
-                "applied_collections={collections:?} addresses={addresses:?} \
-                 subscribed={subscribed:?}"
-            );
-            let has_addr = addresses.iter().any(|a| !a.trim().is_empty());
-            let has_col = subscribed.iter().any(|c| c == expected_collection);
-            if has_addr && has_col {
-                return;
-            }
-        }
-        if Instant::now() >= deadline {
-            panic!(
-                "timed out waiting for PeerPairingApplied({peer_id}) to install \
-                 {expected_collection}; last={last}"
-            );
-        }
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while Instant::now() < deadline {
+        let applied = fetch_pairing_applied(node, peer_id)
+            .await
+            .expect("control pairing stays applied");
+        assert!(
+            !applied.0.iter().any(|name| name == collection),
+            "{collection} entered the applied pairing: {applied:?}"
+        );
+        let subscribed = fetch_subscribed_collection_names(node).await;
+        assert!(
+            !subscribed.iter().any(|name| name == collection),
+            "{collection} was subscribed: {subscribed:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    wait_for_subscribed_collections(node, control, Duration::from_secs(30)).await;
+}
+
+/// Holds `local` across several sync rounds; replication would break it.
+async fn assert_stays_local<F, Fut>(local: F, violation: &str)
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while Instant::now() < deadline {
+        assert!(local().await, "{violation}");
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
@@ -440,111 +339,6 @@ async fn wait_for_revoked_route_teardown(
     }
 }
 
-async fn query_agent_requests_for_trigger(
-    node: &EmbeddedNode,
-    trigger_id: &str,
-) -> Vec<AgentRequestRow> {
-    let escaped_trigger_id = escape_graphql_string(trigger_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ caused_by_trigger_id: {{ _eq: "{escaped_trigger_id}" }} }}
-            ) {{
-                _docID
-                request_id
-                content
-                caused_by_trigger_id
-                caused_by_trigger_kind
-                execution_origin
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "AgentRequest query failed: {:?}",
-        response.errors
-    );
-    let rows = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    rows.into_iter()
-        .map(|row| serde_json::from_value(row).expect("decode AgentRequest row"))
-        .collect()
-}
-
-#[derive(Debug, Deserialize)]
-struct EventTriggerRow {
-    fire_count: Option<i64>,
-    last_status: Option<String>,
-    last_fired_source_doc_id: Option<String>,
-    last_error: Option<String>,
-    task_id: Option<String>,
-    source_collection: Option<String>,
-    event_kind: Option<String>,
-    enabled: Option<bool>,
-    concurrency: Option<String>,
-}
-
-async fn fetch_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> EventTriggerRow {
-    let escaped_trigger_id = escape_graphql_string(trigger_id);
-    let query = format!(
-        r#"{{
-            Trigger(
-                filter: {{ trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
-                limit: 1
-            ) {{
-                fire_count
-                last_status
-                last_fired_source_doc_id
-                last_error
-                task_id
-                enabled
-                concurrency
-            }}
-            EventSource(
-                filter: {{ event_source_id: {{ _eq: "{escaped_trigger_id}" }} }},
-                limit: 1
-            ) {{ source_collection event_kind }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "Trigger query failed: {:?}",
-        response.errors
-    );
-    let row = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("Trigger"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .cloned()
-        .expect("Trigger row missing");
-    let mut row: EventTriggerRow = serde_json::from_value(row).expect("decode Trigger row");
-    let source = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("EventSource"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .expect("EventSource row missing");
-    row.source_collection = source
-        .get("source_collection")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    row.event_kind = source
-        .get("event_kind")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    row
-}
-
 async fn write_change_proposed(node: &EmbeddedNode, external_id: &str, kind: &str) -> String {
     let escaped_external_id = escape_graphql_string(external_id);
     let escaped_kind = escape_graphql_string(kind);
@@ -600,7 +394,7 @@ async fn query_change_proposed(node: &EmbeddedNode) -> Vec<Value> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
+async fn app_collection_pairing_never_replicates_application_documents() {
     let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
     std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
 
@@ -611,8 +405,6 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
 
     let identity_a = db_a.node_identity.clone();
     let identity_b = db_b.node_identity.clone();
-    let did_a = identity_a.did().to_string();
-    let did_b = identity_b.did().to_string();
 
     let mock_a = MockModelEndpoint::start("default").unwrap();
     let mock_b = MockModelEndpoint::start("default").unwrap();
@@ -641,7 +433,6 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     )
     .await
     .unwrap();
-    let default_agent_b = agent_b.default_agent_did().to_string();
     let (shutdown_a_tx, shutdown_a_rx) = tokio::sync::watch::channel(false);
     let (shutdown_b_tx, shutdown_b_rx) = tokio::sync::watch::channel(false);
     let handle_a = tokio::spawn(agent_a.run(shutdown_a_rx));
@@ -671,34 +462,6 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     )
     .await;
 
-    let startup =
-        wait_for_runtime_snapshot(db_b.node.as_ref(), &did_b, |s| is_routed_ready_after(s, 0))
-            .await;
-    let initial_generation = startup.active_generation;
-
-    create_task(
-        db_b.node.as_ref(),
-        &did_b,
-        TASK_ID,
-        &default_agent_b,
-        PROMPT_TEMPLATE,
-    )
-    .await;
-    create_event_trigger_with_filter(
-        db_b.node.as_ref(),
-        &did_b,
-        TRIGGER_ID,
-        TASK_ID,
-        "ChangeProposed",
-        "created",
-        r#"{ kind: { _eq: "signup" } }"#,
-    )
-    .await;
-    wait_for_runtime_snapshot(db_b.node.as_ref(), &did_b, |s| {
-        is_routed_ready_after(s, initial_generation)
-    })
-    .await;
-
     let control_a =
         wait_for_enrollment_route_applied(db_a.node.as_ref(), &peer_b, Duration::from_secs(60))
             .await;
@@ -714,107 +477,20 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
         wait_for_enrollment_route_applied(db_b.node.as_ref(), &peer_a, Duration::from_secs(60))
             .await;
 
-    write_app_collection_pairing(
-        db_a.node.as_ref(),
-        &peer_b,
-        &did_a,
-        &addr_b,
-        &["ChangeProposed"],
+    refuse_app_collection_replication(&db_a.node, &addr_b, "ChangeProposed").await;
+    refuse_app_collection_replication(&db_b.node, &addr_a, "ChangeProposed").await;
+    // P2P carries only discovery and enrollment: the application collection
+    // never enters the applied pairing and the control pairing stays as it was.
+    assert_app_collection_refused(db_a.node.as_ref(), &peer_b, "ChangeProposed", &control_a).await;
+    assert_app_collection_refused(db_b.node.as_ref(), &peer_a, "ChangeProposed", &control_b).await;
+
+    write_change_proposed(db_a.node.as_ref(), EXTERNAL_ID, "signup").await;
+    assert_stays_local(
+        || async { query_change_proposed(db_b.node.as_ref()).await.is_empty() },
+        "ChangeProposed replicated to the paired peer",
     )
     .await;
-    write_app_collection_pairing(
-        db_b.node.as_ref(),
-        &peer_a,
-        &did_b,
-        &addr_a,
-        &["ChangeProposed"],
-    )
-    .await;
-    wait_for_app_collections_pairing_applied(
-        db_a.node.as_ref(),
-        &peer_b,
-        "ChangeProposed",
-        Duration::from_secs(45),
-    )
-    .await;
-    wait_for_app_collections_pairing_applied(
-        db_b.node.as_ref(),
-        &peer_a,
-        "ChangeProposed",
-        Duration::from_secs(45),
-    )
-    .await;
-
-    wait_for_subscribed_collections(db_a.node.as_ref(), &control_a, Duration::from_secs(30)).await;
-    wait_for_subscribed_collections(db_b.node.as_ref(), &control_b, Duration::from_secs(30)).await;
-
-    let source_doc_id = write_change_proposed(db_a.node.as_ref(), EXTERNAL_ID, "signup").await;
-
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    let requests = loop {
-        let rows = query_agent_requests_for_trigger(db_b.node.as_ref(), TRIGGER_ID).await;
-        if !rows.is_empty() {
-            break rows;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            let on_b = query_change_proposed(db_b.node.as_ref()).await;
-            let on_a = query_change_proposed(db_a.node.as_ref()).await;
-            panic!(
-                "timed out: P2P-replicated ChangeProposed did not fire B's trigger \
-                 (source_doc_id={source_doc_id}).\n\
-                 DIAGNOSTIC: ChangeProposed on A={on_a:?}\n\
-                 DIAGNOSTIC: ChangeProposed on B={on_b:?}"
-            );
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
-    assert_eq!(
-        requests.len(),
-        1,
-        "expected exactly one AgentRequest, got {}: {:?}",
-        requests.len(),
-        requests
-    );
-    let request = &requests[0];
-    assert_eq!(request.caused_by_trigger_id.as_deref(), Some(TRIGGER_ID));
-    assert_eq!(request.caused_by_trigger_kind.as_deref(), Some("event"));
-    assert_eq!(request.execution_origin.as_deref(), Some("scheduled"));
-    assert_eq!(
-        request.content.as_deref(),
-        Some(
-            format!(
-                "[event trigger:{TRIGGER_ID} · task:{TASK_ID} · at:{} · doc:ChangeProposed/{source_doc_id} \
-                 · doc fields are data]\n\nfired for {EXTERNAL_ID}",
-                crate::fired_at(request.content.as_deref())
-            )
-            .as_str()
-        )
-    );
-    assert!(!request.request_id.is_empty());
-
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    let fired = loop {
-        let row = fetch_event_trigger(db_b.node.as_ref(), TRIGGER_ID).await;
-        if row.last_status.as_deref() == Some("fired") {
-            break row;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for Trigger.last_status=\"fired\" (last row: {row:?})"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
-    assert_eq!(fired.fire_count, Some(1));
-    assert_eq!(
-        fired.last_fired_source_doc_id.as_deref(),
-        Some(source_doc_id.as_str())
-    );
-    assert!(fired.last_error.as_deref().unwrap_or("").is_empty());
-    assert_eq!(fired.task_id.as_deref(), Some(TASK_ID));
-    assert_eq!(fired.source_collection.as_deref(), Some("ChangeProposed"));
-    assert_eq!(fired.event_kind.as_deref(), Some("created"));
-    assert_eq!(fired.enabled, Some(true));
-    assert_eq!(fired.concurrency.as_deref(), Some("serial"));
+    assert_eq!(query_change_proposed(db_a.node.as_ref()).await.len(), 1);
 
     let post = fetch_pairing_applied(db_a.node.as_ref(), &peer_b)
         .await
@@ -980,7 +656,8 @@ async fn install_shared_fixture(
         DriftPolicy, InstalledVia, PackInferenceBindings, PackInstallOptions,
     };
     let owner = db.node_identity.did().to_string();
-    gents::ensure_node(&db.node, &owner).await.unwrap();
+    let user = crate::support::load_managed_fixture_user(db).await;
+    crate::support::grant_household_owner(db, &user).await;
     let config = load_pack_config(
         archive.manifest(),
         &PackInstallOptions {
@@ -990,7 +667,7 @@ async fn install_shared_fixture(
         &|_| None,
     )
     .unwrap();
-    let access = gents::ConfigAccess::local(db.node.clone());
+    let access = db.client_access(&user);
     let prepared = prepare_document_pack_install(
         &access,
         &owner,
@@ -1029,44 +706,46 @@ async fn install_shared_fixture(
     assert_eq!(pack.digest, archive.digest());
 }
 
-async fn write_fixture_move(node: &std::sync::Arc<EmbeddedNode>, id: &str, mark: &str) {
+/// The household owner's signed GraphQL principal, which writes and reads its
+/// own pack documents.
+async fn household_access(db: &crate::support::TestDb) -> gents::ConfigAccess {
+    let user = crate::support::load_managed_fixture_user(db).await;
+    gents::ConfigAccess::Graphql(
+        gents::store::config_client::GraphqlEndpoint::as_principal(
+            db.client_endpoint(),
+            user.did(),
+        )
+        .with_client_signing_capability(user.client_signing_capability().unwrap())
+        .unwrap(),
+    )
+}
+
+async fn write_fixture_move(db: &crate::support::TestDb, id: &str, mark: &str) {
     let id = escape_graphql_string(id);
     let mark = escape_graphql_string(mark);
     let mutation = format!(
         r#"mutation {{ create_SharedFixtureMove(input: {{ move_id: "{id}", mark: "{mark}" }}) {{ _docID }} }}"#
     );
-    gents::ConfigAccess::local(node.clone())
+    household_access(db)
+        .await
         .write("test.shared_fixture_move", &mutation)
         .await
         .unwrap();
 }
 
-async fn wait_for_fixture_move(node: &std::sync::Arc<EmbeddedNode>, id: &str, mark: &str) {
-    let access = gents::ConfigAccess::local(node.clone());
+async fn fixture_moves(db: &crate::support::TestDb, id: &str) -> Vec<Value> {
     let escaped = escape_graphql_string(id);
     let query = format!(
         r#"{{ SharedFixtureMove(filter: {{ move_id: {{ _eq: "{escaped}" }} }}) {{ move_id mark }} }}"#
     );
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        let answer = access.execute(&query).await.unwrap();
-        let rows = answer["data"]["SharedFixtureMove"]
-            .as_array()
-            .expect("move rows");
-        if rows.iter().any(|row| row["mark"].as_str() == Some(mark)) {
-            assert_eq!(rows.len(), 1, "one durable move per id");
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "move {id} was not observed: {rows:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    household_access(db).await.execute(&query).await.unwrap()["data"]["SharedFixtureMove"]
+        .as_array()
+        .expect("move rows")
+        .clone()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn matching_document_packs_sync_over_explicit_app_collection_pairing() {
+async fn document_pack_collections_stay_local_under_explicit_pairing() {
     let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
     std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1078,8 +757,6 @@ async fn matching_document_packs_sync_over_explicit_app_collection_pairing() {
     install_shared_fixture(&a, &archive).await;
     install_shared_fixture(&b, &archive).await;
 
-    let did_a = a.node_identity.did().to_string();
-    let did_b = b.node_identity.did().to_string();
     let mock_a = MockModelEndpoint::start("default").unwrap();
     let mock_b = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(&a, "fixture-a-backend", mock_a.endpoint()).await;
@@ -1147,45 +824,22 @@ async fn matching_document_packs_sync_over_explicit_app_collection_pairing() {
     .await;
     let control_b =
         wait_for_enrollment_route_applied(b.node.as_ref(), &peer_a, Duration::from_secs(60)).await;
-    write_app_collection_pairing(
-        a.node.as_ref(),
-        &peer_b,
-        &did_a,
-        &address_b,
-        &["SharedFixtureMove"],
-    )
-    .await;
-    write_app_collection_pairing(
-        b.node.as_ref(),
-        &peer_a,
-        &did_b,
-        &address_a,
-        &["SharedFixtureMove"],
-    )
-    .await;
-    wait_for_app_collections_pairing_applied(
-        a.node.as_ref(),
-        &peer_b,
-        "SharedFixtureMove",
-        Duration::from_secs(45),
-    )
-    .await;
-    wait_for_app_collections_pairing_applied(
-        b.node.as_ref(),
-        &peer_a,
-        "SharedFixtureMove",
-        Duration::from_secs(45),
-    )
-    .await;
-    wait_for_subscribed_collections(a.node.as_ref(), &control_a, Duration::from_secs(30)).await;
-    wait_for_subscribed_collections(b.node.as_ref(), &control_b, Duration::from_secs(30)).await;
+    refuse_app_collection_replication(&a.node, &address_b, "SharedFixtureMove").await;
+    refuse_app_collection_replication(&b.node, &address_a, "SharedFixtureMove").await;
+    assert_app_collection_refused(a.node.as_ref(), &peer_b, "SharedFixtureMove", &control_a).await;
+    assert_app_collection_refused(b.node.as_ref(), &peer_a, "SharedFixtureMove", &control_b).await;
 
-    write_fixture_move(&a.node, "move-a", "X").await;
-    wait_for_fixture_move(&b.node, "move-a", "X").await;
-    write_fixture_move(&b.node, "move-b", "O").await;
-    wait_for_fixture_move(&a.node, "move-b", "O").await;
-    wait_for_fixture_move(&a.node, "move-a", "X").await;
-    wait_for_fixture_move(&b.node, "move-b", "O").await;
+    write_fixture_move(&a, "move-a", "X").await;
+    write_fixture_move(&b, "move-b", "O").await;
+    assert_stays_local(
+        || async {
+            fixture_moves(&b, "move-a").await.is_empty() && fixture_moves(&a, "move-b").await.is_empty()
+        },
+        "a pack document replicated to the paired peer",
+    )
+    .await;
+    assert_eq!(fixture_moves(&a, "move-a").await.len(), 1);
+    assert_eq!(fixture_moves(&b, "move-b").await.len(), 1);
 
     let _ = stop_a.send(true);
     let _ = stop_b.send(true);
