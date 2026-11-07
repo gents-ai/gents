@@ -452,7 +452,7 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
     .await
     .unwrap();
     assert_eq!(
-        load_as_creator(&node, &source_item.doc_id)
+        load_mailbox_item_with_access(&access, &source_item.doc_id)
             .await
             .unwrap()
             .unwrap()
