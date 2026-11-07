@@ -268,6 +268,41 @@ pub async fn prepare_document_pack_install(
     root_archive: Option<&PackArchive>,
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<PreparedDocumentPackInstall> {
+    prepare_document_pack_install_with_dependency_variables(
+        access,
+        owner,
+        manifest,
+        config,
+        requested,
+        dependencies,
+        installed_via,
+        plugin_home,
+        root_archive,
+        environment,
+        &BTreeMap::new(),
+    )
+    .await
+}
+
+pub type DependencyVariableOverrides = BTreeMap<String, BTreeMap<String, Option<String>>>;
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "install inputs and policies supplied by each install entry point"
+)]
+pub async fn prepare_document_pack_install_with_dependency_variables(
+    access: &ConfigAccess,
+    owner: &str,
+    manifest: &super::super::PackManifest,
+    config: &PackConfig,
+    requested: &PackInferenceBindings,
+    dependencies: &[&PackArchive],
+    installed_via: InstalledVia,
+    plugin_home: Option<&Path>,
+    root_archive: Option<&PackArchive>,
+    environment: &(dyn Fn(&str) -> Option<String> + Sync),
+    overrides: &DependencyVariableOverrides,
+) -> Result<PreparedDocumentPackInstall> {
     if let Some(archive) = root_archive {
         anyhow::ensure!(
             serde_json::to_value(archive.manifest())? == serde_json::to_value(manifest)?,
@@ -302,6 +337,16 @@ pub async fn prepare_document_pack_install(
              install it with `gents pack install`, then remove it from `dependencies`",
             dependency.metadata.namespace,
             dependency.name
+        );
+    }
+    for coordinate in overrides.keys() {
+        anyhow::ensure!(
+            dependencies.iter().any(|archive| format!(
+                "{}/{}",
+                archive.manifest().metadata.namespace,
+                archive.manifest().name
+            ) == *coordinate),
+            "variable override names undeclared dependency {coordinate:?}"
         );
     }
     for slot in requested.keys() {
@@ -342,17 +387,24 @@ pub async fn prepare_document_pack_install(
             archive.manifest().metadata.namespace,
             archive.manifest().name
         );
-        let snapshot = access
+        let selected_variables = overrides.get(&coordinate);
+        let (snapshot, installed) = access
             .transact_readonly("pack.dependency.snapshot", |txn| {
                 let coordinate = &coordinate;
                 Box::pin(async move {
                     let record = super::read_record(txn, owner, coordinate).await?;
-                    anyhow::ensure!(record.doc_id.is_none() || record.digest.as_deref() == Some(archive.digest()),
+                    anyhow::ensure!(record.doc_id.is_none() || record.digest.as_deref() == Some(archive.digest()) || selected_variables.is_some(),
                         "installed dependency {coordinate} has a different artifact; update it explicitly before installing its dependent");
-                    super::dependency_snapshot_in_txn(txn, owner, coordinate, archive.digest()).await
+                    let snapshot = super::dependency_snapshot_in_txn(txn, owner, coordinate, archive.digest()).await?;
+                    Ok::<_, anyhow::Error>((snapshot, record.doc_id.is_some()))
                 })
             })
             .await?;
+        let snapshot = if selected_variables.is_some() {
+            None
+        } else {
+            snapshot
+        };
         let requested_dependency = selected(archive.manifest());
         let preview = if let Some(snapshot) = &snapshot {
             let bindings = installed_dependency_bindings(
@@ -390,12 +442,32 @@ pub async fn prepare_document_pack_install(
             let config = if let Some(snapshot) = &snapshot {
                 snapshot.config(owner)?
             } else {
-                let authored = super::super::load_pack_config(
-                    archive.manifest(),
-                    &options,
-                    &|path| archive.asset(path).map(<[u8]>::to_vec),
-                    environment,
-                )?;
+                let (authored, captured) = if let Some(selected) = selected_variables {
+                    super::super::load_dependency_config_with_variables(
+                        archive.manifest(),
+                        &options,
+                        &|path| archive.asset(path).map(<[u8]>::to_vec),
+                        installed,
+                        &BTreeMap::new(),
+                        selected,
+                        environment,
+                    )?
+                } else {
+                    super::super::load_pack_config_with_variables(
+                        archive.manifest(),
+                        &options,
+                        &|path| archive.asset(path).map(<[u8]>::to_vec),
+                        environment,
+                    )?
+                };
+                if let Some(selected) = selected_variables {
+                    for name in selected.keys() {
+                        anyhow::ensure!(
+                            captured.contains_key(name),
+                            "dependency {coordinate} does not use variable {name:?}"
+                        );
+                    }
+                }
                 super::super::bind_pack_install_config(
                     archive.manifest(),
                     &authored,

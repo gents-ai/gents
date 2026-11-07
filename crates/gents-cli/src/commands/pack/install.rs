@@ -9,6 +9,33 @@ use futures_util::StreamExt;
 use gents::pack::{PackKind, PackManifest};
 use serde_json::json;
 
+pub(super) fn parse_dependency_variables(
+    values: &[String],
+) -> Result<gents::pack::DependencyVariableOverrides> {
+    let mut result = gents::pack::DependencyVariableOverrides::new();
+    for item in values {
+        let (key, value) = item
+            .split_once('=')
+            .context("dependency variable must be NAMESPACE/PACK:NAME=VALUE")?;
+        let (coordinate, name) = key
+            .rsplit_once(':')
+            .context("dependency variable must include its pack coordinate and name")?;
+        anyhow::ensure!(
+            !coordinate.is_empty() && !name.is_empty(),
+            "dependency variable needs a pack coordinate and name"
+        );
+        anyhow::ensure!(
+            result
+                .entry(coordinate.to_owned())
+                .or_default()
+                .insert(name.to_owned(), Some(value.to_owned()))
+                .is_none(),
+            "dependency variable {key:?} was provided more than once"
+        );
+    }
+    Ok(result)
+}
+
 pub(super) fn reused_variable_preview(
     pack: &PackSource,
     config: &gents::documents::PackConfig,
@@ -53,6 +80,14 @@ pub(super) fn install_variable_preview(
     pack: &PackSource,
     owner: &str,
 ) -> Result<serde_json::Value> {
+    install_variable_preview_with(pack, owner, &|name| std::env::var(name).ok())
+}
+
+fn install_variable_preview_with(
+    pack: &PackSource,
+    owner: &str,
+    lookup: &dyn Fn(&str) -> Option<String>,
+) -> Result<serde_json::Value> {
     let path = pack
         .manifest()
         .config
@@ -64,7 +99,7 @@ pub(super) fn install_variable_preview(
         if name == "GENTS_PACK_NODE_DID" {
             Some(owner.to_owned())
         } else {
-            std::env::var(name).ok()
+            lookup(name)
         }
     };
     let uses = gents::pack::interpolate::inspect_install_variables(&authored, &environment)
@@ -213,7 +248,8 @@ pub(crate) async fn install_documents_pack_resolved(
         owner,
         args.force_rebind_concrete_did,
     )?;
-    let prepared = gents::pack::prepare_document_pack_install(
+    let overrides = parse_dependency_variables(&args.dependency_variables)?;
+    let prepared = gents::pack::prepare_document_pack_install_with_dependency_variables(
         access,
         owner,
         pack.manifest(),
@@ -227,6 +263,7 @@ pub(crate) async fn install_documents_pack_resolved(
         args.scope.graphql.is_none().then_some(home.as_path()),
         Some(pack.archive()),
         &|name| std::env::var(name).ok(),
+        &overrides,
     )
     .await?;
     let inference = prepared.inference.clone();
@@ -243,6 +280,13 @@ pub(crate) async fn install_documents_pack_resolved(
                 );
                 if let Some(config) = prepared.reused_dependency_config(&coordinate) {
                     reused_variable_preview(source, config)
+                } else if let Some(values) = overrides.get(&coordinate) {
+                    install_variable_preview_with(source, owner, &|name| {
+                        values
+                            .get(name)
+                            .cloned()
+                            .unwrap_or_else(|| std::env::var(name).ok())
+                    })
                 } else {
                     install_variable_preview(source, owner)
                 }

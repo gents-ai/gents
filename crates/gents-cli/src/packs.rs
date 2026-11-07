@@ -74,6 +74,7 @@ pub async fn install(
     capture_report(command::install(PackInstallArgs {
         package,
         inference_slots,
+        dependency_variables: Vec::new(),
         preview,
         scope: scope(home),
         output: OutputFormat::Json,

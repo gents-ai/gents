@@ -348,6 +348,7 @@ async fn install_owned(
     let args = PackInstallArgs {
         package: root.manifest().name.clone(),
         inference_slots: request.inference_slots,
+        dependency_variables: Vec::new(),
         preview: request.preview,
         scope: ScopeArgs {
             home: Some(home.clone()),

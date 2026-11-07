@@ -23,7 +23,8 @@ pub use catalog::{installed_catalog, InstalledCatalogEntry};
 pub use documents::{
     apply_prepared_dependency_schemas, document_pack_schema_paths, install_documents_with_plugins,
     install_prepared_document_graph, install_prepared_document_pack, plugin_data_unique_keys,
-    prepare_document_pack_install, PreparedDependency, PreparedDocumentPackInstall,
+    prepare_document_pack_install, prepare_document_pack_install_with_dependency_variables,
+    DependencyVariableOverrides, PreparedDependency, PreparedDocumentPackInstall,
 };
 pub use removal::ensure_plugins_unreferenced;
 pub use scope_preview::{preview_installed_pack_scope, InstalledPackScopePreview};

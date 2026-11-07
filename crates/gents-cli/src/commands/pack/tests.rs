@@ -246,6 +246,16 @@ fn dependency_preview_reads_installed_literals_instead_of_the_current_environmen
     );
 }
 
+#[test]
+fn dependency_variable_overrides_are_scoped_and_reject_duplicates() {
+    let parse = super::install::parse_dependency_variables;
+    let values = parse(&["acme/alpha:HOST=one=two".into(), "acme/beta:HOST=".into()]).unwrap();
+    assert_eq!(values["acme/alpha"]["HOST"].as_deref(), Some("one=two"));
+    assert_eq!(values["acme/beta"]["HOST"].as_deref(), Some(""));
+    assert!(parse(&["acme/alpha:HOST=one".into(), "acme/alpha:HOST=two".into()]).is_err());
+    assert!(parse(&["HOST=one".into()]).is_err());
+}
+
 async fn initialized_home() -> tempfile::TempDir {
     use clap::Parser;
     let home = tempfile::tempdir().unwrap();
@@ -295,6 +305,7 @@ fn document_install_args(
     PackInstallArgs {
         package: spec.to_str().unwrap().to_owned(),
         inference_slots,
+        dependency_variables: Vec::new(),
         preview: false,
         scope: ScopeArgs {
             home: Some(home.to_path_buf()),

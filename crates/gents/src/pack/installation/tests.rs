@@ -2104,6 +2104,48 @@ async fn installing_a_dependent_preserves_the_installed_dependency_environment()
         .await
         .unwrap();
     assert_eq!(rows["data"]["Agent"][0]["description"], "original");
+    let coordinate = format!(
+        "{}/{}",
+        dependee.manifest().metadata.namespace,
+        dependee.manifest().name
+    );
+    let overrides = BTreeMap::from([(
+        coordinate,
+        BTreeMap::from([("DEPENDEE_LABEL".to_owned(), Some("explicit".to_owned()))]),
+    )]);
+    let prepared = prepare_document_pack_install_with_dependency_variables(
+        &access,
+        OWNER,
+        dependent.manifest(),
+        &authored,
+        &requested,
+        &[&dependee],
+        crate::pack::InstalledVia::Operator,
+        None,
+        None,
+        &changed,
+        &overrides,
+    )
+    .await
+    .unwrap();
+    install_prepared_document_pack(
+        &access,
+        OWNER,
+        &dependent,
+        &[&dependee],
+        &prepared,
+        None,
+        false,
+        crate::pack::InstalledVia::Operator,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let rows = access
+        .execute(r#"{ Agent(filter: {agent_id: {_eq: "fixture-dependee"}}) { description } }"#)
+        .await
+        .unwrap();
+    assert_eq!(rows["data"]["Agent"][0]["description"], "explicit");
     node.shutdown().await;
 }
 
