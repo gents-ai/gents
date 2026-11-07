@@ -104,9 +104,16 @@ theorem receipt_commits_after_bounded_conflicts (conflicts : Nat) :
   | zero => rfl
   | succ n ih => simpa [List.replicate_succ, receiptCommits] using ih
 
-/-- The concurrent admission regression has two overflow calls as well as the
-admitted cohort. Its receipts share the canonical publication transaction. This
-is a finite qualification bound, not a guarantee under unbounded external writes. -/
+/-- Attempts for a transaction that contends with the request's siblings. The
+owned loop admits a turn's calls one at a time (a non-read call is dispatched
+alone, and a read batch awaits each call's admission and receipt before the
+next), so while one call's admission or receipt is in flight the only
+concurrent writers of its request and session documents are its running
+children, at most `maxBackgroundedPerParent`. Two more attempts outlast them.
+Admitting sibling calls concurrently is outside this bound: each then contends
+with every sibling commit and can exhaust it
+(`tla/BackgroundAdmissionContention`, #3592). This is not a guarantee under
+unbounded external writes. -/
 def receiptContentionAttempts : Nat := maxBackgroundedPerParent + 2
 
 theorem admission_cohort_receipt_commits :

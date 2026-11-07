@@ -1,0 +1,4 @@
+---- MODULE MCBackgroundAdmissionContentionShortBudget ----
+EXTENDS BackgroundAdmissionContention
+
+====

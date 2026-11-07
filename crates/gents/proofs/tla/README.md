@@ -48,6 +48,22 @@ See `../README.md` for how this fits the broader formal-verification model.
   and `HealthAwaitingOnly` diagnostics restore the old read failure, the old
   health handling, and the rule that missed a pairing change during the first
   read.
+- `BackgroundAdmissionContention` — concurrent writers of one request's
+  background budget (#3592). Each accepted `spawn_process` call runs an
+  admission transaction (reads the request's `AgentToolCall` rows, bumps
+  `AgentRequest.background_admission_sequence`, creates the child) and a
+  receipt transaction (rereads the tool rows, takes the next `AgentMessage`
+  sequence, refreshes the `AgentSession` observation); running children
+  write those session-scoped documents when they finish. Commits follow
+  DefraDB's optimistic rule: a commit aborts when a key it read or wrote
+  changed after its snapshot, and a call whose bounded attempts all abort is
+  lost. `BudgetBound`, `NoConflictLoss`, `ReceiptOnce` and `EveryCallSettles`
+  hold in the owned loop's order, where `run_batch` admits a turn's calls one
+  at a time. `Concurrent` admits every sibling at once and loses a call to
+  conflicts (the #3592 regression schedule); `Unfenced` drops the sequence
+  bump and overfills the budget; `ShortBudget` gives `Max` attempts and loses
+  a call to its running children, so the Lean `receiptContentionAttempts`
+  bound must exceed `Max`.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
@@ -137,6 +153,22 @@ Its three diagnostics are EXPECTED to report violations. `UntypedRead` reads a m
 ./scripts/run-tlc.sh MCReplicatedRequestConvergenceUntypedRead
 ./scripts/run-tlc.sh MCReplicatedRequestConvergenceHealthIgnored
 ./scripts/run-tlc.sh MCReplicatedRequestConvergenceHealthAwaitingOnly
+```
+
+For BackgroundAdmissionContention — the green model (the owned loop's
+admission order) checks clean, including `EveryCallSettles`:
+```bash
+./scripts/run-tlc.sh MCBackgroundAdmissionContention
+```
+
+Its three diagnostics are EXPECTED to report violations. `Concurrent`
+reproduces #3592 (`NoConflictLoss`: an admission loses every attempt to
+sibling commits), `Unfenced` violates `BudgetBound`, and `ShortBudget`
+violates `NoConflictLoss` with only running children writing:
+```bash
+./scripts/run-tlc.sh MCBackgroundAdmissionContentionConcurrent
+./scripts/run-tlc.sh MCBackgroundAdmissionContentionUnfenced
+./scripts/run-tlc.sh MCBackgroundAdmissionContentionShortBudget
 ```
 
 Each run directly, from this directory, is:
@@ -341,6 +373,16 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCReplicatedRequestConvergenceUntypedRead.cfg` | `UntypedRead = TRUE` | `NoTerminalErrorWhileDeliverable` intentionally VIOLATED: write, then a read shows `Error` | 63 distinct states before counterexample; 137 generated | 4 | <1s |
 | `MCReplicatedRequestConvergenceHealthIgnored.cfg` | `HealthRereads = "never"` | `ProjectionCurrent` intentionally VIOLATED: the pairing returns unread and the view stays `NotConnected` | 79 distinct states before counterexample; 180 generated | 5 | <1s |
 | `MCReplicatedRequestConvergenceHealthAwaitingOnly.cfg` | `HealthRereads = "awaiting"` | `ProjectionCurrent` intentionally VIOLATED: the pairing comes up while the first read is in flight, and that read publishes `NotConnected` | 85 distinct states before counterexample; 184 generated | 5 | <1s |
+| `MCBackgroundAdmissionContention.cfg` | `N = 4`, `Max = 2`, `Attempts = 4`, sequential admission, sequence bump | Passes `TypeOK`, `BudgetBound`, `NoConflictLoss`, `ReceiptOnce`, `EveryCallSettles` | 1,021 distinct states; 1,560 generated | 24 | <1s |
+| `MCBackgroundAdmissionContentionConcurrent.cfg` | as green, concurrent admission | `NoConflictLoss` intentionally VIOLATED: call 1's admission aborts on all 4 attempts while siblings commit | 2,831,405 distinct states before counterexample; 7,054,901 generated | 15 | 14s |
+| `MCBackgroundAdmissionContentionUnfenced.cfg` | concurrent, no sequence bump, `Attempts = 100` | `BudgetBound` intentionally VIOLATED: concurrent admissions all count one live row and commit | 796 distinct states before counterexample; 1,110 generated | 8 | <1s |
+| `MCBackgroundAdmissionContentionShortBudget.cfg` | sequential, `Attempts = 2` | `NoConflictLoss` intentionally VIOLATED: two running children finish during one call's transaction | 402 distinct states before counterexample; 522 generated | 21 | <1s |
+
+The four BackgroundAdmissionContention rows used TLC2 2.19 (rev `5a47802`)
+with Homebrew OpenJDK 25.0.2 on macOS arm64, `-workers auto` using 16
+workers. The green run checked its temporal property over the complete state
+space. The counts before each counterexample vary with the worker count; with
+`-workers 2` every diagnostic reached the same violation.
 
 The multi-collection run's final temporal-property pass dominated runtime: TLC completed BFS first, then checked 16 temporal branches over 34,635,520 total distinct states in 19min 27s.
 
