@@ -65,23 +65,15 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
     assert!(!snapshot.initial_inference_cases.is_empty());
     for case in snapshot.initial_inference_cases {
         let args = parse_case(&case);
-        let temp = tempfile::tempdir()?;
-        let identity = Arc::new(KeyIdentity::load_or_create(
-            temp.path().join("identity.key"),
-            None,
-        )?);
-        let owner = identity.did();
-        let node = Arc::new(
-            gents::defra_node::Node::builder()
-                .with_node_identity_did(owner.to_string())
-                .build()
-                .await?,
-        );
-        gents::ensure_runtime_schemas(&node).await?;
+        let home = gents::eval::runner::embedded::EmbeddedHome::create_temp("init-seed").await?;
+        let identity = home.identity.clone();
+        let owner = home.did();
+        let node = home.node.clone();
+        let graphql = home.graphql_endpoint().context("served init home")?;
         let user_home = tempfile::tempdir()?;
         let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None)?;
-        let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did())?);
-        let binding = gents::store::identity::provision_agent_identity(identity.as_ref())?;
+        let binding = provision_fresh_home(&node, identity.as_ref(), user.did()).await?;
+        let access = crate::shared::test_support::user_access(graphql, &user);
         let initialized = initialize_runtime_home(
             &access,
             &node,
@@ -99,7 +91,6 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
                     .is_empty()
             );
             assert!(load_node(&node, owner).await?.is_none());
-            node.shutdown().await.expect("node shutdown");
             continue;
         };
         let summary = initialized.with_context(|| format!("{case:?}"))?;
@@ -150,7 +141,10 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
             let runtime = gents::Gents::from_default_agent_documents(
                 node.clone(),
                 identity.clone(),
-                gents::DocumentRuntimeOptions::default(),
+                gents::DocumentRuntimeOptions {
+                    backend_admission: Some(home.backend_admission()),
+                    ..Default::default()
+                },
             )
             .await?;
             assert!(runtime.agents().is_empty());
@@ -178,7 +172,10 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
             let runtime = gents::Gents::from_default_agent_documents(
                 node.clone(),
                 identity.clone(),
-                gents::DocumentRuntimeOptions::default(),
+                gents::DocumentRuntimeOptions {
+                    backend_admission: Some(home.backend_admission()),
+                    ..Default::default()
+                },
             )
             .await?;
             assert!(runtime.agents().is_empty());
@@ -201,7 +198,6 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
                 "{steps:?}"
             );
         }
-        node.shutdown().await.expect("node shutdown");
     }
     Ok(())
 }
@@ -211,23 +207,17 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
     let Command::Init(args) = Cli::try_parse_from(["gents", "init", "--engineer"])?.command else {
         panic!("expected init");
     };
-    let temp = tempfile::tempdir()?;
-    let identity = Arc::new(KeyIdentity::load_or_create(
-        temp.path().join("identity.key"),
-        None,
-    )?);
-    let owner = identity.did();
-    let node = Arc::new(
-        gents::defra_node::Node::builder()
-            .with_node_identity_did(owner.to_string())
-            .build()
-            .await?,
-    );
-    gents::ensure_runtime_schemas(&node).await?;
+    let home = gents::eval::runner::embedded::EmbeddedHome::create_temp("init-seed").await?;
+    let identity = home.identity.clone();
+    let owner = home.did();
+    let node = home.node.clone();
     let user_home = tempfile::tempdir()?;
     let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None)?;
-    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did())?);
-    let binding = gents::store::identity::provision_agent_identity(identity.as_ref())?;
+    let binding = provision_fresh_home(&node, identity.as_ref(), user.did()).await?;
+    let access = crate::shared::test_support::user_access(
+        home.graphql_endpoint().context("served init home")?,
+        &user,
+    );
     let summary = initialize_runtime_home(
         &access,
         &node,
@@ -284,7 +274,10 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
     let runtime = gents::Gents::from_default_agent_documents(
         node.clone(),
         identity,
-        gents::DocumentRuntimeOptions::default(),
+        gents::DocumentRuntimeOptions {
+            backend_admission: Some(home.backend_admission()),
+            ..Default::default()
+        },
     )
     .await?;
     let resolved = runtime

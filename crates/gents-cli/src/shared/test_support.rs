@@ -92,6 +92,37 @@ pub(crate) async fn publish_test_node_as(node: &std::sync::Arc<defra_node::Node>
         .unwrap();
 }
 
+/// A fixture node served over its own DefraDB HTTP endpoint with node ACP, so
+/// a User's client-signed writes reach it as they do from the CLI. Returns
+/// the node and its GraphQL URL.
+pub(crate) async fn served_node(
+    builder: defra_node::NodeBuilder,
+) -> (std::sync::Arc<defra_node::Node>, String) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let graphql = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+    let node = builder
+        .with_node_acp_enabled()
+        .with_http(gents::defra_node::HttpConfig::with_listener(listener).unwrap())
+        .build()
+        .await
+        .unwrap();
+    (std::sync::Arc::new(node), graphql)
+}
+
+/// The User client's access over `graphql`, signed by its own key as the
+/// CLI's endpoint owner signs it.
+pub(crate) fn user_access(
+    graphql: &str,
+    user: &dyn gents::NodeIdentity,
+) -> gents::store::config_client::ConfigAccess {
+    gents::store::config_client::ConfigAccess::Graphql(
+        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, user.did())
+            .with_client_signing_capability(user.client_signing_capability().unwrap())
+            .unwrap()
+            .with_client_signed_agent_creates(),
+    )
+}
+
 /// Seeds an xAI backend whose profile effort will not be sent, as the
 /// fixture runtime. Returns the runtime's access and its Node DID.
 pub(crate) async fn seed_unsent_xai_effort() -> (gents::store::config_client::ConfigAccess, String)

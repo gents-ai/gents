@@ -1664,6 +1664,7 @@ mod inference_seed_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents::eval::runner::embedded::EmbeddedHome;
 
     fn overwrite(home: &Path, user_home: &Path) -> Result<gents::store::local::home::StoreLock> {
         lock_init_store_for_user(home, &home.join("data"), true, Some(user_home))
@@ -1820,23 +1821,19 @@ mod tests {
 
     #[tokio::test]
     async fn a_freshly_initialized_profile_resolves_to_the_default_turn_limit() {
-        let temp = tempfile::tempdir().unwrap();
-        let identity =
-            Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());
-        let owner = identity.did().to_string();
-        let node = Arc::new(
-            gents::defra_node::Node::builder()
-                .with_node_identity_did(owner.clone())
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let home = EmbeddedHome::create_temp("init-test").await.unwrap();
+        let identity = home.identity.clone();
+        let owner = home.did().to_owned();
+        let node = home.node.clone();
+        let graphql = home.graphql_endpoint().unwrap().to_owned();
         let user_home = tempfile::tempdir().unwrap();
         let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None).unwrap();
-        let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
+        let fresh_binding = provision_fresh_home(&node, identity.as_ref(), user.did())
+            .await
+            .unwrap();
+        let access = crate::shared::test_support::user_access(&graphql, &user);
 
-        let binding = gents::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+        let binding = fresh_binding;
         let agent_did = binding.agent_did;
         let profile_id = default_inference_profile_id_for_agent(&agent_did);
         let execution_id = default_inference_execution_id_for_profile(&profile_id);
@@ -1882,7 +1879,10 @@ mod tests {
         let agent = gents::Gents::from_default_agent_documents(
             node.clone(),
             identity,
-            gents::DocumentRuntimeOptions::default(),
+            gents::DocumentRuntimeOptions {
+                backend_admission: Some(home.backend_admission()),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -1904,25 +1904,23 @@ mod tests {
 
     #[tokio::test]
     async fn the_engineer_sets_max_turns_on_a_freshly_initialized_home() {
-        let temp = tempfile::tempdir().unwrap();
-        let identity: Arc<dyn gents::NodeIdentity> =
-            Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());
-        let owner = identity.did().to_string();
-        let node = Arc::new(
-            gents::defra_node::Node::builder()
-                .with_node_identity_did(owner.clone())
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let home = EmbeddedHome::create_temp("init-test").await.unwrap();
+        let identity = home.identity.clone();
+        let owner = home.did().to_owned();
+        let node = home.node.clone();
+        let graphql = home.graphql_endpoint().unwrap().to_owned();
         let user_home = tempfile::tempdir().unwrap();
         let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None).unwrap();
-        let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
+        let fresh_binding = provision_fresh_home(&node, identity.as_ref(), user.did())
+            .await
+            .unwrap();
+        let access = crate::shared::test_support::user_access(&graphql, &user);
 
         let args = init_args();
         let tool_package = resolve_initial_tool_package(&args).unwrap();
-        let binding = gents::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+        let binding = fresh_binding;
+        let agent_identity =
+            gents::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
         let summary = initialize_runtime_home(
             &access,
             &node,
@@ -1951,7 +1949,7 @@ mod tests {
             std::sync::Arc::default(),
             node.clone(),
             owner.clone(),
-            Some(identity.clone()),
+            Some(agent_identity),
             &gents::tools::surface::SelfConfigToolConfig {
                 enabled: true,
                 agent_did: summary.default_agent_did.clone(),
@@ -1974,7 +1972,10 @@ mod tests {
         let agent = gents::Gents::from_default_agent_documents(
             node.clone(),
             identity,
-            gents::DocumentRuntimeOptions::default(),
+            gents::DocumentRuntimeOptions {
+                backend_admission: Some(home.backend_admission()),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -1994,26 +1995,22 @@ mod tests {
     async fn explain_initialized_default_agent(
         engineer: bool,
     ) -> gents::tools::surface::ToolSurfaceExplanation {
-        let temp = tempfile::tempdir().unwrap();
-        let identity: Arc<dyn gents::NodeIdentity> =
-            Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());
-        let owner = identity.did().to_string();
-        let node = Arc::new(
-            gents::defra_node::Node::builder()
-                .with_node_identity_did(owner.clone())
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let home = EmbeddedHome::create_temp("init-test").await.unwrap();
+        let identity = home.identity.clone();
+        let owner = home.did().to_owned();
+        let node = home.node.clone();
+        let graphql = home.graphql_endpoint().unwrap().to_owned();
         let user_home = tempfile::tempdir().unwrap();
         let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None).unwrap();
-        let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
+        let fresh_binding = provision_fresh_home(&node, identity.as_ref(), user.did())
+            .await
+            .unwrap();
+        let access = crate::shared::test_support::user_access(&graphql, &user);
 
         let mut args = init_args();
         args.engineer = engineer;
         let tool_package = resolve_initial_tool_package(&args).unwrap();
-        let binding = gents::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+        let binding = fresh_binding;
         let summary = initialize_runtime_home(
             &access,
             &node,
@@ -2037,7 +2034,10 @@ mod tests {
         let agent = gents::Gents::from_default_agent_documents(
             node.clone(),
             identity,
-            gents::DocumentRuntimeOptions::default(),
+            gents::DocumentRuntimeOptions {
+                backend_admission: Some(home.backend_admission()),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -2076,24 +2076,30 @@ mod tests {
 
     #[tokio::test]
     async fn failed_init_publishes_no_default_agent() {
-        let node = Arc::new(
-            crate::shared::test_support::node_builder()
-                .build()
-                .await
-                .unwrap(),
-        );
+        let temp = tempfile::tempdir().unwrap();
+        let identity = KeyIdentity::load_or_create(temp.path().join("node.key"), None).unwrap();
+        let owner = identity.did().to_owned();
+        let owner = owner.as_str();
+        let (node, graphql) = crate::shared::test_support::served_node(
+            gents::defra_node::Node::builder().with_node_identity_did(owner),
+        )
+        .await;
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let user_home = tempfile::tempdir().unwrap();
         let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None).unwrap();
-        let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
-        let owner = "did:key:z-init-atomic";
+        let binding = provision_fresh_home(&node, &identity, user.did())
+            .await
+            .unwrap();
+        let access = crate::shared::test_support::user_access(&graphql, &user);
+        let default = binding.agent_did.as_str();
         let backend = json!({"node_did":owner,"backend_id":"backend","name":"Local",
             "provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1",
             "auth":{"kind":"unauthenticated"}});
         let profile = json!({"node_did":owner,"profile_id":"profile","backend_id":"backend",
             "model_name":"model"});
         let agent = |enabled: bool| {
-            json!({"node_did":owner,"agent_did":"default",
+            json!({"node_did":owner,"agent_did":default,
+                "creation_nonce":binding.creation_nonce,
                 "inference_profile_id":"profile","enabled":enabled})
         };
         let entry = |collection, value: serde_json::Value| DesiredStateApplyDocument {
@@ -2108,7 +2114,7 @@ mod tests {
             entry(Collection::InferenceProfile, profile.clone()),
         ];
         assert!(
-            publish_home_config(&access, owner, "Agent", "default", true, missing)
+            publish_home_config(&access, owner, "Agent", default, true, missing)
                 .await
                 .is_err()
         );
@@ -2118,7 +2124,7 @@ mod tests {
             entry(Collection::InferenceProfile, profile.clone()),
             entry(Collection::Agent, agent(false)),
         ];
-        let error = publish_home_config(&access, owner, "Agent", "default", true, disabled)
+        let error = publish_home_config(&access, owner, "Agent", default, true, disabled)
             .await
             .unwrap_err();
         assert!(
@@ -2132,12 +2138,12 @@ mod tests {
             entry(Collection::InferenceProfile, profile),
             entry(Collection::Agent, agent(true)),
         ];
-        publish_home_config(&access, owner, "Agent", "default", true, complete)
+        publish_home_config(&access, owner, "Agent", default, true, complete)
             .await
             .unwrap();
         assert_eq!(
             node_document().await.unwrap().default_agent_did.as_deref(),
-            Some("default")
+            Some(default)
         );
     }
 
@@ -2273,6 +2279,7 @@ mod tests {
 
     #[tokio::test]
     async fn fresh_init_grants_native_operations_once_without_regranting_revocation() {
+        use gents::store::config_client::NodePermission;
         use gents::store::identity::GrantSet;
         let snapshot: Value =
             tokio::task::spawn_blocking(|| gents_lean_contract::load_contract_snapshot().unwrap())
@@ -2447,6 +2454,27 @@ mod tests {
         for set in &agent_direct {
             set.revoke(&runtime, &agent).await.unwrap();
         }
+        // Only the direct grants are revoked: live documents keep projecting
+        // the Agent baseline and the configured tools' node operations (the
+        // self-config categories project `delete-dac-relation`), and native
+        // admission reads the union. NAC relations are never projected.
+        let mut after_revoke = Vec::new();
+        for permission in GrantSet::PolicyDelegate.permissions() {
+            let held = node
+                .nac_manager()
+                .check_permission(&agent, *permission)
+                .await
+                .unwrap();
+            if matches!(
+                permission,
+                NodePermission::NacRelationAdd
+                    | NodePermission::NacRelationDelete
+                    | NodePermission::NacStatus
+            ) {
+                assert!(!held, "direct {} must be revoked", permission.as_str());
+            }
+            after_revoke.push((*permission, held));
+        }
         node.shutdown().await.unwrap();
         drop(owner);
         drop(worker);
@@ -2470,16 +2498,13 @@ mod tests {
             !node.nac_manager().is_admin(&client_did).await.unwrap(),
             "revocation must survive reinit"
         );
-        for permission in GrantSet::PolicyDelegate.permissions() {
-            if GrantSet::AgentBaseline.permissions().contains(permission) {
-                continue;
-            }
-            assert!(
-                !node
-                    .nac_manager()
-                    .check_permission(&agent, *permission)
+        for (permission, held) in after_revoke {
+            assert_eq!(
+                node.nac_manager()
+                    .check_permission(&agent, permission)
                     .await
                     .unwrap(),
+                held,
                 "revocation of {} must survive reinit",
                 permission.as_str()
             );
