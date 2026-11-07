@@ -60,13 +60,13 @@ async fn config_apply_updates_backend_from_canonical_bundle_over_graphql() -> Re
     let response = graphql_query(
         &graphql,
         &format!(
-            r#"{{ InferenceBackend(filter: {{ backend_id: {{ _eq: "{}" }} }}, limit: 1) {{ endpoint }} }}"#,
+            r#"{{ InferenceBackendMetadata(filter: {{ backend_id: {{ _eq: "{}" }} }}, limit: 1) {{ endpoint }} }}"#,
             escape_graphql_string(&backend_id)
         ),
     )
     .await?;
     assert_eq!(
-        first_graphql_row(&response, "InferenceBackend")?["endpoint"],
+        first_graphql_row(&response, "InferenceBackendMetadata")?["endpoint"],
         updated_endpoint
     );
     Ok(())

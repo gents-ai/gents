@@ -15,6 +15,16 @@ fn served_principals(
     PRINCIPALS.get_or_init(Default::default)
 }
 
+fn served_runtimes(
+) -> &'static Mutex<RapidHashMap<u16, gents::store::config_client::ClientSigningCapability>> {
+    static RUNTIMES: OnceLock<
+        Mutex<RapidHashMap<u16, gents::store::config_client::ClientSigningCapability>>,
+    > = OnceLock::new();
+    RUNTIMES.get_or_init(Default::default)
+}
+
+/// The served home's Node key, for fixtures standing in for the runtime's
+/// own observations (backend catalogs, readiness history).
 pub fn register_served_home(home: &Path, port: u16) -> Result<()> {
     let Some(config) = gents::store::local::home::read_init_config::<Value, Value>(home)? else {
         return Ok(());
@@ -24,19 +34,82 @@ pub fn register_served_home(home: &Path, port: u16) -> Result<()> {
     };
     let identity = gents::KeyIdentity::load_existing(key_path, None)
         .with_context(|| format!("loading served home key {key_path}"))?;
-    served_principals()
+    served_runtimes()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(port, identity.client_signing_capability()?);
     Ok(())
 }
 
+/// Acts as the served runtime's Node; see [`register_served_home`]. Its
+/// operational routes (health, status, operator HTTP) admit only that Node.
 pub fn served_endpoint(graphql: &str) -> gents::store::config_client::GraphqlEndpoint {
+    endpoint_from(served_runtimes(), graphql)
+}
+
+/// Test reads and fixture writes on a served home act as the operator: the
+/// CLI's User client key held under the CLI process's `HOME` (or its
+/// `GENTS_DESKTOP_HOME`), the same key the CLI, desktop and shims sign with.
+pub fn register_served_client(cli_home: &Path, envs: &[(&str, &str)], port: u16) -> Result<()> {
+    let desktop = envs
+        .iter()
+        .find(|(name, _)| *name == "GENTS_DESKTOP_HOME")
+        .map(|(_, root)| std::path::PathBuf::from(root))
+        .unwrap_or_else(|| desktop_root_under(cli_home, envs));
+    let paths = gents_desktop_core::client::DesktopPaths::from_root(desktop.join("cli"));
+    if !paths.identity_key_path().exists() {
+        return Ok(());
+    }
+    let identity = gents_desktop_core::client::PrincipalIdentity::load_existing(&paths)
+        .with_context(|| format!("loading the CLI User key under {}", paths.root().display()))?;
+    let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        identity.private_key_bytes(),
+    )?;
+    served_principals()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(port, capability);
+    Ok(())
+}
+
+/// The operator's User DID: the CLI client key a CLI process with this
+/// `HOME` signs with.
+pub fn cli_user_did(cli_home: &Path) -> Result<String> {
+    let paths = gents_desktop_core::client::DesktopPaths::from_root(
+        desktop_root_under(cli_home, &[]).join("cli"),
+    );
+    let identity = gents_desktop_core::client::PrincipalIdentity::load_existing(&paths)
+        .with_context(|| format!("loading the CLI User key under {}", paths.root().display()))?;
+    Ok(identity.did().to_owned())
+}
+
+/// `dirs::data_local_dir()` as the CLI child resolves it from its own `HOME`.
+fn desktop_root_under(cli_home: &Path, envs: &[(&str, &str)]) -> std::path::PathBuf {
+    let data = if cfg!(target_os = "macos") {
+        cli_home.join("Library/Application Support")
+    } else {
+        envs.iter()
+            .find(|(name, _)| *name == "XDG_DATA_HOME")
+            .map(|(_, root)| std::path::PathBuf::from(root))
+            .unwrap_or_else(|| cli_home.join(".local/share"))
+    };
+    data.join("gents").join("desktop")
+}
+
+/// Acts as the operator's User; see [`register_served_client`].
+pub fn served_client_endpoint(graphql: &str) -> gents::store::config_client::GraphqlEndpoint {
+    endpoint_from(served_principals(), graphql)
+}
+
+fn endpoint_from(
+    registry: &Mutex<RapidHashMap<u16, gents::store::config_client::ClientSigningCapability>>,
+    graphql: &str,
+) -> gents::store::config_client::GraphqlEndpoint {
     let principal = reqwest::Url::parse(graphql)
         .ok()
         .and_then(|url| url.port())
         .and_then(|port| {
-            served_principals()
+            registry
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .get(&port)
@@ -52,8 +125,10 @@ pub fn served_endpoint(graphql: &str) -> gents::store::config_client::GraphqlEnd
     }
 }
 
+/// Document reads and fixture writes as the operator's User.
 pub async fn graphql_query(graphql: &str, query: &str) -> Result<Value> {
-    let access = gents::store::config_client::ConfigAccess::Graphql(served_endpoint(graphql));
+    let access =
+        gents::store::config_client::ConfigAccess::Graphql(served_client_endpoint(graphql));
     if query.trim_start().starts_with("mutation") {
         Ok(access.write("test.fixture", query).await?)
     } else {

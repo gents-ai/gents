@@ -127,7 +127,7 @@ pub async fn spawn_observed_server(
 ) -> Result<(ServeProcess, Value)> {
     use std::time::Duration;
     const LOG: &str = "warn,p2p::iroh::endpoint_config=info";
-    let registered_home = support::process::served_home_dir(home, args, &[("RUST_LOG", LOG)]);
+    let registered_home = home.to_owned();
     let owned_home = home.to_owned();
     let owned_args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
     let mut serve = tokio::task::spawn_blocking(move || {
@@ -169,7 +169,7 @@ pub async fn spawn_observed_server(
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
     tokio::task::spawn_blocking(move || {
-        support::graphql::register_served_home(&registered_home, port)
+        support::graphql::register_served_client(&registered_home, &[], port)
     })
     .await??;
     let actual = reported_socket(&readiness, configured)?;

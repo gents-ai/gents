@@ -51,12 +51,23 @@ async fn select_default_agent_skills(
     node_did: &str,
     skill_ids: &[&str],
 ) -> Result<()> {
-    let agent_did = escape_graphql_string(&format!("{node_did}:default"));
-    let node_did = escape_graphql_string(node_did);
+    let node = escape_graphql_string(node_did);
+    let default_agent = graphql_query(
+        graphql,
+        &format!(
+            r#"{{ Node(filter: {{node_did: {{_eq: "{node}"}}}}, limit: 1) {{default_agent_did}} }}"#
+        ),
+    )
+    .await?;
+    let agent_did = default_agent
+        .pointer("/data/Node/0/default_agent_did")
+        .and_then(Value::as_str)
+        .context("Node has no default Agent")?;
+    let agent_did = escape_graphql_string(agent_did);
     let agent = graphql_query(
         graphql,
         &format!(
-            r#"{{ Agent(filter: {{node_did: {{_eq: "{node_did}"}}, agent_did: {{_eq: "{agent_did}"}}}}, limit: 1) {{context_id}} }}"#
+            r#"{{ Agent(filter: {{node_did: {{_eq: "{node}"}}, agent_did: {{_eq: "{agent_did}"}}}}, limit: 1) {{context_id}} }}"#
         ),
     )
     .await?;
@@ -72,7 +83,7 @@ async fn select_default_agent_skills(
     graphql_query(
         graphql,
         &format!(
-            r#"mutation {{ update_AgentContext(filter: {{node_did: {{_eq: "{node_did}"}}, context_id: {{_eq: "{}"}}}}, input: {{skill_ids: [{skills}]}}) {{_docID}} }}"#,
+            r#"mutation {{ update_AgentContext(filter: {{node_did: {{_eq: "{node}"}}, context_id: {{_eq: "{}"}}}}, input: {{skill_ids: [{skills}]}}) {{_docID}} }}"#,
             escape_graphql_string(context_id)
         ),
     )
