@@ -527,39 +527,41 @@ mod tests {
             Some(actor.clone()),
             "test.tool.accepted_snapshot",
             |txn| {
-            let node = node.clone();
-            let tool = tool.clone();
-            let (doc_id, session_id, did, requester) = (&doc_id, &session_id, &did, &requester);
-            Box::pin(async move {
-                let before = ToolCallLifecycle::load_by_doc_id_in_txn(
-                    txn,
-                    node.clone(),
-                    doc_id,
-                    did,
-                    session_id,
-                    requester.as_deref(),
-                )
-                .await?
-                .expect("accepted physical tool");
-                assert_eq!(before.state, ToolCallState::Running);
-                tokio::spawn(async move { tool.lock().await.complete("finished").await }).await??;
-                let after = ToolCallLifecycle::load_by_doc_id_in_txn(
-                    txn,
-                    node,
-                    doc_id,
-                    did,
-                    session_id,
-                    requester.as_deref(),
-                )
-                .await?
-                .expect("same accepted physical tool");
-                assert_eq!(after.state, ToolCallState::Running);
-                assert_eq!(after.accepted_header_doc_id, before.accepted_header_doc_id);
-                assert_eq!(after.execution_generation, before.execution_generation);
-                assert_eq!(after.arguments, before.arguments);
-                Ok::<_, anyhow::Error>(())
-            })
-        })
+                let node = node.clone();
+                let tool = tool.clone();
+                let (doc_id, session_id, did, requester) = (&doc_id, &session_id, &did, &requester);
+                Box::pin(async move {
+                    let before = ToolCallLifecycle::load_by_doc_id_in_txn(
+                        txn,
+                        node.clone(),
+                        doc_id,
+                        did,
+                        session_id,
+                        requester.as_deref(),
+                    )
+                    .await?
+                    .expect("accepted physical tool");
+                    assert_eq!(before.state, ToolCallState::Running);
+                    tokio::spawn(async move { tool.lock().await.complete("finished").await })
+                        .await??;
+                    let after = ToolCallLifecycle::load_by_doc_id_in_txn(
+                        txn,
+                        node,
+                        doc_id,
+                        did,
+                        session_id,
+                        requester.as_deref(),
+                    )
+                    .await?
+                    .expect("same accepted physical tool");
+                    assert_eq!(after.state, ToolCallState::Running);
+                    assert_eq!(after.accepted_header_doc_id, before.accepted_header_doc_id);
+                    assert_eq!(after.execution_generation, before.execution_generation);
+                    assert_eq!(after.arguments, before.arguments);
+                    Ok::<_, anyhow::Error>(())
+                })
+            },
+        )
         .await
         .unwrap();
         let fresh = ToolCallLifecycle::load_by_doc_id_as(
@@ -674,15 +676,11 @@ mod tests {
         lifecycle.start_running().await.expect("dispatch tool call");
 
         let actor = lifecycle.actor().clone();
-        let loaded = ToolCallLifecycle::load_as(
-            node.clone(),
-            actor,
-            "session-routed",
-            "tool-call-routed",
-        )
-        .await
-            .expect("load tool call")
-            .expect("persisted tool call");
+        let loaded =
+            ToolCallLifecycle::load_as(node.clone(), actor, "session-routed", "tool-call-routed")
+                .await
+                .expect("load tool call")
+                .expect("persisted tool call");
 
         assert_eq!(loaded.requester_did.as_deref(), Some(coordinator.as_str()));
         let selected = loaded.selected_tool_identity.expect("selected identity");

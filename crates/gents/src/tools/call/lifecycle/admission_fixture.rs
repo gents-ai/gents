@@ -225,8 +225,11 @@ async fn complete_child_managed_inner(
     // A caused request is client-admitted by its calling Agent, so its claim
     // carries the verified native claim admission.
     let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
-    let verifier =
-        crate::request::admission::AgentRequestAdmissionVerifier::new(node.clone(), runtime, authority);
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        runtime,
+        authority,
+    );
     let (request, admission) = verifier
         .verify_fresh_for_claim_with_identity(&request, identity)
         .await
@@ -1170,7 +1173,9 @@ mod lifecycle_tests {
             .await
             .unwrap();
         assert_eq!(
-            response["data"]["update_AgentRequest"].as_array().map(Vec::len),
+            response["data"]["update_AgentRequest"]
+                .as_array()
+                .map(Vec::len),
             Some(1)
         );
 

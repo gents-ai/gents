@@ -766,7 +766,10 @@ mod tests {
     }
 
     fn access(admission: &PublishedAdmission) -> ConfigAccess {
-        admission.tool.access().expect("admission tool carries its agent-scoped access")
+        admission
+            .tool
+            .access()
+            .expect("admission tool carries its agent-scoped access")
     }
 
     /// The request a job child `slot` caused, owned by `node_did`.
@@ -812,8 +815,8 @@ mod tests {
             doc_id,
         )
         .await
-            .unwrap()
-            .is_some()
+        .unwrap()
+        .is_some()
     }
 
     async fn row_state(admission: &PublishedAdmission) -> String {
@@ -1195,17 +1198,21 @@ mod tests {
             verdict: PluginExecutionVerdict::Success,
         };
         let doc_id = admission.tool.doc_id().unwrap().to_owned();
-        admission.tool.access().unwrap().transact_write("test.control.step", |txn| {
-            let (doc_id, evidence) = (doc_id.clone(), evidence.clone());
-            Box::pin(async move {
-                crate::tools::background::job::records::write_step_state_in_txn(
-                    txn, &doc_id, &evidence, None, None,
-                )
-                .await
+        admission
+            .tool
+            .access()
+            .unwrap()
+            .transact_write("test.control.step", |txn| {
+                let (doc_id, evidence) = (doc_id.clone(), evidence.clone());
+                Box::pin(async move {
+                    crate::tools::background::job::records::write_step_state_in_txn(
+                        txn, &doc_id, &evidence, None, None,
+                    )
+                    .await
+                })
             })
-        })
-        .await
-        .unwrap();
+            .await
+            .unwrap();
         let load = || async {
             crate::tools::background::job::driver::load_lifecycle(&access(&admission), &doc_id)
                 .await

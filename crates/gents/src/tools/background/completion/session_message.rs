@@ -508,7 +508,8 @@ mod turn_assignment_tests {
         .unwrap();
         let node = &admission.node;
         let did = &admission.node_did;
-        let session = caused_session_id(&admission.tool.access().unwrap(), &caused_request_doc_id).await;
+        let session =
+            caused_session_id(&admission.tool.access().unwrap(), &caused_request_doc_id).await;
         // The caused request and every head below are written and read as the
         // Agent that owns them; the node has no fallback read or write.
         let owner = admission.tool.access().unwrap();
@@ -537,11 +538,7 @@ mod turn_assignment_tests {
             escape_graphql_string(&session),
             escape_graphql_string(&now)
         );
-        let created = owner.write("test.folded_head",
-            &create,
-        )
-        .await
-        .unwrap();
+        let created = owner.write("test.folded_head", &create).await.unwrap();
         let head_doc = crate::store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
         let foreign_create = create
             .replace(
@@ -549,14 +546,16 @@ mod turn_assignment_tests {
                 "request_id: \"foreign-head\"",
             )
             .replace(
-                &format!("requester_did: \"{}\"", escape_graphql_string(&caused_requester)),
+                &format!(
+                    "requester_did: \"{}\"",
+                    escape_graphql_string(&caused_requester)
+                ),
                 "requester_did: \"did:test:foreign\"",
             );
-        let foreign = owner.write("test.foreign_head",
-            &foreign_create,
-        )
-        .await
-        .unwrap();
+        let foreign = owner
+            .write("test.foreign_head", &foreign_create)
+            .await
+            .unwrap();
         let foreign_doc = crate::store::graphql::created_doc_id(&foreign, "AgentRequest").unwrap();
         let foreign_fold = format!(
             r#"mutation {{ update_AgentRequest(docID: "{}", input: {{
@@ -567,11 +566,10 @@ mod turn_assignment_tests {
             escape_graphql_string(&foreign_doc),
             escape_graphql_string(crate::request::lifecycle::FOLDED_REASON)
         );
-        owner.write("test.foreign_fold",
-            &foreign_fold,
-        )
-        .await
-        .unwrap();
+        owner
+            .write("test.foreign_fold", &foreign_fold)
+            .await
+            .unwrap();
         let binding_cases =
             &crate::lean_vocab_test::lean_contract_snapshot().agent_folded_binding_cases;
         let foreign_model = binding_cases
@@ -597,11 +595,13 @@ mod turn_assignment_tests {
             .unwrap(),
             0
         );
-        assert!(
-            session_message_notifications(&admission.tool.access().unwrap(), did, admission.tool.session_id())
-                .await
-                .is_empty()
-        );
+        assert!(session_message_notifications(
+            &admission.tool.access().unwrap(),
+            did,
+            admission.tool.session_id()
+        )
+        .await
+        .is_empty());
         let foreign_agent_create = create
             .replace(
                 &format!("request_id: \"{}\"", head_id),
@@ -611,11 +611,10 @@ mod turn_assignment_tests {
                 &format!("agent_did: \"{}\"", escape_graphql_string(&caused_agent)),
                 "agent_did: \"foreign-agent\"",
             );
-        let foreign_agent = owner.write("test.foreign_agent_head",
-            &foreign_agent_create,
-        )
-        .await
-        .unwrap();
+        let foreign_agent = owner
+            .write("test.foreign_agent_head", &foreign_agent_create)
+            .await
+            .unwrap();
         let foreign_agent_doc =
             crate::store::graphql::created_doc_id(&foreign_agent, "AgentRequest").unwrap();
         let foreign_agent_fold = format!(
@@ -627,11 +626,10 @@ mod turn_assignment_tests {
             escape_graphql_string(&foreign_agent_doc),
             escape_graphql_string(crate::request::lifecycle::FOLDED_REASON)
         );
-        owner.write("test.foreign_agent_fold",
-            &foreign_agent_fold,
-        )
-        .await
-        .unwrap();
+        owner
+            .write("test.foreign_agent_fold", &foreign_agent_fold)
+            .await
+            .unwrap();
         let foreign_agent_model = binding_cases
             .iter()
             .find(|case| {
@@ -667,11 +665,10 @@ mod turn_assignment_tests {
             escape_graphql_string(&head_doc),
             escape_graphql_string(crate::request::lifecycle::FOLDED_REASON)
         );
-        owner.write("test.mismatched_fold",
-            &mismatched_fold,
-        )
-        .await
-        .unwrap();
+        owner
+            .write("test.mismatched_fold", &mismatched_fold)
+            .await
+            .unwrap();
         let mismatch_model = binding_cases
             .iter()
             .find(|case| {
@@ -695,9 +692,7 @@ mod turn_assignment_tests {
             escape_graphql_string(&head_doc),
             escape_graphql_string(crate::request::lifecycle::FOLDED_REASON)
         );
-        owner.write("test.folded_cause", &fold)
-            .await
-            .unwrap();
+        owner.write("test.folded_cause", &fold).await.unwrap();
         let matching_model = binding_cases
             .iter()
             .find(|case| {
@@ -723,11 +718,13 @@ mod turn_assignment_tests {
             .unwrap(),
             0
         );
-        assert!(
-            session_message_notifications(&admission.tool.access().unwrap(), did, admission.tool.session_id())
-                .await
-                .is_empty()
-        );
+        assert!(session_message_notifications(
+            &admission.tool.access().unwrap(),
+            did,
+            admission.tool.session_id()
+        )
+        .await
+        .is_empty());
         crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
             node,
             &head_id,
@@ -752,8 +749,12 @@ mod turn_assignment_tests {
             .unwrap(),
             1
         );
-        let notifications =
-            session_message_notifications(&admission.tool.access().unwrap(), did, admission.tool.session_id()).await;
+        let notifications = session_message_notifications(
+            &admission.tool.access().unwrap(),
+            did,
+            admission.tool.session_id(),
+        )
+        .await;
         assert_eq!(notifications.len(), 1);
         assert!(notifications[0].contains("head answer"));
         assert!(!notifications[0].contains("request_superseded"));
@@ -767,7 +768,12 @@ mod turn_assignment_tests {
         crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(node, did, &recovery_identities(&admission))
             .await.unwrap();
         assert_eq!(
-            session_message_notifications(&admission.tool.access().unwrap(), did, admission.tool.session_id()).await,
+            session_message_notifications(
+                &admission.tool.access().unwrap(),
+                did,
+                admission.tool.session_id()
+            )
+            .await,
             notifications
         );
         node.shutdown().await.expect("shut down test node");
@@ -929,8 +935,12 @@ mod turn_assignment_tests {
         assert_eq!(row["lifecycle_state"], "completed");
         assert_eq!(row["status"], "completed");
 
-        let notifications =
-            session_message_notifications(&admission.tool.access().unwrap(), did, admission.tool.session_id()).await;
+        let notifications = session_message_notifications(
+            &admission.tool.access().unwrap(),
+            did,
+            admission.tool.session_id(),
+        )
+        .await;
         assert_eq!(notifications.len(), 1);
         assert!(
             notifications[0].contains("<reason>assignment_active</reason>"),
@@ -1008,8 +1018,12 @@ mod turn_assignment_tests {
         // distinction lives (a no-goal session never reads as success).
         let row = tool_call_row(&admission.tool.access().unwrap(), &tool_doc_id).await;
         assert_eq!(row["status"], "completed");
-        let notifications =
-            session_message_notifications(&admission.tool.access().unwrap(), did, admission.tool.session_id()).await;
+        let notifications = session_message_notifications(
+            &admission.tool.access().unwrap(),
+            did,
+            admission.tool.session_id(),
+        )
+        .await;
         assert_eq!(notifications.len(), 1);
         assert!(
             notifications[0].contains("<reason>assignment_absent</reason>"),
@@ -1087,8 +1101,12 @@ mod turn_assignment_tests {
         assert_eq!(settled, 1);
         let row = tool_call_row(&admission.tool.access().unwrap(), &tool_doc_id).await;
         assert_eq!(row["status"], "completed");
-        let notifications =
-            session_message_notifications(&admission.tool.access().unwrap(), did, admission.tool.session_id()).await;
+        let notifications = session_message_notifications(
+            &admission.tool.access().unwrap(),
+            did,
+            admission.tool.session_id(),
+        )
+        .await;
         assert_eq!(notifications.len(), 1);
         assert!(
             !notifications[0].contains("<reason>"),
@@ -1131,7 +1149,8 @@ mod turn_assignment_tests {
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
         let session_id = admission.tool.session_id().to_owned();
         crate::test_support::install_test_agent(node, did, "general").await;
-        let goal_session_id = caused_session_id(&admission.tool.access().unwrap(), &caused_request_doc_id).await;
+        let goal_session_id =
+            caused_session_id(&admission.tool.access().unwrap(), &caused_request_doc_id).await;
         crate::goal::set_goal_from_access(
             &admission.tool.access().unwrap(),
             did,
@@ -1271,7 +1290,9 @@ mod turn_assignment_tests {
             .await
             .unwrap();
         assert_eq!(report.side_effects_converged, 1);
-        let notifications = session_message_notifications(&admission.tool.access().unwrap(), did, &session_id).await;
+        let notifications =
+            session_message_notifications(&admission.tool.access().unwrap(), did, &session_id)
+                .await;
         assert_eq!(notifications.len(), 1);
         assert!(
             notifications[0].contains("<reason>assignment_active</reason>"),
@@ -1305,10 +1326,7 @@ mod turn_assignment_tests {
         assert_eq!(terminal.notification_status(), "completed");
     }
 
-    async fn tool_call_row(
-        access: &crate::ConfigAccess,
-        tool_doc_id: &str,
-    ) -> serde_json::Value {
+    async fn tool_call_row(access: &crate::ConfigAccess, tool_doc_id: &str) -> serde_json::Value {
         let escaped = escape_graphql_string(tool_doc_id);
         let response = access
             .execute(&format!(
@@ -1356,11 +1374,7 @@ mod turn_assignment_tests {
         notifications
     }
 
-    async fn bind_caused_assignment(
-        access: &crate::ConfigAccess,
-        did: &str,
-        request_doc: &str,
-    ) {
+    async fn bind_caused_assignment(access: &crate::ConfigAccess, did: &str, request_doc: &str) {
         let session = caused_session_id(access, request_doc).await;
         let goal = access
             .transact_readonly("test.load_caused_goal", |txn| {
@@ -1374,7 +1388,10 @@ mod turn_assignment_tests {
                 escape_graphql_string(&goal.doc_id), escape_graphql_string(request_doc))).await.unwrap();
     }
 
-    async fn caused_session_id(access: &crate::ConfigAccess, caused_request_doc_id: &str) -> String {
+    async fn caused_session_id(
+        access: &crate::ConfigAccess,
+        caused_request_doc_id: &str,
+    ) -> String {
         let doc_id = escape_graphql_string(caused_request_doc_id);
         let response = access
             .execute(&format!(

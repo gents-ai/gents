@@ -829,7 +829,12 @@ pub(crate) mod tests {
             .unwrap()
     }
 
-    async fn doc_id_of(access: &ConfigAccess, collection: &str, field: &str, value: &str) -> String {
+    async fn doc_id_of(
+        access: &ConfigAccess,
+        collection: &str,
+        field: &str,
+        value: &str,
+    ) -> String {
         let response = access
             .execute(&format!(
                 r#"{{ {collection}(filter: {{ {field}: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
@@ -902,7 +907,14 @@ pub(crate) mod tests {
         terminalized_at: Option<&str>,
     ) {
         let value = child_request(
-            chain, request_id, session_id, retry_key, agent_did, state, title, created_at,
+            chain,
+            request_id,
+            session_id,
+            retry_key,
+            agent_did,
+            state,
+            title,
+            created_at,
             terminalized_at,
         );
         insert(node, "AgentRequest", value).await;
@@ -928,7 +940,14 @@ pub(crate) mod tests {
         terminalized_at: Option<&str>,
     ) {
         let value = child_request(
-            chain, request_id, session_id, retry_key, agent_did, state, title, created_at,
+            chain,
+            request_id,
+            session_id,
+            retry_key,
+            agent_did,
+            state,
+            title,
+            created_at,
             terminalized_at,
         );
         insert_as(access, "AgentRequest", value).await;
@@ -1335,7 +1354,9 @@ pub(crate) mod tests {
             row.try_into().unwrap(),
             60,
         );
-        lifecycle.bind_managed_agent(managed_agent().as_ref()).unwrap();
+        lifecycle
+            .bind_managed_agent(managed_agent().as_ref())
+            .unwrap();
         assert_eq!(
             lifecycle.claim().await.unwrap(),
             crate::request::lifecycle::ClaimOutcome::Claimed
@@ -1603,7 +1624,8 @@ pub(crate) mod tests {
         static AGENT: std::sync::OnceLock<Arc<dyn crate::store::identity::NodeIdentity>> =
             std::sync::OnceLock::new();
         AGENT.get_or_init(|| {
-            crate::store::identity::resolve_agent_identity(node_identity(), agent_binding()).unwrap()
+            crate::store::identity::resolve_agent_identity(node_identity(), agent_binding())
+                .unwrap()
         })
     }
 
@@ -1928,13 +1950,14 @@ pub(crate) mod tests {
         }
 
         pub(crate) async fn write_guest_state(&self, row: &str, guest: &serde_json::Value) {
-            self.access.transact_write("test.input.guest_state", |txn| {
-                Box::pin(async move {
-                    write_step_state_in_txn(txn, row, &evidence(), None, Some(guest)).await
+            self.access
+                .transact_write("test.input.guest_state", |txn| {
+                    Box::pin(async move {
+                        write_step_state_in_txn(txn, row, &evidence(), None, Some(guest)).await
+                    })
                 })
-            })
-            .await
-            .unwrap();
+                .await
+                .unwrap();
         }
 
         async fn later(&self, row: &str) -> anyhow::Result<(JobStepInput, u64)> {

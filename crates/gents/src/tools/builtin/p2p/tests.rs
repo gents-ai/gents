@@ -350,7 +350,8 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
     )
     .await;
     // Overlay reads are signed by the invoking Agent, never by the node.
-    let agent_binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+    let agent_binding =
+        crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
     let agent =
         crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent_binding).unwrap();
     // No projection pass runs here, so the node admin grants the baseline
@@ -377,7 +378,10 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
     )
     .await
     .unwrap_err();
-    assert!(preview.to_string().contains("protocol collections"), "{preview}");
+    assert!(
+        preview.to_string().contains("protocol collections"),
+        "{preview}"
+    );
     let wrong_did = Tool::call(&tool, serde_json::from_value(json!({"argv":["pairings","apply"],"options":{"peer_id":peer_id,"peer_did":identity.did(),"collections":["DeploymentNote"]}})).unwrap()).await.unwrap_err();
     assert!(wrong_did.to_string().contains("signed enrollment"));
     assert!(tool.overlay(&peer_id).await.unwrap().is_none());
@@ -389,7 +393,8 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
     );
     assert!(Tool::call(
         &readonly,
-        serde_json::from_value(json!({"argv":["pairings","revoke"],"options":{"peer_id":peer_id}})).unwrap()
+        serde_json::from_value(json!({"argv":["pairings","revoke"],"options":{"peer_id":peer_id}}))
+            .unwrap()
     )
     .await
     .unwrap_err()
@@ -419,15 +424,20 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
     )
     .await
     .unwrap_err();
-    assert!(refused.to_string().contains("protocol collections"), "{refused}");
+    assert!(
+        refused.to_string().contains("protocol collections"),
+        "{refused}"
+    );
     assert!(tool.overlay(&peer_id).await.unwrap().is_none());
-    assert!(GraphqlEnrollmentStore::new(local.node.clone(), identity.clone())
-        .load_projection()
-        .await
-        .unwrap()
-        .active
-        .iter()
-        .any(|e| e.request.request_id == enrollment.request_id));
+    assert!(
+        GraphqlEnrollmentStore::new(local.node.clone(), identity.clone())
+            .load_projection()
+            .await
+            .unwrap()
+            .active
+            .iter()
+            .any(|e| e.request.request_id == enrollment.request_id)
+    );
 }
 
 #[tokio::test]
@@ -539,15 +549,21 @@ async fn node_requested_enrollment_is_approved_and_paired_by_the_offering_node()
     )
     .await
     .unwrap_err();
-    assert!(refused.to_string().contains("protocol collections"), "{refused}");
+    assert!(
+        refused.to_string().contains("protocol collections"),
+        "{refused}"
+    );
 }
 
 #[tokio::test]
 async fn p2p_rejects_foreign_actor_and_preserves_another_overlays_owner() {
     let db = crate::support::test_p2p_db("engineer-p2p-owned").await;
     let access = ConfigAccess::local(db.node.clone());
-    let agent_binding = crate::store::identity::provision_agent_identity(db.node_identity.as_ref()).unwrap();
-    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &agent_binding).unwrap();
+    let agent_binding =
+        crate::store::identity::provision_agent_identity(db.node_identity.as_ref()).unwrap();
+    let agent =
+        crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &agent_binding)
+            .unwrap();
     access.write("test.p2p.overlay", "mutation {create_DataPlanePairingDesired(input: {peer_id: \"foreign-route\", node_did: \"did:key:another\", source: \"another-owner\", collections: [\"DeploymentNote\"], replicator_addresses: null, template: \"app-collections\"}) {_docID}}").await.unwrap();
     let tool = P2pTool::new(
         db.node.clone(),

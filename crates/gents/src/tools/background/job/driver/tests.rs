@@ -302,21 +302,25 @@ async fn a_host_kill_settles_a_row_whose_progress_sits_just_under_the_cap() {
     full.title
         .push_str(&"t".repeat(JOB_PROGRESS_MAX_BYTES - bytes(&full) - 4));
     let doc_id = admission.tool.doc_id().unwrap().to_owned();
-    admission.tool.access().unwrap().transact_write("test.driver.full", |txn| {
-        let (doc_id, full) = (doc_id.clone(), full.clone());
-        Box::pin(async move {
-            let host = HostProgressFacts {
-                spawned: full.spawned,
-                budget: full.budget.clone(),
-                observed_terminal_children: full.observed_terminal_children,
-                state: full.state,
-                pause_reason: None,
-            };
-            write_progress_in_txn(txn, &doc_id, full.revision, full, host).await
+    admission
+        .tool
+        .access()
+        .unwrap()
+        .transact_write("test.driver.full", |txn| {
+            let (doc_id, full) = (doc_id.clone(), full.clone());
+            Box::pin(async move {
+                let host = HostProgressFacts {
+                    spawned: full.spawned,
+                    budget: full.budget.clone(),
+                    observed_terminal_children: full.observed_terminal_children,
+                    state: full.state,
+                    pause_reason: None,
+                };
+                write_progress_in_txn(txn, &doc_id, full.revision, full, host).await
+            })
         })
-    })
-    .await
-    .unwrap();
+        .await
+        .unwrap();
     settle_plugin_job(&mut admission.tool, Settlement::Refused(Refusal::TimedOut))
         .await
         .unwrap();
@@ -441,14 +445,19 @@ async fn non_inline_settlement_appends_one_continuation_completion() {
 
 async fn persist_step_state(admission: &PublishedAdmission, evidence: &PluginExecutionReceipt) {
     let doc_id = admission.tool.doc_id().unwrap().to_owned();
-    admission.tool.access().unwrap().transact_write("test.driver.step_state", |txn| {
-        let doc_id = doc_id.clone();
-        Box::pin(async move {
-            super::super::records::write_step_state_in_txn(txn, &doc_id, evidence, None, None).await
+    admission
+        .tool
+        .access()
+        .unwrap()
+        .transact_write("test.driver.step_state", |txn| {
+            let doc_id = doc_id.clone();
+            Box::pin(async move {
+                super::super::records::write_step_state_in_txn(txn, &doc_id, evidence, None, None)
+                    .await
+            })
         })
-    })
-    .await
-    .unwrap();
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -499,7 +508,9 @@ async fn staged_evidence_wins_over_the_persisted_one() {
     finish(admission).await;
 }
 
-use crate::tools::background::job::input::tests::{live_settings, new_job, request_as, resume_block};
+use crate::tools::background::job::input::tests::{
+    live_settings, new_job, request_as, resume_block,
+};
 use crate::tools::background::job::keys::{job_session_id, job_spawn_key};
 use crate::tools::background::job::records::{write_progress_in_txn, HostProgressFacts};
 use gents_protocol::job::{JobBudget, JobPolicy};
@@ -604,8 +615,9 @@ async fn read_step_row_in_txn_sees_the_transactions_own_writes() {
     job.write_pin(&row, &job.pin(&row, None)).await;
     job.write_progress(&row, JobState::Running, 1).await;
     let row = row.as_str();
-    let spent =
-        job.access.transact_write("test.driver.own_writes", |txn| {
+    let spent = job
+        .access
+        .transact_write("test.driver.own_writes", |txn| {
             Box::pin(async move {
                 let host = HostProgressFacts {
                     spawned: 3,
@@ -960,12 +972,16 @@ impl Stepper {
             pause_reason: None,
         };
         let revision = progress.revision;
-        self.job.access.transact_write("test.driver.bump", |txn| {
-            let (progress, host) = (progress.clone(), host.clone());
-            Box::pin(async move { write_progress_in_txn(txn, row, revision, progress, host).await })
-        })
-        .await
-        .unwrap();
+        self.job
+            .access
+            .transact_write("test.driver.bump", |txn| {
+                let (progress, host) = (progress.clone(), host.clone());
+                Box::pin(
+                    async move { write_progress_in_txn(txn, row, revision, progress, host).await },
+                )
+            })
+            .await
+            .unwrap();
     }
 
     /// One step run from `input`, built before the row moved on.
@@ -1304,12 +1320,14 @@ async fn stall_fails_closed() {
     let (input, _) = step.input(&step.row).await;
     let own = step.receipt_of(&input).await;
     let earlier = evidence("persisted");
-    step.job.access.transact_write("test.driver.earlier", |txn| {
-        let (row, earlier) = (step.row.clone(), earlier.clone());
-        Box::pin(async move { write_step_state_in_txn(txn, &row, &earlier, None, None).await })
-    })
-    .await
-    .unwrap();
+    step.job
+        .access
+        .transact_write("test.driver.earlier", |txn| {
+            let (row, earlier) = (step.row.clone(), earlier.clone());
+            Box::pin(async move { write_step_state_in_txn(txn, &row, &earlier, None, None).await })
+        })
+        .await
+        .unwrap();
     assert_eq!(
         step.run(&step.row).await,
         StepOutcome::Refused(Refusal::Stalled)
@@ -1589,7 +1607,8 @@ async fn generated_plugin_job_wake_cases_keep_the_selected_agent() {
         home.path().to_path_buf(),
         None,
     );
-    let other = identity::Did::new("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK").unwrap();
+    let other =
+        identity::Did::new("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK").unwrap();
     let actor = |label: &str| match label {
         "selected" => super::super::input::tests::agent_actor(),
         "other" => other.clone(),
@@ -1628,7 +1647,11 @@ async fn generated_plugin_job_wake_cases_keep_the_selected_agent() {
                 })
                 .await
                 .unwrap();
-            assert_eq!(observed, case.expected.outcome, "{} immediate={immediate}", case.name);
+            assert_eq!(
+                observed, case.expected.outcome,
+                "{} immediate={immediate}",
+                case.name
+            );
             drop(held);
             idle(&driver).await;
         }
@@ -1680,12 +1703,14 @@ async fn concurrent_steps_are_bounded_by_the_semaphore() {
 async fn three_consecutive_step_failures_settle_step_failed_with_the_next_call() {
     let step = stepper(json!("not a step output")).await;
     let earlier = evidence("earlier");
-    step.job.access.transact_write("test.driver.earlier", |txn| {
-        let (row, earlier) = (step.row.clone(), earlier.clone());
-        Box::pin(async move { write_step_state_in_txn(txn, &row, &earlier, None, None).await })
-    })
-    .await
-    .unwrap();
+    step.job
+        .access
+        .transact_write("test.driver.earlier", |txn| {
+            let (row, earlier) = (step.row.clone(), earlier.clone());
+            Box::pin(async move { write_step_state_in_txn(txn, &row, &earlier, None, None).await })
+        })
+        .await
+        .unwrap();
     let driver = JobDriver::new(step.job.runtime.clone());
     driver
         .kick(&step.row, &super::super::input::tests::agent_actor())
@@ -1798,8 +1823,8 @@ async fn step_failures_without_a_remembered_row_read_it_and_settle_on_the_third(
             &child
         )
         .await
-            .unwrap()
-            .is_some(),
+        .unwrap()
+        .is_some(),
         "the live child is interrupted"
     );
     step.close().await;

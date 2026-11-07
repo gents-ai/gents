@@ -81,12 +81,13 @@ async fn write_job_pin_json(job: &Job, row: &str, value: Value) {
         crate::store::graphql::escape_graphql_string(row),
     );
     let variables = json!({ "job_pin": value });
-    job.access.transact_write("test.view.job_pin", |txn| {
-        let (mutation, variables) = (&mutation, &variables);
-        Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
-    })
-    .await
-    .unwrap();
+    job.access
+        .transact_write("test.view.job_pin", |txn| {
+            let (mutation, variables) = (&mutation, &variables);
+            Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
+        })
+        .await
+        .unwrap();
 }
 
 async fn started_at_ms(job: &Job, row: &str) -> u64 {
@@ -438,12 +439,13 @@ async fn update_row(job: &Job, row: &str, field: &str, value: &str) {
         escape_graphql_string(row),
         escape_graphql_string(value),
     );
-    job.access.transact_write("test.view.update_row", |txn| {
-        let mutation = &mutation;
-        Box::pin(async move { txn.execute(mutation).await })
-    })
-    .await
-    .unwrap();
+    job.access
+        .transact_write("test.view.update_row", |txn| {
+            let mutation = &mutation;
+            Box::pin(async move { txn.execute(mutation).await })
+        })
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
