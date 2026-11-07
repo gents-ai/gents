@@ -105,9 +105,15 @@ impl ToolRuntimeContext {
         runtime
     }
 
-    /// Selects the held Agent a test builds tools for, as `for_agent` does.
+    /// Selects the runtime and held Agent a test builds tools for, as
+    /// `for_agent` does from a resolved Agent.
     #[cfg(test)]
-    pub(crate) fn with_agent_identity_for_test(mut self, agent: Arc<dyn NodeIdentity>) -> Self {
+    pub(crate) fn with_agent_for_test(
+        mut self,
+        runtime: Arc<dyn NodeIdentity>,
+        agent: Arc<dyn NodeIdentity>,
+    ) -> Self {
+        self.identity = Some(runtime);
         self.agent_identity = Some(agent);
         self
     }

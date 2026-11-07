@@ -1245,13 +1245,19 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         .unwrap()
         .contains("could not be opened"));
     std::fs::write(installed_path, installed_bytes).unwrap();
-    let removed = tool
+    // Retiring the pack's plugin needs a complete reference inventory, which
+    // document ACP never gives an Agent (`ensure_plugins_unreferenced`), so the
+    // removal is refused and the installation remains.
+    let refused = tool
         .call(json!({"argv": ["pack", "remove", "fixture/plugin_documents_fixture"]}).to_string())
         .await
-        .expect("an installed pack removes");
-    let removed: Value = serde_json::from_str(&removed).unwrap();
-    assert_eq!(removed["pack"], "fixture/plugin_documents_fixture");
-
+        .expect_err("an Agent cannot retire a pack's plugins");
+    assert!(
+        refused.to_string().contains(
+            "plugin retirement requires a complete native configuration reference inventory"
+        ),
+        "{refused:#}"
+    );
     let response = fixture
         .user_access
         .execute(&format!(
@@ -1260,16 +1266,13 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         ))
         .await
         .unwrap();
-    assert!(response["data"]["PackInstallation"]
-        .as_array()
-        .unwrap()
-        .is_empty());
-
-    let again = tool
-        .call(json!({"argv": ["pack", "remove", "fixture/plugin_documents_fixture"]}).to_string())
-        .await
-        .expect_err("a second remove finds no record");
-    assert!(again.to_string().contains("is not installed"), "{again:#}");
+    assert_eq!(
+        response["data"]["PackInstallation"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 async fn signed_pack_tool(
@@ -1614,6 +1617,9 @@ impl std::ops::Deref for ReselectionFixture {
 async fn reselection_tools(label: &str, hold_pack_install: bool) -> ReselectionFixture {
     let fixture = SelfConfigFixture::new(label).await;
     fixture.grant_selected_configuration().await;
+    // Re-pointing re-keys the selected Agents' tool sources, which native NAC
+    // admits only for an actor holding their permissions, as the Engineer does.
+    fixture.grant_engineer_tool_sources().await;
     fixture.grant_node_reader().await;
     let sibling = fixture.install_sibling("sibling").await;
     let granted = fixture.install_sibling("granted").await;
@@ -4000,9 +4006,8 @@ async fn agent_create_commits_and_resolves_after_restart() {
         effective["effective_config"]["tool_grants"]["configured"],
         json!({"lsp": false, "network_mode": "inherit"})
     );
-    fixture
-        .grant_sibling_configuration(&created[0].agent_did)
-        .await;
+    // The creating Agent owns the documents it created, so it configures them
+    // without a further grant (the User cannot add `writer` to them).
     let grant_tools = fixture.tools(&["node", "tools"]);
     let selected = call_config_tool(
         &grant_tools,
@@ -4014,7 +4019,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
             "--set".into(),
             r#"integrations={"lsp":{}}"#.into(),
             "--set".into(),
-            r#"host={"files":{"mode":"ReadOnly"},"bash":{"mode":"ReadOnly","network_mode":"disabled"}}"#.into(),
+            format!(r#"host={{"root":{root:?},"files":{{"mode":"ReadOnly"}},"bash":{{"mode":"ReadOnly","network_mode":"disabled"}}}}"#),
         ],
     )
     .await
@@ -4146,7 +4151,13 @@ async fn agent_clone_never_copies_the_source_self_config_grants() {
         if preview {
             argv.push("preview");
         }
-        argv.extend(["clone", "--display-name", "Granted Copy", "--from", &granted]);
+        argv.extend([
+            "clone",
+            "--display-name",
+            "Granted Copy",
+            "--from",
+            &granted,
+        ]);
         argv.extend(["--profile", &profile]);
         json!({ "argv": argv }).to_string()
     };
@@ -7610,6 +7621,10 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
     let granted = fixture.install_sibling("granted").await;
     fixture.grant_sibling_configuration(&sibling).await;
     fixture.grant_pack_install_to(&granted).await;
+    // Selecting the granted sibling's Context needs its selection management
+    // and re-keys its pack-installation source, which the Engineer holds.
+    fixture.grant_sibling_configuration(&granted).await;
+    fixture.grant_engineer_tool_sources().await;
     let context = format!("{granted}:context");
     let core = SelfConfigCore::new(
         fixture.db.node.clone(),
@@ -7822,7 +7837,7 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     .unwrap();
     let runtime =
         crate::tools::surface::ToolRuntimeContext::oneshot_with_node_did(node.clone(), &did)
-            .with_agent_identity_for_test(fixture.agent.clone())
+            .with_agent_for_test(fixture.db.node_identity.clone(), fixture.agent.clone())
             .with_plugins(plugins.clone());
     let fresh_tools = surface.build_tools(&runtime).await.unwrap();
     let fresh_tool = fresh_tools
