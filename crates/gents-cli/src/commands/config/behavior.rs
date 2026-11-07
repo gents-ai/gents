@@ -377,11 +377,9 @@ pub(super) async fn agent_show(args: ConfigShowArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use gents::NodeIdentity as _;
-    use std::sync::Arc;
 
     use defra_node::Node as EmbeddedNode;
     use gents::documents::Tools;
-    use gents::{ensure_runtime_schemas, upsert_agent};
     use serde_json::Value;
 
     use super::*;
@@ -420,30 +418,26 @@ mod tests {
     /// candidate rows instead of counting them.
     #[tokio::test]
     async fn bare_id_prefers_the_local_row_and_ambiguity_names_candidates() -> Result<()> {
-        let tempdir = tempfile::tempdir()?;
-        let node = Arc::new(
-            crate::shared::test_support::node_builder()
-                .data_path(tempdir.path().join("data"))
-                .build()
-                .await
-                .expect("embedded node boots"),
-        );
-        ensure_runtime_schemas(&node).await?;
-        let local = "did:key:local-owner";
-        let peer = "did:key:peer-owner";
-        gents::ensure_node(&node, local).await?;
-        gents::ensure_node(&node, peer).await?;
         use gents::store::config_client::{
             apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
+        // Agent DIDs are derived per runtime, so the shared logical ID is a
+        // profile label the local Node and a replicated peer both use.
+        let client = crate::shared::test_support::ClientHome::new().await;
+        let peer_dir = tempfile::tempdir()?;
+        let peer = gents::KeyIdentity::load_or_create(peer_dir.path().join("peer.key"), None)?;
+        let local = client.node_did().to_owned();
+        let peer = peer.did().to_owned();
+        let (local, peer) = (local.as_str(), peer.as_str());
         let documents = [local, peer]
             .into_iter()
             .flat_map(|owner| {
                 [
                     (Collection::InferenceBackend, json!({"node_did":owner,"backend_id":"backend","name":"Test","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
-                    (Collection::InferenceProfile, json!({"node_did":owner,"profile_id":"profile-1","backend_id":"backend","model_name":"test"})),
+                    (Collection::InferenceProfile, json!({"node_did":owner,"profile_id":"profile-1","backend_id":"backend","model_name":owner})),
                 ]
             })
+            .chain([(Collection::Node, json!({"node_did":peer}))])
             .map(|(collection, value)| DesiredStateApplyDocument {
                 collection,
                 add: value.clone(),
@@ -451,98 +445,64 @@ mod tests {
             })
             .collect();
         let plan = DesiredStateApplyPlan::new(documents)?;
-        ConfigAccess::transact_local_write(&node, None, "test.slug.profile", |txn| {
-            let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
-        })
-        .await?;
-        for (owner, display) in [(local, "Local"), (peer, "Peer")] {
-            upsert_agent(
-                &node,
-                &Agent {
-                    creation_nonce: "a".repeat(64),
-                    agent_did: "web-researcher".to_string(),
-                    node_did: owner.to_string(),
-                    display_name: Some(display.to_string()),
-                    description: None,
-                    context_id: None,
-                    inference_profile_id: "profile-1".to_string(),
-                    enabled: true,
-                    tags: Vec::new(),
-                    created_at: None,
-                },
-            )
+        let access = client.access.clone();
+        access
+            .transact_write("test.slug.profile", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            })
             .await?;
-        }
-        let access = ConfigAccess::local(node.clone());
 
         // A replicated peer row with the same logical ID is not an ambiguity.
         let row = load_document(
             &access,
-            Collection::Agent,
-            "agent_did creation_nonce node_did display_name",
+            Collection::InferenceProfile,
+            "profile_id node_did model_name",
             None,
             Some(local),
-            "web-researcher",
+            "profile-1",
         )
         .await?
         .expect("the local row resolves");
         assert_eq!(row["node_did"], local);
-        assert_eq!(row["display_name"], "Local");
+        assert_eq!(row["model_name"], local);
 
-        // Two rows under one owner is a real ambiguity, and it names them.
-        upsert_agent(
-            &node,
-            &Agent {
-                creation_nonce: "a".repeat(64),
-                agent_did: "web-researcher".to_string(),
-                node_did: peer.to_string(),
-                display_name: Some("Peer again".to_string()),
-                description: None,
-                context_id: None,
-                inference_profile_id: "profile-1".to_string(),
-                enabled: true,
-                tags: Vec::new(),
-                created_at: None,
-            },
-        )
-        .await?;
         // A clean home has no local DID to prefer. Two rows are then a real
         // ambiguity, and it must be reported as one — not as a missing-home
         // error, which is what `resolve_node_did(...)?` used to produce before
         // the read was ever attempted.
         let error = load_document(
             &access,
-            Collection::Agent,
-            "agent_did creation_nonce node_did display_name",
+            Collection::InferenceProfile,
+            "profile_id node_did model_name",
             None,
             None,
-            "web-researcher",
+            "profile-1",
         )
         .await
         .expect_err("two rows with no local DID to prefer is ambiguous");
         let message = format!("{error:#}");
         assert!(message.contains("ambiguous"), "{message}");
         assert!(
-            message.contains(&format!("{local}/web-researcher"))
-                && message.contains(&format!("{peer}/web-researcher")),
+            message.contains(&format!("{local}/profile-1"))
+                && message.contains(&format!("{peer}/profile-1")),
             "the error must name both candidate rows: {message}"
         );
 
         let error = load_document(
             &access,
-            Collection::Agent,
-            "agent_did creation_nonce node_did display_name",
+            Collection::InferenceProfile,
+            "profile_id node_did model_name",
             None,
             Some("did:key:absent-owner"),
-            "web-researcher",
+            "profile-1",
         )
         .await
-        .expect_err("two rows under one owner is ambiguous");
+        .expect_err("a home preferring an absent owner keeps both rows ambiguous");
         let message = format!("{error:#}");
         assert!(message.contains("ambiguous"), "{message}");
         assert!(
-            message.contains(&format!("{peer}/web-researcher")),
+            message.contains(&format!("{peer}/profile-1")),
             "the error must name the candidate rows: {message}"
         );
         Ok(())
@@ -550,22 +510,9 @@ mod tests {
 
     #[tokio::test]
     async fn agent_create_and_clone_materialize_canonical_chain() -> Result<()> {
-        let tempdir = tempfile::tempdir()?;
-        let node = Arc::new(
-            crate::shared::test_support::node_builder()
-                .data_path(tempdir.path().join("data"))
-                .build()
-                .await
-                .expect("embedded node boots"),
-        );
-        ensure_runtime_schemas(&node).await?;
-        let identity = gents::store::identity::KeyIdentity::load_or_create(
-            tempdir.path().join("identity.key"),
-            None,
-        )?;
-        let owner = identity.did();
-        let actor = identity::Did::new(owner.to_string()).expect("valid test ACP actor");
-        gents::ensure_node(&node, owner).await?;
+        let client = crate::shared::test_support::ClientHome::new().await;
+        let node = client.node().clone();
+        let owner = client.node_did();
         use gents::store::config_client::{
             apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
@@ -574,25 +521,36 @@ mod tests {
             (Collection::InferenceProfile,json!({"node_did":owner,"profile_id":"profile-1","backend_id":"backend","model_name":"test"})),
         ].into_iter().map(|(collection,value)| DesiredStateApplyDocument{collection,add:value.clone(),update:value}).collect();
         let plan = DesiredStateApplyPlan::new(documents)?;
-        ConfigAccess::transact_local_write(
-            &node,
-            Some(actor.clone()),
-            "test.agent.profile",
-            |txn| {
+        let access = client.access.clone();
+        access
+            .transact_write("test.agent.profile", |txn| {
                 let plan = &plan;
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await })
-            },
-        )
-        .await?;
-
-        let access = ConfigAccess::local_as(node.clone(), actor);
+            })
+            .await?;
+        // Write-preset host tools run only under a User-published root.
+        let workspace = tempfile::tempdir()?;
+        let root = std::fs::canonicalize(workspace.path())?
+            .to_string_lossy()
+            .into_owned();
+        gents::tools::surface::set_workspace_root_with_readers(&access, owner, &root, None, true, &[])
+            .await?;
+        let user = identity::Did::new(client.user.did())?;
+        let provision = || {
+            gents::store::identity::provision_agent_identity_authorized(
+                &node,
+                client.home.identity.as_ref(),
+                &user,
+            )
+        };
         let doc = ConfigureAgentParams {
-            identity_binding: Some(gents::store::identity::provision_agent_identity(&identity)?),
+            identity_binding: Some(provision().await?),
             action: "create".into(),
             display_name: StringUpdate::Set("Canonical".into()),
             description: StringUpdate::Set("Canonical test agent".into()),
             system_prompt: StringUpdate::Set("Perform the requested work and verify it.".into()),
             preset: StringUpdate::Set("write".into()),
+            root: StringUpdate::Set(root.clone()),
             profile_id: StringUpdate::Set("profile-1".into()),
             ..Default::default()
         };
@@ -636,7 +594,7 @@ mod tests {
         );
 
         let clone_doc = ConfigureAgentParams {
-            identity_binding: Some(gents::store::identity::provision_agent_identity(&identity)?),
+            identity_binding: Some(provision().await?),
             action: "clone".into(),
             clone_from: Some(agent_did.to_owned()),
             display_name: StringUpdate::Set("Cloned".into()),
@@ -678,7 +636,6 @@ mod tests {
             cloned_tools_id, tools_id,
             "clone must not mutate the shared source tools"
         );
-        let access = ConfigAccess::local(node.clone());
         assert!(load_document(
             &access,
             Collection::Agent,
@@ -710,39 +667,39 @@ mod tests {
 
     #[tokio::test]
     async fn raw_set_rejects_dangling_profile_reference() -> Result<()> {
-        let tempdir = tempfile::tempdir()?;
-        let node = Arc::new(
-            crate::shared::test_support::node_builder()
-                .data_path(tempdir.path().join("data"))
-                .build()
-                .await
-                .expect("embedded node boots"),
-        );
-        ensure_runtime_schemas(&node).await?;
-        gents::ensure_node(&node, "did:key:set-owner").await?;
-        let agent = Agent {
-            creation_nonce: "a".repeat(64),
-            agent_did: "b1".to_string(),
-            node_did: "did:key:set-owner".to_string(),
-            display_name: None,
-            description: None,
-            context_id: None,
-            inference_profile_id: "missing-profile".to_string(),
-            enabled: true,
-            tags: Vec::new(),
-            created_at: None,
+        use gents::store::config_client::{
+            apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
-        assert!(
-            format!("{:#}", upsert_agent(&node, &agent).await.unwrap_err())
-                .contains("missing-profile")
-        );
-        let response = node
+        let client = crate::shared::test_support::ClientHome::new().await;
+        let binding = gents::store::identity::provision_agent_identity(client.home.identity.as_ref())?;
+        let agent = json!({
+            "creation_nonce": binding.creation_nonce,
+            "agent_did": binding.agent_did,
+            "node_did": client.node_did(),
+            "inference_profile_id": "missing-profile",
+            "enabled": true,
+        });
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: Collection::Agent,
+            add: agent.clone(),
+            update: agent,
+        }])?;
+        let error = client
+            .access
+            .transact_write("test.agent.dangling_profile", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            })
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("missing-profile"), "{error:#}");
+        let response = client
+            .access
             .execute("{ Agent {agent_did} AgentContext {context_id} Tools {tools_id} }")
-            .await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
+            .await?;
         for name in ["Agent", "AgentContext", "Tools"] {
             assert_eq!(
-                response.data.as_ref().unwrap()[name],
+                response["data"][name],
                 serde_json::json!([]),
                 "{name} must stay empty after a rejected write"
             );

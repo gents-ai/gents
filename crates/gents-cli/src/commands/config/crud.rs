@@ -446,10 +446,13 @@ mod tests {
 
     #[tokio::test]
     async fn canonical_reads_keep_shared_labels_in_the_selected_owner() -> Result<()> {
-        let node = Arc::new(crate::shared::test_support::node_builder().build().await?);
-        gents::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::local(node.clone());
-        for owner in ["owner-a", "owner-b"] {
+        let client = crate::shared::test_support::ClientHome::new().await;
+        let peer_dir = tempfile::tempdir()?;
+        let peer = gents::KeyIdentity::load_or_create(peer_dir.path().join("peer.key"), None)?;
+        let owner_a = client.node_did().to_owned();
+        let owner_b = gents::NodeIdentity::did(&peer).to_owned();
+        let access = client.access.clone();
+        for owner in [owner_a.as_str(), owner_b.as_str()] {
             let config = serde_json::from_value(json!({
                 "node":{"node_did":owner},
                 "tools":[{"node_did":owner,"tools_id":"same","display_name":owner,
@@ -463,18 +466,17 @@ mod tests {
                 })
                 .await?;
         }
-        let rows = query_collection(&access, TOOLS_SPEC, "owner-a", None).await?;
+        let rows = query_collection(&access, TOOLS_SPEC, &owner_a, None).await?;
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["display_name"], "owner-a");
+        assert_eq!(rows[0]["display_name"], owner_a.as_str());
         assert_eq!(rows[0]["host"]["bash"]["allowed_argv_prefixes"], json!([]));
         assert_eq!(
-            load_one(&access, TOOLS_SPEC, "owner-b", "same").await?["display_name"],
-            "owner-b"
+            load_one(&access, TOOLS_SPEC, &owner_b, "same").await?["display_name"],
+            owner_b.as_str()
         );
         assert!(load_one(&access, TOOLS_SPEC, "absent", "same")
             .await
             .is_err());
-        node.shutdown().await.expect("node shutdown");
         Ok(())
     }
 }

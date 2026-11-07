@@ -237,3 +237,186 @@ async fn catalog_freshness_reaches_cli_observation_reader() -> anyhow::Result<()
     node.shutdown().await.expect("node shutdown");
     Ok(())
 }
+
+/// A served home whose enrolled User configures it: the User holds the
+/// operator grants, publishes the Node through its client-signed endpoint, and
+/// creates managed Agents that sign their own sessions and requests.
+pub(crate) struct ClientHome {
+    pub(crate) home: gents::eval::runner::embedded::EmbeddedHome,
+    pub(crate) user: gents::KeyIdentity,
+    /// The User's client-signed access.
+    pub(crate) access: gents::store::config_client::ConfigAccess,
+    _user_dir: tempfile::TempDir,
+}
+
+impl ClientHome {
+    pub(crate) async fn new() -> Self {
+        use gents::store::config_client::{
+            apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+        };
+        use gents::NodeIdentity as _;
+
+        let home = gents::eval::runner::embedded::EmbeddedHome::create_temp("cli-client-home")
+            .await
+            .unwrap();
+        let user_dir = tempfile::tempdir().unwrap();
+        let user = gents::KeyIdentity::load_or_create(user_dir.path().join("user.key"), None)
+            .unwrap();
+        gents::store::identity::GrantSet::OperatorUser
+            .grant(
+                &gents::store::config_client::ConfigAccess::local_as(
+                    home.node.clone(),
+                    ::identity::Did::new(home.did()).unwrap(),
+                ),
+                &::identity::Did::new(user.did()).unwrap(),
+            )
+            .await
+            .unwrap();
+        let access = user_access(home.graphql_endpoint().unwrap(), &user);
+        let node = serde_json::json!({"node_did": home.did()});
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: gents::Collection::Node,
+            add: node.clone(),
+            update: node,
+        }])
+        .unwrap();
+        access
+            .transact_write("test.client_home.node", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            })
+            .await
+            .unwrap();
+        Self {
+            home,
+            user,
+            access,
+            _user_dir: user_dir,
+        }
+    }
+
+    pub(crate) fn node(&self) -> &std::sync::Arc<defra_node::Node> {
+        &self.home.node
+    }
+
+    pub(crate) fn node_did(&self) -> &str {
+        self.home.did()
+    }
+
+    pub(crate) fn graphql(&self) -> &str {
+        self.home.graphql_endpoint().unwrap()
+    }
+
+    /// The node's runtime access, for runtime-owned state and native grants.
+    pub(crate) fn runtime(&self) -> gents::store::config_client::ConfigAccess {
+        gents::store::config_client::ConfigAccess::local_as(
+            self.home.node.clone(),
+            ::identity::Did::new(self.home.did()).unwrap(),
+        )
+    }
+
+    /// Makes the User the household owner `gents init` creates, the native
+    /// admin that installs packs and their collection schemas.
+    pub(crate) async fn grant_household_owner(&self) {
+        use gents::NodeIdentity as _;
+        gents::store::identity::GrantSet::HouseholdOwner
+            .grant(
+                &self.runtime(),
+                &::identity::Did::new(self.user.did()).unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+
+    /// Provisions a managed Agent and publishes it, with a placeholder
+    /// backend and profile, as the User.
+    pub(crate) async fn agent(&self, display_name: &str) -> ManagedAgent {
+        use gents::store::config_client::{
+            apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+        };
+        use gents::NodeIdentity as _;
+
+        let runtime = self.home.identity.as_ref();
+        let binding = gents::store::identity::provision_agent_identity_authorized(
+            self.node(),
+            runtime,
+            &::identity::Did::new(self.user.did()).unwrap(),
+        )
+        .await
+        .unwrap();
+        let identity = gents::store::identity::resolve_agent_identity(runtime, &binding).unwrap();
+        let backend_id = format!("{}:backend", binding.agent_did);
+        let profile_id = format!("{}:inference", binding.agent_did);
+        let documents = [
+            (
+                gents::Collection::InferenceBackend,
+                serde_json::json!({
+                    "node_did": runtime.did(), "backend_id": backend_id, "name": "Test inference",
+                    "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:1/v1",
+                    "auth": {"kind": "unauthenticated"},
+                }),
+            ),
+            (
+                gents::Collection::InferenceProfile,
+                serde_json::json!({
+                    "node_did": runtime.did(), "profile_id": profile_id,
+                    "backend_id": backend_id, "model_name": "test-model",
+                }),
+            ),
+            (
+                gents::Collection::Agent,
+                serde_json::json!({
+                    "node_did": runtime.did(), "agent_did": binding.agent_did,
+                    "creation_nonce": binding.creation_nonce, "display_name": display_name,
+                    "inference_profile_id": profile_id, "enabled": true,
+                }),
+            ),
+        ];
+        let plan = DesiredStateApplyPlan::new(
+            documents
+                .into_iter()
+                .map(|(collection, value)| DesiredStateApplyDocument {
+                    collection,
+                    add: value.clone(),
+                    update: value,
+                })
+                .collect(),
+        )
+        .unwrap();
+        self.access
+            .transact_write("test.client_home.agent", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            })
+            .await
+            .unwrap();
+        let access = gents::store::config_client::ConfigAccess::local_managed_agent(
+            self.node().clone(),
+            identity.did().parse().unwrap(),
+            identity.as_ref(),
+        )
+        .unwrap();
+        ManagedAgent {
+            identity,
+            binding,
+            access,
+            profile_id,
+            backend_id,
+        }
+    }
+}
+
+/// A managed Agent of a [`ClientHome`] and its own signed access.
+pub(crate) struct ManagedAgent {
+    pub(crate) identity: std::sync::Arc<dyn gents::NodeIdentity>,
+    pub(crate) binding: gents_protocol::agent_identity::AgentIdentityBinding,
+    pub(crate) access: gents::store::config_client::ConfigAccess,
+    pub(crate) profile_id: String,
+    pub(crate) backend_id: String,
+}
+
+impl ManagedAgent {
+    pub(crate) fn did(&self) -> &str {
+        &self.binding.agent_did
+    }
+}
