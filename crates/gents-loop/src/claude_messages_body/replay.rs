@@ -16,6 +16,7 @@ use crate::provider_input::replay_frontier::{
 pub enum ReplayOrigin {
     ClaudeSubscription,
     AcceptedProvider,
+    RecoveredProvider,
     Foreign,
     Missing,
     Ambiguous,
@@ -330,11 +331,11 @@ impl<'a> Selection<'a> {
         let [evidence] = self.evidence(tag) else {
             return false;
         };
-        evidence.origin == ReplayOrigin::AcceptedProvider
+        ((evidence.origin == ReplayOrigin::AcceptedProvider && evidence.complete)
+            || (evidence.origin == ReplayOrigin::RecoveredProvider && !evidence.complete))
             && &evidence.issuer == self.issuer
             && evidence.wire == self.wire
             && evidence.physical_header == header
-            && evidence.complete
             && evidence.reasoning.iter().any(|(block_index, parts)| {
                 *block_index == index && parts.as_slice() == candidate.parts
             })

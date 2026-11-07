@@ -281,6 +281,17 @@ pub fn retained_blocks_from_validated_extent(
     .retained_blocks(close_doc_id)
 }
 
+/// Preserve physical positions when recovery omits unfinished native blocks.
+pub fn retained_block_indices_from_validated_extent(
+    extent: &super::extent::OpenSourceExtent,
+) -> Vec<u32> {
+    let (streams, _) = select_recovery_blocks(&extent.streams, true);
+    streams
+        .iter()
+        .map(|stream| extent.streams[*stream as usize].declaration.block_index)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,11 +358,19 @@ mod tests {
         .unwrap();
         assert_eq!(plan.retained_streams, [0]);
         let extent = super::super::extent::inspect_open_source(
-            &[ObservedSegment { doc_id: "segment", segment: &record }],
-            "request", &source(), &writer,
-        ).unwrap();
-        assert_eq!(retained_blocks_from_validated_extent(&extent, "close").unwrap(),
-            plan.retained_blocks("close").unwrap());
+            &[ObservedSegment {
+                doc_id: "segment",
+                segment: &record,
+            }],
+            "request",
+            &source(),
+            &writer,
+        )
+        .unwrap();
+        assert_eq!(
+            retained_blocks_from_validated_extent(&extent, "close").unwrap(),
+            plan.retained_blocks("close").unwrap()
+        );
         assert_eq!(
             plan.retained_blocks("close").unwrap(),
             vec![MessageBlock::Reasoning {
@@ -372,6 +391,41 @@ mod tests {
                 segments: 1,
                 stream_bytes: vec![1, 1, 0],
             }
+        );
+    }
+
+    #[test]
+    fn recovery_positions_preserve_gaps_from_unfinished_blocks() {
+        let mut unfinished = declaration(0, 1, StreamPayload::Reasoning);
+        unfinished.declaration.as_mut().unwrap().block_index = 1;
+        let mut body = declaration(1, 1, StreamPayload::Reasoning);
+        body.declaration.as_mut().unwrap().block_index = 3;
+        let mut signature = declaration(2, 1, StreamPayload::ReasoningSignature);
+        signature.declaration.as_mut().unwrap().block_index = 3;
+        let mut stop = declaration(3, 0, StreamPayload::ReasoningStop);
+        stop.declaration.as_mut().unwrap().block_index = 3;
+        let mut text = declaration(4, 1, StreamPayload::Text);
+        text.declaration.as_mut().unwrap().block_index = 5;
+        let record = segment(vec![unfinished, body, signature, stop, text], "ABSC");
+        let extent = super::super::extent::inspect_open_source(
+            &[ObservedSegment {
+                doc_id: "segment",
+                segment: &record,
+            }],
+            "request",
+            &source(),
+            &record.writer,
+        )
+        .unwrap();
+        assert_eq!(
+            retained_block_indices_from_validated_extent(&extent),
+            [3, 5]
+        );
+        assert_eq!(
+            retained_blocks_from_validated_extent(&extent, "close")
+                .unwrap()
+                .len(),
+            2
         );
     }
 
