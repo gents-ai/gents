@@ -8,6 +8,23 @@ use crate::tools::call::lifecycle::admission_fixture::{
 use crate::tools::exec::ownership::test_support::OwnedTestProcess;
 use tokio_util::sync::CancellationToken;
 
+/// The calling request's Agent, which owns the tool call, its transcript and
+/// its completion notification.
+fn owner_access(
+    owner: &crate::request::lifecycle::RequestLifecycle,
+    node: &std::sync::Arc<defra_node::Node>,
+) -> crate::ConfigAccess {
+    let signer = owner
+        .managed_agent_signer()
+        .expect("published admissions bind the owner's managed signer");
+    crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(signer.did()).unwrap(),
+        &signer,
+    )
+    .unwrap()
+}
+
 #[tokio::test]
 async fn stop_rechecks_a_process_record_created_after_cancellation_began() {
     let registry = BackgroundExecutionRegistry::default();
@@ -65,6 +82,7 @@ async fn cancelled_worker_keeps_running_row_when_process_exit_is_unverified() {
         .unwrap();
     tokio::time::pause();
     let tool_actor = tool.actor().clone();
+    let tool_requester = tool.requester_did().map(str::to_owned);
     let finishing = tokio::spawn(finish_background_execution(
         tool,
         node.clone(),
@@ -83,7 +101,7 @@ async fn cancelled_worker_keeps_running_row_when_process_exit_is_unverified() {
         &doc_id,
         &admission.node_did,
         &session,
-        Some(&admission.node_did),
+        tool_requester.as_deref(),
     )
     .await
     .unwrap()
@@ -138,6 +156,7 @@ async fn later_stop_preserves_first_timeout_or_failure_and_projects_completion()
             .unwrap();
         let process = OwnedTestProcess::spawn(Some(registry.process_recorder(&call, &doc))).await;
         let tool_actor = tool.actor().clone();
+        let tool_requester = tool.requester_did().map(str::to_owned);
         finish_background_execution(
             tool,
             node.clone(),
@@ -154,11 +173,15 @@ async fn later_stop_preserves_first_timeout_or_failure_and_projects_completion()
             &doc,
             &admission.node_did,
             &session,
-            Some(&admission.node_did),
+            tool_requester.as_deref(),
         )
         .await
         .unwrap()
         .unwrap();
+        let mut lifecycle = lifecycle;
+        lifecycle
+            .bind_agent_signer(request_owner.managed_agent_signer())
+            .unwrap();
         let response = crate::tools::call::control::cancel_loaded_background_tool_call(
             node.clone(),
             &registry,
@@ -176,7 +199,7 @@ async fn later_stop_preserves_first_timeout_or_failure_and_projects_completion()
             &doc,
             &admission.node_did,
             &session,
-            Some(&admission.node_did),
+            tool_requester.as_deref(),
         )
         .await
         .unwrap()
@@ -188,7 +211,7 @@ async fn later_stop_preserves_first_timeout_or_failure_and_projects_completion()
                 &doc, "tool",
             );
         let escaped = crate::store::graphql::escape_graphql_string(&key);
-        let result = crate::store::config_client::ConfigAccess::local(node.clone()).execute(&format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#)).await.unwrap();
+        let result = owner_access(&request_owner, &node).execute(&format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#)).await.unwrap();
         assert_eq!(result["data"]["AgentMessage"].as_array().unwrap().len(), 1);
         process.finish().await;
         drop(request_owner);
@@ -229,6 +252,7 @@ async fn confirmed_background_stop_survives_terminal_write_failure() {
     let _recorder = registry.process_recorder(&call, &doc);
     registry.set_cancellation_reason(&call, &doc, "explicit stop", false);
     let tool_actor = tool.actor().clone();
+    let tool_requester = tool.requester_did().map(str::to_owned);
     let (_, count) =
         crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
             Some(1),
@@ -250,7 +274,7 @@ async fn confirmed_background_stop_survives_terminal_write_failure() {
         &doc,
         &admission.node_did,
         &session,
-        Some(&admission.node_did),
+        tool_requester.as_deref(),
     )
     .await
     .unwrap()
@@ -292,7 +316,7 @@ async fn confirmed_background_stop_survives_terminal_write_failure() {
         &doc,
         &admission.node_did,
         &session,
-        Some(&admission.node_did),
+        tool_requester.as_deref(),
     )
     .await
     .unwrap()
@@ -304,7 +328,7 @@ async fn confirmed_background_stop_survives_terminal_write_failure() {
         &doc, "tool",
     );
     let escaped = crate::store::graphql::escape_graphql_string(&key);
-    let result = crate::store::config_client::ConfigAccess::local(node.clone())
+    let result = owner_access(&request_owner, &node)
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#
         ))
@@ -433,6 +457,7 @@ async fn native_failure_decision_precedes_cancel_during_cleanup() {
     );
     reservation.retain_stopped_worker(lifecycle.clone(), false);
     let lifecycle_actor = lifecycle.actor().clone();
+    let tool_requester = lifecycle.requester_did().map(str::to_owned);
     let _ = crate::tools::call::control::cancel_loaded_background_tool_call(
         node.clone(),
         &registry,
@@ -447,7 +472,7 @@ async fn native_failure_decision_precedes_cancel_during_cleanup() {
         &doc,
         &admission.node_did,
         &session,
-        Some(&admission.node_did),
+        tool_requester.as_deref(),
     )
     .await
     .unwrap()
@@ -611,6 +636,8 @@ async fn failed_terminal_write_keeps_prepared_failure_presentation_for_retry() {
     let call = tool.tool_call_id().to_owned();
     let doc = tool.doc_id().unwrap().to_owned();
     let session = tool.session_id().to_owned();
+    let tool_requester = tool.requester_did().map(str::to_owned);
+    let tool_access = tool.access().unwrap();
     let registry = BackgroundExecutionRegistry::default();
     let writer = registry
         .live_outputs
@@ -683,11 +710,11 @@ async fn failed_terminal_write_keeps_prepared_failure_presentation_for_retry() {
         .unwrap()
         .is_none());
     let shown = crate::tools::call::lifecycle::query::load_tool_call_presentation(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &tool_access,
         &doc,
         &admission.node_did,
         &session,
-        Some(&admission.node_did),
+        tool_requester.as_deref(),
     )
     .await
     .unwrap();
@@ -696,7 +723,7 @@ async fn failed_terminal_write_keeps_prepared_failure_presentation_for_retry() {
         &doc, "tool",
     );
     let escaped = crate::store::graphql::escape_graphql_string(&key);
-    let notification = crate::store::config_client::ConfigAccess::local(node.clone())
+    let notification = owner_access(&request_owner, &node)
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#
         ))
@@ -760,7 +787,7 @@ async fn completed_background_call_resolves_parent_from_physical_request() {
         &doc, "tool",
     );
     let escaped = crate::store::graphql::escape_graphql_string(&key);
-    let result = crate::store::config_client::ConfigAccess::local(node.clone())
+    let result = owner_access(&request_owner, &node)
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#
         ))
