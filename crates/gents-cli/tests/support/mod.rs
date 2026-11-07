@@ -97,6 +97,16 @@ pub fn node_did_from_init(init: &serde_json::Value) -> anyhow::Result<String> {
     Ok(node_did.to_string())
 }
 
+/// The default Agent's inference profile `gents init` created.
+pub fn inference_profile_id_from_init(init: &serde_json::Value) -> anyhow::Result<String> {
+    init.pointer("/init/inference_profile_id")
+        .or_else(|| init.get("inference_profile_id"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("init output missing inference_profile_id: {init}"))
+}
+
 pub fn agent_did_from_init(init: &serde_json::Value) -> anyhow::Result<String> {
     init.pointer("/init/default_agent_did")
         .and_then(serde_json::Value::as_str)

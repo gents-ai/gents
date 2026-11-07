@@ -159,7 +159,7 @@ impl DependentHome {
             "--registry",
             UNROUTABLE_REGISTRY,
             "--inference-slot",
-            &format!("worker={owner_did}:default-profile"),
+            &format!("worker={}", inference_profile_id_from_init(&initialized)?),
         ]
         .map(str::to_owned)
         .to_vec();
@@ -348,7 +348,7 @@ fn offline_pack_install_naming_an_unresolved_plugin_is_refused_before_writing() 
             "--registry",
             UNROUTABLE_REGISTRY,
             "--inference-slot",
-            &format!("worker={owner_did}:default-profile"),
+            &format!("worker={}", inference_profile_id_from_init(&initialized)?),
         ],
     )?;
     anyhow::ensure!(
@@ -502,7 +502,7 @@ fn wire_fixture_with(reviewed_job: bool, init_extra: &[&str]) -> Result<WireFixt
             &content_pack,
             vec![
                 "--inference-slot".to_owned(),
-                format!("worker={owner_did}:default-profile"),
+                format!("worker={}", inference_profile_id_from_init(&initialized)?),
             ],
         ),
     ] {
