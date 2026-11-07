@@ -170,22 +170,13 @@ mod install_variable_conformance {
 
     #[test]
     fn upgrade_variable_precedence_matches_the_executable_model() {
-        let output = std::process::Command::new("lake")
-            .args([
-                "env",
-                "lean",
-                "--run",
-                "Proofs/Conformance/PackInstallUpgrade.lean",
-            ])
-            .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("proofs"))
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let cases: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
+        let output = gents_lean_contract::run_prepared_generator(
+            &gents_lean_contract::proofs_dir().unwrap(),
+            "Proofs.Conformance.PackInstallUpgrade:olean",
+            "Proofs/Conformance/PackInstallUpgrade.lean",
+        )
+        .unwrap();
+        let cases: Vec<Value> = serde_json::from_str(&output).unwrap();
         assert_eq!(cases.len(), 4);
         for case in cases {
             let previous = case["previous"].as_str().map(str::to_owned);
