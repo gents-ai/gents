@@ -580,6 +580,28 @@ theorem unknown_dependency_binding_fails_closed (ambient : Option String) :
     resolvePackInstallVariable true true none none ambient = none := by
   rfl
 
+/-- An installed dependency can be reused without recovering its original
+environment only when the same artifact is requested and the caller has not
+explicitly selected replacement bindings. The snapshot is authoritative only
+if the installation record and every recorded document still match at commit. -/
+def reuseInstalledDependency (installed sameArtifact explicitOverride : Bool) : Bool :=
+  installed && sameArtifact && !explicitOverride
+
+def commitDependencySnapshot (sameRecord sameDocuments : Bool) : Bool :=
+  sameRecord && sameDocuments
+
+theorem replacement_binding_disallows_reuse (installed sameArtifact : Bool) :
+    reuseInstalledDependency installed sameArtifact true = false := by
+  simp [reuseInstalledDependency]
+
+theorem changed_dependency_snapshot_refused (sameRecord : Bool) :
+    commitDependencySnapshot sameRecord false = false := by
+  simp [commitDependencySnapshot]
+
+theorem changed_dependency_record_refused (sameDocuments : Bool) :
+    commitDependencySnapshot false sameDocuments = false := by
+  simp [commitDependencySnapshot]
+
 /-- Local pack preparation has the root and declared dependency manifests and
 an installed-plugin inventory. Every declared reference must resolve through
 those existing resources before configuration writes begin. -/
