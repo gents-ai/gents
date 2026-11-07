@@ -153,11 +153,13 @@ pub fn first_line(total: usize, height: u16, scroll: usize) -> usize {
 
 fn conversation(app: &App, area: Rect, buf: &mut Buffer) {
     let rows = app.conversation_rows(area.width);
+    let edges = bubble_edges(&rows);
     let first = first_line(rows.len(), area.height, app.tabs[app.active].scroll);
-    for ((text, tone), y) in rows[first..].iter().zip(area.top()..area.bottom()) {
+    let shown = rows[first..].iter().zip(&edges[first..]);
+    for (((text, tone), edge), y) in shown.zip(area.top()..area.bottom()) {
         draw_row(buf, area, y, text, *tone, *tone == Tone::Reply);
         if *tone == Tone::You {
-            let left = (text.len() - text.trim_start().len()).saturating_sub(1) as u16;
+            let left = edge.saturating_sub(1) as u16;
             let block = Rect::new(area.x + left, y, area.width - left, 1);
             buf.set_style(block, Style::new().bg(theme::YOU_BG));
         }
@@ -166,6 +168,30 @@ fn conversation(app: &App, area: Rect, buf: &mut Buffer) {
             buf.set_style(mark, theme::tone(Tone::Accent));
         }
     }
+}
+
+/// The column each of your messages' rows starts at: the least indented row of its bubble, so
+/// its blank and indented rows keep the bubble's edge. Other rows get 0.
+fn bubble_edges(rows: &[(String, Tone)]) -> Vec<usize> {
+    let indent = |row: &str| row.len() - row.trim_start().len();
+    let mut edges = vec![0; rows.len()];
+    let mut at = 0;
+    while at < rows.len() {
+        let run = rows[at..]
+            .iter()
+            .take_while(|(_, tone)| *tone == Tone::You)
+            .count();
+        if run == 0 {
+            at += 1;
+            continue;
+        }
+        let bubble = &rows[at..at + run];
+        let written = bubble.iter().filter(|(row, _)| !row.trim().is_empty());
+        let edge = written.map(|(row, _)| indent(row)).min().unwrap_or(0);
+        edges[at..at + run].fill(edge);
+        at += run;
+    }
+    edges
 }
 
 fn running_head(running: &Running) -> (String, Tone) {
@@ -258,6 +284,13 @@ fn message_box(tab: &Tab, area: Rect, focused: bool, buf: &mut Buffer) {
     if !tab.input.is_empty() {
         let (text, _) = tab.input.view(room);
         buf.set_stringn(text_x, y, text, room as usize, theme::tone(Tone::Plain));
+        for badge in tab.input.badges() {
+            for (at, _) in text.match_indices(badge) {
+                let x = text_x + Span::raw(&text[..at]).width() as u16;
+                let w = (Span::raw(badge).width() as u16).min(room.saturating_sub(x - text_x));
+                buf.set_style(Rect::new(x, y, w, 1), theme::tone(Tone::Accent));
+            }
+        }
         return;
     }
     let answers = matches!(
@@ -340,6 +373,7 @@ mod tests {
                 text: text.to_string(),
                 tone: Tone::Plain,
                 item: None,
+                change: None,
             })
             .collect();
         tab
@@ -350,6 +384,33 @@ mod tests {
             .into_iter()
             .map(|(text, _)| text)
             .collect()
+    }
+
+    #[test]
+    fn a_bubble_keeps_one_left_edge_through_blank_and_indented_rows() {
+        let mut app = App::new(Vim, 132, 36);
+        app.tabs[0].lines = vec![ChatLine {
+            text: "first line\n\n    second line".to_string(),
+            tone: Tone::You,
+            item: None,
+            change: None,
+        }];
+        let s = screen(&app);
+        let (y, x) = find(&s, "first line").expect("the bubble");
+        assert_eq!(find(&s, "    second line").map(|at| at.0), Some(y + 2));
+        let buf = buffer(&app);
+        for row in y..y + 3 {
+            assert_eq!(buf[(x - 1, row)].bg, theme::YOU_BG, "row {row}");
+        }
+    }
+
+    #[test]
+    fn a_paste_badge_is_drawn_as_a_badge() {
+        let mut app = App::new(Vim, 132, 36);
+        app.handle(ratatui::crossterm::event::Event::Paste("a\nb".to_string()));
+        let s = screen(&app);
+        let (y, x) = find(&s, "[Pasted text #1 +2 lines]").expect("the badge");
+        assert_eq!(buffer(&app)[(x, y)].fg, theme::ACCENT);
     }
 
     #[test]
@@ -458,6 +519,7 @@ mod tests {
             text: "hello 世界 wörld 🦀 ".repeat(8),
             tone: Tone::You,
             item: None,
+            change: None,
         }];
         let rows = rows_at(&tab, 56);
         assert!(rows.len() > 1);
@@ -630,6 +692,7 @@ mod tests {
             text: text.to_string(),
             tone,
             item: None,
+            change: None,
         };
         tab.lines = vec![
             line("one\ntwo three", Tone::Reply),

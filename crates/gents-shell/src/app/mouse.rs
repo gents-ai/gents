@@ -5,10 +5,10 @@ use super::layers::LayerKind;
 use super::{App, Pane};
 use crate::draw::agent::{chip_at, first_line, message_box_area, slash_area, slash_rows, ChipHit};
 use crate::draw::layers::list_start;
-use crate::draw::sidebar::{first_diff_row, view_at};
+use crate::draw::sidebar::{first_diff_row, scope_at};
 use crate::keys::Action;
 use crate::layout::{running_area, sidebar_rows_area, Right};
-use crate::sample::{diff, menu, MenuId, SidebarRow, Tone, DIFF_BACK_ROW};
+use crate::sample::{menu, MenuId, SidebarRow, Tone, View};
 
 impl App {
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent) {
@@ -38,7 +38,9 @@ impl App {
                     self.focus_pane(Pane::Sidebar);
                     self.click_sidebar(rect, at);
                 }
-                Right::Rail(rect) if rect.contains(at) => self.push_layer(LayerKind::Sidebar),
+                Right::Rail(rect) if rect.contains(at) => {
+                    self.showing_right_pane(|app| app.push_layer(LayerKind::Sidebar));
+                }
                 _ => {}
             }
         }
@@ -145,23 +147,21 @@ impl App {
     }
 
     fn click_sidebar(&mut self, rect: Rect, at: Position) {
-        if at.y == rect.y + 1 {
-            if let Some(view) = view_at(rect, at.x) {
-                self.set_view(view);
+        if self.view == View::Diff && at.y == rect.y + 1 {
+            if let Some(scope) = scope_at(rect, at.x) {
+                self.set_scope(scope);
             }
             return;
         }
-        let rows = sidebar_rows_area(rect);
+        let rows = sidebar_rows_area(rect, self.view);
         if !rows.contains(at) {
             return;
         }
         let row = usize::from(at.y - rows.y);
         if let Some(file) = self.diff {
             let height = self.visible_rows(Pane::Sidebar, rows).height;
-            let lines = diff(file);
-            let first = first_diff_row(self.diff_scroll, lines.len(), height);
-            let back = lines.get(first + row).map(|line| line.0) == Some(DIFF_BACK_ROW);
-            if back {
+            let total = self.diff_rows(file).len();
+            if first_diff_row(self.diff_scroll, total, height) + row == total - 1 {
                 self.diff = None;
             }
         } else if self
@@ -259,8 +259,11 @@ mod tests {
     use crate::app::layers::LayerKind;
     use crate::app::{App, Mode, Pane};
     use crate::keys::KeySet::{Emacs, Vim};
-    use crate::sample::{MenuId, View};
-    use crate::testing::{find, numbered, press, screen, session_row, with_right_pane};
+    use crate::sample::{MenuId, Scope, View};
+    use crate::testing::{
+        click_text, find, numbered, press, screen, session_row, with_right_pane,
+        with_sample_session,
+    };
 
     fn mouse(app: &mut App, kind: MouseEventKind, column: u16, row: u16) {
         app.handle(Event::Mouse(MouseEvent {
@@ -273,11 +276,6 @@ mod tests {
 
     fn click(app: &mut App, column: u16, row: u16) {
         mouse(app, MouseEventKind::Down(MouseButton::Left), column, row);
-    }
-
-    fn click_text(app: &mut App, text: &str) {
-        let (row, column) = find(&screen(app), text).expect(text);
-        click(app, column, row);
     }
 
     fn session_app(width: u16, height: u16) -> App {
@@ -377,29 +375,42 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_a_view_chip_switches_the_view() {
-        let mut app = with_right_pane(App::new(Vim, 132, 36));
-        for (name, view) in [
-            ("Workflows", View::Workflows),
-            ("Agents", View::Agents),
-            ("Changes", View::Changes),
-        ] {
-            click_text(&mut app, name);
-            assert_eq!(app.view, view);
-            assert_eq!(app.focus, Pane::Sidebar);
-        }
+    fn clicking_working_tree_switches_scope_and_closes_a_diff() {
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 36)));
+        app.show_file(1);
+        assert_eq!(app.diff, Some(1));
+        click_text(&mut app, " working tree ");
+        assert_eq!(app.scope, Scope::Tree);
+        assert_eq!(app.diff, None);
+        click(&mut app, 101, 1);
+        assert_eq!(app.scope, Scope::Session);
+        assert_eq!(app.view_sel[View::Diff as usize], 2, "the first file row");
+    }
+
+    #[test]
+    fn rows_below_the_scope_line_take_their_clicks() {
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 36)));
+        let s = screen(&app);
+        let right = |y: usize| s[y].chars().skip(98).collect::<String>();
+        assert!(right(5).starts_with("│ A shell/mod.rs  +3"), "{}", right(5));
+        click(&mut app, 110, 5);
+        assert_eq!(app.view_sel[View::Diff as usize], 2);
+        assert_eq!(app.diff, Some(2));
+        let s = screen(&app);
+        let shown: String = s[3].chars().skip(98).collect();
+        assert!(shown.starts_with("│ A shell/mod.rs  +3"), "{shown}");
     }
 
     #[test]
     fn a_click_on_a_file_in_the_right_pane_opens_its_diff() {
-        let mut app = with_right_pane(App::new(Vim, 132, 36));
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 36)));
         click_text(&mut app, "M cli/mod.rs");
         assert_eq!(app.diff, Some(1));
     }
 
     #[test]
     fn a_click_on_the_back_row_closes_the_diff() {
-        let mut app = with_right_pane(App::new(Vim, 132, 36));
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 36)));
         click_text(&mut app, "M cli/mod.rs");
         click_text(&mut app, "esc back to files");
         assert_eq!(app.diff, None);
@@ -407,7 +418,7 @@ mod tests {
 
     #[test]
     fn a_click_on_the_rail_opens_the_floating_sidebar() {
-        let mut app = with_right_pane(App::new(Vim, 104, 30));
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 104, 30)));
         click(&mut app, 100, 5);
         assert_eq!(top(&app), Some(LayerKind::Sidebar));
         click_text(&mut app, "M cli/mod.rs");
@@ -504,7 +515,7 @@ mod tests {
         for _ in 0..40 {
             press(&mut app, "ctrl-n");
         }
-        click_text(&mut app, "Sidebar: Workflows");
+        click_text(&mut app, "Sidebar: This session's workflows");
         assert_eq!(app.view, View::Workflows);
         assert!(app.layers.is_empty());
     }
@@ -586,7 +597,9 @@ mod tests {
     #[test]
     fn the_wheel_scrolls_the_pane_under_the_pointer() {
         let mut app = with_right_pane(session_app(132, 36));
+        let lines = app.tabs[0].lines.clone();
         app.tabs[0].lines = numbered(100);
+        app.tabs[0].lines.extend(lines);
         mouse(&mut app, MouseEventKind::ScrollUp, 60, 10);
         assert_eq!(app.tabs[0].scroll, 1);
         mouse(&mut app, MouseEventKind::ScrollDown, 60, 10);
@@ -601,9 +614,9 @@ mod tests {
         assert_ne!(app.sessions_sel, before);
         assert_eq!(app.tabs[0].scroll, 0);
 
-        let before = app.view_sel[View::Changes as usize];
+        let before = app.view_sel[View::Diff as usize];
         mouse(&mut app, MouseEventKind::ScrollDown, 110, 10);
-        assert_ne!(app.view_sel[View::Changes as usize], before);
+        assert_ne!(app.view_sel[View::Diff as usize], before);
     }
 
     #[test]

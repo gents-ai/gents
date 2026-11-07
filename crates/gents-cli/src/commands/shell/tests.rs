@@ -12,10 +12,10 @@ use gents::store::config_client::GraphqlEndpoint;
 use gents_codex_protocol as codex;
 use gents_shell::app::{App, ChatLine};
 use gents_shell::keys::KeySet;
-use gents_shell::sample::{Opens, RunState, Running, Tone};
+use gents_shell::sample::{Opens, RunState, Running, Tone, View};
 use gents_shell::source::{
-    Answer as PromptAnswer, BackgroundCall, Connection, Input, Intent, Job, Prompt, PromptKind,
-    Session, Update,
+    Answer as PromptAnswer, BackgroundCall, Change, ChangeKind, Connection, Input, Intent, Job,
+    JobEnd, Prompt, PromptKind, Session, Update,
 };
 use rapidhash::RapidHashMap;
 use ratatui::buffer::Buffer;
@@ -591,6 +591,7 @@ pub(super) fn line(text: &str, tone: Tone, item: &str) -> ChatLine {
         text: text.to_string(),
         tone,
         item: Some(item.to_string()),
+        change: None,
     }
 }
 
@@ -599,6 +600,7 @@ fn blank() -> ChatLine {
         text: String::new(),
         tone: Tone::Plain,
         item: None,
+        change: None,
     }
 }
 
@@ -978,18 +980,245 @@ async fn opening_a_session_sends_its_transcript_and_running_turn() {
             blank(),
         ],
     };
-    assert_eq!(shell.next().await, opened);
     let running = Update::Turn {
         session: "s1".to_string(),
         turn: "t2".to_string(),
     };
-    assert_eq!(shell.next().await, running);
+    assert_eq!(shell.next().await, running, "before the transcript");
+    assert_eq!(shell.next().await, opened);
     assert_eq!(shell.next().await, rows("s1", Vec::new()));
     let item = Update::Item {
         session: "s1".to_string(),
         line: line("still going", Tone::Reply, "r2"),
     };
-    assert_eq!(shell.next().await, item);
+    let read = reread_and(&shell, is_item).await;
+    let items: Vec<_> = read.iter().filter(|update| is_item(update)).collect();
+    assert_eq!(items, [&item]);
+}
+
+const EDIT: &str = "@@ -1 +1 @@\n-a\n+b\n";
+
+/// A `fileChange` item with one change.
+fn file_change(id: &str, status: &str, path: &str, kind: &str, diff: &str) -> Value {
+    json!({
+        "type": "fileChange",
+        "id": id,
+        "status": status,
+        "changes": [{ "path": path, "kind": { "type": kind }, "diff": diff }],
+    })
+}
+
+/// Where each text sits among the conversation's rows.
+fn row_of(app: &App, text: &str) -> Option<usize> {
+    let rows = app.conversation_rows(120);
+    rows.iter().position(|(row, _)| row.contains(text))
+}
+
+fn diff_view(app: &App) -> Vec<String> {
+    let rows = app.view_rows(View::Diff);
+    rows.iter().map(|row| row.text.to_string()).collect()
+}
+
+fn is_s1_rows(update: &Update) -> bool {
+    matches!(update, Update::Running { session, .. } if session == "s1")
+}
+
+#[tokio::test]
+async fn an_opened_sessions_changes_carry_their_turns() {
+    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| match method {
+        "thread/resume" => {
+            let mut resumed = thread("s1", 100);
+            resumed["turns"] = json!([
+                turn(
+                    "t1",
+                    "completed",
+                    json!([
+                        user_message("u1", "edit it"),
+                        file_change("fc1", "completed", "a.rs", "update", EDIT),
+                    ])
+                ),
+                turn(
+                    "t2",
+                    "completed",
+                    json!([file_change("fc2", "completed", "b.rs", "add", "x\n")])
+                ),
+            ]);
+            Some(Ok(thread_answer(resumed)))
+        }
+        _ => quiet(method),
+    })
+    .await;
+    let shell = open_shell(&fake);
+    let (mut app, _intended) = connected_app();
+    app.tabs[0].session = Some("s1".to_string());
+    let ready = |update: &Update| matches!(update, Update::Background { .. });
+    shell.apply_through(&mut app, ready).await;
+
+    open_s1(&shell);
+    let applied = shell.apply_through(&mut app, is_s1_rows).await;
+
+    let opened = applied.iter().find_map(|update| match update {
+        Update::Opened { lines, .. } => Some(lines),
+        _ => None,
+    });
+    let turns: Vec<_> = opened
+        .expect("the transcript")
+        .iter()
+        .filter_map(|line| line.change.as_ref())
+        .map(|change| change.turn.as_str())
+        .collect();
+    assert_eq!(turns, ["t1", "t2"]);
+    let rows = app.conversation_rows(120);
+    let header = |text: &str| rows.iter().position(|(row, _)| row == text);
+    let first = header("  1 file changed  +1 -1").expect("t1's card");
+    let second = header("  1 file changed  +1").expect("t2's card");
+    assert!(first < second, "{rows:#?}");
+    let view = diff_view(&app);
+    let added = view.iter().position(|row| row.contains("A b.rs"));
+    let edited = view.iter().position(|row| row.contains("M a.rs"));
+    assert!(added.expect("b.rs") < edited.expect("a.rs"), "{view:?}");
+}
+
+#[tokio::test]
+async fn a_streamed_file_change_shows_its_card_when_the_turn_completes() {
+    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| match method {
+        "turn/start" => turn_answer("t1"),
+        _ => quiet(method),
+    })
+    .await;
+    let shell = open_shell(&fake);
+    let (mut app, _intended) = connected_app();
+    app.tabs[0].session = Some("s1".to_string());
+    let ready = |update: &Update| matches!(update, Update::Background { .. });
+    shell.apply_through(&mut app, ready).await;
+
+    shell.intend(Intent::Send {
+        tab: app.tabs[0].id,
+        session: Some("s1".to_string()),
+        agent: "a".to_string(),
+        text: "edit it".to_string(),
+    });
+    let started = |update: &Update| matches!(update, Update::Turn { .. });
+    shell.apply_through(&mut app, started).await;
+    assert_eq!(app.tabs[0].turn.as_deref(), Some("t1"));
+    for (method, status) in [
+        ("item/started", "inProgress"),
+        ("item/completed", "completed"),
+    ] {
+        let edit = file_change("fc", status, "a.rs", "update", EDIT);
+        fake.push("a", &item_note(method, "s1", edit));
+        let item = |update: &Update| matches!(update, Update::Item { .. });
+        shell.apply_through(&mut app, item).await;
+    }
+    assert!(row_of(&app, "✓ edit  a.rs").is_some());
+    assert_eq!(row_of(&app, "1 file changed"), None);
+
+    let completed = json!({ "threadId": "s1", "turn": turn("t1", "completed", json!([])) });
+    fake.push(
+        "a",
+        &json!({ "method": "turn/completed", "params": completed }),
+    );
+    let ended = |update: &Update| matches!(update, Update::TurnEnded { .. });
+    shell.apply_through(&mut app, ended).await;
+    assert!(row_of(&app, "1 file changed  +1 -1").is_some());
+    app.show_file(0);
+    assert!(app.diff_rows(0).contains(&(" +b".to_string(), Tone::Add)));
+}
+
+/// A running turn has no card, from the first update the tab applies.
+#[tokio::test]
+async fn opening_a_session_with_a_running_turn_never_shows_its_card() {
+    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| match method {
+        "thread/resume" => {
+            let mut resumed = thread("s1", 100);
+            resumed["turns"] = json!([
+                turn(
+                    "t1",
+                    "completed",
+                    json!([
+                        user_message("u1", "edit it"),
+                        file_change("fc1", "completed", "a.rs", "update", EDIT),
+                    ])
+                ),
+                turn(
+                    "t2",
+                    "inProgress",
+                    json!([
+                        user_message("u2", "and add one"),
+                        file_change("fc2", "completed", "b.rs", "add", "x\n"),
+                    ])
+                ),
+            ]);
+            Some(Ok(thread_answer(resumed)))
+        }
+        _ => quiet(method),
+    })
+    .await;
+    let shell = open_shell(&fake);
+    let (mut app, _intended) = connected_app();
+    app.tabs[0].session = Some("s1".to_string());
+    let ready = |update: &Update| matches!(update, Update::Background { .. });
+    shell.apply_through(&mut app, ready).await;
+
+    open_s1(&shell);
+    let card = |app: &App, text: &str| {
+        let rows = app.conversation_rows(120);
+        rows.iter().any(|(row, _)| row == text)
+    };
+    loop {
+        let update = shell.next().await;
+        app.apply(update.clone());
+        assert!(!card(&app, "  1 file changed  +1"), "after {update:?}");
+        if is_s1_rows(&update) {
+            break;
+        }
+    }
+    assert_eq!(app.tabs[0].turn.as_deref(), Some("t2"));
+    assert!(
+        card(&app, "  1 file changed  +1 -1"),
+        "the ended turn's card"
+    );
+}
+
+/// Opening a tab again replaces the changes it shows with the reread transcript's.
+#[tokio::test]
+async fn reopening_a_session_shows_only_the_reread_changes() {
+    let reread = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let again = reread.clone();
+    let fake = FakeRuntime::start(agents_a_and_b(), move |_, method, _| match method {
+        "thread/resume" => {
+            let path = match again.load(std::sync::atomic::Ordering::SeqCst) {
+                false => "a.rs",
+                true => "z.rs",
+            };
+            let mut resumed = thread("s1", 100);
+            let edit = file_change("fc", "completed", path, "update", EDIT);
+            resumed["turns"] = json!([turn("t1", "completed", json!([edit]))]);
+            Some(Ok(thread_answer(resumed)))
+        }
+        _ => quiet(method),
+    })
+    .await;
+    let shell = open_shell(&fake);
+    let (mut app, _intended) = connected_app();
+    app.tabs[0].session = Some("s1".to_string());
+    let ready = |update: &Update| matches!(update, Update::Background { .. });
+    shell.apply_through(&mut app, ready).await;
+    open_s1(&shell);
+    shell.apply_through(&mut app, is_s1_rows).await;
+    // Then the reread opening asks for.
+    shell.apply_through(&mut app, is_s1_rows).await;
+    assert!(row_of(&app, "M a.rs").is_some());
+
+    reread.store(true, std::sync::atomic::Ordering::SeqCst);
+    open_s1(&shell);
+    shell.apply_through(&mut app, is_s1_rows).await;
+
+    assert!(row_of(&app, "M z.rs").is_some());
+    assert_eq!(row_of(&app, "a.rs"), None);
+    let view = diff_view(&app);
+    assert!(view.iter().any(|row| row.contains("M z.rs")), "{view:?}");
+    assert!(!view.iter().any(|row| row.contains("a.rs")), "{view:?}");
 }
 
 /// A subagent's thread as the endpoint lists it: under its root `s1`, named after its job, on
@@ -1139,6 +1368,7 @@ async fn a_working_subagent_is_resumed_once_and_its_end_refreshes_the_rows() {
         ("a", "thread/resume")
     );
     assert_eq!(resume.params["threadId"], "c1");
+    reread(&shell, 1).await;
 
     ended.store(true, std::sync::atomic::Ordering::SeqCst);
     let completed = json!({ "threadId": "c1", "turn": turn("t1", "completed", json!([])) });
@@ -1202,6 +1432,7 @@ async fn a_spawn_on_the_open_session_relists_its_subagents() {
     open_s1(&shell);
     shell.next().await;
     assert_eq!(shell.next().await, rows("s1", Vec::new()));
+    reread(&shell, 1).await;
 
     let spawn = json!({
         "type": "collabAgentToolCall",
@@ -1248,13 +1479,14 @@ async fn stepping_into_a_subagent_resumes_it_and_streams_it() {
         session: "c1".to_string(),
         lines: vec![line("look into it", Tone::You, "u1"), blank()],
     };
-    assert_eq!(shell.next().await, opened);
     let turn = Update::Turn {
         session: "c1".to_string(),
         turn: "t1".to_string(),
     };
     assert_eq!(shell.next().await, turn);
+    assert_eq!(shell.next().await, opened);
     assert_eq!(shell.next().await, rows("c1", Vec::new()));
+    reread(&shell, 1).await;
     let params = json!({ "threadId": "c1", "turnId": "t1", "itemId": "r1", "delta": "found" });
     fake.push(
         "a",
@@ -1312,7 +1544,9 @@ async fn a_first_send_starts_a_thread_then_a_turn() {
         session: "s-new".to_string(),
         line: line("hello", Tone::You, "u1"),
     };
-    assert_eq!(shell.next().await, item);
+    let read = reread_and(&shell, is_item).await;
+    let items: Vec<_> = read.iter().filter(|update| is_item(update)).collect();
+    assert_eq!(items, [&item]);
     let sent: Vec<_> = fake
         .calls()
         .into_iter()
@@ -1352,6 +1586,7 @@ async fn a_reply_streams_as_deltas() {
         turn: "t1".to_string(),
     };
     assert_eq!(shell.next().await, running);
+    reread(&shell, 1).await;
     for delta in ["Hel", "lo"] {
         let params = json!({ "threadId": "s1", "turnId": "t1", "itemId": "r1", "delta": delta });
         fake.push(
@@ -1491,6 +1726,7 @@ async fn a_refused_send_becomes_a_notice_in_the_runtimes_words() {
         message: "turn/start: the session is busy".to_string(),
     };
     assert_eq!(shell.next().await, refused);
+    reread(&shell, 1).await;
 
     shell.intend(Intent::Send {
         tab: 4,
@@ -1659,6 +1895,7 @@ async fn an_unanswered_request_becomes_a_notice_and_the_shell_goes_on() {
         message: expired("turn/start"),
     };
     assert_eq!(shell.next().await, unanswered);
+    reread(&shell, 1).await;
     shell.intend(Intent::Send {
         tab: 1,
         session: None,
@@ -1847,6 +2084,13 @@ fn job_row(session: &str, call: &str) -> Value {
     })
 }
 
+/// A job row of `session` that ended in the tool-call `state`.
+fn ended_row(session: &str, call: &str, state: &str) -> Value {
+    let mut row = job_row(session, call);
+    row["lifecycle_state"] = json!(state);
+    row
+}
+
 fn background_row(tool: &str, state: &str) -> Value {
     json!({
         "request_id": "r1",
@@ -1856,18 +2100,23 @@ fn background_row(tool: &str, state: &str) -> Value {
         "lifecycle_state": state,
         "await_mode": "background",
         "started_at": null,
+        "session_id": "s1",
     })
 }
 
-/// Answers `list_jobs`' query with `jobs`, the background owner's with `calls`, and the
-/// children read with none.
+/// Answers `list_jobs`' query with the `jobs` of the session it names, as the node filters
+/// them, the background owner's with `calls`, and the children and output reads with none.
 fn work_answer(query: &str, jobs: &[Value], calls: &[Value]) -> Value {
     if query.contains("job_pin") {
+        let named = |job: &&Value| {
+            query.contains(&format!(r#"session_id: {{ _eq: {} }}"#, job["session_id"]))
+        };
+        let jobs: Vec<_> = jobs.iter().filter(named).collect();
         json!({ "data": { "AgentToolCall": jobs } })
     } else if query.contains("await_mode") {
         json!({ "data": { "AgentToolCall": calls } })
     } else {
-        json!({ "data": { "AgentRequest": [] } })
+        json!({ "data": { "AgentRequest": [], "AgentOutputSegment": [] } })
     }
 }
 
@@ -1879,7 +2128,16 @@ fn shown_job(session: &str, call: &str) -> Job {
         title: "cli ux".to_string(),
         status: "build · step 1 of 2".to_string(),
         waiting: false,
+        ended: None,
         detail: vec!["● build".to_string(), "○ test".to_string()],
+    }
+}
+
+fn shown_ended(session: &str, call: &str, status: &str, end: JobEnd) -> Job {
+    Job {
+        status: status.to_string(),
+        ended: Some(end),
+        ..shown_job(session, call)
     }
 }
 
@@ -1910,12 +2168,17 @@ async fn jobs_and_background_calls_are_read_once_the_shell_is_ready() {
     shell.opened().await;
 
     let jobs = Update::Jobs {
-        jobs: vec![shown_job("s1", "call-1")],
+        jobs: Vec::new(),
         as_of: "live".to_string(),
     };
-    assert_eq!(shell.next().await, jobs);
+    assert_eq!(
+        shell.next().await,
+        jobs,
+        "no session is open to list jobs for"
+    );
     let calls = Update::Background {
         calls: vec![BackgroundCall {
+            session: "s1".to_string(),
             name: "bash".to_string(),
             status: "pending".to_string(),
             done: false,
@@ -1929,12 +2192,223 @@ async fn jobs_and_background_calls_are_read_once_the_shell_is_ready() {
         source::WATCHED,
         "it subscribes before it reads: {queries:?}"
     );
-    assert!(queries[1].contains("job_pin"), "{queries:?}");
     let background = queries.last().unwrap();
     assert!(background.contains("await_mode"), "{queries:?}");
     assert!(
         background.contains(RUNNING_CALLS),
         "the node, not the shell, keeps only running calls: {background}"
+    );
+    assert!(background.contains("session_id"), "{background}");
+}
+
+/// The next `count` updates.
+async fn take(shell: &Shell, count: usize) -> Vec<Update> {
+    let mut read = Vec::with_capacity(count);
+    for _ in 0..count {
+        read.push(shell.next().await);
+    }
+    read
+}
+
+/// Whether `read` is exactly one work reread: the jobs, the background calls, then `open`
+/// sessions' running rows.
+fn is_reread(read: &[Update], open: usize) -> bool {
+    let [Update::Jobs { .. }, Update::Background { .. }, rows @ ..] = read else {
+        return false;
+    };
+    rows.len() == open
+        && rows
+            .iter()
+            .all(|update| matches!(update, Update::Running { .. }))
+}
+
+/// Reads exactly what opening `session` tells before it returns: its transcript, then its
+/// running rows.
+async fn opening(shell: &Shell, session: &str) -> Vec<Update> {
+    let read = take(shell, 2).await;
+    let opened = matches!(
+        &read[..],
+        [Update::Opened { session: shown, .. }, Update::Running { session: listed, .. }]
+            if shown == session && listed == session
+    );
+    assert!(opened, "not only opening {session}: {read:?}");
+    read
+}
+
+/// Reads exactly the reread a session opening asks for, with `open` sessions open.
+async fn reread(shell: &Shell, open: usize) -> Vec<Update> {
+    let read = take(shell, open + 2).await;
+    assert!(is_reread(&read, open), "not only the reread: {read:?}");
+    read
+}
+
+/// Reads exactly the reread a session opening asks for and one update `wanted` matches, which
+/// lands before or after it: the reread tells its updates together.
+async fn reread_and<F>(shell: &Shell, wanted: F) -> Vec<Update>
+where
+    F: Fn(&Update) -> bool,
+{
+    let read = take(shell, 4).await;
+    let after = wanted(&read[0]) && is_reread(&read[1..], 1);
+    let before = is_reread(&read[..3], 1) && wanted(&read[3]);
+    assert!(
+        after || before,
+        "not only the reread and one more: {read:?}"
+    );
+    read
+}
+
+fn is_item(update: &Update) -> bool {
+    matches!(update, Update::Item { .. })
+}
+
+/// The `list_jobs` row reads: only they select `job_progress`.
+fn job_reads(fake: &FakeRuntime) -> Vec<String> {
+    let queries = fake.queries().into_iter();
+    queries
+        .filter(|query| query.contains("job_progress"))
+        .collect()
+}
+
+fn call_reads(fake: &FakeRuntime) -> usize {
+    let queries = fake.queries();
+    queries
+        .iter()
+        .filter(|query| query.contains(RUNNING_CALLS))
+        .count()
+}
+
+#[tokio::test]
+async fn jobs_are_read_per_open_session_in_every_state() {
+    let fake = FakeRuntime::start_with(
+        agents_a_and_b(),
+        |_, method, params| match method {
+            "thread/resume" => resumed(params, &[]),
+            _ => quiet(method),
+        },
+        |query| {
+            let jobs = [
+                job_row("s1", "call-1"),
+                ended_row("s1", "call-2", "completed"),
+                job_row("s2", "call-3"),
+                ended_row("s1", "call-4", "failed"),
+                ended_row("s1", "call-5", "cancelled"),
+                ended_row("s1", "call-6", "timedOut"),
+            ];
+            work_answer(query, &jobs, &[])
+        },
+    )
+    .await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+    assert_eq!(job_reads(&fake), Vec::<String>::new(), "no session is open");
+
+    open_s1(&shell);
+    opening(&shell, "s1").await;
+
+    let read = reread(&shell, 1).await;
+    let jobs = vec![
+        shown_job("s1", "call-1"),
+        shown_ended("s1", "call-2", "finished", JobEnd::Done),
+        shown_ended("s1", "call-4", "failed", JobEnd::Failed),
+        shown_ended("s1", "call-5", "cancelled", JobEnd::Failed),
+        shown_ended("s1", "call-6", "timed out", JobEnd::Failed),
+    ];
+    let listed = Update::Jobs {
+        jobs,
+        as_of: "live".to_string(),
+    };
+    assert_eq!(read[0], listed);
+    let asked = job_reads(&fake);
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert!(
+        asked[0].contains(r#"session_id: { _eq: "s1" }"#),
+        "{asked:?}"
+    );
+
+    shell.intend(Intent::Open {
+        session: "s2".to_string(),
+        agent: "a".to_string(),
+    });
+    opening(&shell, "s2").await;
+
+    let read = reread(&shell, 2).await;
+    let mut listed: Vec<_> = read
+        .iter()
+        .filter_map(|update| match update {
+            Update::Jobs { jobs, .. } => Some(jobs),
+            _ => None,
+        })
+        .flatten()
+        .map(|job| job.address.as_str())
+        .collect();
+    listed.sort();
+    let all = [
+        "s1:call-1",
+        "s1:call-2",
+        "s1:call-4",
+        "s1:call-5",
+        "s1:call-6",
+        "s2:call-3",
+    ];
+    assert_eq!(listed, all);
+    let asked = &job_reads(&fake)[1..];
+    for session in ["s1", "s2"] {
+        let named = format!(r#"session_id: {{ _eq: "{session}" }}"#);
+        let reads = asked.iter().filter(|query| query.contains(&named)).count();
+        assert_eq!(reads, 1, "{session}: {asked:?}");
+    }
+}
+
+/// A session opens when a tab picks it or sends to it, and either reads its jobs.
+#[tokio::test]
+async fn opening_a_session_rereads_work() {
+    let fake = FakeRuntime::start_with(
+        agents_a_and_b(),
+        |_, method, params| match method {
+            "thread/resume" => resumed(params, &[]),
+            "turn/start" => turn_answer("t1"),
+            _ => quiet(method),
+        },
+        |query| {
+            let jobs = [job_row("s1", "call-1"), job_row("s2", "call-2")];
+            work_answer(query, &jobs, &[])
+        },
+    )
+    .await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+
+    open_s1(&shell);
+    opening(&shell, "s1").await;
+
+    let read = reread(&shell, 1).await;
+    let s1 = Update::Jobs {
+        jobs: vec![shown_job("s1", "call-1")],
+        as_of: "live".to_string(),
+    };
+    assert_eq!(read[0], s1);
+
+    shell.intend(Intent::Send {
+        tab: 1,
+        session: Some("s2".to_string()),
+        agent: "a".to_string(),
+        text: "hi".to_string(),
+    });
+    let turn = Update::Turn {
+        session: "s2".to_string(),
+        turn: "t1".to_string(),
+    };
+    assert_eq!(shell.next().await, turn);
+
+    let read = reread(&shell, 2).await;
+    let jobs = read.iter().find_map(|update| match update {
+        Update::Jobs { jobs, .. } => Some(jobs),
+        _ => None,
+    });
+    assert!(
+        jobs.is_some_and(|jobs| jobs.contains(&shown_job("s2", "call-2"))),
+        "{read:?}"
     );
 }
 
@@ -1954,7 +2428,12 @@ async fn nothing_rereads_without_an_event() {
     assert!(matches!(update, Update::Jobs { .. }), "{update:?}");
     let update = shell.next().await;
     assert!(matches!(update, Update::Background { .. }), "{update:?}");
-    assert_eq!(fake.queries().len(), read + 2, "{:?}", fake.queries());
+    assert_eq!(
+        fake.queries().len(),
+        read + 1,
+        "the calls, and no jobs with no session open: {:?}",
+        fake.queries()
+    );
     assert_eq!(fake.subscriptions(), 1, "a live subscription is kept");
 }
 
@@ -1964,7 +2443,10 @@ async fn a_tool_call_change_rereads_the_jobs() {
     let job = started.clone();
     let fake = FakeRuntime::start_with(
         agents_a_and_b(),
-        |_, method, _| quiet(method),
+        |_, method, params| match method {
+            "thread/resume" => resumed(params, &[]),
+            _ => quiet(method),
+        },
         move |query| {
             let jobs = match job.load(std::sync::atomic::Ordering::SeqCst) {
                 true => vec![job_row("s1", "call-1")],
@@ -1976,6 +2458,9 @@ async fn a_tool_call_change_rereads_the_jobs() {
     .await;
     let shell = open_shell(&fake);
     shell.ready().await;
+    open_s1(&shell);
+    opening(&shell, "s1").await;
+    reread(&shell, 1).await;
 
     started.store(true, std::sync::atomic::Ordering::SeqCst);
     fake.changed();
@@ -2058,11 +2543,12 @@ async fn a_sessions_jobs_follow_its_subagents_in_its_running_rows() {
             _ => quiet(method),
         },
         |query| {
-            work_answer(
-                query,
-                &[job_row("s1", "call-1"), job_row("s2", "call-2")],
-                &[],
-            )
+            let jobs = [
+                job_row("s1", "call-1"),
+                ended_row("s1", "call-3", "completed"),
+                job_row("s2", "call-2"),
+            ];
+            work_answer(query, &jobs, &[])
         },
     )
     .await;
@@ -2073,11 +2559,15 @@ async fn a_sessions_jobs_follow_its_subagents_in_its_running_rows() {
 
     let opened = shell.next().await;
     assert!(matches!(opened, Update::Opened { .. }), "{opened:?}");
-    let expected = vec![
-        row("c1", "finished", RunState::Done),
-        job_running("s1", "call-1"),
-    ];
-    assert_eq!(shell.next().await, rows("s1", expected.clone()));
+    let subagent = row("c1", "finished", RunState::Done);
+    assert_eq!(shell.next().await, rows("s1", vec![subagent.clone()]));
+    let read = reread(&shell, 1).await;
+    let expected = vec![subagent, job_running("s1", "call-1")];
+    assert_eq!(
+        read.last(),
+        Some(&rows("s1", expected.clone())),
+        "a finished run is not running"
+    );
 
     fake.changed();
     let update = shell.next().await;
@@ -2091,7 +2581,10 @@ async fn a_sessions_jobs_follow_its_subagents_in_its_running_rows() {
 async fn a_failed_job_read_is_one_notice_and_the_background_still_reads() {
     let fake = FakeRuntime::start_with(
         agents_a_and_b(),
-        |_, method, _| quiet(method),
+        |_, method, params| match method {
+            "thread/resume" => resumed(params, &[]),
+            _ => quiet(method),
+        },
         |query| match query.contains("job_pin") {
             true => json!({ "data": null, "errors": [{ "message": "the job store is closed" }] }),
             false => work_answer(query, &[], &[background_row("bash", "running")]),
@@ -2099,7 +2592,10 @@ async fn a_failed_job_read_is_one_notice_and_the_background_still_reads() {
     )
     .await;
     let shell = open_shell(&fake);
-    shell.opened().await;
+    shell.ready().await;
+
+    open_s1(&shell);
+    opening(&shell, "s1").await;
 
     let update = shell.next().await;
     let Update::Notice(notice) = &update else {
@@ -2110,16 +2606,13 @@ async fn a_failed_job_read_is_one_notice_and_the_background_still_reads() {
         "{notice}"
     );
     assert!(notice.contains("the job store is closed"), "{notice}");
-    let never_read = Update::Jobs {
-        jobs: Vec::new(),
-        as_of: "off".to_string(),
+    let read = reread(&shell, 1).await;
+    let [Update::Jobs { jobs, as_of }, Update::Background { calls, .. }, _] = &read[..] else {
+        unreachable!()
     };
-    assert_eq!(shell.next().await, never_read);
-    let update = shell.next().await;
-    let Update::Background { calls, .. } = &update else {
-        panic!("one notice, then the calls: {update:?}");
-    };
-    assert_eq!(calls[0].name, "bash");
+    assert!(jobs.is_empty(), "{jobs:?}");
+    assert!(as_of.starts_with("as of "), "not live: {as_of}");
+    assert_eq!(calls[0].name, "bash", "one notice, then the calls");
 }
 
 #[tokio::test]
@@ -2128,7 +2621,10 @@ async fn a_failed_reread_after_a_good_one_says_as_of() {
     let fails = failing.clone();
     let fake = FakeRuntime::start_with(
         agents_a_and_b(),
-        |_, method, _| quiet(method),
+        |_, method, params| match method {
+            "thread/resume" => resumed(params, &[]),
+            _ => quiet(method),
+        },
         move |query| {
             let failed = fails.load(std::sync::atomic::Ordering::SeqCst);
             match failed && query.contains("job_pin") {
@@ -2142,6 +2638,9 @@ async fn a_failed_reread_after_a_good_one_says_as_of() {
     .await;
     let shell = open_shell(&fake);
     shell.ready().await;
+    open_s1(&shell);
+    opening(&shell, "s1").await;
+    reread(&shell, 1).await;
 
     failing.store(true, std::sync::atomic::Ordering::SeqCst);
     fake.changed();
@@ -2201,33 +2700,50 @@ async fn a_slow_reread_holds_back_no_chat() {
 
 #[tokio::test]
 async fn changes_during_a_reread_read_exactly_once_more() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
+    let fake = FakeRuntime::start_with(
+        agents_a_and_b(),
+        |_, method, params| match method {
+            "thread/resume" => resumed(params, &[]),
+            _ => quiet(method),
+        },
+        |query| work_answer(query, &[job_row("s1", "call-1")], &[]),
+    )
+    .await;
     let shell = open_shell(&fake);
     shell.ready().await;
-    let read = fake.queries().len();
+    open_s1(&shell);
+    opening(&shell, "s1").await;
+    reread(&shell, 1).await;
+    let (jobs, calls) = (job_reads(&fake).len(), call_reads(&fake));
     fake.hold(true);
     fake.changed();
-    within(fake.queried(read + 1)).await;
+    fake.posted("job_progress", jobs + 1).await;
 
     for _ in 0..3 {
         fake.changed();
     }
-    let more = tokio::time::timeout(SHORT_WAIT, fake.queried(read + 2)).await;
-    assert!(more.is_err(), "one reread at a time: {:?}", fake.queries());
+    let more = tokio::time::timeout(SHORT_WAIT, fake.posted("job_progress", jobs + 2)).await;
+    assert!(
+        more.is_err(),
+        "one reread at a time while its job read is out: {:?}",
+        fake.queries()
+    );
+    assert_eq!(
+        call_reads(&fake),
+        calls,
+        "the jobs are read before the calls"
+    );
     fake.hold(false);
 
     for _ in 0..2 {
-        let update = shell.next().await;
-        assert!(matches!(update, Update::Jobs { .. }), "{update:?}");
-        let update = shell.next().await;
-        assert!(matches!(update, Update::Background { .. }), "{update:?}");
+        reread(&shell, 1).await;
     }
-    let more = tokio::time::timeout(SHORT_WAIT, fake.queried(read + 5)).await;
+    let more = tokio::time::timeout(SHORT_WAIT, fake.posted(RUNNING_CALLS, calls + 3)).await;
     assert!(more.is_err(), "{:?}", fake.queries());
     assert_eq!(
-        fake.queries().len(),
-        read + 4,
-        "two rereads, two reads each"
+        (job_reads(&fake).len(), call_reads(&fake)),
+        (jobs + 2, calls + 2),
+        "two rereads, each of s1's jobs and the calls"
     );
 }
 
@@ -2385,7 +2901,11 @@ async fn reopening_an_open_tab_clears_a_prompt_answered_elsewhere() {
     let ready = |update: &Update| matches!(update, Update::Background { .. });
     shell.apply_through(&mut app, ready).await;
     open_s1(&shell);
-    shell.apply_through(&mut app, is_prompts).await;
+    let mut read = opening(&shell, "s1").await;
+    read.extend(reread_and(&shell, is_prompts).await);
+    for update in read {
+        app.apply(update);
+    }
     assert_eq!(app.tabs[0].prompts.len(), 1);
     closed.store(true, std::sync::atomic::Ordering::SeqCst);
 
@@ -2454,12 +2974,14 @@ async fn dismissing_sends_the_mailbox_dismiss_and_shows_the_rest() {
     let shell = open_shell(&fake);
     shell.ready().await;
     open_s1(&shell);
-    let read = shell.until(is_prompts).await;
+    opening(&shell, "s1").await;
+    let read = reread_and(&shell, is_prompts).await;
     let both = vec![
         asked("i1", PromptKind::Gate, PromptAnswer::Ack),
         asked("i2", PromptKind::Ask, PromptAnswer::Reply),
     ];
-    assert_eq!(read.last(), Some(&prompts("s1", both)));
+    let shown: Vec<_> = read.iter().filter(|update| is_prompts(update)).collect();
+    assert_eq!(shown, [&prompts("s1", both)]);
 
     shell.intend(Intent::Dismiss {
         session: "s1".to_string(),
@@ -2499,9 +3021,11 @@ async fn a_reply_to_a_closed_item_is_a_notice_in_the_owners_words() {
     let shell = open_shell(&fake);
     shell.ready().await;
     open_s1(&shell);
-    let read = shell.until(is_prompts).await;
-    let shown = vec![asked("i1", PromptKind::Ask, PromptAnswer::Reply)];
-    assert_eq!(read.last(), Some(&prompts("s1", shown)));
+    opening(&shell, "s1").await;
+    let read = reread_and(&shell, is_prompts).await;
+    let question = vec![asked("i1", PromptKind::Ask, PromptAnswer::Reply)];
+    let shown: Vec<_> = read.iter().filter(|update| is_prompts(update)).collect();
+    assert_eq!(shown, [&prompts("s1", question)]);
     closed.store(true, std::sync::atomic::Ordering::SeqCst);
 
     shell.intend(Intent::Reply {
@@ -2578,4 +3102,118 @@ async fn an_ended_mailbox_subscription_is_told_and_the_next_turn_subscribes_agai
         .filter(|query| *query == source::MAILBOX_WATCHED)
         .count();
     assert_eq!(watched, 2, "{:?}", fake.queries());
+}
+
+fn read_tree(agent: &str) -> Intent {
+    Intent::WorkingTree {
+        agent: agent.to_string(),
+    }
+}
+
+fn is_tree(update: &Update) -> bool {
+    matches!(update, Update::WorkingTree(_))
+}
+
+#[tokio::test]
+async fn the_working_tree_is_read_through_git_diff_to_remote() {
+    let diff = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-a\n+b\n";
+    let fake = FakeRuntime::start(agents_a_and_b(), move |_, method, _| match method {
+        "gitDiffToRemote" => Some(Ok(json!({ "sha": "abc123", "diff": diff }))),
+        _ => quiet(method),
+    })
+    .await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+
+    shell.intend(read_tree("a"));
+
+    let read = shell.until(is_tree).await;
+    let edited = Change::new(
+        String::new(),
+        "a.rs".to_string(),
+        ChangeKind::Update,
+        "@@ -1 +1 @@\n-a\n+b\n".to_string(),
+    );
+    assert_eq!(read.last(), Some(&Update::WorkingTree(Ok(vec![edited]))));
+    let wire = codex::ClientRequest::GitDiffToRemote {
+        request_id: codex::RequestId::Integer(0),
+        params: codex::GitDiffToRemoteParams { cwd: ".".into() },
+    };
+    let calls = fake.calls();
+    let call = calls.iter().find(|call| call.method == wire.method());
+    let call = call.expect("the runtime's git diff");
+    assert_eq!(call.agent, "a");
+    assert_eq!(call.params, json!({ "cwd": "." }));
+}
+
+#[tokio::test]
+async fn a_refused_working_tree_read_says_why() {
+    let why = "git rev-parse --show-toplevel failed: fatal: not a git repository";
+    let fake = FakeRuntime::start(agents_a_and_b(), move |_, method, _| match method {
+        "gitDiffToRemote" => Some(Err((-32603, why.to_string()))),
+        _ => quiet(method),
+    })
+    .await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+
+    shell.intend(read_tree("a"));
+    let read = shell.until(is_tree).await;
+    assert_eq!(
+        read.last(),
+        Some(&Update::WorkingTree(Err(why.to_string())))
+    );
+
+    shell.intend(read_tree("nobody"));
+    let read = shell.until(is_tree).await;
+    let unconnected = Update::WorkingTree(Err("not connected".to_string()));
+    assert_eq!(read.last(), Some(&unconnected));
+}
+
+#[tokio::test]
+async fn a_working_tree_read_holds_up_no_other_intent() {
+    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+
+    shell.intend(read_tree("a"));
+    fake.called("gitDiffToRemote").await;
+    shell.intend(Intent::Refresh);
+
+    let update = shell.next().await;
+    assert!(matches!(update, Update::Jobs { .. }), "{update:?}");
+}
+
+/// The first read is left unanswered until it times out, and the next two are asked for while
+/// it is out: they become one read, so the older answer never lands after the newer one.
+#[tokio::test]
+async fn working_tree_reads_land_in_order() {
+    let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = asked.clone();
+    let fake = FakeRuntime::start(agents_a_and_b(), move |_, method, _| match method {
+        "gitDiffToRemote" if counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 => None,
+        "gitDiffToRemote" => Some(Ok(json!({ "sha": "abc123", "diff": "" }))),
+        _ => quiet(method),
+    })
+    .await;
+    let shell = open_shell_answering(&fake, SHORT_WAIT);
+    shell.ready().await;
+
+    for _ in 0..3 {
+        shell.intend(read_tree("a"));
+    }
+
+    let first = shell.until(is_tree).await;
+    assert!(
+        matches!(first.last(), Some(Update::WorkingTree(Err(_)))),
+        "the unanswered read lands first: {first:?}"
+    );
+    let second = shell.until(is_tree).await;
+    assert_eq!(second.last(), Some(&Update::WorkingTree(Ok(Vec::new()))));
+    let reads = fake
+        .methods()
+        .iter()
+        .filter(|method| *method == "gitDiffToRemote")
+        .count();
+    assert_eq!(reads, 2, "the two asked while one was out are read once");
 }

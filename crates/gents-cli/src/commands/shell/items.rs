@@ -2,7 +2,7 @@ use chrono::{Local, NaiveDate, TimeZone};
 use gents_codex_protocol as codex;
 use gents_shell::app::ChatLine;
 use gents_shell::sample::{Opens, RunState, Running, Tone};
-use gents_shell::source::{Agent, Day, Session, SessionState, Update};
+use gents_shell::source::{Agent, Change, ChangeKind, Day, Session, SessionState, Update};
 
 use crate::commands::codex_shim::RuntimeIdentity;
 
@@ -106,7 +106,7 @@ pub(super) fn agents(identity: &RuntimeIdentity) -> Vec<Agent> {
 
 /// Every line carries an item id. A line under the item (its output, one changed path) has
 /// its own, because a line with an id the tab has seen replaces that line.
-pub(super) fn lines(item: &codex::ThreadItem) -> Vec<ChatLine> {
+pub(super) fn lines(item: &codex::ThreadItem, turn: &str) -> Vec<ChatLine> {
     let id = item.id();
     let line = |text: String, tone| shown(text, tone, id.to_string());
     match item {
@@ -148,11 +148,7 @@ pub(super) fn lines(item: &codex::ThreadItem) -> Vec<ChatLine> {
             let output = aggregated_output.as_deref().map(clean).unwrap_or_default();
             let output = output.trim_end();
             if !output.is_empty() {
-                lines.push(shown(
-                    output.to_string(),
-                    Tone::Label,
-                    format!("{id}/output"),
-                ));
+                lines.push(shown(capped(output), Tone::Label, format!("{id}/output")));
             }
             lines
         }
@@ -168,8 +164,23 @@ pub(super) fn lines(item: &codex::ThreadItem) -> Vec<ChatLine> {
                 .iter()
                 .enumerate()
                 .map(|(n, change)| {
-                    let text = format!("  {mark} edit  {}", clean(&change.path));
-                    shown(text, tone, format!("{id}/{n}"))
+                    let path = clean(&change.path);
+                    let kind = match &change.kind {
+                        codex::PatchChangeKind::Add => ChangeKind::Add,
+                        codex::PatchChangeKind::Delete => ChangeKind::Delete,
+                        codex::PatchChangeKind::Update { move_path: None } => ChangeKind::Update,
+                        codex::PatchChangeKind::Update {
+                            move_path: Some(to),
+                        } => ChangeKind::Move {
+                            to: clean(&to.to_string_lossy()),
+                        },
+                    };
+                    let text = format!("  {mark} edit  {path}");
+                    let diff = clean(&change.diff);
+                    ChatLine {
+                        change: Some(Change::new(turn.to_string(), path, kind, diff)),
+                        ..shown(text, tone, format!("{id}/{n}"))
+                    }
                 })
                 .collect()
         }
@@ -214,6 +225,7 @@ fn shown(text: String, tone: Tone, item: String) -> ChatLine {
         text,
         tone,
         item: Some(item),
+        change: None,
     }
 }
 
@@ -247,8 +259,10 @@ pub(super) fn updates(note: codex::ServerNotification) -> Vec<Update> {
             session: changed.thread_id,
             state: state(&changed.status),
         }],
-        Note::ItemStarted(started) => items(started.thread_id, &started.item),
-        Note::ItemCompleted(completed) => items(completed.thread_id, &completed.item),
+        Note::ItemStarted(started) => items(started.thread_id, &started.turn_id, &started.item),
+        Note::ItemCompleted(completed) => {
+            items(completed.thread_id, &completed.turn_id, &completed.item)
+        }
         Note::AgentMessageDelta(reply) => {
             vec![delta(
                 reply.thread_id,
@@ -263,18 +277,20 @@ pub(super) fn updates(note: codex::ServerNotification) -> Vec<Update> {
             &reasoning.delta,
             Tone::Label,
         )],
-        Note::CommandExecutionOutputDelta(output) => vec![delta(
-            output.thread_id,
-            format!("{}/output", output.item_id),
-            &output.delta,
-            Tone::Label,
-        )],
+        // ponytail: each delta is capped on its own; the endpoint sends a command's output as
+        // one delta before its completed item, which is capped the same way.
+        Note::CommandExecutionOutputDelta(output) => vec![Update::Delta {
+            session: output.thread_id,
+            item: format!("{}/output", output.item_id),
+            text: capped(&clean(&output.delta)),
+            tone: Tone::Label,
+        }],
         _ => Vec::new(),
     }
 }
 
-fn items(session: String, item: &codex::ThreadItem) -> Vec<Update> {
-    lines(item)
+fn items(session: String, turn: &str, item: &codex::ThreadItem) -> Vec<Update> {
+    lines(item, turn)
         .into_iter()
         .map(|line| Update::Item {
             session: session.clone(),
@@ -286,6 +302,37 @@ fn items(session: String, item: &codex::ThreadItem) -> Vec<Update> {
 /// The shell draws text as given, so a carriage return or a terminal escape would move its
 /// cursor or restyle the screen. Drops both: CSI and OSC sequences whole, any other escape
 /// with the character after it.
+/// Lines of a command's output the chat keeps, and the characters it keeps of each: a page of
+/// output would otherwise fill the tab, and every line the tab holds is wrapped to draw it.
+const OUTPUT_LINES: usize = 20;
+const OUTPUT_LINE_CHARS: usize = 400;
+
+/// `output`'s first lines, each cut short, then how many more there were.
+fn capped(output: &str) -> String {
+    let mut all = output.lines();
+    let mut shortened = false;
+    let mut kept: Vec<String> = all
+        .by_ref()
+        .take(OUTPUT_LINES)
+        .map(|line| match line.char_indices().nth(OUTPUT_LINE_CHARS) {
+            Some((at, _)) => {
+                shortened = true;
+                format!("{}…", &line[..at])
+            }
+            None => line.to_string(),
+        })
+        .collect();
+    let more = all.count();
+    if more == 0 && !shortened {
+        return output.to_string();
+    }
+    if more > 0 {
+        let s = if more == 1 { "" } else { "s" };
+        kept.push(format!("… {more} more line{s}"));
+    }
+    kept.join("\n")
+}
+
 fn clean(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars();
@@ -317,8 +364,9 @@ fn clean(text: &str) -> String {
 mod tests {
     use chrono::{Local, NaiveDate, TimeZone};
     use gents_codex_protocol as codex;
+    use gents_shell::app::ChatLine;
     use gents_shell::sample::{Opens, RunState, Running, Tone};
-    use gents_shell::source::{Agent, Day, SessionState, Update};
+    use gents_shell::source::{Agent, Change, ChangeKind, Day, SessionState, Update};
     use serde_json::{json, Value};
 
     use super::{agents, lines, parent, session, subagent, updates};
@@ -450,6 +498,15 @@ mod tests {
         serde_json::from_value(value).unwrap()
     }
 
+    /// `line` showing a change in turn `t1`.
+    fn changed(line: ChatLine, path: &str, kind: ChangeKind, diff: &str) -> ChatLine {
+        let change = Change::new("t1".into(), path.into(), kind, diff.into());
+        ChatLine {
+            change: Some(change),
+            ..line
+        }
+    }
+
     fn command(status: &str, output: Option<&str>) -> codex::ThreadItem {
         item(json!({
             "type": "commandExecution",
@@ -520,7 +577,7 @@ mod tests {
             ),
         ];
         for (item, expected) in cases {
-            assert_eq!(lines(&item), expected, "{item:?}");
+            assert_eq!(lines(&item, "t1"), expected, "{item:?}");
         }
 
         for (status, mark, tone) in [
@@ -538,11 +595,13 @@ mod tests {
                     { "path": "src/b.rs", "kind": { "type": "add" }, "diff": "" },
                 ],
             }));
+            let a = line(&format!("  {mark} edit  src/a.rs"), tone, "f1/0");
+            let b = line(&format!("  {mark} edit  src/b.rs"), tone, "f1/1");
             let expected = vec![
-                line(&format!("  {mark} edit  src/a.rs"), tone, "f1/0"),
-                line(&format!("  {mark} edit  src/b.rs"), tone, "f1/1"),
+                changed(a, "src/a.rs", ChangeKind::Update, ""),
+                changed(b, "src/b.rs", ChangeKind::Add, ""),
             ];
-            assert_eq!(lines(&edit), expected, "{status}");
+            assert_eq!(lines(&edit, "t1"), expected, "{status}");
         }
 
         for (status, mark, tone) in [
@@ -559,8 +618,98 @@ mod tests {
                 "arguments": {},
             }));
             let expected = vec![line(&format!("  {mark} github search"), tone, "m1")];
-            assert_eq!(lines(&call), expected, "{status}");
+            assert_eq!(lines(&call, "t1"), expected, "{status}");
         }
+    }
+
+    #[test]
+    fn a_file_change_carries_its_change_and_turn() {
+        let edit = item(json!({
+            "type": "fileChange",
+            "id": "fc",
+            "status": "completed",
+            "changes": [
+                { "path": "a.rs", "kind": { "type": "update", "move_path": null }, "diff": "@@ -1 +1 @@\n-a\n+b\n" },
+                { "path": "b.rs", "kind": { "type": "add" }, "diff": "x\n" },
+                { "path": "c.rs", "kind": { "type": "delete" }, "diff": "y\n" },
+                { "path": "d.rs", "kind": { "type": "update", "move_path": "e.rs" }, "diff": "" },
+            ],
+        }));
+        let shown = lines(&edit, "t1");
+        let rows: Vec<_> = shown
+            .iter()
+            .map(|line| (line.text.as_str(), line.item.as_deref().unwrap_or_default()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("  ✓ edit  a.rs", "fc/0"),
+                ("  ✓ edit  b.rs", "fc/1"),
+                ("  ✓ edit  c.rs", "fc/2"),
+                ("  ✓ edit  d.rs", "fc/3"),
+            ]
+        );
+        let change = |path: &str, kind, diff: &str| {
+            Some(Change::new("t1".into(), path.into(), kind, diff.into()))
+        };
+        let moved = ChangeKind::Move {
+            to: "e.rs".to_string(),
+        };
+        let changes: Vec<_> = shown.into_iter().map(|line| line.change).collect();
+        assert_eq!(
+            changes,
+            [
+                change("a.rs", ChangeKind::Update, "@@ -1 +1 @@\n-a\n+b\n"),
+                change("b.rs", ChangeKind::Add, "x\n"),
+                change("c.rs", ChangeKind::Delete, "y\n"),
+                change("d.rs", moved, ""),
+            ],
+            "the inner key stays `move_path`"
+        );
+    }
+
+    #[test]
+    fn a_file_changes_text_is_cleaned() {
+        let edit = item(json!({
+            "type": "fileChange",
+            "id": "fc",
+            "status": "completed",
+            "changes": [{
+                "path": "a\u{1b}[2J.rs",
+                "kind": { "type": "update", "move_path": null },
+                "diff": "@@ -1 +1 @@\r\n-a\r\n+\u{1b}[31mb\r\n",
+            }],
+        }));
+        let shown = lines(&edit, "t1").pop().expect("a line");
+        assert_eq!(shown.text, "  ✓ edit  a.rs");
+        let change = shown.change.expect("its change");
+        assert_eq!(change.path, "a.rs");
+        assert_eq!(change.diff, "@@ -1 +1 @@\n-a\n+b\n");
+        assert_eq!(change.counts(), (1, 1));
+    }
+
+    #[test]
+    fn long_command_output_shows_its_first_lines_and_how_many_more() {
+        let long: String = (1..=25).map(|n| format!("line {n}\n")).collect();
+        let first: Vec<String> = (1..=20).map(|n| format!("line {n}")).collect();
+        let capped = format!("{}\n… 5 more lines", first.join("\n"));
+        let output =
+            |item: &codex::ThreadItem| lines(item, "t1").pop().expect("an output line").text;
+        assert_eq!(output(&command("completed", Some(&long))), capped);
+
+        let delta = note(
+            "item/commandExecution/outputDelta",
+            json!({ "threadId": "s1", "turnId": "t1", "itemId": "c1", "delta": long }),
+        );
+        let streamed = updates(delta).into_iter().find_map(|update| match update {
+            Update::Delta { text, .. } => Some(text),
+            _ => None,
+        });
+        assert_eq!(streamed, Some(capped), "the endpoint sends it whole first");
+
+        let wide = format!("{}\nend\n", "x".repeat(1000));
+        let cut = format!("{}…\nend", "x".repeat(400));
+        assert_eq!(output(&command("completed", Some(&wide))), cut);
     }
 
     fn note(method: &str, params: Value) -> codex::ServerNotification {
@@ -649,11 +798,21 @@ mod tests {
                 vec![
                     Update::Item {
                         session: s1(),
-                        line: line("  ✓ edit  a.rs", Tone::Label, "f1/0"),
+                        line: changed(
+                            line("  ✓ edit  a.rs", Tone::Label, "f1/0"),
+                            "a.rs",
+                            ChangeKind::Add,
+                            "",
+                        ),
                     },
                     Update::Item {
                         session: s1(),
-                        line: line("  ✓ edit  b.rs", Tone::Label, "f1/1"),
+                        line: changed(
+                            line("  ✓ edit  b.rs", Tone::Label, "f1/1"),
+                            "b.rs",
+                            ChangeKind::Add,
+                            "",
+                        ),
                     },
                 ],
             ),

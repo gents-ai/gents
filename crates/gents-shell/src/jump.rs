@@ -149,6 +149,7 @@ mod tests {
     use crate::sample::View;
     use crate::testing::{
         buffer, find, kinds, press, screen, session_row, type_text, with_right_pane,
+        with_sample_session,
     };
 
     const ACCOUNTS: LayerKind = LayerKind::Menu(MenuId::Accounts);
@@ -554,9 +555,9 @@ mod tests {
 
     #[test]
     fn sidebar_views_from_the_bar() {
-        let mut app = with_right_pane(App::new(Vim, 132, 36));
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 36)));
         press(&mut app, "esc ctrl-w l ctrl-w l enter :");
-        assert_eq!(app.diff, Some(0));
+        assert_eq!(app.diff, Some(2));
         type_text(&mut app, "work");
         press(&mut app, "enter");
         assert_eq!(app.view, View::Workflows);
@@ -571,7 +572,7 @@ mod tests {
         assert_eq!(app.view, View::Agents);
         assert!(app.wanted().sidebar);
 
-        let mut app = with_right_pane(App::new(Vim, 70, 24));
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 70, 24)));
         press(&mut app, "esc :");
         type_text(&mut app, "work");
         press(&mut app, "enter");

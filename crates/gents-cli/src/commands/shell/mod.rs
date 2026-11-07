@@ -1,6 +1,7 @@
 mod client;
 mod items;
 mod source;
+mod tree;
 mod work;
 
 #[cfg(test)]

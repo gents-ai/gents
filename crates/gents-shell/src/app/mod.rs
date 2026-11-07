@@ -1,3 +1,4 @@
+pub mod changes;
 pub mod input;
 pub mod layers;
 mod mouse;
@@ -16,17 +17,18 @@ use ratatui::text::Span;
 
 use crate::commands::{Command, Effect, COMMANDS};
 use crate::filter::subsequence;
-use crate::keys::{in_key_set, in_line, Action, Dir, KeyCtx, KeySet, Keymap};
+use crate::keys::{in_line, Action, Dir, KeyCtx, KeySet, Keymap};
 use crate::layout::{
     conversation_area, layout, sessions_can_dock, sidebar_can_dock, sidebar_rows_area, Panes,
     Right, Screen, Wanted,
 };
 use crate::sample::{
-    answer, diff, note, row, Opens, RowAction, Running, SidebarRow, Tone, View, CHAT,
-    DIFF_BACK_ROW, START_SESSION, SUBAGENT_MARK,
+    answer, changes, note, row, Opens, RowAction, Running, Scope, SidebarRow, Tone, View, CHAT,
+    START_SESSION, SUBAGENT_MARK,
 };
 use crate::source::{
-    Agent, BackgroundCall, Connection, Day, Intent, Job, Prompt, Session, SessionState, Update,
+    Agent, BackgroundCall, Change, Connection, Day, Intent, Job, Prompt, Session, SessionState,
+    Update,
 };
 use input::LineInput;
 use layers::{Layer, LayerKind};
@@ -59,6 +61,8 @@ pub struct ChatLine {
     pub tone: Tone,
     /// The transcript item the line shows.
     pub item: Option<String>,
+    /// The file change the line shows.
+    pub change: Option<Change>,
 }
 
 fn blank() -> ChatLine {
@@ -66,6 +70,7 @@ fn blank() -> ChatLine {
         text: String::new(),
         tone: Tone::Plain,
         item: None,
+        change: None,
     }
 }
 
@@ -154,7 +159,10 @@ impl Tab {
         }
     }
 
+    /// The lines' rows with each ended turn's card in place. Cards are built on each call, from
+    /// the lines, and never cached.
     pub fn wrapped_rows(&self, width: u16) -> Vec<(String, Tone)> {
+        let mut cards = self.cards(usize::from(width)).into_iter().peekable();
         let mut wrapped = self.wrapped.0.borrow_mut();
         let (wrapped_at, seen) = &mut *wrapped;
         if *wrapped_at != width {
@@ -164,6 +172,9 @@ impl Tab {
         seen.truncate(self.lines.len());
         let mut rows = Vec::new();
         for (at, line) in self.lines.iter().enumerate() {
+            while let Some((_, card)) = cards.next_if(|(before, _)| *before == at) {
+                rows.extend(card);
+            }
             if !matches!(seen.get(at), Some((was, _)) if was == line) {
                 let fresh = (line.clone(), line_rows(line, usize::from(width)));
                 match seen.get_mut(at) {
@@ -173,6 +184,7 @@ impl Tab {
             }
             rows.extend(seen[at].1.iter().map(|row| (row.clone(), line.tone)));
         }
+        rows.extend(cards.flat_map(|(_, card)| card));
         rows
     }
 
@@ -275,22 +287,28 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 fn bubble(text: &str, width: usize) -> Vec<String> {
     let room = (width * 3 / 4).min(width.saturating_sub(2)).max(1);
     let rows = wrap_lines(text, room);
-    let rows: Vec<&str> = rows.iter().map(|row| row.trim_start()).collect();
-    let widest = rows.iter().map(|row| Span::raw(*row).width()).max();
+    let widest = rows.iter().map(|row| Span::raw(row.as_str()).width()).max();
     let left = width.saturating_sub(widest.unwrap_or(0) + 1);
     rows.iter()
         .map(|row| format!("{:left$}{row}", ""))
         .collect()
 }
 
+/// The sample's changes come after its sixth line, the read.
 pub fn sample_chat() -> Vec<ChatLine> {
-    CHAT.iter()
-        .map(|&(text, tone)| ChatLine {
-            text: text.to_string(),
-            tone,
-            item: None,
-        })
-        .collect()
+    let chat = |lines: &[(&str, Tone)]| -> Vec<ChatLine> {
+        lines
+            .iter()
+            .map(|&(text, tone)| ChatLine {
+                text: text.to_string(),
+                tone,
+                item: None,
+                change: None,
+            })
+            .collect()
+    };
+    let (read, ran) = CHAT.split_at(6);
+    [chat(read), changes(), chat(ran)].concat()
 }
 
 /// `+ New session`, then each day's sessions under its header, in list order.
@@ -338,6 +356,7 @@ pub struct App {
     pub mode: Mode,
     pub sessions_wanted: bool,
     pub view: View,
+    pub scope: Scope,
     pub sessions_sel: usize,
     pub view_sel: [usize; 3],
     pub notice: Option<String>,
@@ -357,6 +376,8 @@ pub struct App {
     pub job_open: Option<String>,
     pub background: Vec<BackgroundCall>,
     pub background_as_of: String,
+    /// Every tab's tools share one root, so its working tree is the app's. `None` until read.
+    pub working_tree: Option<Result<Vec<Change>, String>>,
     /// Without a source, the sample answers each intent at once.
     intents: Option<Sender<Intent>>,
     pub connection: Connection,
@@ -398,7 +419,8 @@ impl App {
             focus: Pane::Agent,
             mode: Mode::Input,
             sessions_wanted: true,
-            view: View::Changes,
+            view: View::Diff,
+            scope: Scope::Session,
             sessions_sel: START_SESSION,
             view_sel: [0; 3],
             notice: None,
@@ -416,6 +438,7 @@ impl App {
             job_open: None,
             background: crate::sample::background(),
             background_as_of: String::new(),
+            working_tree: None,
             intents: None,
             connection: Connection::Sample,
             clipboard: None,
@@ -443,7 +466,7 @@ impl App {
     }
 
     fn start_view_rows(&mut self) {
-        self.view_sel = [View::Changes, View::Workflows, View::Agents]
+        self.view_sel = [View::Diff, View::Workflows, View::Agents]
             .map(|view| first_selectable(&self.view_rows(view)));
     }
 
@@ -481,7 +504,11 @@ impl App {
 
     pub fn apply(&mut self, update: Update) {
         match update {
-            Update::Opened { session, lines } => self.opened(&session, lines),
+            Update::Opened { session, lines } => {
+                let file = self.selected_file();
+                self.opened(&session, lines);
+                self.keep_file_selected(file);
+            }
             Update::Running { session, rows } => {
                 if let Some(tab) = self.showing(&session) {
                     tab.set_running(rows);
@@ -490,9 +517,11 @@ impl App {
             Update::Started { tab, session } => self.started(tab, session),
             Update::StartFailed { tab, message } => self.start_failed(tab, message),
             Update::Item { session, line } => {
+                let file = self.selected_file();
                 if let Some(tab) = self.showing(&session) {
                     tab.put(line);
                 }
+                self.keep_file_selected(file);
             }
             Update::Delta {
                 session,
@@ -512,6 +541,10 @@ impl App {
                         tab.following = false;
                     }
                 }
+                // Any turn can change the folder. A hidden pane reads it as it is shown again.
+                if self.right_pane_shown() {
+                    self.read_tree();
+                }
             }
             Update::SessionState { session, state } => {
                 if let Some(listed) = self.sessions.iter_mut().find(|listed| listed.id == session) {
@@ -530,6 +563,7 @@ impl App {
             Update::Jobs { jobs, as_of } => self.set_jobs(jobs, as_of),
             Update::Background { calls, as_of } => self.set_background(calls, as_of),
             Update::Begin { agent, prompt } => self.begin(agent, prompt),
+            Update::WorkingTree(tree) => self.set_working_tree(tree),
         }
     }
 
@@ -543,6 +577,7 @@ impl App {
                 text: text.to_string(),
                 tone,
                 item: Some(item),
+                change: None,
             }),
         }
     }
@@ -715,6 +750,7 @@ impl App {
     pub fn handle(&mut self, event: Event) {
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key),
+            Event::Paste(text) => self.paste(&text),
             Event::Mouse(mouse) => self.handle_mouse(mouse),
             Event::Resize(width, height) => {
                 self.size = (width, height);
@@ -804,6 +840,7 @@ impl App {
                 let agent = child.agent_id.clone();
                 let parent = std::mem::replace(tab, child);
                 tab.parent = Some(Box::new(parent));
+                self.diff = None;
                 self.activate_tab(self.active);
                 self.emit(Intent::Open { session, agent });
             }
@@ -820,25 +857,28 @@ impl App {
         }
     }
 
-    /// Focus stays put, so reading the diff does not cost the place in the conversation.
+    /// Focus stays put, so reading the diff does not cost the place in the conversation. `file`
+    /// indexes the session's files, so the session scope shows it.
     pub fn show_file(&mut self, file: usize) {
-        self.run_effect(Effect::ShowSidebar(View::Changes));
+        self.run_effect(Effect::ShowDiff(Scope::Session));
         self.diff = Some(file);
         self.diff_scroll = 0;
-        let rows = self.view_rows(View::Changes);
+        let rows = self.view_rows(View::Diff);
         if let Some(row) = rows
             .iter()
             .position(|row| row.action == RowAction::OpenDiff(file))
         {
-            self.view_sel[View::Changes as usize] = row;
+            self.view_sel[View::Diff as usize] = row;
         }
     }
 
+    /// A diff indexes the session's files, so it closes as the session changes.
     pub(crate) fn step_out(&mut self) {
         let tab = &mut self.tabs[self.active];
         if let Some(parent) = tab.parent.take() {
             *tab = *parent;
         }
+        self.diff = None;
         self.activate_tab(self.active);
     }
 
@@ -865,6 +905,36 @@ impl App {
             self.press(KeyEvent::new(key.code, key.modifiers - KeyModifiers::ALT));
         } else {
             self.press(key);
+        }
+    }
+
+    /// A filter or search takes it as one line. Otherwise it goes into the message box, which
+    /// a paste in normal mode or on the running rows enters, as typing would after `i`.
+    fn paste(&mut self, text: &str) {
+        self.notice = None;
+        match self.ctx() {
+            KeyCtx::Filter => {
+                if let Some(top) = self.layers.last_mut() {
+                    top.filter.paste_inline(text);
+                    top.selected = 0;
+                }
+            }
+            KeyCtx::SearchLine => {
+                if let Some(search) = &mut self.search {
+                    search.query.paste_inline(text);
+                    search.current = 0;
+                    self.go_to_match();
+                }
+            }
+            KeyCtx::Menu if !self.layers.is_empty() => {}
+            KeyCtx::Menu | KeyCtx::Normal | KeyCtx::Input => {
+                if self.ctx() != KeyCtx::Input {
+                    self.act(Action::EnterInput);
+                }
+                self.focus = Pane::Agent;
+                self.slash = None;
+                self.tabs[self.active].input.paste(text);
+            }
         }
     }
 
@@ -940,7 +1010,6 @@ impl App {
             Action::ClosePane => self.close_pane(),
             Action::ToggleSessions => self.toggle_sessions(),
             Action::ToggleSidebar => self.toggle_sidebar(),
-            Action::NextView => self.next_view_if_shown(),
             Action::PageUp if self.focus == Pane::Agent => self.scroll_agent(true, true),
             Action::PageDown if self.focus == Pane::Agent => self.scroll_agent(false, true),
             Action::Next => self.step(true),
@@ -1042,11 +1111,11 @@ impl App {
             }
             Effect::ShowSidebar(view) => {
                 self.set_view(view);
-                if sidebar_can_dock(self.size.0) {
-                    self.tabs[self.active].sidebar = true;
-                } else {
-                    self.push_layer(LayerKind::Sidebar);
-                }
+                self.open_sidebar();
+            }
+            Effect::ShowDiff(scope) => {
+                self.set_scope(scope);
+                self.open_sidebar();
             }
             Effect::NotWired => self.not_wired(),
             Effect::DismissPrompt => self.dismiss(),
@@ -1058,6 +1127,14 @@ impl App {
                 self.activate_tab(self.active);
             }
             Effect::Quit => self.quit = true,
+        }
+    }
+
+    fn open_sidebar(&mut self) {
+        if sidebar_can_dock(self.size.0) {
+            self.tabs[self.active].sidebar = true;
+        } else {
+            self.push_layer(LayerKind::Sidebar);
         }
     }
 
@@ -1125,7 +1202,7 @@ impl App {
             tab: tab.id,
             session: tab.session.clone(),
             agent: tab.agent_id.clone(),
-            text: tab.input.text().to_string(),
+            text: tab.input.sent(),
         };
         tab.starting = tab.session.is_none();
         tab.following = true;
@@ -1247,7 +1324,7 @@ impl App {
                 self.push_layer(LayerKind::Sessions);
             }
             (Pane::Agent, Dir::Right) if !sidebar_can_dock(self.size.0) => {
-                self.push_layer(LayerKind::Sidebar);
+                self.showing_right_pane(|app| app.push_layer(LayerKind::Sidebar));
             }
             (Pane::Sessions, Dir::Right) | (Pane::Sidebar, Dir::Left) => {
                 self.focus_pane(Pane::Agent);
@@ -1288,6 +1365,11 @@ impl App {
         } else {
             Mode::Normal
         };
+        self.keep_file_selected(None);
+        for view in [View::Workflows, View::Agents] {
+            let rows = self.view_rows(view);
+            self.view_sel[view as usize] = work::in_range(&rows, self.view_sel[view as usize]);
+        }
     }
 
     pub fn open_tab_with_agent(&mut self, agent: usize) {
@@ -1337,6 +1419,7 @@ impl App {
                     break;
                 };
                 *tab = *parent;
+                self.diff = None;
             }
             self.activate_tab(index);
             // Picking it again reads it again, for what other clients added. A resume under a
@@ -1394,62 +1477,62 @@ impl App {
     }
 
     fn toggle_sidebar(&mut self) {
-        if sidebar_can_dock(self.size.0) {
-            let tab = &mut self.tabs[self.active];
-            tab.sidebar = !tab.sidebar;
-            self.recheck_focus();
-        } else {
-            self.toggle_layer(LayerKind::Sidebar);
-        }
-    }
-
-    fn next_view_if_shown(&mut self) {
-        let right = self.panes().map(|panes| panes.right);
-        if matches!(right, Some(Right::Sidebar(_))) {
-            self.next_view();
-        } else {
-            self.notice = Some(self.no_sidebar_hint().to_string());
-        }
-    }
-
-    fn no_sidebar_hint(&self) -> &'static str {
-        match self.keymap.set() {
-            KeySet::Vim => "no right sidebar on screen: ] opens it",
-            KeySet::Emacs => "no right sidebar on screen: ctrl-x ] opens it",
-        }
-    }
-
-    fn next_view(&mut self) {
-        self.set_view(match self.view {
-            View::Changes => View::Workflows,
-            View::Workflows => View::Agents,
-            View::Agents => View::Changes,
+        self.showing_right_pane(|app| {
+            if sidebar_can_dock(app.size.0) {
+                let tab = &mut app.tabs[app.active];
+                tab.sidebar = !tab.sidebar;
+                app.recheck_focus();
+            } else {
+                app.toggle_layer(LayerKind::Sidebar);
+            }
         });
     }
 
-    /// A diff belongs to the Changes view, so it closes when the view changes. The source
-    /// rereads a work view as it is shown.
+    /// A hidden pane skipped the turn ends' rereads, so the working tree it comes back on is
+    /// read again.
+    fn showing_right_pane<F>(&mut self, show: F)
+    where
+        F: FnOnce(&mut App),
+    {
+        let hidden = !self.right_pane_shown();
+        show(self);
+        if hidden && self.right_pane_shown() {
+            self.read_tree();
+        }
+    }
+
+    /// A diff belongs to the Diff view, so it closes when the view changes. The source
+    /// rereads a work view, or the working tree, as it is shown.
     pub fn set_view(&mut self, view: View) {
         self.view = view;
         self.diff = None;
         self.search.take_if(|search| search.pane == Pane::Sidebar);
         let lost = matches!(self.connection, Connection::Lost(_));
-        if view != View::Changes && !lost {
+        if view == View::Diff {
+            self.read_tree();
+        } else if !lost {
             self.emit(Intent::Refresh);
         }
     }
 
-    pub fn diff_rows(&self, file: usize) -> Vec<(String, Tone)> {
-        diff(file)
-            .iter()
-            .map(|&(text, tone)| {
-                if text == DIFF_BACK_ROW {
-                    (in_key_set(self.keymap.set(), text), tone)
-                } else {
-                    (text.to_string(), tone)
-                }
-            })
-            .collect()
+    /// Docked or as a layer: the rail shows only the session's totals.
+    fn right_pane_shown(&self) -> bool {
+        let docked = self.panes().map(|panes| panes.right);
+        let docked = matches!(docked, Some(Right::Sidebar(_)));
+        docked
+            || self
+                .layers
+                .iter()
+                .any(|layer| layer.kind == LayerKind::Sidebar)
+    }
+
+    /// While the Diff view lists the working tree, unless the source is lost.
+    fn read_tree(&mut self) {
+        let lost = matches!(self.connection, Connection::Lost(_));
+        if self.view == View::Diff && self.scope == Scope::Tree && !lost {
+            let agent = self.tabs[self.active].agent_id.clone();
+            self.emit(Intent::WorkingTree { agent });
+        }
     }
 
     fn step(&mut self, forward: bool) {
@@ -1472,9 +1555,9 @@ impl App {
             return;
         };
         if let Some(pane) = self.sidebar_pane() {
-            let rows = self.visible_rows(Pane::Sidebar, sidebar_rows_area(pane));
+            let rows = self.visible_rows(Pane::Sidebar, sidebar_rows_area(pane, self.view));
             let height = usize::from(rows.height);
-            let max = diff(file).len().saturating_sub(height);
+            let max = self.diff_rows(file).len().saturating_sub(height);
             self.diff_scroll = stepped(self.diff_scroll, forward, max);
         }
     }
@@ -1546,6 +1629,7 @@ mod tests {
     use crate::sample::RunState;
     use crate::testing::{
         buffer, find, keys, numbered, press, screen, session_row, type_text, with_right_pane,
+        with_sample_session,
     };
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -1591,11 +1675,11 @@ mod tests {
 
     #[test]
     fn selections_start_on_a_selectable_row() {
-        let app = App::new(Vim, 80, 24);
+        let app = with_sample_session(App::new(Vim, 80, 24));
         assert!(app.session_rows()[app.sessions_sel]
             .text
             .contains("cli ux redesign"));
-        for (view, selected) in [View::Changes, View::Workflows, View::Agents]
+        for (view, selected) in [View::Diff, View::Workflows, View::Agents]
             .into_iter()
             .zip(app.view_sel)
         {
@@ -1639,7 +1723,7 @@ mod tests {
             type_text(&mut app, "hi");
             press(&mut app, "enter");
             let s = screen(&app);
-            assert_eq!(find(&s, "hi"), Some((4, 93)));
+            assert_eq!(find(&s, "hi "), Some((4, 93)));
             assert_eq!(find(&s, "Engineer"), Some((1, 46)));
             let reply = "sample reply: nothing is wired to an agent yet.";
             assert_eq!(find(&s, reply), Some((6, 31)));
@@ -1773,6 +1857,64 @@ mod tests {
         app.handle(alt('i'));
         assert_eq!(app.mode, Mode::Input);
         assert!(app.tabs[0].input.is_empty());
+    }
+
+    #[test]
+    fn a_paste_sends_as_one_message_with_its_lines() {
+        let (mut app, intents) = connected();
+        app.handle(Event::Paste("line one\n\n    line two".to_string()));
+        assert_eq!(app.tabs[0].input.text(), "[Pasted text #1 +3 lines]");
+        press(&mut app, "enter");
+        let sent = intents.try_recv().expect("one send");
+        assert!(
+            matches!(&sent, Intent::Send { text, .. } if text == "line one\n\n    line two"),
+            "{sent:?}"
+        );
+        assert!(intents.try_recv().is_err(), "one message, not one a line");
+    }
+
+    #[test]
+    fn a_paste_in_normal_mode_goes_into_the_box() {
+        let (mut app, _intents) = connected();
+        press(&mut app, "esc");
+        assert_eq!(app.mode, Mode::Normal);
+        app.handle(Event::Paste("hi".to_string()));
+        assert_eq!(app.mode, Mode::Input);
+        assert_eq!(app.tabs[0].input.text(), "hi");
+    }
+
+    #[test]
+    fn a_paste_into_the_jump_bar_stays_on_one_line() {
+        let mut app = App::new(Vim, 132, 36);
+        press(&mut app, "esc");
+        press(&mut app, ":");
+        app.handle(Event::Paste("tab\nclose".to_string()));
+        assert_eq!(
+            app.layers.last().expect("the bar").filter.text(),
+            "tab close"
+        );
+        assert!(app.tabs[0].input.is_empty());
+    }
+
+    #[test]
+    fn a_sent_message_keeps_its_blank_lines_and_indent() {
+        let mut tab = Tab::new_session();
+        tab.lines = vec![ChatLine {
+            text: "one\n\n    two".to_string(),
+            tone: Tone::You,
+            item: None,
+            change: None,
+        }];
+        let rows: Vec<String> = tab
+            .wrapped_rows(40)
+            .into_iter()
+            .map(|(row, _)| row)
+            .collect();
+        let edge = " ".repeat(32);
+        assert_eq!(
+            rows,
+            [format!("{edge}one"), edge.clone(), format!("{edge}    two")]
+        );
     }
 
     #[test]
@@ -2436,21 +2578,24 @@ mod tests {
     #[test]
     fn the_card_lists_each_file_with_counts() {
         let app = session_app();
-        let s = screen(&app);
-        assert!(find(&s, "3 files changed   +58 -12").is_some());
-        let lines = &app.tabs[0].lines;
-        for file in 0..3 {
-            let line = lines
+        let rows = app.conversation_rows(80);
+        let shown = [
+            "M cli/args.rs   +3 -3",
+            "M cli/mod.rs    +2 -1",
+            "A shell/mod.rs  +3",
+        ];
+        for (file, shown) in shown.into_iter().enumerate() {
+            let (card, _) = rows
                 .iter()
-                .find(|line| line.tone == Tone::File(file))
+                .find(|(_, tone)| *tone == Tone::File(file))
                 .expect("a row per file");
             let row = app
-                .view_rows(View::Changes)
+                .view_rows(View::Diff)
                 .into_iter()
                 .find(|row| row.action == RowAction::OpenDiff(file))
-                .expect("the same file in the Changes view");
-            assert_eq!(line.text.trim(), row.text.trim());
-            assert!(find(&s, line.text.trim()).is_some(), "{}", line.text);
+                .expect("the same file in the Diff view");
+            assert_eq!(card.trim(), shown);
+            assert_eq!(row.text.trim(), shown);
         }
     }
 
@@ -2466,12 +2611,12 @@ mod tests {
         let mut app = session_app();
         app.show_file(1);
         assert!(right_is_shown(&app));
-        assert_eq!(app.view, View::Changes);
+        assert_eq!(app.view, View::Diff);
         assert_eq!(app.diff, Some(1));
         assert_eq!(app.focus, Pane::Agent);
-        let selected = app.view_sel[View::Changes as usize];
+        let selected = app.view_sel[View::Diff as usize];
         assert_eq!(
-            app.view_rows(View::Changes)[selected].action,
+            app.view_rows(View::Diff)[selected].action,
             RowAction::OpenDiff(1)
         );
 
@@ -2741,8 +2886,43 @@ mod tests {
     }
 
     #[test]
-    fn slash_changes_and_workflows_open_the_pane() {
-        for (name, view) in [("changes", View::Changes), ("workflows", View::Workflows)] {
+    fn slash_diff_opens_the_diff_view_on_the_session() {
+        let mut app = App::new(Vim, 132, 36);
+        app.scope = Scope::Tree;
+        type_text(&mut app, "/diff");
+        press(&mut app, "enter");
+        assert!(right_is_shown(&app));
+        assert_eq!(app.view, View::Diff);
+        assert_eq!(app.scope, Scope::Session);
+        let s = screen(&app);
+        assert_eq!(find(&s, " Diff "), Some((0, 100)));
+        let scopes: String = s[1].chars().skip(100).collect();
+        assert!(scopes.starts_with(" session   working tree "), "{scopes}");
+        let buf = buffer(&app);
+        assert_eq!(buf[(101, 1)].bg, theme::SEL_BG);
+        assert_eq!(buf[(111, 1)].bg, theme::TAB_BG);
+
+        let mut app = App::new(Vim, 132, 36);
+        type_text(&mut app, "/changes");
+        assert!(
+            app.slash_matches().is_empty(),
+            "changes is only a bar alias"
+        );
+    }
+
+    #[test]
+    fn the_bar_finds_the_working_tree_by_git() {
+        let mut app = App::new(Vim, 132, 36);
+        press(&mut app, "esc :");
+        type_text(&mut app, "git");
+        press(&mut app, "enter");
+        assert_eq!(app.view, View::Diff);
+        assert_eq!(app.scope, Scope::Tree);
+    }
+
+    #[test]
+    fn slash_diff_and_workflows_open_the_pane() {
+        for (name, view) in [("diff", View::Diff), ("workflows", View::Workflows)] {
             let mut app = App::new(Vim, 132, 36);
             type_text(&mut app, &format!("/{name}"));
             press(&mut app, "enter");
@@ -2760,13 +2940,13 @@ mod tests {
     }
 
     #[test]
-    fn the_bar_finds_changes_by_diff() {
+    fn the_bar_finds_the_diff_view_by_changes() {
         let mut app = App::new(Vim, 132, 36);
         press(&mut app, "esc :");
-        type_text(&mut app, "diff");
+        type_text(&mut app, "changes");
         press(&mut app, "enter");
         assert!(right_is_shown(&app));
-        assert_eq!(app.view, View::Changes);
+        assert_eq!(app.view, View::Diff);
     }
 
     #[test]
@@ -2784,10 +2964,10 @@ mod tests {
         enter_on_session(&mut app, "pack registry");
         press(&mut app, "ctrl-x ] ctrl-x o");
         assert_eq!(app.focus, Pane::Sidebar);
-        let before = app.view_sel[View::Changes as usize];
+        let before = app.view_sel[View::Diff as usize];
         press(&mut app, "ctrl-n ctrl-p");
         assert_eq!(app.tabs[0].running_sel, None);
-        assert_eq!(app.view_sel[View::Changes as usize], before);
+        assert_eq!(app.view_sel[View::Diff as usize], before);
     }
 
     #[test]
@@ -2981,7 +3161,7 @@ mod tests {
 
     #[test]
     fn rows_skip_non_selectable_and_clamp() {
-        let mut app = with_right_pane(App::new(Vim, 132, 36));
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 36)));
         press(&mut app, "esc ctrl-w h");
         assert_eq!(app.sessions_sel, session_row("cli ux redesign"));
         for text in ["flaky", "pack registry", "eval baseline"] {
@@ -2998,11 +3178,11 @@ mod tests {
         assert_eq!(app.sessions_sel, session_row("+ New session"));
 
         press(&mut app, "ctrl-w l ctrl-w l");
-        let files = app.view_sel[View::Changes as usize];
+        let files = app.view_sel[View::Diff as usize];
         press(&mut app, "j");
-        assert_eq!(app.view_sel[View::Changes as usize], files + 1);
+        assert_eq!(app.view_sel[View::Diff as usize], files + 1);
         press(&mut app, "k");
-        assert_eq!(app.view_sel[View::Changes as usize], files);
+        assert_eq!(app.view_sel[View::Diff as usize], files);
     }
 
     #[test]
@@ -3118,12 +3298,12 @@ mod tests {
         press(&mut app, "esc ctrl-w ]");
         assert!(!app.wanted().sidebar);
         let s = screen(&app);
-        assert_eq!(find(&s, "Changes"), None);
+        assert_eq!(find(&s, "Diff"), None);
         assert!(find(&s, "enter send").map(|(_, column)| column) > edge);
 
         press(&mut app, "ctrl-w ]");
         assert!(app.wanted().sidebar);
-        assert!(find(&screen(&app), "Changes").is_some());
+        assert!(find(&screen(&app), "Diff").is_some());
 
         let mut app = with_right_pane(App::new(Emacs, 132, 36));
         press(&mut app, "ctrl-x [");
@@ -3146,12 +3326,12 @@ mod tests {
         let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w ]");
         app.handle(Event::Resize(104, 30));
-        assert_eq!(find(&screen(&app), "+58"), None);
+        assert_eq!(find(&screen(&app), "+0"), None);
 
         app.handle(Event::Resize(132, 36));
         press(&mut app, "ctrl-w ]");
         app.handle(Event::Resize(104, 30));
-        assert!(find(&screen(&app), "+58").is_some());
+        assert!(find(&screen(&app), "+0").is_some());
     }
 
     #[test]
@@ -3182,73 +3362,61 @@ mod tests {
     }
 
     #[test]
-    fn view_cycles_and_opens_on_changes() {
-        let mut app = with_right_pane(App::new(Vim, 132, 36));
-        assert_eq!(app.view, View::Changes);
-        for view in [View::Workflows, View::Agents, View::Changes] {
-            press(&mut app, "esc ctrl-w }");
-            assert_eq!(app.view, view);
-        }
-        let mut app = with_right_pane(App::new(Emacs, 132, 36));
-        press(&mut app, "ctrl-x }");
-        assert_eq!(app.view, View::Workflows);
-        assert!(find(&screen(&app), "2 running").is_some());
-    }
-
-    #[test]
     fn file_opens_its_diff_and_back_returns() {
-        let mut app = with_right_pane(App::new(Vim, 132, 36));
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 36)));
         press(&mut app, "esc ctrl-w l ctrl-w l enter");
-        assert_eq!(app.diff, Some(0));
+        assert_eq!(app.diff, Some(2), "the newest file lists first");
         let s = screen(&app);
-        assert!(find(&s, "@@ -85,8 +85,4 @@").is_some());
+        assert!(find(&s, "+pub fn run() {").is_some());
         assert!(find(&s, "esc back to files").is_some());
         assert_eq!(find(&s, "next hunk"), None);
-        assert_eq!(find(&s, "3 files"), None);
+        assert_eq!(find(&s, "3 files   +"), None);
 
         press(&mut app, "esc");
         assert_eq!(app.diff, None);
-        assert!(find(&screen(&app), "3 files").is_some());
+        assert!(find(&screen(&app), "3 files   +").is_some());
 
-        let mut app = with_right_pane(App::new(Emacs, 132, 36));
+        let mut app = with_right_pane(with_sample_session(App::new(Emacs, 132, 36)));
         press(&mut app, "ctrl-x o enter");
         let s = screen(&app);
         assert!(find(&s, "ctrl-g back to files").is_some());
         assert_eq!(find(&s, "esc back"), None);
         press(&mut app, "ctrl-g");
-        assert!(find(&screen(&app), "3 files").is_some());
+        assert!(find(&screen(&app), "3 files   +").is_some());
     }
 
     #[test]
     fn changing_the_view_leaves_the_diff() {
-        let mut app = with_right_pane(App::new(Vim, 132, 36));
-        press(&mut app, "esc ctrl-w l ctrl-w l enter ctrl-w }");
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 36)));
+        press(&mut app, "esc ctrl-w l ctrl-w l enter");
+        assert_eq!(app.diff, Some(2));
+        app.set_view(View::Workflows);
         assert_eq!(app.diff, None);
         assert!(find(&screen(&app), "2 running").is_some());
     }
 
     #[test]
     fn a_tall_diff_scrolls_to_its_last_row_at_the_smallest_height() {
-        let mut app = with_right_pane(App::new(Vim, 132, 16));
-        press(&mut app, "esc ctrl-w l ctrl-w l enter");
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 16)));
+        press(&mut app, "esc ctrl-w l ctrl-w l j j enter");
         let s = screen(&app);
-        assert!(find(&s, "cli/args.rs       +42 -7").is_some());
+        assert!(find(&s, "M cli/args.rs  +3 -3").is_some());
         assert_eq!(find(&s, "esc back to files"), None);
 
-        press(&mut app, "j");
+        press(&mut app, "j j j");
         let s = screen(&app);
         assert!(find(&s, "esc back to files").is_some());
-        assert_eq!(find(&s, "cli/args.rs       +42 -7"), None);
+        assert_eq!(find(&s, "M cli/args.rs  +3 -3"), None);
 
-        press(&mut app, "j j j k");
-        assert!(find(&screen(&app), "cli/args.rs       +42 -7").is_some());
+        press(&mut app, "j j j k k k");
+        assert!(find(&screen(&app), "M cli/args.rs  +3 -3").is_some());
     }
 
     #[test]
     fn a_fresh_diff_starts_at_its_top() {
-        let mut app = with_right_pane(App::new(Vim, 132, 16));
-        press(&mut app, "esc ctrl-w l ctrl-w l enter j esc enter");
-        assert!(find(&screen(&app), "cli/args.rs       +42 -7").is_some());
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 16)));
+        press(&mut app, "esc ctrl-w l ctrl-w l j j enter j esc enter");
+        assert!(find(&screen(&app), "M cli/args.rs  +3 -3").is_some());
     }
 
     #[test]
@@ -3568,31 +3736,6 @@ mod tests {
     }
 
     #[test]
-    fn next_view_needs_a_sidebar_on_screen() {
-        let hint = "no right sidebar on screen: ] opens it";
-        for width in [104, 70] {
-            let mut app = with_right_pane(App::new(Vim, width, 30));
-            press(&mut app, "esc ctrl-w }");
-            assert_eq!(app.view, View::Changes);
-            assert_eq!(app.notice.as_deref(), Some(hint));
-        }
-
-        let mut app = with_right_pane(App::new(Vim, 132, 36));
-        press(&mut app, "esc ctrl-w l ctrl-w l enter ctrl-w ] ctrl-w }");
-        assert_eq!(app.view, View::Changes);
-        assert_eq!(app.diff, Some(0));
-        assert_eq!(app.notice.as_deref(), Some(hint));
-
-        let mut app = with_right_pane(App::new(Emacs, 70, 24));
-        press(&mut app, "ctrl-x }");
-        assert_eq!(app.view, View::Changes);
-        assert!(app
-            .notice
-            .as_deref()
-            .is_some_and(|text| text.contains("ctrl-x ]")));
-    }
-
-    #[test]
     fn the_quit_hint_fits_where_it_is_read() {
         let hint = ":q then enter to quit";
         let mut app = App::new(Vim, 132, 36);
@@ -3654,26 +3797,23 @@ mod tests {
         let sent = lines.len() - 4;
         assert_eq!(lines[sent].text, "hi");
         assert_eq!(lines[sent - 1].text, "");
-        assert_eq!(lines[sent - 2].text, "  A shell/mod.rs      +5");
+        assert_eq!(lines[sent - 2].text, "  … run   cargo check -p gents-cli");
     }
 
     #[test]
     fn only_the_back_row_of_a_diff_changes_with_the_key_set() {
-        let emacs = App::new(Emacs, 132, 36);
+        let emacs = with_sample_session(App::new(Emacs, 132, 36));
+        let vim = with_sample_session(App::new(Vim, 132, 36));
         for file in 0..3 {
             let rows = emacs.diff_rows(file);
             let (last, rest) = rows.split_last().expect("rows");
             assert_eq!(last.0, " ctrl-g back to files");
-            for ((text, tone), (raw, raw_tone)) in rest.iter().zip(diff(file)) {
-                assert_eq!(text, raw);
-                assert_eq!(tone, raw_tone);
-            }
+            let vim_rows = vim.diff_rows(file);
+            let (vim_last, vim_rest) = vim_rows.split_last().expect("rows");
+            assert_eq!(vim_last.0, " esc back to files");
+            assert_eq!(rest, vim_rest);
+            assert!(rest.len() > 3, "{rest:?}");
         }
-        let vim = App::new(Vim, 132, 36);
-        assert_eq!(
-            vim.diff_rows(0).last().expect("rows").0,
-            " esc back to files"
-        );
     }
 
     fn listed(name: &str, day: Day, state: SessionState) -> Session {
@@ -3779,6 +3919,7 @@ mod tests {
             text: text.to_string(),
             tone,
             item: Some(item.to_string()),
+            change: None,
         }
     }
 
@@ -4024,6 +4165,7 @@ mod tests {
             text: "one two three".to_string(),
             tone: Tone::Plain,
             item: None,
+            change: None,
         }];
         let rows = |tab: &Tab, width| -> Vec<String> {
             tab.wrapped_rows(width)
@@ -4365,7 +4507,7 @@ mod tests {
         assert_eq!(app.notice, None);
         assert_eq!(app.tabs[0].input.text(), "y");
 
-        let mut app = with_right_pane(App::new(Vim, 132, 36));
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 36)));
         app.view = View::Agents;
         press(&mut app, "esc ctrl-w l ctrl-w l enter");
         assert_eq!(app.notice.as_deref(), Some("not wired yet"));

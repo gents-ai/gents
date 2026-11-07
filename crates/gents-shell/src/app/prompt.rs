@@ -159,7 +159,7 @@ impl App {
             session: tab.session.clone()?,
             agent: tab.agent_id.clone(),
             item: prompt.item.clone(),
-            text: text.to_string(),
+            text: tab.input.sent(),
         })
     }
 }

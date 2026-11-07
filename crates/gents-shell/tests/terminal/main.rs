@@ -20,6 +20,11 @@ fn assert_mouse_off(e: &Exit) {
 
 fn assert_restored(e: &Exit) {
     assert_mouse_off(e);
+    assert!(
+        e.raw.contains(r"\u001b[?2004l"),
+        "bracketed paste off: {}",
+        e.raw
+    );
     assert!(!e.alternate_screen);
     assert!(e.cursor_visible);
     assert!(

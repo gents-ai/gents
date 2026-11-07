@@ -105,6 +105,7 @@ pub(crate) async fn load_background_tool_calls(
                 lifecycle_state
                 await_mode
                 started_at
+                session_id
             }}
         }}"#,
         filters.join(", ")
@@ -298,6 +299,8 @@ pub(crate) struct BackgroundToolCallRow {
     pub(crate) await_mode: Option<String>,
     #[serde(default)]
     pub(crate) started_at: Option<String>,
+    #[serde(default)]
+    pub(crate) session_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

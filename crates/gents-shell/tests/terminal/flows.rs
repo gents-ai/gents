@@ -49,6 +49,22 @@ fn clicks_reach_the_app() {
     assert_restored(&s.finish());
 }
 
+/// A real bracketed paste: one badge in the box, one message in the chat, its lines kept.
+#[test]
+fn a_bracketed_paste_is_one_message() {
+    let s = Shell::start(&[], 36, 132);
+    s.wait_for_all(&["sample data", "INPUT", "Message Engineer"]);
+    s.send("\x1b[200~first line\n\n    second line\x1b[201~");
+    s.wait_for_all(&["[Pasted text #1 +3 lines]"]);
+    s.send("\r");
+    s.wait_for_all(&["first line", "    second line"]);
+    s.wait_gone("[Pasted text #1");
+    s.send("\x1b");
+    s.wait_for_all(&["NORMAL"]);
+    s.send(":q\r");
+    assert_restored(&s.finish());
+}
+
 #[test]
 fn vim_flow() {
     let s = Shell::start(&[], 36, 132);
@@ -268,7 +284,7 @@ fn capture_screens_for_review() {
     s.send("\x1b");
     s.wait_for_all(&["NORMAL"]);
     s.send("]");
-    s.wait_for_all(&["3 files"]);
+    s.wait_for_all(&["no changes in this session"]);
     shot(&s, "15-sidebar-changes");
     s.send("\x17}");
     s.wait_for_all(&["2 running"]);

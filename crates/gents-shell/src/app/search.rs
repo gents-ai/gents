@@ -189,7 +189,7 @@ impl App {
         match (pane, panes.right) {
             (Pane::Agent, _) => Some(self.conversation_rect(panes.agent)),
             (Pane::Sessions, _) => Some(panes.sessions?.inner(Margin::new(1, 1))),
-            (Pane::Sidebar, Right::Sidebar(rect)) => Some(sidebar_rows_area(rect)),
+            (Pane::Sidebar, Right::Sidebar(rect)) => Some(sidebar_rows_area(rect, self.view)),
             (Pane::Sidebar, _) => None,
         }
     }
@@ -216,6 +216,7 @@ mod tests {
     use crate::sample::View;
     use crate::testing::{
         buffer, find, numbered, press, screen, session_row, type_text, with_right_pane,
+        with_sample_session,
     };
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::Event;
@@ -357,13 +358,13 @@ mod tests {
         press(&mut app, "esc");
         assert_eq!(app.sessions_sel, before);
 
-        let mut app = with_right_pane(App::new(Vim, 132, 36));
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 36)));
         press(&mut app, "esc ctrl-w l ctrl-w l /");
-        let before = app.view_sel[View::Changes as usize];
-        type_text(&mut app, "shell");
-        assert_ne!(app.view_sel[View::Changes as usize], before);
+        let before = app.view_sel[View::Diff as usize];
+        type_text(&mut app, "args");
+        assert_ne!(app.view_sel[View::Diff as usize], before);
         press(&mut app, "ctrl-g");
-        assert_eq!(app.view_sel[View::Changes as usize], before);
+        assert_eq!(app.view_sel[View::Diff as usize], before);
     }
 
     #[test]
@@ -417,13 +418,13 @@ mod tests {
         press(&mut app, "n");
         assert_eq!(app.sessions_sel, session_row("pack registry"));
 
-        let mut app = with_right_pane(App::new(Vim, 132, 36));
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 36)));
         press(&mut app, "esc ctrl-w l ctrl-w l /");
         type_text(&mut app, "cli/");
         assert_eq!(cell_bg(&app, "M cli/args.rs", 2), theme::MATCH);
-        assert_eq!(app.view_sel[View::Changes as usize], 2);
+        assert_eq!(app.view_sel[View::Diff as usize], 3);
         press(&mut app, "enter n");
-        assert_eq!(app.view_sel[View::Changes as usize], 3);
+        assert_eq!(app.view_sel[View::Diff as usize], 4);
     }
 
     #[test]
@@ -433,25 +434,24 @@ mod tests {
         type_text(&mut app, "yesterday");
         assert_eq!(app.sessions_sel, session_row("eval baseline"));
 
-        let mut app = with_right_pane(App::new(Vim, 132, 36));
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 36)));
         press(&mut app, "esc ctrl-w l ctrl-w l j /");
-        let before = app.view_sel[View::Changes as usize];
-        type_text(&mut app, "@@");
-        assert_eq!(cell_bg(&app, "@@ cli/args.rs:85", 0), theme::MATCH);
-        assert_eq!(app.view_sel[View::Changes as usize], before);
+        type_text(&mut app, "files");
+        assert_eq!(cell_bg(&app, "3 files", 2), theme::MATCH);
+        assert_eq!(app.view_sel[View::Diff as usize], 2);
     }
 
     #[test]
     fn a_diff_scrolls_to_its_matches() {
-        let mut app = with_right_pane(App::new(Vim, 132, 16));
-        press(&mut app, "esc ctrl-w l ctrl-w l enter /");
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 16)));
+        press(&mut app, "esc ctrl-w l ctrl-w l j j enter /");
         type_text(&mut app, "back to");
         let s = screen(&app);
         assert_eq!(find(&s, "esc back to files").map(|(row, _)| row), Some(12));
         assert_eq!(find(&s, "search: back to").map(|(row, _)| row), Some(13));
         assert_eq!(cell_bg(&app, "esc back to files", 4), theme::MATCH);
 
-        let mut app = with_right_pane(App::new(Emacs, 132, 36));
+        let mut app = with_right_pane(with_sample_session(App::new(Emacs, 132, 36)));
         press(&mut app, "ctrl-x o enter ctrl-s");
         type_text(&mut app, "ctrl-g");
         assert_eq!(cell_bg(&app, "ctrl-g back to files", 0), theme::MATCH);
@@ -500,12 +500,14 @@ mod tests {
         let mut app = with_right_pane(App::new(Emacs, 132, 36));
         app.view = View::Agents;
         app.view_sel[View::Agents as usize] = 8;
-        press(&mut app, "ctrl-x o ctrl-s ctrl-x }");
+        press(&mut app, "ctrl-x o ctrl-s");
+        app.set_view(View::Diff);
         assert_eq!(app.search, None);
-        assert_eq!(app.view, View::Changes);
+        assert_eq!(app.view, View::Diff);
 
         let mut app = with_right_pane(App::new(Emacs, 132, 36));
-        press(&mut app, "ctrl-s ctrl-x }");
+        press(&mut app, "ctrl-s");
+        app.set_view(View::Workflows);
         assert!(app.search.is_some());
     }
 
@@ -528,7 +530,7 @@ mod tests {
 
     #[test]
     fn opening_a_diff_ends_the_search() {
-        let mut app = with_right_pane(App::new(Vim, 132, 36));
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 36)));
         press(&mut app, "esc ctrl-w l /");
         type_text(&mut app, "args");
         press(&mut app, "enter enter");
@@ -573,6 +575,7 @@ mod tests {
             text: "日本語 sign".to_string(),
             tone: Tone::Plain,
             item: None,
+            change: None,
         }];
         press(&mut app, "esc /");
         type_text(&mut app, "本");
@@ -658,6 +661,7 @@ mod tests {
             text: "日本語 test".to_string(),
             tone: Tone::Plain,
             item: None,
+            change: None,
         }];
         press(&mut app, "esc /");
         type_text(&mut app, "TEST");

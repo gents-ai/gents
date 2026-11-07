@@ -1,6 +1,8 @@
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
-use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::Terminal;
 
 use crate::app::layers::LayerKind;
@@ -101,12 +103,23 @@ pub fn find(screen: &[String], text: &str) -> Option<(u16, u16)> {
     })
 }
 
+pub fn click_text(app: &mut App, text: &str) {
+    let (row, column) = find(&screen(app), text).expect(text);
+    app.handle(Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }));
+}
+
 pub fn numbered(count: usize) -> Vec<ChatLine> {
     (0..count)
         .map(|n| ChatLine {
             text: format!("message {n}"),
             tone: Tone::Plain,
             item: None,
+            change: None,
         })
         .collect()
 }
@@ -121,6 +134,12 @@ pub fn session_row(text: &str) -> usize {
 /// The right pane starts closed. This opens it for tests about what it shows and where it sits.
 pub fn with_right_pane(mut app: App) -> App {
     app.tabs[app.active].sidebar = true;
+    app
+}
+
+/// Opens the sample's first session, whose turn changed three files.
+pub fn with_sample_session(mut app: App) -> App {
+    app.open_session(sample::START_SESSION);
     app
 }
 

@@ -59,7 +59,6 @@ pub enum Action {
     ClosePane,
     ToggleSessions,
     ToggleSidebar,
-    NextView,
     OpenBar,
     /// `ctrl-p` in vim outside lists: the jump bar, or up while the slash list is open.
     Palette,
@@ -169,7 +168,6 @@ impl Keymap {
                 'q' => Action::ClosePane,
                 '[' => Action::ToggleSessions,
                 ']' => Action::ToggleSidebar,
-                '}' => Action::NextView,
                 _ => Action::None,
             },
             Prefix::CtrlX => match c {
@@ -180,7 +178,6 @@ impl Keymap {
                 '0' => Action::ClosePane,
                 '[' => Action::ToggleSessions,
                 ']' => Action::ToggleSidebar,
-                '}' => Action::NextView,
                 'x' => Action::OpenBar,
                 '?' => Action::OpenKeys,
                 _ => Action::None,
@@ -279,7 +276,7 @@ mod tests {
     const VIM: &[(KeyCtx, &str, Action)] = &[
         (Normal, "i", A::EnterInput), (Normal, "ctrl-w h", A::MoveFocus(Dir::Left)), (Normal, "ctrl-w j", A::MoveFocus(Dir::Down)),
         (Normal, "ctrl-w k", A::MoveFocus(Dir::Up)), (Normal, "ctrl-w l", A::MoveFocus(Dir::Right)), (Normal, "g t", A::NextTab), (Normal, "g T", A::PrevTab),
-        (Normal, "ctrl-w q", A::ClosePane), (Normal, "ctrl-w [", A::ToggleSessions), (Normal, "ctrl-w ]", A::ToggleSidebar), (Normal, "ctrl-w }", A::NextView),
+        (Normal, "ctrl-w q", A::ClosePane), (Normal, "ctrl-w [", A::ToggleSessions), (Normal, "ctrl-w ]", A::ToggleSidebar),
         (Normal, ":", A::OpenBar), (Normal, "/", A::OpenSearch), (Normal, "?", A::OpenKeys),
         (Normal, "j", A::Next), (Normal, "k", A::Prev), (Normal, "ctrl-n", A::Next), (Normal, "ctrl-p", A::Palette), (Normal, "down", A::Next), (Normal, "up", A::Prev),
         (Normal, "h", A::MoveFocus(Dir::Left)), (Normal, "l", A::MoveFocus(Dir::Right)),
@@ -305,7 +302,7 @@ mod tests {
     #[rustfmt::skip]
     const EMACS: &[(KeyCtx, &str, Action)] = &[
         (Input, "x", A::Insert('x')), (Input, "y", A::Insert('y')), (Input, "/", A::Insert('/')), (Input, "ctrl-x o", A::NextPane), (Input, "ctrl-x n", A::NextTab), (Input, "ctrl-x p", A::PrevTab),
-        (Input, "ctrl-x t", A::NewTab), (Input, "ctrl-x 0", A::ClosePane), (Input, "ctrl-x [", A::ToggleSessions), (Input, "ctrl-x ]", A::ToggleSidebar), (Input, "ctrl-x }", A::NextView),
+        (Input, "ctrl-x t", A::NewTab), (Input, "ctrl-x 0", A::ClosePane), (Input, "ctrl-x [", A::ToggleSessions), (Input, "ctrl-x ]", A::ToggleSidebar),
         (Input, "alt-x", A::OpenBar), (Input, "ctrl-x x", A::OpenBar), (Input, "ctrl-s", A::OpenSearch), (Input, "ctrl-x ?", A::OpenKeys), (Input, "ctrl-g", A::Back), (Input, "esc", A::Back),
         (Input, "ctrl-n", A::Next), (Input, "ctrl-p", A::Prev), (Input, "enter", A::Submit), (Input, "ctrl-x ctrl-c", A::Quit), (Input, "ctrl-c", A::Interrupt), (Input, "tab", A::Complete),
         (Menu, "ctrl-n", A::Next), (Menu, "alt-x", A::OpenBar), (Menu, "ctrl-x x", A::OpenBar), (Menu, "ctrl-x o", A::NextPane), (Menu, "d", A::NotWired), (Menu, "ctrl-g", A::Back),

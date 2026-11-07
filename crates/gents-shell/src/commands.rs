@@ -1,4 +1,4 @@
-use crate::sample::View;
+use crate::sample::{Scope, View};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Effect {
@@ -7,6 +7,7 @@ pub enum Effect {
     ClearTab,
     CloseTab,
     ShowSidebar(View),
+    ShowDiff(Scope),
     NotWired,
     SwitchKeys,
     DismissPrompt,
@@ -54,7 +55,8 @@ pub const COMMANDS: &[Command] = &[
     command(Some("quit"), "Quit", &["q", "q!", "qa", "wq"], "quit", Effect::Quit),
     command(Some("dismiss"), "/dismiss", &[], "dismiss the prompt above", Effect::DismissPrompt),
     command(None, "Switch key set", &["vim", "emacs", "keys"], "vim to emacs or back", Effect::SwitchKeys),
-    command(Some("changes"), "Sidebar: Changes", &["changes", "diff"], SIDEBAR_VIEW, Effect::ShowSidebar(View::Changes)),
-    command(Some("workflows"), "Sidebar: Workflows", &["workflows"], SIDEBAR_VIEW, Effect::ShowSidebar(View::Workflows)),
+    command(Some("diff"), "Sidebar: Diff", &["diff", "changes"], SIDEBAR_VIEW, Effect::ShowDiff(Scope::Session)),
+    command(Some("workflows"), "Sidebar: This session's workflows", &["workflows"], SIDEBAR_VIEW, Effect::ShowSidebar(View::Workflows)),
+    command(None, "Sidebar: Diff, working tree", &["tree", "worktree", "git"], SIDEBAR_VIEW, Effect::ShowDiff(Scope::Tree)),
     command(None, "Sidebar: Background agents", &["background"], SIDEBAR_VIEW, Effect::ShowSidebar(View::Agents)),
 ];

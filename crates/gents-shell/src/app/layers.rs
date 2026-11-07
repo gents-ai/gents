@@ -103,10 +103,7 @@ impl App {
             Action::ToggleSessions if !sessions_can_dock(width) => {
                 self.toggle_layer(LayerKind::Sessions);
             }
-            Action::ToggleSidebar if !sidebar_can_dock(width) => {
-                self.toggle_layer(LayerKind::Sidebar);
-            }
-            Action::NextView if top.kind == LayerKind::Sidebar => self.next_view(),
+            Action::ToggleSidebar if !sidebar_can_dock(width) => self.toggle_sidebar(),
             Action::OpenBar if self.ctx() == KeyCtx::Menu => self.push_layer(LayerKind::Jump),
             Action::NewTab => self.push_layer(LayerKind::Picker),
             Action::OpenKeys => self.push_layer(LayerKind::Keys),
@@ -200,8 +197,10 @@ mod tests {
     use crate::app::{Mode, Pane};
     use crate::draw::theme;
     use crate::keys::KeySet::{Emacs, Vim};
-    use crate::sample::{MenuId, View};
-    use crate::testing::{buffer, find, kinds, press, screen, type_text, with_right_pane};
+    use crate::sample::MenuId;
+    use crate::testing::{
+        buffer, find, kinds, press, screen, type_text, with_right_pane, with_sample_session,
+    };
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::Event;
     use ratatui::Terminal;
@@ -829,7 +828,7 @@ mod tests {
             }
             assert!(find(&s, "Sample bindings to react to. Switch sets").is_some());
             assert_eq!(find(&s, "HELP"), Some((35, 1)));
-            assert_eq!(find(&s, "clears, or says how to quit"), Some((25, 61)));
+            assert_eq!(find(&s, "clears, or says how to quit"), Some((24, 61)));
         }
 
         let mut app = App::new(Vim, 60, 16);
@@ -859,7 +858,7 @@ mod tests {
     #[test]
     fn the_keys_hint_says_the_hidden_row_is_a_scroll_away() {
         for (set, open, down) in [(Vim, "esc ?", "j"), (Emacs, "ctrl-x ?", "ctrl-n")] {
-            let mut app = App::new(set, 80, 24);
+            let mut app = App::new(set, 80, 23);
             press(&mut app, open);
             let last = "clears, or says how to quit";
             assert_eq!(find(&screen(&app), last), None);
@@ -1005,53 +1004,37 @@ mod tests {
 
     #[test]
     fn sidebar_layer_opens_a_diff_and_back_closes_the_diff_first() {
-        let mut app = App::new(Vim, 104, 30);
+        let mut app = with_sample_session(App::new(Vim, 104, 30));
         press(&mut app, "esc ctrl-w ]");
-        assert!(find(&screen(&app), "3 files").is_some());
+        assert!(find(&screen(&app), "3 files   +").is_some());
         press(&mut app, "enter");
-        assert!(find(&screen(&app), "@@ -85,8 +85,4 @@").is_some());
+        assert!(find(&screen(&app), "+pub fn run() {").is_some());
         press(&mut app, "esc");
         assert_eq!(app.diff, None);
         assert_eq!(kinds(&app), [LayerKind::Sidebar]);
-        assert!(find(&screen(&app), "3 files").is_some());
+        assert!(find(&screen(&app), "3 files   +").is_some());
         press(&mut app, "esc");
         assert!(app.layers.is_empty());
     }
 
     #[test]
-    fn sidebar_layer_changes_view_and_reaches_a_tall_diffs_last_row() {
-        let mut app = App::new(Vim, 60, 16);
+    fn sidebar_layer_reaches_a_tall_diffs_last_row() {
+        let mut app = with_sample_session(App::new(Vim, 60, 16));
         press(&mut app, "esc ctrl-w ]");
-        press(&mut app, "enter");
+        press(&mut app, "j j enter");
         assert_eq!(find(&screen(&app), "esc back to files"), None);
-        press(&mut app, "j");
+        press(&mut app, "j j j");
         assert!(find(&screen(&app), "esc back to files").is_some());
-        press(&mut app, "esc ctrl-w }");
-        assert_eq!(app.view, View::Workflows);
-        assert!(find(&screen(&app), "2 running").is_some());
-        press(&mut app, "ctrl-w }");
-        assert_eq!(app.view, View::Agents);
-        press(&mut app, "esc ctrl-w }");
-        assert_eq!(app.view, View::Agents);
-        assert!(app.notice.is_some());
-    }
-
-    #[test]
-    fn next_view_is_left_to_the_sidebar_layer() {
-        let mut app = App::new(Vim, 132, 36);
-        app.push_layer(ACCOUNTS);
-        press(&mut app, "ctrl-w }");
-        assert_eq!(app.view, View::Changes);
     }
 
     #[test]
     fn back_order_with_nothing_above_a_docked_diff() {
-        let mut app = with_right_pane(App::new(Vim, 132, 36));
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 36)));
         press(&mut app, "esc ctrl-w l ctrl-w l enter");
         app.push_layer(ACCOUNTS);
         press(&mut app, "esc");
         assert!(app.layers.is_empty());
-        assert_eq!(app.diff, Some(0));
+        assert_eq!(app.diff, Some(2));
         press(&mut app, "esc");
         assert_eq!(app.diff, None);
     }

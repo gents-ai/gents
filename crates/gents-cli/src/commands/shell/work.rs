@@ -4,9 +4,11 @@ use chrono::{DateTime, Local};
 use gents::session::mailbox::{MailboxAction, MailboxItem, MailboxKind};
 use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents::tools::background::job::view::{list_jobs, JobFilter, StateFilter};
-use gents_protocol::job::{JobPauseReason, JobPhaseState, JobReadError, JobState, JobView};
+use gents_protocol::job::{
+    JobChildState, JobPauseReason, JobPhaseState, JobReadError, JobState, JobView,
+};
 use gents_protocol::mailbox_question::{MailboxQuestion, MailboxQuestionAnswer};
-use gents_shell::source::{Answer, BackgroundCall, Job, Prompt, PromptKind};
+use gents_shell::source::{Answer, BackgroundCall, Job, JobEnd, Prompt, PromptKind};
 
 use crate::commands::background::{load_background_tool_calls, BackgroundToolCallRow};
 use crate::commands::mailbox::{needs_answer, Reply};
@@ -40,19 +42,31 @@ pub(super) fn work_for(home: &Path) -> Result<Work, String> {
     })
 }
 
-/// The jobs that have not ended, across this node.
-pub(super) async fn jobs(access: &ConfigAccess) -> Result<Vec<JobView>, JobReadError> {
-    let filter = JobFilter {
-        session_id: None,
-        requester: None,
-        state: StateFilter::States(vec![
-            JobState::Running,
-            JobState::Paused,
-            JobState::AwaitingUser,
-        ]),
-        plugin: None,
-    };
-    list_jobs(access, &filter).await
+/// Every job of each of `sessions`, ended ones too, a session's in the order the node lists them.
+pub(super) async fn jobs(
+    access: &ConfigAccess,
+    sessions: &[String],
+) -> Result<Vec<JobView>, JobReadError> {
+    let mut jobs = Vec::new();
+    for session in sessions {
+        // ponytail: every finished run of each open session; add a limit if sessions keep hundreds
+        let filter = JobFilter {
+            session_id: Some(session.clone()),
+            requester: None,
+            state: StateFilter::States(vec![
+                JobState::Running,
+                JobState::Paused,
+                JobState::AwaitingUser,
+                JobState::Completed,
+                JobState::Failed,
+                JobState::Cancelled,
+                JobState::TimedOut,
+            ]),
+            plugin: None,
+        };
+        jobs.extend(list_jobs(access, &filter).await?);
+    }
+    Ok(jobs)
 }
 
 /// The pending and running background calls, as the desktop's Background view lists them.
@@ -68,19 +82,38 @@ pub(super) fn job(view: &JobView) -> Job {
         None => &view.pin.script_id,
     };
     let progress = view.progress.as_ref();
+    // A dynamic run's progress title is its script id; its handle reads better.
     let title = progress
         .map(|progress| progress.title.as_str())
-        .filter(|title| !title.is_empty())
+        .filter(|title| !title.is_empty() && *title != view.pin.script_id)
         .unwrap_or(&view.handle);
-    let waiting = view.state == JobState::AwaitingUser
-        || progress.is_some_and(|progress| progress.pause_reason == Some(JobPauseReason::User));
+    let ended = match view.state {
+        JobState::Completed => Some(("finished", JobEnd::Done)),
+        JobState::Failed => Some(("failed", JobEnd::Failed)),
+        JobState::Cancelled => Some(("cancelled", JobEnd::Failed)),
+        JobState::TimedOut => Some(("timed out", JobEnd::Failed)),
+        JobState::Running | JobState::Paused | JobState::AwaitingUser => None,
+    };
+    let waiting = ended.is_none()
+        && (view.state == JobState::AwaitingUser
+            || progress
+                .is_some_and(|progress| progress.pause_reason == Some(JobPauseReason::User)));
     let phases = progress.map_or(&[][..], |progress| &progress.phases);
-    let status = if waiting {
+    let status = if let Some((status, _)) = ended {
+        status.to_string()
+    } else if waiting {
         "waiting on you".to_string()
     } else if view.state == JobState::Paused {
         "paused".to_string()
-    } else if phases.is_empty() {
+    } else if phases.is_empty() && view.children.is_empty() {
         "running".to_string()
+    } else if phases.is_empty() {
+        let done = view
+            .children
+            .iter()
+            .filter(|child| child.state == JobChildState::Completed)
+            .count();
+        format!("{done} of {} agents done", view.children.len())
     } else {
         let done = phases
             .iter()
@@ -111,6 +144,20 @@ pub(super) fn job(view: &JobView) -> Job {
         .into_iter()
         .flat_map(|progress| &progress.active)
         .map(|child| format!("◆ {}", child.title));
+    // A run that declares no phases has its agents as its steps, in slot order.
+    let agents = view
+        .children
+        .iter()
+        .filter(|_| phases.is_empty())
+        .map(|child| {
+            let mark = match child.state {
+                JobChildState::Completed => '✓',
+                JobChildState::Failed | JobChildState::Interrupted => '✗',
+                JobChildState::Live => '●',
+                JobChildState::Other => '○',
+            };
+            format!("{mark} {}", child.title)
+        });
     Job {
         address: view.address.clone(),
         session: view.session_id.clone(),
@@ -118,7 +165,8 @@ pub(super) fn job(view: &JobView) -> Job {
         title: title.to_string(),
         status,
         waiting,
-        detail: marks.chain(children).collect(),
+        ended: ended.map(|(_, end)| end),
+        detail: marks.chain(children).chain(agents).collect(),
     }
 }
 
@@ -134,6 +182,7 @@ pub(super) fn background_call(row: &BackgroundToolCallRow) -> BackgroundCall {
         None => "pending".to_string(),
     };
     BackgroundCall {
+        session: row.session_id.clone().unwrap_or_default(),
         name: row.tool_name.clone().unwrap_or_default(),
         status,
         done: false,
@@ -433,6 +482,7 @@ mod tests {
             lifecycle_state: Some("running".to_string()),
             await_mode: Some("background".to_string()),
             started_at,
+            session_id: None,
         };
         let started = Local.with_ymd_and_hms(2026, 11, 5, 9, 7, 30).unwrap();
 
@@ -446,6 +496,104 @@ mod tests {
         );
         assert!(!running.done && !pending.done);
         assert_eq!(clock(started), "09:07");
+    }
+
+    /// A stale pause for the user leaves an ended run ended, and its steps stay listed.
+    #[test]
+    fn a_run_without_phases_lists_its_agents_as_steps() {
+        let child = |slot: &str, title: &str, state: &str| {
+            serde_json::from_value(json!({
+                "slot": slot, "attempt": 0, "session_id": "c", "request_id": "r",
+                "state": state, "title": title,
+                "usage": { "input": 0, "output": 0, "total": 0 },
+                "duration_ms": 0, "target": "wf-read-only",
+            }))
+            .expect("a child row")
+        };
+        let mut progress = progress("running", Value::Null, &[], &[]);
+        progress["title"] = json!("change_unit");
+        let mut run = view("running", progress);
+        run.children = vec![
+            child("econ", "Zcash: economic lens", "completed"),
+            child("social", "Zcash: social lens", "live"),
+            child("crypto", "Zcash: cryptographic lens", "failed"),
+        ];
+
+        let shown = job(&run);
+
+        assert_eq!(
+            shown.title, "change-unit-7",
+            "the handle, not the script id"
+        );
+        assert_eq!(shown.status, "1 of 3 agents done");
+        let steps = [
+            "✓ Zcash: economic lens",
+            "● Zcash: social lens",
+            "✗ Zcash: cryptographic lens",
+        ];
+        assert_eq!(shown.detail, steps);
+
+        run.children.clear();
+        assert_eq!(job(&run).status, "running");
+        assert!(job(&run).detail.is_empty());
+    }
+
+    #[test]
+    fn an_ended_job_says_how_it_ended() {
+        let ends = [
+            ("completed", "finished", JobEnd::Done),
+            ("failed", "failed", JobEnd::Failed),
+            ("cancelled", "cancelled", JobEnd::Failed),
+            ("timed_out", "timed out", JobEnd::Failed),
+        ];
+        for (state, status, end) in ends {
+            let shown = job(&view(
+                state,
+                progress(state, json!("user"), PHASES, &["scout"]),
+            ));
+
+            assert_eq!(shown.status, status, "{state}");
+            assert_eq!(shown.ended, Some(end), "{state}");
+            assert!(!shown.waiting, "{state}");
+            let steps = [
+                "✓ plan",
+                "✓ edit",
+                "● build",
+                "○ test",
+                "○ review",
+                "◆ scout",
+            ];
+            assert_eq!(shown.detail, steps, "{state}");
+        }
+        let running = job(&view(
+            "running",
+            progress("running", Value::Null, PHASES, &[]),
+        ));
+        assert_eq!(running.ended, None);
+    }
+
+    #[test]
+    fn a_background_call_keeps_its_session() {
+        let row = |session: Value| -> BackgroundToolCallRow {
+            let mut row = json!({
+                "request_id": "r1",
+                "tool_call_id": "call-1",
+                "tool_name": "bash",
+                "lifecycle_state": "running",
+                "await_mode": "background",
+            });
+            if !session.is_null() {
+                row["session_id"] = session;
+            }
+            serde_json::from_value(row).expect("a background row")
+        };
+
+        assert_eq!(background_call(&row(json!("s1"))).session, "s1");
+        assert_eq!(
+            background_call(&row(Value::Null)).session,
+            "",
+            "a row from before the field"
+        );
     }
 
     /// An open item of `kind` and `action` on session `s1`, asked of this node.

@@ -2,8 +2,8 @@ use std::borrow::Cow;
 
 use crate::app::{sample_chat, ChatLine};
 use crate::source::{
-    Agent, Answer, BackgroundCall, Day, Intent, Job, Prompt, PromptKind, Session, SessionState,
-    Update,
+    Agent, Answer, BackgroundCall, Change, ChangeKind, Day, Intent, Job, Prompt, PromptKind,
+    Session, SessionState, Update,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,9 +53,16 @@ impl SidebarRow {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
-    Changes,
+    Diff,
     Workflows,
     Agents,
+}
+
+/// What the Diff view lists: this tab's session, or the folder its tools work in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    Session,
+    Tree,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,39 +140,20 @@ pub fn sessions() -> Vec<Session> {
 
 pub const START_SESSION: usize = 3;
 
-pub const CHANGES: &[SidebarRow] = &[
-    note(" 3 files   +58  -12", Tone::Label),
-    BLANK,
-    row(
-        " M cli/args.rs      +42 -7",
-        Tone::Plain,
-        RowAction::OpenDiff(0),
-    ),
-    row(
-        " M cli/mod.rs       +11 -5",
-        Tone::Plain,
-        RowAction::OpenDiff(1),
-    ),
-    row(
-        " A shell/mod.rs      +5",
-        Tone::Plain,
-        RowAction::OpenDiff(2),
-    ),
-    BLANK,
-    note(" @@ cli/args.rs:85 @@", Tone::Label),
-    note(" - GrokLogin(GrokLoginArgs),", Tone::Del),
-    note(" + Auth {", Tone::Add),
-];
+/// The session whose row is `START_SESSION`. Each work view lists only the shown session's work,
+/// so all of the sample's is here.
+const SAMPLE_SESSION: &str = "cli ux redesign";
 
 /// Today's Workflows view: the sample's running row opens the first.
 pub fn jobs() -> Vec<Job> {
-    let job = |address: &str, session: &str, name: &str, title: &str, status: &str| Job {
+    let job = |address: &str, name: &str, title: &str, status: &str| Job {
         address: address.to_string(),
-        session: session.to_string(),
+        session: SAMPLE_SESSION.to_string(),
         name: name.to_string(),
         title: title.to_string(),
         status: status.to_string(),
         waiting: false,
+        ended: None,
         detail: Vec::new(),
     };
     let phases = ["✓ plan", "✓ edit", "● build", "○ test", "○ review"];
@@ -174,24 +162,16 @@ pub fn jobs() -> Vec<Job> {
             detail: phases.map(str::to_string).into(),
             ..job(
                 "sample:change-unit",
-                "cli ux redesign",
                 "change unit",
                 "cli ux",
                 "build · step 3 of 5",
             )
         },
-        job(
-            "sample:nightly-eval",
-            "eval baseline",
-            "nightly eval",
-            "",
-            "trial 12 of 40",
-        ),
+        job("sample:nightly-eval", "nightly eval", "", "trial 12 of 40"),
         Job {
             waiting: true,
             ..job(
                 "sample:pack-release",
-                "pack registry login",
                 "pack release",
                 "",
                 "waiting on your approval",
@@ -202,6 +182,7 @@ pub fn jobs() -> Vec<Job> {
 
 pub fn background() -> Vec<BackgroundCall> {
     let call = |name: &str, status: &str, done| BackgroundCall {
+        session: SAMPLE_SESSION.to_string(),
         name: name.to_string(),
         status: status.to_string(),
         done,
@@ -214,13 +195,6 @@ pub fn background() -> Vec<BackgroundCall> {
     ]
 }
 
-pub const RAIL: &[SidebarRow] = &[
-    note(" 3  ", Tone::Label),
-    BLANK,
-    note(" +58", Tone::Add),
-    note(" -12", Tone::Del),
-];
-
 pub const CHAT: &[(&str, Tone)] = &[
     ("Group the sign-in commands under one parent.", Tone::You),
     ("", Tone::Plain),
@@ -231,18 +205,44 @@ pub const CHAT: &[(&str, Tone)] = &[
     (" and folding the probes in beside them.", Tone::Reply),
     ("", Tone::Plain),
     ("  ✓ read  crates/gents-cli/src/cli/args.rs", Tone::Label),
-    (
-        "  ✓ edit  crates/gents-cli/src/cli/args.rs  +42 -7",
-        Tone::Label,
-    ),
     ("  … run   cargo check -p gents-cli", Tone::Warn),
     ("", Tone::Plain),
-    ("  3 files changed   +58 -12", Tone::Label),
-    ("  M cli/args.rs      +42 -7", Tone::File(0)),
-    ("  M cli/mod.rs       +11 -5", Tone::File(1)),
-    ("  A shell/mod.rs      +5", Tone::File(2)),
-    ("", Tone::Plain),
 ];
+
+/// The sample turn's edits, as a source shows them.
+pub fn changes() -> Vec<ChatLine> {
+    let edit = |n: usize, path: &str, kind, diff: &str| ChatLine {
+        text: format!("  ✓ edit  {path}"),
+        tone: Tone::Label,
+        item: Some(format!("sample:edit/{n}")),
+        change: Some(Change::new(
+            "sample:turn".to_string(),
+            path.to_string(),
+            kind,
+            diff.to_string(),
+        )),
+    };
+    vec![
+        edit(
+            0,
+            "cli/args.rs",
+            ChangeKind::Update,
+            "@@ -85,8 +85,4 @@\n #[derive(Subcommand)]\n-CodexLogin(CodexLoginArgs),\n-GrokLogin(GrokLoginArgs),\n-ClaudeLogin(ClaudeLoginArgs),\n+Auth {\n+    command: AuthCommand,\n+},\n",
+        ),
+        edit(
+            1,
+            "cli/mod.rs",
+            ChangeKind::Update,
+            "@@ -12,7 +12,13 @@\n mod args;\n-mod login;\n+mod auth;\n+mod shell;\n",
+        ),
+        edit(
+            2,
+            "shell/mod.rs",
+            ChangeKind::Add,
+            "pub fn run() {\n    start();\n}\n",
+        ),
+    ]
+}
 
 /// Marks a subagent's reply. Its row in the running list uses the same glyph.
 pub const SUBAGENT_MARK: &str = " ◆";
@@ -417,6 +417,7 @@ fn chat_lines(chat: Chat) -> Vec<ChatLine> {
             text: text.to_string(),
             tone,
             item: None,
+            change: None,
         })
         .collect()
 }
@@ -467,6 +468,7 @@ pub fn answer(intent: &Intent) -> Vec<Update> {
                     text: text.to_string(),
                     tone,
                     item: None,
+                    change: None,
                 };
                 updates.push(Update::Item {
                     session: session.clone(),
@@ -490,9 +492,11 @@ pub fn answer(intent: &Intent) -> Vec<Update> {
                     text: text.clone(),
                     tone: Tone::You,
                     item: None,
+                    change: None,
                 },
             },
         ],
+        Intent::WorkingTree { .. } => vec![Update::WorkingTree(Ok(Vec::new()))],
         Intent::Interrupt { .. } | Intent::Refresh => Vec::new(),
     }
 }
@@ -605,7 +609,6 @@ pub const KEY_ROWS: &[(&str, &str, &str)] = &[
     ("Close the pane or tab", "ctrl-w q · :close", "ctrl-x 0"),
     ("Toggle the sessions sidebar", "[ or ctrl-w [", "ctrl-x ["),
     ("Toggle the right sidebar", "] or ctrl-w ]", "ctrl-x ]"),
-    ("Next sidebar view", "ctrl-w }", "ctrl-x }"),
     ("Quick-jump bar", ": / ctrl-p", "alt-x / ctrl-x x"),
     ("Slash commands", "/ while writing", "/"),
     ("Search the focused pane", "/ in normal mode", "ctrl-s"),
@@ -622,45 +625,3 @@ pub const KEY_ROWS: &[(&str, &str, &str)] = &[
 ];
 
 pub const DIFF_BACK_ROW: &str = " esc back to files";
-
-const DIFFS: [&[(&str, Tone)]; 3] = [
-    &[
-        (" cli/args.rs       +42 -7", Tone::Label),
-        ("", Tone::Plain),
-        (" @@ -85,8 +85,4 @@", Tone::Label),
-        ("   #[derive(Subcommand)]", Tone::Plain),
-        (" - CodexLogin(CodexLoginArgs),", Tone::Del),
-        (" - GrokLogin(GrokLoginArgs),", Tone::Del),
-        (" - ClaudeLogin(ClaudeLoginArgs),", Tone::Del),
-        (" + Auth {", Tone::Add),
-        (" +     command: AuthCommand,", Tone::Add),
-        (" + },", Tone::Add),
-        ("", Tone::Plain),
-        (DIFF_BACK_ROW, Tone::Label),
-    ],
-    &[
-        (" cli/mod.rs        +11 -5", Tone::Label),
-        ("", Tone::Plain),
-        (" @@ -12,7 +12,13 @@", Tone::Label),
-        ("   mod args;", Tone::Plain),
-        (" - mod login;", Tone::Del),
-        (" + mod auth;", Tone::Add),
-        (" + mod shell;", Tone::Add),
-        ("", Tone::Plain),
-        (DIFF_BACK_ROW, Tone::Label),
-    ],
-    &[
-        (" shell/mod.rs       +5", Tone::Label),
-        ("", Tone::Plain),
-        (" @@ -0,0 +1,5 @@", Tone::Label),
-        (" + pub fn run() {", Tone::Add),
-        (" +     start();", Tone::Add),
-        (" + }", Tone::Add),
-        ("", Tone::Plain),
-        (DIFF_BACK_ROW, Tone::Label),
-    ],
-];
-
-pub fn diff(file: usize) -> &'static [(&'static str, Tone)] {
-    DIFFS[file]
-}

@@ -10,7 +10,13 @@ use crate::keys::Action;
 pub struct LineInput {
     text: String,
     cursor: usize,
+    /// Each long paste's badge, as `text` shows it, and the text it stands for.
+    pastes: Vec<(String, String)>,
 }
+
+/// A paste of one line up to this many characters is typed in; a longer one, or one of more
+/// lines, shows as a badge, because the box is one row.
+const INLINE_PASTE_CHARS: usize = 400;
 
 impl LineInput {
     pub fn text(&self) -> &str {
@@ -28,7 +34,60 @@ impl LineInput {
         }
     }
 
+    /// A terminal's bracketed paste: typed in when it is short and one line, else a badge.
+    pub fn paste(&mut self, text: &str) {
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        let text = text.trim_end_matches('\n');
+        let lines = text.lines().count();
+        let chars = text.chars().count();
+        if lines <= 1 && chars <= INLINE_PASTE_CHARS {
+            return self.paste_inline(text);
+        }
+        let n = self.pastes.len() + 1;
+        let badge = match lines {
+            1 => format!("[Pasted text #{n} {chars} chars]"),
+            _ => format!("[Pasted text #{n} +{lines} lines]"),
+        };
+        self.text.insert_str(self.cursor, &badge);
+        self.cursor += badge.len();
+        self.pastes.push((badge, text.to_string()));
+    }
+
+    /// A paste into a box that holds one line: line breaks and tabs become spaces.
+    pub fn paste_inline(&mut self, text: &str) {
+        let text = text.replace("\r\n", "\n");
+        for c in text.trim_end_matches(['\n', '\r']).chars() {
+            match c {
+                '\n' | '\r' | '\t' => self.insert(' '),
+                c => self.insert(c),
+            }
+        }
+    }
+
+    /// What sending the box sends: each badge replaced by the text it stands for.
+    pub fn sent(&self) -> String {
+        self.pastes
+            .iter()
+            .fold(self.text.clone(), |text, (badge, pasted)| {
+                text.replacen(badge.as_str(), pasted, 1)
+            })
+    }
+
+    /// The badges the box shows, to draw them as badges.
+    pub fn badges(&self) -> impl Iterator<Item = &str> {
+        self.pastes.iter().map(|(badge, _)| badge.as_str())
+    }
+
+    /// Removes the cluster before the cursor, or the whole badge that ends there.
     pub fn backspace(&mut self) {
+        let before = &self.text[..self.cursor];
+        let badge = self.badges().find(|badge| before.ends_with(badge));
+        if let Some(len) = badge.map(str::len) {
+            let start = self.cursor - len;
+            self.text.drain(start..self.cursor);
+            self.cursor = start;
+            return;
+        }
         let end = self.cursor;
         self.left();
         self.text.drain(self.cursor..end);
@@ -111,6 +170,7 @@ impl LineInput {
     pub fn clear(&mut self) {
         self.text.clear();
         self.cursor = 0;
+        self.pastes.clear();
     }
 
     pub fn set(&mut self, text: &str) {
@@ -174,6 +234,57 @@ fn clusters(text: &str) -> Vec<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_paste_of_many_lines_is_one_badge_that_sends_its_text() {
+        let mut i = LineInput::default();
+        i.insert('s');
+        i.insert(' ');
+        i.paste("one\r\n\n  two\n");
+        i.insert(' ');
+        i.insert('!');
+        assert_eq!(i.text(), "s [Pasted text #1 +3 lines] !");
+        assert_eq!(i.sent(), "s one\n\n  two !");
+    }
+
+    #[test]
+    fn backspace_removes_a_whole_badge() {
+        let mut i = LineInput::default();
+        i.paste("a\nb");
+        i.backspace();
+        assert!(i.is_empty());
+        assert_eq!(i.sent(), "");
+    }
+
+    #[test]
+    fn a_short_paste_is_typed_where_the_cursor_is() {
+        let mut i = LineInput::default();
+        i.paste("hello\tworld\n");
+        assert_eq!(i.text(), "hello world");
+        assert_eq!(i.sent(), "hello world");
+    }
+
+    #[test]
+    fn a_long_line_is_a_badge_and_each_paste_has_its_number() {
+        let mut i = LineInput::default();
+        i.paste(&"x".repeat(401));
+        i.paste("a\nb");
+        assert_eq!(
+            i.text(),
+            "[Pasted text #1 401 chars][Pasted text #2 +2 lines]"
+        );
+        assert_eq!(i.sent(), format!("{}a\nb", "x".repeat(401)));
+        i.clear();
+        i.paste("c\nd");
+        assert_eq!(i.text(), "[Pasted text #1 +2 lines]");
+    }
+
+    #[test]
+    fn an_inline_paste_turns_line_breaks_into_spaces() {
+        let mut i = LineInput::default();
+        i.paste_inline("a\r\nb\tc\n");
+        assert_eq!(i.text(), "a b c");
+    }
 
     #[test]
     fn line_input_counts_characters_and_display_columns() {

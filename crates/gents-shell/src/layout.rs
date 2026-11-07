@@ -1,6 +1,6 @@
 use ratatui::layout::{Margin, Rect};
 
-use crate::sample::MenuId;
+use crate::sample::{MenuId, View};
 
 pub const MIN_W: u16 = 60;
 pub const KEYS_FULL_W: u16 = 84;
@@ -111,11 +111,13 @@ pub fn running_area(pane: Rect, rows: u16) -> Rect {
     )
 }
 
-pub fn sidebar_rows_area(pane: Rect) -> Rect {
+/// The pane's inside, below the Diff view's scope line and its rule.
+pub fn sidebar_rows_area(pane: Rect, view: View) -> Rect {
     let inner = pane.inner(Margin::new(1, 1));
+    let top = 2 * u16::from(view == View::Diff);
     Rect {
-        y: inner.y + 2,
-        height: inner.height - 2,
+        y: inner.y + top,
+        height: inner.height - top,
         ..inner
     }
 }
@@ -132,7 +134,7 @@ fn size_of(kind: LayerKind, on_top: bool) -> (u16, u16) {
         LayerKind::Picker => (66, 16),
         LayerKind::Menu(MenuId::NodeSettings) => (50, 23),
         LayerKind::Menu(_) => (50, 13),
-        LayerKind::Keys => (KEYS_FULL_W, 24),
+        LayerKind::Keys => (KEYS_FULL_W, 23),
         LayerKind::Sessions => (36, 15),
         LayerKind::Sidebar => (40, 20),
     }
@@ -274,7 +276,7 @@ mod tests {
         let accounts = LayerKind::Menu(MenuId::Accounts);
         assert_eq!(
             layer_rect(LayerKind::Keys, area, 0, true),
-            Rect::new(24, 5, 84, 24)
+            Rect::new(24, 5, 84, 23)
         );
         assert_eq!(
             layer_rect(LayerKind::Jump, area, 0, true),
@@ -302,8 +304,8 @@ mod tests {
 
     #[test]
     fn keys_table_has_room_for_every_row_when_the_layer_is_full_size() {
-        let rows = keys_rows_area(Rect::new(24, 5, 84, 24));
-        assert_eq!(rows, Rect::new(27, 9, 80, 17));
+        let rows = keys_rows_area(Rect::new(24, 5, 84, 23));
+        assert_eq!(rows, Rect::new(27, 9, 80, 16));
         assert_eq!(usize::from(rows.height), crate::sample::KEY_ROWS.len());
     }
 }

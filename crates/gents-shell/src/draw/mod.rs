@@ -39,7 +39,7 @@ pub fn draw(app: &App, frame: &mut Frame) {
     agent::draw(app, panes.agent, panes.sessions.is_some(), buf);
     match panes.right {
         Right::None => {}
-        Right::Rail(rect) => sidebar::draw_rail(rect, buf),
+        Right::Rail(rect) => sidebar::draw_rail(app, rect, buf),
         Right::Sidebar(rect) => sidebar::draw(app, rect, app.focus == Pane::Sidebar, buf),
     }
     if let Some(search) = &app.search {
@@ -199,7 +199,9 @@ mod tests {
     use crate::app::{sample_chat, Mode};
     use crate::keys::KeySet::{Emacs, Vim};
     use crate::sample::{note, MenuId, View};
-    use crate::testing::{buffer, find, press, rows, screen, type_text, with_right_pane};
+    use crate::testing::{
+        buffer, find, press, rows, screen, type_text, with_right_pane, with_sample_session,
+    };
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ratatui::crossterm::event::Event;
@@ -210,20 +212,23 @@ mod tests {
     fn panes_at_each_width() {
         let s = screen(&with_right_pane(App::new(Vim, 168, 48)));
         assert_eq!(find(&s, "Sessions"), Some((0, 3)));
-        assert_eq!(find(&s, "Changes"), Some((1, 127)));
+        assert_eq!(find(&s, "Diff"), Some((0, 127)));
         assert_eq!(find(&s, "sample data"), Some((47, 156)));
         let s = screen(&with_right_pane(App::new(Vim, 132, 36)));
-        assert_eq!(find(&s, "Changes"), Some((1, 101)));
-        assert_eq!(find(&s, "M cli/args.rs"), Some((5, 100)));
+        assert_eq!(find(&s, "Diff"), Some((0, 101)));
+        assert_eq!(find(&s, "session   working tree"), Some((1, 101)));
+        assert_eq!(find(&s, "no changes in this session"), Some((3, 100)));
         assert_eq!(find(&s, "cli ux redesign"), Some((4, 4)));
         assert_eq!(find(&s, "INPUT"), Some((35, 1)));
         assert_eq!(find(&s, "sample data"), Some((35, 120)));
-        let s = screen(&with_right_pane(App::new(Vim, 104, 30)));
-        assert_eq!(find(&s, "+58"), Some((3, 99)));
+        let s = screen(&with_right_pane(with_sample_session(App::new(
+            Vim, 104, 30,
+        ))));
+        assert_eq!(find(&s, "+8"), Some((3, 99)));
         assert_eq!(find(&s, "Workflows"), None);
         let s = screen(&with_right_pane(App::new(Vim, 70, 24)));
         assert_eq!(find(&s, "Sessions"), None);
-        assert_eq!(find(&s, "Changes"), None);
+        assert_eq!(find(&s, "Diff"), None);
         assert_eq!(find(&s, "sample data"), Some((23, 58)));
         let s = screen(&with_right_pane(App::new(Vim, 40, 24)));
         assert!(find(&s, "Window too small: need at least 60 by 16").is_some());
@@ -261,7 +266,7 @@ mod tests {
             assert_eq!(buf[(11, y)].symbol(), "│", "sessions row {y}");
             assert_eq!(buf[(12, y)].symbol(), " ", "sessions row {y}");
         }
-        for view in [View::Changes, View::Workflows, View::Agents] {
+        for view in [View::Diff, View::Workflows, View::Agents] {
             let mut app = App::new(Vim, 120, 30);
             app.view = view;
             let buf = buffer(&app);
@@ -295,7 +300,7 @@ mod tests {
 
     #[test]
     fn each_view_shows_its_rows() {
-        let mut app = with_right_pane(App::new(Vim, 132, 36));
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 36)));
         app.view = View::Workflows;
         assert!(find(&screen(&app), "2 running").is_some());
         app.view = View::Agents;
@@ -306,14 +311,16 @@ mod tests {
 
     #[test]
     fn selected_rows_fill_their_width() {
-        let buf = buffer(&with_right_pane(App::new(Vim, 132, 36)));
+        let buf = buffer(&with_right_pane(with_sample_session(App::new(
+            Vim, 132, 36,
+        ))));
         for x in 1..27 {
             assert_eq!(buf[(x, 4)].bg, theme::SEL_BG, "sessions col {x}");
         }
         assert_eq!(buf[(4, 4)].fg, theme::SEL_FG);
         assert_eq!(buf[(1, 5)].bg, theme::BG);
         for x in 99..131 {
-            assert_eq!(buf[(x, 5)].bg, theme::SEL_BG, "changes col {x}");
+            assert_eq!(buf[(x, 5)].bg, theme::SEL_BG, "diff col {x}");
         }
     }
 
@@ -424,14 +431,35 @@ mod tests {
     }
 
     #[test]
-    fn the_sidebar_header_fits_at_every_docked_width() {
-        for width in 120..=132 {
-            let buf = buffer(&with_right_pane(App::new(Vim, width, 30)));
-            let header = &rows(&buf)[1];
-            for chip in [" Changes ", " Workflows ", " Agents "] {
-                assert!(header.contains(chip), "{width}: {header}");
+    fn the_right_pane_shows_only_the_view_asked_for() {
+        for (view, title, others) in [
+            (View::Diff, " Diff ", [" Workflows ", " Background agents "]),
+            (
+                View::Workflows,
+                " Workflows ",
+                [" Diff ", " Background agents "],
+            ),
+            (
+                View::Agents,
+                " Background agents ",
+                [" Diff ", " Workflows "],
+            ),
+        ] {
+            let mut app = with_right_pane(App::new(Vim, 132, 30));
+            app.set_view(view);
+            let buf = buffer(&app);
+            let rows = rows(&buf);
+            let pane: Vec<String> = rows
+                .iter()
+                .map(|row| row.chars().skip(98).collect())
+                .collect();
+            assert!(pane[0].starts_with(&format!("┌─{title}")), "{}", pane[0]);
+            for other in others {
+                assert!(
+                    pane.iter().all(|row| !row.contains(other)),
+                    "{other} in {view:?}"
+                );
             }
-            assert_eq!(buf[(width - 1, 1)].symbol(), "│");
         }
     }
 

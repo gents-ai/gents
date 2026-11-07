@@ -1,5 +1,6 @@
 use std::cmp::Reverse;
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -12,15 +13,16 @@ use gents_codex_protocol as codex;
 use gents_shell::app::ChatLine;
 use gents_shell::sample::{Opens, RunState, Running, Tone};
 use gents_shell::source::{
-    BackgroundCall, Connection, Input, Intent, Job, Prompt, Session, Update,
+    BackgroundCall, Change, Connection, Input, Intent, Job, Prompt, Session, Update,
 };
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use serde_json::Value;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
-use super::client::{Client, ClientEvent};
+use super::client::{Client, ClientError, ClientEvent};
 use super::items;
+use super::tree::git_changes;
 use super::work::{self, Work};
 use crate::commands::codex::relay::agent_route_target;
 use crate::commands::codex::{resolve_endpoint, runtime_identity_at, RemoteEndpoint};
@@ -79,7 +81,7 @@ pub(super) async fn run(
         )
         .await;
         match connected {
-            Ok(client) => source.clients.push((agent.id.clone(), client)),
+            Ok(client) => source.clients.push((agent.id.clone(), Arc::new(client))),
             Err(error) => source.tell(Update::Notice(format!(
                 "could not open agent {}: {error}",
                 agent.name
@@ -152,6 +154,7 @@ enum Watched {
     Ended(Feed, Option<String>),
     Read(Box<Read>),
     Asked(Box<Asked>),
+    Tree(Result<Vec<Change>, String>),
 }
 
 /// One reread of the work views, done off the chat loop.
@@ -183,11 +186,12 @@ async fn watch(work: &Work, document: &str, subscribe: bool) -> Option<Result<Ch
     )
 }
 
-async fn read_work(work: Work, subscribe: bool) -> Read {
+/// The jobs of `sessions` only, and every background call.
+async fn read_work(work: Work, subscribe: bool, sessions: Vec<String>) -> Read {
     let changes = watch(&work, WATCHED, subscribe).await;
     let at = Local::now();
     let access = work.access();
-    let jobs = work::jobs(&access)
+    let jobs = work::jobs(&access, &sessions)
         .await
         .map(|views| views.iter().map(work::job).collect())
         .map_err(|error| error.to_string());
@@ -294,7 +298,7 @@ fn agent_url(remote: &str, identity: &RuntimeIdentity, agent: &str) -> String {
 
 struct Source {
     /// In the order the shell lists the agents.
-    clients: Vec<(String, Client)>,
+    clients: Vec<(String, Arc<Client>)>,
     updates: Sender<Input>,
     /// Sessions a tab has opened or sent to.
     open: RapidHashSet<String>,
@@ -321,6 +325,10 @@ struct Source {
     /// A mailbox read is out, and `ask_again` asks for one more when it lands.
     asking: bool,
     ask_again: bool,
+    /// A working-tree read is out, and `tree_again` names the agent of one more asked for
+    /// meanwhile.
+    reading_tree: bool,
+    tree_again: Option<String>,
     /// The prompts each open session was last told.
     told: RapidHashMap<String, Vec<Prompt>>,
     /// Listed subagents with an open question or approval, which their parent's row names.
@@ -353,6 +361,8 @@ impl Source {
             mailbox_live: false,
             asking: false,
             ask_again: false,
+            reading_tree: false,
+            tree_again: None,
             told: RapidHashMap::new(),
             waiting: RapidHashSet::new(),
         }
@@ -367,7 +377,7 @@ impl Source {
         self.tell(Update::Connection(Connection::Lost(why)));
     }
 
-    fn client(&self, agent: &str) -> Option<&Client> {
+    fn client(&self, agent: &str) -> Option<&Arc<Client>> {
         self.clients
             .iter()
             .find(|(id, _)| id == agent)
@@ -398,7 +408,36 @@ impl Source {
                 item,
                 text,
             } => self.reply(session, &agent, &item, &text).await,
+            Intent::WorkingTree { agent } => self.read_tree(agent),
         }
+    }
+
+    /// One read at a time, off the chat loop, as `reread_work` reads: a slow git diff holds up
+    /// no other intent, and one asked for while a read is out runs after it lands, so the
+    /// newest answer lands last.
+    fn read_tree(&mut self, agent: String) {
+        if self.reading_tree {
+            self.tree_again = Some(agent);
+            return;
+        }
+        let Some(client) = self.client(&agent).cloned() else {
+            return self.tell(Update::WorkingTree(Err("not connected".to_string())));
+        };
+        self.reading_tree = true;
+        let done = self.watching.clone();
+        self.runtime.spawn(async move {
+            // The runtime resolves a relative folder against its tool root.
+            let params = codex::GitDiffToRemoteParams { cwd: ".".into() };
+            let read = client
+                .request::<_, codex::GitDiffToRemoteResponse>("gitDiffToRemote", &params)
+                .await;
+            let tree = match read {
+                Ok(answer) => Ok(git_changes(&answer.diff)),
+                Err(ClientError::Rpc { message, .. }) => Err(message),
+                Err(error) => Err(error.to_string()),
+            };
+            let _ = done.send(Watched::Tree(tree));
+        });
     }
 
     /// `agent` names the connection that sent `note`. A spawn or a send on an open session
@@ -456,8 +495,9 @@ impl Source {
         }
         self.reading = true;
         let (work, subscribe, done) = (work.clone(), !self.live, self.watching.clone());
+        let sessions = self.open.iter().cloned().collect();
         self.runtime.spawn(async move {
-            let read = read_work(work, subscribe).await;
+            let read = read_work(work, subscribe, sessions).await;
             let _ = done.send(Watched::Read(Box::new(read)));
         });
     }
@@ -498,6 +538,13 @@ impl Source {
             }
             Watched::Read(read) => self.landed(*read),
             Watched::Asked(asked) => self.asked(*asked),
+            Watched::Tree(tree) => {
+                self.reading_tree = false;
+                self.tell(Update::WorkingTree(tree));
+                if let Some(agent) = self.tree_again.take() {
+                    self.read_tree(agent);
+                }
+            }
         }
     }
 
@@ -614,7 +661,8 @@ impl Source {
             },
             _ => row.clone(),
         });
-        let jobs = self.jobs.rows.iter().filter(|job| job.session == session);
+        let jobs = self.jobs.rows.iter();
+        let jobs = jobs.filter(|job| job.session == session && job.ended.is_none());
         let jobs = jobs.map(|job| Running {
             name: job.name.clone(),
             job: job.title.clone(),
@@ -743,28 +791,34 @@ impl Source {
                 return false;
             }
         };
-        self.open.insert(session.clone());
+        if self.open.insert(session.clone()) {
+            self.reread_work();
+        }
         self.resumed.insert(session.clone());
         let turns = thread.turns;
-        let lines = turns
-            .iter()
-            .flat_map(|turn| &turn.items)
-            .flat_map(items::lines)
-            .flat_map(|line| [line, blank()])
-            .collect();
-        self.tell(Update::Opened {
-            session: session.clone(),
-            lines,
-        });
         let running = turns
             .iter()
             .rfind(|turn| turn.status == codex::TurnStatus::InProgress);
+        // Told before the transcript, so the shell never draws the running turn's card.
         if let Some(running) = running {
             self.tell(Update::Turn {
                 session: session.clone(),
                 turn: running.id.clone(),
             });
         }
+        let lines = turns
+            .iter()
+            .flat_map(|turn| {
+                turn.items
+                    .iter()
+                    .flat_map(|item| items::lines(item, &turn.id))
+            })
+            .flat_map(|line| [line, blank()])
+            .collect();
+        self.tell(Update::Opened {
+            session: session.clone(),
+            lines,
+        });
         self.subagents(&session, agent).await;
         // A new tab shows no prompts until it is told them.
         self.told.remove(&session);
@@ -853,7 +907,9 @@ impl Source {
         let started = client
             .request::<_, codex::TurnStartResponse>("turn/start", &params)
             .await;
-        self.open.insert(session.clone());
+        if self.open.insert(session.clone()) {
+            self.reread_work();
+        }
         match started {
             Ok(started) => self.tell(Update::Turn {
                 session,
@@ -914,6 +970,7 @@ fn blank() -> ChatLine {
         text: String::new(),
         tone: Tone::Plain,
         item: None,
+        change: None,
     }
 }
 
@@ -946,7 +1003,7 @@ mod tests {
         let (updates, told) = std::sync::mpsc::channel();
         let (watching, _watched) = mpsc::unbounded_channel();
         let mut source = Source::new(updates, None, test_runtime_handle(), watching);
-        source.clients.push(("a".to_string(), client));
+        source.clients.push(("a".to_string(), Arc::new(client)));
 
         source.replied("s1".to_string(), "a").await;
 
@@ -963,17 +1020,14 @@ mod tests {
 
         assert_eq!(resumes_of(&fake, "s1"), 1);
         assert!(
-            matches!(&told[0], Update::Opened { session, lines } if session == "s1" && lines[0].text.starts_with("Decision on")),
+            matches!(&told[1], Update::Opened { session, lines } if session == "s1" && lines[0].text.starts_with("Decision on")),
             "{told:?}"
         );
         let running = Update::Turn {
             session: "s1".to_string(),
             turn: "r9".to_string(),
         };
-        assert!(
-            told.contains(&running),
-            "ctrl-c can stop the answer: {told:?}"
-        );
+        assert_eq!(told[0], running, "ctrl-c can stop the answer: {told:?}");
         let pick = Update::Notice(PICK_AGAIN.to_string());
         assert_eq!(told.last(), Some(&pick), "{told:?}");
     }
