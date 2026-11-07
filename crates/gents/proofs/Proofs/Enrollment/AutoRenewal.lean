@@ -2,6 +2,13 @@ import Proofs.Enrollment.State
 
 namespace Enrollment.AutoRenewal
 
+def unansweredRetrySeconds (remaining attempts : Nat) : Nat :=
+  min (max 1 (remaining / 3)) (min 86400 (3600 * 2 ^ min attempts 5))
+
+theorem unanswered_retry_is_bounded (remaining attempts : Nat) :
+    unansweredRetrySeconds remaining attempts ≤ 86400 := by
+  simp [unansweredRetrySeconds]
+
 structure Generation where
   network : String
   member : String

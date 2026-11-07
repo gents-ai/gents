@@ -18,7 +18,7 @@ mod persisted;
 pub(super) struct MemberRenewalState {
     peer_cursor: Option<String>,
     intent_cursors: BTreeMap<(String, u64), Option<String>>,
-    last_intent_creation: BTreeMap<(String, u64), std::time::Instant>,
+    last_intent_creation: BTreeMap<(String, u64), (std::time::Instant, u32)>,
     last_sweep: Option<std::time::Instant>,
     last_wake: Option<std::time::Instant>,
     sweep_interval: std::time::Duration,
@@ -85,9 +85,10 @@ fn selection_start(due: &[(String, ApprovedStatusEnrollment)], after: Option<&st
         .unwrap_or(0)
 }
 
-fn new_intent_cooldown(remaining_seconds: i64) -> std::time::Duration {
+fn new_intent_cooldown(remaining_seconds: i64, attempts: u32) -> std::time::Duration {
     let remaining = remaining_seconds.max(1) as u64;
-    std::time::Duration::from_secs((remaining / 3).clamp(1, 3600))
+    let backoff = (3600u64 * (1u64 << attempts.min(5))).min(86_400);
+    std::time::Duration::from_secs((remaining / 3).max(1).min(backoff))
 }
 
 fn renewal_due(approval: &ApprovedStatusEnrollment, now: DateTime<Utc>) -> bool {
@@ -207,17 +208,16 @@ pub(super) async fn sweep_member_renewals(
         let remaining = AuthorizationLease::at(&approval.authorization_expires_at, Utc::now())
             .remaining
             .num_seconds();
-        let cooldown = new_intent_cooldown(remaining);
-        let allow_create = state
-            .last_intent_creation
-            .get(&key)
-            .is_none_or(|last| last.elapsed() >= cooldown);
+        let previous = state.last_intent_creation.get(&key).copied();
+        let attempts = previous.map_or(0, |(_, attempts)| attempts);
+        let allow_create = previous
+            .is_none_or(|(last, _)| last.elapsed() >= new_intent_cooldown(remaining, attempts));
         let cursor = state.intent_cursors.entry(key.clone()).or_default();
         match renew_member(node, identity, approval, &local_peer, cursor, allow_create).await {
             Ok(true) => {
                 state
                     .last_intent_creation
-                    .insert(key, std::time::Instant::now());
+                    .insert(key, (std::time::Instant::now(), attempts.saturating_add(1)));
             }
             Ok(false) => {}
             Err(error) => {
@@ -292,11 +292,43 @@ mod tests {
     #[test]
     fn intent_retry_cooldown_stays_bounded_by_lease() {
         assert_eq!(
-            new_intent_cooldown(86400),
+            new_intent_cooldown(86400, 0),
             std::time::Duration::from_secs(3600)
         );
-        assert_eq!(new_intent_cooldown(60), std::time::Duration::from_secs(20));
-        assert_eq!(new_intent_cooldown(1), std::time::Duration::from_secs(1));
+        assert_eq!(
+            new_intent_cooldown(60, 0),
+            std::time::Duration::from_secs(20)
+        );
+        assert_eq!(new_intent_cooldown(1, 0), std::time::Duration::from_secs(1));
+        assert_eq!(
+            new_intent_cooldown(604_800, 2),
+            std::time::Duration::from_secs(14_400)
+        );
+        assert_eq!(
+            new_intent_cooldown(604_800, 9),
+            std::time::Duration::from_secs(86_400)
+        );
+    }
+
+    #[test]
+    fn unanswered_retry_delay_matches_the_model() {
+        let raw = gents_lean_contract::run_prepared_generator(
+            &gents_lean_contract::proofs_dir().unwrap(),
+            "Proofs.Conformance.RenewalRetry:olean",
+            "Proofs/Conformance/RenewalRetry.lean",
+        )
+        .unwrap();
+        let cases: Vec<serde_json::Value> = serde_json::from_str(&raw).unwrap();
+        assert_eq!(cases.len(), 25);
+        for case in cases {
+            let remaining = case["remaining"].as_i64().unwrap();
+            let attempts = case["attempts"].as_u64().unwrap() as u32;
+            assert_eq!(
+                new_intent_cooldown(remaining, attempts).as_secs(),
+                case["delay"].as_u64().unwrap(),
+                "{case}"
+            );
+        }
     }
 
     #[test]
