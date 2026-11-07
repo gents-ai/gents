@@ -42,7 +42,13 @@ pub(super) async fn install(
     let node_did = home.did().to_string();
     let evaluator = home.evaluator(&spec.evaluator_did)?;
     let schema_access = ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(&node_did)?);
-    grant_trial_operations(home, &spec.evaluator_did).await?;
+    // The evaluator is the trial's User: it creates and owns the trial
+    // configuration, and the Agent source projections it causes are bounded by
+    // what it holds, so it holds the enrolled-User grant set.
+    crate::store::identity::GrantSet::OperatorUser
+        .grant(&schema_access, &::identity::Did::new(&spec.evaluator_did)?)
+        .await
+        .context("granting the evaluator the trial User grant set")?;
     let planning_access = ConfigAccess::local_as(
         home.node.clone(),
         ::identity::Did::new(spec.evaluator_did.clone())?,
@@ -156,11 +162,7 @@ pub(super) async fn install(
     )
     .await
     .context("installing the trial inference binding")?;
-    // The native source projection refuses Agent, Tools and AgentContext writes
-    // from a client principal, so the pack's configuration is written as the
-    // trial Node owner, as the schema installs above are.
-    let owner_access = ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(&node_did)?);
-    install_pack_documents(&owner_access, &node_did, &identity, &config, DriftPolicy::Refuse)
+    install_pack_documents(&access, &node_did, &identity, &config, DriftPolicy::Refuse)
         .await
         .context("installing the trial pack")?;
     access
