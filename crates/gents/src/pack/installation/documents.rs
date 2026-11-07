@@ -200,7 +200,7 @@ pub struct PreparedDocumentPackInstall {
     pub dependency_inference: BTreeMap<String, PackInferenceBindingPreview>,
     pub dependencies: Vec<PreparedDependency>,
     pub(super) root_snapshot: Option<super::InstalledDependencySnapshot>,
-    variables: BTreeMap<String, Option<String>>,
+    pub(super) variables: BTreeMap<String, Option<String>>,
 }
 
 impl PreparedDocumentPackInstall {
