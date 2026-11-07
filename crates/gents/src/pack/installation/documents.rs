@@ -219,7 +219,7 @@ pub struct PreparedDocumentPackInstall {
     pub dependencies: Vec<PreparedDependency>,
     pub sources: BTreeMap<String, super::PackSource>,
     pub(super) root_snapshot: Option<super::InstalledDependencySnapshot>,
-    variables: BTreeMap<String, Option<String>>,
+    pub(super) variables: BTreeMap<String, Option<String>>,
 }
 
 /// Public facts from the staged host, checked against the reviewed archives.

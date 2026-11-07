@@ -1957,6 +1957,7 @@ fn prepared() -> PreparedDocumentPackInstall {
         dependencies: Vec::new(),
         sources: BTreeMap::new(),
         root_snapshot: None,
+        variables: BTreeMap::new(),
     }
 }
 
@@ -4000,6 +4001,7 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
         explicit: true,
         source: None,
         snapshot: None,
+        variables: None,
         reconfigure: false,
         reuse_plugins: false,
     };
