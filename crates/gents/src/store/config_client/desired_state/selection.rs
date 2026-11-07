@@ -103,7 +103,9 @@ pub(super) async fn apply_selection_changes(
                 for id in ids {
                     let (source_doc, _) = read_record(txn, source, &change.node_did, id)
                         .await?
-                        .context("selected configuration is unavailable")?;
+                        .with_context(|| {
+                            format!("selected {} {id:?} is unavailable", source.graphql_type())
+                        })?;
                     if add {
                         txn.add_entity_set_relationship(
                             source.graphql_type(),
