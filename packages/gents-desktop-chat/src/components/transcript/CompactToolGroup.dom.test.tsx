@@ -75,7 +75,7 @@ it("opens the actual failed action from mixed history while retaining every chro
   expect(document.activeElement).toBe(summary);
 });
 
-it("keeps a long interrupted block to three rows and opens every original action in order", () => {
+it("groups concurrent work into one row and opens every original action in order", () => {
   const requestTurn = {
     requestDocId: "physical",
     requestId: "request",
@@ -108,9 +108,8 @@ it("keeps a long interrupted block to three rows and opens every original action
   ).flat();
   render(<MessageList timelineItems={timelineItems} compactTools />);
   const rows = screen.getAllByRole("button", { name: /^View actions:/ });
-  expect(rows).toHaveLength(3);
-  expect(rows[1]?.textContent).toContain("2 actions running");
-  expect(rows[2]?.textContent).toContain("command-23");
+  expect(rows).toHaveLength(2);
+  expect(rows[1]?.textContent).toContain("Running 3 commands");
   fireEvent.click(rows[0]!);
   const dialog = screen.getByRole("dialog", { name: "Actions 24" });
   const details = Array.from(
@@ -122,6 +121,11 @@ it("keeps a long interrupted block to three rows and opens every original action
   expect(details[3]?.open).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Close actions" }));
   expect(document.activeElement).toBe(rows[0]);
+  fireEvent.click(rows[1]!);
+  const activeDialog = screen.getByRole("dialog", { name: "Actions 24" });
+  expect(activeDialog.querySelectorAll(".tool-item")).toHaveLength(24);
+  fireEvent.click(screen.getByRole("button", { name: "Close actions" }));
+  expect(document.activeElement).toBe(rows[1]);
 });
 
 it.each([

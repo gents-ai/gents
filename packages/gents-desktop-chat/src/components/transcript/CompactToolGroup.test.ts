@@ -185,7 +185,7 @@ describe("compact action summaries", () => {
             : null,
       }),
     );
-    expect(html.match(/class="tool-activity-row/g)).toHaveLength(3);
+    expect(html.match(/class="tool-activity-row/g)).toHaveLength(2);
     expect(html).toContain("16 actions failed");
     expect(html.match(/data-change-anchor="empty-49"/g)).toHaveLength(1);
     expect(JSON.stringify(items)).toBe(original);
@@ -275,10 +275,9 @@ describe("compact action summaries", () => {
     const html = renderToStaticMarkup(
       createElement(CompactToolGroup, { tools }),
     );
-    expect(html.match(/class="tool-activity-row/g)).toHaveLength(3);
+    expect(html.match(/class="tool-activity-row/g)).toHaveLength(2);
     expect(html).toContain("Read files");
-    expect(html).toContain("499 actions running");
-    expect(html).toContain("Reading README.md");
+    expect(html).toContain("Running 500 actions");
   });
 
   it("keeps mixed history beside current work instead of fragmenting each outcome", () => {
