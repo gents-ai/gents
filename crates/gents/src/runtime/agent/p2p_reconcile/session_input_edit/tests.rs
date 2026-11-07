@@ -835,6 +835,14 @@ async fn valid_author_signature_cannot_install_replacement_with_wrong_admission_
     crate::sign_agent_request_create(fixture.identity.as_ref(), &mut command.replacements[0])
         .await
         .unwrap();
+    // The re-signed replacement carries its own valid graph evidence, so the
+    // rejection comes from the admission branch rather than stale evidence.
+    command.replacement_evidence = vec![crate::store::config_client::prepare_request_evidence(
+        fixture.identity.as_ref(),
+        crate::store::config_client::client_request_input(&command.replacements[0]).unwrap(),
+    )
+    .await
+    .unwrap()];
     command.signature = fixture
         .identity
         .sign(&command.signing_payload())
@@ -853,7 +861,11 @@ async fn valid_author_signature_cannot_install_replacement_with_wrong_admission_
     let receipt = fixture.receipt(&id).await;
     receipt.validate_for(&command).unwrap();
     assert_eq!(receipt.outcome, SessionInputEditOutcome::Rejected);
-    assert!(receipt.reason.contains("replacement admission"));
+    assert!(
+        receipt.reason.contains("replacement admission"),
+        "{}",
+        receipt.reason
+    );
     assert_eq!(fixture.requests().await, before);
 }
 
