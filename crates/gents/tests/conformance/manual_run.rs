@@ -8,7 +8,16 @@ fn actor(did: &str) -> identity::Did {
     identity::Did::new(did.to_owned()).expect("fixture creator DID")
 }
 
-async fn fetch_manual_row(node: &gents::defra_node::Node, doc_id: &str) -> Value {
+/// Manual requests are Agent-owned rows; they are read as that Agent.
+fn agent_access(
+    db: &crate::support::TestDb,
+    agent: &dyn gents::NodeIdentity,
+) -> gents::ConfigAccess {
+    gents::ConfigAccess::local_managed_agent(db.node.clone(), actor(agent.did()), agent)
+        .expect("managed Agent access")
+}
+
+async fn fetch_manual_row(access: &gents::ConfigAccess, doc_id: &str) -> Value {
     let escaped = escape_graphql_string(doc_id);
     let query = format!(
         r#"{{
@@ -21,14 +30,11 @@ async fn fetch_manual_row(node: &gents::defra_node::Node, doc_id: &str) -> Value
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
-    assert!(
-        !resp.has_errors(),
-        "fetch_manual_row query failed: {:?}",
-        resp.errors
-    );
-    resp.data
-        .as_ref()
+    let resp = access
+        .execute(&query)
+        .await
+        .expect("fetch_manual_row query");
+    resp.get("data")
         .and_then(|d| d.get("AgentRequest"))
         .and_then(|v| v.as_array())
         .and_then(|rows| rows.first())
@@ -36,20 +42,17 @@ async fn fetch_manual_row(node: &gents::defra_node::Node, doc_id: &str) -> Value
         .expect("exactly one AgentRequest for the given doc_id")
 }
 
-async fn count_manual_agent_requests(node: &gents::defra_node::Node) -> usize {
+async fn count_manual_agent_requests(access: &gents::ConfigAccess) -> usize {
     let query = r#"{
         AgentRequest(filter: { caused_by_trigger_kind: { _eq: "manual" } }) {
             _docID
         }
     }"#;
-    let resp = node.execute(query).await;
-    assert!(
-        !resp.has_errors(),
-        "count_manual_agent_requests query failed: {:?}",
-        resp.errors
-    );
-    resp.data
-        .as_ref()
+    let resp = access
+        .execute(query)
+        .await
+        .expect("count_manual_agent_requests query");
+    resp.get("data")
         .and_then(|d| d.get("AgentRequest"))
         .and_then(|v| v.as_array())
         .map(|rows| rows.len())
@@ -77,7 +80,7 @@ async fn manual_run_materializes_agent_request_with_lineage() {
     .expect("write_manual_agent_request should succeed on a fresh node");
     assert!(!doc_id.is_empty(), "helper must return a non-empty doc id");
 
-    let row = fetch_manual_row(db.node.as_ref(), &doc_id).await;
+    let row = fetch_manual_row(&agent_access(&db, agent.as_ref()), &doc_id).await;
 
     assert!(
         row["caused_by_trigger_id"].is_null(),
@@ -126,7 +129,7 @@ async fn manual_run_renders_args_scope() {
     .await
     .expect("write_manual_agent_request should render args.* templates");
 
-    let row = fetch_manual_row(db.node.as_ref(), &doc_id).await;
+    let row = fetch_manual_row(&agent_access(&db, agent.as_ref()), &doc_id).await;
     assert_eq!(
         row["content"].as_str(),
         Some("hi Amy"),
@@ -154,7 +157,7 @@ async fn manual_submissions_materialize_distinct_requests() {
     .await
     .expect("first manual run should materialize");
     assert_eq!(
-        count_manual_agent_requests(db.node.as_ref()).await,
+        count_manual_agent_requests(&agent_access(&db, agent.as_ref())).await,
         1,
         "sanity: one manual AgentRequest after the first call"
     );
@@ -178,13 +181,13 @@ async fn manual_submissions_materialize_distinct_requests() {
         "second manual run must produce a fresh doc_id, not alias the first"
     );
     assert_eq!(
-        count_manual_agent_requests(db.node.as_ref()).await,
+        count_manual_agent_requests(&agent_access(&db, agent.as_ref())).await,
         2,
         "two back-to-back manual submissions must yield two AgentRequest rows"
     );
 
     for (label, doc_id) in [("first", &first), ("second", &second)] {
-        let row = fetch_manual_row(db.node.as_ref(), doc_id).await;
+        let row = fetch_manual_row(&agent_access(&db, agent.as_ref()), doc_id).await;
         assert!(
             row["caused_by_trigger_id"].is_null(),
             "{label}: direct manual submission must not invent a configured trigger id"
@@ -217,7 +220,7 @@ async fn manual_run_exposes_manual_event_and_node_scope() {
     .await
     .expect("manual writer must resolve the manual event scope");
 
-    let row = fetch_manual_row(db.node.as_ref(), &doc_id).await;
+    let row = fetch_manual_row(&agent_access(&db, agent.as_ref()), &doc_id).await;
     let content = row["content"]
         .as_str()
         .expect("content must be present")
@@ -258,7 +261,7 @@ async fn manual_run_render_failure_materializes_no_request() {
     );
 
     assert_eq!(
-        count_manual_agent_requests(db.node.as_ref()).await,
+        count_manual_agent_requests(&agent_access(&db, agent.as_ref())).await,
         0,
         "a failed manual render must not leave a claimable AgentRequest row"
     );
@@ -278,14 +281,14 @@ async fn manual_run_render_failure_materializes_no_request() {
     .await
     .expect("a well-formed retry must materialize");
 
-    let row = fetch_manual_row(db.node.as_ref(), &doc_id).await;
+    let row = fetch_manual_row(&agent_access(&db, agent.as_ref()), &doc_id).await;
     assert_eq!(
         row["content"].as_str(),
         Some("recovered value"),
         "the retry must render with the supplied args"
     );
     assert_eq!(
-        count_manual_agent_requests(db.node.as_ref()).await,
+        count_manual_agent_requests(&agent_access(&db, agent.as_ref())).await,
         1,
         "exactly the recovered request may exist after the failed attempt"
     );
