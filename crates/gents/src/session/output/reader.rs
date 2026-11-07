@@ -285,16 +285,18 @@ pub async fn load_canonical_message_from_node(
     .await
 }
 
+/// Fixture read of an Agent-owned payload as that Agent, without pinning the
+/// expected source.
 #[cfg(test)]
-pub(crate) async fn load_canonical_payload_from_node(
-    node: &EmbeddedNode,
+pub(crate) async fn load_canonical_payload_from_access(
+    access: &ConfigAccess,
     request_doc_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
     reference: &PayloadRef,
 ) -> Result<gents_protocol::output::reconstruction::ReconstructedStream> {
     load_canonical_payload(
-        ReadAccess::Node(node),
+        ReadAccess::Config(access),
         request_doc_id,
         node_did,
         requester_did,

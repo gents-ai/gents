@@ -117,7 +117,7 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
             actions.len() + usize::from(ending.is_none()),
             "{name} must not dispatch a suffix"
         );
-        let rows = tool_call_rows(&node).await;
+        let rows = tool_call_rows(&lifecycle.access().unwrap()).await;
         let answered_rows = (0..answered)
             .map(|index| {
                 rows.iter()
@@ -144,16 +144,7 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
             "{name} typed outcome mapping"
         );
         for (index, row) in answered_rows.iter().enumerate() {
-            let output = crate::tools::background::status::canonical_tool_output(
-                &node,
-                row["_docID"].as_str().unwrap(),
-                &lifecycle.request().doc_id,
-                &lifecycle.request().session_id,
-                &lifecycle.request().node_did,
-                None,
-            )
-            .await
-            .unwrap();
+            let output = agent_tool_output(&lifecycle, row["_docID"].as_str().unwrap()).await;
             assert!(
                 !output.is_empty(),
                 "{name}: canonical output for {index} must not be empty"
@@ -212,11 +203,7 @@ async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
             )
             .await
             .expect("terminal owner settles every published undispatched call");
-        let response = node
-            .execute("{ AgentToolCall { _docID tool_call_id lifecycle_state } }")
-            .await;
-        assert!(!response.has_errors());
-        let data = response.data.unwrap();
+        let data = agent_query(&lifecycle.access().unwrap(), "{ AgentToolCall { _docID tool_call_id lifecycle_state } }").await["data"].clone();
         let rows = data["AgentToolCall"].as_array().unwrap();
         assert_eq!(
             rows.len(),
@@ -236,16 +223,7 @@ async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
                 .find(|row| row["tool_call_id"] == format!("invalid-progress-{index}"))
                 .unwrap_or_else(|| panic!("missing durable row {index}"));
             assert_eq!(row["lifecycle_state"], "failed");
-            let output = crate::tools::background::status::canonical_tool_output(
-                &node,
-                row["_docID"].as_str().unwrap(),
-                &lifecycle.request().doc_id,
-                &lifecycle.request().session_id,
-                &lifecycle.request().node_did,
-                None,
-            )
-            .await
-            .unwrap();
+            let output = agent_tool_output(&lifecycle, row["_docID"].as_str().unwrap()).await;
             assert!(
                 !output.is_empty(),
                 "canonical output {index} must be delivered"
@@ -346,11 +324,7 @@ async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeed
         .as_str()
         .unwrap()
         .contains("executable"));
-    let response = node
-        .execute("{ AgentToolCall { _docID tool_call_id lifecycle_state tool_failure_class } }")
-        .await;
-    assert!(!response.has_errors());
-    let data = response.data.unwrap();
+    let data = agent_query(&lifecycle.access().unwrap(), "{ AgentToolCall { _docID tool_call_id lifecycle_state tool_failure_class } }").await["data"].clone();
     let rows = data["AgentToolCall"].as_array().unwrap();
     assert_eq!(rows.len(), 2);
     assert!(rows
@@ -362,16 +336,7 @@ async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeed
         .find(|row| row["lifecycle_state"] == "completed")
         .and_then(|row| row["_docID"].as_str())
         .unwrap();
-    let output = crate::tools::background::status::canonical_tool_output(
-        &node,
-        tool_doc_id,
-        &lifecycle.request().doc_id,
-        &lifecycle.request().session_id,
-        &lifecycle.request().node_did,
-        None,
-    )
-    .await
-    .unwrap();
+    let output = agent_tool_output(&lifecycle, tool_doc_id).await;
     assert!(
         output.contains("visible-proof.txt"),
         "canonical output must carry the successful bash listing: {output}"
@@ -431,11 +396,7 @@ async fn empty_bash_arguments_exhaust_owned_loop_without_side_effects() {
             "unexpected owned loop error: {error}"
         );
         assert_eq!(model.seen_requests().await.len(), 8);
-        let response = node
-            .execute("{ AgentToolCall { _docID tool_call_id lifecycle_state tool_failure_class } }")
-            .await;
-        assert!(!response.has_errors());
-        let data = response.data.unwrap();
+        let data = agent_query(&lifecycle.access().unwrap(), "{ AgentToolCall { _docID tool_call_id lifecycle_state tool_failure_class } }").await["data"].clone();
         let rows = data["AgentToolCall"].as_array().unwrap();
         assert_eq!(rows.len(), 8);
         assert!(rows.iter().all(|row| row["lifecycle_state"] == "failed"
@@ -445,16 +406,7 @@ async fn empty_bash_arguments_exhaust_owned_loop_without_side_effects() {
                 .iter()
                 .find(|row| row["tool_call_id"] == format!("empty-bash-{index}"))
                 .unwrap_or_else(|| panic!("missing durable row {index}"));
-            let output = crate::tools::background::status::canonical_tool_output(
-                &node,
-                row["_docID"].as_str().unwrap(),
-                &lifecycle.request().doc_id,
-                &lifecycle.request().session_id,
-                &lifecycle.request().node_did,
-                None,
-            )
-            .await
-            .unwrap();
+            let output = agent_tool_output(&lifecycle, row["_docID"].as_str().unwrap()).await;
             assert!(
                 !output.is_empty(),
                 "canonical output {index} must be delivered"

@@ -85,7 +85,7 @@ pub(crate) use output::count_request_output_scans;
 #[cfg(test)]
 pub(crate) use output::count_source_output_queries;
 #[cfg(test)]
-pub(crate) use output::reader::load_canonical_payload_from_node;
+pub(crate) use output::reader::load_canonical_payload_from_access;
 pub(crate) use output::reader::load_canonical_payload_in_txn;
 pub(crate) use output::reader::load_canonical_payload_with_access;
 pub(crate) use output::reader::load_source_rows_in_txn;

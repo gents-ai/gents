@@ -21,13 +21,37 @@ impl ToolCallLifecycle {
         session_id: &str,
         requester_did: Option<&str>,
     ) -> Result<AcceptedToolCall> {
-        Self::load_direct_binding(node, tool_doc_id, node_did, session_id, requester_did, true)
+        Self::load_direct_binding(node, None, tool_doc_id, node_did, session_id, requester_did, true)
             .await
     }
 
+    /// [`Self::load_accepted_for_dispatch`] read as the owning Agent, which
+    /// alone sees its Agent-owned call rows.
     #[cfg(test)]
-    pub(super) async fn load_direct_binding(
+    pub(crate) async fn load_accepted_for_dispatch_as(
         node: &std::sync::Arc<EmbeddedNode>,
+        actor: identity::Did,
+        tool_doc_id: &str,
+        node_did: &str,
+        session_id: &str,
+        requester_did: Option<&str>,
+    ) -> Result<AcceptedToolCall> {
+        Self::load_direct_binding(
+            node,
+            Some(actor),
+            tool_doc_id,
+            node_did,
+            session_id,
+            requester_did,
+            true,
+        )
+        .await
+    }
+
+    #[cfg(test)]
+    async fn load_direct_binding(
+        node: &std::sync::Arc<EmbeddedNode>,
+        actor: Option<identity::Did>,
         tool_doc_id: &str,
         node_did: &str,
         session_id: &str,
@@ -36,7 +60,7 @@ impl ToolCallLifecycle {
     ) -> Result<AcceptedToolCall> {
         ConfigAccess::transact_local_readonly(
             node,
-            None,
+            actor,
             "tool_call.load_direct_admission",
             |txn| {
                 Box::pin(Self::load_direct_binding_in_txn(

@@ -51,7 +51,7 @@ async fn signed_claude_tool_round_trip_with_scope(
 
     let request_doc_id = lifecycle.request().doc_id.clone();
     let sends =
-        captured_claude_sends(&node, &request_doc_id, &request_commit_cid, scope_kind).await;
+        captured_claude_sends(&lifecycle.access().unwrap(), &request_doc_id, &request_commit_cid, scope_kind).await;
     let captured_body = &sends[1];
     let messages = captured_body["messages"].as_array().expect("Messages body");
     let assistant = messages
@@ -86,9 +86,7 @@ async fn signed_claude_tool_round_trip_with_scope(
         "second send must include the accepted tool result"
     );
 
-    let resp = node
-        .execute("query { AgentToolCall { _docID tool_name lifecycle_state } }")
-        .await;
+    let resp = agent_response(&lifecycle.access().unwrap(), "query { AgentToolCall { _docID tool_name lifecycle_state } }").await;
     assert!(
         !resp.has_errors(),
         "AgentToolCall query failed: {:?}",
@@ -114,12 +112,13 @@ async fn signed_claude_tool_round_trip_with_scope(
         .unwrap();
     let accepted = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        crate::tools::call::lifecycle::ToolCallLifecycle::load_accepted_for_dispatch(
+        crate::tools::call::lifecycle::ToolCallLifecycle::load_accepted_for_dispatch_as(
             &node,
+            lifecycle.actor_did().unwrap(),
             &tool_doc_id,
             &lifecycle.request().node_did,
             &session_id,
-            None,
+            lifecycle.request().requester_did.as_deref(),
         ),
     )
     .await
@@ -132,11 +131,11 @@ async fn signed_claude_tool_round_trip_with_scope(
         "accepted binding must not cross physical request identity"
     );
 
-    let arguments = crate::session::load_canonical_payload_from_node(
-        &node,
+    let arguments = crate::session::load_canonical_payload_from_access(
+        &lifecycle.access().unwrap(),
         &accepted.request_doc_id,
         &lifecycle.request().node_did,
-        None,
+        lifecycle.request().requester_did.as_deref(),
         &accepted.arguments,
     )
     .await
@@ -153,11 +152,11 @@ async fn signed_claude_tool_round_trip_with_scope(
     );
 
     let native = crate::session::load_tool_call_result(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &lifecycle.access().unwrap(),
         &tool_doc_id,
         &lifecycle.request().node_did,
         &session_id,
-        None,
+        lifecycle.request().requester_did.as_deref(),
     )
     .await
     .expect("delivered tool result");
@@ -206,22 +205,20 @@ async fn claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop(
     assert_eq!(collected.final_text.as_deref(), Some("done"));
 
     let request = lifecycle.request();
-    let headers = crate::store::graphql::graphql_with_transaction_retry(
-        &node,
+    let headers = agent_response(
+        &lifecycle.access().unwrap(),
         &format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }}, role: {{ _eq: "assistant" }} }}, order: {{ sequence: ASC }}) {{ _docID }} }}"#,
             crate::store::graphql::escape_graphql_string(&request.doc_id),
         ),
-        "Claude fixture provider messages",
     )
-    .await
-    .expect("persisted assistant message headers");
+    .await;
     let headers = headers.data.as_ref().expect("query data")["AgentMessage"]
         .as_array()
         .expect("assistant headers");
     assert_eq!(headers.len(), 2, "both provider turns were persisted");
-    let (_, stored) = crate::session::load_canonical_message_from_node(
-        &node,
+    let (_, stored) = crate::session::load_canonical_message(
+                    &lifecycle.access().unwrap(),
         headers[0]["_docID"]
             .as_str()
             .expect("provider message document"),
@@ -239,7 +236,7 @@ async fn claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop(
     );
 
     let sends = captured_claude_sends(
-        &node,
+        &lifecycle.access().unwrap(),
         &lifecycle.request().doc_id,
         &request_commit_cid,
         scope_kind,
@@ -368,7 +365,11 @@ async fn run_claude_fixture_turns(
         .expect("claimed request commit CID")
         .to_owned();
     let capture_factory =
-        crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone());
+        crate::inference::rendered_request::defra_rendered_request_capture_factory_for_signer(
+            node.clone(),
+            lifecycle.managed_agent_signer().expect("claimed Agent signer"),
+        )
+        .unwrap();
     let capture_scope = crate::inference::rendered_request::scope_from_factory(
         crate::inference::rendered_request::context_for_claimed_request(
             lifecycle.request(),
@@ -473,9 +474,11 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
                 crate::turn::provider_input::ProviderInputProfile::ClaudeMessages,
             );
             let capture_factory =
-                crate::inference::rendered_request::defra_rendered_request_capture_factory(
-                    node.clone(),
-                );
+                crate::inference::rendered_request::defra_rendered_request_capture_factory_for_signer(
+            node.clone(),
+            lifecycle.managed_agent_signer().expect("claimed Agent signer"),
+        )
+        .unwrap();
             let capture_scope = crate::inference::rendered_request::scope_from_factory(
                 crate::inference::rendered_request::context_for_claimed_request(
                     lifecycle.request(),
@@ -509,17 +512,19 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
 }
 
 async fn captured_claude_sends(
-    node: &Arc<defra_node::Node>,
+    reader: &crate::ConfigAccess,
     request_doc_id: &str,
     request_commit_cid: &str,
     scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
 ) -> Vec<serde_json::Value> {
-    let captures = node
-        .execute(&format!(
+    let captures = agent_response(
+        reader,
+        &format!(
             r#"{{ RenderedRequest(filter: {{ request_doc_id: {{ _eq: "{}" }} }}, order: {{ turn_index: ASC }}) {{ turn_index capture_scope source request_commit_cid capture_version request_json }} }}"#,
             crate::store::graphql::escape_graphql_string(request_doc_id),
-        ))
-        .await;
+        ),
+    )
+    .await;
     assert!(
         !captures.has_errors(),
         "RenderedRequest query failed: {:?}",
@@ -544,7 +549,7 @@ async fn captured_claude_sends(
         assert_eq!(row["source"], expected_source, "Claude origin is physical");
         assert_eq!(row["request_commit_cid"].as_str(), Some(request_commit_cid));
         let (body, _) = crate::inference::rendered_request::decode_capture_pair(
-            &crate::store::config_client::ConfigAccess::local(node.clone()),
+            reader,
             u32::try_from(row["capture_version"].as_u64().expect("capture version"))
                 .expect("version fits u32"),
             row["request_json"].as_str().expect("encoded request JSON"),

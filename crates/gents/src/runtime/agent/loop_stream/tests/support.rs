@@ -770,30 +770,6 @@ async fn owned_test_hook_with_identity_policy(
     .unwrap();
     let session_id = uuid::Uuid::new_v4().to_string();
     let request_id = uuid::Uuid::new_v4().to_string();
-    let session_created_at =
-        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    // The claimed Agent reads the session it is admitted into, so the Agent
-    // creates the row; a node-created row is not visible to its claim, which
-    // then creates a second row and violates the (node_did, session_id) index.
-    agent_access
-        .transact_write("test.owned_loop.session", |txn| {
-            Box::pin(async {
-                crate::session::ensure_session_in_txn(
-                    txn,
-                    &session_id,
-                    node_did,
-                    &agent_did,
-                    requester_did,
-                    None,
-                    None,
-                    &session_created_at,
-                )
-                .await?;
-                Ok::<_, anyhow::Error>(())
-            })
-        })
-        .await
-        .unwrap();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let create = crate::request::lifecycle::build_signed_request(
         crate::request::lifecycle::RequestSpec::new(
@@ -860,25 +836,6 @@ async fn owned_test_hook_with_identity_policy(
             predecessor = id;
         }
     }
-    let hook = DefraSessionHook::resume_with_identity_policy(
-        node.clone(),
-        &session_id,
-        node_did,
-        requester_did,
-        policy,
-    )
-    .await
-    .unwrap();
-    // The request is agent-owned, so the node identity cannot resolve its
-    // document id by logical id. Bind the id the Agent's write returned.
-    hook.set_active_request_binding(
-        Some(request_id),
-        Some(request_doc_id),
-        requester_did.map(str::to_owned),
-    )
-    .await;
-    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
-        .await;
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         &agent_did,
@@ -899,6 +856,33 @@ async fn owned_test_hook_with_identity_policy(
         lifecycle.claim().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed
     );
+    // The claim projects the session as the admitted Agent, exactly as the
+    // daemon does; the hook then resumes and writes as that Agent.
+    // A local-self request's requester is its signing Agent, so the claimed
+    // row, not the fixture's root, carries the session's requester scope.
+    let claimed_requester = lifecycle.request().requester_did.clone();
+    let hook = DefraSessionHook::resume_with_actor_policy(
+        node.clone(),
+        &session_id,
+        node_did,
+        claimed_requester.as_deref(),
+        ::identity::Did::new(&agent_did).unwrap(),
+        policy,
+    )
+    .await
+    .unwrap()
+    .with_managed_identity(agent_identity.as_ref())
+    .unwrap();
+    // The request is agent-owned, so the node identity cannot resolve its
+    // document id by logical id. Bind the id the Agent's write returned.
+    hook.set_active_request_binding(
+        Some(request_id),
+        Some(request_doc_id),
+        claimed_requester.clone(),
+    )
+    .await;
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
+        .await;
     // The loop's writes to the agent-owned request run as the claimed Agent.
     let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
         node.clone(),
@@ -908,6 +892,43 @@ async fn owned_test_hook_with_identity_policy(
     .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     (node, hook, writer, lifecycle, folded_docs)
+}
+
+/// The loop's rows are owned by the claimed Agent and invisible to the node
+/// identity, so fixture observations read them as that Agent.
+pub(super) async fn agent_query(
+    reader: &crate::ConfigAccess,
+    query: &str,
+) -> serde_json::Value {
+    reader.execute(query).await.expect("Agent-scoped fixture read")
+}
+
+/// [`agent_query`] in the node's response shape for fixtures that inspect it.
+pub(super) async fn agent_response(
+    reader: &crate::ConfigAccess,
+    query: &str,
+) -> defra_node::QueryResponse {
+    defra_node::QueryResponse::success(agent_query(reader, query).await["data"].clone())
+}
+
+/// Canonical tool output for one call, read as the claimed Agent in the
+/// request's own requester scope.
+pub(super) async fn agent_tool_output(
+    lifecycle: &crate::request::lifecycle::RequestLifecycle,
+    tool_doc_id: &str,
+) -> String {
+    let request = lifecycle.request();
+    crate::tools::background::status::observe_canonical_tool_output_with_access(
+        &lifecycle.access().expect("claimed Agent access"),
+        tool_doc_id,
+        &request.doc_id,
+        &request.session_id,
+        &request.node_did,
+        request.requester_did.as_deref(),
+    )
+    .await
+    .expect("Agent-scoped canonical tool output")
+    .into_text()
 }
 
 pub(super) fn transient_provider_error(label: &str) -> CompletionError {

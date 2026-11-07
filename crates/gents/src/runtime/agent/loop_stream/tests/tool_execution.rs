@@ -82,7 +82,7 @@ async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
                     "lost authority must stop the loop"
                 );
                 assert!(collected.tool_results.is_empty());
-                let rows = crate::store::config_client::ConfigAccess::local(node.clone())
+                let rows = lifecycle.access().unwrap()
                     .execute("query { AgentToolCall { lifecycle_state } }")
                     .await
                     .unwrap();
@@ -244,7 +244,7 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
                         Some("tool_call.start_running_canonical"), collect,
                     ).await;
 
-                let rows = crate::store::config_client::ConfigAccess::local(node.clone())
+                let rows = lifecycle.access().unwrap()
                     .execute(
                         "query { AgentToolCall { lifecycle_state started_at tool_failure_class } }",
                     )
@@ -304,7 +304,7 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
 
 #[tokio::test]
 async fn tool_call_turn_executes_threads_result_and_completes() {
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (_node, hook, writer, mut lifecycle) = owned_test_hook().await;
     let prompt = Message::user("use the echo tool");
 
     let model = ScriptedModel::new_turns(vec![
@@ -362,8 +362,8 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
         "fresh result must reach the next dispatch intact below threshold"
     );
 
-    let persisted = crate::session::load_history(
-        &node,
+    let persisted = crate::session::load_history_with_access(
+        &lifecycle.access().unwrap(),
         &lifecycle.request().session_id,
         &lifecycle.request().node_did,
         lifecycle.request().requester_did.as_deref(),
@@ -394,9 +394,7 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
     assert!(durable_stub.contains("\"call_id\":\"call-1\""));
     assert!(!durable_stub.contains("ECHOED"));
 
-    let resp = node
-        .execute("query { AgentToolCall { _docID tool_name lifecycle_state } }")
-        .await;
+    let resp = agent_response(&lifecycle.access().unwrap(), "query { AgentToolCall { _docID tool_name lifecycle_state } }").await;
     assert!(
         !resp.has_errors(),
         "AgentToolCall query failed: {:?}",
@@ -421,16 +419,7 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
         .find(|row| row["tool_name"] == "echo")
         .and_then(|row| row["_docID"].as_str())
         .unwrap();
-    let output = crate::tools::background::status::canonical_tool_output(
-        &node,
-        tool_doc_id,
-        &lifecycle.request().doc_id,
-        &lifecycle.request().session_id,
-        &lifecycle.request().node_did,
-        None,
-    )
-    .await
-    .unwrap();
+    let output = agent_tool_output(&lifecycle, tool_doc_id).await;
     assert!(output.contains("ECHOED"));
 }
 
@@ -733,7 +722,12 @@ async fn persisted_plugin_image_result_replay(image_bytes: usize) {
     assert_eq!(collected.final_text.as_deref(), Some("seen"));
 
     let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id, &lifecycle.request().node_did, None)
+    let history = crate::session::load_history_with_access(
+        &lifecycle.access().unwrap(),
+        &session_id,
+        &lifecycle.request().node_did,
+        lifecycle.request().requester_did.as_deref(),
+    )
         .await
         .unwrap();
     let replayed: Vec<String> = history
@@ -886,7 +880,7 @@ async fn missing_tool_args_notify_model_and_terminalize_failed() {
         }
     }
 
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (_node, hook, writer, mut lifecycle) = owned_test_hook().await;
 
     let model = ScriptedModel::new_turns(vec![
         vec![
@@ -936,9 +930,7 @@ async fn missing_tool_args_notify_model_and_terminalize_failed() {
         "the internal marker must never leak to the model, got: {tool_results:?}"
     );
 
-    let resp = node
-        .execute("query { AgentToolCall { tool_name lifecycle_state tool_failure_class } }")
-        .await;
+    let resp = agent_response(&lifecycle.access().unwrap(), "query { AgentToolCall { tool_name lifecycle_state tool_failure_class } }").await;
     assert!(
         !resp.has_errors(),
         "AgentToolCall query failed: {:?}",
@@ -1065,24 +1057,20 @@ async fn terminalization_with_principal_output(
     let finished_at = chrono::Utc::now();
     let generation = lifecycle.execution_generation().unwrap().to_owned();
     let request_doc_id = lifecycle.request().doc_id.clone();
-    let segments = node
-        .execute(&format!(
+    let segments = agent_response(&lifecycle.access().unwrap(), &format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {} }} }}"#,
             crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS
-        ))
-        .await;
+        )).await;
     let segments = segments.data.as_ref().unwrap()["AgentOutputSegment"]
         .as_array()
         .unwrap()
         .iter()
         .map(|row| crate::session::canonical_rows::decode_output_segment_row(row).unwrap())
         .collect::<Vec<_>>();
-    let messages = node
-        .execute(&format!(
+    let messages = agent_response(&lifecycle.access().unwrap(), &format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {} }} }}"#,
             crate::session::canonical_rows::AGENT_MESSAGE_FIELDS
-        ))
-        .await;
+        )).await;
     let messages = messages.data.as_ref().unwrap()["AgentMessage"]
         .as_array()
         .unwrap()
@@ -1132,8 +1120,8 @@ async fn terminalization_with_principal_output(
     }
     let selection = writer.terminal_output(&request_doc_id).await;
     let started = std::time::Instant::now();
-    let result = crate::request::lifecycle::terminalize_owned_at(
-        &node,
+    let result = crate::request::lifecycle::terminalize_owned_at_with_access(
+        &lifecycle.access().unwrap(),
         &request_doc_id,
         &generation,
         crate::request::lifecycle::RequestTerminalOutcome::Completed,
@@ -1307,7 +1295,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
         assert_eq!(output, "output");
         assert_eq!(
             crate::tools::background::status::observe_canonical_tool_output_with_access(
-                &crate::store::config_client::ConfigAccess::local(node.clone()),
+                &lifecycle.access().unwrap(),
                 "tool-doc",
                 &request_id,
                 "session",
@@ -1429,9 +1417,7 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
         output["tool_results"]["late"]["error"],
         "late timed out after 50ms"
     );
-    let rows = node
-        .execute("query { AgentToolCall { tool_name lifecycle_state } }")
-        .await;
+    let rows = agent_response(&lifecycle.access().unwrap(), "query { AgentToolCall { tool_name lifecycle_state } }").await;
     let rows = rows.data.unwrap()["AgentToolCall"].clone();
     for (name, state) in [
         ("plugin", "completed"),
@@ -1598,7 +1584,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
         let completed = completed.lock().unwrap().clone();
         let invoked = invoked.lock().unwrap().clone();
         assert_eq!(completed.len(), expected.len());
-        let rows = crate::store::config_client::ConfigAccess::local(node.clone())
+        let rows = lifecycle.access().unwrap()
             .execute("query { AgentToolCall { plugin_effect_ordinal lifecycle_state } }")
             .await
             .unwrap();
@@ -1810,7 +1796,7 @@ async fn parallel_native_reads_publish_distinct_bound_unchanged_receipts() {
     )
     .await;
     assert!(collected.error.is_none(), "{:?}", collected.error);
-    let rows = crate::ConfigAccess::local(node.clone()).execute("{ AgentToolCall { _docID tool_name lifecycle_state } ToolFileInventory { tool_call_doc_id request_doc_id verified_unchanged } }").await.unwrap();
+    let rows = lifecycle.access().unwrap().execute("{ AgentToolCall { _docID tool_name lifecycle_state } ToolFileInventory { tool_call_doc_id request_doc_id verified_unchanged } }").await.unwrap();
     let calls: Vec<_> = rows["data"]["AgentToolCall"]
         .as_array()
         .unwrap()

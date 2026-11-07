@@ -16,7 +16,7 @@ pub use gents_loop::rendered_request::{
     CAPTURE_VERSION, CONTEXT_ACCOUNTING_VERSION, PROVENANCE_MANIFEST_VERSION,
 };
 #[cfg(test)]
-pub(crate) use sink::defra_rendered_request_capture_factory;
+pub(crate) use sink::defra_rendered_request_capture_factory_for_signer;
 pub(crate) use sink::defra_rendered_request_capture_factory_for_agent;
 pub use sink::DefraRenderedRequestSink;
 
