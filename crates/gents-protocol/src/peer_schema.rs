@@ -24,6 +24,65 @@ pub fn admit_app_collections(requested: BTreeSet<String>) -> Option<BTreeSet<Str
     (!requested.is_empty() && !overlaps_protocol_catalog).then_some(requested)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppPairingFilter {
+    pub collection: String,
+    pub field: String,
+    pub value: String,
+}
+
+/// An unknown or mutable field cannot safely constrain replicated documents.
+pub fn admit_app_pairing_filters(
+    collections: &BTreeSet<String>,
+    immutable_fields: &BTreeSet<(String, String)>,
+    filters: &[AppPairingFilter],
+) -> bool {
+    let mut seen = BTreeSet::new();
+    filters.iter().all(|filter| {
+        collections.contains(&filter.collection)
+            && !filter.field.is_empty()
+            && !filter.value.is_empty()
+            && immutable_fields.contains(&(filter.collection.clone(), filter.field.clone()))
+            && seen.insert(&filter.collection)
+    })
+}
+
+#[cfg(test)]
+mod app_pairing_filter_conformance {
+    use super::*;
+
+    #[test]
+    fn admission_matches_executable_model() {
+        let snapshot: Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        let cases = snapshot["app_pairing_filter_cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let collections: BTreeSet<String> =
+                serde_json::from_value(case["collections"].clone()).unwrap();
+            let filters: Vec<AppPairingFilter> =
+                serde_json::from_value(case["filters"].clone()).unwrap();
+            let immutable = case["authority"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|field| field["immutable"].as_bool() == Some(true))
+                .map(|field| {
+                    (
+                        field["collection"].as_str().unwrap().to_owned(),
+                        field["field"].as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                admit_app_pairing_filters(&collections, &immutable, &filters),
+                case["valid"].as_bool().unwrap(),
+                "{}",
+                case["label"]
+            );
+        }
+    }
+}
+
 /// What a merge depends on for one collection: DefraDB's content-addressed
 /// active version ID, plus the branchable and policy settings that version
 /// ID does not cover.
