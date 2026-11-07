@@ -103,14 +103,8 @@ async fn session_transcript(db: &TestDb, fixture: &ManagedAgentFixture) -> Vec<T
         .collect::<Vec<_>>();
     let mut rows = Vec::with_capacity(header_ids.len());
     for header_id in header_ids {
-        let (header, message) = gents::session::load_canonical_message(
-            &fixture.access,
-            &header_id,
-            db.node_identity.did(),
-            Some(fixture.user.did()),
-        )
-        .await
-        .unwrap_or_else(|error| panic!("reconstruct message {header_id}: {error:#}"));
+        let (header, message) =
+            crate::support::fixtures::held_canonical_message(db, fixture, &header_id).await;
         rows.push(TranscriptRow {
             sequence: header.sequence,
             content: serde_json::to_string(&message).expect("serialize message"),

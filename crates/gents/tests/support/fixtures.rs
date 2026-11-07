@@ -364,17 +364,48 @@ pub async fn held_fixture_history(
         .as_array()
         .expect("message headers")
     {
-        let (_, message) = gents::session::load_canonical_message(
+        let header = header["_docID"].as_str().expect("message document ID");
+        messages.push(held_canonical_message(db, fixture, header).await.1);
+    }
+    messages
+}
+
+/// A message's segments become readable to its User only once their
+/// relationships are published after the message commits; the
+/// reconstruction owner marks that window incomplete, so wait it out and
+/// fail on any other error.
+pub async fn held_canonical_message(
+    db: &super::TestDb,
+    fixture: &super::ManagedAgentFixture,
+    header: &str,
+) -> (
+    gents_protocol::output::TranscriptMessage,
+    gents::inference::llm::message::Message,
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match gents::session::load_canonical_message(
             &fixture.access,
-            header["_docID"].as_str().expect("message document ID"),
+            header,
             db.node_identity.did(),
             Some(fixture.user.did()),
         )
         .await
-        .expect("read fixture canonical message");
-        messages.push(message);
+        {
+            Ok(message) => return message,
+            Err(error)
+                if tokio::time::Instant::now() < deadline
+                    && error.chain().any(|cause| {
+                        cause
+                            .downcast_ref::<gents_protocol::output::ReconstructionError>()
+                            .is_some_and(gents_protocol::output::ReconstructionError::is_incomplete)
+                    }) =>
+            {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Err(error) => panic!("read fixture canonical message {header}: {error:#}"),
+        }
     }
-    messages
 }
 
 pub async fn bind_managed_agent_backend(
