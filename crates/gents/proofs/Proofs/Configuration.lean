@@ -548,6 +548,32 @@ theorem backend_negative_queue_rejected (queue : Int) (h : queue < 0) :
   have hn : ¬ (0 : Int) ≤ queue := by omega
   simp [resolveBackendControls, defaultBackendControls, ConfigDefaults.resolveNat, hn]
 
+/-- An existing dependency retains its own install variable, including an
+explicitly unset value. Only a per-pack override may replace that value;
+ambient variables are consulted for a root install or a first installation. -/
+def resolvePackInstallVariable (dependency : Bool)
+    (previous override : Option (Option String)) (ambient : Option String) : Option String :=
+  match override with
+  | some value => value
+  | none => if dependency then previous.getD ambient else ambient
+
+theorem dependency_variable_preserved (previous ambient : Option String) :
+    resolvePackInstallVariable true (some previous) none ambient = previous := by
+  rfl
+
+theorem explicit_pack_variable_wins (dependency : Bool) (previous : Option (Option String))
+    (override ambient : Option String) :
+    resolvePackInstallVariable dependency previous (some override) ambient = override := by
+  rfl
+
+theorem first_dependency_uses_ambient (ambient : Option String) :
+    resolvePackInstallVariable true none none ambient = ambient := by
+  rfl
+
+theorem root_uses_current_environment (previous : Option (Option String)) (ambient : Option String) :
+    resolvePackInstallVariable false previous none ambient = ambient := by
+  rfl
+
 /-- Local pack preparation has the root and declared dependency manifests and
 an installed-plugin inventory. Every declared reference must resolve through
 those existing resources before configuration writes begin. -/
