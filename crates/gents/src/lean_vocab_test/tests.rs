@@ -88,3 +88,9 @@ fn decodes_pairing_reconcile_samples_with_stable_desired_resources() {
         );
     }
 }
+
+#[test]
+fn added_contract_cases_parse_through_the_typed_snapshot() {
+    let snapshot = lean_contract_snapshot();
+    assert!(!snapshot.pack_operator_wire_cases.is_empty());
+}
