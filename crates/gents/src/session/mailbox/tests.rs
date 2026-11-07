@@ -399,34 +399,43 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
     )
     .await
     .unwrap();
-    let response = graphql_with_transaction_retry(
-        node.as_ref(),
-        &format!(
+    // AgentRequest rows are owned by the managed Agent that materialized them,
+    // so the owner lineage and the signed row are read as that Agent.
+    let response = access
+        .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ requester_did caused_by_source_doc_id }} }}"#,
             escape_graphql_string(&enqueued.doc_id)
-        ),
-        "verify event-stage owner lineage",
-    )
-    .await
-    .unwrap();
-    let rows = rows::<Value>(&response, "AgentRequest").unwrap();
+        ))
+        .await
+        .unwrap();
+    let rows = response
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["requester_did"], identity.did());
     assert_eq!(rows[0]["caused_by_source_doc_id"], source_item.doc_id);
-    let response = node
+    let response = access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             escape_graphql_string(&enqueued.doc_id),
             crate::request::admission::SIGNED_REQUEST_FIELDS,
         ))
-        .await;
+        .await
+        .unwrap();
+    let request_rows: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(
+        response
+            .pointer("/data/AgentRequest")
+            .cloned()
+            .unwrap_or_else(|| Value::Array(Vec::new())),
+    )
+    .unwrap();
     let request = crate::request::watcher::AgentRequest::try_from(
-        crate::store::graphql::rows::<gents_protocol::row::AgentRequestRow>(
-            &response,
-            "AgentRequest",
-        )
-        .unwrap()
-        .remove(0),
+        request_rows
+            .into_iter()
+            .next()
+            .expect("managed Agent reads its materialized request"),
     )
     .unwrap();
     let request = &request;

@@ -73,6 +73,16 @@ async fn read_as(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> Result<A
     .await
 }
 
+/// AgentSession is governed by the Agent ownership policy, so its signed block
+/// is read as the user who wrote it; the node identity holds no session relation.
+async fn signer_as_actor(node: &EmbeddedNode, actor: &str, cid: &str) -> Result<String> {
+    let (block, signature) = node.authorized_signed_block_bytes(cid, Some(actor)).await?;
+    let block = defra_core::block::Block::from_dag_cbor(&block)?;
+    let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
+    db::block::verify::verified_signature_signer_did(&block, &signature)
+        .map_err(anyhow::Error::msg)
+}
+
 async fn create_session(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> Result<String> {
     ConfigAccess::transact_local_write(
         node, Some(::identity::Did::new(actor.did())?), "test.archive.create",
@@ -416,14 +426,6 @@ async fn authenticated_http_archive_uses_the_same_durable_transaction_owner() ->
                 .await?;
         }
     }
-    // Block signature verification reads the signed block as the node identity,
-    // so the runtime must hold document read to verify the session's update.
-    node.add_nac_actor_relationship_as(
-        &context,
-        acp::nac::NodePermission::DocumentRead.as_str(),
-        runtime.did(),
-    )
-    .await?;
     let client = |identity: &crate::KeyIdentity| -> Result<ConfigAccess> {
         Ok(ConfigAccess::Graphql(
             crate::store::config_client::GraphqlEndpoint::as_principal(&endpoint, identity.did())
@@ -540,7 +542,7 @@ async fn authenticated_http_archive_uses_the_same_durable_transaction_owner() ->
     let cid = session["data"]["AgentSession"][0]["_version"][0]["cid"]
         .as_str()
         .context("archive update missing version")?;
-    assert_eq!(node.verified_block_signer_did(cid).await?, user.did());
+    assert_eq!(signer_as_actor(&node, user.did(), cid).await?, user.did());
     assert_eq!(
         owners().await?[0]
             .owner

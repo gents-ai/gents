@@ -667,6 +667,18 @@ async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
         agent.as_ref(),
     )
     .unwrap();
+    // The Agent baseline carries no node-level delete; the runtime grants it
+    // the same way the runtime fixtures do before the Agent removes its message.
+    crate::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(db.node_identity.did()).unwrap(),
+    )
+    .grant_node_permission(
+        &identity::Did::new(agent.did()).unwrap(),
+        crate::store::config_client::NodePermission::DocumentDelete,
+    )
+    .await
+    .unwrap();
     let deleted = agent_access
         .write(
             "test.remove_middle_header",

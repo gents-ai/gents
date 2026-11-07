@@ -12,6 +12,16 @@ fn envelope_rows<'a>(response: &'a Value, name: &str) -> anyhow::Result<&'a [Val
         .ok_or_else(|| anyhow::anyhow!("{name} response omitted rows"))
 }
 
+/// MailboxItem carries a collection ACP policy, so its signed block is read as
+/// the actor that owns the row; the node's own caller has no recipient relation.
+async fn signer_as_actor(node: &EmbeddedNode, actor: &str, cid: &str) -> anyhow::Result<String> {
+    let (block, signature) = node.authorized_signed_block_bytes(cid, Some(actor)).await?;
+    let block = defra_core::block::Block::from_dag_cbor(&block)?;
+    let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
+    db::block::verify::verified_signature_signer_did(&block, &signature)
+        .map_err(anyhow::Error::msg)
+}
+
 fn client(endpoint: &str, identity: &crate::KeyIdentity) -> anyhow::Result<ConfigAccess> {
     Ok(ConfigAccess::Graphql(
         GraphqlEndpoint::as_principal(endpoint, identity.did())
@@ -148,7 +158,7 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
     let cid = created["data"]["MailboxItem"][0]["_version"][0]["cid"]
         .as_str()
         .unwrap();
-    assert_eq!(node.verified_block_signer_did(cid).await?, agent.did());
+    assert_eq!(signer_as_actor(&node, agent.did(), cid).await?, agent.did());
     let mut aborted_input = input.clone();
     aborted_input["item_key"] = json!("mailbox:aborted");
     let aborted: anyhow::Result<()> = access
@@ -285,7 +295,7 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
     let cid = response["data"]["MailboxItem"][0]["_version"][0]["cid"]
         .as_str()
         .unwrap();
-    assert_eq!(node.verified_block_signer_did(cid).await?, user.did());
+    assert_eq!(signer_as_actor(&node, user.did(), cid).await?, user.did());
     access
         .transact_write("test.mailbox.revoke", |txn| {
             let doc = &doc;
@@ -340,6 +350,25 @@ async fn mailbox_sweep_uses_held_targets() -> anyhow::Result<()> {
     assert_eq!(policy, gents_protocol::schemas::MAILBOX_POLICY_ID);
     node.add_collection_as(&context, gents_protocol::schemas::MAILBOX_ITEM)
         .await?;
+    // The runtime reconciles this ordinary index with the collection; the cursor
+    // sweep's order is only plannable through it.
+    let cursor_index = gents_migration::DEFAULT_ORDINARY_INDEXES
+        .iter()
+        .find(|index| index.name == "MailboxItem_node_status_item_key")
+        .context("MailboxItem cursor index is not registered")?;
+    node.ensure_ordinary_index(
+        cursor_index.collection,
+        cursor_index.name,
+        cursor_index
+            .fields
+            .iter()
+            .map(|field| schema::IndexedFieldDescription {
+                name: field.name.to_owned(),
+                descending: field.descending,
+            })
+            .collect(),
+    )
+    .await?;
     let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse()?);
     for actor in [first.did(), second.did()] {
         for permission in [
