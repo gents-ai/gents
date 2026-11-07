@@ -29,6 +29,7 @@ required-features = ["live-e2e"]
 
 [dependencies]
 schema.workspace = true
+replication-filter.workspace = true
 storage.workspace = true
 rapidhash = { workspace = true }
 ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "no-serde-warnings"] }

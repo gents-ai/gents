@@ -400,24 +400,16 @@ impl P2pTool {
                 .and_then(Value::as_str)
                 .filter(|id| !id.is_empty())
                 .context("collection has no schema version")?;
-            let schema_fields = version
-                .get("Fields")
-                .and_then(Value::as_array)
-                .with_context(|| {
-                    format!("collection {collection} has no readable field metadata")
-                })?;
-            if schema_fields.iter().any(|candidate| {
-                candidate.get("Name").and_then(Value::as_str) == Some(field.as_str())
-                    && candidate.get("Immutable").and_then(Value::as_bool) == Some(true)
-            }) {
-                immutable.insert((collection.clone(), field.clone(), version_id.to_owned()));
-            }
-            filters.push(AppPairingFilter {
+            let filter = AppPairingFilter {
                 collection: collection.clone(),
                 field: field.clone(),
                 value: value.clone(),
                 version: version_id.to_owned(),
-            });
+            };
+            crate::runtime::agent::p2p_reconcile::templates::validate_app_filter(&version, &filter)
+                .map_err(|error| anyhow::anyhow!("invalid pairing filter: {error}"))?;
+            immutable.insert((collection.clone(), field.clone(), version_id.to_owned()));
+            filters.push(filter);
         }
         ensure!(
             admit_app_pairing_filters(collections, &immutable, &filters),
@@ -451,7 +443,7 @@ impl P2pTool {
             ["enrollment", "offer"] => &["valid_for_secs"],
             ["pairings", "get"] => &["peer_id", "details"],
             ["network", "get"] => &["peer_id"],
-            ["pairings", "preview" | "apply"] => &["peer_id", "peer_did", "collections"],
+            ["pairings", "preview" | "apply"] => &["peer_id", "peer_did", "collections", "filters"],
             ["pairings", "revoke"] => &["peer_id"],
             ["enrollment", "approve" | "deny" | "revoke"] => &["request_id"],
             ["enrollment", "request"] => &["offer_token"],
@@ -877,7 +869,7 @@ fn help(resource: Option<&str>) -> Result<&'static str> {
     Ok(match resource {
         None => "Actions: status; network_list, network_get; pairings_list, pairings_get, pairings_preview, pairings_apply, pairings_revoke; enrollment_offer, enrollment_request, enrollment_pending, enrollment_approve, enrollment_deny, enrollment_revoke, enrollment_history; sync_documents. Action help with topic status, network, pairings, enrollment, sync or scope explains each; scope covers grants and capability boundaries. Identity comes from the running node. Mutation and collection grants are explicit.",
         Some("status" | "network") => "status returns native connected peer references (raw IDs or transport addresses) and native sync facts. network_list lists up to 50 registered peers with exact DIDs and addresses. network_get takes peer_id, validates the transport identity and returns its registry record plus observed connection. A registry entry is discovery, not enrollment authority or current connectivity; network_get's connected field is the observed transport connection. status defaults to backlog facts; details:true returns native diagnostic counters.",
-        Some("pairings") => "pairings_get with peer_id inspects one peer; pairings_list shows desired, applied, enrolled and connected observations separately. Defaults show compact replicator counts; details:true includes native collection IDs and filters. pairings_preview and pairings_apply require peer_id, peer_did and collections (1-16 application names). The peer must have current signed enrollment; its DID/address come from that owner. Preview and apply report local schema identities but do not check the peer; the peer must have matching collection versions. Apply changes only the explicit engineer application overlay; the existing reconciler applies it. pairings_revoke requires peer_id and removes only that overlay. Protocol collections and another owner's overlays are refused. Replacing or revoking requires collection authority over the entire existing overlay. Inspect pairings_get after apply/revoke; submitted desired state is not proof of a live route.",
+        Some("pairings") => "pairings_get with peer_id inspects one peer; pairings_list shows desired, applied, enrolled and connected observations separately. Defaults show compact replicator counts; details:true includes native collection IDs and filters. pairings_preview and pairings_apply require peer_id, peer_did and collections (1-16 application names). Optional filters map selected collections to one immutable scalar field and its equality value, for example {\"Post\":{\"to_host\":\"node-a\"}}. Supply filters explicitly when changing a filtered overlay; {} removes them. Filters select pushed documents, but do not replace ACP or constrain independent subscriptions. The peer must have current signed enrollment; its DID/address come from that owner. Preview and apply report local schema identities but do not check the peer; the peer must have matching collection versions. Apply changes only the explicit engineer application overlay; the existing reconciler applies it. pairings_revoke requires peer_id and removes only that overlay. Protocol collections and another owner's overlays are refused. Replacing or revoking requires collection authority over the entire existing overlay. Inspect pairings_get after apply/revoke; submitted desired state is not proof of a live route.",
         Some("enrollment") => "Joining: the approving node runs enrollment_offer and hands offer_token to the joining node, which runs enrollment_request; the approver then finds it with enrollment_pending, approves it and applies pairings. enrollment_offer requires mutation authority and returns this node's signed offer_token, peer_id and DID; the token is valid 5 minutes unless valid_for_secs asks for up to 3600, which a relay through people or other agents needs, and the joining node must request before expires_at; the token only lets its holder ask to join, approval stays here, and it is single use: give each joining node its own offer, because requests from two nodes made with one offer are both refused. enrollment_request requires offer_token from the approving node and mutation authority. It verifies the peer's signed offer, signs a request with this node's identity and delivers it; the peer's operator approves it there with approve_on_peer. enrollment_pending discovers signed request IDs. enrollment_approve, enrollment_deny or enrollment_revoke requires request_id and mutation authority; deny signs a refusal of a pending request, revoke ends an approved one. The existing enrollment owner verifies the operator, network and request and signs the durable decision. Approval admits the peer to this node's network for the default authorization lease and materializes its enrollment route, so approve only a request you were asked to approve whose peer_did you checked. Enrollment is one-way: approval enrolls the requester in this node's network, so this node can pair toward it, not the reverse. Pairing in both directions needs each node enrolled in the other's network, through a second offer, request and approval the other way. Do not invent a DID or substitute an unsigned pairing document. enrollment_history lists up to 50 current pending, approved, denied and revoked requests, newest first, with decision times and signers; requests that expired undecided or were superseded by the same peer's later request are omitted. Approved entries carry lease_state, lease_remaining_days and renewal_due, which turns true inside the last 7 days of the lease. Renewal is re-enrollment before expiry: the same four calls with a fresh offer, request and approval for the same peer; the approval takes the peer's next authorization sequence and supersedes the old generation in place, so pairings applied toward the peer stay. After expiry the peer's routes and remote requests stop until it re-enrolls.",
         Some("sync") => "sync_documents requires peer_id, collection and doc_ids (1-16 physical document IDs). The peer needs current enrollment; only application collections in the tool grant are supported. Protocol collections, including credentials, are always excluded; neither broader grants nor ACP changes enable them. See help topic scope. The native adapter makes a bounded 10-second sync request, then this node observes actual document IDs. Missing IDs and request errors are explicit. DefraDB chooses providers; this does not certify which peer supplied a document. Use query for authorized document content.",
         Some("scope") => "Pairing overlays and document sync support application collections only. Gents protocol/configuration and credential collections are permanently excluded from these actions, even with broader tool grants or document ACP. Keep credentials with their existing operator owner. For an application collection, an authorized configuration owner may grant the exact P2P collection in Tools built_ins.p2p_collections, and wiring a pack plugin to an agent whose Tools enable this tool grants the collections it uses; a grant applies from the agent's next request. Native ACP still controls document access. Enrollment is a separate signed authority. Sync accepts 1-16 known document IDs, not collection-wide discovery, and cannot certify the supplying peer.",

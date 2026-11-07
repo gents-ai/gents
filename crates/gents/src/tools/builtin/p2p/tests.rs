@@ -41,6 +41,8 @@ async fn pairing_filters_require_immutable_selected_fields() {
     for filters in [
         json!({"FilteredPost":{"text":"x"}}),
         json!({"FilteredPost":{"missing":"x"}}),
+        json!({"FilteredPost":{"to_host":123}}),
+        json!({"FilteredPost":{"to_host":["host"]}}),
         json!({"Other":{"to_host":"x"}}),
         json!({"FilteredPost":{"to_host":"x","text":"y"}}),
     ] {

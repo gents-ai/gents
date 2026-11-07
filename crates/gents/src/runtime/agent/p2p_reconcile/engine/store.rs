@@ -249,19 +249,8 @@ impl PairingStateStore for GraphqlPairingStateStore {
                         };
                         if version.get("VersionID").and_then(serde_json::Value::as_str)
                             == Some(filter.version.as_str())
-                            && version
-                                .get("Fields")
-                                .and_then(serde_json::Value::as_array)
-                                .is_some_and(|fields| {
-                                    fields.iter().any(|field| {
-                                        field.get("Name").and_then(serde_json::Value::as_str)
-                                            == Some(filter.field.as_str())
-                                            && field
-                                                .get("Immutable")
-                                                .and_then(serde_json::Value::as_bool)
-                                                == Some(true)
-                                    })
-                                })
+                            && super::super::templates::validate_app_filter(&version, filter)
+                                .is_ok()
                         {
                             immutable.insert((
                                 filter.collection.clone(),
