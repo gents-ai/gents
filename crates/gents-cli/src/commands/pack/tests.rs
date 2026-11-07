@@ -263,6 +263,15 @@ fn dependency_variable_overrides_are_scoped_and_reject_duplicates() {
     assert!(parse(&["HOST=one".into()]).is_err());
 }
 
+#[test]
+fn remote_plugin_routing_does_not_resolve_install_variables() {
+    let config = json!({"tools": [{"integrations": {"plugins": [{"plugin": "${UNSET_PLUGIN}"}]}}]});
+    assert!(super::install::has_plugin_references(&config));
+    assert!(!super::install::has_plugin_references(
+        &json!({"tools": [{"integrations": {"plugins": []}}]})
+    ));
+}
+
 async fn initialized_home() -> tempfile::TempDir {
     use clap::Parser;
     let home = tempfile::tempdir().unwrap();
