@@ -511,13 +511,13 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
 }
 
 async fn configure_bash_output_budget(
-    node: &std::sync::Arc<EmbeddedNode>,
+    author: &crate::store::config_client::ConfigAccess,
     owner: &str,
     agent_did: &str,
     budget: i64,
 ) {
     use crate::store::config_client::{
-        apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     // The request's Agent resolves its tools by the `{agent_did}:tools` id the
     // fixture wrote; a differently named document is never read.
@@ -530,8 +530,7 @@ async fn configure_bash_output_budget(
         update: tools,
     }])
     .unwrap();
-    // The runtime's configuration is authored by its Node owner.
-    let author = ConfigAccess::local_as(node.clone(), identity::Did::new(owner).unwrap());
+    // Tools are configuration: the owning User who wrote them signs the edit.
     author.transact_write("test.output_budget", |txn| {
         let plan = &plan;
         Box::pin(async move { apply_desired_state_plan(txn, plan).await })
@@ -571,6 +570,7 @@ async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
                 node,
                 path,
                 mut tool,
+                client,
                 ..
             },
             request,
@@ -587,7 +587,7 @@ async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
             .await
             .unwrap();
         if configured {
-            configure_bash_output_budget(&node, &tool.node_did, &agent_did, 5).await;
+            configure_bash_output_budget(&client, &tool.node_did, &agent_did, 5).await;
         }
         if reload {
             let signer = tool.access().unwrap().managed_agent_signer();
@@ -635,7 +635,7 @@ async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
         );
 
         if bounded && !reload {
-            configure_bash_output_budget(&node, &tool.node_did, &agent_did, 12).await;
+            configure_bash_output_budget(&client, &tool.node_did, &agent_did, 12).await;
             assert!(!replay.timeout().await.unwrap(), "{name}: replay");
             assert_eq!(interrupted_presentation(&node, &tool).await, presented);
         }

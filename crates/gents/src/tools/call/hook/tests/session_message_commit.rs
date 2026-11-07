@@ -299,12 +299,15 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     .await
     .unwrap()
     .unwrap();
-    crate::tools::call::lifecycle::admission_fixture::complete_child_managed(
+    crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
         &node,
         &caused_row.request_id,
         &did,
         "done",
         &agent_signer,
+        Arc::new(
+            crate::KeyIdentity::load_existing(dir.path().join("test-agent.key"), None).unwrap(),
+        ),
     )
     .await;
     for expected in [1, 0] {

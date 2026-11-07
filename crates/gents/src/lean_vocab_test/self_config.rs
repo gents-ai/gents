@@ -33,6 +33,7 @@ pub(crate) struct LeanSelfConfigBackend {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LeanSelfConfigGrants {
     pub(crate) pack_install: bool,
+    pub(crate) policy: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

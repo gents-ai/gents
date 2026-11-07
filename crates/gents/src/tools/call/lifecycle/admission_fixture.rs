@@ -185,16 +185,6 @@ pub struct PublishedAdmission {
     pub requester_identity: Arc<dyn NodeIdentity>,
 }
 
-pub(crate) async fn complete_child_managed(
-    node: &Arc<EmbeddedNode>,
-    child_id: &str,
-    node_did: &str,
-    text: &str,
-    identity: &dyn NodeIdentity,
-) {
-    complete_child_managed_inner(node, child_id, node_did, text, identity, None).await;
-}
-
 pub(crate) async fn complete_child_managed_verified(
     node: &Arc<EmbeddedNode>,
     child_id: &str,
@@ -203,7 +193,7 @@ pub(crate) async fn complete_child_managed_verified(
     identity: &dyn NodeIdentity,
     runtime: Arc<dyn NodeIdentity>,
 ) {
-    complete_child_managed_inner(node, child_id, node_did, text, identity, Some(runtime)).await;
+    complete_child_managed_inner(node, child_id, node_did, text, identity, runtime).await;
 }
 
 async fn complete_child_managed_inner(
@@ -212,7 +202,7 @@ async fn complete_child_managed_inner(
     node_did: &str,
     text: &str,
     identity: &dyn NodeIdentity,
-    runtime: Option<Arc<dyn NodeIdentity>>,
+    runtime: Arc<dyn NodeIdentity>,
 ) {
     let child_id_escaped = crate::store::graphql::escape_graphql_string(child_id);
     let access = crate::ConfigAccess::local_managed_agent(
@@ -232,21 +222,15 @@ async fn complete_child_managed_inner(
         .clone()
         .expect("fixture request selects an agent");
     let request = row.try_into().unwrap();
-    let (request, admission) = if let Some(runtime) = runtime {
-        let (_owner, authority) =
-            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
-        let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
-            node.clone(),
-            runtime,
-            authority,
-        );
-        verifier
-            .verify_fresh_for_claim_with_identity(&request, identity)
-            .await
-            .expect("verify the child request and its native claim admission")
-    } else {
-        (request, None)
-    };
+    // A caused request is client-admitted by its calling Agent, so its claim
+    // carries the verified native claim admission.
+    let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier =
+        crate::request::admission::AgentRequestAdmissionVerifier::new(node.clone(), runtime, authority);
+    let (request, admission) = verifier
+        .verify_fresh_for_claim_with_identity(&request, identity)
+        .await
+        .expect("verify the child request and its native claim admission");
     let mut request =
         RequestLifecycle::new_with_node_did(node.clone(), &selected_agent, node_did, request, 60);
     request.bind_managed_agent(identity).unwrap();

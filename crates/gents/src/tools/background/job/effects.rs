@@ -240,6 +240,18 @@ fn latest<'a>(row: &'a StepRow, slot: &str) -> Option<&'a StepChild> {
         .max_by_key(|child| child.attempt)
 }
 
+/// Admission resolved a relative spawn cwd against the pinned cwd; the child
+/// gets that path, not one its own admission would resolve against the server
+/// process's cwd. An empty pinned cwd records a caller without one, so a child
+/// that names no directory of its own carries none either.
+fn spawn_cwd(base: &str, dir: Option<&str>) -> Option<String> {
+    match dir {
+        Some(dir) => Some(Path::new(base).join(dir).to_string_lossy().into_owned()),
+        None if base.is_empty() => None,
+        None => Some(base.to_owned()),
+    }
+}
+
 async fn stage_spawn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     job: &JobContext<'_>,
@@ -265,13 +277,7 @@ async fn stage_spawn(
         .pin
         .as_ref()
         .map_or(&job.row.caller_cwd, |pin| &pin.cwd);
-    // Admission resolved a relative spawn cwd against the pinned cwd; the child
-    // gets that path, not one its own admission would resolve against the
-    // server process's cwd.
-    let cwd = Some(match &spawn.cwd {
-        Some(dir) => Path::new(base).join(dir).to_string_lossy().into_owned(),
-        None => base.clone(),
-    });
+    let cwd = spawn_cwd(base, spawn.cwd.as_deref());
     stage_request(
         txn,
         job.cause,
@@ -457,7 +463,7 @@ mod tests {
     use defra_node::Node as EmbeddedNode;
     use serde_json::json;
 
-    use super::{admit_scratch, interrupt_slots, write_scratch};
+    use super::{admit_scratch, interrupt_slots, spawn_cwd, write_scratch};
     use crate::session::origin::SessionScope;
     use crate::store::config_client::ConfigAccess;
     use gents_protocol::job::JobScratch;
@@ -471,6 +477,17 @@ mod tests {
 
     fn read(path: &Path) -> Vec<u8> {
         std::fs::read(path).unwrap()
+    }
+
+    #[test]
+    fn a_caller_without_a_cwd_spawns_children_without_one() {
+        assert_eq!(spawn_cwd("", None), None);
+        assert_eq!(spawn_cwd("", Some("sub")), Some("sub".to_owned()));
+        assert_eq!(spawn_cwd("/work", None), Some("/work".to_owned()));
+        assert_eq!(
+            spawn_cwd("/work", Some("sub")),
+            Some("/work/sub".to_owned())
+        );
     }
 
     #[test]

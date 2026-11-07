@@ -189,7 +189,8 @@ impl ToolCallLifecycle {
             .as_ref()
             .and_then(|data| data["AgentRequest"].as_array())
             .and_then(|rows| rows.first())
-            .and_then(|row| row["agent_did"].as_str())
+            .context("tool owner request is missing or ambiguous")?["agent_did"]
+            .as_str()
             .context("accepted tool request is missing its agent DID")?;
         let actor = identity::Did::new(agent.to_owned())?;
         Ok(AcceptedToolCall {
