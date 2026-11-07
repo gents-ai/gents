@@ -696,15 +696,20 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
             set_parent_enabled(&fixture, false).await;
         }
         if active {
+            // A revoked parent can no longer prove the message source, so the
+            // steering snapshot fails closed instead of omitting the input.
             let blocked = crate::request::lifecycle::queue::steering_snapshot(
                 &fixture.node,
                 child.request(),
                 &verifier,
                 Some(fixture.child.as_ref()),
             )
-            .await
-            .unwrap();
-            assert!(blocked.inputs.is_empty());
+            .await;
+            let error = blocked.err().expect("a revoked parent's steering snapshot fails closed");
+            assert!(
+                format!("{error:#}").contains("local agent-message source is unavailable"),
+                "{error:#}"
+            );
             set_parent_enabled(&fixture, true).await;
             let snapshot = crate::request::lifecycle::queue::steering_snapshot(
                 &fixture.node,
