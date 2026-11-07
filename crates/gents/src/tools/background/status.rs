@@ -5,7 +5,6 @@ pub mod status_projection;
 use crate::inference::llm::message::{AssistantContent, Message, Text};
 use anyhow::{Context, Result};
 use chrono::Utc;
-use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 
 use crate::store::graphql::escape_graphql_string;
@@ -349,8 +348,12 @@ async fn read_tool_output_slice_inner(
     }))
 }
 
+/// Reads without an actor. Output segments are Agent-owned and invisible to
+/// it, so it exists only for unowned fixtures; runtime readers use
+/// [`observe_canonical_tool_output_with_access`] with the owning Agent.
+#[cfg(test)]
 pub(crate) async fn canonical_tool_output(
-    node: &EmbeddedNode,
+    node: &defra_node::Node,
     tool_doc_id: &str,
     request_doc_id: &str,
     session_id: &str,

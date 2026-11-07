@@ -999,15 +999,16 @@ impl BackgroundExecutionRegistry {
                                     "settled tool invocation lacks its physical request"
                                 )
                             })?;
-                            let raw = crate::tools::background::status::canonical_tool_output(
-                                lifecycle.node().as_ref(),
+                            let raw = crate::tools::background::status::observe_canonical_tool_output_with_access(
+                                &lifecycle.access()?,
                                 &doc,
                                 request_doc,
                                 lifecycle.session_id(),
                                 lifecycle.node_did(),
                                 lifecycle.requester_did(),
                             )
-                            .await?;
+                            .await?
+                            .into_text();
                             ("failed", raw, Some("tool_failed"))
                         }
                     };

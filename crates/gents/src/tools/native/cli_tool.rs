@@ -482,11 +482,11 @@ mod tests {
     }
 
     async fn committed_output(
-        node: &std::sync::Arc<defra_node::Node>,
+        _node: &std::sync::Arc<defra_node::Node>,
         tool: &crate::tools::call::lifecycle::ToolCallLifecycle,
     ) -> String {
-        crate::tools::background::status::canonical_tool_output(
-            node.as_ref(),
+        crate::tools::background::status::observe_canonical_tool_output_with_access(
+            &tool.access().unwrap(),
             tool.doc_id().unwrap(),
             tool.request_doc_id().unwrap(),
             tool.session_id(),
@@ -495,6 +495,7 @@ mod tests {
         )
         .await
         .unwrap()
+        .into_text()
     }
 
     #[tokio::test]
