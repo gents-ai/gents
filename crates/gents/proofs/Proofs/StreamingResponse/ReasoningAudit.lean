@@ -103,6 +103,17 @@ def stoppedObserved : Segment :=
 def stoppedClose : Segment :=
   { observed with id := 110, flush := none, close := some (.closed .«partial» 1 [1, 1, 0]) }
 
+def duplicateStops : Segment :=
+  { observed with flush := some ⟨0,
+      [⟨0, 1, some body⟩, ⟨1, 1, some signature⟩,
+       ⟨2, 0, some ⟨0, 0, .reasoningStop, none, none⟩⟩,
+       ⟨3, 0, some ⟨0, 0, .reasoningStop, none, none⟩⟩], [65, 83]⟩ }
+
+theorem duplicate_stops_cannot_validate :
+    (match reconstructAuditPrefix (observation [duplicateStops]) none with
+      | .error _ => true | .ok _ => false) = true := by
+  native_decide
+
 def recoveredReasoning : MessageEnvelope :=
   { header :=
       { id := 111, session := 1, request := some 10, origin := none
@@ -203,6 +214,10 @@ structure AuditCase where
 def auditCases : List AuditCase :=
   [ { name := "reasoning_audit_stopped", input := observation [stoppedObserved],
       expected := reconstructAuditPrefix (observation [stoppedObserved]) none }
+  , { name := "reasoning_audit_duplicate_arrival", input := observation [stoppedObserved, stoppedObserved],
+      expected := reconstructAuditPrefix (observation [stoppedObserved, stoppedObserved]) none }
+  , { name := "reasoning_audit_duplicate_stops", input := observation [duplicateStops],
+      expected := reconstructAuditPrefix (observation [duplicateStops]) none }
   , { name := "reasoning_audit_stopped_late_signature", input :=
         observation [stoppedObserved, signatureContinuation],
       expected := reconstructAuditPrefix (observation [stoppedObserved, signatureContinuation]) none }
