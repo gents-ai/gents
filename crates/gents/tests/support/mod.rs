@@ -199,6 +199,61 @@ pub async fn managed_agent_fixture(db: &TestDb) -> ManagedAgentFixture {
     }
 }
 
+/// Makes the fixture User the household owner `gents init` creates: the native
+/// admin that installs packs and their collection schemas.
+pub async fn grant_household_owner(db: &TestDb, user: &gents::KeyIdentity) {
+    let runtime = db.node_identity.as_ref();
+    let admin = gents::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(runtime.did()).expect("valid runtime DID"),
+    );
+    gents::store::identity::GrantSet::HouseholdOwner
+        .grant(
+            &admin,
+            &identity::Did::new(user.did()).expect("valid user DID"),
+        )
+        .await
+        .expect("grant fixture User household ownership");
+}
+
+/// The configuring User lets `caller` open sessions on `target`'s Agent (the
+/// `session_writer` relation behind `invoke`), as delegation to another Agent needs.
+pub async fn grant_agent_session_writer(
+    db: &TestDb,
+    access: &gents::ConfigAccess,
+    target_agent_did: &str,
+    caller_agent_did: &str,
+) {
+    let node_did = db.node_identity.did();
+    let target_doc = access
+        .transact_readonly("test.agent_session_writer.read", |txn| {
+            Box::pin(async move {
+                Ok::<_, anyhow::Error>(
+                    gents::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        gents::Collection::Agent,
+                        node_did,
+                        target_agent_did,
+                    )
+                    .await?
+                    .expect("target Agent")
+                    .0,
+                )
+            })
+        })
+        .await
+        .expect("read target Agent");
+    access
+        .add_actor_relationship(
+            "Agent",
+            &target_doc,
+            "session_writer",
+            &identity::Did::new(caller_agent_did).expect("valid caller DID"),
+        )
+        .await
+        .expect("grant caller session_writer on target Agent");
+}
+
 pub async fn install_managed_agent(
     db: &TestDb,
     access: &gents::ConfigAccess,

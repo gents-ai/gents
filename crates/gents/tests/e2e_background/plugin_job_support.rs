@@ -147,12 +147,14 @@ pub(crate) async fn install_job_fixture(
     settings: PluginJobSettings,
 ) -> JobActors {
     let fixture = managed_agent_fixture(db).await;
+    crate::support::grant_household_owner(db, &fixture.user).await;
     let (_, child) =
         crate::support::install_managed_agent(db, &fixture.access, &fixture.user, "Job child")
             .await;
     let did = db.node_identity.did().to_string();
     let parent_did = fixture.binding.agent_did.clone();
     let child_did = child.agent_did;
+    crate::support::grant_agent_session_writer(db, &fixture.access, &child_did, &parent_did).await;
     let (bytes, _) = pack_dir(&fixture_dir()).expect("pack the job fixture");
     let archive = PackArchive::from_bytes(&bytes).expect("read the job fixture archive");
     let config = load_pack_config(
