@@ -137,7 +137,9 @@ describe("Add node enrollment", () => {
       expect(
         within(dialog).queryByRole("radio", { name: /Local node/ }),
       ).not.toBeInTheDocument();
-      expect(within(dialog).getByLabelText("Node server")).toBeInTheDocument();
+      expect(
+        within(dialog).getByLabelText("Invitation or node server"),
+      ).toBeInTheDocument();
       expect(api.startManagedServer).not.toHaveBeenCalled();
       expect(api.initLocalStandardRuntime).not.toHaveBeenCalled();
     },
@@ -172,7 +174,7 @@ describe("Add node enrollment", () => {
     api.requestStatusEnrollment.mockRejectedValueOnce(new Error("server refused"));
     let dialog = await openAddAgent(app);
     await userEvent.type(
-      within(dialog).getByLabelText("Node server"),
+      within(dialog).getByLabelText("Invitation or node server"),
       "server.example:9191",
     );
     await userEvent.click(
@@ -193,7 +195,7 @@ describe("Add node enrollment", () => {
     api.requestStatusEnrollment.mockResolvedValue({ requestId: "request-1" });
     const dialog = await openAddAgent(app);
     await userEvent.type(
-      within(dialog).getByLabelText("Node server"),
+      within(dialog).getByLabelText("Invitation or node server"),
       "server.example:9191",
     );
     await userEvent.click(

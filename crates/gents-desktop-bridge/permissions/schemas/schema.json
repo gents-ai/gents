@@ -1243,6 +1243,18 @@
           "markdownDescription": "Denies the desktop_pack_wire_sources command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_peer_enroll_invite command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-peer-enroll-invite",
+          "markdownDescription": "Enables the desktop_peer_enroll_invite command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_peer_enroll_invite command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-peer-enroll-invite",
+          "markdownDescription": "Denies the desktop_peer_enroll_invite command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_peer_enroll_status command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-peer-enroll-status",

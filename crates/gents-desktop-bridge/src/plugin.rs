@@ -161,6 +161,7 @@ where
             tauri_commands::peers::desktop_peer_rename,
             tauri_commands::peers::desktop_peer_status_fetch,
             tauri_commands::peers::desktop_peer_enroll_status,
+            tauri_commands::peers::desktop_peer_enroll_invite,
             tauri_commands::peers::desktop_p2p_repair,
             tauri_commands::workspace::desktop_workspace_list,
             tauri_commands::peers::desktop_network_status,

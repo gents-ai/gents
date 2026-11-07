@@ -141,6 +141,7 @@ pub async fn signed_enrollment_offer(
         owner_agent: admin_identity.did().to_string(),
         profile: "client".to_string(),
         schema_fingerprint: enrollment_schema_fingerprint(),
+        live_schema_digest: None,
         issued_at: now.clone(),
         expires_at: expires_at.clone(),
         admin_sig: Vec::new(),

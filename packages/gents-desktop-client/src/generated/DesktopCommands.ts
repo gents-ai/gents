@@ -37,6 +37,7 @@ import type { DesktopSessionSnapshot } from "./DesktopSessionSnapshot.js";
 import type { DynamicWorkflowView } from "./DynamicWorkflowView.js";
 import type { DynamicWorkflowsView } from "./DynamicWorkflowsView.js";
 import type { EditedDocuments } from "./EditedDocuments.js";
+import type { EnrollmentInviteRequest } from "./EnrollmentInviteRequest.js";
 import type { EnrollmentRequestView } from "./EnrollmentRequestView.js";
 import type { EnrollmentStatusRequest } from "./EnrollmentStatusRequest.js";
 import type { EventSourceDeleteRequest } from "./EventSourceDeleteRequest.js";
@@ -234,6 +235,7 @@ export type DesktopCommands = {
   desktop_pack_whoami: { args: { registry?: string | null }; result: PackAccountView };
   desktop_pack_wire: { args: { request: PackWireRequest }; result: JsonValue };
   desktop_pack_wire_sources: { args: Record<string, never>; result: JsonValue };
+  desktop_peer_enroll_invite: { args: { request: EnrollmentInviteRequest }; result: EnrollmentRequestView };
   desktop_peer_enroll_status: { args: { request: EnrollmentStatusRequest }; result: EnrollmentRequestView };
   desktop_peer_remove: { args: { peerId: string }; result: PeerRemoveResponse };
   desktop_peer_rename: { args: { peerId: string; label: string }; result: DesktopClientSnapshot };

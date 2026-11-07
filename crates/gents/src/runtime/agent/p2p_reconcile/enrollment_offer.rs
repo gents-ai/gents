@@ -16,13 +16,14 @@ use crate::NodeIdentity;
 /// The `/status` offer keeps a short window, because each holder can file a
 /// pending request until it expires; an approver relaying offers by hand may
 /// ask for up to [`MAX_OFFER_VALIDITY`]. Approval remains the only grant.
-pub const DEFAULT_OFFER_VALIDITY: Duration = Duration::minutes(5);
+pub const DEFAULT_OFFER_VALIDITY: Duration = Duration::hours(1);
 /// Issuers and candidates enforce the same cap on the time an offer holder may
 /// file pending requests; approval is still required to grant access.
-pub const MAX_OFFER_VALIDITY: Duration = Duration::hours(1);
+pub const MAX_OFFER_VALIDITY: Duration = Duration::hours(24);
 
 #[derive(Clone)]
 pub struct EnrollmentOfferIssuer {
+    node: Arc<defra_node::EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     p2p: Arc<dyn P2POperations>,
     network_id: String,
@@ -38,6 +39,7 @@ pub struct EnrollmentOfferStatus {
 
 impl EnrollmentOfferIssuer {
     pub fn new(
+        node: Arc<defra_node::EmbeddedNode>,
         identity: Arc<dyn NodeIdentity>,
         p2p: Arc<dyn P2POperations>,
         network_id: String,
@@ -45,6 +47,7 @@ impl EnrollmentOfferIssuer {
         profile: String,
     ) -> Self {
         Self {
+            node,
             identity,
             p2p,
             network_id,
@@ -86,6 +89,14 @@ impl EnrollmentOfferIssuer {
         let issued_at = issued.to_rfc3339_opts(SecondsFormat::Secs, true);
         let expires_at = (issued + validity).to_rfc3339_opts(SecondsFormat::Secs, true);
         let challenge = Uuid::new_v4().simple().to_string();
+        let schema = super::read_client_replicated_schema(Arc::clone(&self.node))
+            .await
+            .context("reading live replicated schema for enrollment offer")?;
+        let live_schema_digest = gents_protocol::peer_schema::replicated_schema_digest(
+            super::CLIENT_COLLECTIONS,
+            &schema,
+        )
+        .context("digesting live replicated schema for enrollment offer")?;
         let offer_id = format!(
             "offer-{}",
             derive_enrollment_id(
@@ -110,6 +121,7 @@ impl EnrollmentOfferIssuer {
             owner_agent: self.owner_agent.clone(),
             profile: self.profile.clone(),
             schema_fingerprint: enrollment_schema_fingerprint(),
+            live_schema_digest: Some(live_schema_digest),
             issued_at,
             expires_at,
             admin_sig: Vec::new(),

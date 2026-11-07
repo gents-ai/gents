@@ -265,14 +265,14 @@ test.describe("first-run install", () => {
     await expect(page.getByRole("heading", { name: "Let’s get set up" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Request access" })).toBeDisabled();
     await page
-      .getByRole("textbox", { name: "Server address" })
+      .getByRole("textbox", { name: "Invitation or server address" })
       .fill("https://agent.example.net:8787");
     await expect(page.getByRole("button", { name: "Request access" })).toBeEnabled();
     await page.getByRole("radio", { name: /Local node/ }).click();
     await page.getByRole("radio", { name: /Remote connect/ }).click();
-    await expect(page.getByRole("textbox", { name: "Server address" })).toHaveValue(
-      "https://agent.example.net:8787",
-    );
+    await expect(
+      page.getByRole("textbox", { name: "Invitation or server address" }),
+    ).toHaveValue("https://agent.example.net:8787");
     await expect(
       page.getByRole("heading", { name: "Connect to a server" }),
     ).toHaveCount(0);

@@ -12,6 +12,7 @@ const OPERATOR_DECISION_COMMAND_SIGNATURE_DOMAIN: &str =
     "gents-enrollment-operator-decision-command-v1";
 const OPERATOR_QUERY_COMMAND_SIGNATURE_DOMAIN: &str = "gents-enrollment-operator-query-command-v1";
 const MAX_OFFER_TOKEN_BYTES: usize = 32 * 1024;
+pub const MAX_LINKABLE_OFFER_CHARACTERS: usize = 1900;
 const MAX_ENROLLMENT_FIELD_BYTES: usize = 16 * 1024;
 const ENROLLMENT_SCHEMA_DOMAIN: &str = "gents-enrollment-schema-v1";
 
@@ -36,7 +37,7 @@ pub use decision::{
 };
 pub use error::EnrollmentError;
 pub use lease::{AuthorizationLease, AuthorizationLeaseState, ENROLLMENT_RENEWAL_WINDOW_SECONDS};
-pub use offer::{decode_offer, encode_offer, EnrollmentOfferRecord};
+pub use offer::{decode_offer, encode_offer, linkable_offer_length, EnrollmentOfferRecord};
 pub use operator::{
     EnrollmentOperatorAction, EnrollmentOperatorDecisionCommand, EnrollmentOperatorQuery,
     EnrollmentOperatorQueryCommand,

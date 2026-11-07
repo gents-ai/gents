@@ -1227,6 +1227,7 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
         owner_agent: runtime_did.into(),
         profile: "client".into(),
         schema_fingerprint: gents_protocol::enrollment::enrollment_schema_fingerprint(),
+        live_schema_digest: None,
         issued_at: "2026-09-24T00:00:00Z".into(),
         expires_at: "2026-09-24T00:05:00Z".into(),
         admin_sig: vec![0; 64],

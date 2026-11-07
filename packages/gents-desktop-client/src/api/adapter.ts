@@ -60,10 +60,20 @@ export function createDesktopApiAdapter(
       invokeDesktop("desktop_peer_status_fetch", {
         request: { peerId },
       }),
-    requestStatusEnrollment: (serverAddress) =>
-      invokeDesktop("desktop_peer_enroll_status", {
-        request: { serverAddress },
-      }),
+    requestStatusEnrollment: (serverAddress) => {
+      const value = serverAddress.trim();
+      if (
+        value.startsWith("gents://invite/") ||
+        /^[1-9A-HJ-NP-Za-km-z]{100,}$/.test(value)
+      ) {
+        return invokeDesktop("desktop_peer_enroll_invite", {
+          request: { invite: value },
+        });
+      }
+      return invokeDesktop("desktop_peer_enroll_status", {
+        request: { serverAddress: value },
+      });
+    },
     listWorkspace: (subpath) =>
       invokeDesktop("desktop_workspace_list", {
         subpath: subpath ?? null,

@@ -121,8 +121,35 @@ impl ClientCore {
             .compare_runtime_schema(&self.node, &offer.owner_agent, status)
             .await
             .context("refusing to enroll with an incompatible runtime")?;
+        self.request_offer_enrollment(offer_token, offer, Some(status), advertised_label, false)
+            .await
+    }
+
+    pub async fn request_invite_enrollment(
+        &self,
+        offer_token: &str,
+    ) -> Result<EnrollmentRequestResult> {
+        let offer = decode_offer(offer_token).context("decoding enrollment invite")?;
+        self.request_offer_enrollment(offer_token, offer, None, None, true)
+            .await
+    }
+
+    async fn request_offer_enrollment(
+        &self,
+        offer_token: &str,
+        offer: gents_protocol::enrollment::EnrollmentOfferRecord,
+        status: Option<&Value>,
+        advertised_label: Option<&str>,
+        require_live_schema: bool,
+    ) -> Result<EnrollmentRequestResult> {
         let _lifecycle = self.route_manager.lock().await;
         verify_enrollment_offer(&self.p2p, &self.node_identity, &offer).await?;
+        gents::runtime::agent::p2p_reconcile::enrollment_candidate::verify_offer_live_schema(
+            &self.node,
+            &offer,
+            require_live_schema,
+        )
+        .await?;
         confirm_network_admin_pin(&self.node, &offer).await?;
 
         let candidate_peer = self.local_peer_id.clone();
@@ -160,7 +187,10 @@ impl ClientCore {
                 (request, document_id)
             }
         };
-        if let Some(endpoint) = status.get("desktop_graphql").and_then(Value::as_str) {
+        if let Some(endpoint) = status
+            .and_then(|status| status.get("desktop_graphql"))
+            .and_then(Value::as_str)
+        {
             self.sync_state
                 .remember_enrollment_endpoint(
                     &request.server_peer,

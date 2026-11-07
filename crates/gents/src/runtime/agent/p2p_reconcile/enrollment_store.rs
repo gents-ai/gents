@@ -312,6 +312,13 @@ impl GraphqlEnrollmentStore {
         }
         let pending = projection.pending_for_decision(request_id)?;
 
+        if kind == WireDecisionKind::Approved {
+            let offer = decode_offer(&pending.request.offer_token)?;
+            super::enrollment_candidate::verify_offer_live_schema(&self.node, &offer, false)
+                .await
+                .context("checking invitation schema before approval")?;
+        }
+
         let decided_at = self.verify_live_candidate(&pending.request).await?;
         let sequence = match kind {
             WireDecisionKind::Approved => projection

@@ -941,6 +941,7 @@ async fn serve_foreground(
             if let Some(p2p) = gents::store::identity::node_p2p(&node) {
                 *enrollment_offer_issuer.write().await =
                     Some(crate::http::enrollment::EnrollmentOfferIssuer::new(
+                        node.clone(),
                         identity.clone(),
                         p2p,
                         enrollment_network.network_id,

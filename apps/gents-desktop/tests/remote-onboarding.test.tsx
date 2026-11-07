@@ -51,6 +51,24 @@ function snapshot(
 }
 
 describe("remote onboarding", () => {
+  it("accepts a shared invitation during setup", async () => {
+    const app = testApp({ snapshot: snapshot([]), supportsManagedServer: false });
+    const enroll = vi
+      .spyOn(app.actions, "requestStatusEnrollment")
+      .mockResolvedValue(request);
+    renderIn(app, <SetupScreen onDone={vi.fn()} />);
+    const invite = `gents://invite/${"a".repeat(150)}`;
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Invitation or server address" }),
+      invite,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Request access" }));
+    expect(enroll).toHaveBeenCalledWith(invite);
+    expect(
+      await screen.findByRole("heading", { name: "Waiting for access" }),
+    ).toBeVisible();
+  });
+
   it("waits for approval and the requested secure route, then completes directly on that node", async () => {
     const app = testApp({ snapshot: snapshot([]), supportsManagedServer: false });
     const enroll = vi

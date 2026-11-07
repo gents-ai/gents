@@ -51,6 +51,7 @@ const COMMANDS: &[&str] = &[
     "desktop_peer_rename",
     "desktop_peer_status_fetch",
     "desktop_peer_enroll_status",
+    "desktop_peer_enroll_invite",
     "desktop_p2p_repair",
     "desktop_workspace_list",
     "desktop_network_status",
