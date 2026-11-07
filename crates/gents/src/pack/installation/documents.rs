@@ -895,7 +895,7 @@ pub(super) async fn install_document_graph(
             })
             .collect::<Vec<_>>();
         let has_references = stages.iter().any(|stage| {
-            stage.config.tools.iter().any(|tools| {
+            (stage.snapshot.is_some() && !stage.manifest.metadata.plugins.is_empty()) || stage.config.tools.iter().any(|tools| {
                 tools
                     .integrations
                     .as_ref()
@@ -948,6 +948,9 @@ pub(super) async fn install_document_graph(
             .rev()
             .map(|stage| (stage.manifest.clone(), stage.config.clone()))
             .collect::<Vec<_>>();
+        let reused_plugins = stages.iter().filter(|stage| stage.snapshot.is_some() && !stage.manifest.metadata.plugins.is_empty())
+            .map(|stage| (stage.manifest.clone(), stage.digest.clone(), stage.config.clone(), stage.bindings.clone(), stage.snapshot.clone().unwrap().record.plugins))
+            .collect::<Vec<_>>();
         let identities = stages
             .iter()
             .map(|stage| {
@@ -984,8 +987,22 @@ pub(super) async fn install_document_graph(
                 let home = home.clone();
                 let plugins = plugins.clone();
                 let snapshots = snapshots.clone();
+                let reused_plugins = reused_plugins.clone();
+                let node_owner = owner.to_owned();
                 Box::pin(async move {
                     tokio::task::spawn_blocking(move || {
+                        for (manifest, digest, config, bindings, recorded) in &reused_plugins {
+                            let home = home.as_deref().context("installed dependency plugins require the local home")?;
+                            anyhow::ensure!(installed_dependency_bindings(manifest, config, Some(home), &node_owner)? == *bindings,
+                                "installed dependency plugin bindings changed during preparation; retry the install");
+                            for plugin in &manifest.metadata.plugins {
+                                let expected = recorded.iter().find(|entry| entry.name == plugin.name)
+                                    .context("installed dependency plugin is absent from its installation record")?;
+                                let current = crate::plugin::store::read_record(home, &manifest.metadata.namespace, &plugin.name)?;
+                                anyhow::ensure!(current.digest == expected.digest && current.owner_pack_digest.as_deref() == Some(digest.as_str()),
+                                    "installed dependency plugin changed during preparation; retry the install");
+                            }
+                        }
                         let packs = reference_packs
                             .iter()
                             .map(|(manifest, config)| (manifest, config))
