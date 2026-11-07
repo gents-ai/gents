@@ -242,6 +242,24 @@ async fn filtered_pairing_survives_reload_and_refuses_missing_filter() {
     access.write("test.remove.filter", &format!("mutation {{delete_DataPlanePairingFilter(filter: {{peer_id: {{_eq: {}}}}}) {{_docID}}}}", quoted(&peer))).await.unwrap();
     let desired = store.load_desired(&peer).await.unwrap();
     assert!(desired.is_none_or(|route| !route.replicator_collections.contains("ScopedPost")));
+    reconcile_peer_tick(&local_admin, &store, &peer)
+        .await
+        .expect("remove the invalid data-plane route");
+    let applied = store.load_applied(&peer).await.unwrap().state;
+    assert!(!applied.replicator_filter.contains_key("ScopedPost"));
+    for replicator in local_admin.list_replicators().await.unwrap() {
+        for collection in replicator.collections {
+            assert_ne!(
+                local_admin
+                    .resolve_collection_name(&collection)
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                Some("ScopedPost"),
+                "filter loss must remove the live data-plane route"
+            );
+        }
+    }
 }
 
 #[tokio::test]
