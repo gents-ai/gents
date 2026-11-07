@@ -15,6 +15,36 @@ struct LocalPackAccess {
     runtime: std::sync::Arc<dyn gents::NodeIdentity>,
 }
 
+pub(super) fn install_variable_preview(
+    pack: &PackSource,
+    owner: &str,
+) -> Result<serde_json::Value> {
+    let path = pack
+        .manifest()
+        .config
+        .as_deref()
+        .context("pack has no configuration")?;
+    let authored: serde_json::Value = serde_json::from_slice(pack.asset(path)?)
+        .context("parsing pack config for variable preview")?;
+    let uses = gents::pack::interpolate::inspect_install_variables(&authored, &|name| {
+        if name == "GENTS_PACK_NODE_DID" {
+            Some(owner.to_owned())
+        } else {
+            std::env::var(name).ok()
+        }
+    })
+    .map_err(|missing| {
+        anyhow::anyhow!(
+            "pack config references unset environment variables: {}",
+            missing.join(", ")
+        )
+    })?;
+    Ok(
+        json!({ "pack": format!("{}/{}", pack.manifest().metadata.namespace, pack.manifest().name),
+        "kind": "install_literal", "uses": uses }),
+    )
+}
+
 /// The documents pack install: the CLI's single site that writes a documents
 /// pack and its dependencies. `explicit` is false only when the pack is
 /// installed as another pack's dependency.
@@ -234,20 +264,22 @@ async fn install_documents_pack_resolved_inner(
     let inference = prepared.inference.clone();
     let dependency_inference = prepared.dependency_inference.clone();
     if args.preview {
-        let packs: Vec<_> = std::iter::once((pack.manifest(), inference.clone()))
-            .chain(dependencies.iter().filter_map(|dependency| {
-                let manifest = dependency.manifest();
-                Some((manifest, dependency_inference.get(&manifest.name)?.clone()))
-            }))
-            .map(|(manifest, preview)| super::review::PackInference::bound(manifest, preview))
-            .collect();
-        let mut preview = review(
-            super::review::documents_by_slot(&prepared.config, &prepared.agent_bindings)?,
-            super::review::inference_needs(&packs),
-        )?;
-        preview["inference"] = json!(inference);
-        preview["dependency_inference"] = json!(dependency_inference);
-        return Ok(preview);
+        let variables = std::iter::once(pack)
+            .chain(dependencies.iter())
+            .map(|source| install_variable_preview(source, owner))
+            .collect::<Result<Vec<_>>>()?;
+        return Ok(json!({
+            "pack": pack.manifest().name,
+            "source": pack.label(),
+            "digest": pack.digest(),
+            "owner": owner,
+            "inference": inference,
+            "dependency_inference": dependency_inference,
+            "origin_tag": origin_tag,
+            "dependencies": pack.manifest().metadata.dependencies,
+            "install_variables": variables,
+            "would_write": false,
+        }));
     }
     // A dependency installed on its own behalf (`explicit` false) writes no
     // home record, and a remote node has no local home to record in.
