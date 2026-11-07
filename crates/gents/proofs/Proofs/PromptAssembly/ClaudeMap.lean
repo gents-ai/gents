@@ -1234,9 +1234,16 @@ def turnBase (issuer : ReplayIssuer) (wire : ReplayWire)
     match resolve tag with
     | [evidence] => evidence.origin == .recoveredProvider && !evidence.complete
     | _ => false
-  !group.candidates.isEmpty && (wire == .responses || group.ordinary || recovered) &&
+  !group.candidates.isEmpty && (wire == .responses || group.ordinary) &&
     (!recovered || group.sourcePrefix) &&
     group.candidates.all (validForReplayProjection issuer wire resolve candidates)
+
+theorem claude_reasoning_only_is_not_replayed (issuer : ReplayIssuer)
+    (resolve : ReplayTag → List ResolvedReplayEvidence)
+    (candidates : List ReasoningCandidate) (group : TurnGroup)
+    (h : group.ordinary = false) :
+    turnBase issuer .claudeMessages resolve candidates group = false := by
+  simp [turnBase, h]
 
 def turnCaptured (resolve : ReplayTag → List ResolvedReplayEvidence)
     (group : TurnGroup) : Option (List ReplayFlatItem) :=
