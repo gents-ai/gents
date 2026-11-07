@@ -258,20 +258,21 @@ async fn check_turn_chronology(retry: bool) {
     drop((first_request, successor, first_tool, second_tool));
     node.shutdown().await.expect("node shutdown");
     drop(node);
-    let reopened = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(&fixture.path)
-            .with_node_identity_did(&fixture.node_did)
-            .build()
-            .await
-            .unwrap(),
+    drop(fixture.home);
+    let reopened = crate::eval::runner::embedded::EmbeddedHome::open_retained(&fixture.path)
+        .await
+        .unwrap();
+    assert_eq!(
+        crate::store::identity::NodeIdentity::did(reopened.identity.as_ref()),
+        fixture.node_did
     );
-    let restored = FileInventorySnapshot::load(&reopened, &admission)
+    let restored = FileInventorySnapshot::load(&reopened.node, &admission)
         .await
         .unwrap();
     assert_eq!(restored.binding, snapshot.binding);
     assert_eq!(restored.entries, snapshot.entries);
     assert_modeled_resource_order(&contracts, "sequential_resource", &restored, &expected);
-    reopened.shutdown().await.expect("node shutdown");
+    reopened.node.shutdown().await.expect("node shutdown");
+    drop(reopened);
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }

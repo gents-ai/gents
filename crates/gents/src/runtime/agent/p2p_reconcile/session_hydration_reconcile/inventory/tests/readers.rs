@@ -98,7 +98,13 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
                     )
                     .await?;
                 assert!(observed[0].visible);
-                assert!(observed[0].owner.is_none());
+                // The requester owns its session; a shared reader observes
+                // that canonical owner and holds no ownership itself.
+                assert_eq!(
+                    observed[0].owner.as_ref().map(|owner| owner.as_str()),
+                    session.session.requester_did.as_deref()
+                );
+                assert_ne!(observed[0].owner.as_ref(), Some(reader_did));
                 Ok::<_, anyhow::Error>(session)
             })
         })
@@ -147,6 +153,23 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
     .unwrap();
     let projection = source["_docID"].as_str().unwrap();
     let image = source["observation_doc_id"].as_str().unwrap().to_owned();
+    // The owning Agent toggles the reader on its projection. Its baseline
+    // grant set adds relationships; revoking one needs the node's relation
+    // delete permission, which the node admin grants for this toggle.
+    let owning_agent: identity::Did = tool
+        .access()
+        .unwrap()
+        .actor_did()
+        .unwrap()
+        .parse()
+        .unwrap();
+    ConfigAccess::local_as(node.clone(), fixture.node_did.parse().unwrap())
+        .grant_node_permission(
+            &owning_agent,
+            crate::store::config_client::NodePermission::DacRelationDelete,
+        )
+        .await
+        .unwrap();
     for step in 0..4 {
         let permitted = step % 2 == 1;
         if step > 0 {

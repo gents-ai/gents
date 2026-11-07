@@ -63,18 +63,36 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
         }
     }
     let old_policy = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
-    for schema in [
-        gents_protocol::schemas::NODE,
-        gents_protocol::schemas::AGENT,
-        gents_protocol::schemas::AGENT_CONTEXT,
-        gents_protocol::schemas::TOOLS,
-        gents_protocol::schemas::TASK,
-        gents_protocol::schemas::AGENT_TARGET,
-    ] {
-        node.add_collection(&schema.replace(old_policy, &policy))
-            .await?;
+    // Configuration publication reads every configuration collection, so the
+    // node declares them all, configuration under the modeled policy.
+    crate::test_support::acp_policies::install_identity_acp_policies(&node).await?;
+    for (name, schema) in gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
+        .iter()
+        .zip(gents_protocol::schemas::RUNTIME_ALL)
+        .chain(
+            gents_protocol::schemas::ALL_COLLECTION_NAMES
+                .iter()
+                .zip(gents_protocol::schemas::ALL),
+        )
+    {
+        if gents_protocol::schemas::RUNTIME_COLLECTION_NAMES.contains(name)
+            || Collection::ALL
+                .iter()
+                .any(|collection| collection.graphql_type() == *name)
+        {
+            node.add_collection(&schema.replace(old_policy, &policy))
+                .await?;
+        }
     }
-    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did())?);
+    // The User configures through client-signed access; a local non-node
+    // write without a managed signer is refused by design.
+    let access = ConfigAccess::Graphql(
+        crate::store::config_client::GraphqlEndpoint::as_principal(
+            format!("http://{address}/api/v0/graphql"),
+            user.did(),
+        )
+        .with_client_signing_capability(user.client_signing_capability()?)?,
+    );
     let esc = crate::store::graphql::escape_graphql_string;
     let create = |name: &str, fields: &str| {
         format!("mutation {{ create_{name}(input: {{{fields}}}) {{_docID}} }}")
@@ -82,8 +100,8 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
     let mut docs = Vec::new();
     for (name, fields) in [
         ("Node", format!("node_did: \"{}\"", esc(runtime.did()))),
-        ("Agent", format!("node_did: \"{}\", agent_did: \"{}\", creation_nonce: \"a\", context_id: \"context\"", esc(runtime.did()), esc(a.did()))),
-        ("Agent", format!("node_did: \"{}\", agent_did: \"{}\", creation_nonce: \"b\"", esc(runtime.did()), esc(b.did()))),
+        ("Agent", format!("node_did: \"{}\", agent_did: \"{}\", creation_nonce: \"a\", context_id: \"context\", inference_profile_id: \"profile\"", esc(runtime.did()), esc(a.did()))),
+        ("Agent", format!("node_did: \"{}\", agent_did: \"{}\", creation_nonce: \"b\", inference_profile_id: \"profile\"", esc(runtime.did()), esc(b.did()))),
         ("AgentContext", format!("node_did: \"{}\", context_id: \"context\", tools_id: \"tools\"", esc(runtime.did()))),
         ("Tools", format!("node_did: \"{}\", tools_id: \"tools\", agents: {{enabled: false, target_ids: [\"target\"]}}", esc(runtime.did()))),
         ("AgentTarget", format!("node_did: \"{}\", target_id: \"target\", target_node_did: \"{}\", agent_did: \"{}\", name: \"target\"", esc(runtime.did()), esc(runtime.did()), esc(b.did()))),

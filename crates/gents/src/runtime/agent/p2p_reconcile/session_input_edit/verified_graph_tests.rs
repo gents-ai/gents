@@ -7,6 +7,19 @@ use gents_protocol::request_admission::{
 use gents_protocol::request_input::{QueueDelivery, QueuePolicy, QueueSource, RequestQueue};
 use gents_protocol::session_input_edit::{PendingMessageEdit, PendingQueueEdit};
 
+/// Native document ACP governs block reads, so the signer is verified from the
+/// block material a reader of that document is authorized to load.
+async fn verified_signer_as(
+    node: &EmbeddedNode,
+    cid: &str,
+    reader: &str,
+) -> anyhow::Result<String> {
+    let (block, signature) = node.authorized_signed_block_bytes(cid, Some(reader)).await?;
+    let block = defra_core::block::Block::from_dag_cbor(&block)?;
+    let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
+    db::block::verify::verified_signature_signer_did(&block, &signature).map_err(anyhow::Error::msg)
+}
+
 #[tokio::test]
 async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> anyhow::Result<()> {
     let cases =
@@ -147,19 +160,40 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                 .with_client_signing_capability(author.client_signing_capability()?)?
                 .with_client_signed_agent_creates(),
         );
-        let replacements = crate::request::lifecycle::queue::prepare_pending_user_edit(
-            &edit_access,
-            author,
-            AgentRequestAdmissionRecord::client(author.did()),
+        // The selected request is the User's; a collaborator cannot read it,
+        // so the client helper refuses to prepare that edit. The modeled
+        // denial is the Agent's: the collaborator's command is crafted from
+        // the User's queue view and signed by the collaborator.
+        let mut replacements = crate::request::lifecycle::queue::prepare_pending_user_edit(
+            &access,
+            &user,
+            AgentRequestAdmissionRecord::client(user.did()),
             root.did(),
             "session",
             user.did(),
             &edit,
         )
         .await?;
+        if author.did() != user.did() {
+            assert!(crate::request::lifecycle::queue::prepare_pending_user_edit(
+                &edit_access,
+                author,
+                AgentRequestAdmissionRecord::client(author.did()),
+                root.did(),
+                "session",
+                user.did(),
+                &edit,
+            )
+            .await
+            .is_err());
+            for replacement in &mut replacements {
+                replacement.admission = AgentRequestAdmissionRecord::client(author.did());
+                crate::sign_agent_request_create(author, replacement).await?;
+            }
+        }
         let (session_doc_id, agent_did, agent_doc_id, replacement_evidence) =
             test_signed_replacement_fields(
-                &edit_access,
+                &access,
                 author,
                 root.did(),
                 "session",
@@ -208,7 +242,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
         )?
         .context("command version missing")?;
         assert_eq!(
-            node.verified_block_signer_did(&command_version.cid).await?,
+            verified_signer_as(&node, &command_version.cid, user.did()).await?,
             author.did()
         );
         if !case["selectedAllowed"]
@@ -260,9 +294,12 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                     })
                 })
                 .await?;
+            // A session_writer on the Agent may invoke it, but only the
+            // session's working Agent or administrator may update another
+            // User's session (Household `sessions.update`).
             assert_eq!(
                 observed.0.as_slice(),
-                [defra_node::DocumentAccessDecision::Allowed]
+                [defra_node::DocumentAccessDecision::Denied]
             );
             assert_eq!(
                 observed.1.as_slice(),
@@ -333,7 +370,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             )?
             .context("replacement version missing")?;
             assert_eq!(
-                node.verified_block_signer_did(&version.cid).await?,
+                verified_signer_as(&node, &version.cid, user.did()).await?,
                 user.did()
             );
             let agent_access = ConfigAccess::local_managed_agent(
@@ -395,7 +432,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             )?
             .context("claim version missing")?;
             assert_eq!(
-                node.verified_block_signer_did(&claim_version.cid).await?,
+                verified_signer_as(&node, &claim_version.cid, agent.did()).await?,
                 agent.did()
             );
             let mut removed_request = original.clone();

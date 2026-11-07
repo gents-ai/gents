@@ -485,7 +485,9 @@ async fn source_only_replacement_seeds_disabled_consumers_before_later_arrivals(
     assert_eq!(cursor(access, "WorkA").await?, "0");
     publish(access, vec![source("WorkA")]).await?;
     assert_eq!(cursor(agent, "WorkA").await?, "0");
-    assert_eq!(cursor(agent, "WorkB").await?, "1");
+    // Moving back revokes the Agent's writer on the now-stale WorkB cursor.
+    assert!(cursor(agent, "WorkB").await.is_err());
+    assert_eq!(cursor(access, "WorkB").await?, "1");
     node.shutdown().await.expect("node shutdown");
     Ok(())
 }
