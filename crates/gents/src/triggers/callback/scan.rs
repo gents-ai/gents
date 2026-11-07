@@ -408,6 +408,11 @@ impl CallbackEngine {
             let entries = page["entries"]
                 .as_array()
                 .context("arrival query omitted entries")?;
+            // An arrival is admitted only once a worker records its claim, which
+            // commits after publication. The rest of the page is still published
+            // (idempotently, by arrival key) so a burst does not wait one rescan
+            // per arrival; the cursor advances on a later pass.
+            let mut unadmitted = false;
             for entry in entries {
                 if self.cancel.is_cancelled() {
                     return Ok(());
@@ -418,10 +423,17 @@ impl CallbackEngine {
                 let position = entry["cursor"].as_str().context("arrival lacks cursor")?;
                 self.materialize_for_binding(binding, collection, doc_id, false)
                     .await?;
+                if unadmitted {
+                    continue;
+                }
                 if !self.checkpoint(binding, collection, position).await? {
-                    return Ok(());
+                    unadmitted = true;
+                    continue;
                 }
                 after = position.to_owned();
+            }
+            if unadmitted {
+                return Ok(());
             }
             // The journal is drained only when a page makes no progress.
             let next = page["next"]
