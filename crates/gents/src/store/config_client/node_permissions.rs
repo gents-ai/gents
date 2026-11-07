@@ -1,4 +1,5 @@
 use super::{graphql, graphql_api_base, ConfigAccess, ConfigClientError, NodePermission};
+use crate::store::config_client::WriteRoute;
 
 const ADMIN_RELATION: &str = "admin";
 
@@ -148,8 +149,8 @@ impl ConfigAccess {
         target: &identity::Did,
         delete: bool,
     ) -> Result<(), ConfigClientError> {
-        match self {
-            Self::Local(local) => {
+        match self.write_route() {
+            WriteRoute::Local(local) => {
                 local.require_mutation_signer()?;
                 let actor = local
                     .identity()
@@ -175,7 +176,7 @@ impl ConfigAccess {
                     })
                     .await
             }
-            Self::Graphql(endpoint) => {
+            WriteRoute::Http(endpoint) => {
                 let url = format!(
                     "{}/acp/node/relationship",
                     graphql_api_base(endpoint.url())?
