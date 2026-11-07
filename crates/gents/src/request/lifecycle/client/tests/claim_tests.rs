@@ -716,15 +716,19 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     let rows = user_access.execute("{ Agent { _docID } }").await.unwrap();
     create.agent_doc_id = Some(rows["data"]["Agent"][0]["_docID"].as_str().unwrap().into());
     let agent_doc = create.agent_doc_id.clone().unwrap();
-    user_access
-        .add_actor_relationship(
-            "Agent",
-            &agent_doc,
-            "session_writer",
-            &collaborator.did().parse().unwrap(),
-        )
-        .await
-        .unwrap();
+    // The collaborator reads the Agent's sessions and their tool calls; the
+    // phases below vary only its update and invoke authority.
+    for relation in ["reader", "session_writer"] {
+        user_access
+            .add_actor_relationship(
+                "Agent",
+                &agent_doc,
+                relation,
+                &collaborator.did().parse().unwrap(),
+            )
+            .await
+            .unwrap();
+    }
     crate::sign_agent_request_create(&user, &mut create)
         .await
         .unwrap();
@@ -1489,6 +1493,17 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
         AgentRequestAdmissionRecord::client(user.did()),
     );
     head.session_doc_id = Some(reserve_goal_session(&user_access, &head).await.unwrap());
+    // A steering author holds update on the session it steers, as the modeled
+    // committed claim requires of the immediate signer.
+    owner
+        .add_actor_relationship(
+            "AgentSession",
+            head.session_doc_id.as_deref().unwrap(),
+            "working_agent",
+            &collaborator.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
     head.agent_doc_id = Some(agent_doc);
     crate::sign_agent_request_create(&user, &mut head)
         .await

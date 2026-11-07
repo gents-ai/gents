@@ -1165,14 +1165,17 @@ mod tests {
             let mut changed = request.clone();
             changed.session_doc_id = Some(case.observation.session.clone());
             changed.agent_doc_id = Some(case.observation.agent_document.clone());
-            let verified = user
-                .verify(
+            // A changed payload is rejected by the identity owner either as
+            // Ok(false) or as a verification error; only Ok(true) verifies.
+            let verified = matches!(
+                user.verify(
                     user.did(),
                     &changed.signing_payload(),
                     &request.admission.signature,
                 )
-                .await
-                .unwrap();
+                .await,
+                Ok(true)
+            );
             assert_eq!(
                 verified,
                 case.decision == crate::lean_vocab_test::LeanCrossActorDecision::Claimed,
@@ -1245,7 +1248,10 @@ mod tests {
         )
         .await;
         crate::store::identity::GrantSet::AgentBaseline
-            .grant(&runtime_access, &identity::Did::new(&binding.agent_did).unwrap())
+            .grant(
+                &runtime_access,
+                &identity::Did::new(&binding.agent_did).unwrap(),
+            )
             .await
             .unwrap();
         let agent =
@@ -1383,6 +1389,21 @@ mod tests {
             ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
         crate::store::identity::GrantSet::OperatorUser
             .grant(&admin, &identity::Did::new(user.did()).unwrap())
+            .await
+            .unwrap();
+    }
+
+    /// Grants a fixture Agent the node permissions production projects from
+    /// its live managed Agent document; document ACP still decides visibility.
+    async fn grant_agent_baseline(
+        node: &Arc<defra_node::Node>,
+        runtime: &dyn NodeIdentity,
+        agent_did: &str,
+    ) {
+        let admin =
+            ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
+        crate::store::identity::GrantSet::AgentBaseline
+            .grant(&admin, &identity::Did::new(agent_did).unwrap())
             .await
             .unwrap();
     }
@@ -1678,6 +1699,7 @@ mod tests {
         let agent = crate::store::identity::provision_agent_identity(&runtime).unwrap();
         let access = client_access(&endpoint, &user);
         seed_owned_agent(&access, runtime.did(), &agent).await;
+        grant_agent_baseline(&node, &runtime, &agent.agent_did).await;
         let request = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "goal-first",
@@ -1801,6 +1823,7 @@ mod tests {
         let agent = crate::store::identity::provision_agent_identity(&runtime).unwrap();
         let access = client_access(&endpoint, &user);
         seed_owned_agent(&access, runtime.did(), &agent).await;
+        grant_agent_baseline(&node, &runtime, &agent.agent_did).await;
         let node_owner = access
             .transact_readonly("test.client.node_owner", |txn| {
                 Box::pin(async move {
@@ -1881,6 +1904,7 @@ mod tests {
         )
         .unwrap();
         let sibling = crate::store::identity::provision_agent_identity(&runtime).unwrap();
+        grant_agent_baseline(&node, &runtime, &sibling.agent_did).await;
         let sibling_access =
             ConfigAccess::local_as(node.clone(), sibling.agent_did.parse().unwrap());
         let runtime_access = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
@@ -2060,6 +2084,17 @@ mod tests {
             })
             .await
             .unwrap();
+        // The other actor and the Agent are authenticated node readers; only
+        // document ACP decides whether each can observe this user's retry.
+        for reader in [other.did(), agent.agent_did.as_str()] {
+            ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap())
+                .grant_node_permission(
+                    &reader.parse().unwrap(),
+                    crate::store::config_client::NodePermission::DocumentRead,
+                )
+                .await
+                .unwrap();
+        }
         let wrong = ConfigAccess::local_as(node.clone(), other.did().parse().unwrap());
         assert!(reconcile_client_retry(
             &wrong,
