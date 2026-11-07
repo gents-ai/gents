@@ -72,7 +72,6 @@ struct InstallRequest {
     root_source: gents::pack::PackSource,
     dependency_sources: Vec<gents::pack::PackSource>,
     inference_slots: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     dependency_variables: Vec<String>,
     overwrite: bool,
     keep: bool,
