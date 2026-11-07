@@ -118,6 +118,25 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
     ] {
         node.add_collection_as(&context, schema).await?;
     }
+    // Configuration reference loading reads every configuration collection
+    // on each apply, so the node must declare them all.
+    for (name, schema) in gents_protocol::schemas::ALL_COLLECTION_NAMES
+        .iter()
+        .zip(gents_protocol::schemas::ALL)
+    {
+        if ![
+            "Node",
+            "InferenceBackendMetadata",
+            "InferenceBackendObservation",
+        ]
+        .contains(name)
+            && crate::Collection::ALL
+                .iter()
+                .any(|collection| collection.graphql_type() == *name)
+        {
+            node.add_collection_as(&context, schema).await?;
+        }
+    }
     for permission in [
         acp::nac::NodePermission::DocumentRead,
         acp::nac::NodePermission::DocumentUpdate,

@@ -479,7 +479,10 @@ async fn source_only_replacement_seeds_disabled_consumers_before_later_arrivals(
         }))
         .await
         .is_err());
-    assert_eq!(cursor(agent, "WorkA").await?, "0");
+    // The source change revoked the Agent's writer on the stale WorkA cursor
+    // (Lean `moveEventCursor`); the Agent cannot read it or seed a duplicate.
+    assert!(cursor(agent, "WorkA").await.is_err());
+    assert_eq!(cursor(access, "WorkA").await?, "0");
     publish(access, vec![source("WorkA")]).await?;
     assert_eq!(cursor(agent, "WorkA").await?, "0");
     assert_eq!(cursor(agent, "WorkB").await?, "1");
