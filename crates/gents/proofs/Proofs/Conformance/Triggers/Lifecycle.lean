@@ -11,6 +11,8 @@ def requestStateToTriggerTerminal : RequestState → Bool
   | .pending => false
   | .claimed => false
   | .processing => false
+  | .waitingForBackend => false
+  | .resumingBackend => false
 
 theorem requestStateToTriggerTerminal_eq_true_iff (rs : RequestState) :
     requestStateToTriggerTerminal rs = true ↔ isTerminal rs := by

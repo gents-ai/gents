@@ -1,12 +1,16 @@
 use tracing::instrument::WithSubscriber;
 
 #[derive(Clone, Default)]
-pub(in crate::runtime::agent::daemon) struct InterruptionCapture(Arc<std::sync::Mutex<Vec<String>>>);
+pub(in crate::runtime::agent::daemon) struct InterruptionCapture(
+    Arc<std::sync::Mutex<Vec<String>>>,
+);
 
 impl InterruptionCapture {
     /// Keep a global dispatcher registered so cross-thread interest rebuilds
     /// include this scoped subscriber instead of the rebuilding thread's default.
-    pub(in crate::runtime::agent::daemon) fn subscriber(&self) -> impl tracing::Subscriber + Send + Sync {
+    pub(in crate::runtime::agent::daemon) fn subscriber(
+        &self,
+    ) -> impl tracing::Subscriber + Send + Sync {
         use tracing_subscriber::layer::SubscriberExt;
         crate::test_support::enable_scoped_event_capture();
         tracing_subscriber::Registry::default().with(self.clone())
@@ -94,7 +98,8 @@ impl crate::inference::llm::tool::ToolDyn for PreInferenceBlockingTool {
     fn definition<'a>(
         &'a self,
         _: String,
-    ) -> crate::inference::llm::tool::BoxFuture<'a, crate::inference::llm::tool::ToolDefinition> {
+    ) -> crate::inference::llm::tool::BoxFuture<'a, crate::inference::llm::tool::ToolDefinition>
+    {
         Box::pin(async move {
             self.entered.notify_one();
             std::future::pending().await
@@ -104,7 +109,10 @@ impl crate::inference::llm::tool::ToolDyn for PreInferenceBlockingTool {
     fn call<'a>(
         &'a self,
         _: String,
-    ) -> crate::inference::llm::tool::BoxFuture<'a, Result<String, crate::inference::llm::tool::ToolError>> {
+    ) -> crate::inference::llm::tool::BoxFuture<
+        'a,
+        Result<String, crate::inference::llm::tool::ToolError>,
+    > {
         Box::pin(async { unreachable!("the pre-inference window never dispatches a tool") })
     }
 }
@@ -235,7 +243,8 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(vec![Box::new(PreInferenceBlockingTool {
             entered: entered.clone(),
-        }) as Box<dyn crate::inference::llm::tool::ToolDyn>]),
+        })
+            as Box<dyn crate::inference::llm::tool::ToolDyn>]),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: None,
@@ -375,9 +384,10 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         agent_config.node_did(),
         Duration::from_millis(agent_config.stream_batch_ms),
     );
-    let origin =
-        crate::request::lifecycle::ExecutionOrigin::from_persisted(request.execution_origin.as_deref())
-            .expect("a created request carries a canonical execution origin");
+    let origin = crate::request::lifecycle::ExecutionOrigin::from_persisted(
+        request.execution_origin.as_deref(),
+    )
+    .expect("a created request carries a canonical execution origin");
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
         node.clone(),
         &agent_config.agent_id,
@@ -449,6 +459,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
             &request,
             shutdown_rx,
             interrupt_rx,
+            None,
         )
         .await;
     assert_eq!(

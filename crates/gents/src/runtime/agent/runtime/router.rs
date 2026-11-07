@@ -109,6 +109,7 @@ pub(super) async fn run_router(
     admission_gate: RuntimeAdmissionGate,
     runtime_status: RuntimeStatusHandle,
     runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
+    backend_health: crate::inference::backends::health::BackendHealthMap,
 ) -> Result<()> {
     if *shutdown.borrow() {
         return Ok(());
@@ -116,7 +117,7 @@ pub(super) async fn run_router(
     if !admission_gate.wait_open(&mut shutdown).await {
         return Ok(());
     }
-    let watcher = DefraWatcher::new(node.clone(), &node_did)?;
+    let watcher = DefraWatcher::new(node.clone(), &node_did)?.with_backend_health(backend_health);
     let result = run_router_with_watcher(RouterInputs {
         node,
         node_did,

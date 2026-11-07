@@ -394,6 +394,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreigcdauzj7thudljoqahk77xhlbf7dd2y76nedlt2dknjnqkmwtzdu"
     ),
     baseline_entry!(
+        gents_protocol::schemas::AGENT_REQUEST_BACKEND_WAIT_NAME,
+        gents_protocol::schemas::AGENT_REQUEST_BACKEND_WAIT,
+        "bafyreif357pclnzto2sq2npd4a2k4nd3iiv6renifouwgosdcs5kfluhza"
+    ),
+    baseline_entry!(
         gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,
         gents_protocol::schemas::AGENT_OUTPUT_SEGMENT,
         "bafyreih6n2g2ofyqw7i23ur3jikelitjlgwaet57hozuxpge3hoibiffzi"

@@ -167,6 +167,8 @@ pub enum CompletionFailure {
 /// Why the owned loop ended a completion on its own authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoopVerdict {
+    /// Retryable provider availability failed after the local retry budget.
+    BackendUnavailable,
     /// Retries ran out on turns that produced no text and no tool call.
     NoVisibleOutput,
     /// Retries ran out on turns whose output broke the structured contract.

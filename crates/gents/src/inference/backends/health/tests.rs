@@ -30,6 +30,23 @@ fn state_from_lean(name: &str, state: &str) -> BackendHealthState {
     }
 }
 
+#[tokio::test]
+async fn every_health_measurement_notifies_parked_request_watchers() {
+    let health = BackendHealthMap::new();
+    let mut observations = health.subscribe_observations();
+    health
+        .set_for_test("backend", BackendHealthState::Healthy, 0)
+        .await;
+    observations.changed().await.unwrap();
+    health
+        .set_for_test("backend", BackendHealthState::Healthy, 0)
+        .await;
+    tokio::time::timeout(std::time::Duration::from_secs(1), observations.changed())
+        .await
+        .unwrap()
+        .unwrap();
+}
+
 #[test]
 fn generated_backend_health_cases_match_prober_transitions() {
     let cases = lean_backend_health_cases();

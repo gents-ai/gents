@@ -22,7 +22,7 @@ theorem deriveAttempt_request_mapping
     (h_not_super : req.isSuperseded = false) :
     deriveAttempt ⟨req⟩ = match req.lifecycleState with
       | .workspaceBindingPending | .pending => .waitingForClaim
-      | .claimed | .processing => .running
+      | .claimed | .processing | .waitingForBackend | .resumingBackend => .running
       | .completed => .completed
       | .failed | .dead => .failed
       | .superseded => .superseded

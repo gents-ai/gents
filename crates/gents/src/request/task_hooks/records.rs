@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use tokio_util::sync::CancellationToken;
 
-use super::{run_finally, HookCommandResult, ManagedTaskHookExec, TaskHookCancellation};
+use super::{
+    run_finally, HookAttempt, HookCommandResult, ManagedTaskHookExec, TaskHookCancellation,
+};
 use crate::documents::{TaskHook, TaskHookPhase};
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::tools::exec::ownership::{
@@ -130,6 +132,67 @@ impl TaskHookRecordStore {
             store: self.clone(),
             record: Mutex::new(record),
         })))
+    }
+
+    /// Reuses the journal written before a request parked; a missing or
+    /// ambiguous preparation cannot safely be reconstructed by rerunning it.
+    pub(crate) async fn resume(
+        &self,
+        request_doc_id: &str,
+        request_id: &str,
+        node_did: &str,
+    ) -> Result<(TaskHookRecord, TaskHookRecordHandle, Vec<HookAttempt>)> {
+        let store = self.clone();
+        let request_doc_id = request_doc_id.to_owned();
+        let request_id = request_id.to_owned();
+        let node_did = node_did.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let records: Vec<_> = store
+                .list()
+                .into_iter()
+                .filter(|record| record.request_doc_id == request_doc_id)
+                .collect();
+            anyhow::ensure!(
+                records.len() == 1,
+                "parked task hook journal is missing or ambiguous"
+            );
+            let record = records.into_iter().next().expect("one journal");
+            anyhow::ensure!(
+                record.request_id == request_id && record.node_did == node_did,
+                "parked task hook journal belongs to another request"
+            );
+            let before: Vec<_> = record
+                .hooks
+                .iter()
+                .filter(|hook| hook.phase == TaskHookPhase::Before)
+                .collect();
+            anyhow::ensure!(
+                record.attempts.len() == before.len(),
+                "parked task hook journal contains unexpected attempts"
+            );
+            let mut recorded = Vec::with_capacity(before.len());
+            for (hook, attempt) in before.into_iter().zip(&record.attempts) {
+                let result = attempt
+                    .result
+                    .clone()
+                    .context("parked task hook preparation is unresolved")?;
+                anyhow::ensure!(
+                    attempt.hook_id == hook.hook_id && result.succeeded(),
+                    "parked task hook preparation is incomplete or reordered"
+                );
+                recorded.push(HookAttempt {
+                    hook_id: attempt.hook_id.clone(),
+                    result,
+                    detail: String::new(),
+                });
+            }
+            let handle = store
+                .claim(record.clone())
+                .context("parked task hook journal is already owned")?;
+            Ok((record, handle, recorded))
+        })
+        .await
+        .context("reading parked task hook journal")?
     }
 
     pub(crate) fn begin(&self, record: TaskHookRecord) -> std::io::Result<TaskHookRecordHandle> {
@@ -390,4 +453,70 @@ pub(crate) async fn recover_task_hook_records(
         recoveries.push(recovery);
     }
     Ok(started)
+}
+
+#[cfg(test)]
+mod backend_resume_tests {
+    use super::*;
+
+    fn record(directory: &std::path::Path) -> TaskHookRecord {
+        TaskHookRecord {
+            request_doc_id: "request-doc".into(),
+            request_id: "request".into(),
+            node_did: "did:test:node".into(),
+            cwd: directory.to_owned(),
+            root_guard: None,
+            hooks: vec![TaskHook {
+                hook_id: "prepare".into(),
+                phase: TaskHookPhase::Before,
+                command: vec!["prepare".into()],
+                timeout_secs: None,
+                skip_exit_codes: Vec::new(),
+            }],
+            attempts: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn resumed_task_reuses_only_confirmed_preparation() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = TaskHookRecordStore::durable(directory.path().to_owned());
+        let handle = store.begin(record(directory.path())).unwrap();
+        handle.attempt_started("prepare").await.unwrap();
+        handle
+            .attempt_finished("prepare", &HookCommandResult::Exited { code: Some(0) })
+            .await;
+        handle.work_started().await.unwrap();
+        drop(handle);
+        assert!(store
+            .resume("request-doc", "wrong", "did:test:node")
+            .await
+            .is_err());
+        let (saved, handle, before) = store
+            .resume("request-doc", "request", "did:test:node")
+            .await
+            .unwrap();
+        assert_eq!(saved.attempts.len(), 1);
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].hook_id, "prepare");
+        assert!(before[0].result.succeeded());
+        assert!(store
+            .resume("request-doc", "request", "did:test:node")
+            .await
+            .is_err());
+        drop(handle);
+    }
+
+    #[tokio::test]
+    async fn resumed_task_rejects_an_unresolved_preparation() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = TaskHookRecordStore::durable(directory.path().to_owned());
+        let handle = store.begin(record(directory.path())).unwrap();
+        handle.attempt_started("prepare").await.unwrap();
+        drop(handle);
+        assert!(store
+            .resume("request-doc", "request", "did:test:node")
+            .await
+            .is_err());
+    }
 }

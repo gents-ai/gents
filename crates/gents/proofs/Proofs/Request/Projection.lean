@@ -48,9 +48,9 @@ theorem retryable_projection_failure_preserves_atomic_retry :
 def stoppedBeforeRunning (owned : Bool) (source target : RequestState) : Bool :=
   owned && source == .claimed && target == .interrupted
 
-theorem claim_only_follows_pending {pre post : RequestContext}
+theorem claim_only_follows_pending_or_backend_wait {pre post : RequestContext}
     (transition : RequestContext.Transition pre post) (claimed : post.state = .claimed) :
-    pre.state = .pending := by
+    pre.state = .pending ∨ pre.state = .waitingForBackend := by
   cases transition <;> simp_all
 
 theorem processing_cannot_certify_no_provider (owned : Bool) (target : RequestState) :

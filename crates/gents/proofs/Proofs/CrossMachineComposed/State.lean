@@ -83,12 +83,14 @@ inductive Transition : ComposedState → ComposedState → Prop where
       post.requestId = pre.requestId →
       (pre.request.state = .pending → pre.process.acceptsWork) →
       ((pre.request.state = .processing ∧ post.request.state = .processing) ∨
-        (pre.request.state = .claimed ∧ post.request.state = .processing) →
+        (pre.request.state = .processing ∧ post.request.state = .waitingForBackend) ∨
+        (pre.request.state = .claimed ∧ post.request.state = .processing) ∨
+        (pre.request.state = .resumingBackend ∧ post.request.state = .processing) →
         ¬ ∃ t ∈ pre.tools, t.awaitMode = .foreground ∧
                             ¬ isTerminal t.state) →
       Transition pre post
   | slot_acquire {pre post : ComposedState} :
-      pre.request.state = .claimed →
+      (pre.request.state = .claimed ∨ pre.request.state = .resumingBackend) →
       pre.request.admission = .waiting →
       post.request = { pre.request with admission := .acquired } →
       post.process = pre.process →

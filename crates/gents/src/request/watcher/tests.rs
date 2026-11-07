@@ -397,6 +397,7 @@ async fn generated_release_cases_preserve_native_session_order() {
                     ProcessedMark {
                         at: Instant::now(),
                         queue_session: Some(format!("session-{id}")),
+                        execution_generation: None,
                     },
                 )
             })

@@ -13,6 +13,8 @@ pub enum RequestLifecycleState {
     Pending,
     Claimed,
     Processing,
+    WaitingForBackend,
+    ResumingBackend,
     Completed,
     Failed,
     Superseded,
@@ -21,11 +23,13 @@ pub enum RequestLifecycleState {
 }
 
 impl RequestLifecycleState {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 11] = [
         Self::WorkspaceBindingPending,
         Self::Pending,
         Self::Claimed,
         Self::Processing,
+        Self::WaitingForBackend,
+        Self::ResumingBackend,
         Self::Completed,
         Self::Failed,
         Self::Superseded,
@@ -39,6 +43,8 @@ impl RequestLifecycleState {
             Self::Pending => "pending",
             Self::Claimed => "claimed",
             Self::Processing => "processing",
+            Self::WaitingForBackend => "waitingForBackend",
+            Self::ResumingBackend => "resumingBackend",
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Superseded => "superseded",
@@ -66,7 +72,14 @@ impl RequestLifecycleState {
     }
 
     pub const fn is_active_runtime(self) -> bool {
-        matches!(self, Self::Pending | Self::Claimed | Self::Processing)
+        matches!(
+            self,
+            Self::Pending
+                | Self::Claimed
+                | Self::Processing
+                | Self::WaitingForBackend
+                | Self::ResumingBackend
+        )
     }
 
     pub fn parse(value: &str) -> Result<Self, InvalidRequestLifecycleState> {
@@ -75,6 +88,8 @@ impl RequestLifecycleState {
             "pending" => Ok(Self::Pending),
             "claimed" => Ok(Self::Claimed),
             "processing" => Ok(Self::Processing),
+            "waitingForBackend" => Ok(Self::WaitingForBackend),
+            "resumingBackend" => Ok(Self::ResumingBackend),
             "completed" => Ok(Self::Completed),
             "failed" => Ok(Self::Failed),
             "superseded" => Ok(Self::Superseded),

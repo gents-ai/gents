@@ -28,6 +28,8 @@ export function requestPhase(state: RequestLifecycleState): RequestPhase {
     case "workspaceBindingPending":
     case "pending":
     case "claimed":
+    case "waitingForBackend":
+    case "resumingBackend":
       return "waiting";
     case "processing":
       return "working";

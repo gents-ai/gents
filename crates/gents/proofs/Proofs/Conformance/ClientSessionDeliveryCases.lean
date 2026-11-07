@@ -6,7 +6,7 @@ namespace Conformance.ClientSessionDelivery
 open Conformance.Contracts
 
 def requestStates : List RequestState :=
-  [ .workspaceBindingPending, .pending, .claimed, .processing, .completed
+  [ .workspaceBindingPending, .pending, .claimed, .processing, .waitingForBackend, .resumingBackend, .completed
   , .failed, .superseded, .dead, .interrupted ]
 
 theorem requestStates_complete (state : RequestState) : state ∈ requestStates := by

@@ -91,15 +91,10 @@ theorem step_claimed : Transition ready claimed := by
   · exact RequestContext.Transition.claim rfl rfl trivial rfl
   · intro _; trivial
   · intro h_advance
-    cases h_advance with
-    | inl h_progress =>
-      simp [claimed, ready] at h_progress
-    | inr h_begin =>
-      obtain ⟨_, h_processing⟩ := h_begin
-      simp [claimed, ready] at h_processing
+    simp [claimed, ready] at h_advance
 
 theorem step_acquired : Transition claimed acquired := by
-  exact Transition.slot_acquire rfl rfl rfl rfl rfl rfl rfl
+  exact Transition.slot_acquire (Or.inl rfl) rfl rfl rfl rfl rfl rfl
 
 theorem step_processing : Transition acquired processing := by
   refine Transition.request_step ?_ rfl rfl rfl rfl ?_ ?_
@@ -303,10 +298,8 @@ theorem step_interrupted : Transition interruptLatched interruptedWithTool := by
   · intro h_pending
     simp [interruptLatched, withPendingTool, processing, acquired, claimed, ready] at h_pending
   · intro h_advance
-    rcases h_advance with h_progress | ⟨h_claimed, _⟩
-    · simp [interruptedWithTool, interruptLatched, withPendingTool, processing, acquired,
-        claimed, ready] at h_progress
-    · simp [interruptLatched, withPendingTool, processing, acquired, claimed, ready] at h_claimed
+    simp [interruptedWithTool, interruptLatched, withPendingTool, processing, acquired,
+      claimed, ready] at h_advance
 
 theorem trace_interruptedWithTool : Trace initial interruptedWithTool :=
   Trace.step step_ready (Trace.step step_claimed
@@ -352,11 +345,8 @@ theorem step_interruptedRunning :
     simp [interruptLatchedRunning, withRunningTool, withPendingTool, processing, acquired,
       claimed, ready] at h_pending
   · intro h_advance
-    rcases h_advance with h_progress | ⟨h_claimed, _⟩
-    · simp [interruptedWithRunningTool, interruptLatchedRunning, withRunningTool,
-        withPendingTool, processing, acquired, claimed, ready] at h_progress
-    · simp [interruptLatchedRunning, withRunningTool, withPendingTool, processing, acquired,
-        claimed, ready] at h_claimed
+    simp [interruptedWithRunningTool, interruptLatchedRunning, withRunningTool,
+      withPendingTool, processing, acquired, claimed, ready] at h_advance
 
 theorem trace_interruptedWithRunningTool : Trace initial interruptedWithRunningTool :=
   Trace.step step_ready (Trace.step step_claimed

@@ -11,6 +11,7 @@ pub(super) const PROCESSED_REQUEST_COOLDOWN: Duration = Duration::from_secs(30);
 pub(super) struct ProcessedMark {
     pub(super) at: Instant,
     pub(super) queue_session: Option<String>,
+    pub(super) execution_generation: Option<String>,
 }
 
 pub(super) type ProcessedRequests = RapidHashMap<String, ProcessedMark>;
@@ -33,20 +34,41 @@ pub(super) fn prune_processed_requests(
 
 pub(super) fn request_is_cooling_down(
     processed_request_ids: &mut ProcessedRequests,
-    request_id: &str,
+    request: &AgentRequest,
     now: Instant,
 ) -> bool {
-    match processed_request_ids.get(request_id).map(|mark| mark.at) {
-        Some(processed_at)
-            if now.saturating_duration_since(processed_at) < PROCESSED_REQUEST_COOLDOWN =>
+    match processed_request_ids.get(&request.request_id) {
+        Some(mark)
+            if generation_mark_applies(
+                &mark.execution_generation,
+                &request.execution_generation,
+            ) && now.saturating_duration_since(mark.at) < PROCESSED_REQUEST_COOLDOWN =>
         {
             true
         }
         Some(_) => {
-            processed_request_ids.remove(request_id);
+            processed_request_ids.remove(&request.request_id);
             false
         }
         None => false,
+    }
+}
+
+fn generation_mark_applies<T: PartialEq>(marked: &Option<T>, observed: &Option<T>) -> bool {
+    marked == observed
+}
+
+#[cfg(test)]
+#[test]
+fn generation_marks_match_the_generated_model() {
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().backend_generation_mark_cases;
+    assert!(!cases.is_empty());
+    for case in cases {
+        assert_eq!(
+            generation_mark_applies(&case.marked, &case.observed),
+            case.applies,
+            "{case:?}"
+        );
     }
 }
 
@@ -71,6 +93,7 @@ fn mark_processed(
         ProcessedMark {
             at: now,
             queue_session,
+            execution_generation: request.execution_generation.clone(),
         },
     );
 }
@@ -81,7 +104,7 @@ pub(super) fn take_next_eligible_pending_request(
     now: Instant,
 ) -> Option<AgentRequest> {
     for request in requests {
-        if request_is_cooling_down(processed_request_ids, &request.request_id, now) {
+        if request_is_cooling_down(processed_request_ids, &request, now) {
             continue;
         }
 

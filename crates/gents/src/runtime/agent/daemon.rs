@@ -114,6 +114,7 @@ where
     M: ProviderModel,
 {
     node: Arc<defra_node::EmbeddedNode>,
+    backend_health: Option<crate::inference::backends::health::BackendHealthMap>,
     agent_config: Arc<ResolvedAgent>,
     provider_family: Option<String>,
     replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,

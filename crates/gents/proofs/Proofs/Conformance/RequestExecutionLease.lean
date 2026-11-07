@@ -456,6 +456,22 @@ def optionalWorldJson : Option (World Generation) → String
   | some value => worldJson value
 
 def actionJson : Action Generation → String
+  | .reparkExpiredResume boundary generation deadline =>
+      "{\"kind\":\"repark_expired_resume\",\"boundary\":" ++ jsonString (boundaryName boundary) ++
+        ",\"generation\":" ++ toString generation ++ ",\"expected_deadline\":" ++ toString deadline ++ "}"
+  | .parkBackend boundary generation closed =>
+      "{\"kind\":\"park_backend\",\"boundary\":" ++ jsonString (boundaryName boundary) ++
+        ",\"generation\":" ++ toString generation ++ ",\"closed\":" ++
+        (if closed then "true" else "false") ++ "}"
+  | .resumeBackend boundary generation duration deadline wake =>
+      "{\"kind\":\"resume_backend\",\"boundary\":" ++ jsonString (boundaryName boundary) ++
+        ",\"generation\":" ++ toString generation ++ ",\"duration\":" ++ toString duration ++
+        ",\"explicit_deadline\":" ++ toString deadline ++ ",\"wake\":" ++
+        (if wake then "true" else "false") ++ "}"
+  | .finalizeParked boundary generation outcome =>
+      "{\"kind\":\"finalize_parked\",\"boundary\":" ++ jsonString (boundaryName boundary) ++
+        ",\"generation\":" ++ toString generation ++ ",\"outcome\":" ++
+        jsonString (outcomeName outcome) ++ "}"
   | .claim boundary generation duration deadline =>
       "{\"kind\":\"claim\",\"boundary\":" ++ jsonString (boundaryName boundary) ++
         ",\"generation\":" ++ toString generation ++

@@ -26,6 +26,7 @@ pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
                     execution_generation
                     execution_lease_secs
                     execution_lease_expires_at
+                    backend_id
                     request_hop
                     caused_by_parent_request_id
                     caused_by_parent_request_doc_id
@@ -127,8 +128,69 @@ impl DefraWatcher {
         .await?;
 
         let (mut rows, malformed) = parse_active_runtime_rows(resp.data.as_ref())?;
+        self.has_parked.store(
+            rows.iter()
+                .any(|row| row.lifecycle_state == Some(RequestLifecycleState::WaitingForBackend)),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         for row in malformed {
             self.terminalize_malformed_pending_request(&row).await;
+        }
+        for row in rows
+            .iter()
+            .filter(|row| row.lifecycle_state == Some(RequestLifecycleState::ResumingBackend))
+        {
+            let (Some(doc), Some(generation), Some(expiry)) = (
+                row.doc_id.as_deref(),
+                row.execution_generation.as_deref(),
+                row.execution_lease_expires_at.as_deref(),
+            ) else {
+                continue;
+            };
+            if chrono::DateTime::parse_from_rfc3339(expiry)
+                .ok()
+                .is_none_or(|time| time.with_timezone(&chrono::Utc) > chrono::Utc::now())
+            {
+                continue;
+            }
+            if let Err(error) = crate::request::lifecycle::repark_expired_resume(
+                &self.node, doc, generation, expiry,
+            )
+            .await
+            {
+                tracing::warn!(request_doc_id = %doc, %error, "could not recover expired backend resume");
+            }
+        }
+        for row in &rows {
+            if row.lifecycle_state != Some(RequestLifecycleState::WaitingForBackend) {
+                continue;
+            }
+            let interrupted = row
+                .interrupt_requested_at
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty());
+            let expired = row
+                .deadline
+                .as_deref()
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .is_some_and(|deadline| chrono::Utc::now() >= deadline.with_timezone(&chrono::Utc));
+            if !interrupted && !expired {
+                continue;
+            }
+            if let (Some(doc), Some(generation)) =
+                (row.doc_id.as_deref(), row.execution_generation.as_deref())
+            {
+                if let Err(error) = crate::request::lifecycle::terminalize_parked_request(
+                    &self.node,
+                    doc,
+                    generation,
+                    interrupted,
+                )
+                .await
+                {
+                    tracing::warn!(request_doc_id = %doc, %error, "could not settle parked request");
+                }
+            }
         }
         for row in &rows {
             if is_pending(row) {
@@ -140,7 +202,125 @@ impl DefraWatcher {
         }
 
         self.order_by_native_arrival(&mut rows).await?;
-        prioritize_aged_background_wakes(claimable_pending_rows_from_rows(rows), chrono::Utc::now())
+        let now = chrono::Utc::now();
+        let mut parked = Vec::new();
+        let mut next_wait_ms = super::GOSSIP_FALLBACK_POLL.as_millis() as u64;
+        let parked_ids: Vec<_> = rows
+            .iter()
+            .filter(|row| row.lifecycle_state == Some(RequestLifecycleState::WaitingForBackend))
+            .filter_map(|row| row.doc_id.as_deref())
+            .map(|doc| format!("\"{}\"", crate::store::graphql::escape_graphql_string(doc)))
+            .collect();
+        let wait_metadata: std::collections::HashMap<String, (Option<String>, Option<String>)> =
+            if parked_ids.is_empty() {
+                std::collections::HashMap::new()
+            } else {
+                let ids = parked_ids.join(", ");
+                let node = crate::store::graphql::escape_graphql_string(&self.node_did);
+                let response = crate::store::graphql::graphql_with_transaction_retry(&self.node,
+                &format!(r#"{{ AgentRequestBackendWait(filter: {{ node_did: {{ _eq: "{node}" }}, request_doc_id: {{ _in: [{ids}] }} }}) {{ request_doc_id retry_at wait_started_at }} }}"#),
+                "load parked backend wait metadata",
+            ).await?;
+                response
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get("AgentRequestBackendWait"))
+                    .and_then(serde_json::Value::as_array)
+                    .ok_or_else(|| anyhow::anyhow!("backend wait metadata query omitted rows"))?
+                    .iter()
+                    .filter_map(|row| {
+                        Some((
+                            row.get("request_doc_id")?.as_str()?.to_owned(),
+                            (
+                                row.get("retry_at")
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(str::to_owned),
+                                row.get("wait_started_at")
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(str::to_owned),
+                            ),
+                        ))
+                    })
+                    .collect()
+            };
+        for row in rows
+            .iter()
+            .filter(|row| row.lifecycle_state == Some(RequestLifecycleState::WaitingForBackend))
+        {
+            let parse_time = |value: Option<&str>| {
+                value
+                    .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                    .map(|time| time.with_timezone(&chrono::Utc))
+            };
+            let Some(doc) = row.doc_id.as_deref() else {
+                continue;
+            };
+            let Some((retry, started)) = wait_metadata.get(doc) else {
+                continue;
+            };
+            let (Some(deadline), Some(retry), Some(started), Some(backend_id)) = (
+                parse_time(row.deadline.as_deref()),
+                parse_time(retry.as_deref()),
+                parse_time(started.as_deref()),
+                row.backend_id.as_deref().filter(|id| !id.is_empty()),
+            ) else {
+                continue;
+            };
+            for time in [deadline, retry] {
+                if time > now {
+                    let millis = (time - now).num_milliseconds().max(1) as u64;
+                    next_wait_ms = next_wait_ms.min(millis);
+                }
+            }
+            if deadline <= now
+                || row
+                    .interrupt_requested_at
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty())
+            {
+                continue;
+            }
+            let other_active_in_session = !row
+                .purpose
+                .is_some_and(gents_protocol::request_admission::RequestPurpose::is_auxiliary)
+                && rows.iter().any(|other| {
+                    other.doc_id.as_deref() != Some(doc)
+                        && other.session_id == row.session_id
+                        && !is_pending(other)
+                        && !other.purpose.is_some_and(
+                            gents_protocol::request_admission::RequestPurpose::is_auxiliary,
+                        )
+                });
+            if other_active_in_session {
+                continue;
+            }
+            let healthy = if retry > now {
+                match &self.backend_health {
+                    Some(health) => match health
+                        .healthy_observed_at(&self.node, &self.node_did, backend_id)
+                        .await
+                    {
+                        Ok(observed) => {
+                            crate::request::lifecycle::fresh_healthy(started, now, observed)
+                        }
+                        Err(error) => {
+                            tracing::warn!(%backend_id, %error, "could not inspect provider health for parked request");
+                            false
+                        }
+                    },
+                    None => false,
+                }
+            } else {
+                false
+            };
+            if (retry <= now || healthy) && AgentRequest::try_from(row.clone()).is_ok() {
+                parked.push(row.clone());
+            }
+        }
+        self.parked_wait_ms
+            .store(next_wait_ms, std::sync::atomic::Ordering::Relaxed);
+        parked.extend(claimable_pending_rows_from_rows(rows));
+        prioritize_aged_background_wakes(parked, now)
             .into_iter()
             .map(AgentRequest::try_from)
             .collect()

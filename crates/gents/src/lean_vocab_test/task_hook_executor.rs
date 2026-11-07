@@ -20,6 +20,7 @@ fn outcome(generated: &LeanTaskOutcome) -> TaskHookOutcome {
             LeanTaskPrimaryError::Agent => HookPrimaryError::Agent,
         }),
         LeanTaskOutcome::Interrupted => TaskHookOutcome::Interrupted,
+        LeanTaskOutcome::Parked => TaskHookOutcome::Parked,
     }
 }
 
@@ -29,6 +30,7 @@ fn agent_result(name: &str) -> TaskAgentResult {
         "failure" => TaskAgentResult::Failure,
         "cancelled" => TaskAgentResult::Cancelled,
         "interrupted" => TaskAgentResult::Interrupted,
+        "parked" => TaskAgentResult::Parked,
         other => panic!("generated contract emitted an unknown agent result {other:?}"),
     }
 }
@@ -279,7 +281,10 @@ async fn generated_task_hook_run_cases_drive_real_host_commands() {
         assert_eq!(
             final_outcome
                 .terminal_outcome()
-                .request_lifecycle_state()
+                .map(|outcome| outcome.request_lifecycle_state())
+                .unwrap_or(
+                    gents_protocol::request_lifecycle::RequestLifecycleState::WaitingForBackend
+                )
                 .as_str(),
             case.expected_request_state,
             "{}: the terminal owner would write a different request state",

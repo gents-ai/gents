@@ -368,6 +368,8 @@ where
                             let failure = failure.classify();
                             let directive =
                                 retry.on_pre_stream_failure(&failure, Utc::now(), config.deadline);
+                            let backend_unavailable = crate::completion_retry::failure_class(&failure)
+                                == crate::completion_retry::FailureClass::Transport;
                             let crate::error::ClassifiedFailure {
                                 error: classified,
                                 text: error_text,
@@ -478,9 +480,16 @@ where
                                         will_retry: false,
                                         backoff: std::time::Duration::ZERO,
                                     };
-                                    Err(StreamingError::Completion(
-                                        CompletionError::ProviderError(terminal_reason),
-                                    ))?;
+                                    if backend_unavailable {
+                                        Err(rig_compat::loop_verdict_error(
+                                            crate::error::LoopVerdict::BackendUnavailable,
+                                            terminal_reason,
+                                        ))?;
+                                    } else {
+                                        Err(StreamingError::Completion(
+                                            CompletionError::ProviderError(terminal_reason),
+                                        ))?;
+                                    }
                                     unreachable!("Err(..)? above ends the stream");
                                 }
                             }
@@ -604,6 +613,8 @@ where
                         let directive = pre_stream.then(|| {
                             retry.on_pre_stream_failure(&failure, Utc::now(), config.deadline)
                         });
+                        let backend_unavailable = crate::completion_retry::failure_class(&failure)
+                            == crate::completion_retry::FailureClass::Transport;
                         let crate::error::ClassifiedFailure {
                             error: classified,
                             text: error_text,
@@ -721,9 +732,16 @@ where
                                         will_retry: false,
                                         backoff: std::time::Duration::ZERO,
                                     };
-                                    Err(StreamingError::Completion(
-                                        CompletionError::ProviderError(terminal_reason),
-                                    ))?;
+                                    if backend_unavailable {
+                                        Err(rig_compat::loop_verdict_error(
+                                            crate::error::LoopVerdict::BackendUnavailable,
+                                            terminal_reason,
+                                        ))?;
+                                    } else {
+                                        Err(StreamingError::Completion(
+                                            CompletionError::ProviderError(terminal_reason),
+                                        ))?;
+                                    }
                                     unreachable!("Err(..)? above ends the stream");
                                 }
                             }
@@ -773,9 +791,16 @@ where
                             MidStreamDirective::Fail { reason } => {
                                 let terminal_reason =
                                     terminal_pre_stream_retry_reason(&classified, attempt, reason);
-                                Err(StreamingError::Completion(
-                                    CompletionError::ProviderError(terminal_reason),
-                                ))?;
+                                if backend_unavailable {
+                                    Err(rig_compat::loop_verdict_error(
+                                        crate::error::LoopVerdict::BackendUnavailable,
+                                        terminal_reason,
+                                    ))?;
+                                } else {
+                                    Err(StreamingError::Completion(
+                                        CompletionError::ProviderError(terminal_reason),
+                                    ))?;
+                                }
                                 unreachable!("Err(..)? above ends the stream");
                             }
                         }
@@ -973,7 +998,7 @@ where
             }
 
             if pending_calls.is_empty() && turn_text.trim().is_empty() {
-                match retry.on_mid_stream_failure(false, Utc::now(), config.deadline) {
+                match retry.on_no_visible_output(Utc::now(), config.deadline) {
                     MidStreamDirective::RetractAndResample { delay } => {
                         yield LoopStreamItem::TurnRetracted {
                             turn: turn_index,

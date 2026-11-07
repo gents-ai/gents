@@ -19,7 +19,8 @@ pub(crate) use publish::publish_provider_turn;
 pub(crate) use publish::publish_provider_turn_at;
 pub(super) use publish::publish_provider_turn_with_time;
 pub(crate) use source::{
-    retained_partial_blocks, validate_closed_source_extent, validate_source_purpose,
+    retained_partial_blocks, validate_closed_source_extent, validate_source_physical_identities,
+    validate_source_purpose,
 };
 
 pub(crate) struct ProviderPublicationPlan {

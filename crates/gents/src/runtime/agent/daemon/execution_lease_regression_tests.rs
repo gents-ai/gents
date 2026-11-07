@@ -1,6 +1,189 @@
+use crate::inference::llm::message::Message;
 use std::sync::atomic::AtomicBool;
 
 const ACTIVE_STREAM_INTERVAL: Duration = Duration::from_millis(300);
+
+#[derive(Clone)]
+struct RecoveringProvider {
+    available: Arc<AtomicBool>,
+}
+
+#[allow(refining_impl_trait)]
+impl CompletionModel for RecoveringProvider {
+    type Response = ();
+    type StreamingResponse = ();
+    type Client = ();
+
+    fn make(_: &(), _: impl Into<String>) -> Self {
+        unreachable!()
+    }
+
+    async fn completion(
+        &self,
+        _: CompletionRequest,
+    ) -> Result<CompletionResponse<()>, CompletionError> {
+        unreachable!()
+    }
+
+    async fn stream(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
+        crate::test_support::capture_scripted_provider_request(&request, "backend-recovery")
+            .await?;
+        if !self.available.load(Ordering::SeqCst) {
+            return Err(CompletionError::ProviderError(
+                "HTTP status 503: unavailable".into(),
+            ));
+        }
+        Ok(StreamingCompletionResponse::stream(Box::pin(stream::iter(
+            vec![
+                Ok(RawStreamingChoice::Message("recovered reply".into())),
+                Ok(RawStreamingChoice::FinalResponse(())),
+            ],
+        ))))
+    }
+}
+
+#[tokio::test]
+async fn unavailable_provider_parks_and_resumes_the_same_request() {
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let mut agent_config = test_agent();
+    Arc::get_mut(&mut agent_config)
+        .unwrap()
+        .completion_retry
+        .retry_interactive_max = Some(1);
+    let node_did = agent_config.node_did().to_owned();
+    let available = Arc::new(AtomicBool::new(false));
+    let prompt = LayeredPromptBuilder::for_agent(
+        &agent_config.system_prompt,
+        &agent_config.agent_id,
+        &[],
+        false,
+        &[],
+    );
+    let mut daemon = AgentDaemon::new(AgentDaemonInit {
+        node: node.clone(),
+        agent_config: agent_config.clone(),
+        provider_family: None,
+        model: Arc::new(RecoveringProvider {
+            available: available.clone(),
+        }),
+        preamble: prompt.preamble().to_owned(),
+        loop_tools: Arc::new(Vec::new()),
+        prompt_builder: prompt,
+        hook_failure_policy: FailurePolicy::default(),
+        rendered_request_capture_factory: Some(
+            crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                node.clone(),
+            ),
+        ),
+        background_tool_registry: BackgroundToolRegistry::default(),
+        background_execution_registry: BackgroundExecutionRegistry::default(),
+        startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
+        runtime_status: crate::runtime::status::RuntimeStatusHandle::new(
+            node.clone(),
+            node_did.clone(),
+        ),
+        slot_generation: 1,
+        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
+            node.clone(),
+            agent_config.node_identity().clone(),
+            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+        ),
+    })
+    .unwrap();
+    let request = create_routed_request(&node, &agent_config, &node_did).await;
+    let doc_id = request.doc_id.clone();
+    let session = gents_protocol::session::AgentSession {
+        session_id: request.session_id.clone(),
+        node_did: node_did.clone(),
+        requester_did: request.requester_did.clone(),
+        agent_id: agent_config.agent_id.clone(),
+        created_at: request.created_at.clone(),
+        closed_at: None,
+        archived_at: None,
+        archive_revision: 0,
+        stopped_at: None,
+        title: None,
+        tags: vec![],
+        provenance: None,
+        observation: None,
+    };
+    let session_input =
+        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session).unwrap())
+            .unwrap();
+    let seeded = node
+        .execute(&format!(
+            "mutation {{ create_AgentSession(input: {session_input}) {{ _docID }} }}"
+        ))
+        .await;
+    assert!(!seeded.has_errors(), "{:?}", seeded.errors);
+    let (_shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
+    daemon
+        .process_request(request.clone(), shutdown_rx.clone())
+        .await
+        .unwrap();
+    let doc = crate::store::graphql::escape_graphql_string(&doc_id);
+    let read_state = || async {
+        let response = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ lifecycle_state execution_generation deadline }} }}"#)).await;
+        response.data.unwrap()["AgentRequest"][0].clone()
+    };
+    let parked = read_state().await;
+    assert_eq!(parked["lifecycle_state"], "waitingForBackend");
+    let old_generation = parked["execution_generation"].as_str().unwrap().to_owned();
+    let deadline = parked["deadline"].clone();
+    available.store(true, Ordering::SeqCst);
+    let past = crate::store::graphql::escape_graphql_string(
+        &(chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339(),
+    );
+    let resumed = node.execute(&format!(r#"mutation {{ update_AgentRequestBackendWait(filter: {{ request_doc_id: {{ _eq: "{doc}" }} }}, input: {{ retry_at: "{past}" }}) {{ _docID }} }}"#)).await;
+    assert!(!resumed.has_errors(), "{:?}", resumed.errors);
+    let resumed_request =
+        crate::request::admission::load_request_for_admission_test(&node, &doc_id)
+            .await
+            .unwrap();
+    daemon
+        .process_request(resumed_request, shutdown_rx)
+        .await
+        .unwrap();
+    let completed = read_state().await;
+    assert_eq!(completed["lifecycle_state"], "completed");
+    assert_ne!(completed["execution_generation"], old_generation);
+    assert_eq!(completed["deadline"], deadline);
+    let history = crate::session::load_history(
+        &node,
+        &request.session_id,
+        &request.node_did,
+        request.requester_did.as_deref(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        history
+            .iter()
+            .filter(|message| matches!(message, Message::User { .. }))
+            .count(),
+        1
+    );
+    assert!(history
+        .iter()
+        .any(|message| matches!(message, Message::Assistant { .. })));
+    let captures = node.execute(&format!(r#"{{ RenderedRequest(filter: {{ request_doc_id: {{ _eq: "{doc}" }} }}) {{ capture_scope capture_key }} }}"#)).await;
+    assert!(!captures.has_errors(), "{:?}", captures.errors);
+    let captures = captures.data.as_ref().unwrap()["RenderedRequest"]
+        .as_array()
+        .unwrap();
+    let scopes: std::collections::HashSet<_> = captures
+        .iter()
+        .filter_map(|capture| capture["capture_scope"].as_str())
+        .collect();
+    assert!(
+        scopes.len() >= 2,
+        "resumed provider calls must use a new capture scope"
+    );
+}
 
 #[derive(Clone)]
 struct NonTerminalProvider {
@@ -105,7 +288,9 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                node.clone(),
+            ),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -470,7 +655,8 @@ impl crate::inference::llm::tool::ToolDyn for LeaseBlockingTool {
     fn definition<'a>(
         &'a self,
         _: String,
-    ) -> crate::inference::llm::tool::BoxFuture<'a, crate::inference::llm::tool::ToolDefinition> {
+    ) -> crate::inference::llm::tool::BoxFuture<'a, crate::inference::llm::tool::ToolDefinition>
+    {
         Box::pin(async {
             crate::inference::llm::tool::ToolDefinition {
                 name: "lease_block".into(),
@@ -482,7 +668,10 @@ impl crate::inference::llm::tool::ToolDyn for LeaseBlockingTool {
     fn call<'a>(
         &'a self,
         _: String,
-    ) -> crate::inference::llm::tool::BoxFuture<'a, Result<String, crate::inference::llm::tool::ToolError>> {
+    ) -> crate::inference::llm::tool::BoxFuture<
+        'a,
+        Result<String, crate::inference::llm::tool::ToolError>,
+    > {
         let entered = self.entered.clone();
         Box::pin(async move {
             if let Some(entered) = entered {
@@ -513,13 +702,14 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
         provider_family: None,
         model: Arc::new(LeaseLossProvider),
         preamble: prompt.preamble().to_owned(),
-        loop_tools: Arc::new(vec![
-            Box::new(LeaseBlockingTool { entered: None }) as Box<dyn crate::inference::llm::tool::ToolDyn>
-        ]),
+        loop_tools: Arc::new(vec![Box::new(LeaseBlockingTool { entered: None })
+            as Box<dyn crate::inference::llm::tool::ToolDyn>]),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                node.clone(),
+            ),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -720,7 +910,9 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                node.clone(),
+            ),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -960,11 +1152,14 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(vec![Box::new(LeaseBlockingTool {
             entered: Some(tool_entered.clone()),
-        }) as Box<dyn crate::inference::llm::tool::ToolDyn>]),
+        })
+            as Box<dyn crate::inference::llm::tool::ToolDyn>]),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                node.clone(),
+            ),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -1172,7 +1367,9 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                node.clone(),
+            ),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -1312,7 +1509,9 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                node.clone(),
+            ),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),

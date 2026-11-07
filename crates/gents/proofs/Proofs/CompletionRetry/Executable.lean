@@ -127,15 +127,27 @@ def retryCases : List RetryCase :=
           phase := .retracted .accountLimited "account limit reached" 12
           budget := { defaultBudget with accountHops := 1 }
           accountUsed := 1 } .schedule
+  , witness "empty_sample_retry_independent_of_transport"
+      { baseState with
+          phase := .retracted .emptySample "empty" 12
+          transportUsed := defaultBudget.transportRetries } .schedule
+  , witness "empty_sample_retry_exhausted"
+      { baseState with
+          phase := .retracted .emptySample "empty" 12
+          emptyUsed := 1 } .schedule
+  , witness "empty_sample_retry_respects_deadline"
+      { baseState with
+          phase := .retracted .emptySample "empty" 12
+          deadline := some 11 } .schedule
   ]
 
-theorem retryCases_count : retryCases.length = 30 := by decide
+theorem retryCases_count : retryCases.length = 33 := by decide
 
 theorem retry_cases_pin_publication_boundary :
     retryCases.map (fun c => c.post.isSome) =
       [true, false, false, true, true, true, true, true, false, true, false, true, true,
        true, true, true, true, false, true, true, true, true, true, true, true, true,
-       true, true, true, true] := by
+       true, true, true, true, true, true, true] := by
   native_decide
 
 theorem retry_cases_pin_exhaustion_and_single_repair :
@@ -181,7 +193,7 @@ theorem reasoning_rejection_never_backs_off (s : State) (error : String) (wake :
   split at h <;> cases h <;> simp
 
 theorem account_limit_cases_rotate_without_budget :
-    (retryCases.drop 27).map (fun c => c.post.map (fun state =>
+    ((retryCases.drop 27).take 3).map (fun c => c.post.map (fun state =>
       (state.phase, state.transportUsed, state.accountUsed, state.attempt))) =
       [some (.retractRequired .accountLimited "account limit reached" 12, 0, 0, 0),
        some (.issuing, 0, 1, 1), some (.exhausted, 0, 1, 0)] := by
@@ -200,5 +212,30 @@ theorem account_limit_never_backs_off (s : State) (error : String) (wake : Time)
   split at h <;> cases h
   · exact Or.inl ⟨rfl, rfl, by assumption, rfl, rfl⟩
   · exact Or.inr rfl
+
+end CompletionRetry
+
+namespace CompletionRetry
+
+/-- A blank provider response cannot spend the transport retry budget; it can
+only be retried after its unpublished attempt has been retracted. -/
+theorem empty_sample_waits_for_retraction_and_has_independent_budget :
+    let initial := { baseState with transportUsed := defaultBudget.transportRetries }
+    let observed := step? initial (.observeFailure .emptySample "empty" 12)
+    let retracted := observed.bind fun s => step? s (.confirmRetraction true)
+    (observed.bind fun s => step? s .schedule) = none ∧
+      (retracted.bind fun s => step? s .schedule).map (fun s =>
+        (s.phase, s.transportUsed, s.emptyUsed)) =
+        some (.backingOff 12, defaultBudget.transportRetries, 1) := by
+  native_decide
+
+theorem empty_sample_exhaustion_and_deadline :
+    (step? { baseState with
+        phase := .retracted .emptySample "empty" 12
+        emptyUsed := 1 } .schedule).map (·.phase) = some .exhausted ∧
+    (step? { baseState with
+        phase := .retracted .emptySample "empty" 12
+        deadline := some 11 } .schedule).map (·.phase) = some .exhausted := by
+  native_decide
 
 end CompletionRetry

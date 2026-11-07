@@ -103,7 +103,7 @@ instance {Generation : Type} [DecidableEq Generation]
 
 /-- States where the owned completion loop may keep its lease alive; a mailbox handoff completes the producer without holding a lease for the later reply request. -/
 def renewableLifecycle : RequestState → Prop
-  | .claimed | .processing => True
+  | .claimed | .processing | .resumingBackend => True
   | _ => False
 
 instance (request : RequestState) : Decidable (renewableLifecycle request) := by
@@ -114,7 +114,7 @@ def canFinalize {Generation : Type} (world : World Generation)
   match outcome with
   | .completed => world.request = .processing
   | .failed | .interrupted | .dead | .superseded =>
-      world.request = .claimed ∨ world.request = .processing
+      world.request = .claimed ∨ world.request = .processing ∨ world.request = .resumingBackend
 
 instance {Generation : Type} (world : World Generation) (outcome : Outcome) :
     Decidable (canFinalize world outcome) := by

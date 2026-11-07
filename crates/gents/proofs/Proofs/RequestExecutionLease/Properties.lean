@@ -277,4 +277,57 @@ theorem provider_eof_requires_explicit_final (sawExplicitFinal : Bool) :
 
 theorem provider_eof_without_final_fails : providerEofIsFailure false = true := rfl
 
+/-- The generation which parked an attempt cannot publish after the park. -/
+theorem parked_generation_is_fenced {Generation : Type} [DecidableEq Generation]
+    (pre post : World Generation) (generation : Generation)
+    (h : step? pre (.parkBackend .mutationWriteGate generation true) = some post) :
+    ¬ admitted post .mutationWriteGate generation := by
+  simp [step?] at h
+  rcases h with ⟨_, rfl⟩
+  simp [admitted]
+
+theorem expired_resume_is_parked_and_fenced {Generation : Type} [DecidableEq Generation]
+    (pre post : World Generation) (generation : Generation) (deadline : Time)
+    (h : step? pre (.reparkExpiredResume .mutationWriteGate generation deadline) = some post) :
+    post.request = .waitingForBackend ∧ ¬ admitted post .mutationWriteGate generation := by
+  cases hlease : pre.lease with
+  | vacant => simp [step?, hlease] at h
+  | active owner duration expiry =>
+      simp [step?, hlease] at h
+      rcases h with ⟨_, rfl⟩
+      simp [admitted]
+  | recoverable owner duration expiry => simp [step?, hlease] at h
+  | terminal owner outcome => simp [step?, hlease] at h
+
+/-- Reclaim uses a generation that has never owned this request. -/
+theorem resumed_generation_is_fresh {Generation : Type} [DecidableEq Generation]
+    (pre post : World Generation) (generation : Generation) (duration deadline : Time)
+    (h : step? pre (.resumeBackend .mutationWriteGate generation duration deadline true) = some post) :
+    fresh pre generation := by
+  cases hlease : pre.lease with
+  | vacant =>
+    simp [step?, hlease] at h
+    exact h.1.2.2.1
+  | active owner duration deadline => simp [step?, hlease] at h
+  | recoverable owner duration deadline => simp [step?, hlease] at h
+  | terminal owner outcome => simp [step?, hlease] at h
+
+/-- Parked cancellation or expiry obtains one fresh terminal generation and
+commits the same terminal effects as the ordinary completion owner. -/
+theorem parked_terminalization_is_fenced_and_single {Generation : Type} [DecidableEq Generation]
+    (pre post : World Generation) (generation : Generation) (outcome : Outcome)
+    (h : step? pre (.finalizeParked .mutationWriteGate generation outcome) = some post) :
+    fresh pre generation ∧ post.lease = .terminal generation outcome ∧
+      post.request = outcome.requestState ∧
+      (step? post (.finalizeParked .mutationWriteGate generation outcome)).isNone = true := by
+  cases hlease : pre.lease with
+  | vacant =>
+    simp [step?, hlease] at h
+    rcases h with ⟨hguard, rfl⟩
+    refine ⟨hguard.2.2.1, rfl, rfl, ?_⟩
+    simp [step?, recoveryTerminal, terminalize, commitTerminalEffects]
+  | active owner duration deadline => simp [step?, hlease] at h
+  | recoverable owner duration deadline => simp [step?, hlease] at h
+  | terminal owner prior => simp [step?, hlease] at h
+
 end RequestExecutionLease

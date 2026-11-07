@@ -64,7 +64,7 @@ def deriveAttempt : AttemptView → ClientTurnState
     | .dead          => .failed
     | .interrupted   => .interrupted
     | .workspaceBindingPending | .pending => .waitingForClaim
-    | .claimed | .processing => .running
+    | .claimed | .processing | .waitingForBackend | .resumingBackend => .running
 
 structure ClientHeadProjection where
   turnState : ClientTurnState

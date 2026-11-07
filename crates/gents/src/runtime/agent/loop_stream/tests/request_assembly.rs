@@ -1103,7 +1103,9 @@ fn generated_authored_key(
     match key {
         Key::Context => "context".to_owned(),
         Key::Prompt => "prompt".to_owned(),
-        Key::Folded { request_id } => crate::request::lifecycle::queue::folded_input_key(&docs[request_id]),
+        Key::Folded { request_id } => {
+            crate::request::lifecycle::queue::folded_input_key(&docs[request_id])
+        }
     }
 }
 
@@ -1310,12 +1312,26 @@ async fn drive_generated_turn_input(
         None,
         None,
         gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+        false,
     )
     .await
     .unwrap();
     assert!(history
         .iter()
         .all(|row| !matches!(&row.message, Message::User { .. })));
+    let resumed_history = crate::session::load_sequenced_history_for_request(
+        &node,
+        lifecycle.request(),
+        None,
+        None,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+        true,
+    )
+    .await
+    .unwrap();
+    assert!(resumed_history
+        .iter()
+        .any(|row| matches!(&row.message, Message::User { .. })));
 }
 
 #[tokio::test]

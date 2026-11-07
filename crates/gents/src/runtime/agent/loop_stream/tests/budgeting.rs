@@ -1302,6 +1302,7 @@ async fn mid_stream_failure_after_tool_budget_exhausted_fails() {
     loop_config.retry_policy = crate::runtime::agent::completion_retry::CompletionRetryPolicy {
         transport_backoff: Vec::new(),
         max_resample: 0,
+        max_empty_resample: 0,
         allow_repair: false,
         account_hops: 0,
     };

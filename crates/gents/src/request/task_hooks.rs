@@ -85,14 +85,16 @@ pub(crate) enum TaskHookOutcome {
     Success,
     Failure(HookPrimaryError),
     Interrupted,
+    Parked,
 }
 
 impl TaskHookOutcome {
-    pub(crate) fn terminal_outcome(&self) -> RequestTerminalOutcome {
+    pub(crate) fn terminal_outcome(&self) -> Option<RequestTerminalOutcome> {
         match self {
-            Self::Success => RequestTerminalOutcome::Completed,
-            Self::Failure(_) => RequestTerminalOutcome::Failed,
-            Self::Interrupted => RequestTerminalOutcome::Interrupted,
+            Self::Success => Some(RequestTerminalOutcome::Completed),
+            Self::Failure(_) => Some(RequestTerminalOutcome::Failed),
+            Self::Interrupted => Some(RequestTerminalOutcome::Interrupted),
+            Self::Parked => None,
         }
     }
 }
@@ -103,6 +105,7 @@ pub(crate) enum TaskAgentResult {
     Failure,
     Cancelled,
     Interrupted,
+    Parked,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -206,6 +209,7 @@ fn phase_outcome(attempts: &[HookAttempt]) -> TaskHookOutcome {
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn run_task_hooks<Work, Fut>(
     hooks: &[TaskHook],
     exec: &dyn TaskHookExec,
@@ -215,8 +219,24 @@ where
     Work: FnOnce() -> Fut,
     Fut: std::future::Future<Output = TaskAgentResult>,
 {
+    run_task_hooks_with_before(hooks, exec, None, work).await
+}
+
+pub(crate) async fn run_task_hooks_with_before<Work, Fut>(
+    hooks: &[TaskHook],
+    exec: &dyn TaskHookExec,
+    recorded_before: Option<Vec<HookAttempt>>,
+    work: Work,
+) -> TaskHookRun
+where
+    Work: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = TaskAgentResult>,
+{
     let mut run = TaskHookRun {
-        before_attempted: run_phase(hooks, TaskHookPhase::Before, exec).await,
+        before_attempted: match recorded_before {
+            Some(attempts) => attempts,
+            None => run_phase(hooks, TaskHookPhase::Before, exec).await,
+        },
         ..Default::default()
     };
     let skipped = run
@@ -231,6 +251,7 @@ where
     if !skipped {
         match phase_outcome(&run.before_attempted) {
             TaskHookOutcome::Interrupted => run.outcome = TaskHookOutcome::Interrupted,
+            TaskHookOutcome::Parked => unreachable!("hook phase cannot park"),
             TaskHookOutcome::Failure(error) => {
                 run.outcome = TaskHookOutcome::Failure(error);
                 run.after_failure_attempted =
@@ -240,6 +261,10 @@ where
                 let agent = work().await;
                 run.agent_result = Some(agent);
                 match agent {
+                    TaskAgentResult::Parked => {
+                        run.outcome = TaskHookOutcome::Parked;
+                        return run;
+                    }
                     TaskAgentResult::Cancelled | TaskAgentResult::Interrupted => {
                         run.outcome = TaskHookOutcome::Interrupted
                     }

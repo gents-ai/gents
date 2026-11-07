@@ -55,6 +55,7 @@ async fn relinquish_execution_lease(
     let active = RequestLifecycleState::graphql_list([
         RequestLifecycleState::Claimed,
         RequestLifecycleState::Processing,
+        RequestLifecycleState::ResumingBackend,
     ]);
     crate::store::config_client::ConfigAccess::write_local(
         node,
@@ -138,10 +139,43 @@ pub enum TerminalizeResult {
 #[derive(Clone, Copy)]
 enum TerminalAuthority<'a> {
     Owner(&'a str),
+    Parked {
+        generation: &'a str,
+    },
     Revocation {
         generation: &'a str,
         expiry: &'a str,
     },
+}
+
+pub(crate) async fn terminalize_parked_request(
+    node: &Arc<EmbeddedNode>,
+    request_doc_id: &str,
+    generation: &str,
+    interrupted: bool,
+) -> Result<TerminalizeResult> {
+    terminalize_execution_with_time(
+        node,
+        TerminalizeSpec {
+            request_doc_id,
+            authority: TerminalAuthority::Parked { generation },
+            outcome: if interrupted {
+                RequestTerminalOutcome::Interrupted
+            } else {
+                RequestTerminalOutcome::Failed
+            },
+            selection: None,
+            reason: if interrupted {
+                "request interrupted while waiting for provider"
+            } else {
+                "request deadline expired while waiting for provider"
+            },
+            fixture_now: None,
+            fixture_fresh_generation: None,
+            pending_fence: None,
+        },
+    )
+    .await
 }
 
 impl RequestExecutionLease {
@@ -154,6 +188,9 @@ impl RequestExecutionLease {
         let Some(row) = super::query::request_view(node, request_doc_id).await? else {
             return Ok(None);
         };
+        if row.lifecycle_state == Some(RequestLifecycleState::WaitingForBackend) {
+            return Ok(Some(false));
+        }
         let expiry = row
             .execution_lease_expires_at
             .as_deref()
@@ -523,7 +560,7 @@ async fn terminalize_execution_in_txn(
     let result = txn.execute_local_response(&format!(r#"{{ AgentRequest(
                 filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
                 _docID request_id purpose node_did requester_did session_id lifecycle_state
-                execution_generation execution_lease_expires_at interrupt_requested_at terminal_output
+                execution_generation execution_lease_expires_at interrupt_requested_at terminal_output deadline
             }} }}"#)).await?;
     let row = crate::store::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")?
         .context("execution request disappeared")?;
@@ -564,16 +601,19 @@ async fn terminalize_execution_in_txn(
             },
         );
     }
-    let expiry = row
-        .execution_lease_expires_at
-        .as_deref()
-        .context("missing execution expiry")?;
-    let deadline = DateTime::parse_from_rfc3339(expiry)?.timestamp_millis();
+    let expiry = row.execution_lease_expires_at.as_deref();
+    let lease_deadline = expiry
+        .map(DateTime::parse_from_rfc3339)
+        .transpose()?
+        .map(|time| time.timestamp_millis());
+    if !matches!(authority, TerminalAuthority::Parked { .. }) {
+        anyhow::ensure!(lease_deadline.is_some(), "missing execution expiry");
+    }
     let now = fixture_now.unwrap_or_else(Utc::now);
     let observed = LeaseObservation {
         request: state,
         generation: owner,
-        deadline_ms: deadline,
+        deadline_ms: lease_deadline.unwrap_or_default(),
     };
     let authorized = match authority {
         TerminalAuthority::Owner(expected) => authorize_finalize(
@@ -582,6 +622,28 @@ async fn terminalize_execution_in_txn(
             now.timestamp_millis(),
             effective_outcome == RequestTerminalOutcome::Completed,
         ),
+        TerminalAuthority::Parked { generation } => {
+            let interrupted = row
+                .interrupt_requested_at
+                .as_deref()
+                .is_some_and(|value| !value.is_empty());
+            let deadline = row
+                .deadline
+                .as_deref()
+                .map(DateTime::parse_from_rfc3339)
+                .transpose()?;
+            state == RequestLifecycleState::WaitingForBackend
+                && expiry.is_none()
+                && owner == generation
+                && match effective_outcome {
+                    RequestTerminalOutcome::Interrupted => interrupted,
+                    RequestTerminalOutcome::Failed => {
+                        !interrupted
+                            && deadline.is_some_and(|deadline| now >= deadline.with_timezone(&Utc))
+                    }
+                    _ => false,
+                }
+        }
         TerminalAuthority::Revocation {
             generation,
             expiry: expected,
@@ -649,7 +711,10 @@ async fn terminalize_execution_in_txn(
         Some(explicit) => explicit,
         None => {
             anyhow::ensure!(
-                matches!(authority, TerminalAuthority::Revocation { .. }),
+                matches!(
+                    authority,
+                    TerminalAuthority::Revocation { .. } | TerminalAuthority::Parked { .. }
+                ),
                 "only revocation may select output by metadata"
             );
             let latest = headers
@@ -691,7 +756,10 @@ async fn terminalize_execution_in_txn(
                 matching.len() == 1,
                 "terminal selection lacks exact owned assistant header"
             );
-            if !matches!(authority, TerminalAuthority::Revocation { .. }) {
+            if !matches!(
+                authority,
+                TerminalAuthority::Revocation { .. } | TerminalAuthority::Parked { .. }
+            ) {
                 let (_, message) = reader.load_message(message_doc_id).await?;
                 reply_preview = session::visible_reply_preview(&message);
             }
@@ -699,7 +767,10 @@ async fn terminalize_execution_in_txn(
         TerminalOutput::NoMessage => {
             for header in headers.iter().filter(eligible) {
                 anyhow::ensure!(
-                    !matches!(authority, TerminalAuthority::Revocation { .. }),
+                    !matches!(
+                        authority,
+                        TerminalAuthority::Revocation { .. } | TerminalAuthority::Parked { .. }
+                    ),
                     "NoMessage cannot replace an owned assistant header during revocation"
                 );
                 match reader.load_message(&header.doc_id).await {
@@ -717,13 +788,39 @@ async fn terminalize_execution_in_txn(
     }
     let terminal_generation = match authority {
         TerminalAuthority::Owner(_) => owner,
-        TerminalAuthority::Revocation { .. } => fresh_generation.as_str(),
+        TerminalAuthority::Revocation { .. } | TerminalAuthority::Parked { .. } => {
+            fresh_generation.as_str()
+        }
     };
     let generation = escape_graphql_string(owner);
     let next_generation = escape_graphql_string(terminal_generation);
-    let expiry = escape_graphql_string(expiry);
+    let expiry_filter = expiry
+        .map(|value| format!("\"{}\"", escape_graphql_string(value)))
+        .unwrap_or_else(|| "null".to_string());
+    let parked_fence = if matches!(authority, TerminalAuthority::Parked { .. }) {
+        let interrupt = row
+            .interrupt_requested_at
+            .as_deref()
+            .map(|value| format!("\"{}\"", escape_graphql_string(value)))
+            .unwrap_or_else(|| "null".to_string());
+        let deadline = row
+            .deadline
+            .as_deref()
+            .map(|value| format!("\"{}\"", escape_graphql_string(value)))
+            .unwrap_or_else(|| "null".to_string());
+        format!(", interrupt_requested_at: {{ _eq: {interrupt} }}, deadline: {{ _eq: {deadline} }}")
+    } else {
+        String::new()
+    };
     let timestamp = now.to_rfc3339();
     let timestamp_gql = escape_graphql_string(&timestamp);
+    let reason = if matches!(authority, TerminalAuthority::Parked { .. })
+        && effective_outcome == RequestTerminalOutcome::Interrupted
+    {
+        "request interrupted while waiting for provider"
+    } else {
+        reason
+    };
     let outcome_reason = reason;
     let reason = escape_graphql_string(reason);
     let stopped_before_running = state.certifies_stopped_before_running(
@@ -735,7 +832,7 @@ async fn terminalize_execution_in_txn(
     let mutation = format!(
         r#"mutation($terminal_output: JSON) {{ update_AgentRequest(
                 docID: "{doc_id}", filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "{state}" }},
-                    execution_generation: {{ _eq: "{generation}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }} }},
+                    execution_generation: {{ _eq: "{generation}" }}, execution_lease_expires_at: {{ _eq: {expiry_filter} }}{parked_fence} }},
                 input: {{ lifecycle_state: "{target}", execution_generation: "{next_generation}",
                     execution_lease_expires_at: "{timestamp_gql}", failure_reason: "{reason}",
                     terminalized_at: "{timestamp_gql}", terminal_redrive_attempts: 0,

@@ -36,6 +36,7 @@ private def primaryErrorJson : PrimaryError → String
   | .agent => "{\"kind\":\"agent\"}"
 
 private def outcomeJson : TaskOutcome → String
+  | .parked => "{\"kind\":\"parked\"}"
   | .success => "{\"kind\":\"success\"}"
   | .failure error => "{\"kind\":\"failure\",\"error\":" ++ primaryErrorJson error ++ "}"
   | .interrupted => "{\"kind\":\"interrupted\"}"
@@ -55,6 +56,7 @@ private def invocationJson : HookInvocation → String
   | .work => "{\"kind\":\"work\"}"
 
 private def agentResultString : AgentResult → String
+  | .parked => "parked"
   | .success => "success"
   | .failure => "failure"
   | .cancelled => "cancelled"
@@ -159,7 +161,11 @@ private def fullTask : List TaskHook :=
   [before "prepare", afterSuccess "verify", afterFailure "report", cleanup "sweep"]
 
 def runCases : List RunCase :=
-  [ { name := "agent_success_runs_after_success_then_cleanup"
+  [ { name := "parked_agent_defers_outcome_and_cleanup"
+    , hooks := fullTask, script := [], agent := .parked
+    , expectedOutcome := .parked, expectedFinalOutcome := .parked
+    , expectedAgentRan := true }
+  , { name := "agent_success_runs_after_success_then_cleanup"
     , hooks := fullTask, script := [], agent := .success
     , expectedOutcome := .success, expectedFinalOutcome := .success
     , expectedAgentRan := true }

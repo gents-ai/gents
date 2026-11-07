@@ -81,6 +81,42 @@ pub(crate) fn scope_from_factory(
     ))
 }
 
+pub(crate) async fn load_scope_allocations(
+    node: &defra_node::EmbeddedNode,
+    request: &crate::request::watcher::AgentRequest,
+) -> anyhow::Result<Vec<CaptureScope>> {
+    use anyhow::Context;
+    let doc = crate::store::graphql::escape_graphql_string(&request.doc_id);
+    let response = crate::store::graphql::graphql_response_with_transaction_retry(
+        node,
+        &format!(r#"{{ RenderedRequest(filter: {{ request_doc_id: {{ _eq: "{doc}" }} }}) {{ request_doc_id node_did requester_did session_id capture_scope }} }}"#),
+        "load resumed capture scopes",
+    ).await?;
+    anyhow::ensure!(!response.has_errors(), "resumed capture scope query failed");
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("RenderedRequest"))
+        .and_then(serde_json::Value::as_array)
+        .context("resumed capture scope query omitted rows")?;
+    rows.iter()
+        .map(|row| {
+            anyhow::ensure!(
+                row["request_doc_id"].as_str() == Some(request.doc_id.as_str())
+                    && row["node_did"].as_str() == Some(request.node_did.as_str())
+                    && row["session_id"].as_str() == Some(request.session_id.as_str())
+                    && row["requester_did"].as_str().unwrap_or_default()
+                        == request.requester_did.as_deref().unwrap_or_default(),
+                "resumed capture crossed its request scope"
+            );
+            let label = row["capture_scope"]
+                .as_str()
+                .context("capture omitted its scope")?;
+            label.parse::<CaptureScope>().map_err(anyhow::Error::new)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

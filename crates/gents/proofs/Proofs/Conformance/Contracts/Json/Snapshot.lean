@@ -5,6 +5,7 @@ import Proofs.Conformance.StorageFailure
 import Proofs.Conformance.RequestPatchPublicationCases
 import Proofs.Conformance.ClientSessionDeliveryCases
 import Proofs.Conformance.AccessReview
+import Proofs.Conformance.BackendWake
 import Proofs.Conformance.OperatorPaths
 import Proofs.Conformance.WorkspaceCommandRoot
 import Proofs.Conformance.CommandIsolation
@@ -611,6 +612,12 @@ def snapshotJson : String :=
       ++ jsonArray (ToolExecution.preflightCases.map toolPreflightCaseJson) ++ ","
     ++ "\"tool_retry_cases\":"
       ++ jsonArray (ToolExecution.retryCases.map toolRetryCaseJson) ++ ","
+    ++ "\"backend_wake_cases\":" ++ Conformance.BackendWake.casesJson ++ ","
+    ++ "\"backend_capture_scope_cases\":" ++ Conformance.BackendWake.captureScopeCasesJson ++ ","
+    ++ "\"backend_health_wake_cases\":" ++ Conformance.BackendWake.healthCasesJson ++ ","
+    ++ "\"backend_generation_mark_cases\":" ++ Conformance.BackendWake.generationCasesJson ++ ","
+    ++ "\"backend_resume_admission_cases\":" ++ Conformance.BackendWake.admissionCasesJson ++ ","
+    ++ "\"backend_repark_cases\":" ++ Conformance.BackendWake.reparkCasesJson ++ ","
     ++ "\"completion_retry_cases\":"
       ++ CompletionRetry.Contracts.casesJson ++ ","
     ++ "\"account_rotation_select_cases\":"
