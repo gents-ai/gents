@@ -22,6 +22,7 @@ path = "src/main.rs"
 live-e2e = []
 # Debug native desktop acceptance must never address the user's daily service.
 native-e2e = []
+heap-profiling = ["dep:tikv-jemallocator"]
 typescript = ["dep:ts-rs"]
 
 # All other test binaries are auto-discovered; this explicit target overrides
@@ -130,6 +131,9 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 # crate as a library through the bridge and keeps the system allocator.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 mimalloc.workspace = true
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+tikv-jemallocator = { version = "0.7", optional = true, features = ["profiling"] }
 
 # `pack build` points stdout at stderr while the plugin compiler runs, so
 # stdout carries only the JSON report.
