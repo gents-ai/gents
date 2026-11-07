@@ -1,7 +1,12 @@
 import { toast } from "sonner";
 import type { UxNotifyCaller } from "@/contrib/plugin";
 import { flag, pluginNotifyOn, preferences } from "@/preferences";
-import { inNativeShell, windowLabel } from "../../../lib/nativeShell";
+import {
+  inNativeShell,
+  pluginWindowLabel,
+  windowLabel,
+  windowOpen,
+} from "../../../lib/nativeShell";
 import { isPluginSubpath, linkRoute } from "../links";
 import type { Route } from "../router";
 import type { Notice } from "./platform";
@@ -16,9 +21,10 @@ export const NOTIFY_RATE_WINDOW = 60_000;
 export type PluginNotifyDeps = {
   /** both experimental features, Notifications and Notifications from packs */
   enabled: () => boolean;
-  /** this window is the one that tells: every window runs its own copy of
-      each plugin, and only the main one speaks for them */
-  speaks: () => boolean;
+  /** this window is the one that tells for the plugin: every window runs its
+      own copy of each plugin, so exactly one speaks for it, its own window
+      while that's open and the main window otherwise */
+  speaks: (caller: UxNotifyCaller) => boolean | Promise<boolean>;
   switchedOn: (key: string, kind: string) => boolean;
   /** the window is in front and shown */
   focused: () => boolean;
@@ -37,7 +43,7 @@ const defaults = (): PluginNotifyDeps => {
   const teller = createTeller(base);
   return {
     enabled: () => flag("notifications") && flag("pack-notifications"),
-    speaks: () => !inNativeShell() || windowLabel() === "main",
+    speaks: ({ id }) => !inNativeShell() || speaksHere(id, windowLabel(), windowOpen),
     switchedOn: pluginNotifyOn,
     focused: base.focused,
     now: base.now,
@@ -60,6 +66,18 @@ const defaults = (): PluginNotifyDeps => {
   };
 };
 
+/** Whether the window labelled `here` speaks for plugin `pluginId`: its own
+    window does while that's open, and the main window otherwise, so one
+    event every window's copy reacts to is told once. */
+export async function speaksHere(
+  pluginId: string,
+  here: string,
+  isOpen: (label: string) => Promise<boolean>,
+): Promise<boolean> {
+  const own = pluginWindowLabel(pluginId);
+  return here === own || (here === "main" && !(await isOpen(own)));
+}
+
 /* one line of plain text: what a notification shows, nothing it could
    format or hide */
 const oneLine = (value: string) =>
@@ -72,7 +90,7 @@ const sender = (caller: UxNotifyCaller) => oneLine(caller.pack ?? caller.name);
 
 /** The owner of what plugins may tell the person. A plugin asks for one of
     the kinds its module declared; it is told only while both experimental
-    features are on, in the main window, for a kind the person turned on for
+    features are on, in the one window that speaks for the plugin, for a kind the person turned on for
     that plugin, at most `NOTIFY_RATE_COUNT` a minute. A click opens the
     plugin's own page, or a place within it, through the route a `gents:`
     link to it takes; no other target can be named.
@@ -96,7 +114,10 @@ export function createPluginNotifier(deps: PluginNotifyDeps = defaults()) {
       refuse(
         "notifications from packs are off; the person turns them on under Experimental features",
       );
-    if (!deps.speaks()) refuse("only the app's main window shows notifications");
+    if (!(await deps.speaks(caller)))
+      refuse(
+        "another window shows this plugin's notifications: its own window while that's open, otherwise the app's main window",
+      );
     if (typeof request !== "object" || request === null || Array.isArray(request))
       refuse("pass { kind, title, body?, target? }");
     const { kind, title, body, target } = request as Record<string, unknown>;

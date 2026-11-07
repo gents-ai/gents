@@ -1,7 +1,8 @@
 //! A UX plugin's page in a window of its own. The window loads the app
 //! with a start address the UI reads, and gets only the `plugin-window`
-//! capability: the client's snapshot and lifecycle, the node list and the
-//! page's own plugin reads and calls.
+//! capability: the client's snapshot and lifecycle, the node list, the
+//! page's own plugin reads and calls, and the notifications its plugin
+//! raises while this window speaks for it.
 use std::fmt::Write;
 
 use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindowBuilder};
@@ -162,9 +163,16 @@ mod tests {
             "gents-desktop-bridge:default",
             "gents-desktop-bridge:ux-plugins-read",
             "gents-desktop-bridge:ux-plugins-call",
+            "notification:default",
         ] {
             assert!(granted.contains(&needed), "{needed}");
         }
+        let notifications: serde_json::Value =
+            serde_json::from_str(include_str!("../../capabilities/notifications.json")).unwrap();
+        assert!(notifications["windows"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("gents-plugin-*")));
         for withheld in [
             "gents-desktop-bridge:full",
             "gents-desktop-bridge:runtime-admin",
