@@ -382,6 +382,7 @@ pub(crate) async fn install_pack_slot(
         None,
         Some(pack.archive()),
         &|_| None,
+        &Default::default(),
     )
     .await?;
     let bound = prepared.config;

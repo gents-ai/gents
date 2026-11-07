@@ -853,6 +853,7 @@ async fn install_dependee(access: &ConfigAccess, explicit: bool) {
         None,
         None,
         &|_| None,
+        &Default::default(),
     )
     .await
     .unwrap();
@@ -1721,6 +1722,7 @@ async fn pack_job_block_is_refused_on_a_self_config_install() {
             Some(home.path()),
             None,
             &|_| None,
+            &Default::default(),
         )
     };
     let refused = prepare(crate::pack::InstalledVia::SelfConfig).await;
@@ -1954,6 +1956,7 @@ async fn try_install_dependent_with_dependee(
         plugin_home,
         None,
         &|_| None,
+        &Default::default(),
     )
     .await
     .unwrap();
@@ -2037,6 +2040,7 @@ async fn installing_a_dependent_preserves_the_installed_dependency_environment()
         None,
         None,
         &original,
+        &Default::default(),
     )
     .await
     .unwrap();
@@ -2066,6 +2070,7 @@ async fn installing_a_dependent_preserves_the_installed_dependency_environment()
         None,
         None,
         &changed,
+        &Default::default(),
     )
     .await
     .unwrap();
@@ -2108,6 +2113,7 @@ async fn installing_a_dependent_preserves_the_installed_dependency_environment()
         None,
         None,
         &changed,
+        &Default::default(),
     )
     .await
     .unwrap();
@@ -2138,7 +2144,7 @@ async fn installing_a_dependent_preserves_the_installed_dependency_environment()
         coordinate,
         BTreeMap::from([("DEPENDEE_LABEL".to_owned(), Some("explicit".to_owned()))]),
     )]);
-    let prepared = prepare_document_pack_install_with_dependency_variables(
+    let prepared = prepare_document_pack_install(
         &access,
         OWNER,
         dependent.manifest(),
@@ -2215,6 +2221,7 @@ async fn upgrading_a_pack_preserves_omitted_install_values() {
         None,
         Some(&first),
         &original,
+        &Default::default(),
     )
     .await
     .unwrap();
@@ -2253,6 +2260,7 @@ async fn upgrading_a_pack_preserves_omitted_install_values() {
         None,
         Some(&next),
         &unset,
+        &Default::default(),
     )
     .await
     .unwrap();
@@ -2422,6 +2430,7 @@ async fn refused_dependency(dependee_plugin: bool, change: &dyn Fn(&mut Value)) 
         None,
         None,
         &|_| None,
+        &Default::default(),
     )
     .await
     .err()
@@ -2516,6 +2525,7 @@ async fn prepare_naming_plugin(
         plugin_home,
         None,
         &|_| None,
+        &Default::default(),
     )
     .await
 }
@@ -2598,6 +2608,7 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
             None,
             Some(archive),
             &|_| None,
+            &Default::default(),
         )
         .await
     }
@@ -2995,6 +3006,7 @@ async fn pinned_plugin_references_match_executable_model_before_install_or_updat
                 Some(home.path()),
                 Some(&archive),
                 &|_| None,
+                &Default::default(),
             )
             .await;
             assert_eq!(

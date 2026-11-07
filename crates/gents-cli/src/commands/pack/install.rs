@@ -265,7 +265,7 @@ pub(crate) async fn install_documents_pack_resolved(
         args.force_rebind_concrete_did,
     )?;
     let overrides = parse_dependency_variables(&args.dependency_variables)?;
-    let prepared = gents::pack::prepare_document_pack_install_with_dependency_variables(
+    let prepared = gents::pack::prepare_document_pack_install(
         access,
         owner,
         pack.manifest(),

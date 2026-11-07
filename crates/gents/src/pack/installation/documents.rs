@@ -555,45 +555,13 @@ pub(super) fn require_installed_dependency_ux(
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "install inputs and policies supplied by each install entry point"
-)]
-pub async fn prepare_document_pack_install(
-    access: &ConfigAccess,
-    owner: &str,
-    manifest: &super::super::PackManifest,
-    config: &PackConfig,
-    requested: &PackInferenceBindings,
-    dependencies: &[&PackArchive],
-    installed_via: InstalledVia,
-    plugin_home: Option<&Path>,
-    root_archive: Option<&PackArchive>,
-    environment: &(dyn Fn(&str) -> Option<String> + Sync),
-) -> Result<PreparedDocumentPackInstall> {
-    prepare_document_pack_install_with_dependency_variables(
-        access,
-        owner,
-        manifest,
-        config,
-        requested,
-        dependencies,
-        installed_via,
-        plugin_home,
-        root_archive,
-        environment,
-        &BTreeMap::new(),
-    )
-    .await
-}
-
 pub type DependencyVariableOverrides = BTreeMap<String, BTreeMap<String, Option<String>>>;
 
 #[expect(
     clippy::too_many_arguments,
     reason = "install inputs and policies supplied by each install entry point"
 )]
-pub async fn prepare_document_pack_install_with_dependency_variables(
+pub async fn prepare_document_pack_install(
     access: &ConfigAccess,
     owner: &str,
     manifest: &super::super::PackManifest,

@@ -118,6 +118,7 @@ impl PackInstaller {
             self.home.as_deref(),
             Some(&distribution.0.archive),
             &environment,
+            &Default::default(),
         )
         .await?;
         // Inference slot bindings pick provider accounts exactly like the
