@@ -592,6 +592,19 @@ theorem unrelated_installed_field_preserved (previous : String) (replacement : O
 theorem ambiguous_affected_field_refused (previous : String) :
     resolveInstalledPackField previous true none = none := by rfl
 
+/-- An upgrade retains the existing literal when its variable is omitted;
+new fields and fields with a supplied value use the newly rendered literal. -/
+def resolvePackUpgradeField (previous : Option String) (supplied : Bool)
+    (rendered : String) : String :=
+  if supplied then rendered else previous.getD rendered
+
+theorem omitted_upgrade_value_preserved (previous rendered : String) :
+    resolvePackUpgradeField (some previous) false rendered = previous := by rfl
+
+theorem new_upgrade_field_uses_rendered (supplied : Bool) (rendered : String) :
+    resolvePackUpgradeField none supplied rendered = rendered := by
+  cases supplied <;> rfl
+
 /-- Node identity comes from the installation scope, not from pack variables. -/
 def packVariableOverrideAllowed (name : String) : Bool :=
   name != "GENTS_PACK_NODE_DID"
