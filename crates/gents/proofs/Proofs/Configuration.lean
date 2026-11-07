@@ -580,6 +580,18 @@ theorem unknown_dependency_binding_fails_closed (ambient : Option String) :
     resolvePackInstallVariable true true none none ambient = none := by
   rfl
 
+/-- An unrelated field keeps its installed value. A field touched by an
+override is replaced only when all variables needed to render it are known. -/
+def resolveInstalledPackField (previous : String) (affected : Bool)
+    (replacement : Option String) : Option String :=
+  if affected then replacement else some previous
+
+theorem unrelated_installed_field_preserved (previous : String) (replacement : Option String) :
+    resolveInstalledPackField previous false replacement = some previous := by rfl
+
+theorem ambiguous_affected_field_refused (previous : String) :
+    resolveInstalledPackField previous true none = none := by rfl
+
 /-- An installed dependency can be reused without recovering its original
 environment only when the same artifact is requested and the caller has not
 explicitly selected replacement bindings. The snapshot is authoritative only

@@ -77,10 +77,110 @@ pub fn inspect_install_variables(
     Ok(uses)
 }
 
+/// Applies selected variable substitutions to recorded literals. The caller
+/// maps authored paths to the corresponding recorded document paths.
+pub fn override_installed_literals(
+    authored: &serde_json::Value,
+    installed: &mut serde_json::Value,
+    overrides: &std::collections::BTreeMap<String, Option<String>>,
+    known: &std::collections::BTreeMap<String, Option<String>>,
+    locate: &dyn Fn(&str) -> Option<String>,
+) -> anyhow::Result<()> {
+    let uses = inspect_install_variables(authored, &|_| Some("inspection".to_owned())).map_err(
+        |names| anyhow::anyhow!("cannot inspect install variables: {}", names.join(", ")),
+    )?;
+    let mut used = std::collections::BTreeSet::new();
+    for entry in uses {
+        if !entry
+            .variables
+            .keys()
+            .any(|name| overrides.contains_key(name))
+        {
+            continue;
+        }
+        for name in entry.variables.keys() {
+            if overrides.contains_key(name) {
+                used.insert(name.clone());
+            }
+            anyhow::ensure!(
+                overrides.contains_key(name) || known.contains_key(name),
+                "field {} also uses unknown variable {name:?}; supply it explicitly",
+                entry.path
+            );
+        }
+        let authored_value = authored
+            .pointer(&entry.path)
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("invalid authored field {}", entry.path))?;
+        let value = interpolate_with(authored_value, &|name| {
+            overrides
+                .get(name)
+                .or_else(|| known.get(name))
+                .cloned()
+                .flatten()
+        })
+        .map_err(|names| anyhow::anyhow!("unset variables: {}", names.join(", ")))?;
+        anyhow::ensure!(
+            !value.starts_with("./"),
+            "field {} resolves to a sidecar; reinstall the dependency explicitly",
+            entry.path
+        );
+        let target = locate(&entry.path).ok_or_else(|| {
+            anyhow::anyhow!(
+                "cannot identify installed field {}; reinstall the dependency explicitly",
+                entry.path
+            )
+        })?;
+        let slot = installed
+            .pointer_mut(&target)
+            .ok_or_else(|| anyhow::anyhow!("installed field {} is missing", entry.path))?;
+        *slot = serde_json::Value::String(value);
+    }
+    for name in overrides.keys() {
+        anyhow::ensure!(
+            used.contains(name),
+            "dependency does not use variable {name:?}"
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod install_variable_conformance {
-    use super::{inspect_install_variables, resolve_install_variable};
+    use super::{inspect_install_variables, override_installed_literals, resolve_install_variable};
     use serde_json::Value;
+
+    #[test]
+    fn overriding_one_field_preserves_other_installed_literals() {
+        use serde_json::json;
+        let authored = json!({"first": "${FIRST}", "second": "${SECOND}"});
+        let mut installed = json!({"first": "old first", "second": "old second"});
+        let override_values =
+            std::collections::BTreeMap::from([("FIRST".into(), Some("new first".into()))]);
+        override_installed_literals(
+            &authored,
+            &mut installed,
+            &override_values,
+            &Default::default(),
+            &|path| Some(path.into()),
+        )
+        .unwrap();
+        assert_eq!(
+            installed,
+            json!({"first": "new first", "second": "old second"})
+        );
+        let ambiguous = json!({"first": "${FIRST}-${SECOND}"});
+        let before = installed.clone();
+        assert!(override_installed_literals(
+            &ambiguous,
+            &mut installed,
+            &override_values,
+            &Default::default(),
+            &|path| Some(path.into())
+        )
+        .is_err());
+        assert_eq!(installed, before);
+    }
 
     #[test]
     fn variable_precedence_matches_the_executable_model() {
