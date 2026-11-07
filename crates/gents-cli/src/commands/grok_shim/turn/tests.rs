@@ -21,6 +21,17 @@ use super::*;
 use gents::store::graphql::{ensure_no_errors, escape_graphql_string};
 use serde_json::json;
 
+#[test]
+fn backend_recovery_states_do_not_end_the_turn() {
+    use gents::client_protocol::RequestLifecycleState;
+    for state in [
+        RequestLifecycleState::WaitingForBackend,
+        RequestLifecycleState::ResumingBackend,
+    ] {
+        assert!(stop_reason_from_rows(state, None).is_none());
+    }
+}
+
 fn text_block(text: &str) -> Value {
     json!({"type": "text", "text": text})
 }

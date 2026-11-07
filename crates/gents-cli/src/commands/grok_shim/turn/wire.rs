@@ -144,7 +144,9 @@ pub(in crate::commands::grok_shim) fn stop_reason_from_rows(
         RequestLifecycleState::WorkspaceBindingPending
         | RequestLifecycleState::Pending
         | RequestLifecycleState::Claimed
-        | RequestLifecycleState::Processing => None,
+        | RequestLifecycleState::Processing
+        | RequestLifecycleState::WaitingForBackend
+        | RequestLifecycleState::ResumingBackend => None,
     }
 }
 
