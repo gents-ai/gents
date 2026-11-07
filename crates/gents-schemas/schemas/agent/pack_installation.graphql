@@ -4,6 +4,7 @@ type PackInstallation @index(fields: ["node_did", "coordinate"], unique: true) {
     version: String
     digest: String @index
     documents: JSON
+    variables: JSON
     plugins: JSON
     history: JSON
     installed_at: String

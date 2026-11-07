@@ -580,36 +580,16 @@ theorem unknown_dependency_binding_fails_closed (ambient : Option String) :
     resolvePackInstallVariable true true none none ambient = none := by
   rfl
 
-/-- An unrelated field keeps its installed value. A field touched by an
-override is replaced only when all variables needed to render it are known. -/
-def resolveInstalledPackField (previous : String) (affected : Bool)
-    (replacement : Option String) : Option String :=
-  if affected then replacement else some previous
+/-- Upgrades render the current template using an explicitly supplied value,
+    or the installed binding when no replacement is supplied. -/
+def resolvePackUpgradeVariable (previous supplied : Option String) : Option String :=
+  supplied.orElse fun _ => previous
 
-theorem unrelated_installed_field_preserved (previous : String) (replacement : Option String) :
-    resolveInstalledPackField previous false replacement = some previous := by rfl
+theorem omitted_upgrade_value_preserved (previous : Option String) :
+    resolvePackUpgradeVariable previous none = previous := by rfl
 
-theorem ambiguous_affected_field_refused (previous : String) :
-    resolveInstalledPackField previous true none = none := by rfl
-
-/-- An upgrade retains the existing literal when its variable is omitted;
-new fields and fields with a supplied value use the newly rendered literal. -/
-def resolvePackUpgradeField (previous : Option String) (supplied : Bool)
-    (rendered : String) : String :=
-  if supplied then rendered else previous.getD rendered
-
-def packUpgradeIdentityAllowed (supplied matchesInstalled : Bool) : Bool :=
-  supplied || matchesInstalled
-
-theorem matching_default_identity_is_allowed :
-    packUpgradeIdentityAllowed false true = true := by rfl
-
-theorem omitted_upgrade_value_preserved (previous rendered : String) :
-    resolvePackUpgradeField (some previous) false rendered = previous := by rfl
-
-theorem new_upgrade_field_uses_rendered (supplied : Bool) (rendered : String) :
-    resolvePackUpgradeField none supplied rendered = rendered := by
-  cases supplied <;> rfl
+theorem supplied_upgrade_value_wins (previous : Option String) (supplied : String) :
+    resolvePackUpgradeVariable previous (some supplied) = some supplied := by rfl
 
 /-- Node identity comes from the installation scope, not from pack variables. -/
 def packVariableOverrideAllowed (name : String) : Bool :=

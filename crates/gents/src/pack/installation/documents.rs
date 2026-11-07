@@ -151,178 +151,10 @@ pub struct PreparedDependency {
     pub(crate) digest: String,
     pub(crate) assets: BTreeMap<String, Vec<u8>>,
     pub(super) snapshot: Option<super::InstalledDependencySnapshot>,
+    variables: BTreeMap<String, Option<String>>,
     reconfigure: bool,
 }
 
-fn override_dependency_config(
-    archive: &PackArchive,
-    snapshot: &super::InstalledDependencySnapshot,
-    owner: &str,
-    overrides: &BTreeMap<String, Option<String>>,
-) -> Result<PackConfig> {
-    let path = archive
-        .manifest()
-        .config
-        .as_deref()
-        .context("dependency has no config")?;
-    let authored: serde_json::Value = serde_json::from_slice(archive.asset(path)?)?;
-    let mut installed = serde_json::to_value(snapshot.config(owner)?)?;
-    let lookup_installed = installed.clone();
-    let locate = |path: &str, value: &str| {
-        let mut parts = path.trim_start_matches('/').splitn(3, '/');
-        let field = parts.next()?;
-        let index: usize = parts.next()?.parse().ok()?;
-        let suffix = parts.next()?;
-        if value.starts_with("./")
-            && (matches!(
-                (field, suffix),
-                ("contexts", "system_prompt")
-                    | ("skills", "instructions")
-                    | ("tasks", "prompt_template")
-            ) || (field == "eval_definitions" && suffix.starts_with("cases/")))
-        {
-            return None;
-        }
-        let collection = crate::Collection::ALL
-            .iter()
-            .copied()
-            .find(|c| c.dir_name() == Some(field))?;
-        if suffix == collection.unique_field() || suffix == "node_did" {
-            return None;
-        }
-        let id = authored
-            .get(field)?
-            .get(index)?
-            .get(collection.unique_field())?
-            .as_str()?;
-        if id.contains('$') {
-            return None;
-        }
-        let index = lookup_installed
-            .get(field)?
-            .as_array()?
-            .iter()
-            .position(|row| {
-                row.get(collection.unique_field())
-                    .and_then(serde_json::Value::as_str)
-                    == Some(id)
-            })?;
-        Some(format!("/{field}/{index}/{suffix}"))
-    };
-    super::super::interpolate::override_installed_literals(
-        &authored,
-        &mut installed,
-        overrides,
-        &BTreeMap::from([("GENTS_PACK_NODE_DID".to_owned(), Some(owner.to_owned()))]),
-        &locate,
-    )?;
-    serde_json::from_value(installed).context("decode overridden dependency configuration")
-}
-
-pub(super) fn upgrade_identity_allowed(supplied: bool, matches_installed: bool) -> bool {
-    supplied || matches_installed
-}
-
-fn preserve_root_upgrade_config(
-    archive: &PackArchive,
-    snapshot: &super::InstalledDependencySnapshot,
-    owner: &str,
-    config: &PackConfig,
-    environment: &dyn Fn(&str) -> Option<String>,
-) -> Result<PackConfig> {
-    let path = archive
-        .manifest()
-        .config
-        .as_deref()
-        .context("pack has no config")?;
-    let authored: serde_json::Value = serde_json::from_slice(archive.asset(path)?)?;
-    let previous = serde_json::to_value(snapshot.config(owner)?)?;
-    let mut next = serde_json::to_value(config)?;
-    let uses = super::super::interpolate::inspect_install_variables(&authored, &|_| {
-        Some("inspection".into())
-    })
-    .map_err(|names| anyhow::anyhow!("cannot inspect install variables: {}", names.join(", ")))?;
-    for entry in uses {
-        let mut parts = entry.path.trim_start_matches('/').splitn(3, '/');
-        let field = parts.next().unwrap_or_default();
-        let _index = parts.next();
-        let suffix = parts.next().unwrap_or_default();
-        if let Some(collection) = crate::Collection::ALL
-            .iter()
-            .copied()
-            .find(|c| c.dir_name() == Some(field))
-        {
-            if suffix == collection.unique_field() {
-                let supplied = entry.variables.keys().all(|name| {
-                    name == "GENTS_PACK_NODE_DID"
-                        || environment(name).is_some_and(|value| !value.is_empty())
-                });
-                let id = next
-                    .pointer(&entry.path)
-                    .and_then(serde_json::Value::as_str);
-                let matches_installed = id.is_some_and(|id| {
-                    previous
-                        .get(field)
-                        .and_then(serde_json::Value::as_array)
-                        .is_some_and(|rows| {
-                            rows.iter().any(|row| {
-                                row.get(collection.unique_field())
-                                    .and_then(serde_json::Value::as_str)
-                                    == Some(id)
-                            })
-                        })
-                });
-                anyhow::ensure!(upgrade_identity_allowed(supplied, matches_installed),
-                    "document identity {} uses an omitted install variable; supply it explicitly before upgrading", entry.path);
-            }
-        }
-    }
-    let indexed_next = next.clone();
-    let locate = |path: &str| {
-        let mut parts = path.trim_start_matches('/').splitn(3, '/');
-        let field = parts.next()?;
-        let index: usize = parts.next()?.parse().ok()?;
-        let suffix = parts.next()?;
-        let collection = crate::Collection::ALL
-            .iter()
-            .copied()
-            .find(|c| c.dir_name() == Some(field))?;
-        if suffix == collection.unique_field() || suffix == "node_did" {
-            return None;
-        }
-        let id = indexed_next
-            .get(field)?
-            .get(index)?
-            .get(collection.unique_field())?
-            .as_str()?;
-        let old_index = previous.get(field)?.as_array()?.iter().position(|row| {
-            row.get(collection.unique_field())
-                .and_then(serde_json::Value::as_str)
-                == Some(id)
-        })?;
-        Some((
-            format!("/{field}/{old_index}/{suffix}"),
-            format!("/{field}/{index}/{suffix}"),
-        ))
-    };
-    super::super::interpolate::preserve_omitted_upgrade_literals(
-        &authored,
-        &previous,
-        &mut next,
-        &|name| {
-            if name == "GENTS_PACK_NODE_DID" {
-                Some(owner.to_owned())
-            } else {
-                environment(name)
-            }
-        },
-        &locate,
-    )?;
-    serde_json::from_value(next).context("decode upgraded pack configuration")
-}
-
-/// Restores recorded literals before decoding when an upgrade omits a required
-/// variable. Only fields that can be matched to an existing document qualify.
 pub async fn load_pack_upgrade_config(
     access: &ConfigAccess,
     owner: &str,
@@ -345,109 +177,19 @@ pub async fn load_pack_upgrade_config(
     let Some(snapshot) = snapshot else {
         return Ok(None);
     };
-    let path = archive
-        .manifest()
-        .config
-        .as_deref()
-        .context("pack has no config")?;
-    let authored: serde_json::Value = serde_json::from_slice(archive.asset(path)?)?;
-    let previous = serde_json::to_value(snapshot.config(owner)?)?;
-    let mut restored = authored.clone();
-    let lookup = |name: &str| {
-        if name == "GENTS_PACK_NODE_DID" {
-            Some(owner.to_owned())
-        } else {
-            environment(name)
-        }
-    };
-    let locate = |path: &str| {
-        let mut parts = path.trim_start_matches('/').splitn(3, '/');
-        let field = parts.next()?;
-        let index: usize = parts.next()?.parse().ok()?;
-        let suffix = parts.next()?;
-        let collection = crate::Collection::ALL
-            .iter()
-            .copied()
-            .find(|c| c.dir_name() == Some(field))?;
-        if suffix == collection.unique_field() || suffix == "node_did" {
-            return None;
-        }
-        let id = authored
-            .get(field)?
-            .get(index)?
-            .get(collection.unique_field())?
-            .as_str()?;
-        let id = super::super::interpolate::interpolate_with(id, &lookup).ok()?;
-        let old_index = previous.get(field)?.as_array()?.iter().position(|row| {
-            row.get(collection.unique_field())
-                .and_then(serde_json::Value::as_str)
-                == Some(id.as_str())
-        })?;
-        Some((format!("/{field}/{old_index}/{suffix}"), path.to_owned()))
-    };
-    super::super::interpolate::preserve_omitted_upgrade_literals(
-        &authored,
-        &previous,
-        &mut restored,
-        &lookup,
-        &locate,
-    )?;
-    let uses = super::super::interpolate::inspect_install_variables(&authored, &|_| {
-        Some("inspection".into())
-    })
-    .map_err(|names| anyhow::anyhow!("cannot inspect install variables: {}", names.join(", ")))?;
-    for entry in uses {
-        if !entry
-            .variables
-            .keys()
-            .all(|name| lookup(name).is_none_or(|value| value.is_empty()))
-        {
-            continue;
-        }
-        let Some((old_path, new_path)) = locate(&entry.path) else {
-            continue;
-        };
-        let Some(value) = previous
-            .pointer(&old_path)
-            .and_then(serde_json::Value::as_str)
-        else {
-            continue;
-        };
-        let mut parts = entry.path.trim_start_matches('/').splitn(3, '/');
-        let field = parts.next().unwrap_or_default();
-        let _index = parts.next();
-        let suffix = parts.next().unwrap_or_default();
-        anyhow::ensure!(
-            !(value.starts_with("./")
-                && (matches!(
-                    (field, suffix),
-                    ("contexts", "system_prompt")
-                        | ("skills", "instructions")
-                        | ("tasks", "prompt_template")
-                ) || (field == "eval_definitions" && suffix.starts_with("cases/")))),
-            "installed field {} cannot be safely decoded as a literal; supply its variable",
-            entry.path
-        );
-        *restored
-            .pointer_mut(&new_path)
-            .context("restored upgrade field is missing")? =
-            serde_json::Value::String(super::super::interpolate::escape(value));
-    }
-    let bytes = serde_json::to_vec(&restored)?;
     let options = PackInstallOptions {
         node_did: owner.to_owned(),
     };
-    let config = super::super::load_pack_config(
+    let (config, _) = super::super::load_pack_config_with_variables(
         archive.manifest(),
         &options,
-        &|asset| {
-            if asset == path {
-                Ok(bytes.clone())
-            } else {
-                Ok(archive.asset(asset)?.to_vec())
-            }
+        &|path| Ok(archive.asset(path)?.to_vec()),
+        &|name| {
+            super::super::interpolate::resolve_upgrade_variable(
+                snapshot.record.variables.get(name).cloned().flatten(),
+                environment(name),
+            )
         },
-        environment,
     )?;
     Ok(Some(config))
 }
@@ -458,6 +200,7 @@ pub struct PreparedDocumentPackInstall {
     pub dependency_inference: BTreeMap<String, PackInferenceBindingPreview>,
     pub dependencies: Vec<PreparedDependency>,
     pub(super) root_snapshot: Option<super::InstalledDependencySnapshot>,
+    variables: BTreeMap<String, Option<String>>,
 }
 
 impl PreparedDocumentPackInstall {
@@ -669,9 +412,33 @@ pub async fn prepare_document_pack_install(
     } else {
         None
     };
-    if let (Some(archive), Some(snapshot)) = (root_archive, &root_snapshot) {
-        config = preserve_root_upgrade_config(archive, snapshot, owner, &config, environment)?;
-    }
+    let variables = if let Some(archive) = root_archive {
+        let options = PackInstallOptions {
+            node_did: owner.to_owned(),
+        };
+        let (authored, variables) = super::super::load_pack_config_with_variables(
+            manifest,
+            &options,
+            &|path| Ok(archive.asset(path)?.to_vec()),
+            &|name| {
+                super::super::interpolate::resolve_upgrade_variable(
+                    root_snapshot
+                        .as_ref()
+                        .and_then(|s| s.record.variables.get(name))
+                        .cloned()
+                        .flatten(),
+                    environment(name),
+                )
+            },
+        )?;
+        if root_snapshot.is_some() {
+            config =
+                super::super::bind_pack_install_config(manifest, &authored, &inference.bindings)?;
+        }
+        variables
+    } else {
+        BTreeMap::new()
+    };
     let mut dependency_inference = BTreeMap::new();
     let mut prepared_dependencies = Vec::new();
     for archive in dependencies {
@@ -681,7 +448,7 @@ pub async fn prepare_document_pack_install(
             archive.manifest().name
         );
         let selected_variables = overrides.get(&coordinate);
-        let (snapshot, installed) = access
+        let (snapshot, record) = access
             .transact_readonly("pack.dependency.snapshot", |txn| {
                 let coordinate = &coordinate;
                 Box::pin(async move {
@@ -689,7 +456,7 @@ pub async fn prepare_document_pack_install(
                     anyhow::ensure!(record.doc_id.is_none() || record.digest.as_deref() == Some(archive.digest()) || selected_variables.is_some(),
                         "installed dependency {coordinate} has a different artifact; update it explicitly before installing its dependent");
                     let snapshot = super::dependency_snapshot_in_txn(txn, owner, coordinate, Some(archive.digest())).await?;
-                    Ok::<_, anyhow::Error>((snapshot, record.doc_id.is_some()))
+                    Ok::<_, anyhow::Error>((snapshot, record))
                 })
             })
             .await?;
@@ -728,20 +495,42 @@ pub async fn prepare_document_pack_install(
             node_did: owner.to_owned(),
         };
         let prepared = {
-            let config = if let Some(snapshot) = &snapshot {
+            let (config, variables) = if let Some(snapshot) = &snapshot {
                 if let Some(selected) = selected_variables {
-                    override_dependency_config(archive, snapshot, owner, selected)?
+                    let (authored, captured) = super::super::load_dependency_config_with_variables(
+                        archive.manifest(),
+                        &options,
+                        &|path| Ok(archive.asset(path)?.to_vec()),
+                        true,
+                        &snapshot.record.variables,
+                        selected,
+                        environment,
+                    )?;
+                    for name in selected.keys() {
+                        anyhow::ensure!(
+                            captured.contains_key(name),
+                            "dependency {coordinate} does not use variable {name:?}"
+                        );
+                    }
+                    (
+                        super::super::bind_pack_install_config(
+                            archive.manifest(),
+                            &authored,
+                            &preview.bindings,
+                        )?,
+                        captured,
+                    )
                 } else {
-                    snapshot.config(owner)?
+                    (snapshot.config(owner)?, snapshot.record.variables.clone())
                 }
             } else {
                 let (authored, captured) = if let Some(selected) = selected_variables {
                     super::super::load_dependency_config_with_variables(
                         archive.manifest(),
                         &options,
-                        &|path| archive.asset(path).map(<[u8]>::to_vec),
-                        installed,
-                        &BTreeMap::new(),
+                        &|path| Ok(archive.asset(path)?.to_vec()),
+                        record.doc_id.is_some(),
+                        &record.variables,
                         selected,
                         environment,
                     )?
@@ -749,7 +538,7 @@ pub async fn prepare_document_pack_install(
                     super::super::load_pack_config_with_variables(
                         archive.manifest(),
                         &options,
-                        &|path| archive.asset(path).map(<[u8]>::to_vec),
+                        &|path| Ok(archive.asset(path)?.to_vec()),
                         environment,
                     )?
                 };
@@ -761,11 +550,14 @@ pub async fn prepare_document_pack_install(
                         );
                     }
                 }
-                super::super::bind_pack_install_config(
-                    archive.manifest(),
-                    &authored,
-                    &preview.bindings,
-                )?
+                (
+                    super::super::bind_pack_install_config(
+                        archive.manifest(),
+                        &authored,
+                        &preview.bindings,
+                    )?,
+                    captured,
+                )
             };
             let mut schemas = Vec::new();
             let mut assets = BTreeMap::new();
@@ -799,6 +591,7 @@ pub async fn prepare_document_pack_install(
                 digest: archive.digest().to_owned(),
                 assets,
                 snapshot,
+                variables,
                 reconfigure,
             }
         };
@@ -881,6 +674,7 @@ pub async fn prepare_document_pack_install(
         dependency_inference,
         dependencies: prepared_dependencies,
         root_snapshot,
+        variables,
     })
 }
 
@@ -1193,6 +987,7 @@ pub async fn install_prepared_document_graph(
             dependencies: Vec::new(),
             explicit: false,
             snapshot: dependency.snapshot.clone(),
+            variables: Some(dependency.variables.clone()),
             reconfigure: dependency.reconfigure,
             reuse_plugins: dependency.snapshot.is_some(),
         });
@@ -1214,6 +1009,7 @@ pub async fn install_prepared_document_graph(
             .collect(),
         explicit,
         snapshot: prepared.root_snapshot.clone(),
+        variables: Some(prepared.variables.clone()),
         reconfigure: prepared.root_snapshot.is_some(),
         reuse_plugins: false,
     });
@@ -1235,6 +1031,7 @@ pub(super) struct DocumentPackStage {
     pub(super) dependencies: Vec<String>,
     pub(super) explicit: bool,
     pub(super) snapshot: Option<super::InstalledDependencySnapshot>,
+    pub(super) variables: Option<BTreeMap<String, Option<String>>>,
     pub(super) reconfigure: bool,
     pub(super) reuse_plugins: bool,
 }
@@ -1354,6 +1151,7 @@ pub(super) async fn install_document_graph(
             .collect::<Vec<_>>();
         let snapshots = stages.iter().map(|stage| stage.snapshot.clone()).collect::<Vec<_>>();
         let reconfigure = stages.iter().map(|stage| stage.reconfigure).collect::<Vec<_>>();
+        let variables = stages.iter().map(|stage| stage.variables.clone()).collect::<Vec<_>>();
         let result = access
             .transact_write_with_finality("pack.document_graph.install", |txn| {
                 let documents = documents.clone();
@@ -1364,6 +1162,7 @@ pub(super) async fn install_document_graph(
                 let plugins = plugins.clone();
                 let snapshots = snapshots.clone();
                 let reconfigure = reconfigure.clone();
+                let variables = variables.clone();
                 let reused_plugins = reused_plugins.clone();
                 let node_owner = owner.to_owned();
                 Box::pin(async move {
@@ -1397,18 +1196,18 @@ pub(super) async fn install_document_graph(
                     })
                     .await??;
                     let mut reports = Vec::new();
-                    for (((identity, documents), snapshot), reconfigure) in identities.iter().zip(documents).zip(snapshots).zip(reconfigure) {
+                    for ((((identity, documents), snapshot), reconfigure), variables) in identities.iter().zip(documents).zip(snapshots).zip(reconfigure).zip(variables) {
                         if let Some(snapshot) = snapshot {
                             let current = super::dependency_snapshot_in_txn(txn, owner, &identity.coordinate, snapshot.record.digest.as_deref()).await?;
                             anyhow::ensure!(current.as_ref() == Some(&snapshot),
                                 "installed dependency {} changed during preparation; retry the install", identity.coordinate);
                             if reconfigure {
-                                reports.push(super::install_in_txn(txn, owner, identity, documents, policy).await?);
+                                reports.push(super::install_in_txn(txn, owner, identity, documents, policy, variables.as_ref()).await?);
                             } else {
                                 reports.push(InstallReport::default());
                             }
                         } else {
-                            reports.push(super::install_in_txn(txn, owner, identity, documents, policy).await?);
+                            reports.push(super::install_in_txn(txn, owner, identity, documents, policy, variables.as_ref()).await?);
                         }
                     }
                     super::validate_plugin_replacements_in_txn(txn, owner, identities).await?;
@@ -1477,6 +1276,7 @@ pub async fn install_documents_with_plugins(
         dependencies,
         explicit,
         snapshot: None,
+        variables: None,
         reconfigure: false,
         reuse_plugins: false,
     };

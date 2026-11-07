@@ -6,28 +6,6 @@ use crate::pack::InstalledVia;
 const OWNER: &str = "did:key:zPackInstallOwner";
 
 #[test]
-fn pack_upgrade_identity_matches_model() {
-    let raw = gents_lean_contract::run_prepared_generator(
-        &gents_lean_contract::proofs_dir().unwrap(),
-        "Proofs.Conformance.PackUpgradeIdentity:olean",
-        "Proofs/Conformance/PackUpgradeIdentity.lean",
-    )
-    .unwrap();
-    let cases: Vec<Value> = serde_json::from_str(&raw).unwrap();
-    assert_eq!(cases.len(), 4);
-    for case in cases {
-        assert_eq!(
-            documents::upgrade_identity_allowed(
-                case["supplied"].as_bool().unwrap(),
-                case["matches_installed"].as_bool().unwrap()
-            ),
-            case["allowed"].as_bool().unwrap(),
-            "{case}"
-        );
-    }
-}
-
-#[test]
 fn edited_pack_error_identifies_the_operator_cli() {
     let error = edited_error("acme/demo", &["Tools/t1".to_owned()]).to_string();
     assert!(error.contains("Tools/t1"));
@@ -2038,7 +2016,7 @@ async fn installing_a_dependent_preserves_the_installed_dependency_environment()
         &[],
         crate::pack::InstalledVia::Operator,
         None,
-        None,
+        Some(&dependee),
         &original,
         &Default::default(),
     )
@@ -2189,6 +2167,7 @@ async fn upgrading_a_pack_preserves_omitted_install_values() {
     let mut source: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
     source["agents"][0]["agent_id"] = json!("${UPGRADE_ID:-fixture-dependee}");
     source["agents"][0]["description"] = json!("${UPGRADE_LABEL}");
+    source["agents"][0]["display_name"] = json!("${UPGRADE_DEFAULT:-first}");
     std::fs::write(&config_path, serde_json::to_vec(&source).unwrap()).unwrap();
     let pack = || {
         let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
@@ -2243,6 +2222,9 @@ async fn upgrading_a_pack_preserves_omitted_install_values() {
         serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
     manifest["version"] = json!("1.0.1");
     std::fs::write(manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    source["agents"][0]["description"] = json!("updated: ${UPGRADE_LABEL}");
+    source["agents"][0]["display_name"] = json!("${UPGRADE_DEFAULT:-second}");
+    std::fs::write(&config_path, serde_json::to_vec(&source).unwrap()).unwrap();
     let next = pack();
     let unset = |_: &str| None;
     let authored = load_pack_upgrade_config(&access, OWNER, &next, &unset)
@@ -2278,10 +2260,11 @@ async fn upgrading_a_pack_preserves_omitted_install_values() {
     .await
     .unwrap();
     let rows = access
-        .execute(r#"{ Agent(filter: {agent_id: {_eq: "fixture-dependee"}}) { description } }"#)
+        .execute(r#"{ Agent(filter: {agent_id: {_eq: "fixture-dependee"}}) { description display_name } }"#)
         .await
         .unwrap();
-    assert_eq!(rows["data"]["Agent"][0]["description"], "original");
+    assert_eq!(rows["data"]["Agent"][0]["description"], "updated: original");
+    assert_eq!(rows["data"]["Agent"][0]["display_name"], "second");
     node.shutdown().await;
 }
 

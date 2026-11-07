@@ -88,10 +88,10 @@ struct Record {
     version: Option<String>,
     digest: Option<String>,
     documents: BTreeMap<String, RecordedDocument>,
+    variables: BTreeMap<String, Option<String>>,
     plugins: Vec<InstalledPackPlugin>,
     history: Vec<String>,
     required_by: BTreeSet<String>,
-    /// Missing legacy records default to explicit ownership.
     explicit: bool,
     plugin_store: bool,
 }
@@ -211,7 +211,7 @@ fn is_reserved(document: &RecordedDocument) -> bool {
 async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) -> Result<Record> {
     let response = txn
         .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID version digest documents plugins history required_by explicit plugin_store }} }}"#,
+            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID version digest documents variables plugins history required_by explicit plugin_store }} }}"#,
             escape_graphql_string(owner),
             escape_graphql_string(coordinate)
         ))
@@ -237,11 +237,21 @@ async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) ->
             .into_iter()
             .map(|document| (key(&document.collection, &document.id), document))
             .collect(),
+        variables: serde_json::from_value(
+            row.get("variables")
+                .cloned()
+                .context("installation record is missing variables")?,
+        )
+        .context("invalid installation variable bindings")?,
         plugins: decode_record_field(row, "plugins", owner, coordinate)?,
         history: decode_record_field(row, "history", owner, coordinate)?,
         required_by: required_by.into_iter().collect(),
-        explicit: row.get("explicit").and_then(Value::as_bool).unwrap_or(true),
-        plugin_store: row["plugin_store"].as_bool().unwrap_or(false),
+        explicit: row["explicit"]
+            .as_bool()
+            .context("installation record is missing explicit ownership")?,
+        plugin_store: row["plugin_store"]
+            .as_bool()
+            .context("installation record is missing plugin store state")?,
     })
 }
 
@@ -319,6 +329,7 @@ async fn write_record_in_txn(
         "version": pack.version,
         "digest": pack.digest,
         "documents": if documents.is_empty() { Value::Null } else { json!(documents) },
+        "variables": prior.variables,
         "plugins": if pack.plugins.is_empty() {
             Value::Null
         } else {
@@ -373,8 +384,12 @@ pub(crate) async fn install_in_txn(
     pack: &PackIdentity,
     documents: Vec<DesiredStateApplyDocument>,
     policy: DriftPolicy,
+    variables: Option<&BTreeMap<String, Option<String>>>,
 ) -> Result<InstallReport> {
-    let prior = read_record(txn, owner, &pack.coordinate).await?;
+    let mut prior = read_record(txn, owner, &pack.coordinate).await?;
+    if let Some(variables) = variables {
+        prior.variables.clone_from(variables);
+    }
     let mut report = InstallReport::default();
     let mut recorded = BTreeMap::new();
     let mut edited = Vec::new();
