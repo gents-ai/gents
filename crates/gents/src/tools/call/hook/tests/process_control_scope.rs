@@ -103,11 +103,10 @@ async fn finish_owned_request(hook: &DefraSessionHook, request_id: &str) {
     let session_id = hook.session_id().await.expect("owned session");
     let node_did = hook.node_did.clone();
     let requester_did = hook.active_requester_did().await;
-    let headers = crate::store::config_client::ConfigAccess::transact_local_write(
-        &hook.node,
-        None,
-        "test.process_control_scope.headers",
-        |txn| {
+    let headers = hook
+        .actor_access()
+        .unwrap()
+        .transact_write("test.process_control_scope.headers", |txn| {
             let request_doc_id = request_doc_id.clone();
             let session_id = session_id.clone();
             let node_did = node_did.clone();
@@ -122,10 +121,9 @@ async fn finish_owned_request(hook: &DefraSessionHook, request_id: &str) {
                 )
                 .await
             })
-        },
-    )
-    .await
-    .expect("load exact canonical request headers");
+        })
+        .await
+        .expect("load exact canonical request headers");
     let selected = headers
         .iter()
         .filter(|header| {
@@ -219,9 +217,14 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
     })
     .await
     .expect("wait owner registered");
-    crate::request::interrupt::interrupt_request(&node, request_id)
-        .await
-        .unwrap();
+    crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+        &hook.actor_access().unwrap(),
+        &hook.active_request_doc_id().await.unwrap(),
+        &hook.node_did,
+        hook.active_requester_did().await.as_deref(),
+    )
+    .await
+    .unwrap();
     let action = tokio::time::timeout(std::time::Duration::from_secs(10), wait)
         .await
         .expect("observer returns on interrupt")
@@ -239,7 +242,7 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
     let wait_row = fetch_tool_call_row(&hook, &session_id, wait_id).await;
     assert_eq!(wait_row["lifecycle_state"], case.terminal_state);
     let persisted = crate::tools::call::lifecycle::query::load_tool_call_result(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &hook.actor_access().unwrap(),
         wait_row["_docID"].as_str().expect("physical wait call"),
         &hook.node_did,
         &session_id,
@@ -377,13 +380,14 @@ async fn accepted_cross_agent_process_controls_preserve_the_owners_running_job()
     assert_eq!(foreign_read_row["request_id"], foreign_request);
     assert_eq!(foreign_read_row["node_did"], foreign_did);
     assert_eq!(foreign_read_row["requester_did"], foreign_agent);
+    // The owner's row is another Agent's document: ACP hides it from the
+    // foreign Agent, so the session scope refuses it as absent.
     for name in ["wait_process", "cancel_process"] {
         let denial = invoke(&foreign, &format!("foreign-{name}"), name, &args).await;
         assert_eq!(denial["ok"], false, "{name}: {denial}");
         assert!(
-            denial["message"]
-                .as_str()
-                .is_some_and(|message| message.contains("not manageable by this session")),
+            denial["message"].as_str().is_some_and(|message| message
+                == format!("background tool call {tool_call_id} was not found")),
             "{name}: {denial}"
         );
     }
@@ -493,23 +497,20 @@ mod job_control {
                     .unwrap(),
             );
             crate::ensure_runtime_schemas(&node).await.unwrap();
-            crate::test_support::install_test_agent(&node, identity.did(), "general").await;
             let executions = BackgroundExecutionRegistry::default();
-            let owner = DefraSessionHook::with_identity(
-                node.clone(),
-                identity.did(),
-                FailurePolicy::default(),
-            )
-            .with_background_tool_registry(BackgroundToolRegistry::from_tools(
-                vec![Box::new(PendingTool)],
-                &["slow_tool".into()],
-            ))
-            .with_background_execution_registry(executions.clone());
+            let owner = signed_hook_as(&node, identity.did(), FailurePolicy::default())
+                .await
+                .with_background_tool_registry(BackgroundToolRegistry::from_tools(
+                    vec![Box::new(PendingTool)],
+                    &["slow_tool".into()],
+                ))
+                .with_background_execution_registry(executions.clone());
             let session_id = owner.session_id().await.unwrap();
             let request_id = format!("job-control-{}", uuid::Uuid::new_v4());
-            bind_signed_hook_request(
+            bind_interruptible_request(
                 &owner,
                 &request_id,
+                &session_id,
                 Utc::now() + chrono::Duration::minutes(5),
             )
             .await;
@@ -531,19 +532,38 @@ mod job_control {
                 request_id: self.request_id.clone(),
                 session_id: self.session_id.clone(),
                 node_did: self.owner.node_did.clone(),
-                requester_did: Some(requester_did.unwrap_or(&self.owner.node_did).to_owned()),
+                requester_did: Some(requester_did.unwrap_or(self.agent()).to_owned()),
             }
         }
 
+        /// The owner's selected Agent, which owns its session, requests and
+        /// tool calls and is the requester of its local-self requests.
+        fn agent(&self) -> &str {
+            self.owner
+                .actor
+                .as_ref()
+                .expect("signed owner hook")
+                .as_str()
+        }
+
         fn access(&self) -> ConfigAccess {
-            ConfigAccess::local(self.node.clone())
+            self.owner.actor_access().unwrap()
         }
 
         async fn load(&self, tool_call_id: &str) -> ToolCallLifecycle {
-            ToolCallLifecycle::load(self.node.clone(), &self.session_id, tool_call_id)
-                .await
-                .unwrap()
-                .unwrap()
+            let mut lifecycle = ToolCallLifecycle::load_as(
+                self.node.clone(),
+                self.owner.actor.clone().unwrap(),
+                &self.session_id,
+                tool_call_id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            lifecycle
+                .bind_agent_signer(self.owner.agent_signer.clone())
+                .unwrap();
+            lifecycle
         }
 
         async fn stored(&self, tool_call_id: &str) -> serde_json::Value {
@@ -591,11 +611,8 @@ mod job_control {
                 .unwrap()
             };
             let row = lifecycle.doc_id().unwrap().to_owned();
-            ConfigAccess::transact_local_write(
-                &hook.node,
-                None,
-                "test.process_control_scope.job_row",
-                |txn| {
+            self.access()
+                .transact_write("test.process_control_scope.job_row", |txn| {
                     let row = &row;
                     Box::pin(async move {
                         let pin = JobPin {
@@ -635,10 +652,9 @@ mod job_control {
                         write_progress_in_txn(txn, row, 0, guest, host).await?;
                         Ok::<_, anyhow::Error>(())
                     })
-                },
-            )
-            .await
-            .unwrap();
+                })
+                .await
+                .unwrap();
             // The published lifecycle predates the pin, so it is not a job row; the
             // reloaded one is.
             let mut job = self.load(tool_call_id).await;
@@ -649,34 +665,30 @@ mod job_control {
         /// The evidence of the job step that ran, persisted on `row`.
         async fn persist_evidence(&self, row: &str) -> PluginExecutionReceipt {
             let evidence = evidence();
-            ConfigAccess::transact_local_write(
-                &self.node,
-                None,
-                "test.process_control_scope.step_state",
-                |txn| {
+            self.access()
+                .transact_write("test.process_control_scope.step_state", |txn| {
                     let evidence = &evidence;
                     Box::pin(async move {
                         write_step_state_in_txn(txn, row, evidence, None, None).await
                     })
-                },
-            )
-            .await
-            .unwrap();
+                })
+                .await
+                .unwrap();
             evidence
         }
 
         /// A live local child the job spawned: a processing request of this node.
         async fn live_child(&self, row: &str) -> String {
-            crate::tools::background::job::input::tests::insert(
-                &self.node,
+            crate::tools::background::job::input::tests::insert_as(
+                &self.access(),
                 "AgentRequest",
                 json!({
                     "request_id": "child-slot-a",
                     "purpose": "normal",
                     "node_did": self.owner.node_did,
-                    "requester_did": self.owner.node_did,
+                    "requester_did": self.agent(),
                     "session_id": "child-session-slot-a",
-                    "agent_did": "general",
+                    "agent_did": self.agent(),
                     "lifecycle_state": "processing",
                     "retry_key": job_spawn_key(row, "slot-a", 0),
                     "created_at": "2026-01-01T00:00:00Z",
@@ -690,10 +702,13 @@ mod job_control {
         }
 
         async fn interrupted(&self, child: &str) -> bool {
-            crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id(&self.node, child)
-                .await
-                .unwrap()
-                .is_some()
+            crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+                &self.access(),
+                child,
+            )
+            .await
+            .unwrap()
+            .is_some()
         }
 
         async fn settle(&self, tool_call_id: &str, settlement: Settlement) {
@@ -954,7 +969,7 @@ mod job_control {
         let outcome = cancel_background_tool_call(
             hook.node.clone(),
             &hook.executions,
-            &hook.owner.node_did,
+            hook.agent(),
             &hook.session_id,
             "job-operator",
         )
@@ -984,7 +999,7 @@ mod job_control {
         let denied = cancel_session_background_process(
             hook.node.clone(),
             &hook.executions,
-            &hook.owner.node_did,
+            hook.agent(),
             &hook.owner.node_did,
             Some("did:key:another-requester"),
             &hook.session_id,
@@ -1000,9 +1015,9 @@ mod job_control {
         let outcome = cancel_session_background_process(
             hook.node.clone(),
             &hook.executions,
+            hook.agent(),
             &hook.owner.node_did,
-            &hook.owner.node_did,
-            Some(&hook.owner.node_did),
+            Some(hook.agent()),
             &hook.session_id,
             "job-client",
         )
@@ -1033,7 +1048,7 @@ mod job_control {
         let outcome = cancel_background_tool_call(
             hook.node.clone(),
             &hook.executions,
-            &hook.owner.node_did,
+            hook.agent(),
             &hook.session_id,
             "job-late",
         )
