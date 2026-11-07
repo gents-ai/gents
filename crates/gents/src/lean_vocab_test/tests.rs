@@ -88,3 +88,10 @@ fn decodes_pairing_reconcile_samples_with_stable_desired_resources() {
         );
     }
 }
+
+#[test]
+fn added_contract_cases_parse_through_the_typed_snapshot() {
+    let snapshot = lean_contract_snapshot();
+    assert!(!snapshot.app_pairing_filter_cases.is_empty());
+    assert!(!snapshot.app_pairing_filter_route_cases.is_empty());
+}
