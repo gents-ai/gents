@@ -509,23 +509,35 @@ mod turn_assignment_tests {
         let node = &admission.node;
         let did = &admission.node_did;
         let session = caused_session_id(&admission.tool.access().unwrap(), &caused_request_doc_id).await;
+        // The caused request and every head below are written and read as the
+        // Agent that owns them; the node has no fallback read or write.
+        let owner = admission.tool.access().unwrap();
+        let caused_row = owner
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ requester_did agent_did }} }}"#,
+                escape_graphql_string(&caused_request_doc_id)
+            ))
+            .await
+            .unwrap()["data"]["AgentRequest"][0]
+            .clone();
+        let caused_requester = caused_row["requester_did"].as_str().unwrap().to_owned();
+        let caused_agent = caused_row["agent_did"].as_str().unwrap().to_owned();
         let head_id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
         let create = format!(
             r#"mutation {{ create_AgentRequest(input: {{
             request_id: "{}", purpose: "normal", node_did: "{}", requester_did: "{}",
-            agent_did: "general", session_id: "{}", content: "head", lifecycle_state: "pending",
+            agent_did: "{}", session_id: "{}", content: "head", lifecycle_state: "pending",
             execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
         }}) {{ _docID }} }}"#,
             escape_graphql_string(&head_id),
             escape_graphql_string(did),
-            escape_graphql_string(did),
+            escape_graphql_string(&caused_requester),
+            escape_graphql_string(&caused_agent),
             escape_graphql_string(&session),
             escape_graphql_string(&now)
         );
-        let created = crate::store::config_client::ConfigAccess::write_local(
-            node,
-            "test.folded_head",
+        let created = owner.write("test.folded_head",
             &create,
         )
         .await
@@ -537,12 +549,10 @@ mod turn_assignment_tests {
                 "request_id: \"foreign-head\"",
             )
             .replace(
-                &format!("requester_did: \"{}\"", escape_graphql_string(did)),
+                &format!("requester_did: \"{}\"", escape_graphql_string(&caused_requester)),
                 "requester_did: \"did:test:foreign\"",
             );
-        let foreign = crate::store::config_client::ConfigAccess::write_local(
-            node,
-            "test.foreign_head",
+        let foreign = owner.write("test.foreign_head",
             &foreign_create,
         )
         .await
@@ -557,9 +567,7 @@ mod turn_assignment_tests {
             escape_graphql_string(&foreign_doc),
             escape_graphql_string(crate::request::lifecycle::FOLDED_REASON)
         );
-        crate::store::config_client::ConfigAccess::write_local(
-            node,
-            "test.foreign_fold",
+        owner.write("test.foreign_fold",
             &foreign_fold,
         )
         .await
@@ -573,7 +581,7 @@ mod turn_assignment_tests {
             })
             .unwrap();
         let foreign_accepted = crate::tools::background::status::load_session_message_terminal(
-            &crate::ConfigAccess::local(node.clone()),
+            &owner,
             &caused_request_doc_id,
         )
         .await
@@ -590,7 +598,7 @@ mod turn_assignment_tests {
             0
         );
         assert!(
-            session_message_notifications(node, did, admission.tool.session_id())
+            session_message_notifications(&admission.tool.access().unwrap(), did, admission.tool.session_id())
                 .await
                 .is_empty()
         );
@@ -599,10 +607,11 @@ mod turn_assignment_tests {
                 &format!("request_id: \"{}\"", head_id),
                 "request_id: \"foreign-agent-head\"",
             )
-            .replace("agent_did: \"general\"", "agent_did: \"foreign-agent\"");
-        let foreign_agent = crate::store::config_client::ConfigAccess::write_local(
-            node,
-            "test.foreign_agent_head",
+            .replace(
+                &format!("agent_did: \"{}\"", escape_graphql_string(&caused_agent)),
+                "agent_did: \"foreign-agent\"",
+            );
+        let foreign_agent = owner.write("test.foreign_agent_head",
             &foreign_agent_create,
         )
         .await
@@ -618,9 +627,7 @@ mod turn_assignment_tests {
             escape_graphql_string(&foreign_agent_doc),
             escape_graphql_string(crate::request::lifecycle::FOLDED_REASON)
         );
-        crate::store::config_client::ConfigAccess::write_local(
-            node,
-            "test.foreign_agent_fold",
+        owner.write("test.foreign_agent_fold",
             &foreign_agent_fold,
         )
         .await
@@ -635,7 +642,7 @@ mod turn_assignment_tests {
             .unwrap();
         let foreign_agent_accepted =
             crate::tools::background::status::load_session_message_terminal(
-                &crate::ConfigAccess::local(node.clone()),
+                &owner,
                 &caused_request_doc_id,
             )
             .await
@@ -660,9 +667,7 @@ mod turn_assignment_tests {
             escape_graphql_string(&head_doc),
             escape_graphql_string(crate::request::lifecycle::FOLDED_REASON)
         );
-        crate::store::config_client::ConfigAccess::write_local(
-            node,
-            "test.mismatched_fold",
+        owner.write("test.mismatched_fold",
             &mismatched_fold,
         )
         .await
@@ -674,7 +679,7 @@ mod turn_assignment_tests {
             })
             .unwrap();
         let mismatch_accepted = crate::tools::background::status::load_session_message_terminal(
-            &crate::ConfigAccess::local(node.clone()),
+            &owner,
             &caused_request_doc_id,
         )
         .await
@@ -690,7 +695,7 @@ mod turn_assignment_tests {
             escape_graphql_string(&head_doc),
             escape_graphql_string(crate::request::lifecycle::FOLDED_REASON)
         );
-        crate::store::config_client::ConfigAccess::write_local(node, "test.folded_cause", &fold)
+        owner.write("test.folded_cause", &fold)
             .await
             .unwrap();
         let matching_model = binding_cases
@@ -702,7 +707,7 @@ mod turn_assignment_tests {
             })
             .unwrap();
         let matching_accepted = crate::tools::background::status::load_session_message_terminal(
-            &crate::ConfigAccess::local(node.clone()),
+            &owner,
             &caused_request_doc_id,
         )
         .await
@@ -719,11 +724,13 @@ mod turn_assignment_tests {
             0
         );
         assert!(
-            session_message_notifications(node, did, admission.tool.session_id())
+            session_message_notifications(&admission.tool.access().unwrap(), did, admission.tool.session_id())
                 .await
                 .is_empty()
         );
-        crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
+        // The head is a raw fixture row rather than an admitted request, so it
+        // completes without claim-admission verification.
+        crate::tools::call::lifecycle::admission_fixture::complete_child_managed(
             node,
             &head_id,
             did,
@@ -734,7 +741,6 @@ mod turn_assignment_tests {
                 .unwrap()
                 .managed_agent_signer()
                 .unwrap(),
-            admission.runtime.clone(),
         )
         .await;
         assert_eq!(
@@ -748,7 +754,7 @@ mod turn_assignment_tests {
             1
         );
         let notifications =
-            session_message_notifications(node, did, admission.tool.session_id()).await;
+            session_message_notifications(&admission.tool.access().unwrap(), did, admission.tool.session_id()).await;
         assert_eq!(notifications.len(), 1);
         assert!(notifications[0].contains("head answer"));
         assert!(!notifications[0].contains("request_superseded"));
@@ -762,7 +768,7 @@ mod turn_assignment_tests {
         crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(node, did, &recovery_identities(&admission))
             .await.unwrap();
         assert_eq!(
-            session_message_notifications(node, did, admission.tool.session_id()).await,
+            session_message_notifications(&admission.tool.access().unwrap(), did, admission.tool.session_id()).await,
             notifications
         );
         node.shutdown().await.expect("shut down test node");
@@ -925,7 +931,7 @@ mod turn_assignment_tests {
         assert_eq!(row["status"], "completed");
 
         let notifications =
-            session_message_notifications(node, did, admission.tool.session_id()).await;
+            session_message_notifications(&admission.tool.access().unwrap(), did, admission.tool.session_id()).await;
         assert_eq!(notifications.len(), 1);
         assert!(
             notifications[0].contains("<reason>assignment_active</reason>"),
@@ -1004,7 +1010,7 @@ mod turn_assignment_tests {
         let row = tool_call_row(&admission.tool.access().unwrap(), &tool_doc_id).await;
         assert_eq!(row["status"], "completed");
         let notifications =
-            session_message_notifications(node, did, admission.tool.session_id()).await;
+            session_message_notifications(&admission.tool.access().unwrap(), did, admission.tool.session_id()).await;
         assert_eq!(notifications.len(), 1);
         assert!(
             notifications[0].contains("<reason>assignment_absent</reason>"),
@@ -1083,7 +1089,7 @@ mod turn_assignment_tests {
         let row = tool_call_row(&admission.tool.access().unwrap(), &tool_doc_id).await;
         assert_eq!(row["status"], "completed");
         let notifications =
-            session_message_notifications(node, did, admission.tool.session_id()).await;
+            session_message_notifications(&admission.tool.access().unwrap(), did, admission.tool.session_id()).await;
         assert_eq!(notifications.len(), 1);
         assert!(
             !notifications[0].contains("<reason>"),
@@ -1161,17 +1167,42 @@ mod turn_assignment_tests {
 
         // Settle the lifecycle row only: a crash before the notice side
         // effect leaves `completionPending:assignment_active` outstanding.
-        let mut lifecycle = ToolCallLifecycle::load_by_doc_id_as(
-            node.clone(),
-            identity::Did::new(did.as_str()).unwrap(),
-            &tool_doc_id,
-            did,
-            &session_id,
-            Some(did),
-        )
-        .await
-        .unwrap()
-        .expect("rehydrated session-message row");
+        // The row is owned by the invoking Agent; rehydrate it as that Agent
+        // exactly as settlement does.
+        let agent_access = admission.tool.access().unwrap();
+        let requester = agent_access
+            .execute(&format!(
+                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ requester_did }} }}"#,
+                escape_graphql_string(&tool_doc_id)
+            ))
+            .await
+            .unwrap()["data"]["AgentToolCall"][0]["requester_did"]
+            .as_str()
+            .map(str::to_owned);
+        let mut lifecycle = agent_access
+            .transact_readonly("test.session_message.rehydrate", |txn| {
+                let (node, tool_doc_id, session_id, requester) =
+                    (node.clone(), &tool_doc_id, &session_id, &requester);
+                Box::pin(async move {
+                    let Some(mut lifecycle) = ToolCallLifecycle::load_by_doc_id_in_txn(
+                        txn,
+                        node,
+                        tool_doc_id,
+                        did,
+                        session_id,
+                        requester.as_deref(),
+                    )
+                    .await?
+                    else {
+                        return Ok::<_, anyhow::Error>(None);
+                    };
+                    lifecycle.bind_agent_signer(txn.managed_agent_signer())?;
+                    Ok(Some(lifecycle))
+                })
+            })
+            .await
+            .unwrap()
+            .expect("rehydrated session-message row");
         let caused = match crate::session::message::observe_caused_request(node, &lifecycle)
             .await
             .unwrap()
@@ -1185,11 +1216,13 @@ mod turn_assignment_tests {
             }
         };
         let caused_doc_id = caused.doc_id.as_deref().unwrap().to_owned();
-        let Some(terminal) =
-            crate::tools::background::status::load_caused_request_terminal(node, &caused_doc_id)
-                .await
-                .unwrap()
-        else {
+        let Some(terminal) = crate::tools::background::status::load_caused_request_terminals(
+            &agent_access,
+            std::slice::from_ref(&caused_doc_id),
+        )
+        .await
+        .unwrap()
+        .remove(&caused_doc_id) else {
             panic!("the completed child is a terminal observation");
         };
         let handoff = turn_assignment_handoff(
@@ -1210,7 +1243,7 @@ mod turn_assignment_tests {
         let row = tool_call_row(&admission.tool.access().unwrap(), &tool_doc_id).await;
         assert_eq!(row["status"], "completionPending:assignment_active");
         assert!(
-            session_message_notifications(node, did, &session_id)
+            session_message_notifications(&admission.tool.access().unwrap(), did, &session_id)
                 .await
                 .is_empty(),
             "no notice exists yet: this is the crash-before-notice state"
@@ -1239,7 +1272,7 @@ mod turn_assignment_tests {
             .await
             .unwrap();
         assert_eq!(report.side_effects_converged, 1);
-        let notifications = session_message_notifications(node, did, &session_id).await;
+        let notifications = session_message_notifications(&admission.tool.access().unwrap(), did, &session_id).await;
         assert_eq!(notifications.len(), 1);
         assert!(
             notifications[0].contains("<reason>assignment_active</reason>"),
@@ -1284,28 +1317,30 @@ mod turn_assignment_tests {
             ))
             .await
             .expect("read the tool call row as its owning Agent");
-        response["AgentToolCall"][0].clone()
+        response["data"]["AgentToolCall"][0].clone()
     }
 
+    /// Notices are owned by the Agent that published them, so they are read
+    /// through that Agent's access rather than anonymously.
     async fn session_message_notifications(
-        node: &Arc<EmbeddedNode>,
+        access: &crate::ConfigAccess,
         did: &str,
         session_id: &str,
     ) -> Vec<String> {
         let escaped = escape_graphql_string(session_id);
-        let response = node
-        .execute(&format!(
-            r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#
-        ))
-        .await;
-        assert!(!response.has_errors(), "{:#?}", response.errors);
+        let response = access
+            .execute(&format!(
+                r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID requester_did }} }}"#
+            ))
+            .await
+            .expect("read session messages as their owning Agent");
         let mut notifications = Vec::new();
-        for row in response.data.unwrap()["AgentMessage"].as_array().unwrap() {
-            let (_, message) = crate::session::load_canonical_message_from_node(
-                node,
+        for row in response["data"]["AgentMessage"].as_array().unwrap() {
+            let (_, message) = crate::session::load_canonical_message(
+                access,
                 row["_docID"].as_str().unwrap(),
                 did,
-                Some(did),
+                row["requester_did"].as_str(),
             )
             .await
             .expect("reconstruct canonical session message");
