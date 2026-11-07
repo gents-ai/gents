@@ -162,7 +162,9 @@ async fn held_client_and_agent_mcp_selection_isolation_rebind_and_rollback() -> 
     );
     crate::ensure_runtime_schemas(node.as_ref()).await?;
     let owner = defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
-    for actor in [agent.did(), sibling.did(), outsider.did()] {
+    // The user owns node ACP here, so the runtime that observes its bound Node
+    // holds node read access like any other granted actor.
+    for actor in [runtime.did(), agent.did(), sibling.did(), outsider.did()] {
         for permission in [
             acp::nac::NodePermission::DocumentRead,
             acp::nac::NodePermission::DocumentUpdate,
