@@ -33,9 +33,20 @@ pub(super) fn install_variable_preview(
             missing.join(", ")
         )
     })?;
+    let runtime_environment = pack
+        .manifest()
+        .metadata
+        .plugins
+        .iter()
+        .map(|plugin| {
+            let manifold = gents::plugin::authority::declared_manifold(plugin)?;
+            Ok(json!({"plugin": plugin.name,
+            "declared": gents::plugin::authority::declared_environment(&manifold)}))
+        })
+        .collect::<Result<Vec<_>>>()?;
     Ok(
         json!({ "pack": format!("{}/{}", pack.manifest().metadata.namespace, pack.manifest().name),
-        "kind": "install_literal", "uses": uses }),
+        "kind": "install_literal", "uses": uses, "runtime_environment": runtime_environment }),
     )
 }
 
