@@ -7,16 +7,20 @@ use gents::session::canonical_rows::{
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
+use gents_desktop_core::error::BridgeErrorCode;
 use gents_protocol::job::{JobControlKind, JobControlOutcome, JobState};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
     OutputWriter, PayloadRef, SegmentRun, SourceClose, StreamDeclaration, StreamPayload,
     TranscriptMessage,
 };
+use gents_protocol::process_control::{
+    ToolControlIntent, ToolControlReceipt, ToolControlReceiptOutcome,
+};
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 
 use crate::job_control::job_control;
-use crate::tests::support::{boot_core, OPERATOR};
+use crate::tests::support::OPERATOR;
 use crate::types::DesktopJobControlRequest;
 
 pub(super) async fn seed_admission_for_node(
@@ -159,201 +163,285 @@ pub(super) async fn seed_admission_for_node(
         .expect("seed admission header");
 }
 
-#[tokio::test]
-async fn job_control_uses_the_client_and_requires_a_matching_agent_receipt() {
-    use gents::store::identity::{KeyIdentity, NodeIdentity};
-    use gents_protocol::process_control::{
-        ToolControlIntent, ToolControlReceipt, ToolControlReceiptOutcome,
-    };
-    use gents_desktop_core::error::BridgeErrorCode;
-    use wiremock::matchers::{
-        body_partial_json, body_string_contains, header, header_exists, method, path,
-    };
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+/// A runtime node served over HTTP that the desktop client controls through
+/// its client-signed GraphQL path, with a selected Agent key that answers
+/// control intents in place of the runtime's control owner.
+pub(super) struct ControlRuntime {
+    pub core: Arc<ClientCore>,
+    pub runtime: Arc<gents::defra_node::Node>,
+    pub node_did: String,
+    pub client_did: String,
+    owner: gents::KeyIdentity,
+    pub agent: Arc<dyn gents::NodeIdentity>,
+    _directory: tempfile::TempDir,
+}
 
-    let server = MockServer::start().await;
-    let (core, temp) = boot_core().await;
-    let owner = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
-    let agent = KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap();
-    let home = temp.path().join("runtime");
+pub(super) async fn control_runtime() -> ControlRuntime {
+    use gents::NodeIdentity as _;
+
+    let directory = tempfile::tempdir().unwrap();
+    let core = Arc::new(
+        ClientCore::start_with_paths_and_options(
+            gents_desktop_core::client::DesktopPaths::from_root(directory.path().join("desktop")),
+            gents_desktop_core::client::ClientCoreOptions::local_only(),
+        )
+        .await
+        .unwrap(),
+    );
+    let owner =
+        gents::KeyIdentity::load_or_create(directory.path().join("owner.key"), None).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let graphql = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+    let runtime = Arc::new(
+        gents::defra_node::Node::builder()
+            .enable_signing()
+            .with_http(
+                gents::defra_node::HttpConfig::with_listener(listener.into_std().unwrap()).unwrap(),
+            )
+            .with_node_identity_did(owner.did())
+            .build()
+            .await
+            .unwrap(),
+    );
+    gents::ensure_runtime_schemas(&runtime).await.unwrap();
+    let binding = gents::store::identity::provision_agent_identity(&owner).unwrap();
+    let agent = gents::store::identity::resolve_agent_identity(&owner, &binding).unwrap();
+    let home = directory.path().join("runtime");
     std::fs::create_dir(&home).unwrap();
-    let graphql = format!("{}/api/v0/graphql", server.uri());
     core.add_managed_enrollment_peer_for_test(owner.did(), &graphql, home.to_str().unwrap(), 1)
         .await
         .unwrap();
     let client_did = core.node_identity().did().to_owned();
     assert_ne!(client_did, owner.did());
+    ControlRuntime {
+        core,
+        runtime,
+        node_did: owner.did().to_owned(),
+        client_did,
+        owner,
+        agent,
+        _directory: directory,
+    }
+}
+
+impl ControlRuntime {
+    /// Seed one invocation owned by the runtime Node and selected for the
+    /// Agent; only a granted client may read it.
+    pub async fn invocation(&self, call: &str, readable: bool) -> String {
+        let owner = ConfigAccess::local_as(self.runtime.clone(), self.node_did.parse().unwrap());
+        let mutation = format!(
+            r#"mutation {{ create_AgentToolCall(input: {{ tool_call_key: "session:{call}", node_did: "{node}", agent_did: "{agent}", requester_did: "{client}", session_id: "session", session_doc_id: "session-doc", request_id: "request", request_doc_id: "request-doc", tool_name: "workflow", tool_call_id: "{call}", message_sequence: 1, status: "running", lifecycle_state: "running", await_mode: "background" }}) {{ _docID }} }}"#,
+            call = escape_graphql_string(call),
+            node = escape_graphql_string(&self.node_did),
+            agent = escape_graphql_string(self.agent.did()),
+            client = escape_graphql_string(&self.client_did),
+        );
+        let response = owner
+            .write("test.control.invocation", &mutation)
+            .await
+            .unwrap();
+        let doc =
+            gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentToolCall").unwrap();
+        if readable {
+            owner
+                .add_actor_relationship(
+                    "AgentToolCall",
+                    &doc,
+                    "reader",
+                    &self.client_did.parse().unwrap(),
+                )
+                .await
+                .unwrap();
+        }
+        doc
+    }
+
+    /// Answers the first control intent the Agent can see for `tool_call_doc_id`
+    /// with a receipt it signs; `tamper` alters the outcome after signing.
+    /// Returns the signed intent the client published.
+    pub fn answer(
+        &self,
+        tool_call_doc_id: &str,
+        outcome: ToolControlReceiptOutcome,
+        tamper: Option<ToolControlReceiptOutcome>,
+    ) -> tokio::task::JoinHandle<ToolControlIntent> {
+        let runtime = self.runtime.clone();
+        let agent = self.agent.clone();
+        let tool_call_doc_id = tool_call_doc_id.to_owned();
+        tokio::spawn(async move {
+            let access = ConfigAccess::local_managed_agent(
+                runtime.clone(),
+                agent.did().parse().unwrap(),
+                agent.as_ref(),
+            )
+            .unwrap();
+            let mut changes = gents::subscribe_collections(&runtime, ["AgentToolControl"]).unwrap();
+            // The working_agent grant follows the intent's creation, so a
+            // creation event can precede the Agent's visibility.
+            let mut sweep = tokio::time::interval(std::time::Duration::from_millis(50));
+            let query = format!(
+                r#"{{ AgentToolControl(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}) {{ _docID intent_json }} }}"#,
+                escape_graphql_string(&tool_call_doc_id)
+            );
+            loop {
+                let rows = access.execute(&query).await.unwrap();
+                if let Some(row) = rows["data"]["AgentToolControl"]
+                    .as_array()
+                    .and_then(|rows| rows.first())
+                {
+                    let intent: ToolControlIntent =
+                        serde_json::from_str(row["intent_json"].as_str().unwrap()).unwrap();
+                    let mut receipt = ToolControlReceipt {
+                        version: 1,
+                        intent_doc_id: row["_docID"].as_str().unwrap().into(),
+                        client_did: intent.client_did.clone(),
+                        agent_did: intent.agent_did.clone(),
+                        node_did: intent.node_did.clone(),
+                        session_id: intent.session_id.clone(),
+                        session_doc_id: intent.session_doc_id.clone(),
+                        request_doc_id: intent.request_doc_id.clone(),
+                        tool_call_id: intent.tool_call_id.clone(),
+                        tool_call_doc_id: intent.tool_call_doc_id.clone(),
+                        action: intent.action.clone(),
+                        outcome: outcome.clone(),
+                        signature: Vec::new(),
+                    };
+                    receipt.signature = agent
+                        .sign(&receipt.signing_payload().unwrap())
+                        .await
+                        .unwrap();
+                    if let Some(tampered) = tamper.clone() {
+                        receipt.outcome = tampered;
+                    }
+                    let update = format!(
+                        r#"mutation {{ update_AgentToolControl(docID: "{}", input: {{ state: "completed", outcome_json: "{}" }}) {{ _docID }} }}"#,
+                        escape_graphql_string(&receipt.intent_doc_id),
+                        escape_graphql_string(&serde_json::to_string(&receipt).unwrap()),
+                    );
+                    let updated = access.write("test.control.receipt", &update).await.unwrap();
+                    assert_eq!(
+                        updated["data"]["update_AgentToolControl"][0]["_docID"],
+                        receipt.intent_doc_id.as_str()
+                    );
+                    return intent;
+                }
+                tokio::select! {
+                    changed = changes.recv() => assert!(changed.is_some()),
+                    _ = sweep.tick() => {}
+                }
+            }
+        })
+    }
+
+    pub async fn shutdown(self) {
+        self.core.shutdown().await.unwrap();
+        drop(self.owner);
+    }
+}
+
+/// The signed intent names the client, the invocation's physical row and its
+/// logical scope, as the runtime's claim requires.
+pub(super) async fn assert_client_signed_intent(
+    control: &ControlRuntime,
+    intent: &ToolControlIntent,
+    tool_call_doc_id: &str,
+    call: &str,
+    action: &str,
+) {
+    use gents::NodeIdentity as _;
+
+    intent.validate_shape().unwrap();
+    assert_eq!(intent.client_did, control.client_did);
+    assert_eq!(intent.node_did, control.node_did);
+    assert_eq!(intent.agent_did, control.agent.did());
+    assert_eq!(intent.session_id, "session");
+    assert_eq!(intent.session_doc_id, "session-doc");
+    assert_eq!(intent.request_doc_id, "request-doc");
+    assert_eq!(
+        intent.requester_did.as_deref(),
+        Some(control.client_did.as_str())
+    );
+    assert_eq!(intent.tool_call_id, call);
+    assert_eq!(intent.tool_call_doc_id, tool_call_doc_id);
+    assert_eq!(intent.action, action);
+    assert!(control
+        .core
+        .node_identity()
+        .verify(
+            &control.client_did,
+            &intent.signing_payload().unwrap(),
+            &intent.signature,
+        )
+        .await
+        .unwrap());
+}
+
+#[tokio::test]
+async fn job_control_publishes_a_client_signed_intent_and_requires_the_agent_receipt() {
+    let control = control_runtime().await;
     let expected = JobControlOutcome::Applied {
         state: JobState::Cancelled,
         killed_children: 1,
     };
-    let mut receipt = ToolControlReceipt {
-        version: 1,
-        intent_doc_id: "intent-job".into(),
-        client_did: client_did.clone(),
-        agent_did: agent.did().into(),
-        node_did: owner.did().into(),
-        session_id: "session".into(),
-        session_doc_id: "session-doc".into(),
-        request_doc_id: "request-doc".into(),
-        tool_call_id: "call".into(),
-        tool_call_doc_id: "runtime-only-doc".into(),
-        action: "job_stop".into(),
-        outcome: ToolControlReceiptOutcome::Job(expected.clone()),
-        signature: Vec::new(),
-    };
-    receipt.signature = agent
-        .sign(&receipt.signing_payload().unwrap())
-        .await
-        .unwrap();
-    let invocation = serde_json::json!({
-        "_docID": "runtime-only-doc", "node_did": owner.did(), "agent_did": agent.did(),
-        "session_id": "session", "session_doc_id": "session-doc",
-        "request_doc_id": "request-doc", "tool_call_id": "call"
-    });
-    let mut intent = invocation.clone();
-    intent["_docID"] = "intent-job".into();
-    intent["client_did"] = client_did.clone().into();
-    intent["tool_call_doc_id"] = "runtime-only-doc".into();
-    intent["action"] = "job_stop".into();
-    intent["outcome_json"] = serde_json::to_string(&receipt).unwrap().into();
-    Mock::given(method("POST"))
-        .and(path("/api/v0/graphql"))
-        .and(header("accept", "text/event-stream"))
-        .and(body_string_contains("intent-job"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw("", "text/event-stream"))
-        .with_priority(1)
-        .expect(2)
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/api/v0/graphql"))
-        .and(header_exists("authorization"))
-        .and(body_string_contains("intent-job"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "data": {"AgentToolControl": [intent], "AgentToolCall": [invocation], "AgentToolControlClaim": []}
-        })))
-        .with_priority(1)
-        .expect(1)
-        .mount(&server)
-        .await;
-    for doc in [
-        "runtime-only-doc",
-        "missing-doc",
-        "foreign-doc",
-        "unsigned-doc",
-    ] {
-        Mock::given(method("POST")).and(path("/api/v0/graphql"))
-            .and(body_string_contains(doc))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": {"AgentToolCall": [{
-                "_docID": doc, "node_did": owner.did(), "agent_did": agent.did(), "session_id": "session",
-                "session_doc_id": "session-doc", "request_doc_id": "request-doc", "requester_did": client_did,
-                "tool_call_id": "call"
-            }]}})))
-            .expect(1).mount(&server).await;
-    }
-    for (doc, response) in [
-        (
-            "runtime-only-doc",
-            ResponseTemplate::new(202).set_body_json(JobControlOutcome::Queued {
-                intent_doc_id: "intent-job".into(),
-            }),
-        ),
-        (
-            "missing-doc",
-            ResponseTemplate::new(404).set_body_json(serde_json::json!({"error":"not found"})),
-        ),
-        (
-            "foreign-doc",
-            ResponseTemplate::new(403)
-                .set_body_json(serde_json::json!({"error":"permission denied"})),
-        ),
-        (
-            "unsigned-doc",
-            ResponseTemplate::new(200).set_body_json(expected.clone()),
-        ),
-    ] {
-        Mock::given(method("POST"))
-            .and(path(gents_protocol::job::JOB_CONTROL_PATH))
-            .and(header_exists("authorization"))
-            .and(body_partial_json(
-                serde_json::json!({"tool_call_doc_id": doc}),
-            ))
-            .respond_with(response)
-            .expect(1)
-            .mount(&server)
-            .await;
-    }
     let command = |doc: &str| DesktopJobControlRequest {
-        node_did: owner.did().into(),
+        node_did: control.node_did.clone(),
         tool_call_doc_id: doc.into(),
         action: JobControlKind::Stop,
     };
+
+    let applied = control.invocation("applied", true).await;
+    let answered = control.answer(
+        &applied,
+        ToolControlReceiptOutcome::Job(expected.clone()),
+        None,
+    );
     assert_eq!(
-        job_control(&core, &command("runtime-only-doc"))
+        job_control(&control.core, &command(&applied))
             .await
             .unwrap(),
         expected
     );
-    assert_eq!(
-        job_control(&core, &command("missing-doc"))
-            .await
-            .unwrap_err()
-            .code,
-        BridgeErrorCode::NotFound
+    let intent = answered.await.unwrap();
+    assert_client_signed_intent(&control, &intent, &applied, "applied", "job_stop").await;
+
+    let forged = control.invocation("forged", true).await;
+    let answered = control.answer(
+        &forged,
+        ToolControlReceiptOutcome::Job(expected.clone()),
+        Some(ToolControlReceiptOutcome::Job(
+            JobControlOutcome::AlreadyTerminal {
+                state: JobState::Cancelled,
+            },
+        )),
     );
-    assert_eq!(
-        job_control(&core, &command("foreign-doc"))
-            .await
-            .unwrap_err()
-            .code,
-        BridgeErrorCode::PermissionDenied
-    );
-    let unsigned_error = job_control(&core, &command("unsigned-doc"))
+    let error = job_control(&control.core, &command(&forged))
         .await
-        .unwrap_err()
-        .message;
-    assert!(unsigned_error.contains("without a queued intent"), "{unsigned_error}");
-    assert!(unsigned_error.contains("the action may still take effect"));
-    let mut other = command("runtime-only-doc");
-    other.node_did = "did:test:unknown-peer".into();
-    assert!(job_control(&core, &other).await.is_err());
-    for request in server.received_requests().await.unwrap() {
-        use identity::Identity as _;
-        let header = request
-            .headers
-            .get("authorization")
-            .unwrap()
-            .to_str()
-            .unwrap();
-        let signer =
-            identity::from_token(header.strip_prefix("Bearer ").unwrap().as_bytes()).unwrap();
-        assert_eq!(signer.did().unwrap().as_str(), client_did);
-        if request.url.path() == gents_protocol::job::JOB_CONTROL_PATH {
-            let intent: ToolControlIntent = serde_json::from_slice(&request.body).unwrap();
-            intent.validate_shape().unwrap();
-            assert_eq!(intent.client_did, client_did);
-            assert_eq!(intent.node_did, owner.did());
-            assert_eq!(intent.agent_did, agent.did());
-            assert_eq!(intent.session_id, "session");
-            assert_eq!(intent.session_doc_id, "session-doc");
-            assert_eq!(intent.request_doc_id, "request-doc");
-            assert_eq!(intent.requester_did.as_deref(), Some(client_did.as_str()));
-            assert_eq!(intent.tool_call_id, "call");
-            assert_eq!(intent.action, "job_stop");
-            if intent.tool_call_doc_id == "unsigned-doc" {
-                assert!(unsigned_error.contains(&intent.intent_id));
-            }
-            assert!(core
-                .node_identity()
-                .verify(
-                    &client_did,
-                    &intent.signing_payload().unwrap(),
-                    &intent.signature,
-                )
+        .unwrap_err();
+    let intent = answered.await.unwrap();
+    assert_eq!(error.code, BridgeErrorCode::Unknown);
+    assert!(
+        error.message.contains("the action may still take effect"),
+        "{}",
+        error.message
+    );
+    assert!(
+        error.message.contains(&intent.intent_id),
+        "{}",
+        error.message
+    );
+
+    let unreadable = control.invocation("unreadable", false).await;
+    for doc in [unreadable.as_str(), "bae-missing"] {
+        assert_eq!(
+            job_control(&control.core, &command(doc))
                 .await
-                .unwrap());
-        }
+                .unwrap_err()
+                .code,
+            BridgeErrorCode::NotFound
+        );
     }
-    core.shutdown().await.unwrap();
+    let mut other = command(&applied);
+    other.node_did = "did:test:unknown-peer".into();
+    assert!(job_control(&control.core, &other).await.is_err());
+    control.shutdown().await;
 }

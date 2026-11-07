@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-pub const PROCESS_CONTROL_PATH: &str = "/processes/control";
-
 /// A displayed native invocation is addressed by both its physical row and
 /// logical identity; neither a session identifier nor a process identifier
 /// alone grants control.

@@ -90,8 +90,6 @@ pub struct JobView {
     pub completed_at: Option<u64>,
 }
 
-pub const JOB_CONTROL_PATH: &str = "/jobs/control";
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

@@ -22,7 +22,7 @@ pub use step::{
 pub use step_output::JobStepOutput;
 pub use view::{
     JobChildRow, JobControlOutcome, JobOutcome, JobPinSummary, JobReadError, JobScope, JobView,
-    OperatorJobControlRequest, JOB_CONTROL_PATH,
+    OperatorJobControlRequest,
 };
 
 // No field below may be named with KEY, SECRET, TOKEN or PASSWORD in any case:
