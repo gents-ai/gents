@@ -543,6 +543,10 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
             install_documents_command(access, &pack, &args).await
         }
         PackKind::Assets | PackKind::Plugins => {
+            anyhow::ensure!(
+                args.dependency_variables.is_empty(),
+                "--dependency-variable applies only to document packs with dependencies"
+            );
             let requested = parse_inference_slot_bindings(&args.inference_slots)?;
             anyhow::ensure!(
                 args.scope.graphql.is_none()
