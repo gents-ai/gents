@@ -83,7 +83,13 @@ fn received_request_preserves_dependency_variable_overrides() {
     let dependee = archive("dependee_fixture");
     let mut request: serde_json::Value =
         serde_json::from_slice(&body(&root, &[dependee], NODE)).unwrap();
-    assert!(request.get("dependency_variables").is_none());
+    assert_eq!(request["dependency_variables"], serde_json::json!([]));
+    let mut missing = request.clone();
+    missing
+        .as_object_mut()
+        .unwrap()
+        .remove("dependency_variables");
+    assert!(refusal(&serde_json::to_vec(&missing).unwrap()).contains("dependency_variables"));
     request["dependency_variables"] = serde_json::json!(["fixture/dependee_fixture:LABEL=value"]);
     let received = decode_request(&serde_json::to_vec(&request).unwrap(), NODE).unwrap();
     assert_eq!(

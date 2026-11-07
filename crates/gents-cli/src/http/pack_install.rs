@@ -68,7 +68,6 @@ struct InstallRequest {
     root: Archive,
     dependencies: Vec<Archive>,
     inference_slots: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     dependency_variables: Vec<String>,
     overwrite: bool,
     keep: bool,
