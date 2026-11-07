@@ -1238,13 +1238,15 @@ mod tests {
         ProbeEvent, ServiceHealth, ServiceHealthMap, ServiceModelInternal,
     };
     use crate::lean_vocab_test::{lean_mcp_health_cases, LeanMcpHealthCase};
+    use crate::store::config_client::ConfigAccess;
+    use crate::store::identity::NodeIdentity;
     use crate::tools::mcp::pool::McpPool;
 
     #[tokio::test]
     async fn service_health_publication_preserves_native_ownership_and_revocation(
     ) -> anyhow::Result<()> {
         use crate::lean_vocab_test::{lean_identity_household_cases, LeanIdentityAction};
-        use crate::store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
+        use crate::store::config_client::{GraphqlEndpoint, NodePermission};
         use crate::NodeIdentity;
         use anyhow::Context;
 
@@ -1447,24 +1449,32 @@ mod tests {
 
     #[tokio::test]
     async fn health_persistence_skips_unchanged_rows_and_only_commits_changed_fields() {
-        async fn field_commits(node: &EmbeddedNode) -> std::collections::BTreeMap<String, usize> {
-            let rows = node.execute("{ ToolServiceHealthState { _docID } }").await;
-            assert!(!rows.has_errors(), "{:?}", rows.errors);
-            let doc_id = rows.data.as_ref().unwrap()["ToolServiceHealthState"][0]["_docID"]
+        fn runtime_reader(node: &Arc<EmbeddedNode>) -> ConfigAccess {
+            ConfigAccess::local_as(
+                node.clone(),
+                identity::Did::new(node.node_identity_did().unwrap()).unwrap(),
+            )
+        }
+        async fn field_commits(
+            node: &Arc<EmbeddedNode>,
+        ) -> std::collections::BTreeMap<String, usize> {
+            let access = runtime_reader(node);
+            let rows = access
+                .execute("{ ToolServiceHealthState { _docID } }")
+                .await
+                .unwrap();
+            let doc_id = rows["data"]["ToolServiceHealthState"][0]["_docID"]
                 .as_str()
                 .unwrap();
             let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
-            let response = node
+            let response = access
                 .execute(&format!(
                     r#"{{ _commits(docID: "{doc_id}") {{ fieldName }} }}"#
                 ))
-                .await;
-            assert!(!response.has_errors(), "{:?}", response.errors);
+                .await
+                .unwrap();
             let mut counts = std::collections::BTreeMap::new();
-            for commit in response.data.as_ref().unwrap()["_commits"]
-                .as_array()
-                .unwrap()
-            {
+            for commit in response["data"]["_commits"].as_array().unwrap() {
                 if let Some(field) = commit["fieldName"].as_str() {
                     *counts.entry(field.to_owned()).or_default() += 1;
                 }
@@ -1472,11 +1482,11 @@ mod tests {
             counts
         }
 
-        let node = crate::inference::auth::credential::test_support::test_node().await;
+        let (node, runtime) = crate::tools::mcp::meta::tests::test_node().await;
         let map = ServiceHealthMap::new();
         let context = HealthPersistenceContext {
             node: &node,
-            node_did: "did:key:health-owner",
+            node_did: runtime.did(),
         };
         let now = chrono::Utc::now();
         let mut entry = super::MCPServiceHealthSnapshot {
@@ -1547,19 +1557,17 @@ mod tests {
             unconfirmed["endpoint"] + 1,
             "unconfirmed publish must repair every field"
         );
-        let row = node
+        let row = runtime_reader(&node)
             .execute("{ ToolServiceHealthState { endpoint status last_error_class } }")
-            .await;
+            .await
+            .unwrap();
         assert_eq!(
-            row.data.as_ref().unwrap()["ToolServiceHealthState"][0]["endpoint"],
+            row["data"]["ToolServiceHealthState"][0]["endpoint"],
             "http://localhost/mcp"
         );
+        assert_eq!(row["data"]["ToolServiceHealthState"][0]["status"], "stale");
         assert_eq!(
-            row.data.as_ref().unwrap()["ToolServiceHealthState"][0]["status"],
-            "stale"
-        );
-        assert_eq!(
-            row.data.as_ref().unwrap()["ToolServiceHealthState"][0]["last_error_class"],
+            row["data"]["ToolServiceHealthState"][0]["last_error_class"],
             "connection_refused"
         );
         node.shutdown().await.expect("shut down test node");
@@ -2055,8 +2063,8 @@ mod tests {
 
     #[tokio::test]
     async fn persistence_collapses_twins_to_the_row_readers_select() {
-        let node = crate::inference::auth::credential::test_support::test_node().await;
-        let node_did = "did:key:health-owner";
+        let (node, runtime) = crate::tools::mcp::meta::tests::test_node().await;
+        let node_did = runtime.did();
         let mut created = std::collections::BTreeMap::<&str, Vec<String>>::new();
         for (service, updated_at, endpoint) in [
             ("newest", "2026-01-01T00:00:00Z", "a"),
@@ -2080,13 +2088,14 @@ mod tests {
             created.entry(service).or_default().push(doc_id.to_owned());
         }
         let reader_order = |node: Arc<EmbeddedNode>| async move {
-            let response = node
+            let actor = identity::Did::new(node.node_identity_did().unwrap()).unwrap();
+            let response = ConfigAccess::local_as(node, actor)
                 .execute(
                     r#"{ ToolServiceHealthState(order: [{ service_id: ASC }, { updated_at: DESC }, { _docID: ASC }]) { _docID service_id status } }"#,
                 )
-                .await;
-            assert!(!response.has_errors(), "{:?}", response.errors);
-            response.data.unwrap()["ToolServiceHealthState"]
+                .await
+                .unwrap();
+            response["data"]["ToolServiceHealthState"]
                 .as_array()
                 .unwrap()
                 .clone()
