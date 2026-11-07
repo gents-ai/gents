@@ -2660,14 +2660,46 @@ async fn retry_frontier_matches_lean_admission() {
             request.session_id = format!("fresh-session-{index}");
         }
         if case["scoped_terminal"].as_bool().unwrap() {
+            // A running parent already published its tool-call assistant
+            // header, which the terminal must select rather than discard.
+            let scope = parent.request().clone();
+            let headers = parent
+                .access()
+                .unwrap()
+                .transact_readonly("test.retry_frontier.headers", |txn| {
+                    let scope = &scope;
+                    Box::pin(async move {
+                        load_request_headers_in_txn(
+                            txn,
+                            &scope.session_id,
+                            &scope.node_did,
+                            scope.requester_did.as_deref(),
+                            &scope.doc_id,
+                        )
+                        .await
+                    })
+                })
+                .await
+                .unwrap();
+            let selection = headers
+                .iter()
+                .filter(|header| {
+                    header.message.role == gents_protocol::output::MessageRole::Assistant
+                })
+                .max_by_key(|header| header.message.sequence)
+                .map_or(gents_protocol::output::TerminalOutput::NoMessage, |header| {
+                    gents_protocol::output::TerminalOutput::Message {
+                        message_doc_id: header.doc_id.clone(),
+                    }
+                });
             parent
                 .terminalize_owned(
                     crate::request::lifecycle::RequestTerminalOutcome::Dead,
-                    gents_protocol::output::TerminalOutput::NoMessage,
+                    selection,
                     Some("Stale"),
                 )
                 .await
-                .unwrap();
+                .unwrap_or_else(|error| panic!("{case}: {error:#}"));
         }
         let actual = history::retry_has_published_input(node, &request).await;
         assert_eq!(actual.ok(), case["expected"].as_bool(), "{case}");

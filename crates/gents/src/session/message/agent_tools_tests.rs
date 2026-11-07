@@ -41,6 +41,18 @@ pub(super) async fn started(
 
 /// The calling Agent's signed access. Its session-message rows are Agent-owned, so
 /// ACP hides them from the node identity.
+/// Goal rows carry document ACP, so their signed blocks are read as the
+/// owning Agent; the node's own caller holds no relation to them.
+async fn signer_as_actor(node: &defra_node::Node, actor: &str, cid: &str) -> String {
+    let (block, signature) = node
+        .authorized_signed_block_bytes(cid, Some(actor))
+        .await
+        .unwrap();
+    let block = defra_core::block::Block::from_dag_cbor(&block).unwrap();
+    let signature = defra_core::block::Signature::from_dag_cbor(&signature).unwrap();
+    db::block::verify::verified_signature_signer_did(&block, &signature).unwrap()
+}
+
 fn owner(message: &PublishedSessionMessage) -> ConfigAccess {
     message.admission.tool.access().unwrap()
 }
@@ -1255,14 +1267,42 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
     assert_eq!(all, stale);
     let identity =
         crate::KeyIdentity::load_existing(message.admission.path.join("node.key"), None).unwrap();
+    let caller_agent = {
+        let agent = crate::load_agent(&node, &caller.agent_did)
+            .await
+            .unwrap()
+            .expect("calling Agent binding");
+        crate::store::identity::resolve_agent_identity(
+            &identity,
+            &gents_protocol::agent_identity::AgentIdentityBinding {
+                agent_did: agent.agent_did,
+                creation_nonce: agent.creation_nonce,
+            },
+        )
+        .unwrap()
+    };
     // A trigger run records the calling Agent as its requester, which is what
-    // makes a same-node session without a parent link messageable by it.
+    // makes a same-node session without a parent link messageable by it. The
+    // run is the calling Agent's own, so its session is the Agent's row.
+    let mut worker_session = caused.clone();
+    worker_session.session_id = "correlated-worker".to_owned();
+    worker_session.agent_did = caller.agent_did.clone();
+    worker_session.requester_did = Some(caller.agent_did.clone());
+    worker_session.caused_by_parent_request_doc_id = None;
+    materialize_session(&owner(&message), &worker_session).await;
+    crate::session::recover_agent_session_relationships_with_access(
+        &owner(&message),
+        &caller.node_did,
+        &identity::Did::new(caller.agent_did.as_str()).unwrap(),
+    )
+    .await
+    .unwrap();
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "trigger-worker-request",
         identity.did(),
         caller.agent_did.as_str(),
-        identity.did(),
+        caller.agent_did.as_str(),
         "correlated-worker",
         "spawn",
         "interactive",
@@ -1272,10 +1312,14 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
     create.caused_by_trigger_id = Some("shard-assignment".to_owned());
     create.caused_by_trigger_kind = Some("schedule".to_owned());
     create.caused_by_correlation = Some("R3a".to_owned());
-    let mut worker = crate::tools::call::lifecycle::admission_fixture::claimed_signed_request_create(
-        &node, &identity, create,
-    )
-    .await;
+    let mut worker =
+        crate::tools::call::lifecycle::admission_fixture::claimed_signed_request_create_as_agent(
+            &node,
+            &identity,
+            caller_agent.as_ref(),
+            create,
+        )
+        .await;
     let filtered = agent_session_list(&node, &caller, &tools, &serde_json::from_value(serde_json::json!({"filter": {"caused_by_trigger_id": "shard-assignment", "caused_by_correlation": "R3a", "status": "busy"}})).unwrap()).await.unwrap();
     assert_eq!(filtered["sessions"].as_array().unwrap().len(), 1);
     assert_eq!(filtered["sessions"][0]["session_id"], "correlated-worker");
@@ -1697,7 +1741,7 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
         let history = caller_access.execute(&format!(r#"{{ _commits(docID: "{doc}", filter: {{fieldName: {{_eq: "_C"}}}}, order: {{height: ASC}}, limit: 1) {{cid}} }}"#)).await.unwrap();
         let cid = history["data"]["_commits"][0]["cid"].as_str().unwrap();
         assert_eq!(
-            node.verified_block_signer_did(cid).await.unwrap(),
+            signer_as_actor(&node, &caller.agent_did, cid).await,
             caller.agent_did
         );
     }

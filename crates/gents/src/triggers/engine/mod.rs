@@ -204,9 +204,13 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         prepared_ids: Option<(&str, &str)>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>;
 
+    /// Recovers an admitted fire as the Agent of the fire's Task. The fire's
+    /// receipt and request are that Agent's rows, so recovery does not depend
+    /// on the trigger still being configured in the current snapshot.
     fn recover_admitted_fire(
         &self,
         _identity: &gents_protocol::trigger_delivery::FireIdentity,
+        _task: &crate::runtime::snapshot::ResolvedTask,
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = anyhow::Result<Option<String>>> + Send + '_>,
     > {
@@ -364,7 +368,7 @@ impl TriggerEngine {
             None
         };
         if let Some(identity) = &delivery_identity {
-            match self.materializer.recover_admitted_fire(identity).await {
+            match self.materializer.recover_admitted_fire(identity, &intent.task).await {
                 Ok(Some(request_id)) => {
                     let result = FireResult::Duplicate { request_id };
                     (intent.on_result)(result.clone());
@@ -780,7 +784,10 @@ impl TriggerEngine {
         let guard = lock.lock().await;
 
         if let Some(identity) = &delivery_identity {
-            let recovered = self.materializer.recover_admitted_fire(identity).await;
+            let recovered = self
+                .materializer
+                .recover_admitted_fire(identity, &intent.task)
+                .await;
             let result = match recovered {
                 Ok(Some(request_id)) => Some(FireResult::Duplicate { request_id }),
                 Ok(None) => None,

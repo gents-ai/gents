@@ -114,8 +114,6 @@ pub use rows::SessionOwnerRow;
 pub use sessions::close_session;
 pub use sessions::load_agent_session_owner_in_txn;
 pub use sessions::load_agent_session_row_in_txn;
-#[cfg(test)]
-pub(crate) use sessions::ensure_session_with_agent_did_and_requester_did;
 pub(crate) use sessions::{
     ensure_reserved_session_in_txn, ensure_session_in_txn, finalize_agent_new_session_in_txn,
     finalize_plugin_job_session_in_txn, finalize_reserved_runtime_session_in_txn,

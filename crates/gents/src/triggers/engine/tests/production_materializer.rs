@@ -1,33 +1,5 @@
 use super::*;
 
-async fn signed_materializer_agent(
-    name: &str,
-) -> (
-    crate::support::TestDb,
-    crate::KeyIdentity,
-    crate::ConfigAccess,
-    Arc<ResolvedAgent>,
-) {
-    let (db, user, access, binding) = crate::test_support::signed_test_node(name).await;
-    let template = tokio::task::spawn_blocking(|| integration_test_agent("materializer-template"))
-        .await
-        .expect("build test agent template");
-    let identity =
-        crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
-            .expect("derive the fixture's held Agent from its runtime key");
-    let mut agent = (*template).clone();
-    agent.agent_did = binding.agent_did.clone();
-    agent.agent_identity = identity;
-    agent.node = Arc::new(crate::store::identity::RuntimeNode {
-        node_did: db.node_identity.did().to_owned(),
-        identity: db.node_identity.clone(),
-        default_agent_did: binding.agent_did,
-        display_name: None,
-        enabled: true,
-    });
-    (db, user, access, Arc::new(agent))
-}
-
 /// A materializer whose snapshot runs `trigger_ids` as event triggers of the
 /// signed fixture Agent, with that Agent's managed access for its own rows.
 async fn signed_trigger_materializer(
@@ -79,9 +51,74 @@ async fn signed_trigger_materializer(
     (db, agent, access, materializer, snapshot)
 }
 
+/// Deletes the session children matching `filter` as the session's
+/// administrator, the operator User, and returns how many were removed.
+async fn admin_delete(client: &crate::ConfigAccess, collection: &str, filter: String) -> usize {
+    client
+        .transact_write("test.admin_delete", |txn| {
+            let filter = filter.clone();
+            Box::pin(async move {
+                let rows = txn
+                    .execute(&format!("{{ {collection}(filter: {{{filter}}}) {{ _docID }} }}"))
+                    .await?;
+                let docs: Vec<String> = rows["data"][collection]
+                    .as_array()
+                    .ok_or_else(|| anyhow::anyhow!("{collection} rows"))?
+                    .iter()
+                    .filter_map(|row| row["_docID"].as_str().map(str::to_owned))
+                    .collect();
+                for doc in &docs {
+                    if collection == "AgentSession" {
+                        txn.delete_session_for_native_fixture(doc).await?;
+                    } else {
+                        txn.delete_session_child_for_native_fixture(collection, doc)
+                            .await?;
+                    }
+                }
+                Ok::<_, anyhow::Error>(docs.len())
+            })
+        })
+        .await
+        .unwrap()
+}
+
+/// Creates a TriggerFire as the Agent under its delivered session, as
+/// delivery binds a receipt, so the session's administrator can remove it.
+async fn create_session_fire(
+    access: &crate::ConfigAccess,
+    agent_did: &str,
+    node_did: &str,
+    session_id: &str,
+    mutation: String,
+) {
+    access
+        .transact_write("test.session_fire", |txn| {
+            let mutation = mutation.clone();
+            Box::pin(async move {
+                let created = txn.execute(&mutation).await?;
+                let doc = crate::store::graphql::created_doc_id(&created, "TriggerFire")?;
+                let session =
+                    crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("fire session is visible to its Agent"))?;
+                crate::triggers::engine::durable::stage_session_child_relationships(
+                    txn,
+                    "TriggerFire",
+                    &doc,
+                    &session.doc_id,
+                    agent_did,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
-    let (db, _user, _client_access, agent) =
+    let (db, _user, client_access, agent) =
         signed_materializer_agent("task-opening-interrupt").await;
     let node = db.node.clone();
     let snapshot = snapshot_with_agent_and_schedules(agent.clone(), RapidHashMap::new());
@@ -254,10 +291,10 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
     .await
     .unwrap()
     .is_some());
-    access.write("test.ambiguous_fire", &format!(
+    create_session_fire(&access, &agent.agent_did, &owner, &scope.session_id, format!(
         r#"mutation {{create_TriggerFire(input: {{fire_key: "duplicate-fire", owner_did: "{}", request_id: "{}", session_id: "{}", trigger_id: "authority-trigger", task_id: "authority-task"}}) {{_docID}}}}"#,
         escape_graphql_string(&owner), escape_graphql_string(&request.request_id), escape_graphql_string(&scope.session_id)
-    )).await.unwrap();
+    )).await;
     assert!(
         !crate::session::origin::task_triggered_opening(&access, &scope)
             .await
@@ -279,35 +316,43 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         .unwrap();
     assert_eq!(entry["can_interrupt"], false);
 
-    access.write("test.remove_fires", &format!(
-        r#"mutation {{delete_TriggerFire(filter: {{owner_did: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}}}) {{_docID}}}}"#,
-        escape_graphql_string(&owner), escape_graphql_string(&request.request_id)
-    )).await.unwrap();
-    access.write("test.wrong_trigger_fire", &format!(
+    // Receipts under a session are removed by its administrator, the User.
+    assert_eq!(
+        admin_delete(&client_access, "TriggerFire", format!(
+            r#"owner_did: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}"#,
+            escape_graphql_string(&owner), escape_graphql_string(&request.request_id)
+        )).await,
+        2
+    );
+    create_session_fire(&access, &agent.agent_did, &owner, &scope.session_id, format!(
         r#"mutation {{create_TriggerFire(input: {{fire_key: "wrong-trigger-fire", owner_did: "{}", request_id: "{}", session_id: "{}", trigger_id: "other-trigger", task_id: "authority-task"}}) {{_docID}}}}"#,
         escape_graphql_string(&owner), escape_graphql_string(&request.request_id), escape_graphql_string(&scope.session_id)
-    )).await.unwrap();
+    )).await;
     assert!(
         !crate::session::origin::task_triggered_opening(&access, &scope)
             .await
             .unwrap()
     );
-    access.write("test.remove_wrong_fire",
-        r#"mutation {delete_TriggerFire(filter: {fire_key: {_eq: "wrong-trigger-fire"}}) {_docID}}"#
-    ).await.unwrap();
-    access.write("test.replace_fire_task", &format!(
+    assert_eq!(
+        admin_delete(&client_access, "TriggerFire", r#"fire_key: {_eq: "wrong-trigger-fire"}"#.to_owned()).await,
+        1
+    );
+    create_session_fire(&access, &agent.agent_did, &owner, &scope.session_id, format!(
         r#"mutation {{create_TriggerFire(input: {{fire_key: "{}", owner_did: "{}", request_id: "{}", session_id: "{}", trigger_id: "authority-trigger", task_id: "different-task", source_collection: "Schedule", source_doc_id: "authority-occurrence"}}) {{_docID}}}}"#,
         escape_graphql_string(&prepared.receipt.fire_key), escape_graphql_string(&owner), escape_graphql_string(&request.request_id), escape_graphql_string(&scope.session_id)
-    )).await.unwrap();
+    )).await;
     assert!(
         !crate::session::origin::task_triggered_opening(&access, &scope)
             .await
             .unwrap()
     );
-    access.write("test.remove_task_session", &format!(
-        r#"mutation {{delete_AgentSession(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{_docID}}}}"#,
-        escape_graphql_string(&owner), escape_graphql_string(&scope.session_id)
-    )).await.unwrap();
+    assert_eq!(
+        admin_delete(&client_access, "AgentSession", format!(
+            r#"node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}"#,
+            escape_graphql_string(&owner), escape_graphql_string(&scope.session_id)
+        )).await,
+        1
+    );
     let original_request = request.clone();
     access.transact_write(
         "test.wrong_requester_session",
@@ -405,13 +450,13 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
     ] {
         let session = test_session.to_owned();
         let node_did = owner.clone();
-        crate::store::config_client::ConfigAccess::transact_local_write(
-            &node,
-            None,
+        let agent_did = agent.agent_did.clone();
+        access.transact_write(
             "test.bad_opening_session",
             move |txn| {
                 let session = session.clone();
                 let node_did = node_did.clone();
+                let agent_did = agent_did.clone();
                 let opening = opening.clone();
                 let requester = requester.clone();
                 Box::pin(async move {
@@ -419,7 +464,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
                         txn,
                         &session,
                         &node_did,
-                        spy_test_agent().agent_did.as_str(),
+                        &agent_did,
                         requester.as_deref(),
                         None,
                         Some(gents_protocol::session::SessionProvenance {
@@ -455,7 +500,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
 
 #[tokio::test]
 async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire() {
-    let (db, _user, _client_access, behavior) =
+    let (db, _user, client_access, behavior) =
         signed_materializer_agent("goal-task-atomic-idempotent").await;
     let node_did = behavior.node_did().to_string();
     let agent_did = behavior.agent_did.clone();
@@ -712,15 +757,19 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
     );
 
     let escaped_session = escape_graphql_string(&identity.session_id);
-    let cleared = access.transact_write("test.clear_task_goal", |txn| {
-        let escaped_session = &escaped_session;
-        Box::pin(async move {
-            let response = txn.execute(&format!(r#"mutation {{ delete_Goal(filter: {{session_id: {{_eq: "{escaped_session}"}}}}) {{_docID}} }}"#)).await?;
-            txn.execute(&format!(r#"mutation {{ delete_GoalCreationClaim(filter: {{session_id: {{_eq: "{escaped_session}"}}}}) {{_docID}} }}"#)).await?;
-            Ok::<_, anyhow::Error>(response["data"]["delete_Goal"].as_array().map_or(0, Vec::len))
-        })
-    }).await.expect("clear Goal and creation claim as their Agent owner");
-    assert_eq!(cleared, 1);
+    // Session children are removed by the session's administrator, the User.
+    let session_filter = format!(r#"session_id: {{_eq: "{escaped_session}"}}"#);
+    assert_eq!(admin_delete(&client_access, "Goal", session_filter.clone()).await, 1);
+    assert_eq!(
+        admin_delete(&client_access, "GoalCreationClaim", session_filter).await,
+        1
+    );
+    let remaining = access
+        .execute(&format!(r#"{{ Goal(filter: {{session_id: {{_eq: "{escaped_session}"}}}}) {{_docID}} GoalCreationClaim(filter: {{session_id: {{_eq: "{escaped_session}"}}}}) {{_docID}} }}"#))
+        .await
+        .unwrap();
+    assert!(remaining["data"]["Goal"].as_array().unwrap().is_empty());
+    assert!(remaining["data"]["GoalCreationClaim"].as_array().unwrap().is_empty());
     assert_eq!(
         materializer
             .recover_goal_task_fire(&task, fire_key)
@@ -2395,9 +2444,10 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
 
 #[tokio::test]
 async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let behavior = spy_test_agent();
+    let (db, _user, _client_access, behavior) =
+        signed_materializer_agent("scheduled-target-admission").await;
+    let node = db.node.clone();
+    let access = agent_access(&node, &behavior);
     let owner = behavior.node_did().to_string();
     let held_agent = behavior.agent_did.clone();
     for (target, agent, closed) in [
@@ -2406,26 +2456,38 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
         ("closed", held_agent.as_str(), true),
         ("foreign-owner", held_agent.as_str(), false),
     ] {
-        crate::session::ensure_session_with_agent_did_and_requester_did(
-            &node,
-            target,
-            if target == "foreign-owner" {
-                "did:key:foreign"
-            } else {
-                &owner
-            },
-            agent,
-            Some(&owner),
-        )
-        .await
-        .unwrap();
+        let node_did = if target == "foreign-owner" {
+            "did:key:foreign"
+        } else {
+            owner.as_str()
+        };
+        access
+            .transact_write("test.scheduled_target_session", |txn| {
+                let owner = &owner;
+                Box::pin(async move {
+                    crate::session::ensure_session_in_txn(
+                        txn,
+                        target,
+                        node_did,
+                        agent,
+                        Some(owner.as_str()),
+                        None,
+                        None,
+                        &chrono::Utc::now().to_rfc3339(),
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
         if closed {
-            crate::session::close_session(&node, &owner, target, Some(&owner))
+            crate::session::close_session_with_access(&access, &owner, target, Some(&owner))
                 .await
                 .unwrap();
         }
     }
-    let task = resolved_task("wake {{ session.session_id }}");
+    let mut task = resolved_task("wake {{ session.session_id }}");
+    task.agent_did = held_agent.clone();
     for target in [
         "captain",
         "wrong-agent",
@@ -2483,18 +2545,15 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
                 engine.dispatch(queued).await,
                 FireResult::Fired { .. }
             ));
-            let response = crate::store::graphql::graphql_with_transaction_retry(
-                &node,
-                &format!(
+            let response = access
+                .execute(&format!(
                     "{{ AgentRequest {{ {} }} }}",
                     crate::request::watcher::AGENT_REQUEST_FIELDS
-                ),
-                "test.scheduled_claim_rows",
-            )
-            .await
-            .unwrap();
+                ))
+                .await
+                .unwrap();
             let rows: Vec<gents_protocol::row::AgentRequestRow> =
-                serde_json::from_value(response.data.unwrap()["AgentRequest"].clone()).unwrap();
+                serde_json::from_value(response["data"]["AgentRequest"].clone()).unwrap();
             let cases = gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap();
             let mut claim_owners = Vec::new();
             for (request_id, case_name) in [
@@ -2509,13 +2568,16 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
                 let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();
                 let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
                     node.clone(),
-                    spy_test_agent().agent_did.as_str(),
+                    &held_agent,
                     &owner,
                     request,
                     60,
                     crate::request::lifecycle::ExecutionOrigin::Scheduled,
                     "test-backend",
                 );
+                lifecycle
+                    .bind_managed_agent(behavior.agent_identity.as_ref())
+                    .unwrap();
                 let now = chrono::Utc::now();
                 let claimed = lifecycle
                     .claim_pending_durable_with_inputs(
@@ -2560,10 +2622,9 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
                 "{first:?}"
             );
         }
-        let response = node.execute(&format!(r#"{{ TriggerFire(filter: {{fire_key: {{_eq: "{}"}}}}) {{ request_id queued_serial }} AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ session_id caused_by_trigger_kind content }} }}"#,
-            escape_graphql_string(&identity.fire_key()), escape_graphql_string(&identity.request_id()))).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        let data = response.data.unwrap();
+        let response = access.execute(&format!(r#"{{ TriggerFire(filter: {{fire_key: {{_eq: "{}"}}}}) {{ request_id queued_serial }} AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ session_id caused_by_trigger_kind content }} }}"#,
+            escape_graphql_string(&identity.fire_key()), escape_graphql_string(&identity.request_id()))).await.unwrap();
+        let data = &response["data"];
         let expected = usize::from(target == "captain");
         assert_eq!(data["TriggerFire"].as_array().unwrap().len(), expected);
         assert_eq!(data["AgentRequest"].as_array().unwrap().len(), expected);

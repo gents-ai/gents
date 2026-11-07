@@ -219,29 +219,50 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
 
 #[tokio::test]
 async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_work() {
-    for case in contract()["latest_admissions"].as_array().unwrap() {
+    for (case_index, case) in contract()["latest_admissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
         for pending_state in [
             gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
             gents_protocol::request_lifecycle::RequestLifecycleState::WorkspaceBindingPending,
         ] {
-            let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-            ensure_runtime_schemas(&node).await.unwrap();
-            let behavior = spy_test_agent();
+            let (db, _user, _client, behavior) = signed_materializer_agent(&format!(
+                "latest-delivery-{case_index}-{}",
+                pending_state.as_str()
+            ))
+            .await;
+            let node = db.node.clone();
+            let access = agent_access(&node, &behavior);
             let owner = behavior.node_did().to_owned();
+            let agent_did = behavior.agent_did.clone();
             let pre: State = decode(&case["pre"]);
             let next: Fire = decode(&case["fire"]);
             let allowed = case["destination_allowed"].as_bool().unwrap();
-            let task = resolved_task("replace work");
+            let mut task = resolved_task("replace work");
+            task.agent_did = agent_did.clone();
             if allowed {
-                crate::session::ensure_session_with_agent_did_and_requester_did(
-                    &node,
-                    &next.session,
-                    &owner,
-                    spy_test_agent().agent_did.as_str(),
-                    Some(&owner),
-                )
-                .await
-                .unwrap();
+                access
+                    .transact_write("test.latest_delivery_session", |txn| {
+                        let (session, owner, agent_did) = (&next.session, &owner, &agent_did);
+                        Box::pin(async move {
+                            crate::session::ensure_session_in_txn(
+                                txn,
+                                session,
+                                owner,
+                                agent_did,
+                                Some(owner.as_str()),
+                                None,
+                                None,
+                                &chrono::Utc::now().to_rfc3339(),
+                            )
+                            .await
+                        })
+                    })
+                    .await
+                    .unwrap();
             }
             for (index, request) in pre.requests.iter().enumerate() {
                 let mut fire = receipt(&request.fire, index);
@@ -249,10 +270,11 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
                 fire.fire_key = fire.identity.fire_key();
                 fire.request_id = fire.identity.request_id();
                 fire.task_id = task.task_id.clone();
-                crate::store::config_client::ConfigAccess::transact_local_write(
-                &node, None, "test.seed_latest_delivery", |txn| {
+                access.transact_write(
+                "test.seed_latest_delivery", |txn| {
                     let fire = &fire;
                     let owner = &owner;
+                    let agent_did = &agent_did;
                     Box::pin(async move {
                         durable::stage_fire_receipt(txn, fire).await?;
                         txn.execute_with_variables(
@@ -260,7 +282,7 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
                             &serde_json::json!({"input": {
                                 "request_id": fire.request_id, "node_did": owner,
                                 "requester_did": owner, "session_id": fire.session_id,
-                                "agent_did": spy_test_agent().agent_did.clone(), "purpose": "normal", "content": "prior work",
+                                "agent_did": agent_did, "purpose": "normal", "content": "prior work",
                                 "lifecycle_state": pending_state.as_str(), "caused_by_trigger_id": fire.identity.trigger_id,
                                 "caused_by_trigger_kind": "schedule", "created_at": fire.created_at
                             }}),
@@ -306,15 +328,12 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
                 allowed,
                 "{case}: {result:?}"
             );
-            let response = crate::store::graphql::graphql_with_transaction_retry(
-                &node,
-                "{ TriggerFire { fire_key } AgentRequest { request_id lifecycle_state } }",
-                "test.latest_delivery_state",
-            )
-            .await
-            .unwrap();
+            let response = access
+                .execute("{ TriggerFire { fire_key } AgentRequest { request_id lifecycle_state } }")
+                .await
+                .unwrap();
             let post: State = decode(&case["post"]);
-            let data = response.data.unwrap();
+            let data = &response["data"];
             assert_eq!(
                 data["TriggerFire"].as_array().unwrap().len(),
                 post.receipts.len(),

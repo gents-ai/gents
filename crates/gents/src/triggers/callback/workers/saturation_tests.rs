@@ -81,22 +81,34 @@ async fn wait_for_invocations(
     .expect("callback invocations did not reach the expected durable state")
 }
 
-async fn wait_for_arrival_checkpoint(access: &ConfigAccess, updates: &mut events::Subscription) {
+async fn arrival_head(access: &ConfigAccess) -> Value {
+    let response = access
+        .execute("{ _documentArrivals(collection: \"SaturationInput\", after: \"0\", limit: 1) { head } }")
+        .await
+        .unwrap();
+    response["data"]["_documentArrivals"]["head"].clone()
+}
+
+/// Waits until source delivery has checkpointed exactly through `through`.
+/// A callback arrival is a checkpoint receipt only once a worker has claimed
+/// it (`visibleCallbackClaim` in the Lean model), so the cursor stops before
+/// an invocation that capacity left unclaimed.
+async fn wait_for_arrival_checkpoint(
+    access: &ConfigAccess,
+    updates: &mut events::Subscription,
+    through: &Value,
+) {
     tokio::time::timeout(WAIT, async {
         loop {
-            let response = access.execute(
-                "{ _documentArrivals(collection: \"SaturationInput\", after: \"0\", limit: 1) { head }
-                    EventSourceCursor { after } }",
-            ).await.unwrap();
-            let data = &response["data"];
-            let cursors = data["EventSourceCursor"].as_array().unwrap();
+            let response = access.execute("{ EventSourceCursor { after } }").await.unwrap();
+            let cursors = response["data"]["EventSourceCursor"].as_array().unwrap();
             assert_eq!(cursors.len(), 1);
-            if cursors[0]["after"] == data["_documentArrivals"]["head"] {
+            if cursors[0]["after"] == *through {
                 return;
             }
             updates.recv().await.expect("database update stream stays open");
         }
-    }).await.expect("source delivery must checkpoint after the capacity refusal");
+    }).await.expect("source delivery must checkpoint the claimed prefix after the capacity refusal");
 }
 
 fn transition(name: &str) -> &'static Value {
@@ -305,6 +317,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
         let stale_running = snapshot(&node, &initial[0]).await;
 
         let mut updates = node.subscribe_updates();
+        let claimed_head = arrival_head(&access).await;
         create_inputs(
             &access,
             PLUGIN_CALLBACK_CONCURRENCY..PLUGIN_CALLBACK_CONCURRENCY + 1,
@@ -320,7 +333,12 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
             .unwrap();
         assert_phase(pending, &claim["pre"], &claim["pre"]["attempts"]);
         let stale_pending = snapshot(&node, pending).await;
-        wait_for_arrival_checkpoint(&access, &mut updates).await;
+        wait_for_arrival_checkpoint(&access, &mut updates, &claimed_head).await;
+        assert_ne!(
+            arrival_head(&access).await,
+            claimed_head,
+            "the unclaimed arrival stays beyond the checkpoint"
+        );
         assert_eq!(
             snapshot(&node, pending).await.lifecycle_state,
             claim["pre"]["state"]
