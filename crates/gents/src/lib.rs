@@ -342,6 +342,42 @@ pub(crate) mod test_support {
             .unwrap();
     }
 
+    /// Replaces one field of the fixture Node through its configuring User's
+    /// signed desired-state owner; Node is configuration the User signs.
+    pub(crate) async fn set_test_node_field_as(
+        access: &crate::store::config_client::ConfigAccess,
+        runtime_did: &str,
+        field: &str,
+        value: serde_json::Value,
+    ) {
+        access
+            .transact_write("test.set_node_field", |txn| {
+                let value = value.clone();
+                Box::pin(async move {
+                    let (_, mut node) =
+                        crate::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            crate::Collection::Node,
+                            runtime_did,
+                            runtime_did,
+                        )
+                        .await?
+                        .expect("fixture user must own one Node for its runtime");
+                    node[field] = value;
+                    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+                        crate::store::config_client::DesiredStateApplyDocument {
+                            collection: crate::Collection::Node,
+                            add: node.clone(),
+                            update: node,
+                        },
+                    ])?;
+                    crate::store::config_client::apply_desired_state_plan(txn, &plan).await
+                })
+            })
+            .await
+            .unwrap();
+    }
+
     pub(crate) async fn ensure_test_default_agent(
         node: &std::sync::Arc<defra_node::Node>,
         owner: &str,
