@@ -1,13 +1,9 @@
 use gents::request::lifecycle::ClaimOutcome;
 use gents::request::watcher::{AgentRequest, DefraWatcher};
-use gents::RequestLifecycle;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::support::{
-    create_request, create_request_with_valid_until, first_row, set_interrupt_requested_at,
-    test_db, AGENT_NAME, NODE_DID,
-};
+use crate::support::{first_row, test_db, AGENT_NAME, NODE_DID};
 
 type StatusRow = AgentRequestRow;
 

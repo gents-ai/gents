@@ -72,7 +72,7 @@ async fn writer_recovers_complete_large_task_contract_in_provider_input() {
     )
     .await;
     configure_agent_tools(
-        &db.node,
+        &db,
         &did,
         behavior,
         None,

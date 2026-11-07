@@ -100,7 +100,7 @@ async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Re
         .await?;
     configure(&access, &db.node, &owner, &endpoints).await?;
     support::fixtures::configure_agent_tools(
-        &db.node, &owner, "delivery-lead",
+        &db, &owner, "delivery-lead",
         Some("Follow the current request and Goal objective. Initial Task deliveries and inbox replies must not call update_goal. On an explicit durable Goal controller continuation, perform the objective and call update_goal complete when instructed. Do not create another Goal or use unrelated tools.".into()),
         gents::documents::Tools {
             tools_id: "delivery-lead:tools".into(), node_did: owner.clone(),

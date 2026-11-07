@@ -298,8 +298,7 @@ pub async fn prepare_accepted_turn_with_signer(
         .expect("start accepted-turn backend");
     for agent_did in spec.configured_agent_dids {
         bind_agent_backend(
-            &db.node,
-            identity.did(),
+            &db,
             agent_did,
             spec.backend_id,
             backend.endpoint(),

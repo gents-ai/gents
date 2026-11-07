@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use gents::request::lifecycle::{ClaimOutcome, ExecutionOrigin};
 use gents::store::graphql::escape_graphql_string;
-use gents::{interrupt_request, Gents, NodeIdentity, RequestLifecycle, ToolCeiling};
+use gents::{interrupt_request, Gents, NodeIdentity, ToolCeiling};
 use gents_protocol::output::{OutputOutcome, SourceClose, TerminalOutput};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -16,10 +16,7 @@ use crate::support::interrupt::{
 };
 use crate::support::snapshots::fetch_request_snapshot;
 use crate::support::streaming_backend::{MockStreamingBackend, StreamScript};
-use crate::support::{
-    build_request, create_request_with_valid_until, create_retry_request, first_row, test_db,
-    RetryRequestSpec, AGENT_NAME, BACKEND_ID, DEADLINE_SECS, NODE_DID,
-};
+use crate::support::{first_row, test_db, BACKEND_ID, DEADLINE_SECS, NODE_DID};
 
 const STREAM_MODEL: &str = "default";
 const STREAM_BACKEND_ID: &str = "backend-stream";
@@ -434,7 +431,7 @@ async fn boot_streaming_agent(
 ) -> BootedAgent {
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity(test_name));
     bind_streaming_backend(
-        &db.node,
+        db,
         identity.did(),
         STREAM_BACKEND_ID,
         endpoint,
@@ -467,7 +464,7 @@ async fn boot_streaming_agent(
 }
 
 async fn bind_streaming_backend(
-    node: &Arc<gents::defra_node::Node>,
+    db: &crate::support::TestDb,
     node_did: &str,
     backend_id: &str,
     endpoint: &str,
@@ -476,8 +473,7 @@ async fn bind_streaming_backend(
 ) {
     for agent_did in agent_dids {
         crate::support::fixtures::bind_agent_backend(
-            node,
-            node_did,
+            db,
             agent_did,
             backend_id,
             endpoint,
@@ -498,7 +494,7 @@ async fn bind_streaming_backend(
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
+    let response = db.node.execute(&mutation).await;
     assert!(
         !response.has_errors(),
         "set streaming backend concurrency failed: {:?}",

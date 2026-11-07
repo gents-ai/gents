@@ -121,8 +121,7 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
         ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
     );
     bind_agent_backend(
-        &db.node,
-        did,
+        &db,
         AGENT,
         target.backend_id(),
         target.endpoint(),

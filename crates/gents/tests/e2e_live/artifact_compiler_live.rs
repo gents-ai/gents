@@ -51,7 +51,7 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     let did_q = escape_graphql_string(&did);
     let endpoint_q = escape_graphql_string(ENDPOINT);
     let model_q = escape_graphql_string(MODEL);
-    bind_default_agent_backend(&db.node, &did, "artifact-live-backend", ENDPOINT).await;
+    bind_default_agent_backend(&db, "artifact-live-backend", ENDPOINT).await;
     let bootstrap = gents::ensure_node(&db.node, &did).await.unwrap();
     let agent_did = bootstrap
         .default_agent_did
@@ -86,7 +86,7 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     gents::upsert_agent(&db.node, &agent).await.unwrap();
 
     configure_agent_tools(
-        &db.node,
+        &db,
         &did,
         &agent_did,
         None,

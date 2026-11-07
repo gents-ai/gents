@@ -1,14 +1,11 @@
-use std::sync::Arc;
-
 use anyhow::Result;
-use gents::defra_node::Node as EmbeddedNode;
 use gents::eval::runner::embedded::EmbeddedHome;
 use gents::store::graphql::escape_graphql_string;
-use gents::{ensure_runtime_schemas, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
+use gents::{DocumentRuntimeOptions, Gents, ToolCeiling};
 use serde_json::Value;
 
 use crate::support::fixtures::{
-    bind_default_agent_backend, test_agent, test_agent_with_identity, test_identity, test_node_for,
+    bind_default_agent_backend, test_agent, test_agent_with_identity, test_node_for,
 };
 use crate::support::mock_endpoint::MockModelEndpoint;
 
@@ -51,23 +48,12 @@ async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> 
     }
 
     let _env_guard = ENV_VAR_LOCK.lock().await;
-    let identity = Arc::new(test_identity("startup-probe-backend-auth"));
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await?,
-    );
-    ensure_runtime_schemas(node.as_ref()).await?;
+    let db = crate::support::test_db("startup-probe-backend-auth").await;
+    let identity = db.node_identity.clone();
+    let node = db.node.clone();
     let mock_endpoint =
         MockModelEndpoint::start_with_required_bearer("default", Some("backend-key"))?;
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
-        "backend-startup-auth",
-        mock_endpoint.endpoint(),
-    )
-    .await;
+    bind_default_agent_backend(&db, "backend-startup-auth", mock_endpoint.endpoint()).await;
 
     let escaped_backend_id = escape_graphql_string("backend-startup-auth");
     let mutation = format!(

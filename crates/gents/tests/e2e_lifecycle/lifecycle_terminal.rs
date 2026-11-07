@@ -1,8 +1,7 @@
 use gents::request::lifecycle::ClaimOutcome;
 use gents::request::lifecycle::RequestTerminalOutcome;
-use gents::RequestLifecycle;
 
-use crate::support::{build_request, create_request, first_row, test_db, AGENT_NAME, NODE_DID};
+use crate::support::{first_row, test_db};
 
 #[tokio::test]
 async fn missing_session_observation_does_not_block_terminal_request() {

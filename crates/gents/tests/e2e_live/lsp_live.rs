@@ -235,7 +235,7 @@ async fn lsp_live_model_uses_rust_analyzer() {
     let (node_did, agent_did) = bind_target(&db.node, identity.as_ref(), &live_target()).await;
 
     configure_agent_tools(
-        &db.node,
+        &db,
         &node_did,
         &agent_did,
         Some(pack_system_prompt()),

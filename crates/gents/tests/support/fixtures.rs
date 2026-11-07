@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use gents::defra_node::Node as EmbeddedNode;
 use gents::{
-    ensure_node, AgentToolSurfaceConfig, BackendProviderKind, KeyIdentity, NodeIdentity,
-    ResolvedAgent, RuntimeNode,
+    AgentToolSurfaceConfig, BackendProviderKind, KeyIdentity, NodeIdentity, ResolvedAgent,
+    RuntimeNode,
 };
 
 pub fn fixture_pack_names() -> Vec<String> {
@@ -362,16 +362,18 @@ pub async fn configure_child_agent(
     .unwrap()
 }
 
+/// Configures an Agent's tools as the Node's retained configuring User.
 pub async fn configure_agent_tools(
-    node: &Arc<EmbeddedNode>,
+    db: &super::TestDb,
     node_did: &str,
     agent_did: &str,
     system_prompt: Option<String>,
     tools: gents::documents::Tools,
     referenced_documents: Vec<(gents::Collection, serde_json::Value)>,
 ) {
+    let user = super::load_managed_fixture_user(db).await;
     configure_agent_tools_as(
-        &gents::ConfigAccess::local(node.clone()),
+        &db.client_access(&user),
         node_did,
         agent_did,
         system_prompt,
@@ -499,13 +501,10 @@ pub fn agent_target(
     }
 }
 
-pub async fn bind_default_agent_backend(
-    node: &Arc<EmbeddedNode>,
-    node_did: &str,
-    backend_id: &str,
-    endpoint: &str,
-) {
-    bind_agent_backend_chain(node, node_did, None, backend_id, endpoint, "default").await;
+/// Binds the Node's default Agent to a backend as the Node's configuring User,
+/// enrolling that User, its Node and a default Agent when the store is fresh.
+pub async fn bind_default_agent_backend(db: &super::TestDb, backend_id: &str, endpoint: &str) {
+    bind_agent_backend_chain(db, None, backend_id, endpoint, "default").await;
 }
 
 pub async fn held_fixture_history(
@@ -635,137 +634,125 @@ pub async fn bind_selected_managed_agent_backend(
     .expect("mark test backend healthy");
 }
 
+/// Binds an installed Agent to a backend as the Node's configuring User and
+/// makes it the Node default.
 pub async fn bind_agent_backend(
-    node: &Arc<EmbeddedNode>,
-    node_did: &str,
+    db: &super::TestDb,
     agent_did: &str,
     backend_id: &str,
     endpoint: &str,
     model_name: &str,
 ) {
-    bind_agent_backend_chain(
-        node,
-        node_did,
-        Some(agent_did),
-        backend_id,
-        endpoint,
-        model_name,
-    )
-    .await;
+    bind_agent_backend_chain(db, Some(agent_did), backend_id, endpoint, model_name).await;
 }
 
 async fn bind_agent_backend_chain(
-    node: &Arc<EmbeddedNode>,
-    node_did: &str,
+    db: &super::TestDb,
     agent_did: Option<&str>,
     backend_id: &str,
     endpoint: &str,
     model_name: &str,
 ) {
-    ensure_node(node, node_did).await.unwrap();
-    let root =
-        gents::store::identity::RegisteredIdentity::from_registered_did(node_did, None).unwrap();
-    let binding = gents::store::identity::provision_agent_identity(&root).unwrap();
-    gents::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "test.bind_behavior_inference",
-        |txn| {
-            let binding = &binding;
-            Box::pin(async move {
-                use gents::store::config_client::{
-                    read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
-                    DesiredStateApplyPlan,
-                };
-                use gents::Collection;
-
-                let (_, mut principal) = read(txn, Collection::Node, node_did, node_did)
-                    .await?
-                    .expect("principal");
-                let agent_did = agent_did
-                    .map(str::to_owned)
-                    .or_else(|| principal["default_agent_did"].as_str().map(str::to_owned))
-                    .unwrap_or_else(|| binding.agent_did.clone());
-
-                let mut behavior = read(txn, Collection::Agent, node_did, &agent_did)
-                    .await?
-                    .map(|(_, value)| value)
-                    .unwrap_or_else(|| {
-                        serde_json::json!({
-                            "node_did": node_did,
-                            "agent_did": binding.agent_did,
-                            "creation_nonce": binding.creation_nonce,
-                            "enabled": true
-                        })
-                    });
-                let agent_did = behavior["agent_did"]
-                    .as_str()
-                    .expect("agent DID")
-                    .to_owned();
-                principal["default_agent_did"] = agent_did.clone().into();
-                let profile_id = behavior["inference_profile_id"]
-                    .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| format!("{agent_did}-inference"));
-                behavior["inference_profile_id"] = profile_id.clone().into();
-                behavior["enabled"] = true.into();
-
-                let mut profile = read(txn, Collection::InferenceProfile, node_did, &profile_id)
-                    .await?
-                    .map(|(_, value)| value)
-                    .unwrap_or_else(|| {
-                        serde_json::json!({
-                            "node_did": node_did,
-                            "profile_id": profile_id
-                        })
-                    });
-                profile["backend_id"] = backend_id.into();
-                profile["model_name"] = model_name.into();
-
-                let mut backend = read(txn, Collection::InferenceBackend, node_did, backend_id)
-                    .await?
-                    .map(|(_, value)| value)
-                    .unwrap_or_else(|| {
-                        serde_json::json!({
-                            "node_did": node_did,
-                            "backend_id": backend_id,
-                            "name": backend_id,
-                            "provider_kind": "OpenAiCompatible",
-                            "openai_wire_api": "chat_completions",
-                            "auth": {"kind": "unauthenticated"}
-                        })
-                    });
-                backend["endpoint"] = endpoint.into();
-                backend["max_concurrent"] = 1.into();
-                backend["max_queue_depth"] = 100.into();
-                backend["enabled"] = true.into();
-
-                let plan = DesiredStateApplyPlan::new(
-                    [
-                        (Collection::Node, principal),
-                        (Collection::InferenceBackend, backend),
-                        (Collection::InferenceProfile, profile),
-                        (Collection::Agent, behavior),
-                    ]
-                    .into_iter()
-                    .map(|(collection, value)| DesiredStateApplyDocument {
-                        collection,
-                        add: value.clone(),
-                        update: value,
+    let owner = db.node_identity.did();
+    let user = super::managed_fixture_user(db).await;
+    let access = db.client_access(&user);
+    let read = |collection: gents::Collection, id: String| {
+        let access = access.clone();
+        async move {
+            access
+                .transact_readonly("test.bind_backend.read", |txn| {
+                    let id = &id;
+                    Box::pin(async move {
+                        gents::store::config_client::read_desired_state_record_in_txn(
+                            txn, collection, owner, id,
+                        )
+                        .await
+                        .map(|record| record.map(|(_, value)| value))
                     })
-                    .collect(),
-                )?;
-                gents::store::config_client::apply_desired_state_plan(txn, &plan).await
+                })
+                .await
+                .expect("read fixture configuration as its User")
+        }
+    };
+    if read(gents::Collection::Node, owner.to_owned())
+        .await
+        .is_none()
+    {
+        let admin = gents::ConfigAccess::local_as(
+            db.node.clone(),
+            identity::Did::new(owner).expect("valid runtime DID"),
+        );
+        gents::store::identity::GrantSet::OperatorUser
+            .grant(
+                &admin,
+                &identity::Did::new(user.did()).expect("valid user DID"),
+            )
+            .await
+            .expect("grant fixture User operator access");
+        let node = serde_json::json!({"node_did": owner});
+        let plan = gents::store::config_client::DesiredStateApplyPlan::new(vec![
+            gents::store::config_client::DesiredStateApplyDocument {
+                collection: gents::Collection::Node,
+                add: node.clone(),
+                update: node,
+            },
+        ])
+        .expect("render fixture Node");
+        access
+            .transact_write("test.bind_backend.node", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    gents::store::config_client::apply_desired_state_plan(txn, plan).await
+                })
             })
+            .await
+            .expect("install fixture Node as its User");
+    }
+    let agent_did = match agent_did {
+        Some(agent_did) => agent_did.to_owned(),
+        None => {
+            let node = read(gents::Collection::Node, owner.to_owned())
+                .await
+                .expect("fixture Node");
+            match node["default_agent_did"]
+                .as_str()
+                .filter(|did| !did.is_empty())
+            {
+                Some(agent_did) => agent_did.to_owned(),
+                None => {
+                    super::install_managed_agent(db, &access, &user, "Default fixture agent")
+                        .await
+                        .1
+                        .agent_did
+                }
+            }
+        }
+    };
+    let fixture = super::ManagedAgentFixture {
+        agent: gents::store::identity::resolve_agent_identity(
+            db.node_identity.as_ref(),
+            &gents_protocol::agent_identity::AgentIdentityBinding {
+                agent_did: agent_did.clone(),
+                creation_nonce: read(gents::Collection::Agent, agent_did.clone())
+                    .await
+                    .expect("fixture Agent is installed by its User")["creation_nonce"]
+                    .as_str()
+                    .expect("fixture Agent creation nonce")
+                    .to_owned(),
+            },
+        )
+        .expect("derive fixture Agent"),
+        binding: gents_protocol::agent_identity::AgentIdentityBinding {
+            agent_did: agent_did.clone(),
+            creation_nonce: String::new(),
         },
+        user,
+        access,
+    };
+    bind_selected_managed_agent_backend(
+        db, &fixture, &agent_did, true, backend_id, endpoint, model_name,
     )
-    .await
-    .unwrap();
-    gents::inference::backends::registry::set_backend_probe_status(
-        node, node_did, backend_id, "healthy",
-    )
-    .await
-    .unwrap();
+    .await;
 }
 
 /// The session's working Agent as its managed signer, derived by the runtime

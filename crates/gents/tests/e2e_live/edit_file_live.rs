@@ -27,7 +27,7 @@ async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
     let (node_did, agent_did) = bind_target(&db.node, identity.as_ref(), &target).await;
 
     configure_agent_tools(
-        &db.node,
+        &db,
         &node_did,
         &agent_did,
         None,
