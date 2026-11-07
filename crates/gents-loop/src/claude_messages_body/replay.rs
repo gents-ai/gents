@@ -16,6 +16,7 @@ use crate::provider_input::replay_frontier::{
 pub enum ReplayOrigin {
     ClaudeSubscription,
     AcceptedProvider,
+    RecoveredProvider,
     Foreign,
     Missing,
     Ambiguous,
@@ -54,6 +55,42 @@ pub struct TaggedAssistantRow {
     pub block_indices: Vec<usize>,
     pub id: Option<String>,
     pub content: Vec<AssistantContent>,
+}
+
+pub fn project_recovered_prefix(
+    rows: &[TaggedAssistantRow],
+    mut resolve: impl FnMut(&ReplayTag) -> Vec<ResolvedReplayEvidence>,
+) -> Vec<TaggedAssistantRow> {
+    rows.iter()
+        .map(|row| {
+            let recovered = row.source.as_ref().is_some_and(|tag| {
+                matches!(resolve(tag).as_slice(),
+            [evidence] if evidence.origin == ReplayOrigin::RecoveredProvider && !evidence.complete)
+            });
+            let valid = row.block_indices.len() == row.content.len()
+                && row.block_indices.windows(2).all(|pair| pair[0] < pair[1]);
+            if !recovered || !valid {
+                return row.clone();
+            }
+            let prefix = row
+                .block_indices
+                .iter()
+                .copied()
+                .enumerate()
+                .take_while(|(expected, actual)| expected == actual)
+                .count();
+            let mut projected = row.clone();
+            projected.content.clear();
+            projected.block_indices.clear();
+            for (index, block) in row.block_indices.iter().copied().zip(&row.content) {
+                if index < prefix || !matches!(block, AssistantContent::Reasoning(_)) {
+                    projected.block_indices.push(index);
+                    projected.content.push(block.clone());
+                }
+            }
+            projected
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -202,14 +239,26 @@ fn row_candidates(row: &TaggedAssistantRow) -> Vec<ReasoningCandidate<'_>> {
 struct TurnGroup<'a> {
     candidates: Vec<ReasoningCandidate<'a>>,
     ordinary: bool,
+    source_prefix: bool,
 }
 
 fn turn_groups(rows: &[TaggedAssistantRow]) -> Vec<TurnGroup<'_>> {
     rows.iter()
         .filter_map(|row| {
             let candidates = row_candidates(row);
+            let prefix = row
+                .block_indices
+                .iter()
+                .copied()
+                .enumerate()
+                .take_while(|(expected, actual)| expected == actual)
+                .count();
+            let source_prefix = candidates
+                .iter()
+                .all(|candidate| candidate.block_index.is_some_and(|index| index < prefix));
             (!candidates.is_empty()).then(|| TurnGroup {
                 candidates,
+                source_prefix,
                 ordinary: row.content.iter().any(|block| match block {
                     AssistantContent::Text(text) => !text.text.is_empty(),
                     AssistantContent::ToolCall(_) => true,
@@ -330,19 +379,28 @@ impl<'a> Selection<'a> {
         let [evidence] = self.evidence(tag) else {
             return false;
         };
-        evidence.origin == ReplayOrigin::AcceptedProvider
+        ((evidence.origin == ReplayOrigin::AcceptedProvider && evidence.complete)
+            || (evidence.origin == ReplayOrigin::RecoveredProvider && !evidence.complete))
             && &evidence.issuer == self.issuer
             && evidence.wire == self.wire
             && evidence.physical_header == header
-            && evidence.complete
             && evidence.reasoning.iter().any(|(block_index, parts)| {
                 *block_index == index && parts.as_slice() == candidate.parts
             })
     }
 
     fn turn_base(&self, group: &TurnGroup<'_>) -> bool {
+        let recovered = group
+            .candidates
+            .first()
+            .and_then(|candidate| candidate.source)
+            .is_some_and(|tag| {
+                matches!(self.evidence(tag), [evidence]
+                if evidence.origin == ReplayOrigin::RecoveredProvider && !evidence.complete)
+            });
         !group.candidates.is_empty()
-            && (self.wire == ReplayWire::Responses || group.ordinary)
+            && (self.wire == ReplayWire::Responses || group.ordinary || recovered)
+            && (!recovered || group.source_prefix)
             && group
                 .candidates
                 .iter()
@@ -482,4 +540,74 @@ pub fn select_replay(
     };
     let kept = total - selection.candidates_before(kept_start);
     strip_first_reasoning(selection.rows, total - kept)
+}
+
+#[cfg(test)]
+mod recovered_prefix_tests {
+    use super::*;
+    use gents_protocol::message::{Reasoning, Text};
+
+    #[test]
+    fn recovered_projection_keeps_prefix_and_ordinary_content() {
+        let tag = ReplayTag {
+            request_doc_id: "request".into(),
+            source: OutputSource::ProviderTurn {
+                scope: "inference.1".parse().unwrap(),
+                turn_index: 0,
+                attempt: 0,
+            },
+        };
+        let thinking = |value: &str| {
+            AssistantContent::Reasoning(Reasoning {
+                id: None,
+                content: vec![ReasoningContent::Text {
+                    text: value.into(),
+                    signature: Some("sig".into()),
+                }],
+            })
+        };
+        let row = TaggedAssistantRow {
+            source: Some(tag),
+            physical_header: Some("header".into()),
+            id: None,
+            block_indices: vec![0, 1, 3, 4],
+            content: vec![
+                thinking("first"),
+                AssistantContent::Text(Text {
+                    text: "before".into(),
+                }),
+                thinking("after-gap"),
+                AssistantContent::Text(Text {
+                    text: "after".into(),
+                }),
+            ],
+        };
+        let evidence = ResolvedReplayEvidence {
+            origin: ReplayOrigin::RecoveredProvider,
+            reasoning: vec![],
+            issuer: ReplayIssuer {
+                family: "claude".into(),
+                endpoint: "messages".into(),
+            },
+            wire: ReplayWire::ClaudeMessages,
+            physical_header: "header".into(),
+            complete: false,
+            captured: None,
+        };
+        let result =
+            project_recovered_prefix(std::slice::from_ref(&row), |_| vec![evidence.clone()]);
+        assert_eq!(result[0].block_indices, [0, 1, 4]);
+        assert_eq!(
+            result[0].content,
+            [
+                row.content[0].clone(),
+                row.content[1].clone(),
+                row.content[3].clone()
+            ]
+        );
+        assert_eq!(
+            project_recovered_prefix(std::slice::from_ref(&row), |_| vec![]),
+            [row]
+        );
+    }
 }

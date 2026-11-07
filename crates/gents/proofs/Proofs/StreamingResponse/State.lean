@@ -96,7 +96,7 @@ def messageScopeResult (observation : Observation)
 def visibleStreams (streams : Streams) : Streams :=
   streams.filter fun stream =>
     stream.1.kind != .encrypted && stream.1.kind != .redacted &&
-      stream.1.kind != .signature
+      stream.1.kind != .signature && stream.1.kind != .reasoningStop
 
 inductive CloseObservation where
   | «open»

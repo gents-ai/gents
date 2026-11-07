@@ -78,6 +78,8 @@ pub enum StreamPayload {
     ReasoningRedacted,
     /// The signature field of a reasoning text part; never rendered.
     ReasoningSignature,
+    /// A provider-confirmed end of one reasoning block; carries no bytes.
+    ReasoningStop,
     /// Native JSON argument text exactly as emitted; it may be incomplete
     /// until sealed and is never rewritten to canonicalize.
     ToolArguments {
@@ -238,8 +240,8 @@ pub enum MessagePublication {
         execution_generation: String,
     },
     RequestRecovery {
-        /// Recovery publishes only retained text from an unheaded provider
-        /// source; never fabricate native metadata.
+        /// Recovery publishes retained text and proven stopped reasoning from
+        /// an unheaded provider source; never fabricate native metadata.
         execution_generation: String,
     },
     /// Tool-owned invocation reply or completion notification. Payload
@@ -286,10 +288,10 @@ pub enum TerminalOutput {
 ///
 /// Recovery of an unheaded provider source is deliberately narrower: close its
 /// committed extent Partial (or reuse its existing Partial closure), then
-/// publish only ordinary Text streams at native part zero as Full
-/// PresentedPayload references, in original block order, with outcome Partial
-/// and native_id and native_request_id None. Never turn argument/reasoning/media bytes into text or
-/// fabricate their missing metadata. If no eligible text stream exists, publish
+/// publish ordinary text and stopped reasoning at native part zero in original
+/// block order, with outcome Partial and native metadata absent. Never turn
+/// argument/reasoning/media bytes into text or fabricate missing metadata. If
+/// no eligible stream exists, publish
 /// no assistant header for that source; retain every omitted stream as
 /// diagnostic data. An existing published header is resolved unchanged, not
 /// replaced by this recovery policy. Provider-input narrowing still applies.

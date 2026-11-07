@@ -56,8 +56,14 @@ pub(super) fn reconstruct_message_with(
             if matches!(
                 message.publication,
                 MessagePublication::RequestRecovery { .. }
-            ) && (!matches!(stream.declaration.payload, StreamPayload::Text)
-                || stream.declaration.part_index != 0)
+            ) && (stream.declaration.part_index != 0
+                || !(matches!(stream.declaration.payload, StreamPayload::Text)
+                    || (matches!(
+                        stream.declaration.payload,
+                        StreamPayload::Reasoning | StreamPayload::ReasoningRedacted
+                    ) && extent
+                        .stopped_reasoning
+                        .contains(&stream.declaration.block_index))))
             {
                 return Err(invalid_extent(reference, stream.text.len() as u64));
             }

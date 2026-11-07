@@ -1,7 +1,7 @@
 use super::*;
 use crate::claude_messages_body::{
-    prepare_replay_checkpoint, replay_stage, select_replay, ReplayCheckpointError, ReplayTag,
-    ResolvedReplayEvidence, TaggedAssistantRow,
+    prepare_replay_checkpoint, project_recovered_prefix, replay_stage, select_replay,
+    ReplayCheckpointError, ReplayTag, ResolvedReplayEvidence, TaggedAssistantRow,
 };
 use gents_protocol::error_chain::ErrorChain;
 
@@ -285,11 +285,16 @@ where
     {
         if let Some(tag) = &row.source {
             if let [evidence] = resolve(tag).as_slice() {
-                row.physical_header = Some(evidence.physical_header.clone());
-                row.block_indices = (0..row.content.len()).collect();
+                if evidence.origin == crate::claude_messages_body::ReplayOrigin::AcceptedProvider
+                    && evidence.complete
+                {
+                    row.physical_header = Some(evidence.physical_header.clone());
+                    row.block_indices = (0..row.content.len()).collect();
+                }
             }
         }
     }
+    rows = project_recovered_prefix(&rows, resolve);
     apply_assistant_rows(
         &mut joined,
         &indices,

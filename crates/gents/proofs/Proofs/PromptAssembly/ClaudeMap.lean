@@ -624,6 +624,7 @@ theorem replayBlocks_mapM_equiv
 inductive ReplayOrigin where
   | claudeSubscription
   | acceptedProvider
+  | recoveredProvider
   | foreign
   | missing
   | ambiguous
@@ -674,6 +675,8 @@ abbrev ReplayFlatItem := ReplayFrontier.FlatItem (List UInt8) (List UInt8)
 
 structure ResolvedReplayEvidence where
   origin : ReplayOrigin
+  /-- Recovered witnesses contain only blocks whose physical source carries a
+  validated provider block-stop marker. -/
   reasoning : ReasoningWitness
   issuer : ReplayIssuer
   wire : ReplayWire
@@ -721,6 +724,57 @@ def originalReasoningWitness (row : TaggedReplayRow) : ReasoningWitness :=
   (reasoningCandidates [row]).filterMap fun candidate =>
     candidate.blockIndex.map fun index => (index, candidate.parts)
 
+def sourcePrefixLength (row : TaggedReplayRow) : Nat :=
+  ((row.blockIndices.zip (List.range row.blocks.length)).takeWhile fun pair =>
+    pair.1 == pair.2).length
+
+def keepRecoveredBlock (cutoff : Nat)
+    (pair : Nat × CanonicalOutput.MessageBlock (List UInt8)) : Bool :=
+  pair.1 < cutoff || match pair.2 with
+    | .reasoning .. => false
+    | _ => true
+
+theorem keptRecoveredReasoning_precedes_gap (cutoff index : Nat)
+    (id : Option String) (parts : List (CanonicalOutput.ReasoningPart (List UInt8)))
+    (h : keepRecoveredBlock cutoff (index, .reasoning id parts) = true) :
+    index < cutoff := by
+  simpa [keepRecoveredBlock] using h
+
+theorem recoveredText_is_kept (cutoff index : Nat) (text : List UInt8) :
+    keepRecoveredBlock cutoff (index, .text text) = true := by
+  simp [keepRecoveredBlock]
+
+def projectRecoveredPrefix (resolve : ReplayTag → List ResolvedReplayEvidence)
+    (row : TaggedReplayRow) : TaggedReplayRow :=
+  match row.source with
+  | none => row
+  | some tag =>
+      match resolve tag with
+      | [evidence] =>
+          if evidence.origin != .recoveredProvider || evidence.complete ||
+              !replayRowIndicesValid row then row
+          else
+            let cutoff := sourcePrefixLength row
+            let kept := (row.blockIndices.zip row.blocks).filter (keepRecoveredBlock cutoff)
+            { row with blockIndices := kept.map Prod.fst, blocks := kept.map Prod.snd }
+      | _ => row
+
+theorem projectRecoveredPrefix_preserves_physical_identity
+    (resolve : ReplayTag → List ResolvedReplayEvidence) (row : TaggedReplayRow) :
+    (projectRecoveredPrefix resolve row).source = row.source ∧
+    (projectRecoveredPrefix resolve row).physicalHeader = row.physicalHeader := by
+  cases hsource : row.source with
+  | none => simp [projectRecoveredPrefix, hsource]
+  | some tag =>
+      cases hresolve : resolve tag with
+      | nil => simp [projectRecoveredPrefix, hsource, hresolve]
+      | cons evidence rest =>
+          cases rest with
+          | nil =>
+              simp only [projectRecoveredPrefix, hsource, hresolve]
+              split <;> simp [hsource]
+          | cons next tail => simp [projectRecoveredPrefix, hsource, hresolve]
+
 /-- Replayability is endpoint-family specific. This validates native payload
 shape only; acceptance and source closure remain external provenance premises. -/
 def replayableReasoning (wire : ReplayWire)
@@ -745,10 +799,10 @@ def validReasoningCandidate (issuer : ReplayIssuer) (wire : ReplayWire)
       if !providerReplayTag tag then false
       else match resolve tag with
         | [evidence] =>
-            evidence.origin == .acceptedProvider &&
+            ((evidence.origin == .acceptedProvider && evidence.complete) ||
+             (evidence.origin == .recoveredProvider && !evidence.complete)) &&
             evidence.issuer == issuer && evidence.wire == wire &&
             evidence.physicalHeader == header &&
-            evidence.complete &&
             candidate.indicesComplete &&
             candidate.blockIndex.any (fun index =>
               (index, candidate.parts) ∈ evidence.reasoning) &&
@@ -1130,6 +1184,7 @@ theorem stripFirstReasoningRows_exact_candidates_of_valid (count : Nat)
 structure TurnGroup where
   candidates : List ReasoningCandidate
   ordinary : Bool
+  sourcePrefix : Bool
   deriving Repr
 
 def encodableOrdinary : CanonicalOutput.MessageBlock (List UInt8) → Bool
@@ -1141,7 +1196,10 @@ def turnGroups (rows : List TaggedReplayRow) : List TurnGroup :=
   rows.filterMap fun row =>
     match reasoningCandidates [row] with
     | [] => none
-    | group => some { candidates := group, ordinary := row.blocks.any encodableOrdinary }
+    | group => some { candidates := group
+                      , ordinary := row.blocks.any encodableOrdinary
+                      , sourcePrefix := group.all fun candidate =>
+                          candidate.blockIndex.any (· < sourcePrefixLength row) }
 
 def groupCandidates (groups : List TurnGroup) : List ReasoningCandidate :=
   groups.flatMap (·.candidates)
@@ -1172,7 +1230,12 @@ def turnHeaderOffset : ReplayWire → Nat
 def turnBase (issuer : ReplayIssuer) (wire : ReplayWire)
     (resolve : ReplayTag → List ResolvedReplayEvidence)
     (candidates : List ReasoningCandidate) (group : TurnGroup) : Bool :=
-  !group.candidates.isEmpty && (wire == .responses || group.ordinary) &&
+  let recovered := group.candidates.head?.bind (·.source) |>.any fun tag =>
+    match resolve tag with
+    | [evidence] => evidence.origin == .recoveredProvider && !evidence.complete
+    | _ => false
+  !group.candidates.isEmpty && (wire == .responses || group.ordinary || recovered) &&
+    (!recovered || group.sourcePrefix) &&
     group.candidates.all (validForReplayProjection issuer wire resolve candidates)
 
 def turnCaptured (resolve : ReplayTag → List ResolvedReplayEvidence)

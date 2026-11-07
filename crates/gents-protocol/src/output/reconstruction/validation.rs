@@ -2,7 +2,8 @@ use super::extents::Extents;
 use super::ObservedSegment;
 use crate::output::{
     MediaKind, MessageBlock, MessagePublication, MessageRole, OutputSource, OutputWriter,
-    PayloadPresentation, PayloadRef, ReconstructionError, ToolResultPart, TranscriptMessage,
+    PayloadPresentation, PayloadRef, ReasoningPart, ReconstructionError, ToolResultPart,
+    TranscriptMessage,
 };
 
 fn reference_allowed_by_publication(
@@ -111,7 +112,9 @@ pub(super) fn validate_native_shape(
     match &message.publication {
         MessagePublication::RequestExecution { .. } => {
             if message.request_doc_id.is_none() {
-                return Err(ReconstructionError::InvalidStructure { detail: "request publication lacks request membership".to_owned() });
+                return Err(ReconstructionError::InvalidStructure {
+                    detail: "request publication lacks request membership".to_owned(),
+                });
             }
         }
         MessagePublication::RequestRecovery { .. } => {
@@ -120,9 +123,20 @@ pub(super) fn validate_native_shape(
                 || message.outcome != crate::output::OutputOutcome::Partial
                 || message.native_id.is_some()
                 || message.native_request_id.is_some()
-                || !message.blocks.iter().all(|block| matches!(block, MessageBlock::Text { text } if matches!(text.presentation, PayloadPresentation::Full)))
+                || !message.blocks.iter().all(|block| match block {
+                    MessageBlock::Text { text } => {
+                        matches!(text.presentation, PayloadPresentation::Full)
+                    }
+                    MessageBlock::Reasoning { id: None, parts } => matches!(
+                        parts.as_slice(),
+                        [ReasoningPart::Text { .. }] | [ReasoningPart::Redacted { .. }]
+                    ),
+                    _ => false,
+                })
             {
-                return Err(ReconstructionError::InvalidStructure { detail: "invalid recovery header".to_owned() });
+                return Err(ReconstructionError::InvalidStructure {
+                    detail: "invalid recovery header".to_owned(),
+                });
             }
         }
         MessagePublication::ToolDelivery { tool_call_doc_id } => {
@@ -130,16 +144,25 @@ pub(super) fn validate_native_shape(
                 || message.role != MessageRole::User
                 || message.blocks.iter().any(|block| match block {
                     MessageBlock::Text { .. } => false,
-                    MessageBlock::ToolResult { tool_call_doc_id: id, .. } => id != tool_call_doc_id,
+                    MessageBlock::ToolResult {
+                        tool_call_doc_id: id,
+                        ..
+                    } => id != tool_call_doc_id,
                     _ => true,
                 })
             {
-                return Err(ReconstructionError::InvalidStructure { detail: "invalid tool delivery header".to_owned() });
+                return Err(ReconstructionError::InvalidStructure {
+                    detail: "invalid tool delivery header".to_owned(),
+                });
             }
         }
-        MessagePublication::Fork { origin_message_doc_id } => {
+        MessagePublication::Fork {
+            origin_message_doc_id,
+        } => {
             if message.request_doc_id.is_some() || origin_message_doc_id.is_empty() {
-                return Err(ReconstructionError::InvalidStructure { detail: "invalid fork provenance".to_owned() });
+                return Err(ReconstructionError::InvalidStructure {
+                    detail: "invalid fork provenance".to_owned(),
+                });
             }
         }
     }

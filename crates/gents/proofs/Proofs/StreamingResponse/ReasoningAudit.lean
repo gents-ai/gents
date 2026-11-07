@@ -91,9 +91,50 @@ theorem partial_audit_keeps_all_received_types_and_bytes :
     reconstructAuditPrefix (observation [observed, partialClose]) none = .ok exactAudit := by
   native_decide
 
-theorem partial_reasoning_has_no_recovery_header :
-    recoveryText [(0, body), (1, signature), (2, encrypted), (3, redacted)] =
-      .ok [] := by native_decide
+theorem partial_reasoning_without_stop_has_no_recovery_header :
+    recoveryPayloads exactAudit = .ok [] := by native_decide
+
+def stoppedObserved : Segment :=
+  { observed with
+    flush := some ⟨0,
+      [⟨0, 1, some body⟩, ⟨1, 1, some signature⟩,
+       ⟨2, 0, some ⟨0, 0, .reasoningStop, none, none⟩⟩], [65, 83]⟩ }
+
+def stoppedClose : Segment :=
+  { observed with id := 110, flush := none, close := some (.closed .«partial» 1 [1, 1, 0]) }
+
+def duplicateStops : Segment :=
+  { observed with flush := some ⟨0,
+      [⟨0, 1, some body⟩, ⟨1, 1, some signature⟩,
+       ⟨2, 0, some ⟨0, 0, .reasoningStop, none, none⟩⟩,
+       ⟨3, 0, some ⟨0, 0, .reasoningStop, none, none⟩⟩], [65, 83]⟩ }
+
+theorem duplicate_stops_cannot_validate :
+    (match reconstructAuditPrefix (observation [duplicateStops]) none with
+      | .error _ => true | .ok _ => false) = true := by
+  native_decide
+
+def recoveredReasoning : MessageEnvelope :=
+  { header :=
+      { id := 111, session := 1, request := some 10, origin := none
+        refs := [⟨110, 0⟩], outcome := .«partial», role := .assistant
+        publication := .requestRecovery 7 }
+    key := "recovered-reasoning", sequence := 0, nativeId := none
+    blocks := [.reasoning none [.text ⟨⟨110, 0⟩, .full⟩ (some "S")]]
+    createdAt := 7 }
+
+theorem partial_stopped_reasoning_reconstructs_with_exact_signature :
+    (reconstructMessage [stoppedObserved, stoppedClose] [] recoveredReasoning).isOk = true := by
+  native_decide
+
+def unstoppedRecovery : MessageEnvelope :=
+  { recoveredReasoning with
+    header := { recoveredReasoning.header with refs := [⟨102, 0⟩] }
+    blocks := [.reasoning none [.text ⟨⟨102, 0⟩, .full⟩ (some "S")]] }
+
+theorem partial_reasoning_without_stop_cannot_publish :
+    (reconstructMessage [observed, partialClose] [] unstoppedRecovery).isOk = false := by
+  native_decide
 
 theorem retracted_audit_keeps_all_received_types_and_bytes :
     reconstructAuditPrefix (observation [observed, retraction]) none = .ok exactAudit := by
@@ -171,7 +212,16 @@ structure AuditCase where
   deriving Repr
 
 def auditCases : List AuditCase :=
-  [ { name := "reasoning_audit_eof", input := observation [observed],
+  [ { name := "reasoning_audit_stopped", input := observation [stoppedObserved],
+      expected := reconstructAuditPrefix (observation [stoppedObserved]) none }
+  , { name := "reasoning_audit_duplicate_arrival", input := observation [stoppedObserved, stoppedObserved],
+      expected := reconstructAuditPrefix (observation [stoppedObserved, stoppedObserved]) none }
+  , { name := "reasoning_audit_duplicate_stops", input := observation [duplicateStops],
+      expected := reconstructAuditPrefix (observation [duplicateStops]) none }
+  , { name := "reasoning_audit_stopped_late_signature", input :=
+        observation [stoppedObserved, signatureContinuation],
+      expected := reconstructAuditPrefix (observation [stoppedObserved, signatureContinuation]) none }
+  , { name := "reasoning_audit_eof", input := observation [observed],
       expected := reconstructAuditPrefix (observation [observed]) none }
   , { name := "reasoning_audit_signature_delta", input :=
         observation [observed, signatureContinuation],

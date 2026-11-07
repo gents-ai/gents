@@ -207,6 +207,7 @@ fn lean_payload_kind(
         LeanPayloadKind::Text => StreamPayload::Text,
         LeanPayloadKind::Reasoning => StreamPayload::Reasoning,
         LeanPayloadKind::Signature => StreamPayload::ReasoningSignature,
+        LeanPayloadKind::ReasoningStop => StreamPayload::ReasoningStop,
         LeanPayloadKind::Summary => StreamPayload::ReasoningSummary,
         LeanPayloadKind::Encrypted => StreamPayload::ReasoningEncrypted,
         LeanPayloadKind::Redacted => StreamPayload::ReasoningRedacted,

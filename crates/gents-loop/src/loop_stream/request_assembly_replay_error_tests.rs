@@ -869,6 +869,62 @@ async fn a_seeded_dispatch_assembles_the_same_request_as_a_fresh_resolution() {
     );
 }
 
+#[tokio::test]
+async fn recovered_reasoning_does_not_regain_missing_physical_identity() {
+    let tag = provider_tag(0);
+    let config = replay_assembly_config();
+    let mut evidence =
+        producing_capture(&AssemblyOnlyModel, &config, &replay_assembly_content()).await;
+    evidence.origin = ReplayOrigin::RecoveredProvider;
+    evidence.complete = false;
+    let replay = LoopReplayInput {
+        issuer: Some(evidence.issuer.clone()),
+        wire: Some(crate::claude_messages_body::ReplayWire::ClaudeMessages),
+        resolve: Some(counting_resolver(
+            vec![ReplayEvidenceRow {
+                tag: tag.clone(),
+                evidence,
+            }],
+            vec![tag.clone()],
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        )),
+        ..LoopReplayInput::default()
+    };
+    let mut history = replay_assembly_history(&tag);
+    history[1].physical_header = None;
+    history[1].block_indices.clear();
+    let mut next = vec![TaggedMessage::unassociated(Message::user("next"))];
+    let request = assemble_provider_request(
+        &AssemblyOnlyModel,
+        &mut history,
+        &mut next,
+        &[],
+        &config,
+        &replay,
+    )
+    .await
+    .unwrap();
+    let body = config
+        .provider_input_counter
+        .project_body(&request)
+        .unwrap();
+    let flat = crate::provider_input::replay_frontier::flatten(
+        &body,
+        crate::claude_messages_body::ReplayWire::ClaudeMessages,
+    )
+    .unwrap();
+    assert!(!flat.iter().any(|item| matches!(
+        item,
+        crate::provider_input::replay_frontier::FlatItem::Reasoning(_)
+    )));
+    let Message::Assistant { content, .. } = &history[1].message else {
+        panic!("assistant row")
+    };
+    assert!(content
+        .iter()
+        .any(|block| matches!(block, AssistantContent::Text(_))));
+}
+
 #[test]
 fn stripping_all_reasoning_keeps_ordinary_blocks_and_their_indices() {
     let reasoning = |text: &str| {

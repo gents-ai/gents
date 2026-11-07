@@ -1,9 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use chrono::{DateTime, FixedOffset};
 
-use crate::output::reconstruction::{ObservedSegment, ReconstructedStream};
-use crate::output::{OutputSource, OutputWriter, StreamPayload};
+use crate::output::reconstruction::{ObservedSegment, ReconstructedStream, StreamDeclarations};
+use crate::output::{OutputSource, OutputWriter};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DensePrefixError {
@@ -142,7 +142,7 @@ pub fn reconstruct_dense_prefix(
     }
 
     let mut streams: Vec<ReconstructedStream> = Vec::new();
-    let mut positions: BTreeSet<(u32, u32, bool)> = BTreeSet::new();
+    let mut declarations = StreamDeclarations::default();
     let mut consumed: u32 = 0;
     for (ordinal, slot) in &slots {
         if *ordinal != consumed {
@@ -167,11 +167,7 @@ pub fn reconstruct_dense_prefix(
             };
             if let Some(declaration) = &run.declaration {
                 if run.stream as usize != streams.len()
-                    || !positions.insert((
-                        declaration.block_index,
-                        declaration.part_index,
-                        matches!(declaration.payload, StreamPayload::ReasoningSignature),
-                    ))
+                    || !declarations.admit(declaration, run.bytes)
                 {
                     return Err(invalid(
                         "stream declarations are not dense or positions conflict",
@@ -185,6 +181,9 @@ pub fn reconstruct_dense_prefix(
                 let Some(existing) = streams.get_mut(run.stream as usize) else {
                     return Err(invalid("continuation before declaration"));
                 };
+                if !declarations.allows_continuation(&existing.declaration) {
+                    return Err(invalid("continuation after reasoning stop"));
+                }
                 existing.text.push_str(part);
             }
             offset = end;

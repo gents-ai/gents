@@ -161,6 +161,7 @@ fn segment(value: &LeanCanonicalSegment) -> Result<OutputSegment> {
                                 LeanPayloadKind::Text => StreamPayload::Text,
                                 LeanPayloadKind::Reasoning => StreamPayload::Reasoning,
                                 LeanPayloadKind::Signature => StreamPayload::ReasoningSignature,
+                                LeanPayloadKind::ReasoningStop => StreamPayload::ReasoningStop,
                                 LeanPayloadKind::Summary => StreamPayload::ReasoningSummary,
                                 LeanPayloadKind::Encrypted => StreamPayload::ReasoningEncrypted,
                                 LeanPayloadKind::Redacted => StreamPayload::ReasoningRedacted,

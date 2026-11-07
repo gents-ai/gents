@@ -1584,10 +1584,11 @@ private def reasoningSuffixCase (name : String) (context : List UInt8)
     (resolutions : List PromptAssemblyClaudeCheckpointResolution) :
     PromptAssemblyReasoningSuffixCase :=
   let resolve := resolveFrom resolutions
-  let stage := PromptAssembly.ClaudeMap.replayStage rows issuer wire resolve
+  let projected := rows.map (PromptAssembly.ClaudeMap.projectRecoveredPrefix resolve)
+  let stage := PromptAssembly.ClaudeMap.replayStage projected issuer wire resolve
   { name, issuer, wire, rows, resolutions, stage,
     assembled := replayCaseAssemble wire context stage,
-    replay := PromptAssembly.ClaudeMap.restoreHistoricalReasoningSuffix rows issuer wire
+    replay := PromptAssembly.ClaudeMap.restoreHistoricalReasoningSuffix projected issuer wire
       resolve (replayCaseAssemble wire context) }
 
 private def turnStartsFrom (offset : Nat) (positions : List Nat) :
@@ -1810,6 +1811,37 @@ def promptAssemblyReasoningSuffixCases : List PromptAssemblyReasoningSuffixCase 
   let second := checkpointRow (some (checkpointTag 2)) "second"
   let third := checkpointRow (some (checkpointTag 3)) "third"
   let unknown := checkpointRow none "unknown"
+  let recovered : PromptAssembly.ClaudeMap.TaggedReplayRow :=
+    { source := some (checkpointTag 5), physicalHeader := some "header",
+      blockIndices := [0, 1],
+      blocks := [.reasoning none [.text (utf8Bytes "finished") (some "sig-finished")],
+        .text (utf8Bytes "partial answer")] }
+  let recoveredWitness : PromptAssembly.ClaudeMap.ResolvedReplayEvidence :=
+    { origin := .recoveredProvider,
+      reasoning := PromptAssembly.ClaudeMap.originalReasoningWitness recovered,
+      issuer := claude, wire := .claudeMessages, physicalHeader := "header",
+      complete := false, captured := some (replayCaseAssemble .claudeMessages context []) }
+  let recoveredEvidence : PromptAssemblyClaudeCheckpointResolution :=
+    { tag := checkpointTag 5, evidence := recoveredWitness }
+  let recoveredOnly : PromptAssembly.ClaudeMap.TaggedReplayRow :=
+    { recovered with blockIndices := [0], blocks := recovered.blocks.take 1 }
+  let recoveredGap : PromptAssembly.ClaudeMap.TaggedReplayRow :=
+    { recoveredOnly with blockIndices := [2] }
+  let gapEvidence : PromptAssemblyClaudeCheckpointResolution :=
+    { recoveredEvidence with evidence := { recoveredWitness with
+      reasoning := PromptAssembly.ClaudeMap.originalReasoningWitness recoveredGap } }
+  let gapAfterPrefix : PromptAssembly.ClaudeMap.TaggedReplayRow :=
+    { recovered with blockIndices := [0, 1, 3]
+                     blocks := recovered.blocks ++ [.reasoning none [.text (utf8Bytes "later") (some "sig-later")]] }
+  let gapAfterPrefixEvidence : PromptAssemblyClaudeCheckpointResolution :=
+    { recoveredEvidence with evidence := { recoveredWitness with
+      reasoning := PromptAssembly.ClaudeMap.originalReasoningWitness gapAfterPrefix } }
+  let gapWithTail : PromptAssembly.ClaudeMap.TaggedReplayRow :=
+    { gapAfterPrefix with blockIndices := [0, 1, 3, 4]
+                          blocks := gapAfterPrefix.blocks ++ [.text (utf8Bytes "retained text")] }
+  let gapWithTailEvidence : PromptAssemblyClaudeCheckpointResolution :=
+    { recoveredEvidence with evidence := { recoveredWitness with
+      reasoning := PromptAssembly.ClaudeMap.originalReasoningWitness gapWithTail } }
   let laterBlock : PromptAssembly.ClaudeMap.TaggedReplayRow :=
     { source := shapeTwoBlockRow.source, physicalHeader := shapeTwoBlockRow.physicalHeader,
       blockIndices := [1],
@@ -1827,7 +1859,30 @@ def promptAssemblyReasoningSuffixCases : List PromptAssemblyReasoningSuffixCase 
     { tag := checkpointTag turn,
       evidence := change { (checkpointEvidence turn value).evidence with
         captured := some (replayCaseAssemble .claudeMessages context prior) } }
-  [ reasoningSuffixCase "middle-unknown-cuts-leading-run" context claude .claudeMessages
+  [ reasoningSuffixCase "recovered-stopped-block-with-original-index" context claude .claudeMessages
+      [recovered] [recoveredEvidence]
+  , reasoningSuffixCase "recovered-stopped-reasoning-only" context claude .claudeMessages
+      [recoveredOnly] [recoveredEvidence]
+  , reasoningSuffixCase "recovered-reasoning-after-omitted-block" context claude .claudeMessages
+      [recoveredGap] [gapEvidence]
+  , reasoningSuffixCase "recovered-reasoning-prefix-before-omitted-block" context claude .claudeMessages
+      [gapAfterPrefix] [gapAfterPrefixEvidence]
+  , reasoningSuffixCase "recovered-gap-keeps-subsequent-ordinary-text" context claude .claudeMessages
+      [gapWithTail] [gapWithTailEvidence]
+  , reasoningSuffixCase "recovered-reasoning-only-without-stop-witness" context claude .claudeMessages
+      [recoveredOnly] [{ recoveredEvidence with evidence := { recoveredEvidence.evidence with reasoning := [] } }]
+  , reasoningSuffixCase "recovered-reasoning-only-with-foreign-issuer" context claude .claudeMessages
+      [recoveredOnly] [{ recoveredEvidence with evidence := { recoveredEvidence.evidence with
+        issuer := { family := "other", endpoint := "messages" } } }]
+  , reasoningSuffixCase "recovered-reasoning-only-without-capture" context claude .claudeMessages
+      [recoveredOnly] [{ recoveredEvidence with evidence := { recoveredEvidence.evidence with captured := none } }]
+  , reasoningSuffixCase "recovered-reasoning-only-with-ambiguous-evidence" context claude .claudeMessages
+      [recoveredOnly] [recoveredEvidence, recoveredEvidence]
+  , reasoningSuffixCase "recovered-block-without-stop-witness" context claude .claudeMessages
+      [recovered] [{ recoveredEvidence with evidence := { recoveredEvidence.evidence with reasoning := [] } }]
+  , reasoningSuffixCase "recovered-origin-cannot-claim-complete" context claude .claudeMessages
+      [recovered] [{ recoveredEvidence with evidence := { recoveredEvidence.evidence with complete := true } }]
+  , reasoningSuffixCase "middle-unknown-cuts-leading-run" context claude .claudeMessages
       [first, unknown, third]
       [accepted 1 "first" [], accepted 3 "third" [first, unknown]]
   , reasoningSuffixCase "missing-capture-cuts-run" context claude .claudeMessages

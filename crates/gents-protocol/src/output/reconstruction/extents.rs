@@ -5,17 +5,23 @@ use super::{
 use crate::output::{OutputSource, PayloadRef, ReconstructionError, StreamPayload};
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::cell::{OnceCell, RefCell};
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
 pub(super) struct SealedExtent {
     pub(super) streams: Vec<ReconstructedStream>,
     pub(super) signatures: RapidHashMap<(u32, u32), Vec<usize>>,
+    pub(super) stopped_reasoning: BTreeSet<u32>,
 }
 
 impl SealedExtent {
     fn new(streams: Vec<ReconstructedStream>) -> Self {
         let mut signatures: RapidHashMap<(u32, u32), Vec<usize>> = RapidHashMap::new();
+        let mut stopped_reasoning = BTreeSet::new();
         for (index, stream) in streams.iter().enumerate() {
+            if matches!(stream.declaration.payload, StreamPayload::ReasoningStop) {
+                stopped_reasoning.insert(stream.declaration.block_index);
+            }
             if matches!(
                 stream.declaration.payload,
                 StreamPayload::ReasoningSignature
@@ -32,6 +38,7 @@ impl SealedExtent {
         Self {
             streams,
             signatures,
+            stopped_reasoning,
         }
     }
 }
