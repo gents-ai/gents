@@ -150,6 +150,7 @@ pub struct PreparedDependency {
     pub(crate) manifest: super::super::PackManifest,
     pub(crate) digest: String,
     pub(crate) assets: BTreeMap<String, Vec<u8>>,
+    pub(super) snapshot: Option<super::InstalledDependencySnapshot>,
 }
 
 pub struct PreparedDocumentPackInstall {
@@ -157,6 +158,14 @@ pub struct PreparedDocumentPackInstall {
     pub inference: PackInferenceBindingPreview,
     pub dependency_inference: BTreeMap<String, PackInferenceBindingPreview>,
     pub dependencies: Vec<PreparedDependency>,
+}
+
+impl PreparedDocumentPackInstall {
+    pub fn reuses_dependency(&self, coordinate: &str) -> bool {
+        self.dependencies
+            .iter()
+            .any(|dependency| dependency.coordinate == coordinate && dependency.snapshot.is_some())
+    }
 }
 
 pub(super) fn document_ux_install_allowed(
@@ -271,6 +280,24 @@ pub async fn prepare_document_pack_install(
     let mut dependency_inference = BTreeMap::new();
     let mut prepared_dependencies = Vec::new();
     for archive in dependencies {
+        let coordinate = format!(
+            "{}/{}",
+            archive.manifest().metadata.namespace,
+            archive.manifest().name
+        );
+        let snapshot = access
+            .transact_readonly("pack.dependency.snapshot", |txn| {
+                let coordinate = &coordinate;
+                Box::pin(async move {
+                    let record = super::read_record(txn, owner, coordinate).await?;
+                    anyhow::ensure!(record.doc_id.is_none() || record.digest.as_deref() == Some(archive.digest()),
+                        "installed dependency {coordinate} has a different artifact; update it explicitly before installing its dependent");
+                    super::dependency_snapshot_in_txn(txn, owner, coordinate, archive.digest()).await
+                })
+            })
+            .await?;
+        anyhow::ensure!(snapshot.is_none() || selected(archive.manifest()).is_empty(),
+            "installed dependency {coordinate} has explicit inference selections; update it explicitly before installing its dependent");
         let preview = super::super::preview_pack_inference_bindings(
             access,
             archive.manifest(),
@@ -282,17 +309,21 @@ pub async fn prepare_document_pack_install(
             node_did: owner.to_owned(),
         };
         let prepared = {
-            let authored = super::super::load_pack_config(
-                archive.manifest(),
-                &options,
-                &|path| archive.asset(path).map(<[u8]>::to_vec),
-                environment,
-            )?;
-            let config = super::super::bind_pack_install_config(
-                archive.manifest(),
-                &authored,
-                &preview.bindings,
-            )?;
+            let config = if let Some(snapshot) = &snapshot {
+                snapshot.config(owner)?
+            } else {
+                let authored = super::super::load_pack_config(
+                    archive.manifest(),
+                    &options,
+                    &|path| archive.asset(path).map(<[u8]>::to_vec),
+                    environment,
+                )?;
+                super::super::bind_pack_install_config(
+                    archive.manifest(),
+                    &authored,
+                    &preview.bindings,
+                )?
+            };
             let mut schemas = Vec::new();
             let mut assets = BTreeMap::new();
             for path in document_pack_schema_paths(archive.manifest())? {
@@ -324,6 +355,7 @@ pub async fn prepare_document_pack_install(
                 manifest: archive.manifest().clone(),
                 digest: archive.digest().to_owned(),
                 assets,
+                snapshot,
             }
         };
         dependency_inference.insert(archive.manifest().name.clone(), preview);
@@ -526,6 +558,7 @@ pub async fn install_prepared_document_pack(
         prepared
             .dependencies
             .iter()
+            .filter(|dependency| dependency.snapshot.is_none())
             .map(|dependency| &dependency.manifest),
     );
     for manifest in all {
@@ -714,6 +747,7 @@ pub async fn install_prepared_document_graph(
             bindings: dependency.inference.bindings.clone(),
             dependencies: Vec::new(),
             explicit: false,
+            snapshot: dependency.snapshot.clone(),
         });
     }
     let mut assets = BTreeMap::new();
@@ -732,6 +766,7 @@ pub async fn install_prepared_document_graph(
             .map(|d| d.coordinate.clone())
             .collect(),
         explicit,
+        snapshot: None,
     });
     let (mut reports, plugins) =
         install_document_graph(access, owner, stages, policy, home, consent).await?;
@@ -750,6 +785,7 @@ pub(super) struct DocumentPackStage {
     pub(super) bindings: PackInferenceBindings,
     pub(super) dependencies: Vec<String>,
     pub(super) explicit: bool,
+    pub(super) snapshot: Option<super::InstalledDependencySnapshot>,
 }
 
 pub(super) async fn install_document_graph(
@@ -773,7 +809,7 @@ pub(super) async fn install_document_graph(
             .collect::<Result<Vec<_>>>()?;
         let input = stages
             .iter()
-            .filter(|stage| !stage.manifest.metadata.plugins.is_empty())
+            .filter(|stage| stage.snapshot.is_none() && !stage.manifest.metadata.plugins.is_empty())
             .map(|stage| crate::plugin::install::PluginStageInput {
                 manifest: stage.manifest.clone(),
                 digest: stage.digest.clone(),
@@ -861,6 +897,7 @@ pub(super) async fn install_document_graph(
                 identity
             })
             .collect::<Vec<_>>();
+        let snapshots = stages.iter().map(|stage| stage.snapshot.clone()).collect::<Vec<_>>();
         let result = access
             .transact_write_with_finality("pack.document_graph.install", |txn| {
                 let documents = documents.clone();
@@ -869,6 +906,7 @@ pub(super) async fn install_document_graph(
                 let reference_packs = reference_packs.clone();
                 let home = home.clone();
                 let plugins = plugins.clone();
+                let snapshots = snapshots.clone();
                 Box::pin(async move {
                     tokio::task::spawn_blocking(move || {
                         let packs = reference_packs
@@ -888,10 +926,15 @@ pub(super) async fn install_document_graph(
                     })
                     .await??;
                     let mut reports = Vec::new();
-                    for (identity, documents) in identities.iter().zip(documents) {
-                        reports.push(
-                            super::install_in_txn(txn, owner, identity, documents, policy).await?,
-                        );
+                    for ((identity, documents), snapshot) in identities.iter().zip(documents).zip(snapshots) {
+                        if let Some(snapshot) = snapshot {
+                            let current = super::dependency_snapshot_in_txn(txn, owner, &identity.coordinate, &identity.digest).await?;
+                            anyhow::ensure!(current.as_ref() == Some(&snapshot),
+                                "installed dependency {} changed during preparation; retry the install", identity.coordinate);
+                            reports.push(InstallReport::default());
+                        } else {
+                            reports.push(super::install_in_txn(txn, owner, identity, documents, policy).await?);
+                        }
                     }
                     super::validate_plugin_replacements_in_txn(txn, owner, identities).await?;
                     Ok::<_, anyhow::Error>(reports)
@@ -958,6 +1001,7 @@ pub async fn install_documents_with_plugins(
         bindings: bindings.clone(),
         dependencies,
         explicit,
+        snapshot: None,
     };
     let (mut reports, plugins) =
         install_document_graph(access, owner, vec![stage], policy, home, consent).await?;

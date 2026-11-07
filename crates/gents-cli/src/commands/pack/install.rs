@@ -195,7 +195,18 @@ pub(crate) async fn install_documents_pack_resolved(
     if args.preview {
         let variables = std::iter::once(pack)
             .chain(dependencies.iter())
-            .map(|source| install_variable_preview(source, owner))
+            .map(|source| {
+                let coordinate = format!(
+                    "{}/{}",
+                    source.manifest().metadata.namespace,
+                    source.manifest().name
+                );
+                if prepared.reuses_dependency(&coordinate) {
+                    Ok(json!({"pack": coordinate, "kind": "existing_installation", "uses": []}))
+                } else {
+                    install_variable_preview(source, owner)
+                }
+            })
             .collect::<Result<Vec<_>>>()?;
         return Ok(json!({
             "pack": pack.manifest().name,
