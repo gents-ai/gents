@@ -249,6 +249,11 @@ pub(crate) async fn apply_desired_state_plan_with_node_binding(
             _ => {}
         }
         if changed {
+            let not_applied = || super::ConfigClientError::ConfigurationMutationNotApplied {
+                collection: name,
+                node_did: owner.to_owned(),
+                id: id.to_owned(),
+            };
             let response = txn
                 .execute_desired_state_mutation(
                     &mutation,
@@ -257,6 +262,15 @@ pub(crate) async fn apply_desired_state_plan_with_node_binding(
                     created,
                 )
                 .await
+                .map_err(|error| {
+                    // An update the actor may not apply surfaces either as an
+                    // empty result or as the adapter's missing-or-denied error.
+                    if !created && error.is_missing_or_denied_write() {
+                        not_applied()
+                    } else {
+                        error
+                    }
+                })
                 .with_context(|| {
                     format!(
                         "{} {name} desired state",
@@ -268,12 +282,7 @@ pub(crate) async fn apply_desired_state_plan_with_node_binding(
                     .as_array()
                     .is_some_and(Vec::is_empty)
             {
-                return Err(super::ConfigClientError::ConfigurationMutationNotApplied {
-                    collection: name,
-                    node_did: owner.to_owned(),
-                    id: id.to_owned(),
-                }
-                .into());
+                return Err(not_applied().into());
             }
             let doc_id = extract_mutation_doc_id(&response, name)?;
             if matches!(

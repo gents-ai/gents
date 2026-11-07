@@ -393,10 +393,13 @@ async fn held_client_and_agent_mcp_selection_isolation_rebind_and_rollback() -> 
     changed["hostname"] = json!("changed");
     let update = plan(vec![(Collection::ToolServiceRegistry, changed.clone())])?;
     let denied = apply(&agent_access, &update).await.unwrap_err();
-    assert!(matches!(
-        denied.downcast_ref::<ConfigClientError>(),
-        Some(ConfigClientError::ConfigurationMutationNotApplied { .. })
-    ));
+    assert!(
+        matches!(
+            denied.downcast_ref::<ConfigClientError>(),
+            Some(ConfigClientError::ConfigurationMutationNotApplied { .. })
+        ),
+        "{denied:?}"
+    );
     let service_rows = access
         .execute("{ ToolServiceRegistry(filter:{service_id:{_eq:\"two\"}}) {_docID hostname} }")
         .await?;
