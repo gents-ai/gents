@@ -448,11 +448,22 @@ async fn persisted_outcome_requests(
 
 #[tokio::test]
 async fn generated_terminal_outcome_action_traces_use_native_owners() {
-    use crate::store::config_client::ConfigAccess;
     for trace in contract()["outcome_traces"].as_array().unwrap() {
-        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        // The Task's Agent admits, claims, terminalizes and recovers its fires.
+        let node = std::sync::Arc::new(
+            crate::triggers::callback::test_node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::local(node.clone());
+        crate::triggers::callback::seed_test_agent(
+            &node,
+            crate::request::lifecycle::test_support::PIN_FIXED_DID,
+        )
+        .await;
+        let agent = crate::triggers::callback::test_agent_identity();
+        let access = crate::triggers::callback::test_agent_access(&node);
         let mut published = std::collections::BTreeMap::new();
         let mut terminal_states = std::collections::BTreeMap::new();
         for (index, step) in trace["steps"].as_array().unwrap().iter().enumerate() {
@@ -461,12 +472,24 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
             match action {
                 OutcomeAction::Admit { fire } => {
                     let receipt = receipt(&fire, index);
-                    let mutation = request_mutation(&receipt);
+                    let mutation = request_mutation_as(&receipt, agent.did());
                     let result = access
                         .transact_write("test.outcome_trace_admit", |txn| {
                             let receipt = &receipt;
                             let mutation = &mutation;
+                            let agent = agent.did();
                             Box::pin(async move {
+                                crate::session::ensure_session_in_txn(
+                                    txn,
+                                    &receipt.session_id,
+                                    &receipt.identity.owner_did,
+                                    agent,
+                                    None,
+                                    None,
+                                    None,
+                                    &receipt.created_at,
+                                )
+                                .await?;
                                 durable::stage_fire_request(txn, receipt, mutation).await
                             })
                         })
@@ -488,13 +511,14 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                         crate::request::watcher::AgentRequest::try_from(row.clone()).unwrap();
                     let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
                         node.clone(),
-                        spy_test_agent().agent_did.as_str(),
+                        agent.did(),
                         &identity.owner_did,
                         request,
                         60,
                         crate::request::lifecycle::ExecutionOrigin::Interactive,
                         "test-backend",
                     );
+                    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
                     let now = chrono::Utc::now();
                     assert!(
                         lifecycle
@@ -538,7 +562,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                 }
                 OutcomeAction::Recover { commit } => {
                     if commit {
-                        durable::recover_outcomes(&node, "owner-a", &spy_test_agent().agent_did)
+                        durable::recover_outcomes(&node, "owner-a", agent.as_ref())
                             .await
                             .unwrap();
                     } else {

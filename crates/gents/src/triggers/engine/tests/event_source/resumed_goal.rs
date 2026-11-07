@@ -8,49 +8,25 @@ use gents_protocol::row::AgentRequestRow;
 
 #[tokio::test]
 async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
-    let temp = tempfile::tempdir().unwrap();
-    let identity = KeyIdentity::load_or_create(temp.path().join("principal.key"), None).unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node = configured_event_node().await;
     node.add_collection("type ResumedGoalOutput { run_id: String @index summary: String }")
         .await
         .unwrap();
-    let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
-    crate::test_support::install_test_agent_binding(
-        &node,
-        identity.did(),
-        "resumed goal",
-        &binding,
-    )
-    .await;
-    let agent = crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
+    let identity = crate::triggers::callback::test_root_identity();
+    let agent = crate::triggers::callback::test_agent_identity();
     let access = crate::ConfigAccess::local_managed_agent(
         node.clone(),
         ::identity::Did::new(agent.did()).unwrap(),
         agent.as_ref(),
     )
     .unwrap();
-    access
-        .transact_write("test.resumed_goal_session", |txn| {
-            Box::pin(crate::session::ensure_session_in_txn(
-                txn,
-                "resumed-event-session",
-                identity.did(),
-                agent.did(),
-                Some(agent.did()),
-                None,
-                None,
-                "2020-01-01T00:00:00Z",
-            ))
-        })
-        .await
-        .unwrap();
+    crate::test_support::create_agent_owned_session(
+        &access,
+        identity.did(),
+        "resumed-event-session",
+        Some(agent.did()),
+    )
+    .await;
     let goal = crate::goal::set_goal_from_access(
         &access,
         identity.did(),
@@ -131,10 +107,12 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
             r#"{ run_id: { _eq: "resumed-run-correlation" } }"#,
         )
     };
-    let snapshot = snapshot_with_event_triggers(
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([("resumed-output-trigger".to_owned(), trigger)]),
-    );
+    )
+    .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
     source.reconcile_subscriptions(snapshot.as_ref()).await;
