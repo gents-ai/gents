@@ -33,6 +33,8 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
     })
     .await
     .unwrap();
+    fixture.grant_agent_collection_get().await.unwrap();
+    fixture.grant_runtime_session_reader().await.unwrap();
     let mut parent = fixture.tool;
     let root = tempfile::tempdir().unwrap();
     let root_path = std::fs::canonicalize(root.path()).unwrap();
@@ -132,6 +134,13 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
                 })
             })
         },
+    )
+    .await
+    .unwrap();
+    crate::tools::call::lifecycle::admission_fixture::grant_runtime_projection_readers(
+        &access,
+        parent.node_did(),
+        parent.session_id(),
     )
     .await
     .unwrap();

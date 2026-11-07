@@ -185,6 +185,84 @@ pub struct PublishedAdmission {
     pub requester_identity: Arc<dyn NodeIdentity>,
 }
 
+impl PublishedAdmission {
+    /// Lets the fixture Agent read collection versions. The Agent baseline
+    /// omits `CollectionGet`; production reads retained file images as the
+    /// operator User, so tests that read them as the Agent grant it here.
+    pub(crate) async fn grant_agent_collection_get(&self) -> anyhow::Result<()> {
+        let admin =
+            crate::ConfigAccess::local_as(self.node.clone(), identity::Did::new(&self.node_did)?);
+        admin
+            .grant_node_permission(
+                self.tool.actor(),
+                crate::store::config_client::NodePermission::CollectionGet,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Grants the runtime Node the session `reader` relation the source-local
+    /// file inventory loader reads through. The session's signer grants it.
+    pub(crate) async fn grant_runtime_session_reader(&self) -> anyhow::Result<()> {
+        let node_did = crate::store::graphql::escape_graphql_string(&self.node_did);
+        let session_id = crate::store::graphql::escape_graphql_string(self.tool.session_id());
+        let response = self
+            .client
+            .execute(&format!(
+                r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }} }}) {{ _docID }} }}"#,
+            ))
+            .await?;
+        let [row] = response["data"]["AgentSession"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+        else {
+            anyhow::bail!("fixture client must see exactly one session: {response}");
+        };
+        let doc = row["_docID"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("fixture session has no document id"))?;
+        self.client
+            .add_actor_relationship(
+                "AgentSession",
+                doc,
+                "reader",
+                &identity::Did::new(&self.node_did)?,
+            )
+            .await?;
+        Ok(())
+    }
+}
+
+/// Grants the runtime Node `reader` on every file-inventory projection of
+/// `session_id`, as the projections' owning Agent. Publication grants no
+/// reader relation; the source-local loader reads as the runtime Node.
+pub(crate) async fn grant_runtime_projection_readers(
+    agent: &crate::ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    let response = agent
+        .execute(&format!(
+            r#"{{ ToolFileInventory(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            crate::store::graphql::escape_graphql_string(session_id),
+        ))
+        .await?;
+    let rows = response["data"]["ToolFileInventory"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("projection lookup omitted rows: {response}"))?;
+    let runtime = identity::Did::new(node_did)?;
+    for row in rows {
+        let doc = row["_docID"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("projection has no document id"))?;
+        agent
+            .add_actor_relationship("ToolFileInventory", doc, "reader", &runtime)
+            .await?;
+    }
+    Ok(())
+}
+
 pub(crate) async fn complete_child_managed_verified(
     node: &Arc<EmbeddedNode>,
     child_id: &str,

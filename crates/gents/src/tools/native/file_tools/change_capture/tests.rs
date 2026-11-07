@@ -94,6 +94,8 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     })
     .await
     .unwrap();
+    admission.grant_agent_collection_get().await.unwrap();
+    admission.grant_runtime_session_reader().await.unwrap();
     let mut call = admission.tool;
     let doc_id = call.doc_id().unwrap().to_owned();
     let root = tempfile::tempdir().unwrap();
@@ -258,6 +260,13 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
             "after": {"kind": "file", "content_hash": change["after"]["content_hash"]},
         })
     );
+    crate::tools::call::lifecycle::admission_fixture::grant_runtime_projection_readers(
+        &access,
+        &admission.node_did,
+        &session_id,
+    )
+    .await
+    .unwrap();
     let inventory =
         crate::file_inventory::FileInventorySnapshot::load(&admission.node, &inventory_admission)
             .await
@@ -297,9 +306,10 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     )
     .await
     .unwrap();
+    // The selected Agent signs the projection; the runtime only reads it.
     assert_eq!(
         owners[0].owner.as_ref().map(|owner| owner.as_str()),
-        Some(admission.node_did.as_str())
+        Some(call.actor().as_str())
     );
     let reader = requester_did.as_ref().unwrap().parse().unwrap();
     let denied = ConfigAccess::transact_local_readonly(
@@ -430,6 +440,7 @@ async fn maximum_images_survive_the_terminal_transaction_and_scoped_read() {
     })
     .await
     .unwrap();
+    admission.grant_agent_collection_get().await.unwrap();
     let mut call = admission.tool;
     let doc_id = call.doc_id().unwrap().to_owned();
     let root = tempfile::tempdir().unwrap();
@@ -577,6 +588,7 @@ async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
     })
     .await
     .unwrap();
+    admission.grant_agent_collection_get().await.unwrap();
     let mut call = admission.tool;
     let doc_id = call.doc_id().unwrap().to_owned();
     let root = tempfile::tempdir().unwrap();
