@@ -15,8 +15,9 @@
   /* Text selection is off across the app's controls and chrome, as in a
      native app, and on where people copy: what they type, messages and
      other written content, code and output, diffs, identifiers and paths
-     (set in mono), errors, and anything marked data-selectable. WebKit
-     needs the prefixed property. */
+     (set in mono), errors, a page's title and the lines under it, values
+     marked data-selectable (a read-only field's), and nothing in a control.
+     WebKit needs the prefixed property. */
   body {
     -webkit-user-select: none;
     user-select: none;
@@ -35,22 +36,38 @@
     .font-mono,
     diffs-container,
     [role="alert"],
+    h1,
+    h1 ~ p,
     [data-selectable]
   ) {
     -webkit-user-select: text;
     user-select: text;
   }
-  /* a control's own label, mono or not, is part of the control */
+  /* a control, and everything in it, stays a control even inside
+     selectable content */
+  :is(
+    button,
+    [role="button"],
+    [role="switch"],
+    [role="menuitem"],
+    [role="menuitemradio"],
+    [role="menuitemcheckbox"],
+    [role="option"],
+    [role="tab"],
+    [data-slot="badge"]
+  ),
   :is(
       button,
       [role="button"],
+      [role="switch"],
       [role="menuitem"],
       [role="menuitemradio"],
       [role="menuitemcheckbox"],
       [role="option"],
-      [role="tab"]
+      [role="tab"],
+      [data-slot="badge"]
     )
-    :is(.font-mono, code, kbd) {
+    * {
     -webkit-user-select: none;
     user-select: none;
   }

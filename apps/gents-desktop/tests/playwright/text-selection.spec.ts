@@ -24,6 +24,9 @@ test("selects text in messages, code and fields, and not in the app's controls",
   expect(await selection(page.getByRole("button").first())).toBe("none");
 
   expect(await selection(message)).toBe("text");
+  /* a button inside selectable content is still a control */
+  const inMessage = page.locator('[data-slot="assistant-message"] button').first();
+  if (await inMessage.count()) expect(await selection(inMessage)).toBe("none");
   expect(await selection(page.getByRole("textbox").first())).toBe("text");
   const code = page.locator('[data-slot="assistant-message"] code').first();
   if (await code.count()) expect(await selection(code)).toBe("text");
