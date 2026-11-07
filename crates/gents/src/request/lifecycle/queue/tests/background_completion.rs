@@ -510,24 +510,25 @@ async fn a_returned_result_is_admitted_into_a_paired_client_session() {
         lifecycle.claim_with_identity().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed
     );
-    crate::tools::call::hook::DefraSessionHook::resume_with_identity_policy(
+    crate::tools::call::hook::DefraSessionHook::resume_with_actor_policy(
         db.node.clone(),
         session_id,
         db.node_did(),
         verified.requester_did.as_deref(),
+        ::identity::Did::new(db.agent_did()).unwrap(),
         crate::tools::call::hook::FailurePolicy::FailClosed,
     )
     .await
     .expect("the completion resumes the desktop-owned session");
     let sessions = db
-        .node
+        .agent_access
         .execute(&format!(
             "{{ AgentSession {{ {} }} }}",
             session::AGENT_SESSION_FIELDS
         ))
         .await
-        .data
-        .unwrap();
+        .unwrap()["data"]
+        .clone();
     assert_eq!(sessions["AgentSession"].as_array().unwrap().len(), 1);
     assert_eq!(sessions["AgentSession"][0]["requester_did"], desktop.did());
 }

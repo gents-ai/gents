@@ -18,8 +18,8 @@ async fn queue_image(
     session_id: &str,
     active: Option<&super::folding::ActiveTurn>,
 ) -> crate::lean_vocab_test::QueueImage {
-    crate::lean_vocab_test::native_queue_image(
-        &db.node,
+    crate::lean_vocab_test::native_queue_image_with_access(
+        &db.agent_access,
         db.node_did(),
         session_id,
         active.map_or(&[], |turn| turn.lifecycle.folded_selection()),
@@ -180,20 +180,25 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             None,
         )
         .unwrap();
-        let signer: &dyn crate::store::identity::NodeIdentity = match caller {
-            Some(1) => db.identity.as_ref(),
-            Some(2) => &user_key,
-            _ => panic!("unsupported caller in {}", case.name),
-        };
-        let access = ConfigAccess::local_as(
-            db.node.clone(),
-            ::identity::Did::new(signer.did().to_owned()).unwrap(),
-        );
+        // Modeled requester 1 is the Agent that authored its own queued work;
+        // it edits through its managed signer.
+        let (signer, access): (&dyn crate::store::identity::NodeIdentity, ConfigAccess) =
+            match caller {
+                Some(1) => (db.agent_identity.as_ref(), db.agent_access.clone()),
+                Some(2) => (
+                    &user_key,
+                    ConfigAccess::local_as(
+                        db.node.clone(),
+                        ::identity::Did::new(user_key.did().to_owned()).unwrap(),
+                    ),
+                ),
+                _ => panic!("unsupported caller in {}", case.name),
+            };
         let state_query = format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID content input admission_signature lifecycle_state valid_until }} }}"#,
             escape_graphql_string(&session_id),
         );
-        let snapshot = pending_user_queue(&access, db.node_did(), &session_id, db.node_did())
+        let snapshot = pending_user_queue(&access, db.node_did(), &session_id, signer.did())
             .await
             .unwrap();
         let mut observed = snapshot
@@ -211,7 +216,7 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             &access,
             db.node_did(),
             &session_id,
-            db.node_did(),
+            signer.did(),
             &observed,
         )
         .await
@@ -257,7 +262,7 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             PendingEditActor {
                 node_did: db.node_did(),
                 session_id: &session_id,
-                requester_did: db.node_did(),
+                requester_did: signer.did(),
             },
             edit,
             &replacements

@@ -10,13 +10,28 @@ pub(crate) async fn native_queue_image(
     session_id: &str,
     selection: &[crate::request::lifecycle::queue::FoldedInput],
 ) -> QueueImage {
+    native_queue_image_with_access(
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        node_did,
+        session_id,
+        selection,
+    )
+    .await
+}
+
+/// The queue image observed by `access`, such as the Agent that owns the rows.
+pub(crate) async fn native_queue_image_with_access(
+    access: &crate::store::config_client::ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    selection: &[crate::request::lifecycle::queue::FoldedInput],
+) -> QueueImage {
     use gents_protocol::request_lifecycle::RequestLifecycleState;
     #[derive(serde::Deserialize)]
     struct Row {
         request_id: String,
         lifecycle_state: RequestLifecycleState,
     }
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let response = access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ request_id lifecycle_state }} }}"#,
