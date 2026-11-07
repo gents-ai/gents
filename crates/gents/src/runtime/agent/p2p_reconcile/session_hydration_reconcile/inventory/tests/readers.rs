@@ -66,6 +66,15 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
             .unwrap()
             .unwrap();
     let reader_did: identity::Did = reader.did().parse().unwrap();
+    // A shared reader holds a document relation and the node's read permission;
+    // native ACP observes both, with no Node fallback.
+    ConfigAccess::local_as(node.clone(), fixture.node_did.parse().unwrap())
+        .grant_node_permission(
+            &reader_did,
+            crate::store::config_client::NodePermission::DocumentRead,
+        )
+        .await
+        .unwrap();
     grant_session_reader(
         &fixture.client,
         &fixture.node_did,
