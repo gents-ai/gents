@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::Node as EmbeddedNode;
 use gents::{
     AgentToolSurfaceConfig, BackendProviderKind, KeyIdentity, NodeIdentity, ResolvedAgent,
     RuntimeNode,
@@ -204,162 +203,6 @@ pub async fn session_command_agent_snapshot(
         };
     let (_sender, receiver) = tokio::sync::watch::channel(Arc::new(snapshot));
     receiver
-}
-
-pub async fn configure_child_agent(
-    node: &Arc<EmbeddedNode>,
-    node_did: &str,
-    agent_did: &str,
-    tools_id: &str,
-    targets: Vec<gents::AgentTargetDocument>,
-    enabled: bool,
-) -> String {
-    use gents::documents::{AgentContext, AgentTools, Tools};
-    use gents::store::config_client::{
-        read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
-    use gents::Collection;
-
-    let root =
-        gents::store::identity::RegisteredIdentity::from_registered_did(node_did, None).unwrap();
-    let binding = gents::store::identity::provision_agent_identity(&root).unwrap();
-    gents::ConfigAccess::transact_local_write(node, None, "test.configure_child_agent", |txn| {
-        let targets = targets.clone();
-        let binding = &binding;
-        Box::pin(async move {
-            let mut documents = Vec::new();
-            let mut behavior = read(txn, Collection::Agent, node_did, agent_did)
-                .await?
-                .map(|(_, value)| serde_json::from_value::<gents::AgentDocument>(value))
-                .transpose()?
-                .unwrap_or_else(|| gents::AgentDocument {
-                    agent_did: binding.agent_did.clone(),
-                    creation_nonce: binding.creation_nonce.clone(),
-                    node_did: node_did.to_string(),
-                    display_name: Some(agent_did.to_string()),
-                    description: None,
-                    context_id: None,
-                    inference_profile_id: format!("{agent_did}-inference"),
-                    enabled: true,
-                    tags: Vec::new(),
-                    created_at: Some("2026-05-12T00:00:00Z".to_string()),
-                });
-
-            if read(
-                txn,
-                Collection::InferenceProfile,
-                node_did,
-                &behavior.inference_profile_id,
-            )
-            .await?
-            .is_none()
-            {
-                let backend_id = format!("{agent_did}-test-backend");
-                if read(txn, Collection::InferenceBackend, node_did, &backend_id)
-                    .await?
-                    .is_none()
-                {
-                    documents.push((
-                        Collection::InferenceBackend,
-                        serde_json::json!({
-                            "node_did": node_did,
-                            "backend_id": backend_id,
-                            "name": format!("{agent_did} test backend"),
-                            "provider_kind": "OpenAiCompatible",
-                            "openai_wire_api": "chat_completions",
-                            "endpoint": "http://127.0.0.1:1/v1",
-                            "auth": {"kind": "unauthenticated"}
-                        }),
-                    ));
-                }
-                documents.push((
-                    Collection::InferenceProfile,
-                    serde_json::json!({
-                        "node_did": node_did,
-                        "profile_id": behavior.inference_profile_id,
-                        "backend_id": backend_id,
-                        "model_name": "test-model"
-                    }),
-                ));
-            }
-
-            let context_id = behavior
-                .context_id
-                .clone()
-                .unwrap_or_else(|| format!("{agent_did}-test-context"));
-            let mut context = read(txn, Collection::AgentContext, node_did, &context_id)
-                .await?
-                .map(|(_, value)| serde_json::from_value::<AgentContext>(value))
-                .transpose()?
-                .unwrap_or_else(|| AgentContext {
-                    context_id: context_id.clone(),
-                    node_did: node_did.to_string(),
-                    display_name: None,
-                    description: None,
-                    system_prompt: None,
-                    tools_id: None,
-                    compaction_id: None,
-                    skill_ids: Vec::new(),
-                    tags: Vec::new(),
-                });
-            context.tools_id = Some(tools_id.to_string());
-
-            let mut tools = read(txn, Collection::Tools, node_did, tools_id)
-                .await?
-                .map(|(_, value)| serde_json::from_value::<Tools>(value))
-                .transpose()?
-                .unwrap_or_else(|| Tools {
-                    tools_id: tools_id.to_string(),
-                    node_did: node_did.to_string(),
-                    ..Default::default()
-                });
-            tools.agents = Some(AgentTools {
-                target_ids: targets
-                    .iter()
-                    .map(|target| target.target_id.clone())
-                    .collect(),
-                enabled: Some(enabled),
-            });
-            behavior.context_id = Some(context_id);
-
-            let selected_agent = behavior.agent_did.clone();
-            documents.extend(targets.into_iter().map(|target| {
-                (
-                    Collection::AgentTarget,
-                    serde_json::to_value(target).expect("serialize target fixture"),
-                )
-            }));
-            documents.extend([
-                (
-                    Collection::Tools,
-                    serde_json::to_value(tools).expect("serialize tools fixture"),
-                ),
-                (
-                    Collection::AgentContext,
-                    serde_json::to_value(context).expect("serialize context fixture"),
-                ),
-                (
-                    Collection::Agent,
-                    serde_json::to_value(behavior).expect("serialize behavior fixture"),
-                ),
-            ]);
-            let plan = DesiredStateApplyPlan::new(
-                documents
-                    .into_iter()
-                    .map(|(collection, value)| DesiredStateApplyDocument {
-                        collection,
-                        add: value.clone(),
-                        update: value,
-                    })
-                    .collect(),
-            )?;
-            gents::store::config_client::apply_desired_state_plan(txn, &plan)
-                .await
-                .map(|_| selected_agent)
-        })
-    })
-    .await
-    .unwrap()
 }
 
 /// Configures an Agent's tools as the Node's retained configuring User.
@@ -791,4 +634,41 @@ pub async fn session_agent_identity(
         },
     )
     .expect("derive session Agent signer")
+}
+
+/// Rebinds an InferenceBackend's `auth` as its configuring User through the
+/// client-signed desired-state owner; client endpoints refuse raw mutations.
+pub async fn set_backend_auth_as(
+    access: &gents::ConfigAccess,
+    owner: &str,
+    backend_id: &str,
+    auth: serde_json::Value,
+) {
+    use gents::store::config_client::{
+        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
+        DesiredStateApplyPlan,
+    };
+    access
+        .transact_write("test.set_backend_auth", |txn| {
+            let auth = auth.clone();
+            Box::pin(async move {
+                let (_, mut backend) = read_desired_state_record_in_txn(
+                    txn,
+                    gents::Collection::InferenceBackend,
+                    owner,
+                    backend_id,
+                )
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("backend {backend_id} is missing"))?;
+                backend["auth"] = auth;
+                let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                    collection: gents::Collection::InferenceBackend,
+                    add: backend.clone(),
+                    update: backend,
+                }])?;
+                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+            })
+        })
+        .await
+        .expect("rebind backend auth as its User");
 }

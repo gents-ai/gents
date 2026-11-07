@@ -29,8 +29,8 @@ pub async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
 pub async fn wait_for_connected_peer(node: &EmbeddedNode) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let peers = node
-            .p2p()
+        // Peer administration is authorized for the node's own identity only.
+        let peers = gents::store::identity::node_p2p(node)
             .expect("p2p should be enabled")
             .connected_peers()
             .await
