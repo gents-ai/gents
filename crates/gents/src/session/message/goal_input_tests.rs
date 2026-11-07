@@ -137,16 +137,13 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                 })
                 .await
                 .unwrap();
-            agent_access
-                .add_resource_relationship(
-                    "AgentSession",
-                    &session_doc,
-                    "parent",
-                    "agents",
-                    &f.agent_doc_id,
-                )
-                .await
-                .unwrap();
+            crate::session::recover_agent_session_relationships_with_access(
+                &agent_access,
+                f.identity.did(),
+                &identity::Did::new(f.agent.did()).unwrap(),
+            )
+            .await
+            .unwrap();
             if remote {
                 agent_access
                     .add_actor_relationship(
@@ -154,6 +151,15 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                         &session_doc,
                         "reader",
                         &identity::Did::new(caller_agent.did()).unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                // Reading this node at all requires its native read grant;
+                // the session relation alone selects which rows are visible.
+                ConfigAccess::local_as(f.node.clone(), identity::Did::new(f.identity.did()).unwrap())
+                    .grant_node_permission(
+                        &identity::Did::new(caller_agent.did()).unwrap(),
+                        crate::store::config_client::NodePermission::DocumentRead,
                     )
                     .await
                     .unwrap();
@@ -243,6 +249,28 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                 escape_graphql_string(row["_docID"].as_str().unwrap()),
                 escape_graphql_string(&serde_json::to_string(&observation).unwrap()))).await.unwrap();
         }
+        // A local message is caused by an accepted tool call on the caller's
+        // own request, which staging verifies before it publishes.
+        let tool_call_doc_id = if remote {
+            format!("call-doc-{index}")
+        } else {
+            let created = agent_access
+                .write(
+                    "test.goal_input.tool_call",
+                    &format!(
+                        r#"mutation {{ create_AgentToolCall(input: {{ tool_call_key: "goal-input-call-{index}", request_id: "{}", request_doc_id: "{}", session_id: "{}", agent_did: "{}", node_did: "{}", requester_did: "{}", tool_name: "agent_message", tool_call_id: "call-{index}", status: "pending", lifecycle_state: "pending" }}) {{ _docID }} }}"#,
+                        escape_graphql_string(&f.parent.request_id),
+                        escape_graphql_string(&f.parent.doc_id),
+                        escape_graphql_string(&f.parent.session_id),
+                        escape_graphql_string(f.agent.did()),
+                        escape_graphql_string(f.identity.did()),
+                        escape_graphql_string(f.parent.requester_did.as_deref().unwrap()),
+                    ),
+                )
+                .await
+                .unwrap();
+            crate::store::graphql::created_doc_id(&created, "AgentToolCall").unwrap()
+        };
         let cause = SessionMessageCause {
             caller_node_did: if remote {
                 foreign_root.did().into()
@@ -270,7 +298,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                 .map_or_else(|| f.parent.doc_id.clone(), |(_, doc)| doc.clone()),
             caller_hop: 0,
             tool_call_id: format!("call-{index}"),
-            tool_call_doc_id: format!("call-doc-{index}"),
+            tool_call_doc_id,
             correlation: None,
         };
         let selected = super::plan::target_goal_assignment(&f.node, &cause, &target).await;
@@ -390,8 +418,21 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                     .transact_write("test.session_message_stage_goal_input", |txn| {
                         Box::pin(async { stage_planned_write_in_txn(txn, &cause, &planned).await })
                     })
-                    .await
-                    .unwrap();
+                    .await;
+                if case["session_readable"] == false {
+                    // Session messages publish only into an existing session the
+                    // caller can see; a fresh session is opened by its own flow.
+                    let error = staged.err().unwrap_or_else(|| {
+                        panic!("{name}: an unseen session must not receive a message")
+                    });
+                    assert!(
+                        format!("{error:#}").contains("client request session is unavailable"),
+                        "{name}: {error:#}"
+                    );
+                    f.node.shutdown().await.expect("shut down test node");
+                    continue;
+                }
+                let staged = staged.unwrap_or_else(|error| panic!("{name}: {error:#}"));
                 let stored = source_access
                     .execute(&format!(
                         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
