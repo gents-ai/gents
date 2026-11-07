@@ -740,6 +740,10 @@ theorem keptRecoveredReasoning_precedes_gap (cutoff index : Nat)
     index < cutoff := by
   simpa [keepRecoveredBlock] using h
 
+theorem recoveredText_is_kept (cutoff index : Nat) (text : List UInt8) :
+    keepRecoveredBlock cutoff (index, .text text) = true := by
+  simp [keepRecoveredBlock]
+
 def projectRecoveredPrefix (resolve : ReplayTag → List ResolvedReplayEvidence)
     (row : TaggedReplayRow) : TaggedReplayRow :=
   match row.source with
