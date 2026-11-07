@@ -2,13 +2,15 @@ use std::time::{Duration, Instant};
 
 use gents::defra_node::Node as EmbeddedNode;
 
+// Transport observations run as the Node's own identity, as the runtime's
+// P2P owners bind them.
+
 /// iroh may also advertise a NAT-PMP mapping from the LAN router first
 /// (`<router ip>:<port>`), which a local dial through that router times out on.
 pub async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let addrs = node
-            .p2p()
+        let addrs = gents::store::identity::node_p2p(node)
             .expect("p2p should be enabled")
             .listen_addresses()
             .await
@@ -29,8 +31,7 @@ pub async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
 pub async fn wait_for_connected_peer(node: &EmbeddedNode) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let peers = node
-            .p2p()
+        let peers = gents::store::identity::node_p2p(node)
             .expect("p2p should be enabled")
             .connected_peers()
             .await

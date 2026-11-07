@@ -2,14 +2,11 @@ use std::time::{Duration, Instant};
 
 use gents::defra_node::Node as EmbeddedNode;
 use gents::store::graphql::escape_graphql_string;
-use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_protocol::row::AgentRequestRow;
 
 use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
 use crate::support::{test_p2p_db_with_admission, TestP2pAdmission};
 
 const OWNER_DID: &str = "did:test:admission-p2p-owner";
-const AGENT_DID: &str = "admission-p2p-behavior";
 
 async fn install_one_way_replicator(
     sender: &EmbeddedNode,
@@ -18,8 +15,9 @@ async fn install_one_way_replicator(
 ) {
     let sender_addr = wait_for_listen_addr(sender).await;
     let receiver_addr = wait_for_listen_addr(receiver).await;
-    let sender_p2p = sender.p2p().expect("sender p2p");
-    let receiver_p2p = receiver.p2p().expect("receiver p2p");
+    // Transport administration runs as each Node's own identity.
+    let sender_p2p = gents::store::identity::node_p2p(sender).expect("sender p2p");
+    let receiver_p2p = gents::store::identity::node_p2p(receiver).expect("receiver p2p");
 
     sender_p2p
         .connect_peer(&receiver_addr)
@@ -62,121 +60,80 @@ async fn install_one_way_replicator(
         .expect("install sender to receiver replicator");
 }
 
-async fn create_request(
-    node: &EmbeddedNode,
-    request_id: &str,
-    session_id: &str,
-    node_did: &str,
-    lifecycle_state: &str,
-) {
-    let request_id = escape_graphql_string(request_id);
-    let session_id = escape_graphql_string(session_id);
-    let node_did = escape_graphql_string(node_did);
+/// Publishes one discovery record, the only document class pairing carries.
+async fn publish_peer_record(node: &EmbeddedNode, peer_id: &str, address: &str) {
+    let peer_id = escape_graphql_string(peer_id);
+    let address = escape_graphql_string(address);
     let mutation = format!(
         r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{request_id}",
-                purpose: "normal",
-                node_did: "{node_did}",
-                agent_did: "{AGENT_DID}",
-                session_id: "{session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{request_id}",
-                superseded_by_request: "",
-                content: "admission backpressure e2e",
-                lifecycle_state: "{lifecycle_state}",
-                backend_id: "",
-                execution_origin: "interactive",
-                created_at: "2026-07-09T00:00:00Z",
-                retry_count: 0,
-                max_retries: 0
+            create_PeerRegistry(input: {{
+                peer_id: "{peer_id}",
+                node_did: "{OWNER_DID}",
+                addresses: ["{address}"],
+                endpoint_address: "{address}",
+                endpoint_updated_at: "2026-07-09T00:00:00Z",
+                binding_sig: "sig-{address}"
             }}) {{ _docID }}
         }}"#
     );
     let resp = node.execute(&mutation).await;
     assert!(
         !resp.has_errors(),
-        "create AgentRequest failed: {:?}",
+        "create PeerRegistry failed: {:?}",
         resp.errors
     );
 }
 
-async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> Option<AgentRequestRow> {
-    let request_id = escape_graphql_string(request_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
-                request_id
-                node_did
-                lifecycle_state
-            }}
-        }}"#
-    );
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        return None;
-    }
-    resp.data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .and_then(|rows| rows.first())
-        .cloned()
-        .and_then(|row| serde_json::from_value(row).ok())
-}
-
-async fn wait_for_request_lifecycle(
+async fn wait_for_peer_record(
     node: &EmbeddedNode,
-    request_id: &str,
-    expected_lifecycle: RequestLifecycleState,
+    peer_id: &str,
     timeout: Duration,
     label: &str,
-) -> AgentRequestRow {
+) -> serde_json::Value {
     let deadline = Instant::now() + timeout;
-    let mut last: Option<AgentRequestRow> = None;
+    let query = format!(
+        r#"{{ PeerRegistry(filter: {{ peer_id: {{ _eq: "{}" }} }}, limit: 1) {{ peer_id node_did endpoint_address }} }}"#,
+        escape_graphql_string(peer_id)
+    );
     loop {
-        if let Some(row) = fetch_request(node, request_id).await {
-            if row.lifecycle_state == Some(expected_lifecycle) {
-                return row;
-            }
-            last = Some(row);
+        let resp = node.execute(&query).await;
+        if let Some(row) = resp
+            .data
+            .as_ref()
+            .and_then(|data| data["PeerRegistry"].as_array())
+            .and_then(|rows| rows.first())
+        {
+            return row.clone();
         }
-        if Instant::now() >= deadline {
-            panic!(
-                "timed out waiting for AgentRequest({request_id}) \
-                 lifecycle_state={expected_lifecycle} on {label}; last={last:?}"
-            );
-        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for PeerRegistry({peer_id}) on {label}: {:?}",
+            resp.errors
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn single_push_worker_delivers_multi_wave_updates() {
     let admission = TestP2pAdmission::single_push_worker();
     let owner = test_p2p_db_with_admission("admission-p2p-multi-owner", admission.clone()).await;
     let peer = test_p2p_db_with_admission("admission-p2p-multi-peer", admission).await;
 
-    install_one_way_replicator(owner.node.as_ref(), peer.node.as_ref(), &["AgentRequest"]).await;
+    install_one_way_replicator(owner.node.as_ref(), peer.node.as_ref(), &["PeerRegistry"]).await;
 
     for idx in 0..3 {
-        let request_id = format!("admission-p2p-multi-wave-{idx}");
-        let session_id = format!("admission-p2p-multi-session-{idx}");
-        create_request(
-            owner.node.as_ref(),
-            &request_id,
-            &session_id,
-            OWNER_DID,
-            "completed",
-        )
-        .await;
-        let on_peer = wait_for_request_lifecycle(
+        let peer_id = format!("admission-p2p-multi-wave-{idx}");
+        let address = format!("/ip4/127.0.0.1/tcp/{}", 4100 + idx);
+        publish_peer_record(owner.node.as_ref(), &peer_id, &address).await;
+        let on_peer = wait_for_peer_record(
             peer.node.as_ref(),
-            &request_id,
-            RequestLifecycleState::Completed,
+            &peer_id,
             Duration::from_secs(45),
             &format!("peer wave {idx}"),
         )
         .await;
-        assert_eq!(on_peer.node_did.as_deref(), Some(OWNER_DID));
+        assert_eq!(on_peer["node_did"], OWNER_DID);
+        assert_eq!(on_peer["endpoint_address"], address.as_str());
     }
 }

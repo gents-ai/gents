@@ -372,6 +372,14 @@ pub async fn test_p2p_db(name: &str) -> TestDb {
 }
 
 pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission) -> TestDb {
+    let db = test_p2p_db_without_node(name, admission).await;
+    install_runtime_node(&db).await;
+    db
+}
+
+/// A P2P-enabled store whose Node document its enrolling User installs, as
+/// `managed_agent_fixture` does.
+pub async fn test_p2p_db_without_node(name: &str, admission: TestP2pAdmission) -> TestDb {
     let tempdir = tempfile::Builder::new()
         .prefix(&format!("gents-{name}-"))
         .tempdir()
@@ -384,9 +392,7 @@ pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission)
     )
     .await
     .expect("p2p embedded home");
-    let db = test_db_from_home(home);
-    install_runtime_node(&db).await;
-    db
+    test_db_from_home(home)
 }
 
 /// Writes the runtime's Node document as the runtime owner. Publication and

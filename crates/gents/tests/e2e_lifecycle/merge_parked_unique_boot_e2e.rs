@@ -82,30 +82,25 @@ async fn install_replicator(sender: &Arc<EmbeddedNode>, receiver: &Arc<EmbeddedN
     let sender_addr = wait_for_listen_addr(sender).await;
     let collections = vec!["PeerRegistry".to_string()];
 
-    sender
-        .p2p()
-        .expect("sender p2p")
+    // Transport administration runs as each Node's own identity.
+    let sender_p2p = gents::store::identity::node_p2p(sender).expect("sender p2p");
+    let receiver_p2p = gents::store::identity::node_p2p(receiver).expect("receiver p2p");
+    sender_p2p
         .connect_peer(&receiver_addr)
         .await
         .expect("connect sender to receiver");
     wait_for_connected_peer(sender).await;
     wait_for_connected_peer(receiver).await;
 
-    sender
-        .p2p()
-        .expect("sender p2p")
+    sender_p2p
         .add_collections(collections.clone())
         .await
         .expect("sender p2p collections");
-    receiver
-        .p2p()
-        .expect("receiver p2p")
+    receiver_p2p
         .add_collections(collections.clone())
         .await
         .expect("receiver p2p collections");
-    receiver
-        .p2p()
-        .expect("receiver p2p")
+    receiver_p2p
         .add_replicator(
             collections.clone(),
             Some(&sender_addr),
