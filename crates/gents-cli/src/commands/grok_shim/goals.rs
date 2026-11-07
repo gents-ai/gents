@@ -128,8 +128,20 @@ impl GoalCommand {
                     goal.status
                 ));
             }
-            goal =
-                gents::goal::set_goal(node, principal, session, None, Some(status), None).await?;
+            anyhow::ensure!(
+                access.actor_did().as_deref() == Some(actor.as_str()),
+                "goal control requires the authenticated client capability"
+            );
+            goal = gents::goal::set_goal_from_access(
+                access,
+                principal,
+                session,
+                None,
+                Some(status),
+                None,
+                None,
+            )
+            .await?;
         }
         goal.tokens_used =
             Some(gents::goal::session_token_usage(node, actor, principal, session).await?);

@@ -742,3 +742,41 @@ async fn bind_agent_backend_chain(
     .await
     .unwrap();
 }
+
+/// The session's working Agent as its managed signer, derived by the runtime
+/// that holds the Node key, for owners that act only as that Agent.
+pub async fn session_agent_identity(
+    node: &std::sync::Arc<gents::defra_node::Node>,
+    runtime: &dyn gents::NodeIdentity,
+    node_did: &str,
+    session_id: &str,
+) -> std::sync::Arc<dyn gents::NodeIdentity> {
+    let access = gents::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(runtime.did()).expect("runtime DID"),
+    );
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ agent_did }} }}"#,
+            gents::store::graphql::escape_graphql_string(node_did),
+            gents::store::graphql::escape_graphql_string(session_id),
+        ))
+        .await
+        .expect("read session Agent");
+    let agent_did = response["data"]["AgentSession"][0]["agent_did"]
+        .as_str()
+        .expect("session has a working Agent")
+        .to_owned();
+    let agent = gents::load_agent(node, &agent_did)
+        .await
+        .expect("load session Agent")
+        .expect("session Agent exists");
+    gents::store::identity::resolve_agent_identity(
+        runtime,
+        &gents_protocol::agent_identity::AgentIdentityBinding {
+            agent_did: agent.agent_did,
+            creation_nonce: agent.creation_nonce,
+        },
+    )
+    .expect("derive session Agent signer")
+}

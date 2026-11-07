@@ -2,7 +2,7 @@ use super::super::session_commands::{unanswered_commands, CommandKind, Sweep};
 use super::*;
 use crate::lean_vocab_test::{
     LeanQueueManagementState, LeanSessionInputEditAuthority, LeanSessionInputEditCommand,
-    LeanSessionInputEditStep, QueueImage,
+    LeanSessionInputEditStep, LeanSessionInputEditor, QueueImage,
 };
 use crate::store::identity::KeyIdentity;
 use gents_protocol::request_admission::{
@@ -471,9 +471,17 @@ impl ModeledQueue {
         assert!(!model.has_peer, "remote authority is bound by e2e_runtime");
         assert!(authority.command_identity_unique);
         let foreign;
-        let requester: &dyn NodeIdentity = if authority.requester_is_node {
+        // The fixture's client key is the session's requester; a fresh key is
+        // neither requester, working Agent nor admin.
+        let requester: &dyn NodeIdentity = if authority.editor == LeanSessionInputEditor::Requester
+        {
             self.fixture.identity.as_ref()
         } else {
+            assert_eq!(
+                authority.editor,
+                LeanSessionInputEditor::Other,
+                "generated local edit names an unrealized editor"
+            );
             foreign = KeyIdentity::load_or_create(
                 self.fixture
                     ._dir
@@ -757,8 +765,10 @@ async fn generated_commands_bind_to_atomic_queue_owner() {
                 assert_eq!(native, prior[doc], "{name}: recorded receipt is final");
             }
             assert_eq!(model.digest, *digest, "{name}: receipt intent");
-            let receipt: SessionInputEditReceipt =
-                serde_json::from_str(&native.expect("modeled receipt")).unwrap();
+            let receipt: SessionInputEditReceipt = serde_json::from_str(
+                &native.unwrap_or_else(|| panic!("{name}: modeled receipt for command {id}")),
+            )
+            .unwrap();
             receipt.validate_for(command).unwrap();
             assert!(queue
                 .fixture

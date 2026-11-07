@@ -294,6 +294,7 @@ impl ToolPolicySurface {
                     NodePermission::DocumentRead,
                     NodePermission::DocumentUpdate,
                     NodePermission::DacRelationAdd,
+                    NodePermission::DocumentDelete,
                 ],
             );
         }

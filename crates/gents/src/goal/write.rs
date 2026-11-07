@@ -1,20 +1,34 @@
 use super::*;
 
+/// Set the session's Goal as its working Agent, signed by that Agent's managed
+/// key. The session is resolved inside the Agent's own transaction, so a caller
+/// holding another Agent's key, or none, cannot select the session's Agent by
+/// an unauthenticated read; such a call fails rather than writing as anyone else.
 pub async fn set_goal(
     node: &std::sync::Arc<EmbeddedNode>,
+    agent: &dyn crate::store::identity::NodeIdentity,
     node_did: &str,
     session_id: &str,
     objective: Option<&str>,
     status: Option<GoalStatus>,
     token_budget: Option<Option<i64>>,
 ) -> Result<GoalDocument> {
-    let actor = crate::session::load_session_agent_did(node, node_did, session_id).await?;
-    let goal = crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        Some(actor.clone()),
-        "goal.set",
-        move |txn| {
+    let access = crate::store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did())?,
+        agent,
+    )?;
+    let goal = access
+        .transact_write("goal.set", move |txn| {
             Box::pin(async move {
+                let session =
+                    crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+                        .await?
+                        .context("cannot set a Goal for a missing session")?;
+                anyhow::ensure!(
+                    Some(session.session.agent_did.as_str()) == txn.actor_did(),
+                    "only the session's working Agent may set its Goal through this owner"
+                );
                 set_goal_in_txn(
                     txn,
                     node_did,
@@ -26,15 +40,9 @@ pub async fn set_goal(
                 )
                 .await
             })
-        },
-    )
-    .await?;
-    super::creation::finish_goal_relationships(
-        &crate::ConfigAccess::local_as(node.clone(), actor),
-        node_did,
-        session_id,
-    )
-    .await?;
+        })
+        .await?;
+    super::creation::finish_goal_relationships(&access, node_did, session_id).await?;
     Ok(goal)
 }
 

@@ -187,7 +187,9 @@ def editAuthorityJson (a : SessionQueue.InputEdit.Authority) : String :=
   "{\"signature_valid\":" ++ jsonOptionalBool (some a.signatureValid) ++
   ",\"replacements_valid\":" ++ jsonOptionalBool (some a.replacementsValid) ++
   ",\"session_owned\":" ++ jsonOptionalBool (some a.sessionOwned) ++
-  ",\"requester_is_node\":" ++ jsonOptionalBool (some a.requesterIsNode) ++
+  ",\"editor\":" ++ jsonString (match a.editor with
+    | .requester => "requester" | .workingAgent => "working_agent"
+    | .admin => "admin" | .other => "other") ++
   ",\"enrollment_fresh\":" ++ jsonOptionalBool (some a.enrollmentFresh) ++
   ",\"route_applied\":" ++ jsonOptionalBool (some a.routeApplied) ++
   ",\"command_identity_unique\":" ++ jsonOptionalBool (some a.commandIdentityUnique) ++ "}"

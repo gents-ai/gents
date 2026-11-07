@@ -2498,8 +2498,16 @@ async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
     let agent = fx.boot(workspace.path()).await?;
 
     let session = "session-live-goal-parent";
+    let session_agent = crate::support::fixtures::session_agent_identity(
+        fx.node(),
+        fx.identity.as_ref(),
+        &fx.did,
+        session,
+    )
+    .await;
     let goal = set_goal(
         fx.node(),
+        session_agent.as_ref(),
         &fx.did,
         session,
         Some("Wait for the background completion notification from the worker session that was already started, then report its code word verbatim. Never start or message another session."),
@@ -2580,6 +2588,7 @@ async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
     .await;
     set_goal(
         fx.node(),
+        session_agent.as_ref(),
         &fx.did,
         session,
         None,

@@ -83,7 +83,13 @@ These source-specific node permissions do not confer document ACP, bypass,
 or the ability to grant permissions. Native authorization remains decisive.
 Datastore write declarations create documents only. Self-configuration cleanup
 requires the node category for Agent and Context deletion; the agent category
-alone does not authorize cleanup. -/
+alone does not authorize cleanup. Goal creation also carries `delete-document`
+(user decision, 2026-11-07): an Agent that creates Goals may retire and delete
+the Goals it created, for example once one completes. Node permissions are
+node-wide, so document ACP decides which documents that reaches: the native
+owner, which is the creating Agent, holds delete on its own Goal rows
+(`goal_creator_deletes_its_goal`), while another session Agent does not. The
+goal-create source is the only grant, so disabling goal creation withdraws it. -/
 def toolOperationSources (surface : ToolPolicy.Surface) (packInstall : Bool) : List (String × String) :=
   let emit (purpose : String) (enabled : Bool) (permissions : List String) : List (String × String) :=
     if enabled then permissions.map (fun permission => (purpose, permission)) else []
@@ -93,7 +99,7 @@ def toolOperationSources (surface : ToolPolicy.Surface) (packInstall : Bool) : L
   emit "session-history" surface.sessionHistory ["read-document"] ++
   emit "goal" surface.goalTools ["read-document", "update-document"] ++
   emit "goal-create" (surface.goalTools && surface.goalCreate)
-    ["read-document", "update-document", "add-dac-relation"] ++
+    ["read-document", "update-document", "add-dac-relation", "delete-document"] ++
   ([("self-config:agent", "agent"), ("self-config:node", "node"),
     ("self-config:tools", "tools"), ("self-config:profile", "profile")].flatMap fun (purpose, category) =>
       emit purpose (surface.selfConfig && selfConfigCategoryEnabled surface.selfConfigCategories category)
@@ -195,6 +201,30 @@ def toolGrantEffective (state : ToolGrantProjection) (actor permission : String)
   state.owners.contains actor || state.admins.contains actor ||
     state.direct.contains (actor, permission) ||
     state.grants.any (fun grant => grant.agent == actor && grant.permission == permission)
+
+/-- A session's Goal row is a session child owned by the Agent that created it.
+The working-Agent relationship of another Agent grants update, not delete. -/
+def goalRetirementFixture : State :=
+  { objects := [⟨"agents", "agent-doc", "user"⟩, ⟨"sessions", "session-doc", "user"⟩,
+      ⟨"children", "goal-doc", "creator"⟩],
+    relations := [⟨"sessions", "session-doc", "parent", .object "agents" "agent-doc"⟩,
+      ⟨"children", "goal-doc", "parent", .object "sessions" "session-doc"⟩,
+      ⟨"children", "goal-doc", "working_agent", .actor "creator"⟩,
+      ⟨"children", "goal-doc", "working_agent", .actor "sibling"⟩],
+    enrolled := [] }
+
+theorem goal_creator_deletes_its_goal :
+    Household.allowed 5 goalRetirementFixture "creator" "children" "goal-doc" "delete" = true ∧
+    Household.allowed 5 goalRetirementFixture "sibling" "children" "goal-doc" "update" = true ∧
+    Household.allowed 5 goalRetirementFixture "sibling" "children" "goal-doc" "delete" = false ∧
+    Household.allowed 5 goalRetirementFixture "user" "children" "goal-doc" "delete" = true := by
+  native_decide
+
+/-- The goal retirement source exists only while goal creation is enabled. -/
+theorem goal_retirement_requires_goal_creation (surface : ToolPolicy.Surface)
+    (noCreate : surface.goalCreate = false) :
+    ("goal-create", "delete-document") ∉ toolOperationSources surface false := by
+  simp [toolOperationSources, noCreate]
 
 /-- For a request without native DAC bypass, a session tool's node-operation
 grant does not expand document visibility. HTTP may resolve bypass for a NAC

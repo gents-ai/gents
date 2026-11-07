@@ -3,11 +3,27 @@ import Proofs.Session.CommandAuthority
 
 namespace SessionQueue.InputEdit
 
+/-- The immediate authenticated signer of a session input edit, relative to the
+target session. Only the session's requester, its working Agent, or an admin (the
+client key: the User DID shared by desktop and CLI) may edit the session's input.
+A valid signature by any other actor is rejected; signing well does not confer
+edit authority, and the runtime Node key is not an editor by position. -/
+inductive Editor where
+  | requester
+  | workingAgent
+  | admin
+  | other
+  deriving DecidableEq, Repr
+
+def Editor.mayEdit : Editor → Bool
+  | .other => false
+  | _ => true
+
 structure Authority where
   signatureValid : Bool
   replacementsValid : Bool
   sessionOwned : Bool
-  requesterIsNode : Bool
+  editor : Editor
   enrollmentFresh : Bool
   routeApplied : Bool
   /-- All physical command documents have been observed without relying on a unique
@@ -64,9 +80,24 @@ structure State where
   deriving DecidableEq
 
 def authorized (a : Authority) (c : Command) (now : Nat) : Bool :=
-  a.replacementsValid && AgentSession.CommandAuthority.authorized
-    ⟨a.signatureValid, a.sessionOwned, a.requesterIsNode, a.enrollmentFresh, a.routeApplied⟩
+  a.replacementsValid && a.editor.mayEdit && AgentSession.CommandAuthority.authorized
+    { signatureValid := a.signatureValid, sessionOwned := a.sessionOwned,
+      requesterIsNode := false, enrollmentFresh := a.enrollmentFresh,
+      routeApplied := a.routeApplied }
     c.hasPeer now c.expiresAt
+
+theorem other_editor_is_denied (a : Authority) (c : Command) (now : Nat)
+    (h : a.editor = .other) : authorized a c now = false := by
+  simp [authorized, h, Editor.mayEdit]
+
+/-- Requester, working Agent and admin hold the same edit authority; the
+remaining checks do not distinguish them. -/
+theorem permitted_editors_are_equivalent (a : Authority) (c : Command) (now : Nat)
+    (e : Editor) (h : e.mayEdit = true) :
+    authorized { a with editor := e } c now = authorized { a with editor := .requester } c now := by
+  unfold authorized
+  simp only [h]
+  rfl
 
 def recorded (q : SessionQueueState) (id : RequestId) : Prop :=
   q.active = some id ∨ id ∈ q.terminal ∨ id ∈ (q.folding ++ q.pending).map (·.requestId)

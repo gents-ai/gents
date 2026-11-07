@@ -198,9 +198,13 @@ async fn interrupt_request_is_idempotent() {
     let created_at = chrono::Utc::now().to_rfc3339();
     let _doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
 
-    gents::interrupt_request(&db.node, &request_id)
-        .await
-        .expect("first interrupt should succeed");
+    gents::interrupt_request(
+        &db.node,
+        support::managed_agent(&db).await.as_ref(),
+        &request_id,
+    )
+    .await
+    .expect("first interrupt should succeed");
     let after_first = gents::fetch_interrupt_requested_at(&db.node, &request_id)
         .await
         .expect("fetch after first interrupt");
@@ -210,9 +214,13 @@ async fn interrupt_request_is_idempotent() {
     );
 
     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    gents::interrupt_request(&db.node, &request_id)
-        .await
-        .expect("second interrupt should be a no-op");
+    gents::interrupt_request(
+        &db.node,
+        support::managed_agent(&db).await.as_ref(),
+        &request_id,
+    )
+    .await
+    .expect("second interrupt should be a no-op");
     let after_second = gents::fetch_interrupt_requested_at(&db.node, &request_id)
         .await
         .expect("fetch after second interrupt");
@@ -225,7 +233,12 @@ async fn interrupt_request_is_idempotent() {
 #[tokio::test]
 async fn interrupt_request_errors_on_unknown_request_id() {
     let db = test_db("interrupt-unknown").await;
-    let err = gents::interrupt_request(&db.node, "bogus-id-that-does-not-exist").await;
+    let err = gents::interrupt_request(
+        &db.node,
+        support::managed_agent(&db).await.as_ref(),
+        "bogus-id-that-does-not-exist",
+    )
+    .await;
     assert!(
         err.is_err(),
         "interrupting unknown request_id must error, got Ok"
@@ -802,9 +815,13 @@ async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
     )
     .await;
 
-    gents::interrupt_request(&db.node, "drain-parent")
-        .await
-        .expect("interrupt_request should latch and drain");
+    gents::interrupt_request(
+        &db.node,
+        support::managed_agent(&db).await.as_ref(),
+        "drain-parent",
+    )
+    .await
+    .expect("interrupt_request should latch and drain");
 
     let latched = gents::fetch_interrupt_requested_at(&db.node, "drain-parent")
         .await
