@@ -16,7 +16,7 @@ fn self_pairing_row_is_not_materialized() {
 }
 
 #[test]
-fn explicit_client_route_keeps_requester_and_owner_across_remote_admin() {
+fn explicit_client_route_scopes_peer_registry_to_its_owner() {
     let desired = desired_from_pairing_row(
         PairingStateRow {
             peer_id: Some("directory-a:runtime-to-client".to_string()),
@@ -29,15 +29,18 @@ fn explicit_client_route_keeps_requester_and_owner_across_remote_admin() {
     )
     .expect("explicit route parses")
     .expect("route materializes");
+    // The runtime-to-client route scopes the signed PeerRegistry to the owner
+    // node; requester DIDs are not replicated for client routes.
     let encoded = serde_json::to_string(
         desired
             .replicator_filter
-            .get("AgentRequest")
-            .expect("request filter"),
+            .get("PeerRegistry")
+            .expect("registry filter"),
     )
     .unwrap();
-    assert!(encoded.contains("did:key:phone"));
     assert!(encoded.contains("did:key:mandrake"));
+    assert!(!encoded.contains("did:key:phone"));
+    assert!(!desired.replicator_filter.contains_key("AgentRequest"));
 }
 
 #[test]

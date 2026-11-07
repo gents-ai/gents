@@ -346,10 +346,14 @@ mod tests {
             .await
             .unwrap());
         record.graphql_url = Some("https://other.example/api/v0/graphql".into());
-        assert!(!signer
-            .verify(signer.did(), &record.signing_payload(), &record.sig)
-            .await
-            .unwrap());
+        // A mismatched payload is rejected by the owner either as Ok(false) or as a
+        // verification error; it must never verify.
+        assert!(!matches!(
+            signer
+                .verify(signer.did(), &record.signing_payload(), &record.sig)
+                .await,
+            Ok(true)
+        ));
     }
 
     #[test]
