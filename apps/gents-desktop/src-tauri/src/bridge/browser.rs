@@ -56,6 +56,7 @@ struct HandedKey {
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PageState {
+    tab: String,
     url: String,
     title: String,
     loading: bool,
@@ -65,6 +66,13 @@ struct PageState {
 
 /// What the browser is asked to open: a web page, or a file on this
 /// machine together with the folder its page may read, the file's own.
+/// A page asked for a window of its own: the app opens it in a new tab.
+#[derive(Clone, serde::Serialize)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+struct NewTab {
+    url: String,
+}
+
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) enum Target {
     Web(String),
@@ -142,7 +150,7 @@ mod mac {
     };
     use tauri::{AppHandle, Emitter};
 
-    use super::{HandedKey, PageState, Placement, Rect, Target};
+    use super::{HandedKey, NewTab, PageState, Placement, Rect, Target};
 
     /* the page's own website data, kept across launches */
     const STORE: &str = "5B0C7F3E-6D1A-4E8B-9C2F-7A4D1E6B3C90";
@@ -166,7 +174,8 @@ mod mac {
 
     pub struct RouterIvars {
         main: Retained<WKWebView>,
-        page: Retained<PageView>,
+        /* the tab showing */
+        page: RefCell<Option<Retained<PageView>>>,
         solids: RefCell<Vec<Rect>>,
     }
 
@@ -210,7 +219,8 @@ mod mac {
         {
             return None;
         }
-        ivars.page.hitTest(point)
+        let page = ivars.page.borrow().clone()?;
+        page.hitTest(point)
     }
 
     pub struct PageViewIvars {
@@ -286,6 +296,7 @@ mod mac {
 
     pub struct PageIvars {
         app: AppHandle,
+        tab: String,
         /* the folder a local file opened with may read, which is also as
         far as its links may go */
         files: RefCell<Option<String>>,
@@ -338,17 +349,22 @@ mod mac {
         }
 
         unsafe impl WKUIDelegate for PageDelegate {
-            /* a link that asks for a new window opens here: the browser has
-            one page */
+            /* a link that asks for a window of its own opens in a new tab,
+            which the app makes and loads */
             #[unsafe(method_id(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:))]
             fn create(
                 &self,
-                view: &WKWebView,
+                _view: &WKWebView,
                 _configuration: &WKWebViewConfiguration,
                 action: &WKNavigationAction,
                 _features: &WKWindowFeatures,
             ) -> Option<Retained<WKWebView>> {
-                unsafe { view.loadRequest(&action.request()) };
+                let url = unsafe { action.request().URL() }
+                    .and_then(|url| unsafe { url.absoluteString() })
+                    .map(|url| url.to_string());
+                if let Some(url) = url {
+                    emit(&self.ivars().app, "browser-new-tab", NewTab { url });
+                }
                 None
             }
 
@@ -440,7 +456,8 @@ mod mac {
                 if let Some(object) = object {
                     /* only the page is observed */
                     let view = unsafe { &*(object as *const AnyObject as *const WKWebView) };
-                    report(&self.ivars().app, view);
+                    let ivars = self.ivars();
+                    report(&ivars.app, &ivars.tab, view);
                 }
             }
         }
@@ -485,9 +502,10 @@ mod mac {
         alert.beginSheetModalForWindow_completionHandler(&window, Some(&handler));
     }
 
-    fn report(app: &AppHandle, view: &WKWebView) {
+    fn report(app: &AppHandle, tab: &str, view: &WKWebView) {
         let state = unsafe {
             PageState {
+                tab: tab.to_owned(),
                 url: view
                     .URL()
                     .and_then(|url| url.absoluteString())
@@ -505,11 +523,74 @@ mod mac {
         emit(app, "browser-state", state);
     }
 
+    struct Tab {
+        id: String,
+        page: Retained<PageView>,
+        delegate: Retained<PageDelegate>,
+    }
+
     struct Browser {
         main: Retained<WKWebView>,
-        page: Retained<PageView>,
         router: Retained<Router>,
-        delegate: Retained<PageDelegate>,
+        tabs: Vec<Tab>,
+        active: Option<String>,
+        /* whether the app is showing the panel, and where */
+        shown: bool,
+        placed: Option<(NSRect, f64)>,
+    }
+
+    impl Browser {
+        fn tab(&self, id: &str) -> Option<&Tab> {
+            self.tabs.iter().find(|tab| tab.id == id)
+        }
+
+        /* the active tab where the app last placed the page, and every other
+        tab hidden, alive, with its page as it was */
+        fn show(&self) {
+            let active = self.active.as_deref().and_then(|id| self.tab(id));
+            for tab in &self.tabs {
+                let showing = self.shown && Some(tab.id.as_str()) == self.active.as_deref();
+                if showing {
+                    if let Some((frame, radius)) = self.placed {
+                        tab.page.setFrame(frame);
+                        round_bottom(&tab.page, radius);
+                    }
+                }
+                tab.page.setHidden(!showing);
+            }
+            *self.router.ivars().page.borrow_mut() = active.map(|tab| tab.page.clone());
+            self.router.setHidden(!self.shown || active.is_none());
+        }
+
+        /* the keyboard can't stay with a page no one sees */
+        fn take_keyboard_back(&self) {
+            if let Some(window) = self.main.window() {
+                if let Some(responder) = window.firstResponder() {
+                    let in_page = self.tabs.iter().any(|tab| {
+                        let responder: &NSResponder = &responder;
+                        let is_view: bool =
+                            unsafe { msg_send![responder, isKindOfClass: NSView::class()] };
+                        is_view && unsafe { msg_send![responder, isDescendantOf: &*tab.page] }
+                    });
+                    if in_page {
+                        window.makeFirstResponder(Some(&self.main));
+                    }
+                }
+            }
+        }
+    }
+
+    fn round_bottom(page: &PageView, radius: f64) {
+        unsafe {
+            let layer: *mut AnyObject = msg_send![page, layer];
+            if !layer.is_null() {
+                let _: () = msg_send![layer, setCornerRadius: radius];
+                let _: () = msg_send![layer, setMasksToBounds: Bool::YES];
+                /* kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner: the panel's
+                bottom corners; the toolbar covers the top */
+                let _: () = msg_send![layer, setMaskedCorners: 3_usize];
+            }
+        }
     }
 
     struct Slot(Option<Browser>);
@@ -534,15 +615,48 @@ mod mac {
         }
     }
 
-    fn create(
+    fn create(mtm: MainThreadMarker, main: &Retained<WKWebView>) -> Option<Browser> {
+        let superview = unsafe { main.superview() }?;
+        let router: Retained<Router> = {
+            let this = Router::alloc(mtm).set_ivars(RouterIvars {
+                main: main.clone(),
+                page: RefCell::new(None),
+                solids: RefCell::new(Vec::new()),
+            });
+            unsafe { msg_send![super(this), init] }
+        };
+        /* the app's webview stops painting a background of its own: where
+        its page paints nothing, the browser beneath shows */
+        draws_background(main, false);
+        router.setHidden(true);
+        superview.addSubview_positioned_relativeTo(
+            &router,
+            NSWindowOrderingMode::Above,
+            Some(main),
+        );
+        Some(Browser {
+            main: main.clone(),
+            router,
+            tabs: Vec::new(),
+            active: None,
+            shown: false,
+            placed: None,
+        })
+    }
+
+    /* a tab's page, beneath the app's webview, in the browser's own website
+    data store, which every tab shares */
+    fn new_tab(
         mtm: MainThreadMarker,
         app: &AppHandle,
         main: &Retained<WKWebView>,
-    ) -> Option<Browser> {
+        id: &str,
+    ) -> Option<Tab> {
         let superview = unsafe { main.superview() }?;
         let config = unsafe { WKWebViewConfiguration::new(mtm) };
-        if let Some(id) = NSUUID::initWithUUIDString(NSUUID::alloc(), &NSString::from_str(STORE)) {
-            let store = unsafe { WKWebsiteDataStore::dataStoreForIdentifier(&id, mtm) };
+        if let Some(store) = NSUUID::initWithUUIDString(NSUUID::alloc(), &NSString::from_str(STORE))
+        {
+            let store = unsafe { WKWebsiteDataStore::dataStoreForIdentifier(&store, mtm) };
             unsafe { config.setWebsiteDataStore(&store) };
         }
         /* sites tailor themselves to the system browser's user agent; a
@@ -560,6 +674,7 @@ mod mac {
         let delegate: Retained<PageDelegate> = {
             let this = PageDelegate::alloc(mtm).set_ivars(PageIvars {
                 app: app.clone(),
+                tab: id.to_owned(),
                 files: RefCell::new(None),
             });
             unsafe { msg_send![super(this), init] }
@@ -578,31 +693,24 @@ mod mac {
             }
             let _: () = msg_send![&*page, setWantsLayer: Bool::YES];
         }
-        let router: Retained<Router> = {
-            let this = Router::alloc(mtm).set_ivars(RouterIvars {
-                main: main.clone(),
-                page: page.clone(),
-                solids: RefCell::new(Vec::new()),
-            });
-            unsafe { msg_send![super(this), init] }
-        };
-        /* the app's webview stops painting a background of its own: where
-        its page paints nothing, the browser beneath shows */
-        draws_background(main, false);
         page.setHidden(true);
-        router.setHidden(true);
         superview.addSubview_positioned_relativeTo(&page, NSWindowOrderingMode::Below, Some(main));
-        superview.addSubview_positioned_relativeTo(
-            &router,
-            NSWindowOrderingMode::Above,
-            Some(main),
-        );
-        Some(Browser {
-            main: main.clone(),
+        Some(Tab {
+            id: id.to_owned(),
             page,
-            router,
             delegate,
         })
+    }
+
+    fn drop_tab(tab: Tab) {
+        unsafe {
+            for key in OBSERVED {
+                tab.page
+                    .removeObserver_forKeyPath(&tab.delegate, &NSString::from_str(key));
+            }
+            tab.page.stopLoading();
+        }
+        tab.page.removeFromSuperview();
     }
 
     /* a rect in the app's CSS pixels, in the content view's coordinates */
@@ -619,20 +727,27 @@ mod mac {
         unsafe { Retained::retain(main.cast::<WKWebView>()) }
     }
 
-    pub fn open(app: AppHandle, main: *mut c_void, target: Target) {
+    pub fn open(app: AppHandle, main: *mut c_void, tab: String, target: Target) {
         let Some(main) = main_view(main) else { return };
         on_main(|mtm, slot| {
             if slot.is_none() {
-                *slot = create(mtm, &app, &main);
+                *slot = create(mtm, &main);
             }
-            let Some(browser) = slot.as_ref() else { return };
-            let files = &browser.delegate.ivars().files;
+            let Some(browser) = slot.as_mut() else { return };
+            if browser.tab(&tab).is_none() {
+                let Some(made) = new_tab(mtm, &app, &main, &tab) else {
+                    return;
+                };
+                browser.tabs.push(made);
+            }
+            let Some(tab) = browser.tab(&tab) else { return };
+            let files = &tab.delegate.ivars().files;
             match target {
                 Target::Web(url) => {
                     files.replace(None);
                     if let Some(url) = NSURL::URLWithString(&NSString::from_str(&url)) {
                         let request = NSURLRequest::requestWithURL(&url);
-                        unsafe { browser.page.loadRequest(&request) };
+                        unsafe { tab.page.loadRequest(&request) };
                     }
                 }
                 Target::File { file, folder } => {
@@ -645,90 +760,98 @@ mod mac {
                     let folder =
                         NSURL::fileURLWithPath_isDirectory(&NSString::from_str(&root), true);
                     files.replace(Some(root));
-                    unsafe {
-                        browser
-                            .page
-                            .loadFileURL_allowingReadAccessToURL(&file, &folder)
-                    };
+                    unsafe { tab.page.loadFileURL_allowingReadAccessToURL(&file, &folder) };
                 }
             }
+            browser.show();
+        });
+    }
+
+    /// Shows `tab`, or no page when it has none open yet.
+    pub fn select(tab: Option<String>) {
+        on_main(|_, slot| {
+            let Some(browser) = slot.as_mut() else { return };
+            browser.active = tab;
+            browser.take_keyboard_back();
+            browser.show();
         });
     }
 
     pub fn place(main: *mut c_void, placement: Placement) {
         let Some(main) = main_view(main) else { return };
-        on_main(|_, slot| {
-            let Some(browser) = slot.as_ref() else { return };
+        on_main(|mtm, slot| {
+            /* a placement can arrive before the load that made the tab */
+            if slot.is_none() {
+                *slot = create(mtm, &main);
+            }
+            let Some(browser) = slot.as_mut() else { return };
             let Some(superview) = (unsafe { main.superview() }) else {
                 return;
             };
             let zoom = unsafe { main.pageZoom() };
-            browser
-                .page
-                .setFrame(frame(&main, &superview, placement.bounds));
+            browser.placed = Some((
+                frame(&main, &superview, placement.bounds),
+                placement.radius * zoom,
+            ));
             browser
                 .router
                 .setFrame(frame(&main, &superview, placement.open));
             *browser.router.ivars().solids.borrow_mut() = placement.solids;
-            unsafe {
-                let layer: *mut AnyObject = msg_send![&*browser.page, layer];
-                if !layer.is_null() {
-                    let _: () = msg_send![layer, setCornerRadius: placement.radius * zoom];
-                    let _: () = msg_send![layer, setMasksToBounds: Bool::YES];
-                    /* kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner: the
-                    panel's bottom corners; the toolbar covers the top */
-                    let _: () = msg_send![layer, setMaskedCorners: 3_usize];
-                }
-            }
-            browser.page.setHidden(false);
-            browser.router.setHidden(false);
+            browser.shown = true;
+            browser.show();
         });
     }
 
     pub fn hide() {
         on_main(|_, slot| {
-            if let Some(browser) = slot.as_ref() {
-                browser.page.setHidden(true);
-                browser.router.setHidden(true);
+            if let Some(browser) = slot.as_mut() {
+                browser.shown = false;
                 browser.router.ivars().solids.borrow_mut().clear();
-                /* the keyboard can't stay with a page no one sees */
-                if let Some(window) = browser.page.window() {
-                    window.makeFirstResponder(Some(&browser.main));
-                }
+                browser.take_keyboard_back();
+                browser.show();
             }
         });
     }
 
-    pub fn go(action: &str) {
+    pub fn go(tab: &str, action: &str) {
         on_main(|_, slot| {
-            let Some(browser) = slot.as_ref() else { return };
+            let Some(tab) = slot.as_ref().and_then(|browser| browser.tab(tab)) else {
+                return;
+            };
             unsafe {
                 match action {
-                    "back" => drop(browser.page.goBack()),
-                    "forward" => drop(browser.page.goForward()),
-                    "reload" => drop(browser.page.reload()),
-                    "stop" => browser.page.stopLoading(),
+                    "back" => drop(tab.page.goBack()),
+                    "forward" => drop(tab.page.goForward()),
+                    "reload" => drop(tab.page.reload()),
+                    "stop" => tab.page.stopLoading(),
                     _ => {}
                 }
             }
         });
     }
 
+    pub fn close_tab(tab: &str) {
+        on_main(|_, slot| {
+            let Some(browser) = slot.as_mut() else { return };
+            browser.take_keyboard_back();
+            if let Some(index) = browser.tabs.iter().position(|open| open.id == tab) {
+                drop_tab(browser.tabs.remove(index));
+            }
+            if browser.active.as_deref() == Some(tab) {
+                browser.active = None;
+            }
+            browser.show();
+        });
+    }
+
     pub fn close() {
         on_main(|_, slot| {
-            if let Some(browser) = slot.take() {
-                unsafe {
-                    for key in OBSERVED {
-                        browser
-                            .page
-                            .removeObserver_forKeyPath(&browser.delegate, &NSString::from_str(key));
-                    }
-                }
-                if let Some(window) = browser.page.window() {
-                    window.makeFirstResponder(Some(&browser.main));
+            if let Some(mut browser) = slot.take() {
+                browser.take_keyboard_back();
+                for tab in browser.tabs.drain(..) {
+                    drop_tab(tab);
                 }
                 browser.router.removeFromSuperview();
-                browser.page.removeFromSuperview();
                 draws_background(&browser.main, true);
             }
         });
@@ -773,10 +896,23 @@ fn in_order(
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
-pub async fn browser_open(webview: tauri::Webview, url: String, seq: u64) -> Result<(), String> {
+/// Loads a page into a tab, making the tab if it's new. A load changes what
+/// a tab holds, not what shows, so it takes no part in `in_order`: a
+/// placement sent after it must not drop it.
+pub async fn browser_open(webview: tauri::Webview, tab: String, url: String) -> Result<(), String> {
     let target = target(&url).await?;
     let app = webview.app_handle().clone();
-    in_order(&webview, seq, move |main| mac::open(app, main, target))
+    with_main(&webview, move |main| mac::open(app, main, tab, target))
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn browser_select(
+    webview: tauri::Webview,
+    tab: Option<String>,
+    seq: u64,
+) -> Result<(), String> {
+    in_order(&webview, seq, move |_| mac::select(tab))
 }
 
 #[cfg(target_os = "macos")]
@@ -797,8 +933,22 @@ pub async fn browser_hide(webview: tauri::Webview, seq: u64) -> Result<(), Strin
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
-pub async fn browser_go(webview: tauri::Webview, action: String) -> Result<(), String> {
-    with_main(&webview, move |_| mac::go(&action))
+pub async fn browser_go(
+    webview: tauri::Webview,
+    tab: String,
+    action: String,
+) -> Result<(), String> {
+    with_main(&webview, move |_| mac::go(&tab, &action))
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn browser_close_tab(
+    webview: tauri::Webview,
+    tab: String,
+    seq: u64,
+) -> Result<(), String> {
+    in_order(&webview, seq, move |_| mac::close_tab(&tab))
 }
 
 #[cfg(target_os = "macos")]
