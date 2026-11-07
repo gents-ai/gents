@@ -1993,6 +1993,62 @@ async fn backend_park_releases_local_lease_only_after_durable_transition() {
 }
 
 #[tokio::test]
+async fn session_interrupt_finds_parked_backend_request() {
+    let (node, _dir) = test_node().await;
+    let mut lifecycle = owner(&node).await;
+    let request = lifecycle.request().clone();
+    assert!(lifecycle.park_for_backend().await.unwrap());
+    let active = crate::request::interrupt::active_session_request(
+        &node,
+        &request.session_id,
+        "did:test:execution-lease",
+        request.requester_did.as_deref(),
+    )
+    .await
+    .unwrap()
+    .expect("parked work is active for session control");
+    assert_eq!(active.doc_id.as_deref(), Some(request.doc_id.as_str()));
+    let interrupted = crate::store::config_client::ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "test.interrupt_parked_session",
+        |txn| {
+            Box::pin(async {
+                crate::request::interrupt::interrupt_active_session_in_txn(
+                    txn,
+                    &request.session_id,
+                    "did:test:execution-lease",
+                    request.requester_did.as_deref(),
+                )
+                .await
+            })
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(interrupted.as_deref(), Some(request.request_id.as_str()));
+    assert!(
+        crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id(&node, &request.doc_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let wake = crate::request::lifecycle::backend_wait::wake_parked_execution(
+        &node,
+        &request.doc_id,
+        "lease-test",
+        Some(chrono::Utc::now()),
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        wake,
+        crate::request::lifecycle::backend_wait::WakeResult::Lost
+    ));
+}
+
+#[tokio::test]
 async fn backend_park_does_not_release_lease_when_interrupted() {
     let (node, _dir) = test_node().await;
     let mut lifecycle = owner(&node).await;

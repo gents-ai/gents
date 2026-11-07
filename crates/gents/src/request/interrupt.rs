@@ -212,7 +212,9 @@ pub(crate) async fn interrupt_active_session_in_txn(
                 {{ _docID request_id }} }}"#,
             claimed_or_processing = RequestLifecycleState::graphql_list([
                 RequestLifecycleState::Claimed,
-                RequestLifecycleState::Processing
+                RequestLifecycleState::Processing,
+                RequestLifecycleState::WaitingForBackend,
+                RequestLifecycleState::ResumingBackend
             ])
         ))
         .await?;
@@ -248,7 +250,7 @@ pub(crate) async fn active_session_request(
     let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let response = graphql_with_transaction_retry(
         node,
-        &format!(r#"{{AgentRequest(filter:{{{scope},purpose:{{_eq:"normal"}},lifecycle_state:{{_in:{claimed_or_processing}}}}},limit:2){{_docID request_id node_did requester_did session_id lifecycle_state}}}}"#, claimed_or_processing = RequestLifecycleState::graphql_list([RequestLifecycleState::Claimed, RequestLifecycleState::Processing])),
+        &format!(r#"{{AgentRequest(filter:{{{scope},purpose:{{_eq:"normal"}},lifecycle_state:{{_in:{claimed_or_processing}}}}},limit:2){{_docID request_id node_did requester_did session_id lifecycle_state}}}}"#, claimed_or_processing = RequestLifecycleState::graphql_list([RequestLifecycleState::Claimed, RequestLifecycleState::Processing, RequestLifecycleState::WaitingForBackend, RequestLifecycleState::ResumingBackend])),
         "active request lookup",
     )
     .await?;

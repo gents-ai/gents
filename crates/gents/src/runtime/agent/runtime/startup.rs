@@ -755,16 +755,16 @@ async fn run_agent_owned(
     let router_backend_health = agent.backend_health.clone();
     background_tasks.spawn(async move {
         BackgroundTaskResult::Router(
-            super::router::run_router(
-                router_node,
-                router_node_did,
-                router_active_snapshot_rx,
-                router_shutdown,
-                router_admission_gate,
-                router_runtime_status,
-                router_runtime_snapshot_observer,
-                router_backend_health,
-            )
+            super::router::run_router(super::router::RouterConfig {
+                node: router_node,
+                node_did: router_node_did,
+                active_snapshot_rx: router_active_snapshot_rx,
+                shutdown: router_shutdown,
+                admission_gate: router_admission_gate,
+                runtime_status: router_runtime_status,
+                runtime_snapshot_observer: router_runtime_snapshot_observer,
+                backend_health: router_backend_health,
+            })
             .await,
         )
     });
