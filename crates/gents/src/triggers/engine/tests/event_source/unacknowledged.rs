@@ -245,7 +245,12 @@ impl Delivery {
 
     async fn trigger_status(&self, status: &str) -> serde_json::Value {
         for _ in 0..100 {
-            let trigger = observed_trigger(self.node.as_ref(), crate::request::lifecycle::test_support::PIN_FIXED_DID, "ping-trigger").await;
+            let trigger = observed_trigger(
+                self.node.as_ref(),
+                crate::request::lifecycle::test_support::PIN_FIXED_DID,
+                "ping-trigger",
+            )
+            .await;
             if trigger["last_status"].as_str() == Some(status) {
                 return trigger;
             }
@@ -309,6 +314,18 @@ async fn refused_fire_fails_once_visibly_and_is_delivered_once_after_reconfigura
         vec![delivery.doc_id.clone()]
     );
 
+    // The repair is a committed Task change; admission revalidates against it.
+    crate::triggers::callback::seed_test_configuration(
+        &delivery.node,
+        crate::request::lifecycle::test_support::PIN_FIXED_DID,
+        vec![(
+            crate::Collection::Task,
+            serde_json::json!({"task_id":"ping-task",
+                "agent_did":crate::triggers::callback::test_agent_did(),
+                "prompt_template":"Handle the ping: {{ doc.message }}", "emit_outcome":false}),
+        )],
+    )
+    .await;
     delivery
         .snapshot_tx
         .send(ping_snapshot(&delivery.node, 2, false).await)
@@ -433,7 +450,12 @@ async fn an_acknowledged_fire_records_no_unacknowledged_status() {
     });
     let trigger = delivery.trigger_status("error").await;
     tokio::time::sleep(Duration::from_millis(150)).await;
-    let settled = observed_trigger(delivery.node.as_ref(), crate::request::lifecycle::test_support::PIN_FIXED_DID, "ping-trigger").await;
+    let settled = observed_trigger(
+        delivery.node.as_ref(),
+        crate::request::lifecycle::test_support::PIN_FIXED_DID,
+        "ping-trigger",
+    )
+    .await;
     assert_ne!(
         settled["last_status"].as_str(),
         Some(crate::triggers::engine::UNACKNOWLEDGED_STATUS),
