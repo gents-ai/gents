@@ -386,6 +386,7 @@ pub(crate) async fn install_pack_slot(
         gents::pack::InstalledVia::Operator,
         None,
         &|_| None,
+        &Default::default(),
     )
     .await?;
     gents::pack::install_prepared_document_graph(

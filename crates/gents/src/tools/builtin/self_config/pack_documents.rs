@@ -118,6 +118,7 @@ impl PackInstaller {
             self.home.as_deref(),
             &environment,
             provisioner.as_ref(),
+            &Default::default(),
         )
         .await?;
         for source in std::iter::once(distribution).chain(dependencies.iter()) {
