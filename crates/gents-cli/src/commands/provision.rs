@@ -147,7 +147,7 @@ async fn ensure_home_identity(
     }
 
     let data_dir = crate::default_data_dir(home_dir);
-    let _store_lock = crate::commands::init::lock_init_store(home_dir, &data_dir, false)?;
+    let store_lock = crate::commands::init::lock_init_store(home_dir, &data_dir, false)?;
     if let Some(report) = read_init_config(home_dir)?.and_then(report_from_stored_identity) {
         return Ok(report);
     }
@@ -174,6 +174,7 @@ async fn ensure_home_identity(
         tool_root: None,
         reset: false,
         store_key_custody,
+        store_lock: &store_lock,
     })
     .await
     .with_context(|| format!("initializing identity metadata in {}", home_dir.display()))?;
