@@ -695,9 +695,15 @@ async fn readiness_parent_recovery_matches_native_owner_and_model() {
         let user = crate::KeyIdentity::load_or_create(dir.path().join("user.key"), None).unwrap();
         let foreign =
             crate::KeyIdentity::load_or_create(dir.path().join("foreign.key"), None).unwrap();
+        // The User configures the Node through client-signed access; a local
+        // non-node write without a managed signer is refused by design.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
         let node = Arc::new(
             defra_node::Node::builder()
+                .enable_signing()
                 .with_node_identity_did(runtime.did())
+                .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
                 .build()
                 .await
                 .unwrap(),
@@ -721,8 +727,11 @@ async fn readiness_parent_recovery_matches_native_owner_and_model() {
         node.add_collection(gents_protocol::schemas::AGENT)
             .await
             .unwrap();
-        let user_access =
-            ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
+        let user_access = ConfigAccess::Graphql(
+            crate::store::config_client::GraphqlEndpoint::as_principal(&endpoint, user.did())
+                .with_client_signing_capability(user.client_signing_capability().unwrap())
+                .unwrap(),
+        );
         let runtime_access =
             ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
         let parent_write = format!(
