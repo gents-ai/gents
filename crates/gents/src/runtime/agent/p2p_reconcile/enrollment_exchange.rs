@@ -150,7 +150,9 @@ pub(super) async fn prune_expired_offers(
             admin_did: row.admin_did,
             admin_sig: signature,
         };
-        let owned = response.admin_did == identity.did() && offer.expires_at == row.expires_at;
+        let owned = response.admin_did == identity.did()
+            && chrono::DateTime::parse_from_rfc3339(&offer.expires_at)
+                .is_ok_and(|signed_expiry| signed_expiry == expires);
         let verified = owned
             && matches!(
                 identity
@@ -190,8 +192,10 @@ async fn existing_response(
         anyhow::ensure!(found.is_empty(), "conflicting renewal offer responses");
         return Ok(None);
     };
+    let signed_expiry = gents_protocol::enrollment::decode_offer(&row.offer_token)?.expires_at;
     anyhow::ensure!(
-        gents_protocol::enrollment::decode_offer(&row.offer_token)?.expires_at == row.expires_at,
+        chrono::DateTime::parse_from_rfc3339(&signed_expiry)?
+            == chrono::DateTime::parse_from_rfc3339(&row.expires_at)?,
         "renewal offer expiry does not match its signed offer"
     );
     let offer = RenewalOfferResponse {
