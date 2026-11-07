@@ -410,10 +410,10 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) enrollment_route_readiness_cases: Vec<serde_json::Value>,
     pub(crate) enrollment_startup_cases: Vec<serde_json::Value>,
     pub(crate) enrollment_candidate_name_cases: Vec<serde_json::Value>,
-    pub(crate) enrollment_auto_renewal_cases: Vec<serde_json::Value>,
-    pub(crate) enrollment_renewal_intent_cases: Vec<serde_json::Value>,
     pub(crate) enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,
     pub(crate) enrollment_digest_cases: Vec<LeanEnrollmentDigestCase>,
+    pub(crate) enrollment_auto_renewal_cases: Vec<serde_json::Value>,
+    pub(crate) enrollment_renewal_intent_cases: Vec<serde_json::Value>,
     pub(crate) agent_request_admission_cases: Vec<LeanAgentRequestAdmissionCase>,
     pub(crate) causal_hop_contract: LeanCausalHopContract,
     pub(crate) scope_collection_rules:
