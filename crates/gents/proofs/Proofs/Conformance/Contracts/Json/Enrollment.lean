@@ -44,7 +44,6 @@ def autoRenewalCasesJson : String :=
       ",\"proposal\":{\"network\":" ++ jsonString p.network ++
       ",\"member\":" ++ jsonString p.member ++ ",\"peer\":" ++ jsonString p.peer ++
       ",\"owner\":" ++ jsonString p.owner ++ ",\"profile\":" ++ jsonString p.profile ++
-      ",\"lease_seconds\":" ++ toString p.leaseSeconds ++
       ",\"member_signed\":" ++ boolJson p.memberSigned ++ ",\"offer_fresh\":" ++ boolJson p.offerFresh ++
       ",\"predecessor_sequence\":" ++ toString p.predecessorSequence ++ "}" ++
       ",\"now\":" ++ toString c.now ++ ",\"window\":" ++ toString c.window ++
