@@ -408,9 +408,11 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     "{name}: edit crossed physical root"
                 );
                 assert!(
-                    !crate::goal::update_goal_fields_if_status(
-                        &node,
-                        &identity::Did::new(identity.did()).unwrap(),
+                    !crate::goal::update_goal_fields_if_status_from_access(
+                        &crate::ConfigAccess::local_as(
+                            node.clone(),
+                            identity::Did::new(identity.did()).unwrap()
+                        ),
                         &observed,
                         observed.parsed_status().unwrap(),
                         r#"last_failure: "Stale controller write""#
