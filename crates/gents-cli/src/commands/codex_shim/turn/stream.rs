@@ -1404,6 +1404,7 @@ mod tests {
             ),
             node_did: Arc::from("did:test:reasoning"),
             agent_did: Arc::from("reasoning"),
+            agent_signer: None,
             id_counter: Arc::new(AtomicU64::new(1)),
             timeout: Duration::from_secs(5),
             poll_interval: Duration::from_millis(10),
