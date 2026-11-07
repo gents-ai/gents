@@ -42,6 +42,37 @@ import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 const invoke = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
+/* the main window, the plugin windows open beside it, and what it's told */
+const shell = vi.hoisted(() => {
+  const listeners = new Map<string, (event: { payload: unknown }) => void>();
+  const open = new Set<string>();
+  const closed = vi.fn();
+  return {
+    open,
+    closed,
+    tell: (event: string, payload: unknown) => listeners.get(event)?.({ payload }),
+    reset: () => {
+      listeners.clear();
+      open.clear();
+      closed.mockClear();
+    },
+    module: {
+      getCurrentWindow: () => ({
+        label: "main",
+        listen: async (event: string, heard: (event: { payload: unknown }) => void) => {
+          listeners.set(event, heard);
+          return () => listeners.delete(event);
+        },
+      }),
+      Window: {
+        getByLabel: async (label: string) =>
+          open.has(label) ? { close: async () => closed(label) } : null,
+      },
+    },
+  };
+});
+vi.mock("@tauri-apps/api/window", () => shell.module);
+
 const disposers: Array<() => void> = [];
 afterEach(() => {
   disposers.splice(0).forEach((dispose) => dispose());
@@ -50,6 +81,7 @@ afterEach(() => {
   resetRuntimeDoor();
   resetUxDoors();
   invoke.mockClear();
+  shell.reset();
   vi.restoreAllMocks();
 });
 
@@ -179,6 +211,57 @@ describe("the page's open-in-window action", () => {
     (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
     view.rerender(<PluginPageScreen pluginId="board" windowed />);
     expect(screen.queryByTestId("plugin-page-window")).toBeNull();
+  });
+});
+
+describe("the page while it has a window of its own", () => {
+  const BOARD_WINDOW = "gents-plugin-626f617264";
+  const told = (pluginId: string, open: boolean) =>
+    act(() => shell.tell("desktop://plugin-window", { pluginId, open }));
+
+  function renderBoard(windowed = false) {
+    registerBoard();
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    publishUxPlugin({ id: "board", name: "Board", door: "pack", status: "loaded" });
+    const app = testApp({ deployments: [deployment] });
+    return renderIn(app, <PluginPageScreen pluginId="board" windowed={windowed} />);
+  }
+
+  it("stands aside while that window is open, and comes back when it closes", async () => {
+    shell.open.add(BOARD_WINDOW);
+    renderBoard();
+    expect(await screen.findByTestId("plugin-page-elsewhere")).toHaveTextContent(
+      "Board is open in its own window",
+    );
+    expect(screen.queryByTestId("board-page")).toBeNull();
+
+    told("other", false);
+    expect(screen.getByTestId("plugin-page-elsewhere")).toBeInTheDocument();
+    told("board", false);
+    expect(screen.getByTestId("board-page")).toBeInTheDocument();
+    told("board", true);
+    expect(screen.getByTestId("plugin-page-elsewhere")).toBeInTheDocument();
+  });
+
+  it("brings that window forward, or closes it to show the page here", async () => {
+    shell.open.add(BOARD_WINDOW);
+    renderBoard();
+    fireEvent.click(await screen.findByRole("button", { name: "Bring it forward" }));
+    expect(invoke).toHaveBeenCalledWith("desktop_open_plugin_window", {
+      pluginId: "board",
+      nodeDid: deployment.nodeDid,
+      title: "Board",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Show it here" }));
+    await waitFor(() => expect(shell.closed).toHaveBeenCalledWith(BOARD_WINDOW));
+  });
+
+  it("stays the page inside that window", async () => {
+    shell.open.add(BOARD_WINDOW);
+    renderBoard(true);
+    await act(async () => {});
+    expect(screen.getByTestId("board-page")).toBeInTheDocument();
+    expect(screen.queryByTestId("plugin-page-elsewhere")).toBeNull();
   });
 });
 

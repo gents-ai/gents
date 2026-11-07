@@ -5,12 +5,34 @@
 //! raises while this window speaks for it.
 use std::fmt::Write;
 
-use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindowBuilder};
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 pub(super) const LABEL_PREFIX: &str = "gents-plugin-";
 const MAX_ID: usize = 256;
 const MAX_NODE: usize = 512;
 const MAX_TITLE: usize = 120;
+
+/// Sent to the main view when a plugin's own window opens or closes, so the
+/// page there stands aside while the window shows it.
+pub const PLUGIN_WINDOW_EVENT: &str = "desktop://plugin-window";
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct PluginWindowChange<'a> {
+    plugin_id: &'a str,
+    open: bool,
+}
+
+fn tell_main<R>(app: &AppHandle<R>, plugin_id: &str, open: bool)
+where
+    R: Runtime,
+{
+    let change = PluginWindowChange { plugin_id, open };
+    if let Err(error) = app.emit_to("main", PLUGIN_WINDOW_EVENT, change) {
+        tracing::warn!(%error, plugin = %plugin_id, open, "could not tell the main view about a plugin window");
+    }
+}
 
 /// Window labels allow only `a-zA-Z0-9-/:_`, and the capability's window
 /// glob must match every label, so the id is spelled in hex: one window per
@@ -109,6 +131,14 @@ where
         WebviewWindowBuilder::from_config(app, &config)?,
     )
     .build()?;
+    let handle = app.clone();
+    let id = plugin_id.to_owned();
+    window.on_window_event(move |event| {
+        if matches!(event, WindowEvent::Destroyed) {
+            tell_main(&handle, &id, false);
+        }
+    });
+    tell_main(app, plugin_id, true);
     window.set_focus()
 }
 
@@ -128,6 +158,18 @@ mod tests {
                 .all(|c| c.is_ascii_hexdigit()));
         }
         assert_eq!(label_for("a/b"), "gents-plugin-612f62");
+    }
+
+    #[test]
+    fn a_window_change_reaches_the_main_view_in_its_shape() {
+        assert_eq!(
+            serde_json::to_value(PluginWindowChange {
+                plugin_id: "acme/board",
+                open: true,
+            })
+            .unwrap(),
+            serde_json::json!({ "pluginId": "acme/board", "open": true })
+        );
     }
 
     #[test]

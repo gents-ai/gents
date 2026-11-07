@@ -1,6 +1,13 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { uxPluginRecords, useUxPluginRecords } from "@/contrib/plugins-store";
 import { uxScanSettled } from "@/contrib/runtime-door";
+import {
+  listenToWindow,
+  PLUGIN_WINDOW_EVENT,
+  pluginWindowLabel,
+  windowOpen,
+  type PluginWindowChange,
+} from "../../lib/nativeShell";
 
 /** A UX plugin's page in a window of its own opens on that page, with its
     data calls going to the node it was opened from. The shell opens the
@@ -41,4 +48,37 @@ export function useClosesWhenPluginGone(pluginId: string, close: () => void) {
       current = false;
     };
   }, [loaded, pluginId]);
+}
+
+/** Whether plugin `pluginId` has a window of its own open, as the main
+    window follows it: asked once, then told of each open and close. What it
+    was told wins over an answer that arrives after it. `follow` is false
+    where no such window can exist (a browser, a phone, the window itself). */
+export function usePluginWindowOpen(pluginId: string, follow: boolean): boolean {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    setOpen(false);
+    if (!follow) return;
+    let live = true;
+    let told = false;
+    const stop = listenToWindow<PluginWindowChange>(PLUGIN_WINDOW_EVENT, (change) => {
+      if (!live || change.pluginId !== pluginId) return;
+      told = true;
+      setOpen(change.open);
+    });
+    void stop
+      .then(() => windowOpen(pluginWindowLabel(pluginId)))
+      .then(
+        (now) => live && !told && setOpen(now),
+        () => {},
+      );
+    return () => {
+      live = false;
+      void stop.then(
+        (unlisten) => unlisten(),
+        () => {},
+      );
+    };
+  }, [pluginId, follow]);
+  return follow && open;
 }
