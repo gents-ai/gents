@@ -1,0 +1,7 @@
+type EnrollmentRenewalOffer @branchable {
+    intent_id: String @index(unique: true) @immutable
+    member_did: String @index @immutable
+    offer_token: String @immutable
+    admin_did: String @immutable
+    admin_sig: String @immutable
+}

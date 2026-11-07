@@ -534,6 +534,8 @@ def snapshotSessionCasesJson : String :=
   ""
     ++ "\"file_inventory_closure_cases\":"
       ++ fileInventoryClosureCasesJson ++ ","
+    ++ "\"enrollment_auto_renewal_cases\":" ++ autoRenewalCasesJson ++ ","
+    ++ "\"enrollment_renewal_intent_cases\":" ++ renewalIntentCasesJson ++ ","
     ++ "\"enrollment_cases\":"
       ++ enrollmentCasesJson ++ ","
     ++ "\"enrollment_durable_projection_cases\":"

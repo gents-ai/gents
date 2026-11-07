@@ -6,7 +6,8 @@
 use std::time::{Duration, Instant};
 
 use gents::runtime::agent::p2p_reconcile::{
-    enrollment_authority_channel, run_enrollment_reconciler, GraphqlEnrollmentStore,
+    enrollment_authority_channel, run_enrollment_reconciler, run_pairing_reconciler,
+    EnrollmentRenewalPolicy, GraphqlEnrollmentStore,
 };
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
@@ -56,6 +57,166 @@ async fn wait_for_route_sequence(db: &TestDb, peer: &str, sequence: i64) -> serd
         );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
+}
+
+#[tokio::test]
+async fn opted_in_members_renew_over_authenticated_routes() {
+    use gents::runtime::agent::p2p_reconcile::enrollment_candidate::request_enrollment;
+    use gents::runtime::agent::p2p_reconcile::enrollment_member_authority::{
+        load_status_enrollment_approvals, EnrollmentAuthorityOutcome,
+    };
+
+    let server = support::test_p2p_db("automatic-renewal-server").await;
+    let member = support::test_p2p_db("automatic-renewal-member").await;
+    gents::documents::ensure_node(&server.node, server.node_identity.did())
+        .await
+        .unwrap();
+    gents::documents::ensure_node(&member.node, member.node_identity.did())
+        .await
+        .unwrap();
+    let (member_peer, _) = support::enrollment::wait_for_peer_identity(&member.node).await;
+    let (server_peer, _) = support::enrollment::wait_for_peer_identity(&server.node).await;
+    let (_, token) = support::enrollment::signed_enrollment_offer(
+        &server.node,
+        "automatic-renewal-network",
+        "Renewal network",
+        server.node_identity.as_ref(),
+        "automatic-renewal-bootstrap".into(),
+    )
+    .await;
+    let first = request_enrollment(&member.node, member.node_identity.as_ref(), &token)
+        .await
+        .unwrap();
+    let store = GraphqlEnrollmentStore::new(server.node.clone(), server.node_identity.clone());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if store
+            .load_projection()
+            .await
+            .unwrap()
+            .pending
+            .iter()
+            .any(|pending| pending.request.request_id == first.request_id)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "initial enrollment request did not arrive"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    store
+        .decide_request_with_lease(
+            &first.request_id,
+            EnrollmentDecisionKind::Approved,
+            Duration::from_secs(120),
+        )
+        .await
+        .unwrap();
+    let now = chrono::Utc::now();
+    let mut forged = gents_protocol::enrollment::RenewalIntent {
+        network_id: first.network_id.clone(),
+        admin_did: first.admin_did.clone(),
+        server_peer: first.server_peer.clone(),
+        member_did: first.candidate_did.clone(),
+        member_peer: first.candidate_peer.clone(),
+        predecessor_sequence: 1,
+        issued_at: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        expires_at: (now + chrono::Duration::seconds(60))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        nonce: "invalid-signature".into(),
+        member_sig: vec![0; 64],
+    };
+    let disabled = store.issue_renewal_offer(&forged).await.unwrap_err();
+    assert!(disabled
+        .to_string()
+        .contains("automatic enrollment renewal is disabled"));
+    store
+        .set_renewal_policy(EnrollmentRenewalPolicy {
+            enabled: true,
+            lease_seconds: None,
+        })
+        .await
+        .unwrap();
+    let invalid_signature = store.issue_renewal_offer(&forged).await.unwrap_err();
+    assert!(format!("{invalid_signature:#}").contains("signature verification failed"));
+    forged.member_sig = member
+        .node_identity
+        .sign(&forged.signing_payload())
+        .await
+        .unwrap();
+    forged.member_peer = "another-peer".into();
+    assert!(store.issue_renewal_offer(&forged).await.is_err());
+    let cancel = CancellationToken::new();
+    let _stop = Stop(cancel.clone());
+    let (server_owner, server_authority) = enrollment_authority_channel();
+    let server_task = tokio::spawn(run_enrollment_reconciler(
+        server.node.clone(),
+        server.node_identity.clone(),
+        server_owner,
+        cancel.clone(),
+    ));
+    let pairing_task = tokio::spawn(run_pairing_reconciler(
+        server.node.clone(),
+        server.node_identity.clone(),
+        server_authority,
+        cancel.clone(),
+    ));
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let (outcomes, _) = load_status_enrollment_approvals(
+            &member.node,
+            member.node_identity.as_ref(),
+            &member_peer,
+        )
+        .await
+        .unwrap();
+        if matches!(
+            outcomes.get(&server_peer),
+            Some(EnrollmentAuthorityOutcome::Current(_))
+        ) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "member did not observe the initial signed route"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let (member_owner, _member_authority) = enrollment_authority_channel();
+    let member_task = tokio::spawn(run_enrollment_reconciler(
+        member.node.clone(),
+        member.node_identity.clone(),
+        member_owner,
+        cancel.clone(),
+    ));
+    let deadline = Instant::now() + Duration::from_secs(110);
+    loop {
+        let projection = store.load_projection().await.unwrap();
+        if let Some(active) = projection.active.iter().find(|entry| {
+            entry.request.candidate_did == member.node_identity.did()
+                && entry.revision.sequence == 2
+        }) {
+            assert_ne!(active.request.request_id, first.request_id);
+            assert_eq!(active.request.candidate_peer, member_peer);
+            let lease =
+                chrono::DateTime::parse_from_rfc3339(&active.revision.authorization_expires_at)
+                    .unwrap()
+                    - chrono::DateTime::parse_from_rfc3339(&active.decision.decided_at).unwrap();
+            assert_eq!(lease.num_seconds(), 120);
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "automatic renewal did not create the next generation"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    cancel.cancel();
+    server_task.await.unwrap().unwrap();
+    member_task.await.unwrap().unwrap();
+    pairing_task.await.unwrap().unwrap();
 }
 
 #[tokio::test]

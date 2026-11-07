@@ -1,11 +1,54 @@
 import Proofs.Conformance.ContractCases.Enrollment
 import Proofs.Conformance.Contracts.Json.Core
+import Proofs.Enrollment.AutoRenewal
 
 namespace Conformance.Contracts
 
 open Conformance.ContractCases
 
 private def boolJson (value : Bool) : String := if value then "true" else "false"
+
+def renewalIntentCasesJson : String :=
+  jsonArray (Enrollment.AutoRenewal.intentBoundaryCases.map fun (name, g, i, now, window, valid) =>
+    "{\"name\":" ++ jsonString name ++
+      ",\"current\":{\"network\":" ++ jsonString g.network ++
+      ",\"member\":" ++ jsonString g.member ++ ",\"peer\":" ++ jsonString g.peer ++
+      ",\"expires_at\":" ++ toString g.expiresAt ++ ",\"sequence\":" ++ toString g.sequence ++
+      ",\"next_sequence\":" ++ toString g.nextSequence ++ ",\"conflict\":" ++ boolJson g.authorityConflict ++
+      ",\"revoked\":" ++ boolJson g.revoked ++ ",\"enabled\":" ++ boolJson g.enabled ++
+      ",\"verified\":" ++ boolJson g.verified ++ "}" ++
+      ",\"intent\":{\"network\":" ++ jsonString i.network ++
+      ",\"member\":" ++ jsonString i.member ++ ",\"peer\":" ++ jsonString i.peer ++
+      ",\"predecessor_sequence\":" ++ toString i.predecessorSequence ++
+      ",\"issued_at\":" ++ toString i.issuedAt ++ ",\"expires_at\":" ++ toString i.expiresAt ++
+      ",\"member_signed\":" ++ boolJson i.memberSigned ++
+      ",\"transport_authenticated\":" ++ boolJson i.transportAuthenticated ++ "}" ++
+      ",\"now\":" ++ toString now ++ ",\"window\":" ++ toString window ++
+      ",\"max_validity\":" ++ toString valid ++ ",\"allowed\":" ++
+      boolJson (Enrollment.AutoRenewal.mayOffer g i now window valid) ++ "}")
+
+def autoRenewalCasesJson : String :=
+  jsonArray (Enrollment.AutoRenewal.boundaryInputCases.map fun c =>
+    let g := c.current
+    let p := c.proposal
+    let limit := match g.renewalLeaseLimit with | none => "null" | some n => toString n
+    "{\"name\":" ++ jsonString c.name ++
+      ",\"current\":{\"network\":" ++ jsonString g.network ++
+      ",\"member\":" ++ jsonString g.member ++ ",\"peer\":" ++ jsonString g.peer ++
+      ",\"owner\":" ++ jsonString g.owner ++ ",\"profile\":" ++ jsonString g.profile ++
+      ",\"expires_at\":" ++ toString g.expiresAt ++ ",\"lease_seconds\":" ++ toString g.leaseSeconds ++
+      ",\"renewal_limit\":" ++ limit ++ ",\"sequence\":" ++ toString g.sequence ++ ",\"revoked\":" ++ boolJson g.revoked ++
+      ",\"next_sequence\":" ++ toString g.nextSequence ++ ",\"authority_conflict\":" ++ boolJson g.authorityConflict ++
+      ",\"enabled\":" ++ boolJson g.enabled ++ ",\"verified\":" ++ boolJson g.verified ++ "}" ++
+      ",\"proposal\":{\"network\":" ++ jsonString p.network ++
+      ",\"member\":" ++ jsonString p.member ++ ",\"peer\":" ++ jsonString p.peer ++
+      ",\"owner\":" ++ jsonString p.owner ++ ",\"profile\":" ++ jsonString p.profile ++
+      ",\"lease_seconds\":" ++ toString p.leaseSeconds ++
+      ",\"member_signed\":" ++ boolJson p.memberSigned ++ ",\"offer_fresh\":" ++ boolJson p.offerFresh ++
+      ",\"predecessor_sequence\":" ++ toString p.predecessorSequence ++ "}" ++
+      ",\"now\":" ++ toString c.now ++ ",\"window\":" ++ toString c.window ++
+      ",\"protocol_max\":" ++ toString c.protocolMax ++ ",\"allowed\":" ++
+      boolJson (Enrollment.AutoRenewal.allowed g p c.now c.window c.protocolMax) ++ "}")
 
 def enrollmentTraceStepJson (step : EnrollmentTraceStep) : String :=
   "{"

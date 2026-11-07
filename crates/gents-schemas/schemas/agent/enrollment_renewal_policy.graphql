@@ -1,0 +1,6 @@
+# Local operator policy must not be replicated from a peer.
+type EnrollmentRenewalPolicy {
+    network_id: String @index(unique: true)
+    enabled: Boolean
+    lease_seconds: Int
+}
