@@ -1,5 +1,6 @@
 use super::target::session_target_allowed;
 use super::*;
+use crate::store::identity::NodeIdentity as _;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_session_message, PublishedAdmissionOptions, PublishedSessionMessage,
 };

@@ -446,7 +446,8 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
             r#"{{ AgentSession(filter: {{ {} }}, limit: 1) {{ stopped_at }} }}"#,
             crate::session::session_scope_filter(&node_did, &session_id, tool.requester_did(),)
         ))
-        .await;
+        .await
+        .unwrap();
     assert!(stop_latch["data"]["AgentSession"][0]["stopped_at"].is_string());
     token.cancel();
     worker.await.unwrap();
