@@ -33,10 +33,10 @@ use crate::commands::grok_shim::server::{
 pub(crate) struct GrokShimBindArgs {
     pub(crate) background_executions: gents::tools::call::hook::BackgroundExecutionRegistry,
     pub(crate) node: Arc<EmbeddedNode>,
-    pub(crate) actor: identity::Did,
     /// Runtime root that derives the bound Agent's managed signer.
     pub(crate) runtime_identity: Arc<dyn gents::NodeIdentity>,
-    pub(crate) graphql: gents::store::config_client::GraphqlEndpoint,
+    /// Node GraphQL URL; the shim signs against it with the CLI's User client key.
+    pub(crate) graphql_url: String,
     pub(crate) agent_did: Option<String>,
     pub(crate) node_did: String,
     pub(crate) node_name: String,
@@ -50,6 +50,15 @@ pub(crate) struct GrokShimBindArgs {
 /// fails fast instead of serving a fabricated model catalog.
 pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandle> {
     let node = args.node.clone();
+    // The shim acts for the operator with the CLI's User client key; it holds
+    // no identity of its own.
+    let graphql = crate::home_state::resolve_graphql_endpoint(
+        Some(&args.graphql_url),
+        Some(args.home.as_path()),
+    )
+    .context("resolving the Grok shim's client-signed GraphQL endpoint")?;
+    let actor = crate::home_state::cli_client_did()
+        .context("resolving the Grok shim's User client DID")?;
     let agent_did =
         resolve_grok_shim_agent_did(node.as_ref(), args.agent_did.as_deref(), &args.node_did)
             .await?;
@@ -91,8 +100,8 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
         agent_signer,
         background_executions: args.background_executions.clone(),
         node: args.node.clone(),
-        actor: args.actor.clone(),
-        graphql: args.graphql.clone(),
+        actor,
+        graphql,
         node_did: args.node_did.clone(),
         agent_did: agent_did.clone(),
         bound: bound.clone(),

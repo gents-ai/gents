@@ -273,9 +273,6 @@ impl AcpService {
         request: &AcpRequest,
         prompt_sender: &PromptSender,
     ) -> Result<RequestOutcome> {
-        if self.client_id.is_some() && requires_client_identity(&request.method) {
-            anyhow::bail!("Grok shim requires an authenticated client DID for this operation; its registration does not provide one");
-        }
         match request.method.as_str() {
             INITIALIZE_METHOD => self.handle_initialize(request).await,
             AUTHENTICATE_METHOD => self.handle_authenticate(request).await,
@@ -440,39 +437,6 @@ impl AcpService {
             })),
         }
     }
-}
-
-/// Pager registration supplies capabilities but no authenticated DID. Runtime
-/// identity must not stand in for a client on document or session operations.
-pub(super) fn requires_client_identity(method: &str) -> bool {
-    matches!(
-        method,
-        "x.ai/session/info"
-            | "x.ai/session/usage"
-            | "x.ai/workflows/list"
-            | "x.ai/sessions/list"
-            | "x.ai/session/list"
-            | SESSION_NEW_METHOD
-            | SESSION_SET_MODEL_METHOD
-            | SESSION_SET_MODE_METHOD
-            | SESSION_PROMPT_METHOD
-            | SESSION_LOAD_METHOD
-            | SUBAGENT_GET_METHOD
-            | SUBAGENT_LIST_RUNNING_METHOD
-            | SUBAGENT_CANCEL_METHOD
-            | "x.ai/task/kill"
-    )
-}
-
-#[cfg(test)]
-#[test]
-fn user_document_operations_need_a_client_identity() {
-    assert!(requires_client_identity(SESSION_NEW_METHOD));
-    assert!(requires_client_identity(SESSION_PROMPT_METHOD));
-    assert!(requires_client_identity("x.ai/task/kill"));
-    assert!(requires_client_identity("x.ai/session/list"));
-    assert!(!requires_client_identity(INITIALIZE_METHOD));
-    assert!(!requires_client_identity("x.ai/billing"));
 }
 
 impl AcpDelegate for AcpService {
