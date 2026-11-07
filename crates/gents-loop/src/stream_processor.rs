@@ -975,6 +975,42 @@ mod tests {
     use super::{render_reasoning_text, AssistantMessageContent, CompletionMessage};
 
     #[test]
+    fn provider_stop_marks_the_exact_reasoning_block_once() {
+        use super::AssistantTurnAccumulator;
+        use crate::provider_audit::{ClaudeAuditEvent as Event, ClaudeBlockKind};
+
+        let mut turn = AssistantTurnAccumulator::default();
+        turn.apply_provider_audit(&Event::BlockStart {
+            index: 0,
+            kind: ClaudeBlockKind::Thinking,
+        })
+        .unwrap();
+        turn.apply_provider_audit(&Event::ThinkingText {
+            index: 0,
+            fragment: "thought".into(),
+        })
+        .unwrap();
+        turn.apply_provider_audit(&Event::Signature {
+            index: 0,
+            fragment: "sig".into(),
+        })
+        .unwrap();
+        let stop = Event::BlockStop { index: 0 };
+        turn.apply_provider_audit(&stop).unwrap();
+        assert_eq!(turn.reasoning_stop_index(&stop).unwrap(), Some(0));
+        assert!(turn.apply_provider_audit(&stop).is_err());
+
+        turn.apply_provider_audit(&Event::BlockStart {
+            index: 1,
+            kind: ClaudeBlockKind::Text,
+        })
+        .unwrap();
+        let text_stop = Event::BlockStop { index: 1 };
+        turn.apply_provider_audit(&text_stop).unwrap();
+        assert_eq!(turn.reasoning_stop_index(&text_stop).unwrap(), None);
+    }
+
+    #[test]
     fn generated_reasoning_visibility_matches_live_preview() {
         for case in super::rendered_reasoning_contract::generated_reasoning_cases() {
             let CompletionMessage::Assistant { content, .. } = &case.message else {
