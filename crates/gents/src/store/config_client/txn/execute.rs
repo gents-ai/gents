@@ -158,7 +158,7 @@ impl ConfigApplyTxn<'_> {
                 self.affected_documents
                     .fetch_add(graphql::affected_documents(&result), Ordering::Relaxed);
                 #[cfg(test)]
-                after_successful_mutation_for_test().await?;
+                after_successful_mutation_for_test(self.operation).await?;
                 result
             }
             _ => self.execute(&mutation).await?,
@@ -260,7 +260,7 @@ impl ConfigApplyTxn<'_> {
         self.affected_documents
             .fetch_add(graphql::affected_documents(&response), Ordering::Relaxed);
         #[cfg(test)]
-        after_successful_mutation_for_test().await?;
+        after_successful_mutation_for_test(self.operation).await?;
         Ok(response)
     }
 
@@ -329,7 +329,7 @@ impl ConfigApplyTxn<'_> {
         self.affected_documents
             .fetch_add(graphql::affected_documents(&response), Ordering::Relaxed);
         #[cfg(test)]
-        after_successful_mutation_for_test().await?;
+        after_successful_mutation_for_test(self.operation).await?;
         Ok(response)
     }
 
@@ -807,7 +807,7 @@ impl ConfigApplyTxn<'_> {
             self.affected_documents
                 .fetch_add(graphql::affected_documents(&response), Ordering::Relaxed);
             #[cfg(test)]
-            after_successful_mutation_for_test().await?;
+            after_successful_mutation_for_test(self.operation).await?;
         }
         Ok(response)
     }
@@ -1157,7 +1157,7 @@ impl ConfigApplyTxn<'_> {
                 Ordering::Relaxed,
             );
             #[cfg(test)]
-            after_successful_mutation_for_test().await?;
+            after_successful_mutation_for_test(self.operation).await?;
         }
         Ok(response)
     }

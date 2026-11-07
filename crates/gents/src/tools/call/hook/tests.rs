@@ -893,12 +893,13 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
             .await;
             let access = hook.actor_access().unwrap();
             accept_hook_tool_call(&hook, "control-call", "create_goal", &args, None).await;
-            let (action, mutations) =
-                crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+            let (action, trace) =
+                crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_and_trace(
                     completion_mutation,
                     hook.on_tool_call("create_goal", None, "control-call", &args),
                 )
                 .await;
+            let mutations = trace.len();
             let goal = access
                 .transact_readonly("test.hook_control_goal", |txn| {
                     Box::pin(crate::goal::load_canonical_goal_in_txn(
@@ -951,8 +952,22 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
                     matches!(action, ToolCallHookAction::Skip { .. }),
                     "{action:?}"
                 );
-                assert!(mutations > 0);
-                completion_mutation = Some(mutations);
+                // The completion is the last mutation before the post-commit
+                // publication of the created Goal's session relationships.
+                let completion = trace
+                    .iter()
+                    .rposition(|operation| {
+                        *operation != Some("session.publish_child_relationships")
+                    })
+                    .expect("the control call commits its completion")
+                    + 1;
+                assert!(
+                    trace[..completion]
+                        .iter()
+                        .all(|operation| *operation != Some("session.publish_child_relationships")),
+                    "{trace:?}"
+                );
+                completion_mutation = Some(completion);
             }
             hook_execution_fixtures()
                 .lock()
