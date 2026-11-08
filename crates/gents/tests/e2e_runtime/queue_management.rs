@@ -3,69 +3,13 @@ use gents::request::lifecycle::{
     PendingMessageEdit, PendingQueueEdit,
 };
 use gents::runtime::agent::p2p_reconcile::session_commands::run_session_command_reconciler;
-use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents::NodeIdentity;
-use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
-};
+use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 use gents_protocol::request_input::QueueDelivery;
 use gents_protocol::session_input_edit::SessionInputEditReceipt;
 
 use crate::support::{self, test_db, TestDb};
-
-pub(super) async fn enqueue(
-    db: &TestDb,
-    agent: &str,
-    session: &str,
-    id: &str,
-    text: &str,
-    delivery: QueueDelivery,
-) -> String {
-    let did = db.node_identity.did();
-    let mut request = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        id,
-        did,
-        did,
-        agent,
-        session,
-        text,
-        "interactive",
-        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::client(did),
-    );
-    request.input = gents::request::lifecycle::prepare_user_message_input(
-        &ConfigAccess::local_as(
-            db.node.clone(),
-            ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-        ),
-        did,
-        session,
-        request.input,
-        delivery,
-    )
-    .await
-    .unwrap();
-    insert_signed(db, request).await
-}
-
-pub(super) async fn insert_signed(db: &TestDb, mut request: AgentRequestCreate) -> String {
-    gents::sign_agent_request_create(db.node_identity.as_ref(), &mut request)
-        .await
-        .unwrap();
-    let response = ConfigAccess::local_as(
-        db.node.clone(),
-        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-    )
-    .write(
-        "test.queue_signed_input",
-        &request.graphql_mutation().unwrap(),
-    )
-    .await
-    .unwrap();
-    gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
-}
 
 pub(super) async fn insert_signed_as(
     fixture: &support::ManagedAgentFixture,
@@ -201,13 +145,6 @@ async fn submit_edit_inner(
     cancel.cancel();
     worker.await??;
     result
-}
-
-pub(super) async fn row(db: &TestDb, doc: &str) -> serde_json::Value {
-    let response = ConfigAccess::local_as(db.node.clone(), ::identity::Did::new(db.node_identity.did().to_owned()).unwrap()).execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id content input lifecycle_state failure_reason admission_signature superseded_by_request_doc_id terminal_output }} }}"#, escape_graphql_string(doc))).await.unwrap();
-    let rows = response["data"]["AgentRequest"].as_array().unwrap();
-    assert_eq!(rows.len(), 1);
-    rows[0].clone()
 }
 
 pub(super) async fn row_as(fixture: &support::ManagedAgentFixture, doc: &str) -> serde_json::Value {
