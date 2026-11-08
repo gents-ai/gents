@@ -47,6 +47,8 @@ typescript = ["gents/typescript"]
 test-fixtures = []
 
 [dev-dependencies]
+# Enables the served-runtime fixture for this crate's integration tests.
+gents-desktop-core = { path = ".", features = ["test-fixtures"] }
 defra-core.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 gents-lean-contract.workspace = true
