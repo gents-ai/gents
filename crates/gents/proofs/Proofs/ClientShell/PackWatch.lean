@@ -9,19 +9,30 @@ reading the runtime's `POST /packs/ux/watch` server-sent events
 
 namespace ClientShell.PackWatch
 
-/-- Why a watch stopped for good. Both reasons name the same next action: the
-page must be reopened, which starts a new watch. -/
+/-- Why a watch stopped for good. Every reason names the same next action:
+the page must be reopened, which starts a new watch. -/
 inductive TerminalReason where
   /-- The runtime refused the User's freshly acquired credentials. -/
   | auth
-  /-- The request or the stream is malformed: a rejected query, an
-  undecodable or oversized event, or an endpoint that is not a managed
-  runtime. Retrying would repeat it. -/
+  /-- The request or the stream is malformed, or the runtime cannot be
+  reached through this desktop at all (its record names another home, no
+  local home, or no operator endpoint, or the client key cannot sign).
+  Retrying would repeat it. -/
   | permanent
+  /-- `retryBudget` consecutive attempts failed without one stream ending
+  cleanly: the runtime is stopped, refuses connections, keeps answering a
+  retryable status, or accepts and then fails every stream. -/
+  | unreachable
   deriving DecidableEq, Repr
 
-/-- Consecutive failures stop counting here: the delay is already capped. -/
-def maxFailures : Nat := 5
+/-- Consecutive failed attempts that end the watch.
+
+Decision: the delays before the 2nd through 8th attempts are 2, 4, 8, 16, 30,
+30 and 30 seconds, so a watch gives up about two minutes after its runtime
+stops answering. A runtime restart (a new port and credential) takes seconds
+and is healed within the budget; an outage longer than that is reported, not
+hidden behind an indicator that never resolves. -/
+def retryBudget : Nat := 8
 
 /-- The watch task's phase.
 
@@ -29,10 +40,12 @@ def maxFailures : Nat := 5
 from the client core and connects; every connect re-acquires them, so a
 runtime restart (a new port) or a renewed credential is picked up by the next
 attempt rather than ending the watch. `failures` counts consecutive failed
-attempts since the last accepted connection. -/
+attempts since the last stream that ended cleanly; an accepted connection
+keeps the count, because a runtime that accepts and then fails every stream
+is as unavailable as one that refuses. -/
 inductive Phase where
   | starting (failures : Nat)
-  | streaming
+  | streaming (failures : Nat)
   | backoff (failures : Nat)
   | terminal (reason : TerminalReason)
   | cancelled
@@ -42,15 +55,16 @@ inductive Phase where
 
 `transientError` is a connect, send or read failure or timeout, a truncated
 stream, a retryable status (408, 425, 429, 5xx), the runtime's own `error`
-event (whose text asks the client to reconnect), or an endpoint that cannot be
-acquired while the client core or its route is restarting. `authError` is a
-401 or 403. `permanentError` is any other refusal, an oversized (8 MiB) or
-undecodable event, or a local signing failure.
+event (whose text asks the client to reconnect), or a client core that is
+restarting. `authError` is a 401 or 403. `permanentError` is any other
+refusal, an oversized (8 MiB) or undecodable event, a runtime record this
+desktop cannot reach (`LocalHomeAccessError`), or a local signing failure.
 
-`cancel` is the page's unwatch, the window's destruction, or a closed channel.
-`nodeDeselected` is the window selecting another node: the selection change
-and the registry cancellation happen under the bridge lock, so the task
-observes it as the same token cancellation. `retry` is the backoff timer. -/
+`cancel` is the page's unwatch, the window's destruction, a closed channel,
+or the window selecting another node. The task cannot tell these apart and
+does not need to; the ordering that keeps a selection change from delivering
+the old node's data is TLA `PackUxWatch` `CancelBeforeSelect`. `retry` is the
+backoff timer. -/
 inductive Event where
   | connected
   | cleanEnd
@@ -58,7 +72,6 @@ inductive Event where
   | authError
   | permanentError
   | cancel
-  | nodeDeselected
   | retry
   deriving DecidableEq, Repr
 
@@ -67,8 +80,6 @@ def Phase.isFinal : Phase → Bool
   | .cancelled => true
   | _ => false
 
-def nextFailures (failures : Nat) : Nat := min (failures + 1) maxFailures
-
 /-- The minimum spacing, in milliseconds, between the start of an attempt and
 the start of the next one after `failures` consecutive failures. A clean end
 is `backoff 0`: the runtime bounds each stream (30 s) and re-sends a full
@@ -76,23 +87,28 @@ snapshot on every connect, so one second between connects is enough to heal
 the gap. -/
 def delayMs (failures : Nat) : Nat := min (1000 * 2 ^ failures) 30000
 
+/-- One more failed attempt: back off, or end the watch once the budget is
+spent. -/
+def fail (failures : Nat) : Phase :=
+  if failures + 1 < retryBudget then .backoff (failures + 1) else .terminal .unreachable
+
 /-- External premise: the runtime authenticates the signed request before it
 opens the stream, so an authorization failure arrives only as the connect
-status. A stream that ends after it was accepted is treated as transient. -/
+status. A stream that ends with one after it was accepted is a failure like
+any other. -/
 def step : Phase → Event → Phase
   | .terminal reason, _ => .terminal reason
   | .cancelled, _ => .cancelled
   | _, .cancel => .cancelled
-  | _, .nodeDeselected => .cancelled
-  | .starting _, .connected => .streaming
-  | .starting failures, .cleanEnd => .backoff (nextFailures failures)
-  | .starting failures, .transientError => .backoff (nextFailures failures)
+  | .starting failures, .connected => .streaming failures
+  | .starting failures, .cleanEnd => fail failures
+  | .starting failures, .transientError => fail failures
   | .starting _, .authError => .terminal .auth
   | .starting _, .permanentError => .terminal .permanent
-  | .streaming, .cleanEnd => .backoff 0
-  | .streaming, .transientError => .backoff (nextFailures 0)
-  | .streaming, .authError => .backoff (nextFailures 0)
-  | .streaming, .permanentError => .terminal .permanent
+  | .streaming _, .cleanEnd => .backoff 0
+  | .streaming failures, .transientError => fail failures
+  | .streaming failures, .authError => fail failures
+  | .streaming _, .permanentError => .terminal .permanent
   | .backoff failures, .retry => .starting failures
   | phase, _ => phase
 
@@ -101,14 +117,10 @@ inductive NextAction where
   | reopenPage
   deriving DecidableEq, Repr
 
-/-- What the pack page shows.
-
-Decision: the wire event keeps its two forms (snapshot, error). While
-`connecting` or `reconnecting` the page keeps its last snapshot; the task is
-progressing on a bounded timer, and the next accepted connection re-sends a
-full snapshot. `closed` sends nothing: the page unwatched, its window is gone,
-or the shell changed node, and the page itself receives `shell-changed` with
-the new node and decides whether to watch it. -/
+/-- What the pack page shows. A snapshot makes the page live; `closed` sends
+nothing: the page unwatched, its window is gone, or the shell changed node,
+and the page itself receives `shell-changed` with the new node and decides
+whether to watch it. -/
 inductive View where
   | connecting
   | live
@@ -119,10 +131,27 @@ inductive View where
 
 def view : Phase → View
   | .starting _ => .connecting
-  | .streaming => .live
+  | .streaming _ => .live
   | .backoff failures => .reconnecting (delayMs failures)
   | .terminal reason => .unavailable reason .reopenPage
   | .cancelled => .closed
+
+/-- What the task sends the page on entering a phase, besides the snapshots a
+stream carries.
+
+Decision: the page learns of a reconnect when it starts, not only when it
+fails for good, so a stalled stream is never shown as live. The next
+snapshot is the page's signal that it is live again; `starting` sends
+nothing, since the page still shows the reconnect it was told of. -/
+inductive Notice where
+  | reconnecting (delayMs : Nat)
+  | unavailable (reason : TerminalReason) (next : NextAction)
+  deriving DecidableEq, Repr
+
+def notice : Phase → Option Notice
+  | .backoff failures => some (.reconnecting (delayMs failures))
+  | .terminal reason => some (.unavailable reason .reopenPage)
+  | _ => none
 
 def View.progressing : View → Bool
   | .connecting => true
@@ -130,19 +159,94 @@ def View.progressing : View → Bool
   | .reconnecting _ => true
   | _ => false
 
-theorem transient_errors_are_not_terminal (phase : Phase)
-    (h : phase.isFinal = false) :
-    (step phase .transientError).isFinal = false ∧
-      (step phase .cleanEnd).isFinal = false := by
-  cases phase <;> simp_all [step, Phase.isFinal]
+/-- Failure counts stay inside the budget. -/
+def Phase.wf : Phase → Prop
+  | .starting failures => failures < retryBudget
+  | .streaming failures => failures < retryBudget
+  | .backoff failures => failures < retryBudget
+  | _ => True
 
-theorem node_deselected_cancels (phase : Phase) (h : phase.isFinal = false) :
-    step phase .nodeDeselected = .cancelled := by
-  cases phase <;> simp_all [step, Phase.isFinal]
+/-- Reconnects a phase can still make without a clean end. -/
+def budgetLeft : Phase → Nat
+  | .starting failures => retryBudget - 1 - failures
+  | .streaming failures => retryBudget - 1 - failures
+  | .backoff failures => retryBudget - failures
+  | _ => 0
 
-theorem node_deselected_is_cancel (phase : Phase) :
-    step phase .nodeDeselected = step phase .cancel := by
-  cases phase <;> rfl
+def isReconnect : Phase → Event → Bool
+  | .backoff _, .retry => true
+  | _, _ => false
+
+/-- Reconnects a run of events makes. -/
+def reconnects : Phase → List Event → Nat
+  | _, [] => 0
+  | phase, event :: rest =>
+      (if isReconnect phase event then 1 else 0) + reconnects (step phase event) rest
+
+theorem fail_wf (failures : Nat) : (fail failures).wf := by
+  unfold fail
+  split <;> simp_all [Phase.wf]
+
+theorem fail_budget (failures : Nat) :
+    budgetLeft (fail failures) ≤ retryBudget - 1 - failures := by
+  unfold fail
+  split <;> simp [budgetLeft] <;> omega
+
+theorem step_preserves_wf (phase : Phase) (event : Event) (h : phase.wf) :
+    (step phase event).wf := by
+  cases phase <;> cases event <;> simp only [step] <;>
+    first | exact fail_wf _ | exact h | simp [Phase.wf, retryBudget] | trivial
+
+theorem step_spends_budget (phase : Phase) (event : Event) (h : phase.wf)
+    (hclean : event ≠ .cleanEnd) :
+    (if isReconnect phase event then 1 else 0) + budgetLeft (step phase event) ≤
+      budgetLeft phase := by
+  cases phase <;> cases event <;>
+    simp only [step, isReconnect, Phase.wf, Bool.false_eq_true, ↓reduceIte, Nat.zero_add]
+      at h hclean ⊢ <;>
+    first
+    | exact absurd rfl hclean
+    | exact fail_budget _
+    | (simp only [budgetLeft]; omega)
+    | simp [budgetLeft]
+
+/-- No hot loop: without a clean end a watch reconnects at most
+`retryBudget - 1` times, however often the runtime accepts and then fails. -/
+theorem reconnects_bounded_without_a_clean_end (phase : Phase) (events : List Event)
+    (h : phase.wf) (hclean : Event.cleanEnd ∉ events) :
+    reconnects phase events ≤ budgetLeft phase := by
+  induction events generalizing phase with
+  | nil => simp [reconnects]
+  | cons event rest ih =>
+      simp only [List.mem_cons, not_or] at hclean
+      have spent := step_spends_budget phase event h (Ne.symm hclean.1)
+      have rest_bound := ih (step phase event) (step_preserves_wf phase event h) hclean.2
+      simp only [reconnects]
+      omega
+
+theorem a_new_watch_reconnects_fewer_than_the_budget (events : List Event)
+    (hclean : Event.cleanEnd ∉ events) :
+    reconnects (.starting 0) events ≤ retryBudget - 1 :=
+  reconnects_bounded_without_a_clean_end _ _ (by simp [Phase.wf, retryBudget]) hclean
+
+/-- Only a stream the runtime ended cleanly resets the failure count. -/
+theorem only_a_clean_end_resets_failures (phase : Phase) (event : Event)
+    (hphase : ∀ failures, phase ≠ .backoff failures)
+    (hstep : step phase event = .backoff 0) :
+    event = .cleanEnd := by
+  cases phase <;> cases event <;> simp only [step, fail] at hstep <;>
+    (try split at hstep) <;> simp_all
+
+theorem an_accepted_stream_keeps_its_failures (failures : Nat) :
+    step (.starting failures) .connected = .streaming failures ∧
+      step (.streaming failures) .transientError = fail failures :=
+  ⟨rfl, rfl⟩
+
+theorem transient_errors_end_only_after_the_budget (phase : Phase) (failures : Nat)
+    (h : phase = .starting failures ∨ phase = .streaming failures)
+    (hleft : failures + 1 < retryBudget) :
+    step phase .transientError = .backoff (failures + 1) := by
+  rcases h with h | h <;> subst h <;> simp [step, fail, hleft]
 
 theorem cancel_cancels (phase : Phase) (h : phase.isFinal = false) :
     step phase .cancel = .cancelled := by
@@ -157,40 +261,40 @@ theorem delay_bounded (failures : Nat) : delayMs failures ≤ 30000 :=
 
 theorem clean_end_waits_one_second : delayMs 0 = 1000 := by decide
 
-theorem failures_stay_bounded (phase : Phase) (event : Event)
-    (h : ∀ f, phase = .starting f ∨ phase = .backoff f → f ≤ maxFailures) :
-    ∀ f, step phase event = .starting f ∨ step phase event = .backoff f →
-      f ≤ maxFailures := by
-  intro f hf
-  have bound : ∀ g, nextFailures g ≤ maxFailures := fun g => Nat.min_le_right _ _
-  cases phase <;> cases event <;> simp_all [step, maxFailures] <;>
-    first
-    | (rcases hf with hf | hf <;> subst hf <;> exact bound _)
-    | (subst hf; exact bound _)
-    | (subst hf; simp)
-    | omega
+/-- The delays before the 2nd through 8th consecutive attempts. -/
+theorem the_budget_spans_two_minutes :
+    ((List.range (retryBudget - 1)).map fun index => delayMs (index + 1)).sum = 120000 := by
+  decide
 
-/-- Only a permanent error, or an authorization refusal of credentials that
-the attempt acquired freshly (every `starting` attempt re-acquires them),
-ends the watch with an error. -/
-theorem terminal_only_from_permanent_or_reacquired_auth
+/-- Only a permanent error, an authorization refusal of credentials that the
+attempt acquired freshly (every `starting` attempt re-acquires them), or a
+spent budget ends the watch with an error. -/
+theorem terminal_only_from_permanent_auth_or_budget
     (phase : Phase) (event : Event) (reason : TerminalReason)
     (h : phase.isFinal = false) (hstep : step phase event = .terminal reason) :
     (event = .permanentError ∧ reason = .permanent) ∨
-      (event = .authError ∧ reason = .auth ∧ ∃ failures, phase = .starting failures) := by
-  cases phase <;> cases event <;> simp_all [step, Phase.isFinal] <;>
-    first | (subst hstep; simp) | exact hstep.symm
+      (event = .authError ∧ reason = .auth ∧ ∃ failures, phase = .starting failures) ∨
+      (reason = .unreachable ∧ ∃ failures, retryBudget ≤ failures + 1 ∧
+        (phase = .starting failures ∨ phase = .streaming failures)) := by
+  cases phase <;> cases event <;> simp only [step, fail, Phase.isFinal] at hstep h <;>
+    (try split at hstep) <;> (try simp_all) <;> (try omega)
 
 theorem backoff_retry_reacquires (failures : Nat) :
     step (.backoff failures) .retry = .starting failures := rfl
 
-theorem accepted_connection_resets_failures (failures : Nat) :
-    step (.starting failures) .connected = .streaming ∧
-      step .streaming .transientError = .backoff 1 :=
-  ⟨rfl, by decide⟩
+/-- Nothing gets silently stuck: every transition into a phase that is not
+receiving data sends the page a notice naming it, and the notice is what the
+phase's view shows. -/
+theorem every_stall_is_noticed (phase : Phase) :
+    (∃ failures, phase = .backoff failures) ∨ (∃ reason, phase = .terminal reason) →
+      ∃ shown, notice phase = some shown ∧
+        (∀ delay, shown = .reconnecting delay → view phase = .reconnecting delay) ∧
+        (∀ reason next, shown = .unavailable reason next →
+          view phase = .unavailable reason next) := by
+  rintro (⟨failures, rfl⟩ | ⟨reason, rfl⟩) <;> simp [notice, view]
 
-/-- Nothing gets silently stuck: every view is progressing on its own, or names
-its cause and the next action, or is closed because nobody watches it. -/
+/-- Every view is progressing on its own, or names its cause and the next
+action, or is closed because nobody watches it. -/
 theorem every_view_progresses_or_names_its_cause (phase : Phase) :
     (view phase).progressing = true ∨
       (∃ reason, view phase = .unavailable reason .reopenPage) ∨
@@ -201,11 +305,11 @@ theorem every_view_progresses_or_names_its_cause (phase : Phase) :
 or live view always has a network outcome that moves it. -/
 theorem progressing_phases_have_an_unattended_exit (phase : Phase)
     (h : (view phase).progressing = true) :
-    ∃ event, event ≠ .cancel ∧ event ≠ .nodeDeselected ∧ step phase event ≠ phase := by
+    ∃ event, event ≠ .cancel ∧ step phase event ≠ phase := by
   cases phase with
-  | starting failures => exact ⟨.connected, by decide, by decide, by simp [step]⟩
-  | streaming => exact ⟨.cleanEnd, by decide, by decide, by simp [step]⟩
-  | backoff failures => exact ⟨.retry, by decide, by decide, by simp [step]⟩
+  | starting failures => exact ⟨.connected, by decide, by simp [step]⟩
+  | streaming failures => exact ⟨.cleanEnd, by decide, by simp [step]⟩
+  | backoff failures => exact ⟨.retry, by decide, by simp [step]⟩
   | terminal reason => simp [view, View.progressing] at h
   | cancelled => simp [view, View.progressing] at h
 
