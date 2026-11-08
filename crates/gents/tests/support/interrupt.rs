@@ -12,7 +12,7 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::snapshots::fetch_request_snapshot;
+use super::snapshots::{fetch_request_snapshot, SnapshotReader};
 
 const TEST_MUTATION_MAX_RETRIES: u32 = 3;
 const TEST_MUTATION_INITIAL_BACKOFF_MS: u64 = 100;
@@ -99,6 +99,27 @@ pub async fn wait_for_runtime_ready_or_exit(
             Err(error) => panic!("runtime task failed before readiness: {error}"),
         },
     }
+}
+
+/// The production runtime on the test Node's own identity, admitted through
+/// the home's backend protection, before its installed Agents are added with
+/// their identity bindings.
+pub fn managed_runtime_builder(db: &super::TestDb, default_agent_did: &str) -> gents::GentsBuilder {
+    gents::Gents::builder()
+        .node(db.node.clone())
+        .identity(db.node_identity.clone())
+        .backend_admission(db.home.backend_admission())
+        .default_agent_did(default_agent_did)
+        .tool_ceiling(gents::ToolCeiling::meta_only())
+}
+
+/// Runs a built runtime until it reports ready.
+pub async fn spawn_runtime(db: &super::TestDb, runtime: gents::Gents) -> BootedAgent {
+    let node_did = runtime.node_did().to_string();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let mut handle = tokio::spawn(runtime.run(shutdown_rx));
+    wait_for_runtime_ready_or_exit(db.node.as_ref(), &node_did, &mut handle).await;
+    BootedAgent::new(shutdown_tx, handle, node_did)
 }
 
 pub async fn wait_for_runtime_ready(node: &EmbeddedNode, node_did: &str) {
@@ -333,25 +354,20 @@ async fn lookup_request_doc_id(node: &EmbeddedNode, request_id: &str) -> String 
     first_doc_id(&response, "AgentRequest")
 }
 
-pub async fn fetch_output_segments_for_request(
-    node: &EmbeddedNode,
+pub async fn fetch_output_segments_for_request<R>(
+    reader: &R,
     request_doc_id: &str,
-) -> Vec<OutputSegmentRow> {
+) -> Vec<OutputSegmentRow>
+where
+    R: SnapshotReader + ?Sized,
+{
     let request_doc_id = escape_graphql_string(request_doc_id);
-    let response = node
-        .execute(&format!(
+    let data = reader
+        .read_data(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
         ))
         .await;
-    assert!(
-        !response.has_errors(),
-        "canonical output query failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentOutputSegment"))
+    data.get("AgentOutputSegment")
         .and_then(Value::as_array)
         .expect("canonical output rows")
         .iter()
@@ -359,11 +375,10 @@ pub async fn fetch_output_segments_for_request(
         .collect()
 }
 
-pub async fn wait_for_provider_output_contains(
-    node: &EmbeddedNode,
-    request_doc_id: &str,
-    expected: &str,
-) {
+pub async fn wait_for_provider_output_contains<R>(node: &R, request_doc_id: &str, expected: &str)
+where
+    R: SnapshotReader + ?Sized,
+{
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let rows = fetch_output_segments_for_request(node, request_doc_id).await;
@@ -411,7 +426,7 @@ pub async fn wait_for_provider_output_contains(
 
 pub async fn wait_for_request_lifecycle_state<R>(node: &R, request_doc_id: &str, expected: &str)
 where
-    R: super::snapshots::SnapshotReader + ?Sized,
+    R: SnapshotReader + ?Sized,
 {
     let expected = RequestLifecycleState::parse(expected)
         .expect("expected request lifecycle state must be canonical");
@@ -441,7 +456,7 @@ pub async fn wait_for_request_terminal_state<R>(
     budget: Duration,
 ) -> RequestLifecycleState
 where
-    R: super::snapshots::SnapshotReader + ?Sized,
+    R: SnapshotReader + ?Sized,
 {
     let deadline = tokio::time::Instant::now() + budget;
     loop {
@@ -468,11 +483,14 @@ pub struct InferenceCallSnapshot {
 
 /// The daemon retries transient provider failures, so a historical failed
 /// attempt must not hide the current attempt's state.
-pub async fn wait_for_inference_call_state(
-    node: &EmbeddedNode,
+pub async fn wait_for_inference_call_state<R>(
+    node: &R,
     request_id: &str,
     expected: &str,
-) -> InferenceCallSnapshot {
+) -> InferenceCallSnapshot
+where
+    R: SnapshotReader + ?Sized,
+{
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
         let row = fetch_latest_inference_call(node, request_id).await;
@@ -490,10 +508,10 @@ pub async fn wait_for_inference_call_state(
     }
 }
 
-async fn fetch_latest_inference_call(
-    node: &EmbeddedNode,
-    request_id: &str,
-) -> Option<InferenceCallSnapshot> {
+async fn fetch_latest_inference_call<R>(node: &R, request_id: &str) -> Option<InferenceCallSnapshot>
+where
+    R: SnapshotReader + ?Sized,
+{
     let escaped_request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
@@ -511,16 +529,9 @@ async fn fetch_latest_inference_call(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "InferenceCall query failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("InferenceCall"))
+    node.read_data(&query)
+        .await
+        .get("InferenceCall")
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
         .cloned()

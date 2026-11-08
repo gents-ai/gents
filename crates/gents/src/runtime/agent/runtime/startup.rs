@@ -493,7 +493,6 @@ async fn run_agent_owned(
     let trigger_engine_schedule_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_event_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_goal_snapshot_rx = active_snapshot_rx.clone();
-    let trigger_engine_engine_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_materializer_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_cancel = cancel.child_token();
     let trigger_engine_startup_barrier = startup_barrier.clone();
@@ -524,12 +523,6 @@ async fn run_agent_owned(
             Ok(_) => {}
             Err(error) => tracing::warn!(%error, "workspace binding recovery sweep failed"),
         }
-        let materializer: Arc<dyn crate::triggers::engine::MaterializerHandle> = Arc::new(
-            crate::triggers::engine::production_materializer::ProductionMaterializer::new(
-                trigger_engine_node.clone(),
-                trigger_engine_materializer_snapshot_rx,
-            ),
-        );
         let schedule_source: Box<dyn crate::triggers::engine::TriggerSource> = Box::new(
             crate::triggers::engine::schedule_source::ScheduleSource::new(
                 trigger_engine_schedule_snapshot_rx,
@@ -561,11 +554,13 @@ async fn run_agent_owned(
             goal_source,
             manual_source_box,
         ];
-        let engine = crate::triggers::engine::TriggerEngine::new(
-            trigger_engine_engine_snapshot_rx,
-            materializer,
-        );
-        engine.run(sources, trigger_engine_cancel).await;
+        crate::triggers::engine::run_trigger_engine(
+            trigger_engine_node,
+            trigger_engine_materializer_snapshot_rx,
+            sources,
+            trigger_engine_cancel,
+        )
+        .await;
     }));
 
     let callback_node = agent.node.clone();

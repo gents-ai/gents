@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::{HttpConfig, Node as EmbeddedNode};
+use gents::defra_node::Node as EmbeddedNode;
 use gents::request::lifecycle::{
     build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
     RequestSigner, RequestSpec,
@@ -9,7 +9,7 @@ use gents::request::lifecycle::{
 use gents::runtime::agent::p2p_reconcile::{
     expand_p2p_collection_profile_ids, EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin,
 };
-use gents::store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
+use gents::store::config_client::{ConfigAccess, NodePermission};
 use gents::store::graphql::escape_graphql_string;
 use gents::{KeyIdentity, NodeIdentity, RequestLifecycle, TERMINAL_REDRIVE_CAP};
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
@@ -17,150 +17,78 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
 use crate::support::p2p_waits::wait_for_connected_peer;
-use crate::support::{test_p2p_config, test_p2p_db, TestDb, TestP2pAdmission};
+use crate::support::{test_p2p_db, TestDb};
 
+/// The owner Node with its enrolled User and Agent; the User submits over the
+/// owner's HTTP endpoint with its client key, and `peer` is a second Node
+/// that may receive only discovery documents.
 struct DeliveryFixture {
     _directory: tempfile::TempDir,
+    owner: TestDb,
     node: Arc<EmbeddedNode>,
     node_identity: Arc<dyn NodeIdentity>,
     agent_identity: Arc<dyn NodeIdentity>,
+    user: KeyIdentity,
     peer: TestDb,
     requester: ConfigAccess,
     outsider: ConfigAccess,
     agent: ConfigAccess,
 }
 
-fn authenticated_http(endpoint: &str, signer: &dyn NodeIdentity) -> ConfigAccess {
-    ConfigAccess::Graphql(
-        GraphqlEndpoint::as_principal(endpoint, signer.did())
-            .with_client_signing_capability(signer.client_signing_capability().unwrap())
-            .unwrap()
-            .with_client_signed_agent_creates(),
-    )
-}
-
 impl DeliveryFixture {
     async fn new(name: &str) -> Self {
         let directory = tempfile::Builder::new().prefix(name).tempdir().unwrap();
-        let node_identity: Arc<dyn NodeIdentity> =
-            Arc::new(KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap());
+        let owner =
+            crate::support::test_p2p_db_without_node(&format!("{name}-owner"), Default::default())
+                .await;
         let peer = test_p2p_db(&format!("{name}-peer")).await;
+        let fixture = crate::support::managed_agent_fixture(&owner).await;
         let outsider =
             KeyIdentity::load_or_create(directory.path().join("outsider.key"), None).unwrap();
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .data_path(directory.path().join("db"))
-                .with_node_identity_did(node_identity.did())
-                .with_node_acp_enabled()
-                .with_p2p(test_p2p_config(
-                    &TestP2pAdmission::default(),
-                    directory.path(),
-                ))
-                .with_http(HttpConfig::with_listener(listener).unwrap())
-                .build()
-                .await
-                .unwrap(),
+        // Node-level reads and updates are open to the outsider, so document
+        // ACP alone is what hides and refuses the User's request.
+        let admin = ConfigAccess::local_as(
+            owner.node.clone(),
+            owner.node_identity.did().parse().unwrap(),
         );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
-        let admin = ConfigAccess::local_as(node.clone(), node_identity.did().parse().unwrap());
-        for actor in [peer.node_identity.did(), outsider.did()] {
-            for permission in [NodePermission::DocumentRead, NodePermission::DocumentUpdate] {
-                admin
-                    .grant_node_permission(&actor.parse().unwrap(), permission)
-                    .await
-                    .unwrap();
-            }
-        }
-        for permission in [
-            NodePermission::DacRelationAdd,
-            NodePermission::DacRelationDelete,
-        ] {
+        for permission in [NodePermission::DocumentRead, NodePermission::DocumentUpdate] {
             admin
-                .grant_node_permission(&peer.node_identity.did().parse().unwrap(), permission)
+                .grant_node_permission(&outsider.did().parse().unwrap(), permission)
                 .await
                 .unwrap();
         }
-        let node_input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
-            "node_did": node_identity.did(),
-        }))
-        .unwrap();
-        let created = admin
-            .write(
-                "test.delivery.node",
-                &format!("mutation {{ create_Node(input: {node_input}) {{ _docID }} }}"),
+        // The outsider speaks raw DID-authenticated GraphQL, outside the
+        // client-signed owners, so the database's ACP is what refuses it.
+        let outsider = ConfigAccess::Graphql(
+            gents::store::config_client::GraphqlEndpoint::as_principal(
+                owner.client_endpoint(),
+                outsider.did(),
             )
-            .await
-            .unwrap();
-        let node_doc = gents::store::graphql::created_doc_id(&created, "Node").unwrap();
-        let binding = gents::store::identity::provision_agent_identity_authorized(
-            &node,
-            node_identity.as_ref(),
-            &node_identity.did().parse().unwrap(),
-        )
-        .await
-        .unwrap();
-        let agent_identity =
-            gents::store::identity::resolve_agent_identity(node_identity.as_ref(), &binding)
-                .unwrap();
-        let agent_input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
-            "node_did": node_identity.did(),
-            "agent_did": binding.agent_did,
-            "creation_nonce": binding.creation_nonce,
-            "display_name": "Delivery agent",
-            "inference_profile_id": "delivery-profile",
-            "enabled": true,
-        }))
-        .unwrap();
-        let created = admin
-            .write(
-                "test.delivery.agent",
-                &format!("mutation {{ create_Agent(input: {agent_input}) {{ _docID }} }}"),
-            )
-            .await
-            .unwrap();
-        let agent_doc = gents::store::graphql::created_doc_id(&created, "Agent").unwrap();
-        admin
-            .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
-            .await
-            .unwrap();
-        admin
-            .add_actor_relationship(
-                "Agent",
-                &agent_doc,
-                "executor",
-                &agent_identity.did().parse().unwrap(),
-            )
-            .await
-            .unwrap();
-        admin
-            .add_actor_relationship(
-                "Agent",
-                &agent_doc,
-                "session_writer",
-                &peer.node_identity.did().parse().unwrap(),
-            )
-            .await
-            .unwrap();
-        let requester = authenticated_http(&endpoint, peer.node_identity.as_ref());
-        let outsider = authenticated_http(&endpoint, &outsider);
+            .with_client_signing_capability(outsider.client_signing_capability().unwrap())
+            .unwrap(),
+        );
         let agent = ConfigAccess::local_managed_agent(
-            node.clone(),
-            agent_identity.did().parse().unwrap(),
-            agent_identity.as_ref(),
+            owner.node.clone(),
+            fixture.agent.did().parse().unwrap(),
+            fixture.agent.as_ref(),
         )
         .unwrap();
         Self {
             _directory: directory,
-            node,
-            node_identity,
-            agent_identity,
+            node: owner.node.clone(),
+            node_identity: owner.node_identity.clone(),
+            agent_identity: fixture.agent.clone(),
+            user: fixture.user,
+            requester: fixture.access,
+            owner,
             peer,
-            requester,
             outsider,
             agent,
         }
+    }
+
+    fn user_did(&self) -> &str {
+        self.user.did()
     }
 
     async fn submit(&self, request_id: &str, session_id: &str) -> String {
@@ -169,22 +97,19 @@ impl DeliveryFixture {
             RequestIdentity {
                 request_id: request_id.into(),
                 node_did: self.node_identity.did().into(),
-                requester_did: Some(self.peer.node_identity.did().into()),
+                requester_did: Some(self.user_did().into()),
                 agent_did: self.agent_identity.did().into(),
                 session_id: session_id.into(),
                 content: "convergence delivery e2e".into(),
                 execution_origin: ExecutionOrigin::Interactive,
                 created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             },
-            AgentRequestAdmissionRecord::client(self.peer.node_identity.did()),
+            AgentRequestAdmissionRecord::client(self.user_did()),
         );
-        let request = build_signed_client_request(
-            &self.requester,
-            spec,
-            RequestSigner::Identity(self.peer.node_identity.as_ref()),
-        )
-        .await
-        .unwrap();
+        let request =
+            build_signed_client_request(&self.requester, spec, RequestSigner::Identity(&self.user))
+                .await
+                .unwrap();
         submit_client_request(&self.requester, &request)
             .await
             .unwrap();
@@ -196,6 +121,13 @@ impl DeliveryFixture {
     }
 
     async fn set_state(&self, doc_id: &str, state: &str) {
+        // The Agent's watcher completes the client's delegated relationships
+        // before the Agent writes the request it now owns.
+        let mut watcher =
+            gents::DefraWatcher::new(self.node.clone(), self.node_identity.did()).unwrap();
+        gents::Watcher::set_agent_identities(&mut watcher, vec![self.agent_identity.clone()])
+            .unwrap();
+        watcher.try_fetch_request(doc_id).await.unwrap();
         let doc_id = escape_graphql_string(doc_id);
         let state = escape_graphql_string(state);
         let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
@@ -235,7 +167,7 @@ impl DeliveryFixture {
     }
 
     async fn shutdown(self) {
-        self.node.shutdown().await.unwrap();
+        self.owner.node.shutdown().await.unwrap();
         self.peer.node.shutdown().await.unwrap();
     }
 }
@@ -250,13 +182,18 @@ async fn authenticated_requester_observes_owner_terminal_and_bounded_redrive() {
         r#"{{ _commits(docID: "{escaped}", filter: {{ fieldName: {{ _eq: "_C" }} }}, order: {{ height: ASC }}, limit: 1) {{ cid }} }}"#,
     )).await.unwrap();
     let genesis = commits["data"]["_commits"][0]["cid"].as_str().unwrap();
+    // The genesis block is the User's: read under its document ACP and
+    // verified against its detached signature.
+    let (block, signature) = fixture
+        .node
+        .authorized_signed_block_bytes(genesis, Some(fixture.user_did()))
+        .await
+        .unwrap();
+    let block = defra_core::block::Block::from_dag_cbor(&block).unwrap();
+    let signature = defra_core::block::Signature::from_dag_cbor(&signature).unwrap();
     assert_eq!(
-        fixture
-            .node
-            .verified_block_signer_did(genesis)
-            .await
-            .unwrap(),
-        fixture.peer.node_identity.did()
+        db::block::verify::verified_signature_signer_did(&block, &signature).unwrap(),
+        fixture.user_did()
     );
     fixture.set_state(&doc, "processing").await;
     let processing = fixture.read(&fixture.requester, request_id).await.unwrap();
@@ -270,7 +207,7 @@ async fn authenticated_requester_observes_owner_terminal_and_bounded_redrive() {
     );
     assert_eq!(
         processing.requester_did.as_deref(),
-        Some(fixture.peer.node_identity.did())
+        Some(fixture.user_did())
     );
     assert_ne!(
         processing.node_did.as_deref(),
@@ -286,6 +223,15 @@ async fn authenticated_requester_observes_owner_terminal_and_bounded_redrive() {
         .as_array()
         .unwrap()
         .is_empty());
+    assert_eq!(
+        fixture
+            .read(&fixture.requester, request_id)
+            .await
+            .unwrap()
+            .lifecycle_state,
+        Some(RequestLifecycleState::Processing),
+        "the outsider's update changed nothing"
+    );
     fixture.set_state(&doc, "completed").await;
     let terminal = fixture.read(&fixture.requester, request_id).await.unwrap();
     assert_eq!(
@@ -297,10 +243,7 @@ async fn authenticated_requester_observes_owner_terminal_and_bounded_redrive() {
         terminal.node_did.as_deref(),
         Some(fixture.node_identity.did())
     );
-    assert_eq!(
-        terminal.requester_did.as_deref(),
-        Some(fixture.peer.node_identity.did())
-    );
+    assert_eq!(terminal.requester_did.as_deref(), Some(fixture.user_did()));
 
     for attempt in 1..=TERMINAL_REDRIVE_CAP {
         let report = fixture.redrive().await;
@@ -352,10 +295,7 @@ async fn authenticated_requester_observes_each_terminal_in_a_recovery_wave() {
         let row = fixture.read(&fixture.requester, &request_id).await.unwrap();
         assert_eq!(row.doc_id.as_deref(), Some(doc.as_str()));
         assert_eq!(row.node_did.as_deref(), Some(fixture.node_identity.did()));
-        assert_eq!(
-            row.requester_did.as_deref(),
-            Some(fixture.peer.node_identity.did())
-        );
+        assert_eq!(row.requester_did.as_deref(), Some(fixture.user_did()));
         assert_eq!(row.lifecycle_state, Some(RequestLifecycleState::Completed));
         assert_eq!(row.terminal_redrive_attempts, Some(1));
         assert!(fixture.read(&fixture.outsider, &request_id).await.is_none());

@@ -441,22 +441,56 @@ pub async fn fetch_message_snapshots_for_session(
         )
         .await
         .unwrap_or_else(|error| panic!("reconstruct message {header_id}: {error:#}"));
-        let role = serde_json::to_value(header.role)
-            .expect("serialize message role")
-            .as_str()
-            .expect("message role string")
-            .to_owned();
-        snapshots.push(MessageSnapshot {
-            message_key: header.message_key,
-            session_id: header.session_id,
-            sequence: header.sequence,
-            role,
-            content: gents_protocol::transcript::present_message(&native).body_markdown,
-            timestamp: header.created_at,
-            native,
-        });
+        snapshots.push(message_snapshot(header, native));
     }
     snapshots
+}
+
+/// The session's transcript as `access` reconstructs it.
+pub async fn fetch_message_snapshots_for_session_as(
+    access: &gents::ConfigAccess,
+    session_id: &str,
+) -> Vec<MessageSnapshot> {
+    let session_id = escape_graphql_string(session_id);
+    let data = access
+        .read_data(&format!(
+            r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, order: {{ sequence: ASC }}) {{ _docID node_did requester_did }} }}"#
+        ))
+        .await;
+    let mut snapshots = Vec::new();
+    for row in data["AgentMessage"].as_array().expect("message rows") {
+        let header_id = row["_docID"].as_str().expect("physical message identity");
+        let (header, native) = gents::session::load_canonical_message(
+            access,
+            header_id,
+            row["node_did"].as_str().expect("message principal"),
+            row["requester_did"].as_str(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("reconstruct message {header_id}: {error:#}"));
+        snapshots.push(message_snapshot(header, native));
+    }
+    snapshots
+}
+
+fn message_snapshot(
+    header: gents_protocol::output::TranscriptMessage,
+    native: gents_protocol::message::Message,
+) -> MessageSnapshot {
+    let role = serde_json::to_value(header.role)
+        .expect("serialize message role")
+        .as_str()
+        .expect("message role string")
+        .to_owned();
+    MessageSnapshot {
+        message_key: header.message_key,
+        session_id: header.session_id,
+        sequence: header.sequence,
+        role,
+        content: gents_protocol::transcript::present_message(&native).body_markdown,
+        timestamp: header.created_at,
+        native,
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize)]
@@ -521,8 +555,14 @@ impl ToolCallSnapshot {
         &self,
         node: std::sync::Arc<EmbeddedNode>,
     ) -> anyhow::Result<String> {
+        self.try_load_result_as(&gents::store::config_client::ConfigAccess::local(node))
+            .await
+    }
+
+    /// The call's exact invocation reply as `access` reads it.
+    pub async fn try_load_result_as(&self, access: &gents::ConfigAccess) -> anyhow::Result<String> {
         let message = gents::tools::call::lifecycle::load_tool_call_result(
-            &gents::store::config_client::ConfigAccess::local(node),
+            access,
             &self.doc_id,
             &self.node_did,
             &self.session_id,
@@ -579,10 +619,13 @@ pub async fn fetch_tool_call_payloads_for_request(
     payloads
 }
 
-pub async fn fetch_tool_call_snapshots_for_session(
-    node: &EmbeddedNode,
+pub async fn fetch_tool_call_snapshots_for_session<R>(
+    node: &R,
     session_id: &str,
-) -> Vec<ToolCallSnapshot> {
+) -> Vec<ToolCallSnapshot>
+where
+    R: SnapshotReader + ?Sized,
+{
     let filter = format!(
         r#"session_id: {{ _eq: "{}" }}"#,
         escape_graphql_string(session_id)
@@ -590,7 +633,10 @@ pub async fn fetch_tool_call_snapshots_for_session(
     fetch_tool_call_snapshots(node, &filter).await
 }
 
-async fn fetch_tool_call_snapshots(node: &EmbeddedNode, filter: &str) -> Vec<ToolCallSnapshot> {
+async fn fetch_tool_call_snapshots<R>(node: &R, filter: &str) -> Vec<ToolCallSnapshot>
+where
+    R: SnapshotReader + ?Sized,
+{
     let query = format!(
         r#"{{
             AgentToolCall(
@@ -605,13 +651,7 @@ async fn fetch_tool_call_snapshots(node: &EmbeddedNode, filter: &str) -> Vec<Too
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
-    assert!(
-        !resp.has_errors(),
-        "fetch_tool_call_snapshots failed: {:?}",
-        resp.errors
-    );
-    let data = resp.data.expect("data");
+    let data = node.read_data(&query).await;
     serde_json::from_value(data["AgentToolCall"].clone()).expect("parse ToolCallSnapshot")
 }
 
