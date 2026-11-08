@@ -12,7 +12,7 @@ use crate::request::lifecycle::{
     task_goal_session_title, task_session_title, ExecutionOrigin, TriggerLineage, WorkspaceLineage,
 };
 use crate::runtime::snapshot::{ActiveRuntimeSnapshot, ResolvedTask};
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
+use crate::store::graphql::{escape_graphql_string, rows};
 use crate::triggers::engine::{MaterializerHandle, TriggerKind};
 
 type ResolvedAgent = (
@@ -110,32 +110,43 @@ pub(crate) async fn recover_workspace_binding_pending_requests(
     node_did: &str,
     agent_identities: &[Arc<dyn crate::store::identity::NodeIdentity>],
 ) -> Result<usize> {
-    let query = format!(
-        r#"{{
-            AgentRequest(filter: {{
-                lifecycle_state: {{ _eq: "{workspace_binding_pending}" }},
-                node_did: {{ _eq: "{node}" }}
-            }}) {{
-                _docID
-                request_id
-                node_did
-                agent_did
-                workspace_id
-                workspace_owner_node_did
-                workspace_authority
-                workspace_seal_hash
-            }}
-        }}"#,
-        workspace_binding_pending = RequestLifecycleState::WorkspaceBindingPending.as_str(),
-        node = escape_graphql_string(node_did),
-    );
-    let response = graphql_with_transaction_retry(
-        node,
-        &query,
-        "load workspace-binding-pending AgentRequest rows",
-    )
-    .await?;
-    let staged = rows::<AgentRequestRow>(&response, "AgentRequest")?;
+    // A pending request is its working Agent's document: the Node principal
+    // does not see it under ACP, so each held Agent reads its own requests.
+    let mut staged = Vec::new();
+    for agent_identity in agent_identities {
+        let query = format!(
+            r#"{{
+                AgentRequest(filter: {{
+                    lifecycle_state: {{ _eq: "{workspace_binding_pending}" }},
+                    node_did: {{ _eq: "{node}" }},
+                    agent_did: {{ _eq: "{agent}" }}
+                }}) {{
+                    _docID
+                    request_id
+                    node_did
+                    agent_did
+                    workspace_id
+                    workspace_owner_node_did
+                    workspace_authority
+                    workspace_seal_hash
+                }}
+            }}"#,
+            workspace_binding_pending = RequestLifecycleState::WorkspaceBindingPending.as_str(),
+            node = escape_graphql_string(node_did),
+            agent = escape_graphql_string(agent_identity.did()),
+        );
+        let response = crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(agent_identity.did())?,
+        )
+        .execute(&query)
+        .await
+        .context("load workspace-binding-pending AgentRequest rows as their Agent")?;
+        staged.extend(rows::<AgentRequestRow>(
+            &defra_node::QueryResponse::success(response["data"].clone()),
+            "AgentRequest",
+        )?);
+    }
     let mut recovered = 0;
     for request in staged {
         let request_doc_id = request

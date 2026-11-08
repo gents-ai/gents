@@ -10,7 +10,7 @@ use gents::{
     DocumentRuntimeOptions, FileToolMode, Gents, NodeIdentity, ToolCeiling,
 };
 use serde_json::{json, Value};
-use std::{collections::BTreeSet, path::Path, process::Command, sync::Arc, time::Duration};
+use std::{path::Path, process::Command, sync::Arc, time::Duration};
 
 fn git(repo: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -28,11 +28,6 @@ fn git(repo: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8(out.stdout).unwrap().trim().to_owned()
-}
-async fn execute(node: &gents::defra_node::Node, query: &str) -> Value {
-    let out = node.execute(query).await;
-    assert!(!out.has_errors(), "{query}: {:?}", out.errors);
-    out.data.unwrap()
 }
 
 #[cfg(target_os = "macos")]
@@ -150,71 +145,28 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
         Vec::new(),
     )
     .await;
-    let mut documents = MemoryWorkspaceDocuments::default();
-    let mut host = HostExecutorContext {
-        owner_node_did: did.clone(),
-        repository: RepositoryPlacementRef {
-            repository_id: "artifact-live-repo".into(),
-            owner_node_did: did.clone(),
-            host_path: repo.clone(),
-            enabled: true,
+    // The User publishes the repository and the managed Agent creates and
+    // seals the read-only workspace through the production provisioning owner,
+    // which publishes the workspace documents as that Agent.
+    let workspace_id = uuid::Uuid::new_v4().to_string();
+    let sealed = gents::tools::workspace::provision_read_only_workspace(
+        &access,
+        &actors.agent_access,
+        &repo,
+        &git(&repo, &["rev-parse", "HEAD"]),
+        &WorkspaceProvisioningSelection {
+            workspace_id: workspace_id.clone(),
+            node_did: did.clone(),
+            creator_agent_did: agent_did.clone(),
+            writer_agent_did: agent_did.clone(),
+            integrator_agent_did: agent_did.clone(),
+            reader_agent_dids: Vec::new(),
         },
-        ceiling: Some(&repo),
-        capabilities: BTreeSet::from([
-            CAP_CREATE_WORKSPACE.into(),
-            CAP_OBSERVE_DIRTY_BASE.into(),
-            CAP_SEAL_WORKSPACE.into(),
-        ]),
-        writer_principal: did.clone(),
-        integrator_principal: did.clone(),
-        caused_by_invocation_id: "artifact-live-setup".into(),
-        caused_by_correlation: "artifact-live-setup".into(),
-        documents: &mut documents,
-    };
-    let created = execute_create_workspace_plan(
-        &emit_create_workspace_plan(CreateWorkspaceAction {
-            writer_agent_did: None,
-            writer_agent_doc_id: None,
-            integrator_agent_did: None,
-            integrator_agent_doc_id: None,
-            readers: Vec::new(),
-            workspace_id: "artifact-live-workspace".into(),
-            work_unit_id: "artifact-live-unit".into(),
-            repository_id: "artifact-live-repo".into(),
-            base_sha: git(&repo, &["rev-parse", "HEAD"]),
-            branch: "artifact-live-review".into(),
-            creation_policy: CreationPolicy::GitWorktreeDiff,
-            adapter: WorkspaceAdapterKind::GitWorktree,
-            clone_artifacts: None,
-            path_capability: WorkspacePathCapability::exact_paths(Vec::new()).unwrap(),
-        }),
-        &mut Vec::new(),
-        &mut host,
     )
-    .unwrap();
-    let sealed = execute_seal_workspace_plan(
-        &emit_seal_workspace_plan(SealWorkspaceAction {
-            workspace_id: "artifact-live-workspace".into(),
-            produced_by_request_id: "artifact-live-writer".into(),
-            produced_by_request_doc_id: "artifact-live-writer-doc".into(),
-        }),
-        &mut Vec::new(),
-        &mut host,
-    )
-    .unwrap();
-    let mut placement = created.placement;
-    placement.observed_tree_hash = sealed.workspace.seal_hash.clone().unwrap();
+    .await
+    .expect("provision the sealed read-only workspace");
+    let placement = sealed.placement.clone();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    execute(
-        &db.node,
-        &isolated_workspace_upsert_mutation(&sealed.workspace),
-    )
-    .await;
-    execute(
-        &db.node,
-        &workspace_placement_upsert_mutation(&placement, &now),
-    )
-    .await;
     let source = std::path::PathBuf::from(&placement.host_path);
     let before_tree = git(&source, &["rev-parse", "HEAD^{tree}"]);
     let gitdir = std::path::PathBuf::from(git(&source, &["rev-parse", "--absolute-git-dir"]));
@@ -321,7 +273,7 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     assert!(inference.iter().any(|call| call["completion_tokens"]
         .as_u64()
         .is_some_and(|tokens| tokens > 0)));
-    assert_eq!(row["workspace_id"], "artifact-live-workspace");
+    assert_eq!(row["workspace_id"], workspace_id.as_str());
     assert_eq!(row["workspace_owner_node_did"], did);
     assert_eq!(row["workspace_authority"], "readOnly");
     assert_eq!(
