@@ -112,7 +112,7 @@ async fn stage_goal_backed_request(
         .cloned()
         .unwrap_or_default();
     anyhow::ensure!(requests.len() <= 1, "goal request retry key is not unique");
-    let (request_doc_id, disposition) = if let Some(existing_request) = requests.first() {
+    let (published_doc_id, disposition) = if let Some(existing_request) = requests.first() {
         let persisted: GoalBackedRequestFingerprint =
             serde_json::from_value(existing_request.clone())
                 .context("decoding goal-backed request fingerprint")?;
@@ -146,103 +146,22 @@ async fn stage_goal_backed_request(
             "persisted Goal request differs from its native author"
         );
         (
-            existing_doc.to_owned(),
+            Some(existing_doc.to_owned()),
             GoalBackedRequestDisposition::Idempotent,
         )
     } else {
-        let request_doc = if let Some(graph) = client_graph {
-            let session = request
-                .session_doc_id
-                .as_deref()
-                .context("client Goal request has no physical session")?;
-            let agent = request
-                .agent_doc_id
-                .as_deref()
-                .context("client Goal request has no physical Agent")?;
-            txn.stage_verified_edit_request(request, graph.clone(), session, agent)
-                .await?
-        } else {
-            use gents_protocol::request_admission::AgentRequestAdmissionKind;
-            match request.admission.kind {
-                AgentRequestAdmissionKind::RuntimeInternal => {
-                    crate::request::lifecycle::stage_runtime_request_in_txn(
-                        txn,
-                        request,
-                        &session.doc_id,
-                        &agent_doc,
-                    )
-                    .await?
-                }
-                AgentRequestAdmissionKind::Client | AgentRequestAdmissionKind::LocalSelf => {
-                    let escaped = escape_graphql_string(&session.doc_id);
-                    let response = txn.execute(&format!(
-                        r#"{{ AgentSession(filter: {{_docID: {{_eq: "{escaped}"}}}}, limit: 2) {{relationships_pending}} }}"#
-                    )).await?;
-                    let rows = response["data"]["AgentSession"]
-                        .as_array()
-                        .context("goal session publication state unavailable")?;
-                    let [row] = rows.as_slice() else {
-                        anyhow::bail!("goal session publication state ambiguous")
-                    };
-                    if row["relationships_pending"] == true {
-                        crate::request::lifecycle::stage_pending_child_request_in_txn(
-                            txn,
-                            request,
-                            &session.doc_id,
-                            &agent_doc,
-                        )
-                        .await?
-                    } else {
-                        crate::request::lifecycle::stage_client_request_in_txn(
-                            txn,
-                            request,
-                            &session.doc_id,
-                            &agent_doc,
-                        )
-                        .await?
-                    }
-                }
-                _ => anyhow::bail!("unsupported Goal-backed request admission"),
-            }
-        };
-        (request_doc, GoalBackedRequestDisposition::Created)
+        (None, GoalBackedRequestDisposition::Created)
     };
-    let response = txn
-        .execute(&format!(
-            r#"{{ AgentRequest(docIDs: ["{}"]) {{ {} }} }}"#,
-            escape_graphql_string(&request_doc_id),
-            gents_protocol::row::AGENT_REQUEST_FIELDS,
-        ))
-        .await?;
-    let rows = response["data"]["AgentRequest"]
-        .as_array()
-        .context("staged request lookup omitted rows")?;
-    anyhow::ensure!(rows.len() == 1, "staged request is missing or ambiguous");
-    let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(rows[0].clone())?;
-    let staged_request = gents_protocol::row::AgentRequest::try_from(row)?;
-    let provenance = crate::request::lifecycle::materialize::created_session_provenance_in_txn(
+    let request_doc_id = crate::request::lifecycle::stage_admitted_request_in_txn(
         txn,
-        &staged_request,
-    )
-    .await?;
-    if reserved_runtime_session {
-        crate::session::finalize_reserved_runtime_session_in_txn(
-            txn,
-            &session.doc_id,
-            &staged_request,
-            provenance.clone(),
-        )
-        .await?;
-    }
-    crate::session::ensure_session_in_txn(
-        txn,
-        session_id,
-        node_did,
-        &request.agent_did,
-        Some(&request.requester_did),
-        request.input.initial_title.clone(),
-        provenance,
-        &request.created_at,
+        request,
+        &session.doc_id,
+        &agent_doc,
+        crate::request::lifecycle::StageOptions {
+            published_doc_id: published_doc_id.as_deref(),
+            signer: client_graph,
+            reserved_runtime_session,
+        },
     )
     .await?;
     let staged_goal = stage_goal_and_claim(

@@ -212,6 +212,101 @@ pub(crate) async fn stage_pending_child_request_in_txn(
     )?)
 }
 
+/// How another owner's transaction publishes a signed request before it is
+/// staged into its session.
+pub(crate) struct StageOptions<'a> {
+    /// The request document this signed create already published (an
+    /// idempotent retry); `None` publishes it in this transaction.
+    pub(crate) published_doc_id: Option<&'a str>,
+    /// A verified client graph publishes the request under its own signer.
+    pub(crate) signer: Option<&'a std::sync::Arc<db::block::builder::VerifiedClientCreate>>,
+    pub(crate) reserved_runtime_session: bool,
+}
+
+/// Publish an admitted request through its admission kind, reread it, and
+/// stage its session with the created-session provenance, in that order.
+pub(crate) async fn stage_admitted_request_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    create: &AgentRequestCreate,
+    session_doc: &str,
+    agent_doc: &str,
+    options: StageOptions<'_>,
+) -> anyhow::Result<String> {
+    let doc_id = if let Some(existing) = options.published_doc_id {
+        existing.to_owned()
+    } else if let Some(graph) = options.signer {
+        let session = create
+            .session_doc_id
+            .as_deref()
+            .context("client Goal request has no physical session")?;
+        let agent = create
+            .agent_doc_id
+            .as_deref()
+            .context("client Goal request has no physical Agent")?;
+        txn.stage_verified_edit_request(create, graph.clone(), session, agent)
+            .await?
+    } else {
+        match create.admission.kind {
+            AgentRequestAdmissionKind::RuntimeInternal => {
+                stage_runtime_request_in_txn(txn, create, session_doc, agent_doc).await?
+            }
+            AgentRequestAdmissionKind::Client | AgentRequestAdmissionKind::LocalSelf => {
+                let escaped = crate::store::graphql::escape_graphql_string(session_doc);
+                let response = txn.execute(&format!(
+                    r#"{{ AgentSession(filter: {{_docID: {{_eq: "{escaped}"}}}}, limit: 2) {{relationships_pending}} }}"#
+                )).await?;
+                let rows = response["data"]["AgentSession"]
+                    .as_array()
+                    .context("goal session publication state unavailable")?;
+                let [row] = rows.as_slice() else {
+                    anyhow::bail!("goal session publication state ambiguous")
+                };
+                if row["relationships_pending"] == true {
+                    stage_pending_child_request_in_txn(txn, create, session_doc, agent_doc).await?
+                } else {
+                    stage_client_request_in_txn(txn, create, session_doc, agent_doc).await?
+                }
+            }
+            _ => anyhow::bail!("unsupported Goal-backed request admission"),
+        }
+    };
+    let response = txn
+        .execute(&format!(
+            r#"{{ AgentRequest(docIDs: ["{}"]) {{ {} }} }}"#,
+            crate::store::graphql::escape_graphql_string(&doc_id),
+            gents_protocol::row::AGENT_REQUEST_FIELDS,
+        ))
+        .await?;
+    let rows = response["data"]["AgentRequest"]
+        .as_array()
+        .context("staged request lookup omitted rows")?;
+    anyhow::ensure!(rows.len() == 1, "staged request is missing or ambiguous");
+    let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(rows[0].clone())?;
+    let request = gents_protocol::row::AgentRequest::try_from(row)?;
+    let provenance = super::materialize::created_session_provenance_in_txn(txn, &request).await?;
+    if options.reserved_runtime_session {
+        crate::session::finalize_reserved_runtime_session_in_txn(
+            txn,
+            session_doc,
+            &request,
+            provenance.clone(),
+        )
+        .await?;
+    }
+    crate::session::ensure_session_in_txn(
+        txn,
+        &create.session_id,
+        &create.node_did,
+        &create.agent_did,
+        Some(&create.requester_did),
+        create.input.initial_title.clone(),
+        provenance,
+        &create.created_at,
+    )
+    .await?;
+    Ok(doc_id)
+}
+
 pub(crate) async fn ensure_request_session_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     create: &AgentRequestCreate,
