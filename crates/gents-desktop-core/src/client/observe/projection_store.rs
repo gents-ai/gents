@@ -79,16 +79,16 @@ enum ProvenanceUpdate {
     Invalidate,
 }
 
-/// Captures publication ordering: unknown ownership invalidates every scope;
-/// classified changes invalidate only their actual owners.
+/// One family of publication epochs: unknown ownership invalidates every
+/// scope; classified changes invalidate only their actual owners.
 #[derive(Clone, Default)]
-pub(crate) struct StoreReadFence {
+struct Epochs {
     all: Arc<()>,
     shared: Arc<()>,
     nodes: BTreeMap<String, Arc<()>>,
 }
 
-impl StoreReadFence {
+impl Epochs {
     fn accepts(&self, captured: &Self, scope: &StoreScope) -> bool {
         match scope {
             StoreScope::All => Arc::ptr_eq(&self.all, &captured.all),
@@ -118,6 +118,34 @@ impl StoreReadFence {
     }
 }
 
+/// `ClientDataPublication` epochs: publications move `data`, request events
+/// move `events`. A snapshot reload checks `data` only; a patch checks both.
+#[derive(Clone, Default)]
+pub(crate) struct StoreReadFence {
+    data: Epochs,
+    events: Epochs,
+}
+
+impl StoreReadFence {
+    /// `ClientDataPublication.acceptsFor`.
+    fn accepts(&self, captured: &Self, scope: &StoreScope) -> bool {
+        self.accepts_reload(captured, scope) && self.events.accepts(&captured.events, scope)
+    }
+
+    /// `ClientDataPublication.acceptsReloadFor`.
+    fn accepts_reload(&self, captured: &Self, scope: &StoreScope) -> bool {
+        self.data.accepts(&captured.data, scope)
+    }
+
+    fn touch(&mut self, scope: &StoreScope) {
+        self.data.touch(scope);
+    }
+
+    fn touch_events(&mut self, scope: &StoreScope) {
+        self.events.touch(scope);
+    }
+}
+
 enum StoreMutation {
     Replace(ClientStore),
     ReplaceNode(String, ClientStore),
@@ -132,6 +160,11 @@ impl StoreMutation {
             Self::ReplaceNode(node, incoming) => current.replacement_scope(node, incoming),
             Self::Chat(incoming) | Self::Observer(incoming) => current.merge_scope(incoming),
         }
+    }
+
+    /// Replacements are snapshot reloads; merges are patches.
+    fn reloads(&self) -> bool {
+        matches!(self, Self::Replace(_) | Self::ReplaceNode(_, _))
     }
 
     fn provenance(&self) -> ProvenanceUpdate {
@@ -457,7 +490,7 @@ impl ObservedStore {
         let notice = {
             let mut state = self.state.write().expect("store snapshot lock poisoned");
             if provenance_changed {
-                state.fences.touch(&StoreScope::All);
+                state.fences.touch_events(&StoreScope::All);
             }
             state.revision = StoreProjectionRevision {
                 store_version: state.revision.store_version.saturating_add(1),
@@ -481,7 +514,19 @@ impl ObservedStore {
     pub(crate) fn observe_request_event(&self, doc_id: Option<&str>) -> u64 {
         let mut state = self.state.write().expect("store snapshot lock poisoned");
         let scope = state.snapshot.request_event_scope(doc_id);
-        state.fences.touch(&scope);
+        Self::record_request_event(&mut state, &scope)
+    }
+
+    /// `ClientDataPublication.observerEvent`: a change delivered on
+    /// `node_did`'s subscription, whose observer reads only that node's rows.
+    pub(crate) fn observe_node_event(&self, node_did: &str) -> u64 {
+        let mut state = self.state.write().expect("store snapshot lock poisoned");
+        let scope = state.snapshot.node_event_scope(node_did);
+        Self::record_request_event(&mut state, &scope)
+    }
+
+    fn record_request_event(state: &mut ObservedState, scope: &StoreScope) -> u64 {
+        state.fences.touch_events(scope);
         state.revision.request_event_version =
             state.revision.request_event_version.saturating_add(1);
         state.revision.request_event_version
@@ -542,7 +587,13 @@ impl ObservedStore {
         let notice = {
             let mut state = self.state.write().expect("store snapshot lock poisoned");
             let scope = mutation.scope(&state.snapshot);
-            if captured.is_some_and(|captured| !state.fences.accepts(captured, &scope)) {
+            if captured.is_some_and(|captured| {
+                if mutation.reloads() {
+                    !state.fences.accepts_reload(captured, &scope)
+                } else {
+                    !state.fences.accepts(captured, &scope)
+                }
+            }) {
                 return None;
             }
             let store_version = state.revision.store_version.saturating_add(1);

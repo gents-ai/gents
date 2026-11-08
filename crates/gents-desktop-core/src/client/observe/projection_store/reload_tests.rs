@@ -94,7 +94,7 @@ fn provenance_revision_ignores_transcript_and_lease_but_tracks_remote_completion
 fn accepted_reload_refreshes_unretained_lineage_but_rejected_reload_does_not() {
     let (store, _) = ObservedStore::new(requests(&["parent"]));
     let captured = store.capture_read();
-    store.invalidate_projection(true);
+    store.merge_chat_patch(requests(&["parent"]));
     let current = store.projection_revision();
     assert!(!store.replace_reloaded_snapshot_at_read(&captured, None, requests(&["parent"]),));
     assert_eq!(store.projection_revision(), current);
@@ -108,6 +108,24 @@ fn accepted_reload_refreshes_unretained_lineage_but_rejected_reload_does_not() {
         store.projection_revision().provenance_version,
         current.provenance_version + 1
     );
+}
+
+/// A tool-call change is a request event: it rejects a patch read before it
+/// but not a reload, whose own resync reads after it.
+#[test]
+fn tool_call_invalidation_rejects_patches_but_not_reloads() {
+    let (store, _) = ObservedStore::new(requests(&["parent"]));
+    let captured = store.capture_read();
+    let before = store.projection_revision();
+    store.invalidate_projection(true);
+    assert_eq!(
+        store.projection_revision().provenance_version,
+        before.provenance_version + 1
+    );
+    assert!(store
+        .merge_chat_patch_at_read(&captured, requests(&["parent"]))
+        .is_none());
+    assert!(store.replace_reloaded_snapshot_at_read(&captured, None, requests(&["parent"])));
 }
 
 #[test]

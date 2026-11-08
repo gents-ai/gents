@@ -89,7 +89,10 @@ async fn submitted_request_refresh_success_does_not_schedule_another_read() {
         node_did: "did:test:node".into(),
         agent_did: None,
     };
-    let accepted = observe_submitted_request(&store, receipt.clone(), async { Ok(1) }).await;
+    let accepted = observe_submitted_request(&store, receipt.clone(), async {
+        Ok(crate::client::StoreRefresh::Published { version: 1 })
+    })
+    .await;
     assert_eq!(accepted, receipt);
     assert!(!wake.has_changed().unwrap());
     assert_eq!(store.take_resync_requests(), (false, Vec::new()));

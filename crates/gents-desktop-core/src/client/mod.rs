@@ -19,7 +19,7 @@ pub use core::{
     ClientRouteStatus, ClientStoreKeyProvider, ClientSyncStateSnapshot, EnrollmentActivationError,
     EnrollmentRequestResult, GoalSubmissionReference, InferenceActivity, InferenceObservation,
     InferenceTarget, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
-    RefreshedRequestProjection, RetainedGoalSubmission, RuntimeSchemaObservation,
+    RefreshedRequestProjection, RetainedGoalSubmission, RuntimeSchemaObservation, StoreRefresh,
     STUCK_THRESHOLD_ATTEMPTS,
 };
 pub use gents::P2pSyncStatusSnapshot;
@@ -46,9 +46,8 @@ pub use query::{
     load_session_diagnostics_store, load_session_diagnostics_store_on, load_session_live_store,
     load_session_live_store_on, load_session_tip_store, load_session_tip_store_on,
     load_session_transcript_page, load_session_transcript_page_on, load_session_transcript_window,
-    load_session_transcript_window_on,
-    CanonicalTranscriptDependencies, RequestPromptFact, RequestPromptOwnership,
-    SessionTranscriptQueryPage, TranscriptSpan, TranscriptWindow,
+    load_session_transcript_window_on, CanonicalTranscriptDependencies, RequestPromptFact,
+    RequestPromptOwnership, SessionTranscriptQueryPage, TranscriptSpan, TranscriptWindow,
     DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE, MAX_SESSION_TRANSCRIPT_PAGE_SIZE,
 };
 pub use schema::subscribed_collection_names;

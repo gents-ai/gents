@@ -39,7 +39,7 @@ pub struct RefreshedRequestProjection {
 async fn observe_submitted_request(
     store: &ObservedStore,
     receipt: SubmittedRequest,
-    refresh: impl std::future::Future<Output = Result<u64>>,
+    refresh: impl std::future::Future<Output = Result<super::StoreRefresh>>,
 ) -> SubmittedRequest {
     store.set_focused_request_id(Some(receipt.request_id.clone()));
     if let Err(error) = refresh.await {
@@ -195,11 +195,14 @@ impl ClientCore {
         self.node_identity.did().to_owned()
     }
 
+    /// A superseded node read is not read again here: the observer owns that
+    /// node's next load (`ObserverResync` `RefreshFallback`).
     async fn refresh_config_source(&self, source_node_did: &str) -> Result<u64> {
-        match self.refresh_node(source_node_did).await? {
-            Some(version) => Ok(version),
-            None => self.refresh_store().await,
-        }
+        let refresh = match self.refresh_node(source_node_did).await? {
+            Some(refresh) => refresh,
+            None => self.refresh_store().await?,
+        };
+        Ok(refresh.version())
     }
 
     #[cfg(test)]

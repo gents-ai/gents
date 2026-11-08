@@ -293,6 +293,15 @@ impl ClientStore {
         }
     }
 
+    /// The footprint of a change delivered on `node_did`'s subscription; a
+    /// blank source is unclassified.
+    pub(crate) fn node_event_scope(&self, node_did: &str) -> StoreScope {
+        match nonblank(Some(node_did)) {
+            Some(node_did) => StoreScope::node(node_did.to_owned()),
+            None => StoreScope::All,
+        }
+    }
+
     pub(crate) fn into_observer_projection(mut self) -> Self {
         self.transcript_messages.clear();
         self.output_segments.clear();

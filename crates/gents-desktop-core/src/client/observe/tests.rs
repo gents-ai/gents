@@ -59,7 +59,8 @@ enum ProxyMode {
     Denied,
 }
 
-type ProxyCommands = tokio::sync::mpsc::UnboundedSender<(ProxyMode, tokio::sync::oneshot::Sender<()>)>;
+type ProxyCommands =
+    tokio::sync::mpsc::UnboundedSender<(ProxyMode, tokio::sync::oneshot::Sender<()>)>;
 
 async fn read_request(client: &mut tokio::net::TcpStream) -> std::io::Result<()> {
     use tokio::io::AsyncReadExt;
@@ -91,10 +92,8 @@ async fn interruptible_proxy(
 ) -> (String, ProxyCommands, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
-    let (commands, mut command_rx) = tokio::sync::mpsc::unbounded_channel::<(
-        ProxyMode,
-        tokio::sync::oneshot::Sender<()>,
-    )>();
+    let (commands, mut command_rx) =
+        tokio::sync::mpsc::unbounded_channel::<(ProxyMode, tokio::sync::oneshot::Sender<()>)>();
     let task = tokio::spawn(async move {
         let mut mode = ProxyMode::Online;
         let mut connections = tokio::task::JoinSet::new();
@@ -574,10 +573,20 @@ async fn denied_runtime_recovers_when_access_returns_at_the_same_endpoint() {
         fixture.client.client_signing_capability().unwrap(),
     );
     wait_for_name(&store, Some("remote")).await;
-    wait_for_connection(&store, &fixture.runtime_did, RuntimeConnectionStatus::Connected).await;
+    wait_for_connection(
+        &store,
+        &fixture.runtime_did,
+        RuntimeConnectionStatus::Connected,
+    )
+    .await;
 
     set_proxy_mode(&fixture.proxy_commands, ProxyMode::Denied).await;
-    wait_for_connection(&store, &fixture.runtime_did, RuntimeConnectionStatus::Denied).await;
+    wait_for_connection(
+        &store,
+        &fixture.runtime_did,
+        RuntimeConnectionStatus::Denied,
+    )
+    .await;
     assert!(store.snapshot().nodes.is_empty());
     let physical = gents::store::graphql::escape_graphql_string(&fixture.physical);
     fixture
@@ -591,7 +600,12 @@ async fn denied_runtime_recovers_when_access_returns_at_the_same_endpoint() {
 
     set_proxy_mode(&fixture.proxy_commands, ProxyMode::Online).await;
     wait_for_name(&store, Some("regranted")).await;
-    wait_for_connection(&store, &fixture.runtime_did, RuntimeConnectionStatus::Connected).await;
+    wait_for_connection(
+        &store,
+        &fixture.runtime_did,
+        RuntimeConnectionStatus::Connected,
+    )
+    .await;
     handle.shutdown().await;
     fixture.stop().await;
 }
@@ -618,7 +632,12 @@ async fn stalled_runtime_snapshot_delays_neither_another_runtime_nor_shutdown() 
     .await
     .expect("stalled runtime snapshot in flight")
     .unwrap();
-    wait_for_connection(&store, &fixture.runtime_did, RuntimeConnectionStatus::Connected).await;
+    wait_for_connection(
+        &store,
+        &fixture.runtime_did,
+        RuntimeConnectionStatus::Connected,
+    )
+    .await;
     let mut notices = store.subscribe_changes();
     let physical = gents::store::graphql::escape_graphql_string(&fixture.physical);
     fixture
@@ -690,4 +709,279 @@ fn generated_denied_reprobe_schedule_drives_the_sources() {
             "{case}"
         );
     }
+}
+
+/// Replays observer traces through the delivery path, the store fences and
+/// the loop's settlement, and checks each step against the executed Lean
+/// `ObserverResync` owner.
+#[tokio::test]
+async fn generated_observer_resync_traces_match_the_lean_owner() {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    const NODES: usize = 2;
+    let did = |node: usize| format!("did:resync:{node}");
+    let rows = |node: usize| {
+        ClientStore::from_rows(crate::client::store::ClientStoreRows {
+            sessions: vec![serde_json::from_value(serde_json::json!({
+                "node_did": did(node), "session_id": format!("session-{node}"),
+                "agent_did": "agent", "created_at": "2026-01-01T00:00:00Z",
+            }))
+            .unwrap()],
+            ..Default::default()
+        })
+    };
+    let op = |op: &str, node: usize, result: &str| serde_json::json!({"op": op, "node": node, "result": result});
+    let alphabet = [
+        op("deliver", 0, "rows"),
+        op("deliver", 1, "rows"),
+        op("reconnect_event", 0, "rows"),
+        op("publish", 0, "rows"),
+        op("publish", 1, "rows"),
+        op("finish", 0, "rows"),
+        op("finish", 0, "transport_failed"),
+        op("finish", 0, "denied"),
+        op("finish", 1, "rows"),
+        op("timer", 0, "rows"),
+        op("start", 0, "rows"),
+    ];
+    let prefix = [
+        op("armed", 0, "rows"),
+        op("armed", 1, "rows"),
+        op("start", 0, "rows"),
+        op("start", 1, "rows"),
+    ];
+    let suffix = [
+        op("finish", 0, "rows"),
+        op("timer", 0, "rows"),
+        op("start", 0, "rows"),
+        op("finish", 0, "rows"),
+    ];
+    let mut traces = Vec::new();
+    for a in &alphabet {
+        for b in &alphabet {
+            for c in &alphabet {
+                let ops: Vec<_> = prefix
+                    .iter()
+                    .chain([a, b, c])
+                    .chain(suffix.iter())
+                    .cloned()
+                    .collect();
+                traces.push(serde_json::json!({"nodes": NODES, "ops": ops}));
+            }
+        }
+    }
+    let serialized = serde_json::to_string(&traces).unwrap();
+    let output = tokio::task::spawn_blocking(move || {
+        gents_lean_contract::run_prepared_generator_with_input(
+            &gents_lean_contract::proofs_dir().unwrap(),
+            "Proofs.Conformance.ObserverResync:olean",
+            "Proofs/Conformance/ObserverResync.lean",
+            &serialized,
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let modeled: Vec<serde_json::Value> = serde_json::from_str(&output).unwrap();
+    assert_eq!(modeled.len(), traces.len());
+
+    let metrics = ObserverMetrics::default();
+    for (trace, expected) in traces.iter().zip(&modeled) {
+        let (store, _) = ObservedStore::new(ClientStore::default());
+        let mut pending = BTreeSet::<String>::new();
+        let mut retry_at = BTreeMap::<String, Instant>::new();
+        let mut in_flight = BTreeMap::<String, projection_store::StoreReadFence>::new();
+        let now = Instant::now();
+        for node in 0..NODES {
+            store.observe_runtime_connection(&did(node), RuntimeConnectionEvent::SourceStarted);
+        }
+        let mut results = Vec::new();
+        for step in trace["ops"].as_array().unwrap() {
+            let node = usize::try_from(step["node"].as_u64().unwrap()).unwrap();
+            let node_did = did(node);
+            match step["op"].as_str().unwrap() {
+                "armed" => {
+                    store.observe_runtime_connection(
+                        &node_did,
+                        RuntimeConnectionEvent::SubscriptionsReady,
+                    );
+                    pending.insert(node_did);
+                }
+                "start" => {
+                    let ready = store.runtime_connection(&node_did)
+                        != Some(RuntimeConnectionStatus::Denied);
+                    if startable(
+                        &node_did,
+                        &pending,
+                        &retry_at,
+                        in_flight.contains_key(&node_did),
+                        ready,
+                    ) {
+                        pending.remove(&node_did);
+                        in_flight.insert(node_did, store.capture_read());
+                    }
+                }
+                "deliver" => {
+                    delivery::deliver(
+                        &store,
+                        &metrics,
+                        &node_did,
+                        "AgentRequest",
+                        &serde_json::json!({"data": {"AgentRequest": [{"_docID": "changed"}]}}),
+                    )
+                    .unwrap();
+                    let (full, scopes) = store.take_resync_requests();
+                    assert!(!full);
+                    pending.extend(scopes);
+                }
+                "reconnect_event" => {
+                    store.observe_request_event(None);
+                }
+                "publish" => {
+                    assert!(store.replace_reloaded_snapshot_at_read(
+                        &store.capture_read(),
+                        Some(&node_did),
+                        rows(node),
+                    ));
+                }
+                "timer" => {
+                    retry_at.remove(&node_did);
+                }
+                "finish" => {
+                    let Some(captured) = in_flight.remove(&node_did) else {
+                        results.push(serde_json::Value::Null);
+                        continue;
+                    };
+                    let patch_accepted = store.accepts_chat_patch_read(&captured, &rows(node));
+                    let settlement = match step["result"].as_str().unwrap() {
+                        "rows" => {
+                            if store.replace_reloaded_snapshot_at_read(
+                                &captured,
+                                Some(&node_did),
+                                rows(node),
+                            ) {
+                                Settlement::Published
+                            } else {
+                                Settlement::Superseded
+                            }
+                        }
+                        "transport_failed" => Settlement::TransportFailed,
+                        "denied" => {
+                            clear_node(&store, &node_did);
+                            Settlement::Denied
+                        }
+                        other => panic!("unknown load result {other}"),
+                    };
+                    if let Some(event) = settlement.connection_event() {
+                        store.observe_runtime_connection(&node_did, event);
+                    }
+                    settle(&mut pending, &mut retry_at, &node_did, settlement, now);
+                    let name = match settlement {
+                        Settlement::Published => "published",
+                        Settlement::Superseded => "superseded",
+                        Settlement::TransportFailed => "transport_failed",
+                        Settlement::Denied => "denied",
+                    };
+                    results.push(serde_json::json!({
+                        "settlement": name, "patch_accepted": patch_accepted,
+                    }));
+                }
+                other => panic!("unknown modeled op {other}"),
+            }
+        }
+        assert_eq!(
+            serde_json::Value::from(results),
+            expected["results"],
+            "{trace}"
+        );
+        for node in 0..NODES {
+            let node_did = did(node);
+            let slot = &expected["slots"][node];
+            assert_eq!(slot["pending"], pending.contains(&node_did), "{trace}");
+            assert_eq!(slot["waiting"], retry_at.contains_key(&node_did), "{trace}");
+            assert_eq!(
+                slot["loading"],
+                in_flight.contains_key(&node_did),
+                "{trace}"
+            );
+            assert_eq!(
+                slot["status"],
+                store.runtime_connection(&node_did).unwrap().as_str(),
+                "{trace}"
+            );
+            assert_ne!(slot["presentation"], "stalled", "{trace}");
+        }
+    }
+}
+
+fn desktop_snapshot(body: &str) -> bool {
+    body.contains("query DesktopSnapshot")
+}
+
+/// Every snapshot load sees a runtime change while it is in flight, on its own
+/// node and on another. Each load still publishes, so the node connects after
+/// its first load and the rows catch up to the last change.
+#[tokio::test]
+async fn request_events_during_every_snapshot_load_still_publish() {
+    use crate::test_fixtures::{GatedRuntimeProxy, ServedRuntimeHome};
+
+    let runtime = ServedRuntimeHome::start().await;
+    let other = runtime.publish_foreign_node().await;
+    runtime
+        .publish_node(serde_json::json!({"display_name": "before"}))
+        .await;
+    let mut proxy = GatedRuntimeProxy::start(runtime.graphql(), desktop_snapshot).await;
+    let directory = tempfile::tempdir().unwrap();
+    let mut peers = PeerDirectory::open_writer(directory.path().join("peers.json"))
+        .await
+        .unwrap();
+    let mut peer = PeerRecord::new("runtime", "", runtime.node_did());
+    peer.graphql = Some(proxy.url().to_owned());
+    peers.upsert(peer).await.unwrap();
+    let configured = ClientSyncStateOwner::new(Default::default(), peers, Vec::new());
+    let (store, _) = ObservedStore::new(ClientStore::default());
+    let mut resyncs = store.subscribe_resync_requests();
+    let handle = spawn_observer(
+        store.clone(),
+        configured,
+        runtime.user().client_signing_capability().unwrap(),
+    );
+    let node = runtime.node_did().to_owned();
+    for load in 1..=3_u64 {
+        let held = proxy.next().await;
+        assert!(
+            held.body.contains(&node),
+            "the held read is this node's snapshot"
+        );
+        runtime
+            .publish_node(serde_json::json!({"display_name": format!("during load {load}")}))
+            .await;
+        resyncs.changed().await.unwrap();
+        // A request event without a source (a reconnect) and another node's
+        // change both land while the read is in flight.
+        store.observe_request_event(None);
+        store.observe_node_event(&other);
+        held.release();
+        let mut notices = store.subscribe_changes();
+        tokio::time::timeout(Duration::from_secs(15), async {
+            while handle.metrics_snapshot().scope_reloads < load {
+                notices.changed().await.unwrap();
+            }
+        })
+        .await
+        .expect("a load overlapping request events publishes");
+        assert_eq!(
+            store.runtime_connection(&node),
+            Some(RuntimeConnectionStatus::Connected)
+        );
+    }
+    let release = tokio::spawn(async move {
+        loop {
+            proxy.next().await.release();
+        }
+    });
+    wait_for_name(&store, Some("during load 3")).await;
+    handle.shutdown().await;
+    release.abort();
+    runtime.shutdown().await;
 }

@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,7 +9,7 @@ use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::Instant;
 
 use super::{ObservedStore, ObserverMetrics, RuntimeConnectionEvent, RESYNC_RETRY_DELAY};
-use crate::client::query::{is_transcript_content_collection, OBSERVED_COLLECTIONS};
+use crate::client::query::OBSERVED_COLLECTIONS;
 use crate::client::PeerRecord;
 
 pub(super) struct Notice {
@@ -223,34 +222,7 @@ async fn connected(
         let metrics = metrics.clone();
         tasks.spawn(async move {
             while let Some(envelope) = stream.recv().await? {
-                if envelope
-                    .get("errors")
-                    .and_then(serde_json::Value::as_array)
-                    .is_some_and(|errors| !errors.is_empty())
-                {
-                    anyhow::bail!("runtime GraphQL subscription returned errors");
-                }
-                let rows = envelope
-                    .get("data")
-                    .and_then(|data| data.get(collection))
-                    .and_then(serde_json::Value::as_array)
-                    .context("runtime subscription omitted selected root")?;
-                metrics
-                    .events_received
-                    .fetch_add(rows.len() as u64, Ordering::Relaxed);
-                if matches!(collection, "AgentToolControl" | "AgentToolControlClaim") {
-                    store.invalidate_projection(false);
-                } else if is_transcript_content_collection(collection) {
-                    store.invalidate_projection(
-                        collection == gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
-                    );
-                    metrics
-                        .transcript_invalidations
-                        .fetch_add(1, Ordering::Relaxed);
-                } else {
-                    store.observe_request_event(None);
-                    store.request_resync(Some(&node));
-                }
+                super::delivery::deliver(&store, &metrics, &node, collection, &envelope)?;
             }
             Ok::<(), anyhow::Error>(())
         });
