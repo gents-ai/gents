@@ -18,6 +18,7 @@ async fn generated_local_publication_survives_notification_outcomes() {
                 false,
                 None,
                 &BTreeMap::new(),
+                super::PackSource::local(std::path::Path::new("fixture.afb")),
                 |_| async { Ok(()) },
             )
             .await
@@ -50,6 +51,7 @@ async fn generated_local_publication_survives_notification_outcomes() {
                     false,
                     None,
                     &bindings,
+                    super::PackSource::local(std::path::Path::new("fixture.afb")),
                     move |_| async move {
                         assert!(crate::plugin::store::try_lock_store(&notify_home).is_err());
                         Ok(())
@@ -66,6 +68,7 @@ async fn generated_local_publication_survives_notification_outcomes() {
                     false,
                     None,
                     &bindings,
+                    super::PackSource::local(std::path::Path::new("fixture.afb")),
                     move |_| async move {
                         assert!(crate::plugin::store::try_lock_store(&notify_home).is_err());
                         Err(super::PluginStoreChangeError::Unconfirmed(anyhow::anyhow!(
@@ -83,15 +86,23 @@ async fn generated_local_publication_survives_notification_outcomes() {
                 let notify_home = caller_home.clone();
                 let reached_notify = reached.clone();
                 let release_notify = release.clone();
-                let operation =
-                    tokio::spawn(async move {
-                        install(&caller_home, &next, false, None, &bindings, move |_| async move {
-                        assert!(crate::plugin::store::try_lock_store(&notify_home).is_err());
-                        reached_notify.notify_one();
-                        release_notify.notified().await;
-                        Ok(())
-                    }).await
-                    });
+                let operation = tokio::spawn(async move {
+                    install(
+                        &caller_home,
+                        &next,
+                        false,
+                        None,
+                        &bindings,
+                        super::PackSource::local(std::path::Path::new("fixture.afb")),
+                        move |_| async move {
+                            assert!(crate::plugin::store::try_lock_store(&notify_home).is_err());
+                            reached_notify.notify_one();
+                            release_notify.notified().await;
+                            Ok(())
+                        },
+                    )
+                    .await
+                });
                 tokio::time::timeout(std::time::Duration::from_secs(20), reached.notified())
                     .await
                     .unwrap();
@@ -147,9 +158,15 @@ async fn home_removal_excludes_reinstall_until_pin_and_records_are_removed() {
     let home = tempfile::tempdir().unwrap();
     let (_dir, _, archive) = fixture("1.0.0", false);
     let bindings = BTreeMap::new();
-    install(home.path(), &archive, false, None, &bindings, |_| async {
-        Ok(())
-    })
+    install(
+        home.path(),
+        &archive,
+        false,
+        None,
+        &bindings,
+        super::PackSource::local(std::path::Path::new("fixture.afb")),
+        |_| async { Ok(()) },
+    )
     .await
     .unwrap();
     let prepare_error = super::plugin_lifecycle::remove_local(
@@ -207,9 +224,15 @@ async fn home_removal_excludes_reinstall_until_pin_and_records_are_removed() {
     assert!(crate::plugin::store::list_records(home.path())
         .unwrap()
         .is_empty());
-    install(home.path(), &archive, false, None, &bindings, |_| async {
-        Ok(())
-    })
+    install(
+        home.path(),
+        &archive,
+        false,
+        None,
+        &bindings,
+        super::PackSource::local(std::path::Path::new("fixture.afb")),
+        |_| async { Ok(()) },
+    )
     .await
     .unwrap();
     assert!(
@@ -231,6 +254,7 @@ async fn non_pin_notification_rejection_restores_previous_plugin_and_home_record
         false,
         None,
         &BTreeMap::new(),
+        super::PackSource::local(std::path::Path::new("fixture.afb")),
         |_| async { Ok(()) },
     )
     .await
@@ -270,6 +294,7 @@ async fn non_pin_notification_rejection_restores_previous_plugin_and_home_record
         false,
         Some("did:test:owner"),
         &BTreeMap::new(),
+        super::PackSource::local(std::path::Path::new("fixture.afb")),
         move |identity| async move {
             let staged =
                 crate::plugin::store::read_record(&notify_home, "fixture", "native_echo").unwrap();
