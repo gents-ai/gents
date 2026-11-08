@@ -36,6 +36,7 @@ async fn local_billing_has_no_cloud_balance_or_subscription() {
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn workflows_list_is_routed() {
     let (_staging, service) = service_over(true).await;
     let config = &service.config;

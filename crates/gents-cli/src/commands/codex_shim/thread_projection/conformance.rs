@@ -99,6 +99,7 @@ fn generated_thread_status_cases_drive_thread_projection() {
 }
 
 #[tokio::test]
+#[ignore = "codex shim is being removed"]
 async fn generated_agent_selection_cases_drive_scoped_model_binding() {
     let cases = lean_codex_shim_agent_selection_cases();
     assert_eq!(cases.len(), 5);

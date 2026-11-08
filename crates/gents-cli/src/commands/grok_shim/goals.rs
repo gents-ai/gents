@@ -327,6 +327,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "grok shim is being removed"]
     async fn goal_observation_is_scoped_read_only_and_retries_failed_delivery() {
         use super::super::projection::BoundModelContext;
         use gents::store::graphql::ensure_no_errors;

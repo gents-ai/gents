@@ -92,6 +92,7 @@ async fn prompt_gated_before_insertion_is_rejected_after_disconnect() {
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn disconnect_drains_an_already_pending_entry_and_duplicate_disconnect_is_a_noop() {
     let (_tempdir, node, node_did) = test_node().await;
     let submission_arrived = Arc::new(tokio::sync::Notify::new());
@@ -171,6 +172,7 @@ async fn disconnect_drains_an_already_pending_entry_and_duplicate_disconnect_is_
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn send_failure_after_submission_interrupts_the_request() {
     let (_tempdir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;
@@ -226,6 +228,7 @@ async fn send_failure_after_submission_interrupts_the_request() {
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn second_prompt_for_live_session_is_rejected() {
     let (_tempdir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;

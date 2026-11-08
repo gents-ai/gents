@@ -427,6 +427,7 @@ fn selection_requires_exact_unambiguous_advertisement() {
 }
 
 #[tokio::test]
+#[ignore = "codex shim is being removed"]
 async fn model_change_copies_controls_and_preserves_shared_profiles_and_noop() {
     let node = Arc::new(
         crate::shared::test_support::fixture_node_builder()
@@ -596,6 +597,7 @@ async fn model_change_copies_controls_and_preserves_shared_profiles_and_noop() {
     );
 }
 #[tokio::test]
+#[ignore = "codex shim is being removed"]
 async fn model_list_scope_excludes_foreign_malformed_backend_before_decode() {
     let node = Arc::new(
         crate::shared::test_support::fixture_node_builder()

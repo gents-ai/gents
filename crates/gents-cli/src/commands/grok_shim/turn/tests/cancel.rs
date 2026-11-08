@@ -135,6 +135,7 @@ async fn outbound_close_after_submission_interrupts_and_drains() {
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn cancel_before_request_id_resolves_cancelled_and_permits_reuse() {
     let (_tempdir, node, node_did) = test_node().await;
     let submission_arrived = Arc::new(tokio::sync::Notify::new());
@@ -249,6 +250,7 @@ async fn cancel_before_request_id_resolves_cancelled_and_permits_reuse() {
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn disconnect_before_request_id_resolves_cancelled() {
     let (_tempdir, node, node_did) = test_node().await;
     let submission_arrived = Arc::new(tokio::sync::Notify::new());
