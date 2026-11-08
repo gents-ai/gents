@@ -14,13 +14,17 @@ import { errorText } from "../lib/errorText";
     rejection is still reported; only the wait between attempts is bounded. */
 const RELISTEN_FIRST_MS = 250;
 const RELISTEN_MAX_MS = 8_000;
+/** How long the observer waits for its listener before it reads the selection
+    without one. A registration that keeps failing, or never settles, must not
+    leave the selection unread (TLA `DesktopUpdateListener` `StartupRead`). */
+export const UNREGISTERED_READ_MS = 250;
 
 export function startClientObservation(
   { api, stores, view, actions, lifecycle, trackedRequestId }: DesktopApp,
   listenToUpdates: DesktopClientUpdatedListenerFactory,
 ): () => void {
   const selection = stores.selection;
-  const { refreshSession, readSessionUpdate, refreshSnapshot } = actions;
+  const { refreshSession, rereadSession, readSessionUpdate, refreshSnapshot } = actions;
   /* the selected session shows no snapshot: it waits on its node, or its
      read has not resolved yet */
   const selectedSessionUnresolved = () => {
@@ -46,13 +50,27 @@ export function startClientObservation(
       currentSessionId: () => selection.getState().sessionId,
       refreshSnapshot,
       refreshSession,
+      rereadSession,
       readSessionUpdate,
       onError: reportListenerError,
     });
+    const unfollowReads = actions.followSessionReads(
+      () => void controller.request("reread"),
+    );
     /* Store and pairing-health events drive the reads. Tauri drops an event
        emitted while no handler is registered and never replays it, so the
-       full read that brings the view up to date starts only once the handler
-       is registered; a rejected registration is retried. */
+       full read that brings the view up to date follows the registration; a
+       rejected registration is retried. Until a registration succeeds, a
+       rejection or the deadline reads the selection once without it. */
+    let unregisteredTimer: ReturnType<typeof setTimeout> | undefined;
+    let startupRead = true;
+    const readUnregistered = () => {
+      clearTimeout(unregisteredTimer);
+      unregisteredTimer = undefined;
+      if (stopped || !startupRead) return;
+      startupRead = false;
+      void controller.request("session");
+    };
     let relistenTimer: ReturnType<typeof setTimeout> | undefined;
     let relistenMs = RELISTEN_FIRST_MS;
     let registrationError: string | null = null;
@@ -77,6 +95,8 @@ export function startClientObservation(
             return;
           }
           unlisten = cleanup;
+          clearTimeout(unregisteredTimer);
+          startupRead = false;
           relistenMs = RELISTEN_FIRST_MS;
           if (
             registrationError !== null &&
@@ -90,6 +110,7 @@ export function startClientObservation(
           if (stopped) return;
           reportListenerError(listenerError);
           registrationError = errorText(listenerError);
+          readUnregistered();
           relistenTimer = setTimeout(() => {
             relistenTimer = undefined;
             if (!stopped) listen();
@@ -144,6 +165,7 @@ export function startClientObservation(
     });
 
     publishSelection();
+    unregisteredTimer = setTimeout(readUnregistered, UNREGISTERED_READ_MS);
     listen();
     const unsubscribeSelection = selection.subscribe((state, prev) => {
       if (state.nodeDid !== prev.nodeDid) publishSelection();
@@ -172,7 +194,9 @@ export function startClientObservation(
     return () => {
       stopped = true;
       clearTimeout(relistenTimer);
+      clearTimeout(unregisteredTimer);
       controller.dispose();
+      unfollowReads();
       actions.invalidateSessionReads();
       clearTimeout(operatorTimer);
       unsubscribeOperator();

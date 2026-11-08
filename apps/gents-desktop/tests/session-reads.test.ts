@@ -227,6 +227,8 @@ describe("createSessionReads", () => {
       .mockRejectedValueOnce(delivery("sessionAccepted"))
       .mockResolvedValueOnce(tip);
     const reads = readsFor({ fetchSessionSnapshot } as unknown as DesktopApiAdapter);
+    /* an observer follows the reads, so each waiting phase has its re-read */
+    reads.followSessionReads(vi.fn());
     const status = () =>
       projectSessionLoadingStatus({
         selectedSessionId: "session-1",
@@ -774,5 +776,94 @@ describe("createSessionReads", () => {
       phase: "loading",
       sessionId: "session-1",
     });
+  });
+
+  it("reloads a shown session for a selection that names no node, and shows its answer", async () => {
+    const page = {
+      totalItems: 1,
+      totalItemsExact: true,
+      pageItems: 1,
+      hasOlder: false,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k1",
+    };
+    const shown = session(["k1"], page);
+    const fetchSessionSnapshot = vi.fn().mockResolvedValue(shown);
+    const reload = vi.fn(async () => {});
+    const store = createSelectionStore({ nodeDid: null, sessionId: "session-1" });
+    const reads = readsFor(
+      { fetchSessionSnapshot, reloadSession: reload } as unknown as DesktopApiAdapter,
+      store,
+    );
+    await reads.refreshSession("session-1");
+    expect(readSession(reads.sessionStore)?.nodeDid).toBe("did:key:test");
+    /* the reload narrows the node to the shown session's; that is the same
+       selection, not a mismatched answer */
+    await reads.reloadSession("session-1");
+    expect(reload).toHaveBeenCalledWith("session-1", "did:key:test");
+    expect(fetchSessionSnapshot).toHaveBeenLastCalledWith(
+      "session-1",
+      "did:key:test",
+      "request-1",
+      expect.anything(),
+    );
+    expect(reads.sessionStore.getState().load).toMatchObject({
+      phase: "loaded",
+      nodeDid: "did:key:test",
+      error: null,
+    });
+  });
+
+  it("leaves the held load an action when the observer stops", async () => {
+    const pending = new BridgeInvokeError({
+      code: "projectionPending",
+      message: "not at its owner yet",
+      retryable: true,
+      endpoint: null,
+    });
+    const fetchSessionSnapshot = vi.fn().mockRejectedValueOnce(pending);
+    const reads = readsFor({ fetchSessionSnapshot } as unknown as DesktopApiAdapter);
+    const status = () =>
+      projectSessionLoadingStatus({
+        selectedSessionId: "session-1",
+        selectedNodeDid: "did:key:test",
+        session: readSession(reads.sessionStore),
+        sessionLoad: reads.sessionStore.getState().load,
+        operationalState: null,
+      });
+    const unfollow = reads.followSessionReads(vi.fn());
+    await reads.refreshSession("session-1");
+    expect(status()).toMatchObject({
+      title: "Waiting for session update",
+      action: null,
+    });
+    unfollow();
+    reads.invalidateSessionReads();
+    expect(status()).toMatchObject({
+      title: "Waiting for session update",
+      action: "retryLocal",
+    });
+
+    /* a read the stopped observer drops cannot settle its load */
+    const loading = readsFor({
+      fetchSessionSnapshot: vi.fn().mockReturnValue(new Promise(() => {})),
+    } as unknown as DesktopApiAdapter);
+    void loading.refreshSession("session-1");
+    expect(loading.sessionStore.getState().load.phase).toBe("loading");
+    loading.invalidateSessionReads();
+    expect(loading.sessionStore.getState().load).toMatchObject({
+      phase: "failed",
+      reread: false,
+    });
+    expect(
+      projectSessionLoadingStatus({
+        selectedSessionId: "session-1",
+        selectedNodeDid: "did:key:test",
+        session: null,
+        sessionLoad: loading.sessionStore.getState().load,
+        operationalState: null,
+      }),
+    ).toMatchObject({ phase: "failed", action: "retryLocal" });
   });
 });

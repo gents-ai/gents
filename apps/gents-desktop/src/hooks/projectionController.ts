@@ -6,6 +6,11 @@ import {
 export type DesktopUpdateRefreshScope =
   "snapshot" | "sessionDelta" | "session" | "sessionEvent" | "full";
 
+/** What the drain loop can be asked for: an update's scope, or a waiting
+    phase's re-read, which continues its streak unless another request for
+    the session joins it. */
+export type ProjectionRequest = DesktopUpdateRefreshScope | "reread";
+
 /** A pairing-health change re-reads a selected session that shows no
     snapshot yet: the pairing is one of the signals its delivery state derives
     from, and a read already in flight may have taken the pairing before the
@@ -29,9 +34,10 @@ const SNAPSHOT = 1 << 0;
 const SESSION_DELTA = 1 << 1;
 const SESSION = 1 << 2;
 const INDEX_AFTER_TERMINAL = 1 << 3;
+const REREAD = 1 << 4;
 
 export type ProjectionController = {
-  request: (scope: DesktopUpdateRefreshScope) => Promise<void>;
+  request: (scope: ProjectionRequest) => Promise<void>;
   dispose: () => void;
 };
 
@@ -39,14 +45,18 @@ type ProjectionControllerOptions = {
   currentSessionId: () => string | null;
   refreshSnapshot: () => Promise<void>;
   refreshSession: (sessionId: string | null) => Promise<DesktopSessionSnapshot | null>;
+  /** a waiting phase's re-read of the session */
+  rereadSession: (sessionId: string | null) => Promise<DesktopSessionSnapshot | null>;
   /** reads a store update for the open session; resolves to the ms until
       it is owed a full read (0: now), or null when a read covers it */
   readSessionUpdate: () => Promise<number | null>;
   onError?: (error: unknown) => void;
 };
 
-function requestedWork(scope: DesktopUpdateRefreshScope) {
+function requestedWork(scope: ProjectionRequest) {
   switch (scope) {
+    case "reread":
+      return REREAD;
     case "snapshot":
       return SNAPSHOT;
     case "sessionDelta":
@@ -64,6 +74,7 @@ export function createProjectionController({
   currentSessionId,
   refreshSnapshot,
   refreshSession,
+  rereadSession,
   readSessionUpdate,
   onError = () => {},
 }: ProjectionControllerOptions): ProjectionController {
@@ -82,7 +93,7 @@ export function createProjectionController({
 
   const enqueue = (work: number) => {
     pending |= work;
-    if (pending & SESSION) {
+    if (pending & (SESSION | REREAD)) {
       pending &= ~SESSION_DELTA;
     }
   };
@@ -118,12 +129,12 @@ export function createProjectionController({
       pending = 0;
       try {
         const sessionId = currentSessionId();
-        if (work & SESSION) {
+        if (work & (SESSION | REREAD)) {
           settleOwed();
-          const next = await refreshSession(sessionId);
-          /* a selection that moved while the read ran is read next; the read
-             it replaced dropped its answer */
-          if (currentSessionId() !== sessionId) enqueue(SESSION);
+          const next =
+            work & SESSION
+              ? await refreshSession(sessionId)
+              : await rereadSession(sessionId);
           if (
             work & INDEX_AFTER_TERMINAL &&
             !(work & SNAPSHOT) &&
