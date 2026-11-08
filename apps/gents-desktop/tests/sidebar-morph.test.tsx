@@ -94,6 +94,25 @@ describe("the sidebar's mode changes", () => {
     expect(sidebarMode()).toBe("collapsed");
   });
 
+  it("cleans up when a skipped transition rejects after its update", async () => {
+    start.mockImplementationOnce((update: () => void) => {
+      update();
+      return {
+        finished: Promise.reject(
+          new DOMException("Transition was skipped", "AbortError"),
+        ),
+        ready: Promise.reject(new DOMException("Transition was skipped", "AbortError")),
+      };
+    });
+    render(<Shell />);
+    act(() => sidebar.setMode("collapsed"));
+    await act(async () => {});
+    expect(sidebarMode()).toBe("collapsed");
+    expect(
+      screen.getByTestId("sidebar").style.getPropertyValue("view-transition-name"),
+    ).toBe("");
+  });
+
   it("are not morphed while the edge is dragged, nor when it lets go", () => {
     act(() => preferences.setNav("expanded"));
     render(<Shell />);
