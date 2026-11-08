@@ -310,7 +310,7 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
             .transact_write("test.task_target.apply", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                    crate::documents::apply_desired_state_plan(txn, plan).await
                 })
             })
             .await?;
@@ -370,7 +370,7 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
         .transact_write("test.task_target.apply_rebind", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                crate::documents::apply_desired_state_plan(txn, plan).await
             })
         })
         .await?;

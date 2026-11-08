@@ -65,8 +65,9 @@ impl ConfigApplyTxn<'_> {
 mod tests {
     use anyhow::Context as _;
 
+    use crate::documents::apply_desired_state_plan;
     use crate::store::config_client::{
-        apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
+        read_desired_state_record_in_txn, ConfigAccess,
         DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
     };
     use crate::store::identity::NodeIdentity;

@@ -69,7 +69,14 @@ async fn only_the_fresh_store_and_its_key_can_reopen_protected_backend() -> anyh
         .preflight(&key, Some(&did))
         .await?;
     let (node, admission) = protected
-        .start_node(&key, runtime, None, None, &home)
+        .start_node_with_projection(
+            &key,
+            runtime,
+            None,
+            None,
+            std::sync::Arc::new(crate::tools::surface::ToolCeiling::meta_only()),
+            Vec::new(),
+        )
         .await?;
     crate::ensure_runtime_schemas(&node).await?;
     for entry in gents_migration::DEFAULT_BASELINE.iter() {

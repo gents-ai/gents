@@ -4,27 +4,26 @@ use super::tool_permission_projection::ToolPermissionProjection;
 use crate::store::config_client::transport_publication::{
     project_transport_document, reconcile_transport_documents,
 };
-use crate::tools::surface::ToolCeiling;
 
 pub(super) struct RuntimeDocumentProjector {
     tools: ToolPermissionProjection,
-    startup_plugins: Option<Vec<crate::plugin::store::InstalledPlugin>>,
+    startup_plugins: Option<Vec<super::ProjectedPlugin>>,
 }
 
 impl RuntimeDocumentProjector {
     pub(super) fn new(
         node: std::sync::Arc<dyn crate::store::identity::NodeIdentity>,
-        ceiling: ToolCeiling,
+        policy: std::sync::Arc<dyn super::ToolSourcePolicy>,
     ) -> std::result::Result<Self, identity::Error> {
         Ok(Self {
-            tools: ToolPermissionProjection::new(node, ceiling)?,
+            tools: ToolPermissionProjection::new(node, policy)?,
             startup_plugins: None,
         })
     }
 
     pub(super) fn with_startup_plugins(
         mut self,
-        plugins: Vec<crate::plugin::store::InstalledPlugin>,
+        plugins: Vec<super::ProjectedPlugin>,
     ) -> Self {
         self.startup_plugins = Some(plugins);
         self
@@ -127,7 +126,7 @@ mod tests {
         let key = crate::store::identity::load_file_identity(&path)?.private_key_bytes();
         let projector = RuntimeDocumentProjector::new(
             Arc::new(crate::KeyIdentity::load_or_create(&path, None)?),
-            crate::tools::surface::ToolCeiling::meta_only(),
+            Arc::new(crate::tools::surface::ToolCeiling::meta_only()),
         )?;
         let node = Arc::new(
             defra_node::Node::builder()

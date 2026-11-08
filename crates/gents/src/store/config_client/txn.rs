@@ -10,7 +10,6 @@ mod gate;
 mod native;
 mod pack_interpreter;
 mod rollback;
-mod runtime_default_account;
 mod runtime_hop_cap;
 mod telemetry;
 mod transact;

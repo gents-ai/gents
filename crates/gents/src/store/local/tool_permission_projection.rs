@@ -72,18 +72,18 @@ async fn apply_source_change(
 pub(super) struct ToolPermissionProjection {
     node: identity::Did,
     runtime: Arc<dyn crate::store::identity::NodeIdentity>,
-    ceiling: crate::tools::surface::ToolCeiling,
+    policy: Arc<dyn super::ToolSourcePolicy>,
 }
 
 impl ToolPermissionProjection {
     pub(super) fn new(
         runtime: Arc<dyn crate::store::identity::NodeIdentity>,
-        ceiling: crate::tools::surface::ToolCeiling,
+        policy: Arc<dyn super::ToolSourcePolicy>,
     ) -> std::result::Result<Self, identity::Error> {
         Ok(Self {
             node: identity::Did::new(runtime.did())?,
             runtime,
-            ceiling,
+            policy,
         })
     }
 
@@ -118,7 +118,7 @@ impl ToolPermissionProjection {
     pub(super) async fn reconcile_installed(
         &self,
         ctx: &db::DocumentMutationContext<'_>,
-        installed: &[crate::plugin::store::InstalledPlugin],
+        installed: &[super::ProjectedPlugin],
     ) -> Result<()> {
         let store = Arc::new(acp::zanzibar::store::TransactionZanzibarStore::new(
             ctx.view.sibling(Namespace::Acpstore),
@@ -128,17 +128,15 @@ impl ToolPermissionProjection {
         let index = super::plugin_delete_source::index(node);
         let mut wanted = BTreeSet::new();
         for plugin in installed {
-            if plugin
-                .declaration
-                .data
-                .as_ref()
-                .is_some_and(|data| data.ops.iter().any(|op| op == "delete"))
-            {
-                let coordinate = format!("{}/{}", plugin.namespace, plugin.name);
-                wanted.insert(super::plugin_delete_source::root(node, &coordinate, None));
+            if plugin.deletes {
                 wanted.insert(super::plugin_delete_source::root(
                     node,
-                    &coordinate,
+                    &plugin.coordinate,
+                    None,
+                ));
+                wanted.insert(super::plugin_delete_source::root(
+                    node,
+                    &plugin.coordinate,
                     Some(&plugin.digest),
                 ));
             }
@@ -221,9 +219,7 @@ impl ToolPermissionProjection {
         for doc in datastore_surfaces {
             let (_, value) = row(doc)?;
             if field(&value, "node_did") == Some(node) {
-                if let Ok(surface) = serde_json::from_value(value) {
-                    surfaces.push(surface);
-                }
+                surfaces.push(value);
             }
         }
         let mut context_by_id = BTreeMap::new();
@@ -296,20 +292,13 @@ impl ToolPermissionProjection {
             let Some((tools_doc, tool_value)) = tools_by_id.get(&tools_id) else {
                 continue;
             };
-            let Ok(tools) = serde_json::from_value::<crate::documents::Tools>(tool_value.clone())
+            let Ok(operations) = self
+                .policy
+                .node_operation_sources(tool_value, &surfaces)
             else {
                 continue;
             };
-            let Ok(operations) = crate::tools::surface::configured_node_operation_sources(
-                &tools,
-                &surfaces,
-                &self.ceiling,
-            ) else {
-                continue;
-            };
-            if let Ok(plugins) =
-                crate::tools::surface::configured_plugin_refs(&tools, &self.ceiling)
-            {
+            if let Ok(plugins) = self.policy.plugin_refs(tool_value) {
                 for plugin in plugins {
                     let root = super::plugin_delete_source::root(
                         node,
@@ -643,7 +632,7 @@ mod tests {
         let projector = Arc::new(
             super::super::runtime_document_projection::RuntimeDocumentProjector::new(
                 Arc::new(crate::KeyIdentity::load_or_create(&path, None)?),
-                crate::tools::surface::ToolCeiling::meta_only(),
+                Arc::new(crate::tools::surface::ToolCeiling::meta_only()),
             )?,
         );
         let node = Arc::new(
@@ -662,7 +651,7 @@ mod tests {
     async fn observed_plugin_input(
         owner: &crate::ConfigAccess,
         runtime: &crate::KeyIdentity,
-        installed: &[crate::plugin::store::InstalledPlugin],
+        installed: &[super::super::ProjectedPlugin],
         actor: &identity::Did,
         direct: bool,
     ) -> anyhow::Result<serde_json::Value> {
@@ -715,8 +704,8 @@ mod tests {
                 "toolsId":tools["tools_id"].as_str().unwrap_or_default(), "plugins":plugins})
         }).collect::<Vec<_>>();
         let installed = installed.iter().map(|plugin| json!({
-            "coordinate":format!("{}/{}", plugin.namespace, plugin.name), "digest":plugin.digest,
-            "operations":plugin.declaration.data.as_ref().map(|data| data.ops.clone()).unwrap_or_default(),
+            "coordinate":plugin.coordinate, "digest":plugin.digest,
+            "operations":if plugin.deletes { vec!["delete"] } else { Vec::new() },
         })).collect::<Vec<_>>();
         Ok(
             json!({"node":runtime.did(), "installed":installed, "agents":agents,
@@ -729,7 +718,7 @@ mod tests {
         owner: &crate::ConfigAccess,
         runtime: &crate::KeyIdentity,
         node: &defra_node::Node,
-        installed: &[crate::plugin::store::InstalledPlugin],
+        installed: &[super::super::ProjectedPlugin],
         actor: &identity::Did,
         direct: bool,
     ) -> anyhow::Result<()> {
@@ -762,7 +751,7 @@ mod tests {
             .transact_write("test.projection.fixture_tools", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                    crate::documents::apply_desired_state_plan(txn, plan).await
                 })
             })
             .await?;
@@ -972,7 +961,7 @@ mod tests {
         let projector = Arc::new(
             super::super::runtime_document_projection::RuntimeDocumentProjector::new(
                 Arc::new(crate::KeyIdentity::load_or_create(&path, None)?),
-                crate::tools::surface::ToolCeiling::meta_only(),
+                Arc::new(crate::tools::surface::ToolCeiling::meta_only()),
             )?,
         );
         let node = Arc::new(
@@ -1118,7 +1107,7 @@ mod tests {
         let projector = Arc::new(
             super::super::runtime_document_projection::RuntimeDocumentProjector::new(
                 Arc::new(crate::KeyIdentity::load_or_create(&path, None)?),
-                crate::tools::surface::ToolCeiling::meta_only(),
+                Arc::new(crate::tools::surface::ToolCeiling::meta_only()),
             )?,
         );
         let node = Arc::new(
@@ -1228,7 +1217,7 @@ mod tests {
         // Install a legacy source to exercise cleanup after upgrading the projector.
         let projector = ToolPermissionProjection::new(
             Arc::new(crate::KeyIdentity::load_or_create(&path, None)?),
-            crate::tools::surface::ToolCeiling::meta_only(),
+            Arc::new(crate::tools::surface::ToolCeiling::meta_only()),
         )?;
         let legacy_source = format!("{}legacy", projector.prefix());
         let txn = node.database().new_txn(false).await?;
@@ -1832,7 +1821,6 @@ mod tests {
     }
     #[tokio::test]
     async fn reviewed_plugin_delete_source_tracks_selection_and_reinstall() -> anyhow::Result<()> {
-        use gents_protocol::job::PluginDataDeclaration;
         let (directory, runtime, node) = projection_node().await?;
         let outsider = crate::KeyIdentity::load_or_create(directory.path().join("outsider"), None)?;
         let outsider_did = identity::Did::new(outsider.did())?;
@@ -1840,27 +1828,10 @@ mod tests {
         let agent = identity::Did::new(&binding.agent_did)?;
         let owner = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
         let digest = format!("sha256:{}", "a".repeat(64));
-        let record = crate::plugin::store::InstalledPlugin {
-            namespace: "team".into(),
-            name: "worker".into(),
-            version: "1".into(),
+        let record = super::super::ProjectedPlugin {
+            coordinate: "team/worker".into(),
             digest: digest.clone(),
-            language: "wasm".into(),
-            declaration: crate::pack::PackPlugin {
-                data: Some(PluginDataDeclaration {
-                    collections: vec!["Note".into()],
-                    ops: vec!["delete".into()],
-                    stamped: Default::default(),
-                }),
-                ..Default::default()
-            },
-            granted: None,
-            instructions: None,
-            owner_pack_coordinate: None,
-            owner_pack_digest: None,
-            model_binding: None,
-            data_unique_keys: Default::default(),
-            data_collection_fields: Default::default(),
+            deletes: true,
         };
         let integration = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
             "plugins": [{"plugin":"team/worker", "digest": digest}]

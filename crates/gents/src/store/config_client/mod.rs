@@ -38,7 +38,7 @@ pub(crate) use client_signed_agent::{
 mod client_signed_agent_conformance;
 mod common;
 pub mod agent_session;
-mod desired_state;
+pub(crate) mod desired_state;
 #[cfg(test)]
 mod dormant_file_request_conformance;
 mod error;
@@ -104,7 +104,6 @@ pub use client_agent_publication::{
     AgentPublicationObserver, ClientAgentJournal, PublicationStage, PublicationStatus,
 };
 pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
-pub use desired_state::apply_desired_state_plan;
 pub use desired_state::grant_selected_self_configuration;
 pub use desired_state::plan::{
     stale_expectation, DesiredStateApplyCounts, DesiredStateApplyDocument, DesiredStateApplyPlan,
@@ -121,10 +120,10 @@ pub use desired_state::validate::{
     event_trigger_document_field_names, validate_event_trigger_document_fields,
 };
 pub(crate) use desired_state::validate::{validate_desired_state_plan, OutcomeSourceSchemaError};
+pub(crate) use desired_state::semantics::{DesiredStateSemantics, PendingEventGrants};
 pub(crate) use desired_state::{
-    apply_desired_state_plan_with_node_binding, configuration_node_doc, ConfigurationNodeBinding,
+    apply_desired_state_plan_with_semantics, configuration_node_doc, ConfigurationNodeBinding,
 };
-pub(crate) use inference_backend::backend_metadata_fields;
 pub use inference_backend::{list_inference_backends_in_txn, load_inference_backend_in_txn};
 pub(crate) use node_deferred_operation::recover_deferred_node_operations;
 pub use node_deferred_operation::{

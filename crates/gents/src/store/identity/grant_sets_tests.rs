@@ -214,7 +214,7 @@ async fn agent_step(
         .transact_write("test.grant_sets.agent", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                crate::documents::apply_desired_state_plan(txn, plan).await
             })
         })
         .await?;

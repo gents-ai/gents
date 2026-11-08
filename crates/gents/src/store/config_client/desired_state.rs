@@ -1,10 +1,10 @@
-mod event_grants;
-pub(super) mod plan;
-pub(super) mod projection;
-pub(super) mod read;
+pub(crate) mod plan;
+pub(crate) mod projection;
+pub(crate) mod read;
 pub(super) mod schema_fields;
 pub(super) mod selection;
 mod self_config_inference;
+pub(crate) mod semantics;
 pub(super) mod task_selection;
 pub(super) mod validate;
 mod workspace_selection;
@@ -23,6 +23,7 @@ use schema_fields::{
     prefetch_declared_fields, validate_event_source_live_fields,
     validate_output_obligation_count_fields, IntrospectedFields,
 };
+use semantics::DesiredStateSemantics;
 use std::collections::BTreeSet;
 use validate::{
     changed_configuration_keys, validate_advertised_profiles, validate_outcome_source_fields,
@@ -41,18 +42,6 @@ fn confirm_removal(response: &serde_json::Value, collection: &str, doc_id: &str)
         return Err(super::ConfigClientError::DesiredStateRemovalUnconfirmed.into());
     }
     Ok(())
-}
-
-/// Documents commit in the caller's transaction. Managed Agent creates stage
-/// their creator-managed relationships in that transaction; the client HTTP
-/// publication route retains its separately observed post-commit grants.
-/// Reference checks run after staged writes so cyclic configurations do not
-/// depend on write order.
-pub async fn apply_desired_state_plan(
-    txn: &ConfigApplyTxn<'_>,
-    plan: &DesiredStateApplyPlan,
-) -> Result<DesiredStateApplyCounts> {
-    apply_desired_state_plan_with_node_binding(txn, plan, None).await
 }
 
 /// Explicitly grant an Agent authority to configure its selected documents.
@@ -126,13 +115,19 @@ pub(crate) async fn configuration_node_doc(
     }
 }
 
-pub(crate) async fn apply_desired_state_plan_with_node_binding(
+/// Documents commit in the caller's transaction. Managed Agent creates stage
+/// their creator-managed relationships in that transaction; the client HTTP
+/// publication route retains its separately observed post-commit grants.
+/// Reference checks run after staged writes so cyclic configurations do not
+/// depend on write order.
+pub(crate) async fn apply_desired_state_plan_with_semantics(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
     binding: Option<&ConfigurationNodeBinding>,
+    semantics: &dyn DesiredStateSemantics,
 ) -> Result<DesiredStateApplyCounts> {
     ensure_expectations_hold(txn, plan).await?;
-    let event_grants = event_grants::capture(txn, plan).await?;
+    let event_grants = semantics.capture_event_grants(txn, plan).await?;
     let workspace_selection = workspace_selection::capture(txn, plan).await?;
     let mut introspected = IntrospectedFields::new();
     prefetch_declared_fields(txn, plan, &mut introspected).await?;
@@ -159,37 +154,13 @@ pub(crate) async fn apply_desired_state_plan_with_node_binding(
             .is_none_or(|(_, current)| current != &document.update);
         let created = existing.is_none();
         if document.collection == Collection::InferenceBackend {
-            let backend: crate::InferenceBackend = serde_json::from_value(document.update.clone())?;
-            backend.validate()?;
-            let (metadata, credential) = super::inference_backend::prepare_backend_metadata_in_txn(
-                txn,
-                backend,
-                existing.as_ref().map(|(_, value)| value),
-            )
-            .await?;
-            let projected = serde_json::to_value(metadata.clone().into_backend()?)?;
-            let normalized =
-                super::config_projection(Collection::InferenceBackend, Some(&projected))?
-                    .1
-                    .context("backend metadata projection missing")?;
-            if credential.is_some()
-                || existing
-                    .as_ref()
-                    .is_none_or(|(_, value)| value != &normalized)
-            {
-                crate::OpenAiWireApi::warn_if_ignored(
-                    metadata.provider_kind,
-                    metadata.openai_wire_api,
-                    &metadata.backend_id,
-                );
-                super::inference_backend::write_backend_metadata_in_txn(
+            semantics
+                .write_inference_backend(
                     txn,
-                    &metadata,
-                    credential.as_ref(),
+                    &document.update,
+                    existing.as_ref().map(|(_, value)| value),
                 )
-                .await
-                .context("applying InferenceBackend metadata")?;
-            }
+                .await?;
             counts.increment(document.collection);
             continue;
         }
@@ -466,7 +437,8 @@ pub(crate) async fn apply_desired_state_plan_with_node_binding(
             existing_removals.remove(&(*collection, owner.clone(), id.clone()))
         {
             if *collection == Collection::InferenceBackend {
-                super::inference_backend::remove_backend_metadata_in_txn(txn, &doc_id, owner, id)
+                semantics
+                    .remove_inference_backend(txn, &doc_id, owner, id)
                     .await?;
             } else {
                 txn.delete_configuration_document(collection.graphql_type(), &doc_id)
@@ -474,43 +446,9 @@ pub(crate) async fn apply_desired_state_plan_with_node_binding(
             }
         }
     }
-    event_grants::grant_changes(txn, event_grants).await?;
+    event_grants.grant_changes(txn).await?;
     workspace_selection::apply(txn, workspace_selection).await?;
-    for document in plan.documents() {
-        let (owner, id) = document_identity(document.collection, &document.add)?;
-        match document.collection {
-            Collection::EventSource => {
-                super::event_source_cursor::seed_referencing_consumers(txn, owner, id, binding)
-                    .await?;
-            }
-            Collection::Trigger => {
-                let trigger: crate::documents::Trigger =
-                    serde_json::from_value(document.update.clone())?;
-                if matches!(
-                    trigger.source,
-                    crate::documents::TriggerSource::Event { .. }
-                ) {
-                    let consumer = gents_protocol::event_delivery::EventConsumer::Trigger {
-                        trigger_id: id.to_owned(),
-                    };
-                    super::event_source_cursor::load_or_seed_with_node_binding(
-                        txn, owner, &consumer, binding,
-                    )
-                    .await?;
-                }
-            }
-            Collection::CallbackBinding => {
-                let consumer = gents_protocol::event_delivery::EventConsumer::CallbackBinding {
-                    binding_id: id.to_owned(),
-                };
-                super::event_source_cursor::load_or_seed_with_node_binding(
-                    txn, owner, &consumer, binding,
-                )
-                .await?;
-            }
-            _ => {}
-        }
-    }
+    semantics.seed_event_consumers(txn, plan, binding).await?;
     let mut owners: BTreeSet<_> = plan
         .documents()
         .iter()

@@ -202,7 +202,7 @@ impl DesiredStateApplyPlan {
     }
 }
 
-pub(super) fn document_identity(collection: Collection, value: &Value) -> Result<(&str, &str)> {
+pub(crate) fn document_identity(collection: Collection, value: &Value) -> Result<(&str, &str)> {
     let owner = value
         .get("node_did")
         .and_then(Value::as_str)

@@ -222,7 +222,7 @@ mod tests {
             .transact_write("test.workspace_selection.callback", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                    crate::documents::apply_desired_state_plan(txn, plan).await
                 })
             })
             .await?;
@@ -278,7 +278,7 @@ mod tests {
             .transact_write("test.workspace_selection.repeat", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                    crate::documents::apply_desired_state_plan(txn, plan).await
                 })
             })
             .await?;
@@ -314,7 +314,7 @@ mod tests {
                 .transact_write("test.workspace_selection.enabled", |txn| {
                     let changed = &changed;
                     Box::pin(async move {
-                        crate::store::config_client::apply_desired_state_plan(txn, changed).await
+                        crate::documents::apply_desired_state_plan(txn, changed).await
                     })
                 })
                 .await?;

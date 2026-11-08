@@ -4,8 +4,9 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use crate::inference::resolved::{SelectedConfiguration, SelectedConfigurationDocument};
+use crate::documents::apply_desired_state_plan;
 use crate::store::config_client::{
-    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
     GraphqlEndpoint,
 };
 use crate::store::identity::NodeIdentity;

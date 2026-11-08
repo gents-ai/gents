@@ -95,7 +95,7 @@ async fn read_records_paged(
         return Ok(out);
     }
     let fields = if collection == Collection::InferenceBackend {
-        super::super::backend_metadata_fields()?
+        crate::documents::inference_backend::backend_metadata_fields()?
     } else {
         config_projection(collection, None)?.0
     };

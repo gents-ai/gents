@@ -172,83 +172,22 @@ pub struct PreflightProtectedBackendStore<'a> {
 impl PreflightProtectedBackendStore<'_> {
     /// Construct the served node from the same locked data directory whose
     /// provenance was checked. Callers cannot substitute another native node.
-    pub async fn start_node(
+    /// The caller reads `plugins` from its plugin store while it holds that
+    /// store's lease, and keeps the lease until this returns.
+    pub async fn start_node_with_projection(
         self,
         key: &StoreKey,
         runtime: Arc<dyn crate::store::identity::NodeIdentity>,
         http: Option<defra_node::HttpConfig>,
         p2p: Option<defra_node::P2PConfig>,
-        plugin_home: &Path,
-    ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
-        self.start_node_with_tool_ceiling(
-            key,
-            runtime,
-            http,
-            p2p,
-            crate::tools::surface::ToolCeiling::meta_only(),
-            plugin_home,
-        )
-        .await
-    }
-
-    pub async fn start_node_with_tool_ceiling(
-        self,
-        key: &StoreKey,
-        runtime: Arc<dyn crate::store::identity::NodeIdentity>,
-        http: Option<defra_node::HttpConfig>,
-        p2p: Option<defra_node::P2PConfig>,
-        ceiling: crate::tools::surface::ToolCeiling,
-        plugin_home: &Path,
+        policy: Arc<dyn super::ToolSourcePolicy>,
+        plugins: Vec<super::ProjectedPlugin>,
     ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
         if runtime.did() != self.node_did {
             return Err(BackendProtectionError::WrongNode);
         }
-        let plugin_home = plugin_home.to_owned();
-        let (plugins, _plugin_guard) = tokio::task::spawn_blocking(move || {
-            let guard = crate::plugin::store::try_lock_store_shared(&plugin_home)?;
-            let plugins = crate::plugin::store::list_records(&plugin_home)
-                .map_err(crate::plugin::store::PublishedPluginReadError::Read)?;
-            Ok::<_, crate::plugin::store::PublishedPluginReadError>((plugins, guard))
-        })
-        .await?
-        .map_err(|error| BackendProtectionError::Schema(error.into()))?;
-        self.start_node_with_plugins(key, runtime, http, p2p, ceiling, plugins)
+        self.start_node_with_plugins(key, runtime, http, p2p, policy, plugins)
             .await
-    }
-
-    /// Starts the node for a caller that already holds the home's exclusive
-    /// plugin store lock: the installed plugins it projects are read under
-    /// that guard, because a shared lock taken here would refuse against the
-    /// caller's own exclusive one.
-    pub async fn start_node_under_plugin_store(
-        self,
-        key: &StoreKey,
-        runtime: Arc<dyn crate::store::identity::NodeIdentity>,
-        http: Option<defra_node::HttpConfig>,
-        p2p: Option<defra_node::P2PConfig>,
-        guard: &crate::plugin::store::StoreGuard,
-    ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
-        if runtime.did() != self.node_did {
-            return Err(BackendProtectionError::WrongNode);
-        }
-        let plugin_home = guard.home().to_owned();
-        let plugins =
-            tokio::task::spawn_blocking(move || crate::plugin::store::list_records(&plugin_home))
-                .await?
-                .map_err(|error| {
-                    BackendProtectionError::Schema(
-                        crate::plugin::store::PublishedPluginReadError::Read(error).into(),
-                    )
-                })?;
-        self.start_node_with_plugins(
-            key,
-            runtime,
-            http,
-            p2p,
-            crate::tools::surface::ToolCeiling::meta_only(),
-            plugins,
-        )
-        .await
     }
 
     async fn start_node_with_plugins(
@@ -257,11 +196,11 @@ impl PreflightProtectedBackendStore<'_> {
         runtime: Arc<dyn crate::store::identity::NodeIdentity>,
         http: Option<defra_node::HttpConfig>,
         p2p: Option<defra_node::P2PConfig>,
-        ceiling: crate::tools::surface::ToolCeiling,
-        plugins: Vec<crate::plugin::store::InstalledPlugin>,
+        policy: Arc<dyn super::ToolSourcePolicy>,
+        plugins: Vec<super::ProjectedPlugin>,
     ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
         let projection =
-            super::document_projector_with_installed_plugins(runtime, ceiling, plugins)
+            super::document_projector_with_installed_plugins(runtime, policy, plugins)
                 .map_err(|error| BackendProtectionError::Schema(error.into()))?;
         let mut builder = super::store_key::persistent_builder(&self.store.data, key)
             .map_err(|error| BackendProtectionError::Schema(error.into()))?

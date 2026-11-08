@@ -487,7 +487,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
     let denied = agent_access
         .transact_write("test.backend.remove.denied", |txn| {
             let removal = &removal;
-            Box::pin(async move { super::apply_desired_state_plan(txn, removal).await })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, removal).await })
         })
         .await;
     assert!(denied.is_err());
@@ -513,7 +513,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         Some(1),
         access.transact_write("test.backend.remove.rollback", |txn| {
             let removal = &removal;
-            Box::pin(async move { super::apply_desired_state_plan(txn, removal).await })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, removal).await })
         }),
     )
     .await;
@@ -543,7 +543,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
     access
         .transact_write("test.backend.remove", |txn| {
             let removal = &removal;
-            Box::pin(async move { super::apply_desired_state_plan(txn, removal).await })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, removal).await })
         })
         .await?;
     let removed_case = modeled

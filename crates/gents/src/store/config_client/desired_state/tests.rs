@@ -8,6 +8,7 @@ use super::validate::{
     validate_desired_state_plan, validate_event_trigger_document_fields, OutcomeSourceSchemaError,
 };
 use super::*;
+use crate::documents::apply_desired_state_plan;
 use crate::store::config_client::ConfigAccess;
 use crate::store::config_client::schema_introspection::SchemaField;
 use anyhow::Context;

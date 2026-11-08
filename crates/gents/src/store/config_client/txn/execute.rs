@@ -403,17 +403,11 @@ impl ConfigApplyTxn<'_> {
     /// store lease is held; the request actor remains the transaction owner.
     pub(crate) async fn stage_plugin_delete_roots(
         &self,
-        previous: &[crate::plugin::store::InstalledPlugin],
-        installed: &[crate::plugin::store::InstalledPlugin],
+        previous: &[crate::store::local::ProjectedPlugin],
+        installed: &[crate::store::local::ProjectedPlugin],
     ) -> Result<()> {
         use crate::store::local::plugin_delete_source as source;
-        if !previous.iter().chain(installed).any(|record| {
-            record
-                .declaration
-                .data
-                .as_ref()
-                .is_some_and(|data| data.ops.iter().any(|op| op == "delete"))
-        }) {
+        if !previous.iter().chain(installed).any(|record| record.deletes) {
             return Ok(());
         }
         let TxnBackend::Embedded {
@@ -436,20 +430,14 @@ impl ConfigApplyTxn<'_> {
         // edge against the explicit actor and admits an unchanged one without
         // authority (Lean `Configuration.sourceChangeAllowed`).
         let context = defra_core::RequestContext::default().with_identity(Some(actor.to_string()));
-        let roots = |records: &[crate::plugin::store::InstalledPlugin]| {
+        let roots = |records: &[crate::store::local::ProjectedPlugin]| {
             let mut roots = std::collections::BTreeSet::new();
             for record in records {
-                if !record
-                    .declaration
-                    .data
-                    .as_ref()
-                    .is_some_and(|data| data.ops.iter().any(|op| op == "delete"))
-                {
+                if !record.deletes {
                     continue;
                 }
-                let coordinate = format!("{}/{}", record.namespace, record.name);
                 for pin in [None, Some(record.digest.as_str())] {
-                    roots.insert(source::root(node_did, &coordinate, pin));
+                    roots.insert(source::root(node_did, &record.coordinate, pin));
                 }
             }
             roots
@@ -1086,16 +1074,14 @@ impl ConfigApplyTxn<'_> {
 
     /// Read only account-selection metadata as this transaction's bound
     /// runtime. Native document ACP still filters and authorizes the read.
-    pub(super) async fn execute_runtime_account_metadata_query(
+    /// The credential owner supplies `query`; store holds no OAuthCredential
+    /// selection of its own.
+    pub(crate) async fn execute_runtime_account_metadata_query(
         &self,
         node_did: &str,
-        provider: &str,
+        query: &str,
     ) -> Result<defra_node::QueryResponse> {
-        self.execute_runtime_metadata_query(
-            node_did,
-            &crate::inference::auth::credential::runtime_account_query(node_did, provider),
-        )
-        .await
+        self.execute_runtime_metadata_query(node_did, query).await
     }
 
     /// Read only the runtime Node's hop cap as this transaction's bound

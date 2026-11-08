@@ -234,7 +234,7 @@ mod tests {
             .transact_write("test.backend.create_profile", |txn| {
                 let (plan, node_binding) = (&plan, &node_binding);
                 Box::pin(async move {
-                    super::super::apply_desired_state_plan_with_node_binding(
+                    crate::documents::apply_desired_state_plan_with_node_binding(
                         txn,
                         plan,
                         Some(node_binding),

@@ -1,8 +1,12 @@
 use super::*;
+use crate::documents::event_consumer::{
+    acknowledge_fire, exclude_arrival, load_or_seed_for_source,
+    load_or_seed_for_source_with_node_binding,
+};
 use crate::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
+use crate::documents::apply_desired_state_plan;
 use crate::store::config_client::{
-    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    NodePermission,
+    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
 };
 use crate::store::identity::NodeIdentity;
 use crate::Collection;
@@ -433,7 +437,7 @@ async fn held_agent_cursor_seed_uses_runtime_observed_node_binding() -> Result<(
             let plan = &plan;
             let binding = &binding;
             Box::pin(async move {
-                super::super::apply_desired_state_plan_with_node_binding(txn, plan, Some(binding))
+                crate::documents::apply_desired_state_plan_with_node_binding(txn, plan, Some(binding))
                     .await
             })
         })

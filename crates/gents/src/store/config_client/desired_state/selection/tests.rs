@@ -166,7 +166,7 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
         .transact_write("test.skill.install", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                crate::documents::apply_desired_state_plan(txn, plan).await
             })
         })
         .await?;
@@ -288,7 +288,7 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
         .transact_write("test.skill.unrelated", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                crate::documents::apply_desired_state_plan(txn, plan).await
             })
         })
         .await?;
@@ -314,7 +314,7 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
         .transact_write("test.skill.agent_create", |txn| {
             let (plan, binding) = (&agent_plan, &binding);
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan_with_node_binding(
+                crate::documents::apply_desired_state_plan_with_node_binding(
                     txn,
                     plan,
                     Some(binding),
@@ -383,7 +383,7 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
         .transact_write("test.skill.create_removal_target", |txn| {
             let plan = &user_plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                crate::documents::apply_desired_state_plan(txn, plan).await
             })
         })
         .await?;
@@ -404,7 +404,7 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
         .transact_write("test.skill.denied_removal", |txn| {
             let (plan, binding) = (&removal, &binding);
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan_with_node_binding(
+                crate::documents::apply_desired_state_plan_with_node_binding(
                     txn,
                     plan,
                     Some(binding),
