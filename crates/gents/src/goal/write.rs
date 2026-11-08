@@ -55,8 +55,11 @@ pub async fn set_goal_from_access(
     token_budget: Option<Option<i64>>,
     auto_resume: Option<bool>,
 ) -> Result<GoalDocument> {
+    // Operator Goal writes re-read the Goal inside the transaction, so a
+    // confirmed conflict with the active turn's Goal accounting re-plans and
+    // re-signs rather than surfacing the conflict.
     let goal = access
-        .transact_write("goal.set_from_access", move |txn| {
+        .transact_signed_conflict_rebuild("goal.set_from_access", move |txn| {
             Box::pin(async move {
                 set_goal_in_txn(
                     txn,
@@ -85,7 +88,7 @@ pub async fn set_goal_auto_resume_from_access(
     enabled: bool,
 ) -> Result<()> {
     access
-        .transact_write("goal.set_auto_resume", |txn| {
+        .transact_signed_conflict_rebuild("goal.set_auto_resume", |txn| {
             Box::pin(async move {
                 let goal = load_canonical_goal_in_txn(txn, node_did, session_id)
                     .await?
@@ -294,7 +297,7 @@ pub async fn delete_goals_for_session_from_access(
     node_did: &str,
     session_id: &str,
 ) -> Result<usize> {
-    access.transact_write("goal.delete_for_session", |txn| {
+    access.transact_signed_conflict_rebuild("goal.delete_for_session", |txn| {
         Box::pin(async move {
             let owner = escape_graphql_string(node_did);
             let session = escape_graphql_string(session_id);

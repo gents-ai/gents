@@ -81,6 +81,17 @@ See `../README.md` for how this fits the broader formal-verification model.
   drops the cadence premise and loses an admission to back-to-back renewals;
   `StartWitness` reproduces the traced renewal/dispatch-start conflict that
   green absorbs.
+- `ClientSubmissionContention` — a User's signed client submission
+  (`request.client.submit`) racing its session's active turn. The submission
+  reads the `AgentSession` document and creates the User-signed
+  `AgentRequest`; the working Agent refreshes the session observation as it
+  publishes each message, so the submission's commit aborts. `NoConflictLoss`,
+  `CreatedOnce` and `EverySubmissionSettles` hold when the submission is a
+  signed-conflict rebuild (Lean `clientSignedWriteMayRetry`: only a confirmed
+  abort re-reads, re-plans and signs a fresh graph; a lost response is
+  reported) and fewer refreshes land in one attempt series than it has
+  attempts. `SingleAttempt` is the found race (the busy-session mailbox
+  test); `ShortBudget` shows the overlap premise is load-bearing.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup

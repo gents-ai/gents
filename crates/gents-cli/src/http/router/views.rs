@@ -170,8 +170,25 @@ pub(super) async fn fleet_handler(State(state): State<RuntimeHttpState>) -> Resp
     }
 }
 
-pub(super) async fn fleet_slots_handler(State(state): State<RuntimeHttpState>) -> Response {
-    match load_fleet_slot_snapshot(&state.p2p_graphql).await {
+/// The slot snapshot is read as its authorized caller, so a native admin sees
+/// the Agent-owned inference calls its DAC bypass admits (HttpAccess.lean).
+pub(super) async fn fleet_slots_handler(
+    State(state): State<RuntimeHttpState>,
+    identity: defra_http::ExtractIdentity,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let reader =
+        match crate::http::private_reader::authorize_private_reader(&state, &identity, &headers)
+            .await
+        {
+            Ok(reader) => reader,
+            Err(refused) => return refused,
+        };
+    crate::http::private_reader::private(fleet_slots_response(&reader).await)
+}
+
+async fn fleet_slots_response(reader: &gents::store::config_client::GraphqlEndpoint) -> Response {
+    match load_fleet_slot_snapshot(reader).await {
         Ok(snapshot) => (StatusCode::OK, axum::Json(snapshot)).into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,

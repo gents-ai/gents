@@ -5,6 +5,7 @@ use axum::{
     http::{header, StatusCode},
     response::{IntoResponse, Response},
 };
+use gents::store::config_client::GraphqlEndpoint;
 use serde_json::{json, Value};
 use tokio::sync::OnceCell;
 
@@ -19,10 +20,15 @@ use crate::http::version::version_response;
 /// own timeout while the node is still opening.
 pub(super) const STATUS_PROBE_BUDGET: Duration = Duration::from_secs(2);
 
-pub(super) async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
+/// Private status, read as `reader`: the authorized caller's own forwarded
+/// bearer (HttpAccess.lean `readsAs`).
+pub(super) async fn status_handler(
+    State(state): State<RuntimeHttpState>,
+    reader: &GraphqlEndpoint,
+) -> Response {
     let mut p2p = match tokio::time::timeout(
         P2P_METRICS_FETCH_BUDGET,
-        crate::commands::p2p::load_live_http_p2p_status(None, &state.p2p_graphql),
+        crate::commands::p2p::load_live_http_p2p_status(None, reader),
     )
     .await
     {
@@ -37,12 +43,12 @@ pub(super) async fn status_handler(State(state): State<RuntimeHttpState>) -> Res
     let probe_deadline = tokio::time::Instant::now() + STATUS_PROBE_BUDGET;
     let metrics = tokio::time::timeout_at(
         probe_deadline,
-        load_metrics_core_data(&state.p2p_graphql, &state.node_did),
+        load_metrics_core_data(reader, &state.node_did),
     )
     .await;
     let metrics = match metrics {
         Ok(Ok(core)) => Ok(Ok(core
-            .with_liveness_activity(&state.p2p_graphql, probe_deadline)
+            .with_liveness_activity(reader, probe_deadline)
             .await)),
         Ok(Err(error)) => Ok(Err(error)),
         Err(elapsed) => Err(elapsed),
@@ -122,11 +128,8 @@ pub(super) async fn status_handler(State(state): State<RuntimeHttpState>) -> Res
     };
 
     if body.get("error").is_none() {
-        if let Ok(Ok((agents, context_budget, context))) = tokio::time::timeout(
-            STATUS_PROBE_BUDGET,
-            load_self_view(&state.p2p_graphql, &state.node_did),
-        )
-        .await
+        if let Ok(Ok((agents, context_budget, context))) =
+            tokio::time::timeout(STATUS_PROBE_BUDGET, load_self_view(reader, &state.node_did)).await
         {
             if let Some(map) = body.as_object_mut() {
                 map.insert("agents".to_string(), json!(agents));
@@ -169,12 +172,12 @@ fn backend_probe_reports(
 pub(super) async fn status_route(
     State(state): State<RuntimeHttpState>,
     identity: defra_http::ExtractIdentity,
+    headers: axum::http::HeaderMap,
 ) -> Response {
-    let mut response = if identity
-        .did()
-        .is_some_and(|actor| actor.as_ref() == state.node_did)
-    {
-        status_handler(State(state)).await
+    let reader =
+        crate::http::private_reader::authorize_private_reader(&state, &identity, &headers).await;
+    let mut response = if let Ok(reader) = reader {
+        status_handler(State(state), &reader).await
     } else {
         let mut body = json!({
             "service": "gents",

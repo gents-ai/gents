@@ -39,6 +39,27 @@ impl ConfigAccess {
             .await
     }
 
+    /// Whether the access's own actor is the node's NAC owner or holds the
+    /// `admin` relation, as native NAC reports it to that actor. An
+    /// observation only: every operation it gates is still checked natively.
+    pub async fn actor_is_native_admin(&self) -> Result<bool, ConfigClientError> {
+        let actor = identity::Did::new(
+            self.actor_did()
+                .ok_or(ConfigClientError::NodePermissionActorRequired)?,
+        )
+        .map_err(ConfigClientError::NodePermissionIdentity)?;
+        Ok(self
+            .explain_node_subject(&actor)
+            .await?
+            .iter()
+            .any(|grant| {
+                matches!(
+                    grant.via,
+                    acp::nac::PermissionVia::Owner | acp::nac::PermissionVia::Admin
+                )
+            }))
+    }
+
     /// Every way `subject` holds each node permission, as native NAC reports it
     /// to the access's actor. Native allows the subject itself, an admin, or a
     /// caller holding `NacStatus`; any other caller is refused by DefraDB.

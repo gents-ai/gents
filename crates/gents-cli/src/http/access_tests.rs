@@ -79,9 +79,11 @@ struct Fixture {
     _server: tokio_util::task::AbortOnDropHandle<()>,
     owner: PrincipalIdentity,
     other: PrincipalIdentity,
+    admin: PrincipalIdentity,
     endpoint: String,
     client: reqwest::Client,
     queries: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    query_bearers: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     status_requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
@@ -126,12 +128,17 @@ impl Fixture {
         let temp = tempfile::tempdir().unwrap();
         let owner_paths = DesktopPaths::from_root(temp.path().join("owner"));
         let other_paths = DesktopPaths::from_root(temp.path().join("other"));
+        let admin_paths = DesktopPaths::from_root(temp.path().join("admin"));
         owner_paths.ensure_root_dirs().await.unwrap();
         other_paths.ensure_root_dirs().await.unwrap();
+        admin_paths.ensure_root_dirs().await.unwrap();
         let owner = PrincipalIdentity::load_or_create(&owner_paths)
             .await
             .unwrap();
         let other = PrincipalIdentity::load_or_create(&other_paths)
+            .await
+            .unwrap();
+        let admin = PrincipalIdentity::load_or_create(&admin_paths)
             .await
             .unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -139,16 +146,48 @@ impl Fixture {
         let router = runtime_routes(&endpoint, &owner);
         let queries = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let observed_queries = queries.clone();
-        let router = router.merge(axum::Router::new().route(
-            "/api/v0/graphql",
-            axum::routing::post(move || {
-                let queries = observed_queries.clone();
-                async move {
-                    queries.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    axum::Json(serde_json::json!({ "data": {} }))
-                }
-            }),
-        ));
+        let query_bearers = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let observed_bearers = query_bearers.clone();
+        let admin_did = admin.did().to_owned();
+        let router = router
+            .merge(axum::Router::new().route(
+                "/api/v0/graphql",
+                axum::routing::post(move |headers: axum::http::HeaderMap| {
+                    let queries = observed_queries.clone();
+                    let bearers = observed_bearers.clone();
+                    async move {
+                        queries.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        if let Some(bearer) = headers
+                            .get(header::AUTHORIZATION)
+                            .and_then(|value| value.to_str().ok())
+                        {
+                            bearers.lock().unwrap().push(bearer.to_owned());
+                        }
+                        axum::Json(serde_json::json!({ "data": {} }))
+                    }
+                }),
+            ))
+            // Native NAC's explanation to the subject itself; only the
+            // fixture admin holds the `admin` relation.
+            .merge(axum::Router::new().route(
+                "/api/v0/acp/node/explain",
+                axum::routing::get(
+                    move |query: axum::extract::Query<rapidhash::RapidHashMap<String, String>>| {
+                        let admin_did = admin_did.clone();
+                        async move {
+                            let grants = if query.get("subject") == Some(&admin_did) {
+                                vec![acp::nac::PermissionProvenance {
+                                    permission: acp::nac::NodePermission::NacStatus,
+                                    via: acp::nac::PermissionVia::Admin,
+                                }]
+                            } else {
+                                Vec::new()
+                            };
+                            axum::Json(grants)
+                        }
+                    },
+                ),
+            ));
         let status_requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let observed_status_requests = status_requests.clone();
         let router = router.layer(axum::middleware::from_fn(
@@ -171,9 +210,11 @@ impl Fixture {
             _server: server,
             owner,
             other,
+            admin,
             endpoint,
             client: reqwest::Client::builder().no_proxy().build().unwrap(),
             queries,
+            query_bearers,
             status_requests,
         }
     }
@@ -357,6 +398,7 @@ struct Case {
     surface: String,
     identity: String,
     decision: String,
+    reads_as: Option<String>,
 }
 
 #[tokio::test]
@@ -368,26 +410,34 @@ async fn generated_http_access_cases_bind_real_bearers_and_router_dispatch() {
     )
     .unwrap();
     let cases: Vec<Case> = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(cases.len(), 12);
+    assert_eq!(cases.len(), 24);
     let f = Fixture::start().await;
     for case in cases {
-        let path = if case.surface == "bootstrap" {
-            "/status"
-        } else {
-            "/activation"
+        let path = match case.surface.as_str() {
+            "bootstrap" => "/status",
+            "operator" => "/activation",
+            "snapshot" => "/fleet/slots",
+            _ => panic!("unknown surface"),
         };
         let mut request = f.get(path);
         let identity = match case.identity.as_str() {
             "operator" => Some(&f.owner),
             "other" => Some(&f.other),
+            "admin" => Some(&f.admin),
             "anonymous" => None,
             _ => panic!("unknown identity"),
         };
+        let mut bearer = None;
         if let Some(identity) = identity {
-            request = principal_endpoint(format!("{}/api/v0/graphql", f.endpoint), identity)
-                .authorize(request)
-                .unwrap();
+            let authorization =
+                principal_endpoint(format!("{}/api/v0/graphql", f.endpoint), identity)
+                    .authorization()
+                    .unwrap()
+                    .unwrap();
+            request = request.header(header::AUTHORIZATION, &authorization);
+            bearer = Some(authorization);
         }
+        f.query_bearers.lock().unwrap().clear();
         if !case.authority_matches {
             request = request.header(header::HOST, "attacker.example:9191");
         }
@@ -414,10 +464,37 @@ async fn generated_http_access_cases_bind_real_bearers_and_router_dispatch() {
         if case.decision == "unauthorized" {
             assert_eq!(response.headers()[header::WWW_AUTHENTICATE], "Bearer");
         }
+        if path == "/fleet/slots" {
+            let bearers = f.query_bearers.lock().unwrap().clone();
+            if case.decision == "operator" {
+                assert_eq!(case.reads_as.as_deref(), Some(case.identity.as_str()));
+                assert!(!bearers.is_empty(), "the slot snapshot is read");
+                assert!(
+                    bearers.iter().all(|seen| Some(seen) == bearer.as_ref()),
+                    "the slot snapshot reads as its caller {}: {bearers:?}",
+                    case.identity
+                );
+            } else {
+                assert_eq!(case.reads_as, None);
+                assert!(bearers.is_empty(), "refused snapshots read nothing");
+            }
+            continue;
+        }
         let body: Value = response.json().await.unwrap();
         if case.decision == "operator" && path == "/status" {
             assert_eq!(body["home"], "/private/operator/home");
             assert_eq!(body["tool_root"], "/private/operator/workspace");
+            assert_eq!(case.reads_as.as_deref(), Some(case.identity.as_str()));
+            let bearers = f.query_bearers.lock().unwrap().clone();
+            assert!(!bearers.is_empty(), "private status reads the node's data");
+            assert!(
+                bearers.iter().all(|seen| Some(seen) == bearer.as_ref()),
+                "private status reads as its caller {}: {bearers:?}",
+                case.identity
+            );
+        }
+        if case.decision != "operator" {
+            assert_eq!(case.reads_as, None);
         }
         if case.decision != "operator" {
             assert_eq!(

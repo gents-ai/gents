@@ -1,0 +1,4 @@
+---- MODULE MCClientSubmissionContention ----
+EXTENDS ClientSubmissionContention
+
+====

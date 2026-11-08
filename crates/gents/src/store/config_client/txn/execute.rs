@@ -675,17 +675,17 @@ impl ConfigApplyTxn<'_> {
     /// dangling-selection repair consults this; it confers no authority, and
     /// every write it gates is still checked natively.
     pub(crate) async fn actor_is_native_admin(&self) -> Result<bool> {
-        let actor = identity::Did::new(
-            self.actor_did()
-                .ok_or(ConfigClientError::NodePermissionActorRequired)?,
-        )
-        .map_err(ConfigClientError::NodePermissionIdentity)?;
         match &self.backend {
             TxnBackend::Embedded {
                 node,
                 native_operations,
                 ..
             } => {
+                let actor = identity::Did::new(
+                    self.actor_did()
+                        .ok_or(ConfigClientError::NodePermissionActorRequired)?,
+                )
+                .map_err(ConfigClientError::NodePermissionIdentity)?;
                 let node = Arc::clone(node);
                 execute_owned_native(
                     async move { node.nac_manager().is_admin(&actor).await },
@@ -696,15 +696,9 @@ impl ConfigApplyTxn<'_> {
                 .map_err(ConfigClientError::NativeAdminObservation)
             }
             TxnBackend::Http { endpoint, .. } => {
-                let provenance = super::super::ConfigAccess::Graphql((*endpoint).clone())
-                    .explain_node_subject(&actor)
-                    .await?;
-                Ok(provenance.iter().any(|grant| {
-                    matches!(
-                        grant.via,
-                        acp::nac::PermissionVia::Owner | acp::nac::PermissionVia::Admin
-                    )
-                }))
+                super::super::ConfigAccess::Graphql((*endpoint).clone())
+                    .actor_is_native_admin()
+                    .await
             }
         }
     }

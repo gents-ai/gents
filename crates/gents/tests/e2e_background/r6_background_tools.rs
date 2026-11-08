@@ -621,14 +621,60 @@ async fn assert_accepted_rows_visible(turn: &AcceptedBackgroundTurn) {
     );
 }
 
+/// The owned loop admits one turn's calls one at a time (dispatch start,
+/// admission, receipt each), so the wall time before the provider sees the
+/// next request grows with the call count and machine load; nine admissions
+/// take about 3 s alone and 5 s under parallel load, with no transaction
+/// conflict. Wait on the turn's own progress instead of a fixed budget: fail
+/// when its tool rows stop changing for `STALL`, or its request settles first.
 async fn wait_for_provider_requests(turn: &AcceptedBackgroundTurn, expected: usize) {
-    for _ in 0..200 {
+    const STALL: Duration = Duration::from_secs(5);
+    let session_id = escape_graphql_string(&turn.session_id);
+    let request_id = escape_graphql_string(&turn.request_id);
+    let progress = || async {
+        let response = turn
+            .fixture
+            .access
+            .execute(&format!(
+                r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ _docID lifecycle_state }}
+                    AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ lifecycle_state }} }}"#
+            ))
+            .await
+            .expect("read turn progress");
+        let mut calls = response["data"]["AgentToolCall"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| format!("{}={}", row["_docID"], row["lifecycle_state"]))
+            .collect::<Vec<_>>();
+        calls.sort();
+        let request = response["data"]["AgentRequest"][0]["lifecycle_state"].clone();
+        (calls, request)
+    };
+    let mut observed = progress().await;
+    let mut changed = tokio::time::Instant::now();
+    loop {
         if turn.runtime.backend.observed_requests(&turn.prompt) >= expected {
             return;
         }
+        assert!(
+            !gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(
+                observed.1.as_str()
+            ),
+            "request settled before the provider received {expected} requests: {observed:?}"
+        );
+        assert!(
+            changed.elapsed() < STALL,
+            "turn stopped progressing before the provider received {expected} requests: {observed:?}"
+        );
         tokio::time::sleep(Duration::from_millis(25)).await;
+        let current = progress().await;
+        if current != observed {
+            observed = current;
+            changed = tokio::time::Instant::now();
+        }
     }
-    panic!("provider did not receive {expected} requests")
 }
 
 fn finish_dynamic_turn(turn: &AcceptedBackgroundTurn) {

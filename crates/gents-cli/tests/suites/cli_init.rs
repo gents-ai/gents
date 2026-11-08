@@ -1452,6 +1452,21 @@ async fn init_reuses_recorded_store_custody_and_refuses_an_unrecorded_key() -> R
         .context("init.json object")?
         .remove("store_encryption");
     write_json_file(&config_path, &legacy)?;
+    // Identity-only init protects its fresh store (a81734312e), so the store
+    // exists; the refused opener must leave every store file untouched.
+    let store_files = |dir: &std::path::Path| -> Result<Vec<(std::path::PathBuf, Vec<u8>)>> {
+        let mut files = Vec::new();
+        for entry in walkdir_files(dir)? {
+            files.push((entry.clone(), fs::read(&entry)?));
+        }
+        files.sort();
+        Ok(files)
+    };
+    let store_before = store_files(&home.join("data"))?;
+    assert!(
+        !store_before.is_empty(),
+        "identity-only init protects its store"
+    );
     let output = Command::new(cli_bin())
         .env("HOME", &home_dir)
         .env("RUST_LOG", "error")
@@ -1465,11 +1480,25 @@ async fn init_reuses_recorded_store_custody_and_refuses_an_unrecorded_key() -> R
     assert!(stderr.contains("refusing to replace"), "{stderr}");
     assert_eq!(fs::read(&key_file)?, key);
     assert_eq!(read_json_file(&config_path)?, legacy);
-    assert!(
-        !home.join("data/MANIFEST").exists(),
+    assert_eq!(
+        store_files(&home.join("data"))?,
+        store_before,
         "the store is never opened"
     );
     Ok(())
+}
+
+fn walkdir_files(dir: &std::path::Path) -> Result<Vec<std::path::PathBuf>> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            files.extend(walkdir_files(&path)?);
+        } else {
+            files.push(path);
+        }
+    }
+    Ok(files)
 }
 
 #[test]

@@ -172,7 +172,6 @@ pub(crate) fn runtime_contract_router(
         .route("/self", get(self_handler))
         .route("/sessions", get(sessions_handler))
         .route("/fleet", get(fleet_handler))
-        .route("/fleet/slots", get(fleet_slots_handler))
         .route("/mcp/pool", get(mcp_pool_handler))
         .route(
             "/identity/decide",
@@ -199,6 +198,7 @@ pub(crate) fn runtime_contract_router(
             post(crate::http::agent_identity::provision),
         )
         .route("/status", get(status_route))
+        .route("/fleet/slots", get(fleet_slots_handler))
         .route(
             gents_protocol::serve_lifecycle::control::RUNTIME_CONTROL_PATH,
             post(crate::http::runtime_control::runtime_control_handler),

@@ -634,7 +634,7 @@ fn p2p_metrics_snapshot_decodes_pinned_live_sync_status() {
 #[tokio::test]
 async fn status_lifecycle_is_starting_until_serve_marks_it_ready() {
     async fn lifecycle(state: &RuntimeHttpState) -> Value {
-        let response = status_handler(State(state.clone())).await;
+        let response = status_handler(State(state.clone()), &state.p2p_graphql).await;
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("status body");
@@ -734,7 +734,7 @@ async fn stalled_liveness_activity_read_does_not_hold_health() {
     assert!((120_000..180_000).contains(&progress_age_ms(&healthz)));
 
     let started = std::time::Instant::now();
-    let (_, status_body) = health_body(status_handler(State(state)).await).await;
+    let (_, status_body) = health_body(status_handler(State(state.clone()), &state.p2p_graphql).await).await;
     assert!(
         started.elapsed() < STATUS_PROBE_BUDGET + P2P_METRICS_FETCH_BUDGET,
         "/status waited {:?}",
@@ -749,7 +749,7 @@ async fn late_core_read_leaves_status_ok_when_activity_stalls() {
     let state = stalled_activity_state(Duration::from_millis(1_700)).await;
 
     let started = std::time::Instant::now();
-    let (_, status_body) = health_body(status_handler(State(state)).await).await;
+    let (_, status_body) = health_body(status_handler(State(state.clone()), &state.p2p_graphql).await).await;
     assert!(
         started.elapsed() < STATUS_PROBE_BUDGET + P2P_METRICS_FETCH_BUDGET,
         "/status waited {:?}",

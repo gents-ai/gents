@@ -288,30 +288,13 @@ pub(crate) async fn install_handler(
     }
 }
 
-/// HttpAuthority has already restricted Host to this runtime. Preserve that authority
-/// when forwarding the audience-bound bearer; use neither proxy headers nor a new key.
 fn delegated_install_access(
     state: &RuntimeHttpState,
     headers: &HeaderMap,
     actor: identity::Did,
 ) -> Result<gents::store::config_client::ConfigAccess> {
-    let authorization = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .context("caller bearer is missing")?
-        .to_str()?;
-    let host = headers
-        .get(axum::http::header::HOST)
-        .context("caller authority is missing")?
-        .to_str()?;
-    let configured = reqwest::Url::parse(state.p2p_graphql.url())?;
-    let mut endpoint = reqwest::Url::parse(&format!("{}://{host}", configured.scheme()))?;
-    endpoint.set_path(configured.path());
     Ok(gents::store::config_client::ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::with_authenticated_delegation(
-            endpoint.to_string(),
-            authorization,
-            actor,
-        )?,
+        crate::http::private_reader::caller_endpoint(state, headers, actor)?,
     ))
 }
 
