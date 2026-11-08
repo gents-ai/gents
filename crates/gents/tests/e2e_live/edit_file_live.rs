@@ -2,13 +2,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::documents::{FileTools, HostTools, Tools};
-use gents::NodeIdentity;
 use gents::{DocumentRuntimeOptions, FileToolMode, Gents, ToolCeiling};
 
-use crate::support::fixtures::{configure_agent_tools, test_identity};
-use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
+use crate::support::builder_runtime::submit_request;
+use crate::support::fixtures::configure_agent_tools_as;
+use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::live_inference::{bind_target, live_target, wait_for_request_terminal};
-use crate::support::snapshots::fetch_tool_call_payloads_for_request;
+use crate::support::snapshots::fetch_tool_call_payloads_for_request_as;
 use crate::support::test_db;
 
 const SEED: &str = "{\r\n  \"max_turns\": 20,  \r\n  \"model_name\": \"fixture-model\"\r\n}\r\n";
@@ -19,15 +19,16 @@ async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
     let target = live_target();
 
     let db = test_db("edit-file-live").await;
-    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("edit-file-live"));
 
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     std::fs::write(workspace.path().join("profile.json"), SEED).unwrap();
 
-    let (node_did, agent_did) = bind_target(&db.node, identity.as_ref(), &target).await;
+    let actors = bind_target(&db, &target).await;
+    let (node_did, agent_did) = (actors.node_did().to_owned(), actors.agent_did().to_owned());
+    let reader = &actors.fixture.access;
 
-    configure_agent_tools(
-        &db,
+    configure_agent_tools_as(
+        reader,
         &node_did,
         &agent_did,
         None,
@@ -50,7 +51,7 @@ async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
 
     let agent = Gents::from_default_agent_documents(
         db.node.clone(),
-        Arc::clone(&identity),
+        Arc::clone(&db.node_identity),
         DocumentRuntimeOptions {
             backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::readwrite(workspace.path()),
@@ -65,12 +66,11 @@ async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
     let booted = BootedAgent::new(shutdown_tx, handle, node_did.clone());
 
     let request_id = "edit-file-live-req-1";
-    create_runtime_request(
-        &db.node,
-        &node_did,
-        &agent_did,
+    submit_request(
+        &actors,
         request_id,
         "edit-file-live-session-1",
+        "interactive",
         "In profile.json, change max_turns from 20 to 250. Use read_file first, \
          then make the change with edit_file, passing the content_hash from the \
          read as expected_content_hash. Do not use write_file. Reply DONE when \
@@ -78,7 +78,7 @@ async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
     )
     .await;
 
-    let terminal = wait_for_request_terminal(&db.node, request_id, Duration::from_secs(300)).await;
+    let terminal = wait_for_request_terminal(reader, request_id, Duration::from_secs(300)).await;
     assert_eq!(terminal, "completed", "live edit run must complete");
 
     let bytes = std::fs::read(workspace.path().join("profile.json")).unwrap();
@@ -100,7 +100,7 @@ async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
         "unrelated line untouched:\n{text}"
     );
 
-    let calls = fetch_tool_call_payloads_for_request(&db.node, request_id).await;
+    let calls = fetch_tool_call_payloads_for_request_as(reader, request_id).await;
     assert!(!calls.is_empty(), "tool calls must be persisted");
     let edit_completed = calls.iter().any(|c| {
         c.tool_name == "edit_file"

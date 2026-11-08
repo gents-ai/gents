@@ -2,18 +2,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::Node as EmbeddedNode;
 use gents::documents::{FileTools, HostTools, IntegrationTools, LspTools, Tools};
 use gents::{DocumentRuntimeOptions, FileToolMode, Gents, ToolCeiling};
 
 use gents::NodeIdentity;
 
-use crate::support::fixtures::{configure_agent_tools, test_identity};
-use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
+use crate::support::builder_runtime::submit_request;
+use crate::support::fixtures::configure_agent_tools;
+use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::live_inference::{
     bind_target, live_target, wait_for_assistant_answer, wait_for_request_terminal,
 };
-use crate::support::snapshots::fetch_tool_call_payloads_for_request;
+use crate::support::snapshots::fetch_tool_call_payloads_for_request_as;
 use crate::support::test_db;
 
 const MEET_FILE: &str = "crates/gents-loop/src/tool_policy.rs";
@@ -197,8 +197,8 @@ struct ToolCallRow {
     result: Option<String>,
 }
 
-async fn fetch_tool_calls(node: &Arc<EmbeddedNode>, request_id: &str) -> Vec<ToolCallRow> {
-    fetch_tool_call_payloads_for_request(node, request_id)
+async fn fetch_tool_calls(reader: &gents::ConfigAccess, request_id: &str) -> Vec<ToolCallRow> {
+    fetch_tool_call_payloads_for_request_as(reader, request_id)
         .await
         .into_iter()
         .map(|call| ToolCallRow {
@@ -230,9 +230,11 @@ async fn lsp_live_model_uses_rust_analyzer() {
     let _cwd = CurrentDirGuard::set(&workspace);
 
     let db = test_db("lsp-live").await;
-    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("lsp-live"));
+    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
 
-    let (node_did, agent_did) = bind_target(&db.node, identity.as_ref(), &live_target()).await;
+    let actors = bind_target(&db, &live_target()).await;
+    let (node_did, agent_did) = (actors.node_did().to_owned(), actors.agent_did().to_owned());
+    let reader = &actors.fixture.access;
 
     configure_agent_tools(
         &db,
@@ -280,22 +282,21 @@ async fn lsp_live_model_uses_rust_analyzer() {
     let booted = BootedAgent::new(shutdown_tx, handle, node_did.clone());
 
     let unscripted_request_id = "lsp-live-unscripted-1";
-    create_runtime_request(
-        &db.node,
-        &node_did,
-        &agent_did,
+    submit_request(
+        &actors,
         unscripted_request_id,
         "lsp-live-unscripted-session-1",
+        "interactive",
         &pack_unscripted_prompt(),
     )
     .await;
     let terminal =
-        wait_for_request_terminal(&db.node, unscripted_request_id, Duration::from_secs(600)).await;
+        wait_for_request_terminal(reader, unscripted_request_id, Duration::from_secs(600)).await;
     let mut failures = Vec::new();
     if terminal != "completed" {
         failures.push(format!("unscripted live lsp run must complete: {terminal}"));
     }
-    let unscripted_calls = fetch_tool_calls(&db.node, unscripted_request_id).await;
+    let unscripted_calls = fetch_tool_calls(reader, unscripted_request_id).await;
     let useful_semantic = unscripted_calls.iter().any(|call| {
         call.tool_name.as_deref() == Some("lsp")
             && call_completed(call)
@@ -319,7 +320,7 @@ async fn lsp_live_model_uses_rust_analyzer() {
         ));
     }
     let unscripted_answer =
-        wait_for_assistant_answer(&db.node, unscripted_request_id, Duration::from_secs(10)).await;
+        wait_for_assistant_answer(reader, unscripted_request_id, Duration::from_secs(10)).await;
     if !answer_reports_meet_contract(&unscripted_answer) {
         failures.push(format!(
             "unscripted answer must report that the more restrictive mode wins in Disabled < Inherit < Enabled order; got:\n{unscripted_answer}"
@@ -328,22 +329,21 @@ async fn lsp_live_model_uses_rust_analyzer() {
 
     let request_id = "lsp-live-req-1";
     let prompt = pack_default_prompt();
-    create_runtime_request(
-        &db.node,
-        &node_did,
-        &agent_did,
+    submit_request(
+        &actors,
         request_id,
         "lsp-live-session-1",
+        "interactive",
         &prompt,
     )
     .await;
 
-    let terminal = wait_for_request_terminal(&db.node, request_id, Duration::from_secs(600)).await;
+    let terminal = wait_for_request_terminal(reader, request_id, Duration::from_secs(600)).await;
     if terminal != "completed" {
         failures.push(format!("live lsp run must complete: {terminal}"));
     }
 
-    let calls = fetch_tool_calls(&db.node, request_id).await;
+    let calls = fetch_tool_calls(reader, request_id).await;
     let lsp_calls: Vec<_> = calls
         .iter()
         .filter(|call| call.tool_name.as_deref() == Some("lsp"))
@@ -366,7 +366,7 @@ async fn lsp_live_model_uses_rust_analyzer() {
         }
     }
 
-    let answer = wait_for_assistant_answer(&db.node, request_id, Duration::from_secs(10)).await;
+    let answer = wait_for_assistant_answer(reader, request_id, Duration::from_secs(10)).await;
     if !(answer.contains("FileToolMode")
         || (answer.contains("Disabled") && answer.contains("Inherit")))
     {

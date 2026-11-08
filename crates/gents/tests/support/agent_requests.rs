@@ -665,3 +665,104 @@ impl RequestActors {
         response["data"]["AgentRequest"][0].clone()
     }
 }
+
+/// Submits one User message through the client request owner, as desktop and
+/// the CLI do: the fixture User signs it as the requester and the client
+/// admission reserves its session for the fixture Agent.
+pub async fn submit_user_request(
+    node_did: &str,
+    fixture: &ManagedAgentFixture,
+    session: &str,
+    id: &str,
+    text: &str,
+    delivery: gents_protocol::request_input::QueueDelivery,
+) -> String {
+    submit_user_request_to(
+        &fixture.access,
+        &fixture.user,
+        node_did,
+        &fixture.binding.agent_did,
+        session,
+        id,
+        text,
+        delivery,
+    )
+    .await
+}
+
+/// [`submit_user_request`] to any Agent of the User's node.
+#[allow(clippy::too_many_arguments)]
+pub async fn submit_user_request_to(
+    access: &ConfigAccess,
+    user: &gents::KeyIdentity,
+    node_did: &str,
+    agent: &str,
+    session: &str,
+    id: &str,
+    text: &str,
+    delivery: gents_protocol::request_input::QueueDelivery,
+) -> String {
+    let requester = user.did();
+    let mut request = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        id,
+        node_did,
+        requester,
+        agent,
+        session,
+        text,
+        "interactive",
+        canonical_now(),
+        AgentRequestAdmissionRecord::client(requester),
+    );
+    request.input = gents::request::lifecycle::prepare_user_message_input(
+        access,
+        node_did,
+        session,
+        request.input,
+        delivery,
+    )
+    .await
+    .expect("prepare the User's message input");
+    request.session_doc_id = Some(
+        gents::request::lifecycle::reserve_goal_session(access, &request)
+            .await
+            .expect("reserve the User's session"),
+    );
+    let agent_doc = access
+        .transact_readonly("test.user_request.agent", |txn| {
+            Box::pin(async move {
+                Ok::<_, anyhow::Error>(
+                    gents::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        gents::Collection::Agent,
+                        node_did,
+                        agent,
+                    )
+                    .await?
+                    .expect("selected Agent exists")
+                    .0,
+                )
+            })
+        })
+        .await
+        .expect("read the selected Agent as its User");
+    request.agent_doc_id = Some(agent_doc);
+    gents::sign_agent_request_create(user, &mut request)
+        .await
+        .expect("sign the User's request");
+    gents::request::lifecycle::submit_client_request(access, &request)
+        .await
+        .expect("submit the User's request");
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(id)
+        ))
+        .await
+        .expect("read the User's request");
+    response["data"]["AgentRequest"][0]["_docID"]
+        .as_str()
+        .expect("submitted request is visible to its User")
+        .to_owned()
+}

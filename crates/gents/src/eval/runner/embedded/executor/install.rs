@@ -42,13 +42,14 @@ pub(super) async fn install(
     let node_did = home.did().to_string();
     let evaluator = home.evaluator(&spec.evaluator_did)?;
     let schema_access = ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(&node_did)?);
-    // The evaluator is the trial's User: it creates and owns the trial
-    // configuration, and the Agent source projections it causes are bounded by
-    // what it holds, so it holds the enrolled-User grant set.
-    crate::store::identity::GrantSet::OperatorUser
+    // The evaluator is the User that creates the throwaway trial node, so it is
+    // that node's init User (`Recipient.initUser`): the native admin whose
+    // client key installs the pack, including the Tools projections that stage
+    // schema authority an enrolled User may not grant.
+    crate::store::identity::GrantSet::HouseholdOwner
         .grant(&schema_access, &::identity::Did::new(&spec.evaluator_did)?)
         .await
-        .context("granting the evaluator the trial User grant set")?;
+        .context("granting the evaluator the trial node's household ownership")?;
     let planning_access = ConfigAccess::local_as(
         home.node.clone(),
         ::identity::Did::new(spec.evaluator_did.clone())?,
@@ -189,6 +190,13 @@ pub(super) async fn install(
         )])?,
     )
     .await?;
+    // The selected Agent is the trial node's default Agent
+    // (`Recipient.defaultAgent`), which holds the relationship-management set
+    // that projects a new Agent's baseline when it creates one.
+    crate::store::identity::GrantSet::PolicyDelegate
+        .grant(&schema_access, &::identity::Did::new(&agent_did)?)
+        .await
+        .context("granting the selected trial Agent policy delegation")?;
     let root_readers = config
         .agents
         .iter()

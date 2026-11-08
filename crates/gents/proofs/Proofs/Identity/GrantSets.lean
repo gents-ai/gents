@@ -77,9 +77,12 @@ def GrantSet.nativeAdmin : GrantSet → Bool
 
 def all : List GrantSet := [.agentBaseline, .operatorUser, .householdOwner, .policyDelegate]
 
-/-- Who receives a set. The init User is the first User `gents init` creates:
-the human owner. An enrolled User is admitted by verified enrollment. The
-default Agent is the Agent init publishes. -/
+/-- Who receives a set. The init User is the User that creates the node: the
+human owner `gents init` creates, whose one client key desktop, CLI and shims
+share, or an evaluation trial's evaluator, which creates and owns its
+throwaway trial node. An enrolled User is admitted by verified enrollment. The
+default Agent is the Agent init publishes, or the subject Agent a trial selects
+as its node's default. -/
 inductive Recipient where
   | initUser
   | enrolledUser
@@ -94,8 +97,8 @@ def Recipient.name : Recipient → String
   | .agent => "agent"
 
 /-- Direct grants, issued once by the admission that creates the recipient:
-init for the init User and the default Agent, enrollment for an enrolled
-User. They persist until an explicit revocation. -/
+init (or trial installation) for the init User and the default Agent,
+enrollment for an enrolled User. They persist until an explicit revocation. -/
 def directSets : Recipient → List GrantSet
   | .initUser => [.householdOwner]
   | .enrolledUser => [.operatorUser]

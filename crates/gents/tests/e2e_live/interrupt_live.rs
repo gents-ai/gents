@@ -2,18 +2,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::defra_node::Node as EmbeddedNode;
-use gents::documents::{Agent, AgentContext, InferenceProfile};
+use gents::documents::{AgentContext, InferenceProfile};
+use gents::request::interrupt::interrupt_request_by_doc_id_with_access;
 use gents::session::canonical_rows::{
     decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
     AGENT_OUTPUT_SEGMENT_FIELDS,
 };
-use gents::session::load_canonical_message_from_node;
+use gents::session::load_canonical_message;
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents::{
-    default_inference_profile_id_for_agent, ensure_node, interrupt_request_by_doc_id, Collection,
-    DocumentRuntimeOptions, Gents, NodeIdentity, ReasoningEffort, ToolCeiling,
+    default_inference_profile_id_for_agent, Collection, DocumentRuntimeOptions, Gents,
+    ReasoningEffort, ToolCeiling,
 };
 use gents_protocol::message::{AssistantContent, Message, Text};
 use gents_protocol::output::live::{
@@ -28,16 +28,16 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 
-use crate::support::fixtures::test_identity;
+use crate::support::agent_requests::RequestActors;
+use crate::support::builder_runtime::submit_request;
 use crate::support::interrupt::{
-    create_runtime_request, wait_for_inference_call_state, wait_for_request_lifecycle_state,
-    wait_for_runtime_ready, BootedAgent,
+    wait_for_inference_call_state, wait_for_request_lifecycle_state, wait_for_runtime_ready,
+    BootedAgent,
 };
-use crate::support::live_inference::{live_target, InferenceTarget};
+use crate::support::live_inference::{bind_target, live_target, InferenceTarget};
 use crate::support::test_db;
 use crate::support::TestDb;
 
-const LIVE_AGENT_DID: &str = "live-interrupt";
 const LIVE_SAMPLING_ID: &str = "live-interrupt:live-sampling";
 const LIVE_CONTEXT_ID: &str = "live-interrupt:context";
 
@@ -57,22 +57,22 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
     let target = live_target();
 
     let db = test_db("live-openai-interrupt").await;
-    let agent = boot_interrupt_agent(&db, &target).await?;
+    let (agent, actors) = boot_interrupt_agent(&db, &target).await?;
+    let reader = &actors.fixture.access;
 
     let request_id = "req-live-openai-interrupt";
     let session_id = "session-live-openai-interrupt";
-    let request_doc_id = create_runtime_request(
-        &db.node,
-        agent.node_did.as_str(),
-        LIVE_AGENT_DID,
+    let request_doc_id = submit_request(
+        &actors,
         request_id,
         session_id,
+        "interactive",
         "Write a long numbered list from 1 to 200. Use one short sentence per item. Start immediately and keep streaming.",
     )
     .await;
 
     let (observed_row, before_interrupt, provider_scopes) =
-        wait_for_visible_text_prefix(&db.node, &request_doc_id, MIN_VISIBLE_PREFIX_CHARS).await?;
+        wait_for_visible_text_prefix(reader, &request_doc_id, MIN_VISIBLE_PREFIX_CHARS).await?;
     let node_did = observed_row
         .node_did
         .clone()
@@ -99,21 +99,21 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
         assert!(scope.seq >= 1, "provider capture scopes allocate from 1");
     }
 
-    interrupt_request_by_doc_id(
-        &db.node,
-        None,
+    // The requesting Agent interrupts its own request.
+    interrupt_request_by_doc_id_with_access(
+        &actors.agent_access,
         &request_doc_id,
         &node_did,
         observed_row.requester_did.as_deref(),
     )
     .await
-    .expect("interrupt_request_by_doc_id should latch interrupt_requested_at");
+    .expect("the requester's interrupt should latch interrupt_requested_at");
 
-    wait_for_request_lifecycle_state(&db.node, &request_doc_id, "interrupted").await;
-    let call = wait_for_inference_call_state(&db.node, request_id, "cancelled").await;
+    wait_for_request_lifecycle_state(reader, &request_doc_id, "interrupted").await;
+    let call = wait_for_inference_call_state(reader, request_id, "cancelled").await;
     assert_eq!(call.failure_reason.as_deref(), Some("Cancelled"));
 
-    let row = wait_for_interrupted_terminal_row(&db.node, &request_doc_id).await?;
+    let row = wait_for_interrupted_terminal_row(reader, &request_doc_id).await?;
     assert_eq!(
         row.execution_generation.as_deref(),
         Some(execution_generation.as_str()),
@@ -124,7 +124,7 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
         .clone()
         .expect("interrupted terminal row carries terminal_output");
     assert_terminal_partial(
-        &db.node,
+        reader,
         &row,
         &request_doc_id,
         &terminal_output,
@@ -133,7 +133,7 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
     .await?;
 
     tokio::time::sleep(Duration::from_millis(750)).await;
-    let settled_row = fetch_request_row(&db.node, &request_doc_id).await?;
+    let settled_row = fetch_request_row(reader, &request_doc_id).await?;
     assert_eq!(
         settled_row.lifecycle_state, row.lifecycle_state,
         "interrupted lifecycle must stay settled"
@@ -147,7 +147,7 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
         "execution owner must stay settled after the interrupted lifecycle persists"
     );
     assert_terminal_partial(
-        &db.node,
+        reader,
         &settled_row,
         &request_doc_id,
         &terminal_output,
@@ -160,7 +160,7 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
 }
 
 async fn assert_terminal_partial(
-    node: &EmbeddedNode,
+    reader: &ConfigAccess,
     row: &AgentRequestRow,
     request_doc_id: &str,
     terminal_output: &TerminalOutput,
@@ -168,8 +168,8 @@ async fn assert_terminal_partial(
 ) -> Result<()> {
     match terminal_output {
         TerminalOutput::Message { message_doc_id } => {
-            let (header, native) = load_canonical_message_from_node(
-                node,
+            let (header, native) = load_canonical_message(
+                reader,
                 message_doc_id,
                 row.node_did
                     .as_deref()
@@ -197,7 +197,7 @@ async fn assert_terminal_partial(
             anyhow::ensure!(text.starts_with(before_interrupt));
         }
         TerminalOutput::NoMessage => {
-            let retained = observe_request(node, request_doc_id).await?;
+            let retained = observe_request(reader, request_doc_id).await?;
             anyhow::ensure!(retained.row.terminal_output == Some(TerminalOutput::NoMessage));
             anyhow::ensure!(retained.text.starts_with(before_interrupt));
         }
@@ -212,25 +212,19 @@ struct CanonicalObservation {
     provider_scopes: Vec<CaptureScope>,
 }
 
-async fn fetch_request_row(node: &EmbeddedNode, request_doc_id: &str) -> Result<AgentRequestRow> {
+async fn fetch_request_row(reader: &ConfigAccess, request_doc_id: &str) -> Result<AgentRequestRow> {
     let physical = escape_graphql_string(request_doc_id);
-    let response = node
+    let response = reader
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{physical}" }} }}, limit: 2) {{
                 _docID request_id node_did requester_did session_id lifecycle_state
                 execution_generation terminal_output terminalized_at
             }} }}"#
         ))
-        .await;
-    anyhow::ensure!(
-        !response.has_errors(),
-        "canonical AgentRequest row query failed: {:?}",
-        response.errors
-    );
-    let rows = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
+        .await
+        .context("canonical AgentRequest row query")?;
+    let rows = response["data"]
+        .get("AgentRequest")
         .and_then(Value::as_array)
         .context("AgentRequest row query omitted rows")?;
     anyhow::ensure!(
@@ -247,10 +241,10 @@ async fn fetch_request_row(node: &EmbeddedNode, request_doc_id: &str) -> Result<
 }
 
 async fn observe_request(
-    node: &EmbeddedNode,
+    reader: &ConfigAccess,
     request_doc_id: &str,
 ) -> Result<CanonicalObservation> {
-    let row = fetch_request_row(node, request_doc_id).await?;
+    let row = fetch_request_row(reader, request_doc_id).await?;
     let node_did = row
         .node_did
         .as_deref()
@@ -263,23 +257,16 @@ async fn observe_request(
     let physical = escape_graphql_string(request_doc_id);
     let scope =
         gents::session::session_scope_filter(node_did, session_id, row.requester_did.as_deref());
-    let response = node
+    let response = reader
         .execute(&format!(
             r#"{{
                 AgentOutputSegment(filter:{{{scope},request_doc_id:{{_eq:"{physical}"}}}}){{{AGENT_OUTPUT_SEGMENT_FIELDS}}}
                 AgentMessage(filter:{{{scope},request_doc_id:{{_eq:"{physical}"}}}}){{{AGENT_MESSAGE_FIELDS}}}
             }}"#
         ))
-        .await;
-    anyhow::ensure!(
-        !response.has_errors(),
-        "canonical output facts query failed: {:?}",
-        response.errors
-    );
-    let data = response
-        .data
-        .as_ref()
-        .context("canonical output facts query omitted data")?;
+        .await
+        .context("canonical output facts query")?;
+    let data = &response["data"];
     let segments = data
         .get("AgentOutputSegment")
         .and_then(Value::as_array)
@@ -385,13 +372,13 @@ async fn observe_request(
 }
 
 async fn wait_for_visible_text_prefix(
-    node: &EmbeddedNode,
+    reader: &ConfigAccess,
     request_doc_id: &str,
     min_len: usize,
 ) -> Result<(AgentRequestRow, String, Vec<CaptureScope>)> {
     let deadline = tokio::time::Instant::now() + OBSERVATION_TIMEOUT;
     loop {
-        let observation = observe_request(node, request_doc_id).await?;
+        let observation = observe_request(reader, request_doc_id).await?;
         match observation.row.lifecycle_state {
             Some(state) if state.is_terminal() => panic!(
                 "request reached terminal lifecycle {state} before the interrupt latched; \
@@ -422,12 +409,12 @@ async fn wait_for_visible_text_prefix(
 }
 
 async fn wait_for_interrupted_terminal_row(
-    node: &EmbeddedNode,
+    reader: &ConfigAccess,
     request_doc_id: &str,
 ) -> Result<AgentRequestRow> {
     let deadline = tokio::time::Instant::now() + TERMINAL_TIMEOUT;
     loop {
-        let row = fetch_request_row(node, request_doc_id).await?;
+        let row = fetch_request_row(reader, request_doc_id).await?;
         match row.lifecycle_state {
             Some(RequestLifecycleState::Interrupted) => {
                 anyhow::ensure!(
@@ -457,15 +444,16 @@ async fn wait_for_interrupted_terminal_row(
     }
 }
 
-async fn boot_interrupt_agent(db: &TestDb, target: &InferenceTarget) -> Result<BootedAgent> {
-    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("live-openai-interrupt"));
-    let node_did = identity.did().to_string();
-
-    upsert_live_backend(&db.node, &node_did, target).await;
+async fn boot_interrupt_agent(
+    db: &TestDb,
+    target: &InferenceTarget,
+) -> Result<(BootedAgent, RequestActors)> {
+    let actors = bind_target(db, target).await;
+    configure_live_interrupt(&actors, target).await;
 
     let agent = Gents::from_default_agent_documents(
         db.node.clone(),
-        identity,
+        Arc::clone(&db.node_identity),
         DocumentRuntimeOptions {
             backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
@@ -479,21 +467,22 @@ async fn boot_interrupt_agent(db: &TestDb, target: &InferenceTarget) -> Result<B
     let handle = tokio::spawn(agent.run(shutdown_rx));
     wait_for_runtime_ready(&db.node, &node_did).await;
 
-    Ok(BootedAgent::new(shutdown_tx, handle, node_did))
+    Ok((BootedAgent::new(shutdown_tx, handle, node_did), actors))
 }
 
-async fn upsert_live_backend(node: &Arc<EmbeddedNode>, node_did: &str, target: &InferenceTarget) {
-    let mut principal = ensure_node(node, node_did)
-        .await
-        .expect("ensure live interrupt fixture principal");
-
-    let root =
-        gents::store::identity::RegisteredIdentity::from_registered_did(node_did, None).unwrap();
-    let binding = gents::store::identity::provision_agent_identity(&root).unwrap();
-    let backend = target.backend(node_did);
+/// The node's client key gives the bound Agent a high-effort live sampling
+/// profile and a streaming system prompt.
+async fn configure_live_interrupt(actors: &RequestActors, target: &InferenceTarget) {
+    use gents::store::config_client::{
+        apply_desired_state_plan, read_desired_state_record_in_txn as read,
+        DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
+    let node_did = actors.node_did();
+    let agent_did = actors.agent_did();
+    let profile_id = default_inference_profile_id_for_agent(agent_did);
     let sampling = target.live_sampling(node_did, LIVE_SAMPLING_ID);
     let profile = InferenceProfile {
-        profile_id: default_inference_profile_id_for_agent(LIVE_AGENT_DID),
+        profile_id: profile_id.clone(),
         sampling_id: Some(LIVE_SAMPLING_ID.to_string()),
         reasoning_effort: Some(ReasoningEffort::High),
         ..target.profile(node_did)
@@ -512,71 +501,40 @@ async fn upsert_live_backend(node: &Arc<EmbeddedNode>, node_did: &str, target: &
         skill_ids: Vec::new(),
         tags: Vec::new(),
     };
-    let behavior = Agent {
-        agent_did: binding.agent_did.clone(),
-        creation_nonce: binding.creation_nonce,
-        node_did: node_did.to_string(),
-        display_name: Some(LIVE_AGENT_DID.to_string()),
-        description: None,
-        context_id: Some(LIVE_CONTEXT_ID.to_string()),
-        inference_profile_id: default_inference_profile_id_for_agent(LIVE_AGENT_DID),
-        enabled: true,
-        tags: Vec::new(),
-        created_at: Some("2026-06-02T00:00:00Z".to_string()),
-    };
-    principal.default_agent_did = Some(binding.agent_did);
-    let documents = vec![
-        (
-            Collection::InferenceSampling,
-            serde_json::to_value(sampling).expect("serialize live interrupt sampling"),
-        ),
-        (
-            Collection::InferenceProfile,
-            serde_json::to_value(profile).expect("serialize live interrupt profile"),
-        ),
-        (
-            Collection::AgentContext,
-            serde_json::to_value(context).expect("serialize live interrupt context"),
-        ),
-        (
-            Collection::Agent,
-            serde_json::to_value(behavior).expect("serialize live interrupt behavior"),
-        ),
-        (
-            Collection::InferenceBackend,
-            serde_json::to_value(backend).expect("serialize live interrupt backend"),
-        ),
-        (
-            Collection::Node,
-            serde_json::to_value(principal).expect("serialize live interrupt principal"),
-        ),
-    ];
-    apply_fixture_documents(node, documents).await;
-}
-
-async fn apply_fixture_documents(
-    node: &Arc<EmbeddedNode>,
-    documents: Vec<(Collection, serde_json::Value)>,
-) {
-    use gents::store::config_client::{
-        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
-
-    let plan = DesiredStateApplyPlan::new(
-        documents
-            .into_iter()
-            .map(|(collection, value)| DesiredStateApplyDocument {
-                collection,
-                add: value.clone(),
-                update: value,
+    actors
+        .fixture
+        .access
+        .transact_write("test.live_interrupt_fixture", |txn| {
+            let sampling = &sampling;
+            let profile = &profile;
+            let context = &context;
+            Box::pin(async move {
+                let (_, agent) = read(txn, Collection::Agent, node_did, agent_did)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("the live Agent is missing"))?;
+                let mut agent: gents::documents::Agent = serde_json::from_value(agent)?;
+                agent.context_id = Some(LIVE_CONTEXT_ID.to_string());
+                let plan = DesiredStateApplyPlan::new(
+                    [
+                        (
+                            Collection::InferenceSampling,
+                            serde_json::to_value(sampling)?,
+                        ),
+                        (Collection::InferenceProfile, serde_json::to_value(profile)?),
+                        (Collection::AgentContext, serde_json::to_value(context)?),
+                        (Collection::Agent, serde_json::to_value(agent)?),
+                    ]
+                    .into_iter()
+                    .map(|(collection, value)| DesiredStateApplyDocument {
+                        collection,
+                        add: value.clone(),
+                        update: value,
+                    })
+                    .collect(),
+                )?;
+                apply_desired_state_plan(txn, &plan).await.map(|_| ())
             })
-            .collect(),
-    )
-    .expect("build live interrupt fixture plan");
-    ConfigAccess::transact_local_write(node, None, "test.live_interrupt_fixture", |txn| {
-        let plan = &plan;
-        Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
-    })
-    .await
-    .expect("apply live interrupt fixture documents");
+        })
+        .await
+        .expect("configure the live interrupt Agent as the node's client key");
 }

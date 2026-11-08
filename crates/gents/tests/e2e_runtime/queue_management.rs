@@ -121,72 +121,15 @@ pub(super) async fn enqueue_owned(
     text: &str,
     delivery: QueueDelivery,
 ) -> String {
-    let did = db.node_identity.did();
-    let access = &fixture.access;
-    let requester = fixture.user.did();
-    let agent = fixture.binding.agent_did.as_str();
-    let mut request = AgentRequestCreate::base(
-        RequestPurpose::Normal,
+    support::agent_requests::submit_user_request(
+        db.node_identity.did(),
+        fixture,
+        session,
         id,
-        did,
-        requester,
-        agent,
-        session,
         text,
-        "interactive",
-        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::client(requester),
-    );
-    request.input = gents::request::lifecycle::prepare_user_message_input(
-        access,
-        did,
-        session,
-        request.input,
         delivery,
     )
     .await
-    .unwrap();
-    request.session_doc_id = Some(
-        gents::request::lifecycle::reserve_goal_session(access, &request)
-            .await
-            .unwrap(),
-    );
-    let agent_doc = access
-        .transact_readonly("test.queue.agent", |txn| {
-            Box::pin(async move {
-                Ok::<_, anyhow::Error>(
-                    gents::store::config_client::read_desired_state_record_in_txn(
-                        txn,
-                        gents::Collection::Agent,
-                        did,
-                        agent,
-                    )
-                    .await?
-                    .expect("selected Agent exists")
-                    .0,
-                )
-            })
-        })
-        .await
-        .unwrap();
-    request.agent_doc_id = Some(agent_doc);
-    gents::sign_agent_request_create(&fixture.user, &mut request)
-        .await
-        .unwrap();
-    gents::request::lifecycle::submit_client_request(access, &request)
-        .await
-        .unwrap();
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            escape_graphql_string(id)
-        ))
-        .await
-        .unwrap();
-    response["data"]["AgentRequest"][0]["_docID"]
-        .as_str()
-        .unwrap()
-        .into()
 }
 
 async fn submit_edit(

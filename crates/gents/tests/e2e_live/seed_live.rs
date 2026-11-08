@@ -1,18 +1,17 @@
-use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::Node as EmbeddedNode;
 use gents::documents::{AgentContext, CompactionConfig, InferenceSampling};
 use gents::store::graphql::escape_graphql_string;
-use gents::{default_inference_profile_id_for_agent, Collection, CompactionStrategy, NodeIdentity};
+use gents::{default_inference_profile_id_for_agent, Collection, CompactionStrategy};
 use serde::Deserialize;
 
-use crate::support::fixtures::test_identity;
-use crate::support::interrupt::create_runtime_request;
+use crate::support::agent_requests::RequestActors;
+use crate::support::builder_runtime::{seed_session_message, submit_request};
 use crate::support::live_inference::{
     bind_target, boot_live_agent, live_target, wait_for_assistant_answer, wait_for_request_terminal,
 };
-use crate::support::{create_agent_message_in_scope, test_db};
+use crate::support::snapshots::SnapshotReader;
+use crate::support::test_db;
 
 const PROFILE_SEED: i64 = 424_242;
 
@@ -30,48 +29,46 @@ async fn live_seeds_reach_the_provider() {
     let target = live_target();
 
     let db = test_db("live-seed").await;
-    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("live-seed"));
-    let (node_did, agent_did) = bind_target(&db.node, identity.as_ref(), &target).await;
+    let actors = bind_target(&db, &target).await;
+    let (node_did, agent_did) = (actors.node_did().to_owned(), actors.agent_did().to_owned());
+    let reader = &actors.fixture.access;
 
     let profile_id = default_inference_profile_id_for_agent(&agent_did);
-    configure_seed_and_compaction(&db.node, &node_did, &agent_did, &profile_id).await;
+    configure_seed_and_compaction(&actors, &node_did, &agent_did, &profile_id).await;
 
     let profile_request_id = "req-live-profile-seed";
-    create_runtime_request(
-        &db.node,
-        &node_did,
-        &agent_did,
+    submit_request(
+        &actors,
         profile_request_id,
         "session-live-profile-seed",
+        "interactive",
         "Reply with the single lowercase word: profile",
     )
     .await;
 
     let second_request_id = "req-live-second-profile-seed";
-    create_runtime_request(
-        &db.node,
-        &node_did,
-        &agent_did,
+    submit_request(
+        &actors,
         second_request_id,
         "session-live-second-profile-seed",
+        "interactive",
         "Reply with the single lowercase word: second",
     )
     .await;
 
     let compaction_request_id = "req-live-compaction-seed";
     let compaction_session_id = "session-live-compaction-seed";
-    create_runtime_request(
-        &db.node,
-        &node_did,
-        &agent_did,
+    submit_request(
+        &actors,
         compaction_request_id,
         compaction_session_id,
+        "interactive",
         "Use the retained context and reply with the single lowercase word: compacted",
     )
     .await;
-    seed_compaction_history(&db.node, &node_did, compaction_session_id).await;
+    seed_compaction_history(&actors, compaction_session_id).await;
 
-    let agent = boot_live_agent(&db, identity)
+    let agent = boot_live_agent(&db, db.node_identity.clone())
         .await
         .expect("boot live agent");
 
@@ -81,20 +78,20 @@ async fn live_seeds_reach_the_provider() {
         (compaction_request_id, PROFILE_SEED, true),
     ] {
         let terminal =
-            wait_for_request_terminal(&db.node, request_id, Duration::from_secs(120)).await;
+            wait_for_request_terminal(reader, request_id, Duration::from_secs(120)).await;
         assert_eq!(
             terminal, "completed",
             "target {} must accept and complete seeded request {request_id}",
             target.name
         );
 
-        let answer = wait_for_assistant_answer(&db.node, request_id, Duration::from_secs(30)).await;
+        let answer = wait_for_assistant_answer(reader, request_id, Duration::from_secs(30)).await;
         assert!(
             !answer.trim().is_empty(),
             "seeded request {request_id} must persist a non-empty response"
         );
 
-        let rows = rendered_requests(&db.node, request_id).await;
+        let rows = rendered_requests(reader, request_id).await;
         let inference_rows = rows
             .iter()
             .filter(|row| row.capture_scope.starts_with("inference."))
@@ -114,8 +111,8 @@ async fn live_seeds_reach_the_provider() {
         );
         for row in inference_rows.into_iter().chain(compaction_rows) {
             assert_eq!(row.source, "openai_chat_completions");
-            let body = gents::inference::rendered_request::decode_capture_json_embedded(
-                &db.node,
+            let body = gents::inference::rendered_request::decode_capture_json(
+                reader,
                 row.capture_version,
                 &row.request_json,
                 gents::inference::rendered_request::CapturePayloadKind::RequestBody,
@@ -134,7 +131,7 @@ async fn live_seeds_reach_the_provider() {
 }
 
 async fn configure_seed_and_compaction(
-    node: &Arc<EmbeddedNode>,
+    actors: &RequestActors,
     node_did: &str,
     agent_did: &str,
     profile_id: &str,
@@ -144,103 +141,106 @@ async fn configure_seed_and_compaction(
         DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
 
-    gents::ConfigAccess::transact_local_write(node, None, "test.configure_live_seed", |txn| {
-        Box::pin(async move {
-            let (_, profile) = read(txn, Collection::InferenceProfile, node_did, profile_id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("default inference profile is missing"))?;
-            let mut profile: gents::InferenceProfile = serde_json::from_value(profile)?;
-            let mut sampling = match profile.sampling_id.as_deref() {
-                Some(id) => {
-                    let (_, value) = read(txn, Collection::InferenceSampling, node_did, id)
-                        .await?
-                        .ok_or_else(|| anyhow::anyhow!("selected inference sampling is missing"))?;
-                    serde_json::from_value::<InferenceSampling>(value)?
-                }
-                None => InferenceSampling::default(),
-            };
-            let (_, behavior) = read(txn, Collection::Agent, node_did, agent_did)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("default behavior is missing"))?;
-            let mut behavior: gents::documents::Agent = serde_json::from_value(behavior)?;
-            let context_id = behavior
-                .context_id
-                .clone()
-                .unwrap_or_else(|| format!("{agent_did}:context"));
-            let mut context = read(txn, Collection::AgentContext, node_did, &context_id)
-                .await?
-                .map(|(_, value)| serde_json::from_value::<AgentContext>(value))
-                .transpose()?
-                .unwrap_or_else(|| AgentContext {
-                    context_id: context_id.clone(),
+    actors
+        .fixture
+        .access
+        .transact_write("test.configure_live_seed", |txn| {
+            Box::pin(async move {
+                let (_, profile) = read(txn, Collection::InferenceProfile, node_did, profile_id)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("default inference profile is missing"))?;
+                let mut profile: gents::InferenceProfile = serde_json::from_value(profile)?;
+                let mut sampling = match profile.sampling_id.as_deref() {
+                    Some(id) => {
+                        let (_, value) = read(txn, Collection::InferenceSampling, node_did, id)
+                            .await?
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("selected inference sampling is missing")
+                            })?;
+                        serde_json::from_value::<InferenceSampling>(value)?
+                    }
+                    None => InferenceSampling::default(),
+                };
+                let (_, behavior) = read(txn, Collection::Agent, node_did, agent_did)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("default behavior is missing"))?;
+                let mut behavior: gents::documents::Agent = serde_json::from_value(behavior)?;
+                let context_id = behavior
+                    .context_id
+                    .clone()
+                    .unwrap_or_else(|| format!("{agent_did}:context"));
+                let mut context = read(txn, Collection::AgentContext, node_did, &context_id)
+                    .await?
+                    .map(|(_, value)| serde_json::from_value::<AgentContext>(value))
+                    .transpose()?
+                    .unwrap_or_else(|| AgentContext {
+                        context_id: context_id.clone(),
+                        node_did: node_did.to_string(),
+                        display_name: None,
+                        description: None,
+                        system_prompt: None,
+                        tools_id: None,
+                        compaction_id: None,
+                        skill_ids: Vec::new(),
+                        tags: Vec::new(),
+                    });
+                let sampling_id = format!("{profile_id}:sampling");
+                let compaction_id = format!("{agent_did}:compaction");
+                profile.sampling_id = Some(sampling_id.clone());
+                profile.context_window = Some(64_000);
+                profile.max_output_tokens =
+                    Some(profile.max_output_tokens.map_or(512, |cap| cap.min(512)));
+                behavior.context_id = Some(context_id);
+                context.compaction_id = Some(compaction_id.clone());
+                sampling.node_did = node_did.to_string();
+                sampling.sampling_id = sampling_id;
+                sampling.seed = Some(PROFILE_SEED);
+                let compaction = CompactionConfig {
+                    compaction_id,
                     node_did: node_did.to_string(),
                     display_name: None,
-                    description: None,
-                    system_prompt: None,
-                    tools_id: None,
-                    compaction_id: None,
-                    skill_ids: Vec::new(),
+                    strategy: CompactionStrategy::StripThenSummarize,
+                    threshold: Some(0.25),
+                    keep_recent_tokens: None,
+                    tool_result_max_chars: None,
+                    summary_max_output_tokens: None,
+                    summary_file_list_max: None,
+                    inference_profile_id: None,
                     tags: Vec::new(),
-                });
-            let sampling_id = format!("{profile_id}:sampling");
-            let compaction_id = format!("{agent_did}:compaction");
-            profile.sampling_id = Some(sampling_id.clone());
-            profile.context_window = Some(64_000);
-            profile.max_output_tokens =
-                Some(profile.max_output_tokens.map_or(512, |cap| cap.min(512)));
-            behavior.context_id = Some(context_id);
-            context.compaction_id = Some(compaction_id.clone());
-            sampling.node_did = node_did.to_string();
-            sampling.sampling_id = sampling_id;
-            sampling.seed = Some(PROFILE_SEED);
-            let compaction = CompactionConfig {
-                compaction_id,
-                node_did: node_did.to_string(),
-                display_name: None,
-                strategy: CompactionStrategy::StripThenSummarize,
-                threshold: Some(0.25),
-                keep_recent_tokens: None,
-                tool_result_max_chars: None,
-                summary_max_output_tokens: None,
-                summary_file_list_max: None,
-                inference_profile_id: None,
-                tags: Vec::new(),
-            };
-            let documents = [
-                (
-                    Collection::InferenceSampling,
-                    serde_json::to_value(sampling)?,
-                ),
-                (Collection::Compaction, serde_json::to_value(compaction)?),
-                (Collection::InferenceProfile, serde_json::to_value(profile)?),
-                (Collection::AgentContext, serde_json::to_value(context)?),
-                (Collection::Agent, serde_json::to_value(behavior)?),
-            ];
-            let plan = DesiredStateApplyPlan::new(
-                documents
-                    .into_iter()
-                    .map(|(collection, value)| DesiredStateApplyDocument {
-                        collection,
-                        add: value.clone(),
-                        update: value,
-                    })
-                    .collect(),
-            )?;
-            apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                };
+                let documents = [
+                    (
+                        Collection::InferenceSampling,
+                        serde_json::to_value(sampling)?,
+                    ),
+                    (Collection::Compaction, serde_json::to_value(compaction)?),
+                    (Collection::InferenceProfile, serde_json::to_value(profile)?),
+                    (Collection::AgentContext, serde_json::to_value(context)?),
+                    (Collection::Agent, serde_json::to_value(behavior)?),
+                ];
+                let plan = DesiredStateApplyPlan::new(
+                    documents
+                        .into_iter()
+                        .map(|(collection, value)| DesiredStateApplyDocument {
+                            collection,
+                            add: value.clone(),
+                            update: value,
+                        })
+                        .collect(),
+                )?;
+                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+            })
         })
-    })
-    .await
-    .expect("configure live seed and compaction");
+        .await
+        .expect("configure live seed and compaction");
 }
 
-async fn seed_compaction_history(node: &EmbeddedNode, node_did: &str, session_id: &str) {
+async fn seed_compaction_history(actors: &RequestActors, session_id: &str) {
     let timestamp = chrono::Utc::now().to_rfc3339();
     for turn in 0..10 {
         let sequence = turn * 2 + 1;
-        create_agent_message_in_scope(
-            node,
-            node_did,
-            Some(node_did),
+        seed_session_message(
+            actors,
             session_id,
             sequence,
             "user",
@@ -248,10 +248,8 @@ async fn seed_compaction_history(node: &EmbeddedNode, node_did: &str, session_id
             &timestamp,
         )
         .await;
-        create_agent_message_in_scope(
-            node,
-            node_did,
-            Some(node_did),
+        seed_session_message(
+            actors,
             session_id,
             sequence + 1,
             "assistant",
@@ -262,7 +260,10 @@ async fn seed_compaction_history(node: &EmbeddedNode, node_did: &str, session_id
     }
 }
 
-async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<RenderedRequestRow> {
+async fn rendered_requests<R>(reader: &R, request_id: &str) -> Vec<RenderedRequestRow>
+where
+    R: SnapshotReader,
+{
     let request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
@@ -274,16 +275,10 @@ async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Rendere
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "RenderedRequest query failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("RenderedRequest"))
+    reader
+        .read_data(&query)
+        .await
+        .get("RenderedRequest")
         .cloned()
         .map(serde_json::from_value)
         .transpose()

@@ -291,29 +291,9 @@ async fn every_installed_trial_agent_can_read_its_operational_collections() {
         ..TrialSpec::empty_for_tests("t1")
     };
     bind_test_evaluator(&mut spec, &mut home);
-    // The subject pack enables the schema tool and the trial Engineer's
-    // projection carries schema authority plus delegation of the relations it
-    // grants. Delegation is bounded by what the evaluator holds, so the runtime
-    // owner grants the evaluator that held authority before the pack installs.
-    let owner = ConfigAccess::local_as(
-        home.node.clone(),
-        ::identity::Did::new(home.did()).unwrap(),
-    );
-    let evaluator_did = ::identity::Did::new(&spec.evaluator_did).unwrap();
-    crate::store::identity::GrantSet::PolicyDelegate
-        .grant(&owner, &evaluator_did)
-        .await
-        .unwrap();
-    for permission in [
-        crate::store::config_client::NodePermission::CollectionPatch,
-        crate::store::config_client::NodePermission::MigrationSet,
-        crate::store::config_client::NodePermission::ViewAdd,
-    ] {
-        owner
-            .grant_node_permission(&evaluator_did, permission)
-            .await
-            .unwrap();
-    }
+    // The subject pack enables the schema tool, so the trial Engineer's Tools
+    // projection stages schema authority. The evaluator owns the throwaway
+    // node, and `install` alone must give it the standing to do that.
     let selected = install(&spec, &home, &dir.path().join("workspace"))
         .await
         .unwrap();
@@ -341,6 +321,18 @@ async fn every_installed_trial_agent_can_read_its_operational_collections() {
         );
     }
     assert!(agents.iter().any(|agent| agent["agent_did"] == selected));
+    // The selected default Agent can project the baseline of an Agent it creates.
+    let selected_did = ::identity::Did::new(&selected).unwrap();
+    for permission in crate::store::identity::GrantSet::PolicyDelegate.permissions() {
+        assert!(
+            home.node
+                .nac_manager()
+                .check_permission(&selected_did, *permission)
+                .await
+                .unwrap(),
+            "the selected trial Agent lacks {permission:?}"
+        );
+    }
     home.node.shutdown().await.unwrap();
 }
 

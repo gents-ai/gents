@@ -7,11 +7,16 @@ use serde_json::Value;
 
 pub use gents::store::graphql::escape_graphql_string;
 
-fn served_principals(
-) -> &'static Mutex<RapidHashMap<u16, gents::store::config_client::ClientSigningCapability>> {
-    static PRINCIPALS: OnceLock<
-        Mutex<RapidHashMap<u16, gents::store::config_client::ClientSigningCapability>>,
-    > = OnceLock::new();
+/// The CLI client key a served port's User reads and writes with. `gents
+/// init` may not have created it when the server is spawned, so it is located
+/// at registration and loaded on first use.
+enum ServedPrincipal {
+    Pending(gents_desktop_core::client::DesktopPaths),
+    Loaded(gents::store::config_client::ClientSigningCapability),
+}
+
+fn served_principals() -> &'static Mutex<RapidHashMap<u16, ServedPrincipal>> {
+    static PRINCIPALS: OnceLock<Mutex<RapidHashMap<u16, ServedPrincipal>>> = OnceLock::new();
     PRINCIPALS.get_or_init(Default::default)
 }
 
@@ -26,21 +31,40 @@ pub fn register_served_home(
 ) -> Result<()> {
     register_node_principal(gents_home, port)?;
     let paths = cli_client_paths(user_home, envs);
-    if !paths.identity_key_path().exists() {
-        return Ok(());
-    }
-    let identity = gents_desktop_core::client::PrincipalIdentity::load_existing(&paths)
-        .with_context(|| format!("loading CLI client key under {}", paths.root().display()))?;
     served_principals()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .insert(
-            port,
+        .insert(port, ServedPrincipal::Pending(paths));
+    Ok(())
+}
+
+fn served_capability(port: u16) -> Option<gents::store::config_client::ClientSigningCapability> {
+    let mut principals = served_principals()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let principal = principals.get_mut(&port)?;
+    if let ServedPrincipal::Pending(paths) = principal {
+        if !paths.identity_key_path().exists() {
+            return None;
+        }
+        let identity = gents_desktop_core::client::PrincipalIdentity::load_existing(paths)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "loading CLI client key under {}: {error:#}",
+                    paths.root().display()
+                )
+            });
+        *principal = ServedPrincipal::Loaded(
             gents::store::config_client::ClientSigningCapability::from_ed25519_key(
                 identity.private_key_bytes(),
-            )?,
+            )
+            .expect("CLI client key is an Ed25519 signing key"),
         );
-    Ok(())
+    }
+    match principal {
+        ServedPrincipal::Loaded(capability) => Some(capability.clone()),
+        ServedPrincipal::Pending(_) => None,
+    }
 }
 
 fn node_principals(
@@ -90,7 +114,11 @@ pub fn cli_client_paths(
                 .filter(|value| !value.is_empty())
                 .map(std::path::PathBuf::from)
         })
-        .unwrap_or_else(|| user_data_local_dir(user_home, envs).join("gents").join("desktop"));
+        .unwrap_or_else(|| {
+            user_data_local_dir(user_home, envs)
+                .join("gents")
+                .join("desktop")
+        });
     gents_desktop_core::client::DesktopPaths::from_root(desktop_root.join("cli"))
 }
 
@@ -120,23 +148,31 @@ fn user_data_local_dir(user_home: &Path, envs: &[(&str, &str)]) -> std::path::Pa
 }
 
 pub fn served_endpoint(graphql: &str) -> gents::store::config_client::GraphqlEndpoint {
-    endpoint_for(graphql, served_principals())
+    endpoint_with(graphql, graphql_port(graphql).and_then(served_capability))
+}
+
+fn graphql_port(graphql: &str) -> Option<u16> {
+    reqwest::Url::parse(graphql).ok().and_then(|url| url.port())
 }
 
 fn endpoint_for(
     graphql: &str,
     principals: &Mutex<RapidHashMap<u16, gents::store::config_client::ClientSigningCapability>>,
 ) -> gents::store::config_client::GraphqlEndpoint {
-    let principal = reqwest::Url::parse(graphql)
-        .ok()
-        .and_then(|url| url.port())
-        .and_then(|port| {
-            principals
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .get(&port)
-                .cloned()
-        });
+    let principal = graphql_port(graphql).and_then(|port| {
+        principals
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&port)
+            .cloned()
+    });
+    endpoint_with(graphql, principal)
+}
+
+fn endpoint_with(
+    graphql: &str,
+    principal: Option<gents::store::config_client::ClientSigningCapability>,
+) -> gents::store::config_client::GraphqlEndpoint {
     match principal {
         Some(capability) => {
             gents::store::config_client::GraphqlEndpoint::as_principal(graphql, capability.did())

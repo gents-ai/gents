@@ -278,7 +278,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             .unwrap()
             .to_owned();
         ConfigAccess::local(local.node.clone()).write("eval.p2p.registry", &format!("mutation {{create_PeerRegistry(input: {{peer_id: \"{}\", node_did: \"{}\", display_name: \"Cedar\", network_id: \"engineer-eval\", addresses: [\"{}\"], status: \"discovered\"}}) {{_docID}}}}", escape_graphql_string(&peer), escape_graphql_string(&remote_did), escape_graphql_string(&address))).await?;
-        let target_ids = bind_target(&local.node, local.node_identity.as_ref(), &target).await;
+        let target_actors = bind_target(&local, &target).await;
         let subject = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/configurator_evals/ladder/engineer_subject");
         let manifest: PackManifest =
@@ -293,7 +293,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
         )?;
         config.node.default_agent_did = Some(config.agents[0].agent_did.clone());
         config.agents[0].inference_profile_id =
-            gents::default_inference_profile_id_for_agent(&target_ids.1);
+            gents::default_inference_profile_id_for_agent(target_actors.agent_did());
         let mut profile = target.profile(&did);
         profile.profile_id = config.agents[0].inference_profile_id.clone();
         profile.reasoning_effort = Some(gents::inference::resolved::ReasoningEffort::High);

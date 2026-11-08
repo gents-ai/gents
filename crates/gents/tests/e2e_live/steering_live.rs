@@ -7,23 +7,17 @@ use gents::inference::rendered_request::{decode_capture_json, CapturePayloadKind
 use gents::request::lifecycle::{
     pending_user_queue, submit_pending_user_edit, PendingMessageEdit, PendingQueueEdit,
 };
-use gents::store::config_client::{
-    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
 use gents::store::graphql::escape_graphql_string;
-use gents::{Collection, Gents, ReasoningEffort, SamplingConfig, ToolCeiling};
-use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
-};
+use gents::{Gents, NodeIdentity, ReasoningEffort, SamplingConfig, ToolCeiling};
+use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_input::QueueDelivery;
 use tokio::sync::Notify;
 
-use crate::support::fixtures::bind_agent_backend;
+use crate::support::agent_requests::{submit_user_request, RequestActors};
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
-use crate::support::live_inference::{live_target, wait_for_request_terminal};
-use crate::support::{create_session_document, session_document_in_scope, test_db, TestDb};
+use crate::support::live_inference::{bind_target, live_target, wait_for_request_terminal};
+use crate::support::test_db;
 
-const AGENT: &str = "live-steering";
 const SESSION: &str = "live-steering-session";
 const ACTIVE: &str = "live-steering-active";
 const FIRST: &str = "retained-alpha-4b29";
@@ -65,45 +59,16 @@ impl Drop for Release {
     }
 }
 
-async fn enqueue(db: &TestDb, id: &str, content: &str) -> Result<String> {
-    let did = db.node_identity.did();
-    let mut create = AgentRequestCreate::base(
-        RequestPurpose::Normal,
+async fn enqueue(actors: &RequestActors, id: &str, content: &str) -> Result<String> {
+    Ok(submit_user_request(
+        actors.node_did(),
+        &actors.fixture,
+        SESSION,
         id,
-        did,
-        did,
-        AGENT,
-        SESSION,
         content,
-        "interactive",
-        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::client(did),
-    );
-    create.input = gents::request::lifecycle::prepare_user_message_input(
-        &ConfigAccess::local_as(
-            db.node.clone(),
-            ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-        ),
-        did,
-        SESSION,
-        create.input,
         QueueDelivery::Steer,
     )
-    .await?;
-    gents::sign_agent_request_create(db.node_identity.as_ref(), &mut create).await?;
-    let result = ConfigAccess::local_as(
-        db.node.clone(),
-        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-    )
-    .write(
-        "test.live_steering.enqueue",
-        &create.graphql_mutation().map_err(anyhow::Error::msg)?,
-    )
-    .await?;
-    Ok(gents::store::graphql::created_doc_id(
-        &result,
-        "AgentRequest",
-    )?)
+    .await)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -115,67 +80,66 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
     );
     let target = live_target();
     let db = test_db("live-steering").await;
-    let did = db.node_identity.did();
-    let access = ConfigAccess::local_as(
-        db.node.clone(),
-        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-    );
-    bind_agent_backend(
-        &db,
-        AGENT,
+    let actors = bind_target(&db, &target).await;
+    let did = actors.node_did();
+    let user_did = actors.fixture.user.did();
+    let agent_did = actors.agent_did();
+    let access = actors.fixture.access.clone();
+    // The builder runtime admits only a probed backend; the live target was
+    // just checked reachable, so its User records the probe result.
+    target.assert_reachable().await;
+    gents::inference::backends::registry::set_backend_probe_status_as(
+        &access,
+        did,
         target.backend_id(),
-        target.endpoint(),
-        target.model(),
+        "healthy",
     )
-    .await;
-    let backend = serde_json::to_value(target.backend(did))?;
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::InferenceBackend,
-        add: backend.clone(),
-        update: backend,
-    }])?;
-    ConfigAccess::transact_local_write(&db.node, None, "test.live_steering.backend", |txn| {
-        let plan = &plan;
-        Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
-    })
     .await?;
-    let mut session =
-        session_document_in_scope(did, SESSION, AGENT, &chrono::Utc::now().to_rfc3339());
-    session.requester_did = Some(did.into());
-    session.title = Some(gents_protocol::session::SessionTitle {
-        text: "Live steering".into(),
-        source: gents_protocol::session::SessionTitleSource::Generated,
-    });
-    create_session_document(&db.node, &session).await;
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let _release_on_failure = Release(release.clone());
-    let runtime = Gents::builder().node(db.node.clone()).identity(db.node_identity.clone()).default_agent_did(AGENT)
-        .tool_ceiling(ToolCeiling::meta_only()).agent(AGENT).backend_id(target.backend_id()).model_name(target.model())
+    let runtime = Gents::builder().node(db.node.clone()).backend_admission(db.home.backend_admission()).identity(db.node_identity.clone()).default_agent_did(agent_did)
+        .tool_ceiling(ToolCeiling::meta_only()).agent(agent_did).identity_binding(actors.fixture.binding.clone()).backend_id(target.backend_id()).model_name(target.model())
         .system_prompt("Call held_probe exactly once before answering. After it returns, use the latest user messages, then give a concise answer. Do not call other tools.")
         .sampling(SamplingConfig { reasoning_effort: Some(ReasoningEffort::High), temperature: Some(1.0), top_p: Some(0.95), ..Default::default() })
         .max_turns(1000).deadline_duration_secs(24*60*60).custom_tool(HeldTool { entered: entered.clone(), release: release.clone() }).done().build().await?;
-    let (shutdown, receiver) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(runtime.run(receiver));
-    wait_for_runtime_ready(&db.node, did).await;
-    let runtime = BootedAgent::new(shutdown, handle, did.into());
     let active = enqueue(
-        &db,
+        &actors,
         ACTIVE,
         "Call held_probe now. Wait for its result before answering.",
     )
     .await?;
+    access
+        .transact_write("test.live_steering.title", |txn| {
+            Box::pin(async move {
+                gents::session::apply_title_in_txn(
+                    txn,
+                    did,
+                    Some(user_did),
+                    SESSION,
+                    Some("Live steering"),
+                    gents_protocol::session::SessionTitleSource::Generated,
+                    &chrono::Utc::now().to_rfc3339(),
+                )
+                .await
+            })
+        })
+        .await?;
+    let (shutdown, receiver) = tokio::sync::watch::channel(false);
+    let handle = tokio::spawn(runtime.run(receiver));
+    wait_for_runtime_ready(&db.node, did).await;
+    let runtime = BootedAgent::new(shutdown, handle, did.into());
     tokio::time::timeout(Duration::from_secs(300), entered.notified())
         .await
         .expect("live model must invoke held_probe; failure is not a skipped test");
-    let old = enqueue(&db, "live-steering-old", OLD).await?;
-    let second = enqueue(&db, "live-steering-second", SECOND).await?;
-    let dropped = enqueue(&db, "live-steering-drop", DROP).await?;
-    let snapshot = pending_user_queue(&access, did, SESSION, did).await?;
+    let old = enqueue(&actors, "live-steering-old", OLD).await?;
+    let second = enqueue(&actors, "live-steering-second", SECOND).await?;
+    let dropped = enqueue(&actors, "live-steering-drop", DROP).await?;
+    let snapshot = pending_user_queue(&access, did, SESSION, user_did).await?;
     let receipt = submit_pending_user_edit(
         &access,
-        db.node_identity.as_ref(),
-        AgentRequestAdmissionRecord::client(did),
+        &actors.fixture.user,
+        AgentRequestAdmissionRecord::client(user_did),
         None,
         did,
         SESSION,
@@ -201,11 +165,11 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
         },
     )
     .await?;
-    let snapshot = pending_user_queue(&access, did, SESSION, did).await?;
+    let snapshot = pending_user_queue(&access, did, SESSION, user_did).await?;
     submit_pending_user_edit(
         &access,
-        db.node_identity.as_ref(),
-        AgentRequestAdmissionRecord::client(did),
+        &actors.fixture.user,
+        AgentRequestAdmissionRecord::client(user_did),
         None,
         did,
         SESSION,
@@ -229,7 +193,7 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
     );
     release.notify_one();
     assert_eq!(
-        wait_for_request_terminal(&db.node, ACTIVE, Duration::from_secs(600)).await,
+        wait_for_request_terminal(&access, ACTIVE, Duration::from_secs(600)).await,
         "completed"
     );
     let captures = access.execute(&format!(r#"{{ RenderedRequest(filter: {{ request_id: {{ _eq: "{active_id}" }} }}, order: {{ turn_index: ASC }}) {{ request_doc_id capture_version request_json turn_index }} }}"#)).await?;
