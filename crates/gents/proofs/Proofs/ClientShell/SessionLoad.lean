@@ -11,11 +11,14 @@ re-read scheduled) or name its cause and offer an action. Nothing waits on a
 notice that may never come.
 
 The projection mirrors `projectSessionLoadingStatus` in the desktop's
-`lib/loadingStatus.ts`; the follow-up machine mirrors `createSessionReads`
-(`hooks/sessionReads.ts`) and the drain loop that serializes its reads
-(`hooks/projectionController.ts`). The operational admission blocker is
-projected verbatim from the runtime-connection owner, whose own model carries
-its exits.
+`lib/loadingStatus.ts`. The follow-up machine mirrors `createSessionReads`
+(`hooks/sessionReads.ts`), which owns the load, its re-read streak and the
+refresh fence, and the observer's drain loop (`hooks/projectionController.ts`
+and `hooks/clientObservation.ts`), which starts the reads that notices,
+selection changes and the re-read timer request, one at a time. Both are
+replayed against production by `Conformance.ClientSessionLoad`. The
+operational admission blocker is projected verbatim from the
+runtime-connection owner, whose own model carries its exits.
 -/
 namespace ClientSessionLoad
 
@@ -254,9 +257,12 @@ theorem actionless_status_has_exit (i : Input) (s : Status)
 
 /-! ## Follow-up machine
 
-One selected session at a time; targets are abstract session numbers. The
-drain loop runs one read pass at a time, but a re-read timer or the shell's
-retry action can start a read beside it, so `reading` holds only the latest
+One selected session at a time. Targets are abstract session numbers; two
+targets are the same when `matchesSelection` holds, so a read whose node
+override narrows the selection's node is a read of the selection, and only a
+reply naming another session is a mismatch. The observer's drain loop starts
+one read at a time. The shell's retry action and the other direct callers of
+`refreshSession` may start one beside it, so `reading` holds only the latest
 refresh: an older read's result fails the refresh fence and is dropped. -/
 
 /-- The re-read budget a waiting phase is given. The production delays back off
@@ -273,15 +279,21 @@ structure State where
   phase : Phase
   shown : Option Nat
   found : Option Bool
-  failedRead : Bool
+  /-- the load carries an error: its last read failed or reported a waiting cause -/
+  errored : Bool
   /-- the latest refresh's target while it runs -/
   reading : Option Nat
-  /-- a read of the selection is owed: requested on the drain loop, or owed
-  to the observer once its listener resolves -/
+  /-- the drain loop owes a read of the selection -/
   queued : Bool
+  /-- the owed read starts a new re-read streak: something other than the
+  re-read timer asked for it -/
+  fresh : Bool
   /-- a waiting phase's re-read is scheduled -/
   timer : Bool
   budget : Nat
+  /-- the observer runs: the client is running, so its listener, drain loop and
+  re-read timer are live -/
+  running : Bool
   deriving DecidableEq, Repr
 
 inductive Outcome where
@@ -289,61 +301,93 @@ inductive Outcome where
   | missing
   | waiting (phase : Phase) (h : phase.isWaiting = true)
   | failed
-  /-- the reply names another session or node than the read asked for -/
+  /-- the reply names another session than the read asked for -/
   | mismatch
 
-def start (s : State) : State :=
-  let sameWaiting := s.load == some s.selected && s.phase.isWaiting
+/-- A read of the selection starts and takes over the load. A waiting phase of
+the same target stays while it is read again; any read cancels the scheduled
+re-read. -/
+def launch (s : State) : State :=
+  let same := s.load == some s.selected
   { s with
     reading := some s.selected
     load := some s.selected
-    phase := if sameWaiting then s.phase else .loading
-    queued := false
+    phase := if same && s.phase.isWaiting then s.phase else .loading
+    found := if same && s.found == some false then some false else none
+    errored := same && s.errored
     timer := false }
 
-def finish (s : State) (target : Nat) : Outcome → State
-  | o =>
-    if target ≠ s.selected then
-      /- The selection moved while the read ran. The drain loop re-reads the
-         moved selection; the selection subscription requests the same. -/
-      { s with reading := none, queued := true }
-    else
-      let s := { s with reading := none }
-      match o with
-      | .found =>
-          { s with shown := some target, phase := .loaded, found := some true,
-                   failedRead := false, budget := rereadBudget }
-      | .missing =>
-          { s with shown := none, phase := .loaded, found := some false, failedRead := false,
-                   budget := rereadBudget }
-      | .waiting p _ =>
-          { s with phase := p, timer := rereadArmed s.budget, budget := s.budget - 1 }
-      | .failed => { s with phase := .failed, failedRead := true }
-      /- A reply for another target cannot be shown, and reading again would
-         ask the same runtime the same question. It fails visibly instead of
-         leaving the load in `loading` with no read behind it. -/
-      | .mismatch => { s with phase := .failed, failedRead := true }
+/-- The drain loop starts the owed read; a read the timer alone asked for
+continues its streak. -/
+def beginRead (s : State) : State :=
+  { launch s with queued := false, fresh := false,
+                  budget := if s.fresh then rereadBudget else s.budget }
+
+def finish (s : State) (target : Nat) (o : Outcome) : State :=
+  if target ≠ s.selected then
+    /- The selection moved while the read ran: the answer is dropped, and the
+       selection subscription has already queued the moved selection's read
+       (`moved_read_leaves_read_queued`). -/
+    { s with reading := none }
+  else
+    let s := { s with reading := none }
+    match o with
+    | .found =>
+        { s with shown := some target, phase := .loaded, found := some true,
+                 errored := false, budget := rereadBudget }
+    | .missing =>
+        { s with shown := none, phase := .loaded, found := some false, errored := false,
+                 budget := rereadBudget }
+    | .waiting p _ =>
+        { s with phase := p, found := none, errored := true,
+                 timer := s.running && rereadArmed s.budget, budget := s.budget - 1 }
+    | .failed => { s with phase := .failed, found := none, errored := true }
+    /- A reply for another session cannot be shown, and reading again would ask
+       the same runtime the same question. It fails visibly instead of leaving
+       the load in `loading` with no read behind it. -/
+    | .mismatch => { s with phase := .failed, found := none, errored := true }
+
+/-- The client stops: the observer drops its reads and timer. Nothing will
+settle the held load, so a `loading` load fails visibly and a waiting phase
+loses its re-read, which offers the retry action. -/
+def stopObserver (s : State) : State :=
+  { s with running := false, reading := none, queued := false, fresh := false,
+           timer := false,
+           phase := if s.phase == .loading then .failed else s.phase,
+           errored := s.errored || s.phase == .loading }
 
 inductive Step : State → State → Prop where
+  /-- the user selects another session; while the observer runs, its selection
+  subscription requests the read -/
   | select (s : State) (n : Nat) (drop : Bool) (h : n ≠ s.selected) :
-      Step s { s with selected := n, queued := true, timer := false, budget := rereadBudget,
+      Step s { s with selected := n, queued := s.queued || s.running,
+                      fresh := s.fresh || s.running, timer := false,
                       shown := if drop then none else s.shown }
-  /-- a store or health notice, or a foreground refresh. Any read the
-  re-read timer did not start begins a new re-read streak. -/
-  | notice (s : State) : Step s { s with queued := true, budget := rereadBudget }
-  | begin (s : State) (h : s.queued = true) : Step s (start s)
+  /-- a store or health notice, the listener's registration, or a foreground
+  refresh -/
+  | notice (s : State) (h : s.running = true) : Step s { s with queued := true, fresh := true }
+  | begin (s : State) (h : s.queued = true) : Step s (beginRead s)
   | complete (s : State) (t : Nat) (o : Outcome) (h : s.reading = some t) :
       Step s (finish s t o)
   | fire (s : State) (h : s.timer = true) : Step s { s with timer := false, queued := true }
-  /-- the shell's retry action: a fresh read with a fresh budget -/
-  | retry (s : State) : Step s { s with queued := true, budget := rereadBudget }
+  /-- the shell's retry action reads directly, with a fresh streak -/
+  | retry (s : State) : Step s { launch s with budget := rereadBudget }
   /-- a writer drops the shown session without moving the selection -/
   | drop (s : State) : Step s { s with shown := none }
+  | stop (s : State) (h : s.running = true) : Step s (stopObserver s)
+  /-- the client runs again; the observer reads the selection at once -/
+  | restart (s : State) (h : s.running = false) :
+      Step s { s with running := true, queued := true, fresh := true }
 
+/-- The observer owes the selection a read from the start. Its listener's
+registration requests it; until a registration succeeds, a rejection or a
+deadline (`UNREGISTERED_READ_MS`) requests it without the listener, so the first
+read never waits on a registration that may not resolve. The TLA model
+`DesktopUpdateListener` (`StartupRead`, `NoRegistration`) checks that race. -/
 def initial (selected : Nat) : State :=
   { selected, load := none, phase := .idle, shown := none, found := none,
-    failedRead := false, reading := none, queued := true, timer := false,
-    budget := rereadBudget }
+    errored := false, reading := none, queued := true, fresh := true, timer := false,
+    budget := rereadBudget, running := true }
 
 inductive Reachable : State → Prop where
   | init (n : Nat) : Reachable (initial n)
@@ -354,91 +398,128 @@ def input (s : State) (blocker : Option Blocker) : Input :=
     sessionMatches := s.shown == some s.selected
     loadMatches := s.load == some s.selected
     phase := s.phase
-    error := if s.failedRead then some "read failed" else none
+    error := if s.errored then some "read failed" else none
     found := s.found
     reread := s.reading.isSome || s.timer
     blocker }
 
-/-- The machine's invariant: a running read is the load's; a `loading` load is
-being read or is owed a read; a load naming another target is owed a read for
-the selection. -/
+/-- The machine's invariant: a running read is the load's, and a named load has
+left `idle`. While the observer runs, a `loading` load is being read or owed a
+read, a load naming another target is owed a read for the selection, and a
+read whose selection moved leaves the moved selection's read owed. -/
 def Invariant (s : State) : Prop :=
   (∀ t, s.reading = some t → s.load = some t) ∧
-  (s.phase = .loading → s.reading.isSome ∨ s.queued = true) ∧
-  (s.load ≠ some s.selected → s.queued = true ∨ s.reading.isSome)
+  (s.load.isSome = true → s.phase ≠ .idle) ∧
+  (s.running = true → s.phase = .loading → s.reading.isSome = true ∨ s.queued = true) ∧
+  (s.running = true → s.load ≠ some s.selected → s.queued = true ∨ s.reading.isSome = true) ∧
+  (s.running = true → ∀ t, s.reading = some t → t ≠ s.selected → s.queued = true)
+
+theorem launch_phase_ne_idle (s : State) : (launch s).phase ≠ .idle := by
+  simp only [launch]
+  split
+  · rename_i h
+    intro hp
+    simp only [Bool.and_eq_true] at h
+    simp [hp, Phase.isWaiting, Phase.isDelivery] at h
+  · simp
 
 theorem invariant_initial (n : Nat) : Invariant (initial n) := by
-  refine ⟨?_, ?_, ?_⟩
-  · intro t h; simp [initial] at h
-  · intro h; simp [initial] at h
-  · intro _; simp [initial]
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> simp [initial]
 
 theorem invariant_step {s t : State} (hs : Invariant s) (step : Step s t) : Invariant t := by
-  obtain ⟨hr, hl, ho⟩ := hs
+  obtain ⟨hr, hi, hl, ho, hm⟩ := hs
   cases step with
   | select n drop h =>
-      refine ⟨hr, fun hp => Or.inr rfl, fun _ => Or.inl rfl⟩
-  | notice =>
-      refine ⟨hr, fun _ => Or.inr rfl, fun _ => Or.inl rfl⟩
+      refine ⟨hr, hi, ?_, ?_, ?_⟩ <;> intro hrun <;> simp only at hrun ⊢ <;> simp [hrun]
+  | notice h =>
+      refine ⟨hr, hi, ?_, ?_, ?_⟩ <;> intros <;> simp
   | begin h =>
-      refine ⟨?_, ?_, ?_⟩
-      · intro t ht; simp [start] at ht; simp [start, ht]
-      · intro _; simp [start]
-      · intro hne; simp [start] at hne
+      refine ⟨?_, ?_, ?_, ?_, ?_⟩
+      · intro t ht; simp [beginRead, launch] at ht ⊢; exact ht
+      · intro _; exact launch_phase_ne_idle s
+      · intros; simp [beginRead, launch]
+      · intros; simp [beginRead, launch]
+      · intro _ t ht hne; simp [beginRead, launch] at ht; exact absurd ht.symm hne
   | complete target o h =>
       have hload := hr target h
       unfold finish
       by_cases hsel : target ≠ s.selected
       · simp only [hsel, ↓reduceIte, ne_eq, not_false_eq_true]
-        exact ⟨fun _ h => by simp at h, fun _ => Or.inr rfl, fun _ => Or.inl rfl⟩
+        refine ⟨fun _ h => by simp at h, fun hs => hi hs, ?_, ?_, fun _ _ h => by simp at h⟩
+        · intro hrun _; exact Or.inr (hm hrun target h hsel)
+        · intro hrun _; exact Or.inl (hm hrun target h hsel)
       · have heq : target = s.selected := by simpa using hsel
         simp only [hsel, ↓reduceIte]
         subst heq
         cases o with
         | found =>
-            exact ⟨fun _ h => by simp at h, fun h => by simp at h,
-              fun hne => absurd hload hne⟩
+            exact ⟨fun _ h => by simp at h, fun _ => by simp, fun _ h => by simp at h,
+              fun _ hne => absurd hload hne, fun _ _ h => by simp at h⟩
         | missing =>
-            exact ⟨fun _ h => by simp at h, fun h => by simp at h,
-              fun hne => absurd hload hne⟩
+            exact ⟨fun _ h => by simp at h, fun _ => by simp, fun _ h => by simp at h,
+              fun _ hne => absurd hload hne, fun _ _ h => by simp at h⟩
         | waiting p hp =>
-            refine ⟨fun _ h => by simp at h, fun hpl => ?_, fun hne => absurd hload hne⟩
-            simp only at hpl
-            subst hpl
-            simp [Phase.isWaiting, Phase.isDelivery] at hp
+            refine ⟨fun _ h => by simp at h, fun _ hpi => ?_, fun _ hpl => ?_,
+              fun _ hne => absurd hload hne, fun _ _ h => by simp at h⟩
+            · simp only at hpi; subst hpi; simp [Phase.isWaiting, Phase.isDelivery] at hp
+            · simp only at hpl; subst hpl; simp [Phase.isWaiting, Phase.isDelivery] at hp
         | failed =>
-            exact ⟨fun _ h => by simp at h, fun h => by simp at h,
-              fun hne => absurd hload hne⟩
+            exact ⟨fun _ h => by simp at h, fun _ => by simp, fun _ h => by simp at h,
+              fun _ hne => absurd hload hne, fun _ _ h => by simp at h⟩
         | mismatch =>
-            exact ⟨fun _ h => by simp at h, fun h => by simp at h,
-              fun hne => absurd hload hne⟩
+            exact ⟨fun _ h => by simp at h, fun _ => by simp, fun _ h => by simp at h,
+              fun _ hne => absurd hload hne, fun _ _ h => by simp at h⟩
   | fire h =>
-      refine ⟨hr, fun _ => Or.inr rfl, fun _ => Or.inl rfl⟩
+      refine ⟨hr, hi, ?_, ?_, ?_⟩ <;> intros <;> simp
   | retry =>
-      refine ⟨hr, fun _ => Or.inr rfl, fun _ => Or.inl rfl⟩
+      refine ⟨?_, ?_, ?_, ?_, ?_⟩
+      · intro t ht; simp [launch] at ht ⊢; exact ht
+      · intro _; exact launch_phase_ne_idle s
+      · intros; simp [launch]
+      · intros; simp [launch]
+      · intro _ t ht hne; simp [launch] at ht; exact absurd ht.symm hne
   | drop =>
-      exact ⟨hr, hl, ho⟩
+      exact ⟨hr, hi, hl, ho, hm⟩
+  | stop h =>
+      refine ⟨fun _ h => by simp [stopObserver] at h, fun hs => ?_, fun h => by
+        simp [stopObserver] at h, fun h => by simp [stopObserver] at h,
+        fun h => by simp [stopObserver] at h⟩
+      have := hi hs
+      simp only [stopObserver] at this ⊢
+      split <;> simp_all
+  | restart h =>
+      refine ⟨hr, hi, ?_, ?_, ?_⟩ <;> intros <;> simp
 
 theorem reachable_invariant {s : State} (h : Reachable s) : Invariant s := by
   induction h with
   | init n => exact invariant_initial n
   | step _ st ih => exact invariant_step ih st
 
-/-- Nothing the selected session shows is silently stuck: every status without
-an action has a read running, a read queued, a re-read scheduled, or is the
-runtime-connection owner's blocker. -/
-theorem phase_has_exit {s : State} (hs : Reachable s) (blocker : Option Blocker)
-    (st : Status) (h : project (input s blocker) = some st) (hn : st.action = none) :
+/-- A read whose selection moved while it ran leaves the moved selection's read
+owed: the selection subscription queued it, so the drain loop needs no second
+request of its own. -/
+theorem moved_read_leaves_read_queued {s : State} (hs : Reachable s) (hrun : s.running = true)
+    (t : Nat) (o : Outcome) (h : s.reading = some t) (hne : t ≠ s.selected) :
+    (finish s t o).queued = true := by
+  have := (reachable_invariant hs).2.2.2.2 hrun t h hne
+  simp [finish, hne, this]
+
+/-- While the observer runs, nothing the selected session shows is silently
+stuck: every status without an action has a read running, a read queued, a
+re-read scheduled, or is the runtime-connection owner's blocker. -/
+theorem phase_has_exit {s : State} (hs : Reachable s) (hrun : s.running = true)
+    (blocker : Option Blocker) (st : Status) (h : project (input s blocker) = some st)
+    (hn : st.action = none) :
     s.reading.isSome ∨ s.queued = true ∨ s.timer = true ∨
       (s.shown = some s.selected ∧ blocker.isSome) := by
-  obtain ⟨_, hl, ho⟩ := reachable_invariant hs
+  obtain ⟨_, _, hl, ho, _⟩ := reachable_invariant hs
   rcases actionless_status_has_exit _ _ h hn with ⟨_, hp⟩ | hm | ⟨_, hr⟩ | ⟨hm, hb⟩
-  · rcases hl hp with h | h
+  · rcases hl hrun hp with h | h
     · exact Or.inl h
     · exact Or.inr (Or.inl h)
   · have hne : s.load ≠ some s.selected := by
       intro heq; simp [input, heq] at hm
-    rcases ho hne with h | h
+    rcases ho hrun hne with h | h
     · exact Or.inr (Or.inl h)
     · exact Or.inl h
   · simp only [input, Bool.or_eq_true] at hr
@@ -447,6 +528,25 @@ theorem phase_has_exit {s : State} (hs : Reachable s) (blocker : Option Blocker)
     · exact Or.inr (Or.inr (Or.inl h))
   · simp only [input, beq_iff_eq] at hm
     exact Or.inr (Or.inr (Or.inr ⟨hm, hb⟩))
+
+/-- When the client stops, the load it held names its next action: no read or
+timer remains behind it, so the status is the retry action or the
+runtime-connection owner's blocker over a shown session. A selection made
+while the client is stopped has no load of its own until the client runs
+again; that status belongs to the client's lifecycle, outside this machine. -/
+theorem stop_leaves_action {s : State} (hs : Reachable s)
+    (hload : s.load = some s.selected) (blocker : Option Blocker) (st : Status)
+    (h : project (input (stopObserver s) blocker) = some st) (hn : st.action = none) :
+    s.shown = some s.selected ∧ blocker.isSome := by
+  obtain ⟨_, hi, _, _, _⟩ := reachable_invariant hs
+  have hidle := hi (by simp [hload])
+  rcases actionless_status_has_exit _ _ h hn with ⟨_, hp⟩ | hm | ⟨_, hr⟩ | ⟨hm, hb⟩
+  · simp only [input, stopObserver] at hp
+    split at hp <;> simp_all
+  · simp [input, stopObserver, hload] at hm
+  · simp [input, stopObserver] at hr
+  · simp only [input, stopObserver, beq_iff_eq] at hm
+    exact ⟨hm, hb⟩
 
 /-- A waiting phase of the selected load with nothing running or scheduled,
 and no session shown, names its next action. -/
@@ -467,15 +567,10 @@ theorem waiting_rereads_are_bounded (budget : Nat) :
     rereadArmed budget = false ↔ budget = 0 := by
   simp [rereadArmed]
 
-/-- A reply for another target fails visibly rather than staying `loading`. -/
+/-- A reply for another session fails visibly rather than staying `loading`. -/
 theorem mismatched_reply_fails (s : State) :
     (finish s s.selected .mismatch).phase = .failed ∧
       (finish s s.selected .mismatch).reading = none := by
   simp [finish]
-
-/-- A read whose selection moved while it ran leaves a read queued. -/
-theorem superseded_read_requeues (s : State) (t : Nat) (o : Outcome) (h : t ≠ s.selected) :
-    (finish s t o).queued = true := by
-  simp [finish, h]
 
 end ClientSessionLoad

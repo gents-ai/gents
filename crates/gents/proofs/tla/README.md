@@ -85,14 +85,19 @@ See `../README.md` for how this fits the broader formal-verification model.
   load phases. A read sees the versions committed before it starts. A
   selected request that has not reached its owner answers `pending`, and the
   runtime may catch up with no store notice at all, since the desktop holds no
-  replica of a remote runtime's session. `ViewConverges` and `NoStuckPending`
-  hold with four guards: a full read once the listener resolves, re-listening
-  after a rejected registration, bounded re-reads of a waiting phase followed
-  by the retry action (Lean `ClientSessionLoad.phase_has_exit`), and a visible
-  failure for a reply that cannot be shown. `RegistrationGap` is the observed
-  defect (a commit between the startup read and registration is dropped and
-  the view stays a version behind); `ListenFailure`, `PendingNoEvent` and
-  `SupersededMismatch` each drop one remaining guard.
+  replica of a remote runtime's session. A waiting phase is `pending` or one
+  of the three delivery phases. `ViewConverges` and `NoStuckPending` hold
+  with five guards: a read without the listener once a registration rejects
+  or a deadline passes, a full read once the listener resolves, re-listening after a rejected registration,
+  bounded re-reads of a waiting phase followed by the retry action (Lean
+  `ClientSessionLoad.phase_has_exit`), and a visible failure for a reply for
+  another session. `MovedReadQueued` checks that a read whose selection moved
+  needs no guard of its own. `NoRegistration` drops registration fairness and
+  still settles the selection; `NoInitialRead` shows what the startup read
+  prevents there. `RegistrationGap` is the observed defect (a commit between
+  the read without a listener and registration is dropped and the view stays a version
+  behind); `ListenFailure`, `PendingNoEvent` and `SupersededMismatch` each
+  drop one remaining guard.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
@@ -196,15 +201,18 @@ in the same second, the client reopens, B completes and never appears);
 
 For DesktopUpdateListener — the green model (every guard on, one rejected
 registration, one bridge mismatch, one selection change, silent and noticed
-arrival) checks clean, including both liveness properties:
+arrival) checks clean, including both liveness properties, and so does
+`NoRegistration`, where registration may never resolve:
 ```bash
 ./scripts/run-tlc.sh MCDesktopUpdateListener
+./scripts/run-tlc.sh MCDesktopUpdateListenerNoRegistration
 ```
 
-Its four diagnostics are EXPECTED to report violations. `RegistrationGap`
-violates `ViewConverges`; `ListenFailure`, `PendingNoEvent` and
-`SupersededMismatch` violate `NoStuckPending`:
+Its five diagnostics are EXPECTED to report violations. `RegistrationGap`
+and `ListenFailure` violate `ViewConverges`; `NoInitialRead`,
+`PendingNoEvent` and `SupersededMismatch` violate `NoStuckPending`:
 ```bash
+./scripts/run-tlc.sh MCDesktopUpdateListenerNoInitialRead
 ./scripts/run-tlc.sh MCDesktopUpdateListenerRegistrationGap
 ./scripts/run-tlc.sh MCDesktopUpdateListenerListenFailure
 ./scripts/run-tlc.sh MCDesktopUpdateListenerPendingNoEvent
@@ -294,11 +302,13 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCSessionHeadObservationNoLivePreference.cfg` | `Order = "noLive"`, `Refusals = FALSE` | `ReplyObserved` intentionally VIOLATED: B's claim ranks below A's same-second terminalization | 620 distinct states; 1,056 generated | 11 | <1s |
 | `MCSessionHeadObservationNoTerminalizationOrder.cfg` | `Order = "noTerminal"`, `Refusals = TRUE` | `ReplyObserved` intentionally VIOLATED: B refused in A's second loses the random tie | 838 distinct states; 1,406 generated | 11 | <1s |
 | `MCSessionHeadObservationNoHeadSeed.cfg` | `Order = "lean"`, `HeadSeed = FALSE` | `ReplyObserved` intentionally VIOLATED: the head is B but the reader reads only nonterminal rows | 572 distinct states; 984 generated | 11 | <1s |
-| `MCDesktopUpdateListener.cfg` | `MaxVersion = 2`, `ListenFailures = 1`, `Mismatches = 1`, `Selections = 1`, `RereadBudget = 2`, every guard on | Passes `TypeOK`, `ViewConverges`, `NoStuckPending` | 2,238 distinct states; 6,861 generated | 18 | <1s |
-| `MCDesktopUpdateListenerRegistrationGap.cfg` | as green, `FullAfterListen = FALSE` | `ViewConverges` intentionally VIOLATED: the startup read takes version 1, the arrival commit is dropped before registration, the listener resolves and nothing reads version 2 | 2,793 distinct states; 9,084 generated | 18 | <1s |
-| `MCDesktopUpdateListenerListenFailure.cfg` | as green, `Relisten = FALSE` | `NoStuckPending` intentionally VIOLATED: registration rejects once and the owed full read never starts ('Opening session' with no follow-up) | 1,170 distinct states; 3,554 generated | 16 | <1s |
-| `MCDesktopUpdateListenerPendingNoEvent.cfg` | as green, `PendingReread = FALSE` | `NoStuckPending` intentionally VIOLATED: a `pending` read, then a silent arrival; 'Waiting for session update' stays with no action | 1,290 distinct states; 3,509 generated | 15 | <1s |
-| `MCDesktopUpdateListenerSupersededMismatch.cfg` | as green, `MismatchExit = FALSE` | `NoStuckPending` intentionally VIOLATED: a reply for another target is dropped and the load stays `loading` with no read behind it | 2,138 distinct states; 6,615 generated | 17 | <1s |
+| `MCDesktopUpdateListener.cfg` | `MaxVersion = 2`, `ListenFailures = 1`, `Mismatches = 1`, `Selections = 1`, `RereadBudget = 2`, every guard on | Passes `TypeOK`, `MovedReadQueued`, `ViewConverges`, `NoStuckPending` | 10,819 distinct states; 46,787 generated | 18 | <1s |
+| `MCDesktopUpdateListenerNoRegistration.cfg` | as green, `SpecListenerUnfair` (registration may never resolve) | Passes `TypeOK`, `MovedReadQueued`, `NoStuckPending`: the read without a listener settles the selection with no event at all | 10,819 distinct states; 46,787 generated | 18 | <1s |
+| `MCDesktopUpdateListenerNoInitialRead.cfg` | as NoRegistration, `InitialRead = FALSE` | `NoStuckPending` intentionally VIOLATED: ListenRejects, Relistens, then the listener never resolves; 'Opening session' stays with no read and no action | 5,856 distinct states; 22,536 generated | 18 | <1s |
+| `MCDesktopUpdateListenerRegistrationGap.cfg` | as green, `FullAfterListen = FALSE` | `ViewConverges` intentionally VIOLATED: the read without a listener takes version 1, a commit before registration is dropped, the listener resolves and nothing reads version 2 | 12,735 distinct states; 54,745 generated | 19 | <1s |
+| `MCDesktopUpdateListenerListenFailure.cfg` | as green, `Relisten = FALSE` | `ViewConverges` intentionally VIOLATED: the read without a listener settles the session, registration rejects and is never retried, and the next commit is never read | 6,073 distinct states; 25,790 generated | 16 | <1s |
+| `MCDesktopUpdateListenerPendingNoEvent.cfg` | as green, `PendingReread = FALSE` | `NoStuckPending` intentionally VIOLATED: a read answers a waiting phase (`accepted` in the trace), then a silent arrival; the waiting status stays with no action | 5,093 distinct states; 18,904 generated | 15 | <1s |
+| `MCDesktopUpdateListenerSupersededMismatch.cfg` | as green, `MismatchExit = FALSE` | `NoStuckPending` intentionally VIOLATED: a reply for another session (FinishMismatch) is dropped and the load stays `loading` with no read behind it | 10,903 distinct states; 46,605 generated | 17 | <1s |
 
 The nine BackgroundAdmissionContention rows used TLC2 `2026.11.06.222357`
 (rev `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and
@@ -310,9 +320,9 @@ The six SessionHeadObservation rows used TLC2 `2026.11.06.222357` (rev
 `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the
 liveness rows checked `ReplyObserved` over the complete state space.
 
-The five DesktopUpdateListener rows used TLC2 `2026.11.06.222357` (rev
+The seven DesktopUpdateListener rows used TLC2 `2026.11.06.222357` (rev
 `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the
-green run checked both temporal properties over the complete state space.
+green runs checked their temporal properties over the complete state space.
 
 ## PairingTransport derived requirements
 
