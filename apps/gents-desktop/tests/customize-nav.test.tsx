@@ -150,10 +150,9 @@ describe("customizing the nav", () => {
   it("exposes the sidebar customization sheet as a modal dialog", () => {
     panel();
     act(() => openCustomizeNav());
-    expect(screen.getByRole("dialog", { name: "Customize navigation" })).toHaveAttribute(
-      "aria-modal",
-      "true",
-    );
+    expect(
+      screen.getByRole("dialog", { name: "Customize navigation" }),
+    ).toHaveAttribute("aria-modal", "true");
   });
 
   it("draws the default items until the person customizes them", () => {
