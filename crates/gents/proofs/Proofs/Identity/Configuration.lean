@@ -1101,44 +1101,153 @@ theorem unchanged_userset_selection_preserves_revocation :
     updateUsersetSelection inferenceUsersetFixture "sampling-owner" "configuration" "profile" "selected_by"
       ["sampling"] ["sampling"] true = inferenceUsersetFixture := by rfl
 
-/-- Whether `id` names a physical configuration document. To the native
-admin, which bypasses document ACP, an unreadable source is an absent one. -/
+/-- Whether `id` names a physical configuration document, as a complete
+inventory would report it. -/
 def configurationPresent (state : State) (id : String) : Bool :=
   state.objects.any fun object => object.resource == "configuration" && object.id == id
 
-/-- Dangling-reference repair (decision 2026-11-07). A saved selection can
-name a source document that no longer exists. An ordinary update leaves that
-source in `removed`, where `mayManage` of an absent object is false, so the
-whole update aborts: the default stays fail-closed, because for a non-admin an
-unreadable source is indistinguishable from an absent one and skipping its
-edge could retain a live grant. The repair is an explicit request, and only the
-native admin may perform it: the client key, i.e. the User DID that desktop
-and CLI share (`GrantSets.only_init_user_is_admin`). The admin reads past
-document ACP, so a source it cannot read is absent and has no edge left to
-revoke; the repair drops exactly those sources from `removed`. Every present
-source, and every added one, still goes through `updateUsersetSelection`. A
-repair requested by anyone else, or not requested, is the ordinary update. -/
-def repairUsersetSelection (state : State) (manager : String) (admin repair : Bool)
-    (targetResource targetId targetRelation : String) (before after : List String)
+/-- Where a destructive admin decision learns which documents exist.
+`acpFiltered` is every read Gents has: an ordinary query, filtered by document
+ACP for its own actor. Native premise: DefraDB does not apply its DacBypass to
+ordinary reads, so the native admin (the client User key,
+`GrantSets.GrantSet.householdOwner`) does not see documents other actors own
+through them. The conformance evidence is the admin case of
+`crates/gents/src/pack/installation/tests.rs` on branch
+`aos/g20-admin-retire-refuted` (commit 43928b8f33), which refuted the earlier
+premise that "the admin can tell missing from hidden". An ACP-filtered read is
+therefore not a complete inventory for any actor, the admin included: a
+document it cannot read is not known to be absent. `complete` names a read
+that enumerates every document whatever its ACP; no such source exists yet,
+and until one does every destructive decision that needs it is refused. -/
+inductive InventoryRead where
+  | acpFiltered
+  | complete
+  deriving DecidableEq, Repr
+
+def InventoryRead.isComplete : InventoryRead → Bool
+  | .acpFiltered => false
+  | .complete => true
+
+/-- The native observations a destructive admin decision rests on. `admin` is
+what native NAC reports for the actor; while NAC is not `Enabled`, native
+`NodeACP::is_admin` reports every actor as admin, so that report is no
+evidence of authority. -/
+structure DestructiveAuthority where
+  nacEnabled : Bool
+  admin : Bool
+  inventory : InventoryRead
+  deriving DecidableEq, Repr
+
+/-- Why a destructive admin decision was refused, in the order it is checked. -/
+inductive DestructiveRefusal where
+  | nacDisabled
+  | notAdmin
+  | incompleteInventory
+  deriving DecidableEq, Repr
+
+def DestructiveRefusal.name : DestructiveRefusal → String
+  | .nacDisabled => "nac_disabled"
+  | .notAdmin => "not_admin"
+  | .incompleteInventory => "incomplete_inventory"
+
+/-- A destructive admin decision (one that drops state because a document is
+taken to be absent) is allowed only to the native admin of a node whose NAC is
+enabled, reading a complete inventory. With NAC disabled no actor is admin for
+these decisions; without a complete inventory the decision fails closed for
+every actor. `none` is allowed. -/
+def destructiveAdminDecision (authority : DestructiveAuthority) : Option DestructiveRefusal :=
+  if !authority.nacEnabled then some .nacDisabled
+  else if !authority.admin then some .notAdmin
+  else if !authority.inventory.isComplete then some .incompleteInventory
+  else none
+
+theorem nac_disabled_refuses_destructive_decision (authority : DestructiveAuthority)
+    (disabled : authority.nacEnabled = false) :
+    destructiveAdminDecision authority = some .nacDisabled := by
+  simp [destructiveAdminDecision, disabled]
+
+theorem acp_filtered_inventory_refuses_destructive_decision (authority : DestructiveAuthority)
+    (filtered : authority.inventory = .acpFiltered) :
+    (destructiveAdminDecision authority).isSome := by
+  unfold destructiveAdminDecision
+  split <;> try rfl
+  split <;> try rfl
+  simp [filtered, InventoryRead.isComplete]
+
+theorem acp_filtered_admin_is_refused_for_incomplete_inventory :
+    destructiveAdminDecision ⟨true, true, .acpFiltered⟩ = some .incompleteInventory := by decide
+
+/-- Dangling-reference repair (decision 2026-11-07, narrowed 2026-11-08). A
+saved selection can name a source document that no longer exists. An ordinary
+update leaves that source in `removed`, where `mayManage` of an absent object
+is false, so the whole update aborts: the default is fail-closed, because an
+unreadable source is indistinguishable from an absent one and skipping its edge
+could retain a live grant. The repair is an explicit request and a destructive
+admin decision: it drops sources from `removed` only when
+`destructiveAdminDecision` allows it, i.e. the native admin of a NAC-enabled
+node reading a complete inventory. The earlier decision let the admin repair on
+the premise that it reads past document ACP; native conformance refuted that
+(`InventoryRead`), so with every available read ACP-filtered the repair is
+refused and is the ordinary update. Every present source, and every added one,
+still goes through `updateUsersetSelection`. -/
+def repairUsersetSelection (state : State) (manager : String) (authority : DestructiveAuthority)
+    (repair : Bool) (targetResource targetId targetRelation : String) (before after : List String)
     (committed : Bool) : State :=
-  let retained := if repair && admin then before.filter (configurationPresent state) else before
+  let retained := if repair && (destructiveAdminDecision authority).isNone then
+    before.filter (configurationPresent state) else before
   updateUsersetSelection state manager targetResource targetId targetRelation retained after committed
 
 theorem unrequested_repair_is_the_ordinary_update (state : State)
-    (manager targetResource targetId targetRelation : String) (admin : Bool)
+    (manager targetResource targetId targetRelation : String) (authority : DestructiveAuthority)
     (before after : List String) (committed : Bool) :
-    repairUsersetSelection state manager admin false targetResource targetId targetRelation
+    repairUsersetSelection state manager authority false targetResource targetId targetRelation
       before after committed =
     updateUsersetSelection state manager targetResource targetId targetRelation before after committed := by
   simp [repairUsersetSelection]
 
-theorem non_admin_repair_is_the_ordinary_update (state : State)
-    (manager targetResource targetId targetRelation : String) (repair : Bool)
-    (before after : List String) (committed : Bool) :
-    repairUsersetSelection state manager false repair targetResource targetId targetRelation
+theorem refused_repair_is_the_ordinary_update (state : State)
+    (manager targetResource targetId targetRelation : String) (authority : DestructiveAuthority)
+    (repair : Bool) (before after : List String) (committed : Bool)
+    (refused : (destructiveAdminDecision authority).isSome) :
+    repairUsersetSelection state manager authority repair targetResource targetId targetRelation
       before after committed =
     updateUsersetSelection state manager targetResource targetId targetRelation before after committed := by
-  simp [repairUsersetSelection]
+  have : (destructiveAdminDecision authority).isNone = false := by
+    cases h : destructiveAdminDecision authority <;> simp_all
+  simp [repairUsersetSelection, this]
+
+theorem repair_refused_without_complete_inventory (state : State)
+    (manager targetResource targetId targetRelation : String) (authority : DestructiveAuthority)
+    (repair : Bool) (before after : List String) (committed : Bool)
+    (filtered : authority.inventory = .acpFiltered) :
+    repairUsersetSelection state manager authority repair targetResource targetId targetRelation
+      before after committed =
+    updateUsersetSelection state manager targetResource targetId targetRelation before after committed :=
+  refused_repair_is_the_ordinary_update state manager targetResource targetId targetRelation
+    authority repair before after committed
+    (acp_filtered_inventory_refuses_destructive_decision authority filtered)
+
+theorem nac_disabled_repair_is_refused (state : State)
+    (manager targetResource targetId targetRelation : String) (authority : DestructiveAuthority)
+    (repair : Bool) (before after : List String) (committed : Bool)
+    (disabled : authority.nacEnabled = false) :
+    repairUsersetSelection state manager authority repair targetResource targetId targetRelation
+      before after committed =
+    updateUsersetSelection state manager targetResource targetId targetRelation before after committed :=
+  refused_repair_is_the_ordinary_update state manager targetResource targetId targetRelation
+    authority repair before after committed
+    (by simp [nac_disabled_refuses_destructive_decision authority disabled])
+
+theorem non_admin_repair_is_the_ordinary_update (state : State)
+    (manager targetResource targetId targetRelation : String) (authority : DestructiveAuthority)
+    (repair : Bool) (before after : List String) (committed : Bool)
+    (notAdmin : authority.admin = false) :
+    repairUsersetSelection state manager authority repair targetResource targetId targetRelation
+      before after committed =
+    updateUsersetSelection state manager targetResource targetId targetRelation before after committed :=
+  refused_repair_is_the_ordinary_update state manager targetResource targetId targetRelation
+    authority repair before after committed
+    (by unfold destructiveAdminDecision; split <;> simp [notAdmin])
 
 /-- A Context whose saved Tools selection names the deleted `gone`, owned by
 the User, with the Engineer-style Agent holding only its executor. -/
@@ -1149,22 +1258,29 @@ def danglingSelectionFixture : State :=
       ⟨"configuration", "context", "selected_by", .entitySet "agents" "agent" "executor"⟩],
     enrolled := [] }
 
-def danglingRepairResult (actor : String) (admin repair : Bool) : State :=
-  repairUsersetSelection danglingSelectionFixture actor admin repair
+def danglingRepairResult (actor : String) (authority : DestructiveAuthority) (repair : Bool) : State :=
+  repairUsersetSelection danglingSelectionFixture actor authority repair
     "configuration" "context" "selected_by" ["gone"] ["tools"] true
 
 /-- The repair is applied iff it changed the selection edges. -/
-def danglingRepairApplied (actor : String) (admin repair : Bool) : Bool :=
-  (danglingRepairResult actor admin repair).relations.length !=
+def danglingRepairApplied (actor : String) (authority : DestructiveAuthority) (repair : Bool) : Bool :=
+  (danglingRepairResult actor authority repair).relations.length !=
     danglingSelectionFixture.relations.length
 
-theorem dangling_selection_fails_closed_without_admin_repair :
-    [danglingRepairApplied "user" true false, danglingRepairApplied "agent" false false,
-     danglingRepairApplied "agent" false true] = [false, false, false] := by native_decide
+theorem dangling_selection_repair_is_refused_for_every_available_read :
+    [danglingRepairApplied "user" ⟨true, true, .acpFiltered⟩ true,
+     danglingRepairApplied "user" ⟨true, true, .acpFiltered⟩ false,
+     danglingRepairApplied "agent" ⟨true, false, .acpFiltered⟩ true,
+     danglingRepairApplied "agent" ⟨true, false, .acpFiltered⟩ false,
+     danglingRepairApplied "agent" ⟨false, true, .acpFiltered⟩ true,
+     danglingRepairApplied "user" ⟨false, true, .complete⟩ true] =
+      [false, false, false, false, false, false] := by native_decide
 
-theorem admin_repair_drops_only_the_absent_source :
-    let repaired := danglingRepairResult "user" true true
-    danglingRepairApplied "user" true true = true ∧
+/-- What a future complete-inventory read would permit: the NAC-enabled admin's
+repair drops exactly the absent source. No Gents read provides it today. -/
+theorem complete_inventory_admin_repair_drops_only_the_absent_source :
+    let repaired := danglingRepairResult "user" ⟨true, true, .complete⟩ true
+    danglingRepairApplied "user" ⟨true, true, .complete⟩ true = true ∧
       allowed 8 repaired "agent" "configuration" "tools" "read" = true := by native_decide
 
 /-- A Skill's instructions may enter a fresh provider input only while the

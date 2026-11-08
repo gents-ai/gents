@@ -1538,10 +1538,34 @@ theorem own_only_grant_cannot_enable_tool_sources :
   native_decide
 
 /-- Conformance input for `Configuration.repairUsersetSelection`: who asks,
-whether that actor is the native admin, and whether repair was requested. -/
-def danglingRepairCaseJson (actor : String) (admin repair : Bool) : Json :=
-  Json.mkObj [("actor", toJson actor), ("admin", toJson admin), ("repair", toJson repair),
-    ("applied", toJson (Configuration.danglingRepairApplied actor admin repair))]
+the native observations the destructive decision rests on (whether NAC is
+enabled, what native NAC reports as admin, which inventory read is used),
+whether repair was requested, and the modeled refusal of a requested repair. -/
+def danglingRepairCaseJson (actor : String) (authority : Configuration.DestructiveAuthority)
+    (repair : Bool) : Json :=
+  let refusal := if repair then
+    (Configuration.destructiveAdminDecision authority).map Configuration.DestructiveRefusal.name
+  else none
+  Json.mkObj [("actor", toJson actor), ("nac_enabled", toJson authority.nacEnabled),
+    ("admin", toJson authority.admin),
+    ("complete_inventory", toJson authority.inventory.isComplete), ("repair", toJson repair),
+    ("refusal", toJson refusal),
+    ("applied", toJson (Configuration.danglingRepairApplied actor authority repair))]
+
+/-- Every combination of the destructive decision's observations, with the
+modeled refusal (`null` when allowed). -/
+def destructiveDecisionCases : List Json := Id.run do
+  let mut cases := []
+  for nacEnabled in [true, false] do
+    for admin in [true, false] do
+      for inventory in [Configuration.InventoryRead.acpFiltered, .complete] do
+        let authority : Configuration.DestructiveAuthority := ⟨nacEnabled, admin, inventory⟩
+        cases := cases ++ [Json.mkObj [("nac_enabled", toJson nacEnabled),
+          ("admin", toJson admin), ("complete_inventory", toJson inventory.isComplete),
+          ("refusal", toJson ((Configuration.destructiveAdminDecision authority).map
+            Configuration.DestructiveRefusal.name))]]
+  return cases
+
 def callbackState : State :=
   { objects := [⟨"nodes", "home", userDid⟩,
       ⟨"configuration", "binding", userDid⟩,
@@ -1796,9 +1820,13 @@ def json : Json := Json.mkObj
    ("tool_grantor_cases", toJson ([toolGrantorCaseJson userDid true,
       toolGrantorCaseJson agentDid true, toolGrantorCaseJson userDid false])),
    ("own_tool_edit_cases", toJson ownToolEditCases),
-   ("dangling_selection_repair_cases", toJson ([danglingRepairCaseJson "user" true true,
-      danglingRepairCaseJson "user" true false, danglingRepairCaseJson "agent" false true,
-      danglingRepairCaseJson "agent" false false])),
+   ("dangling_selection_repair_cases", toJson ([
+      danglingRepairCaseJson "user" ⟨true, true, .acpFiltered⟩ true,
+      danglingRepairCaseJson "user" ⟨true, true, .acpFiltered⟩ false,
+      danglingRepairCaseJson "agent" ⟨true, false, .acpFiltered⟩ true,
+      danglingRepairCaseJson "agent" ⟨true, false, .acpFiltered⟩ false,
+      danglingRepairCaseJson "agent" ⟨false, true, .acpFiltered⟩ true])),
+   ("destructive_decision_cases", toJson destructiveDecisionCases),
    ("tool_source_change_cases", toJson ([
       toolSourceChangeCaseJson "present-noop" true false false,
       toolSourceChangeCaseJson "absent-noop" false true false,
