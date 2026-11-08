@@ -181,7 +181,16 @@ fn load_operator_node_identity(
 /// Only a record for a runtime this desktop hosts qualifies, and only when
 /// its home's live `runtime.json` names both the record's endpoint and node,
 /// so a bearer is never sent to a remote or re-pointed endpoint.
+///
+/// Every route endpoint admits the User client key, so `operator_graphql`
+/// does not distinguish a hosted runtime: only a desktop-installed
+/// (`local-standard`) or managed enrollment route may open the runtime's key.
 pub fn hosted_runtime_home(record: &crate::client::PeerRecord) -> Result<&Path> {
+    anyhow::ensure!(
+        record.source.as_deref() == Some(LOCAL_STANDARD_SOURCE)
+            || (record.is_enrollment() && record.is_managed_runtime()),
+        "runtime record is not a runtime this desktop hosts"
+    );
     let endpoint = record
         .operator_graphql()
         .context("runtime record is not a runtime this desktop hosts")?;
