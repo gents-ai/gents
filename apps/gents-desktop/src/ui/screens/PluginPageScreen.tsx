@@ -7,11 +7,28 @@
    edge and top to bottom, not the reading column: a plugin page is an
    app surface of its own (a board, a diff viewer) that lays itself out and
    scrolls inside its frame. */
+import { SquareArrowOutUpRight } from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "@gents/ui/components/button";
 import { ContribBoundary, ContribRender } from "@/contrib/react/boundary";
+import { useUxPluginRecords } from "@/contrib/plugins-store";
 import { useContributions } from "@/contrib/react/use-contributions";
 import { PLUGIN_PAGE_AREA } from "@/contrib/types";
+import { PaneBar } from "@/app/PaneBar";
+import { useSelectedNodeDid } from "@/hooks/useClient";
+import { errorText } from "../../lib/errorText";
+import { inNativeShell, openPluginWindow } from "../../lib/nativeShell";
+import { isMobileTauriShell } from "../../lib/shellPlatform";
+import { Hint } from "./Hint";
 
-export function PluginPageScreen({ pluginId }: { pluginId: string }) {
+/** `windowed`: the page fills a window of its own, so it offers no other */
+export function PluginPageScreen({
+  pluginId,
+  windowed = false,
+}: {
+  pluginId: string;
+  windowed?: boolean;
+}) {
   const pages = useContributions(PLUGIN_PAGE_AREA);
   const page = pages.find((c) => c.source === `plugin:${pluginId}` && c.render);
   if (!page?.render) {
@@ -29,9 +46,42 @@ export function PluginPageScreen({ pluginId }: { pluginId: string }) {
       className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-auto p-2 md:p-3"
       data-testid="plugin-page"
     >
+      {!windowed && inNativeShell() && !isMobileTauriShell() && (
+        <OpenInWindow pluginId={pluginId} />
+      )}
       <ContribBoundary id={page.id} variant="pane">
         <ContribRender render={page.render} />
       </ContribBoundary>
     </div>
+  );
+}
+
+function OpenInWindow({ pluginId }: { pluginId: string }) {
+  const name = useUxPluginRecords()[pluginId]?.name ?? pluginId;
+  const nodeDid = useSelectedNodeDid();
+  return (
+    <PaneBar>
+      <div className="flex-1" />
+      <Hint label="Open in new window">
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          className="text-muted-foreground hover:text-foreground"
+          aria-label="Open in new window"
+          data-testid="plugin-page-window"
+          onClick={() =>
+            void openPluginWindow({
+              pluginId,
+              nodeDid,
+              title: name.slice(0, 120),
+            }).catch((error) =>
+              toast.error(`Couldn't open ${name} in a new window: ${errorText(error)}`),
+            )
+          }
+        >
+          <SquareArrowOutUpRight />
+        </Button>
+      </Hint>
+    </PaneBar>
   );
 }

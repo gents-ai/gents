@@ -7,6 +7,7 @@ import type { BackendDeleteRequest } from "./BackendDeleteRequest.js";
 import type { BackendHealthView } from "./BackendHealthView.js";
 import type { BackendRotationSetRequest } from "./BackendRotationSetRequest.js";
 import type { BackendSaveRequest } from "./BackendSaveRequest.js";
+import type { Channel } from "@tauri-apps/api/core";
 import type { ChatSendRequest } from "./ChatSendRequest.js";
 import type { ChatSendResult } from "./ChatSendResult.js";
 import type { ChatSubmissionQuery } from "./ChatSubmissionQuery.js";
@@ -290,6 +291,8 @@ export type DesktopCommands = {
   desktop_trigger_save: { args: { request: TriggerSaveRequest }; result: DesktopClientSnapshot };
   desktop_ux_data_call: { args: { request: UxDataCallRequest }; result: JsonValue };
   desktop_ux_data_surfaces: { args: { request: UxDataSurfacesRequest }; result: JsonValue };
+  desktop_ux_data_unwatch: { args: { id: string }; result: void };
+  desktop_ux_data_watch: { args: { request: UxDataCallRequest; channel: Channel<JsonValue> }; result: string };
   desktop_ux_plugin_source: { args: { id: string }; result: JsonValue };
   desktop_ux_plugins_list: { args: Record<string, never>; result: JsonValue };
   desktop_workflow_dynamic: { args: { selector: string }; result: DynamicWorkflowView };

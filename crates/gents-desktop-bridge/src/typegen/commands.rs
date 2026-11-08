@@ -56,6 +56,20 @@ impl Types {
                 match (name.as_str(), arguments.as_slice()) {
                     ("Option", [value]) => Ok(format!("{value} | null")),
                     ("Vec", [value]) => Ok(format!("Array<{value}>")),
+                    ("Channel", [value])
+                        if path
+                            .path
+                            .segments
+                            .iter()
+                            .map(|part| part.ident.to_string())
+                            .collect::<Vec<_>>()
+                            == ["tauri", "ipc", "Channel"] =>
+                    {
+                        self.imports.insert(
+                            "import type { Channel } from \"@tauri-apps/api/core\";".into(),
+                        );
+                        Ok(format!("Channel<{value}>"))
+                    }
                     ("String" | "PathBuf", []) => Ok("string".into()),
                     ("bool", []) => Ok("boolean".into()),
                     (
@@ -254,4 +268,23 @@ pub(super) fn export(dir: &Path) -> Result<(), String> {
     }
     let source = format!("// Generated from the native command signatures.\n{}\n\nexport type DesktopCommands = {{\n{}\n}};\n", types.imports.into_iter().collect::<Vec<_>>().join("\n"), commands.into_values().collect::<Vec<_>>().join("\n"));
     std::fs::write(dir.join("DesktopCommands.ts"), source).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tauri_channel_keeps_its_payload_type_and_package_import() {
+        let mut types = Types {
+            files: BTreeMap::from([("JsonValue".into(), "serde_json/JsonValue.ts".into())]),
+            imports: BTreeSet::new(),
+            aliases: BTreeMap::new(),
+        };
+        let ty: Type = syn::parse_str("tauri::ipc::Channel<serde_json::Value>").unwrap();
+        assert_eq!(types.name(&ty).unwrap(), "Channel<JsonValue>");
+        assert!(types
+            .imports
+            .contains("import type { Channel } from \"@tauri-apps/api/core\";"));
+    }
 }

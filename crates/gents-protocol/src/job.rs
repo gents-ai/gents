@@ -80,7 +80,7 @@ pub enum JobOrigin {
 }
 
 /// How dynamic (non-installed) scripts are treated; mirrors Lean `PluginJob.DynamicMode`.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum DynamicMode {
