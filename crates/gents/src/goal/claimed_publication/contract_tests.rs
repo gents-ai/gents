@@ -9,7 +9,7 @@ use serde_json::json;
 use crate::request::lifecycle::{ClaimOutcome, RequestTerminalOutcome, TerminalizeResult};
 use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
 use crate::tools::call::lifecycle::SpawnedBackgroundToolAdmission;
-use gents_protocol::row::AwaitMode;
+use gents_protocol::tool_call::AwaitMode;
 
 use super::super::operator_resume::support::*;
 

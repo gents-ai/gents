@@ -7,10 +7,8 @@ use serde_json::{json, Value};
 use crate::inference::resolved::{
     ResolvedConfiguration, SelectedConfiguration, SelectedConfigurationDocument,
 };
-use crate::store::config_client::{
-    apply_desired_state_plan, ConfigAccess, ConfigClientError, DesiredStateApplyDocument,
-    DesiredStateApplyPlan, GraphqlEndpoint,
-};
+use crate::documents::apply_desired_state_plan;
+use crate::store::config_client::{ConfigAccess, ConfigClientError, DesiredStateApplyDocument, DesiredStateApplyPlan, GraphqlEndpoint};
 use crate::store::identity::NodeIdentity;
 use crate::Collection;
 
@@ -488,7 +486,7 @@ async fn held_client_and_agent_mcp_selection_isolation_rebind_and_rollback() -> 
         .transact_write("test.mcp.agent_create", |txn| {
             let (plan, binding) = (&agent_service, &node_binding);
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan_with_node_binding(
+                crate::documents::apply_desired_state_plan_with_node_binding(
                     txn,
                     plan,
                     Some(binding),

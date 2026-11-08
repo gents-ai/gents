@@ -160,7 +160,7 @@ pub(crate) fn row_admission(row: &AgentRequestRow) -> Result<AgentRequestAdmissi
 static DEFAULT_REQUEST_INPUT: std::sync::LazyLock<RequestInput> =
     std::sync::LazyLock::new(Default::default);
 
-fn required(value: Option<&str>, field: &'static str) -> Result<&str> {
+fn required<'a>(value: Option<&'a str>, field: &'static str) -> Result<&'a str> {
     value.ok_or(RequestReceiptError::MissingField(field))
 }
 

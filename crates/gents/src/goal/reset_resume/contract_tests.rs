@@ -101,7 +101,7 @@ pub(super) async fn disable_backend(f: &Fixture, backend: &str) {
                         update: value,
                     },
                 ])?;
-                crate::store::config_client::apply_desired_state_plan(txn, &plan).await?;
+                crate::documents::apply_desired_state_plan(txn, &plan).await?;
                 Ok::<_, anyhow::Error>(())
             })
         })
@@ -193,7 +193,7 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
                 .unwrap();
         }
         if !facts.profile_names_account {
-            crate::store::config_client::switch_profile_account(
+            crate::inference::profile_switch::switch_profile_account(
                 &accounts.access,
                 did,
                 PROFILE,

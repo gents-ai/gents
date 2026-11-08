@@ -52,7 +52,7 @@ async fn fixture(name: &str) -> Fixture {
         .transact_write("test.finality.node", |txn| {
             let node_plan = &node_plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, node_plan).await
+                crate::documents::apply_desired_state_plan(txn, node_plan).await
             })
         })
         .await
@@ -94,7 +94,7 @@ async fn fixture(name: &str) -> Fixture {
         .transact_write("test.finality.agents", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                crate::documents::apply_desired_state_plan(txn, plan).await
             })
         })
         .await
@@ -258,7 +258,7 @@ async fn set_parent_enabled(fixture: &Fixture, enabled: bool) {
         .transact_write("test.finality.parent_enabled", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                crate::documents::apply_desired_state_plan(txn, plan).await
             })
         })
         .await

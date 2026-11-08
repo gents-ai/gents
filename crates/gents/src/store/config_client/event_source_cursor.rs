@@ -14,7 +14,6 @@ pub(crate) struct CursorRecord {
 /// The consumer configuration a checkpoint is admitted against, resolved by
 /// the documents owner inside the same transaction as the journal reads.
 pub(crate) struct ResolvedConsumerBinding {
-    pub source_collection: String,
     pub agent_did: String,
     pub enabled: bool,
     pub serial: bool,

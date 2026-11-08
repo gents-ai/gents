@@ -22,7 +22,7 @@ pub async fn read_direct_inventory(
     );
     let session = access
         .transact_readonly("file_inventory.client_scope", |txn| {
-            Box::pin(crate::session::load_agent_session_owner_in_txn(
+            Box::pin(crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
                 txn, node_did, session_id,
             ))
         })

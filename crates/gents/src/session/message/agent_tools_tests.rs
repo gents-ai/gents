@@ -4,7 +4,7 @@ use crate::store::identity::NodeIdentity as _;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_session_message, PublishedAdmissionOptions, PublishedSessionMessage,
 };
-use gents_protocol::row::AwaitMode;
+use gents_protocol::tool_call::AwaitMode;
 
 pub(super) async fn started(
     name: &str,

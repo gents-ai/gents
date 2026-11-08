@@ -259,7 +259,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             .with_node_acp_enabled()
             .with_document_projector(crate::store::local::document_projector(
                 runtime.clone(),
-                crate::tools::surface::ToolCeiling::meta_only(),
+                std::sync::Arc::new(crate::tools::surface::ToolCeiling::meta_only()),
             )?)
             .with_http(defra_node::HttpConfig::with_listener(listener)?)
             .build()
@@ -350,7 +350,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         .transact_write("test.agent_creator.seed", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                crate::documents::apply_desired_state_plan(txn, plan).await
             })
         })
         .await
@@ -926,7 +926,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         .transact_write("test.surface.select", |txn| {
             let plan = &initial_surface_plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                crate::documents::apply_desired_state_plan(txn, plan).await
             })
         })
         .await?;
@@ -1166,7 +1166,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         .transact_write("test.surface.change", |txn| {
             let plan = &changed_plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                crate::documents::apply_desired_state_plan(txn, plan).await
             })
         })
         .await?;
@@ -1178,7 +1178,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         .transact_write("test.surface.restore", |txn| {
             let plan = &initial_surface_plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                crate::documents::apply_desired_state_plan(txn, plan).await
             })
         })
         .await?;
@@ -1192,7 +1192,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         .transact_write("test.surface.deselect", |txn| {
             let plan = &deselect_plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                crate::documents::apply_desired_state_plan(txn, plan).await
             })
         })
         .await?;
@@ -1208,7 +1208,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         .transact_write("test.surface.reselect", |txn| {
             let plan = &initial_surface_plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                crate::documents::apply_desired_state_plan(txn, plan).await
             })
         })
         .await?;

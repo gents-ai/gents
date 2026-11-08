@@ -155,7 +155,7 @@ async fn existing_resume_receipt_in_txn(
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GoalResumeOnReceipt {
-    pub switch: Option<crate::store::config_client::SwitchReceipt>,
+    pub switch: Option<crate::inference::profile_switch::SwitchReceipt>,
     pub resume: GoalResumeReceipt,
 }
 
@@ -216,7 +216,7 @@ where
         Some(profile) => {
             let receipt = async {
                 let slots = plugin_slots(&profile)?;
-                crate::store::config_client::switch_profile_account(
+                crate::inference::profile_switch::switch_profile_account(
                     access,
                     node_did,
                     &profile,

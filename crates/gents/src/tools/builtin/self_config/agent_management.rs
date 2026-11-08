@@ -559,7 +559,7 @@ async fn agent_apply_in_txn(
         );
     }
     if !preview {
-        crate::store::config_client::apply_desired_state_plan_with_node_binding(
+        crate::documents::apply_desired_state_plan_with_node_binding(
             txn,
             &plan,
             node_binding,

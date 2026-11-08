@@ -234,9 +234,9 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
             ).await?;
             for tool in &encoded.tool_calls {
                 let await_mode = if background_calls.contains(&tool.id) {
-                    gents_protocol::row::AwaitMode::Background
+                    gents_protocol::tool_call::AwaitMode::Background
                 } else {
-                    gents_protocol::row::AwaitMode::Foreground
+                    gents_protocol::tool_call::AwaitMode::Foreground
                 };
                 let tool_call_key = format!("{}:{}:{}", prepared.request_doc_id, message_key, tool.native_index);
                 tool_call_keys.push(tool_call_key.clone());
@@ -319,9 +319,9 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
                     execution_generation: generation.to_owned(),
                     arguments: PayloadRef { close_doc_id: close_doc_id.clone(), stream: tool.arguments_stream },
                     await_mode: if background_calls.contains(&tool.id) {
-                        gents_protocol::row::AwaitMode::Background
+                        gents_protocol::tool_call::AwaitMode::Background
                     } else {
-                        gents_protocol::row::AwaitMode::Foreground
+                        gents_protocol::tool_call::AwaitMode::Foreground
                     },
                 }
             }).collect();
@@ -462,16 +462,16 @@ async fn replay_publication_in_txn(
                     == Some("pending"),
             "publication replay pending tool binding changed"
         );
-        let await_mode = gents_protocol::row::AwaitMode::from_persisted(
+        let await_mode = gents_protocol::tool_call::AwaitMode::from_persisted(
             tool["await_mode"]
                 .as_str()
                 .context("publication replay lacks await mode")?,
         )
         .context("publication replay has invalid await mode")?;
         let planned = if background_calls.contains(id) {
-            gents_protocol::row::AwaitMode::Background
+            gents_protocol::tool_call::AwaitMode::Background
         } else {
-            gents_protocol::row::AwaitMode::Foreground
+            gents_protocol::tool_call::AwaitMode::Foreground
         };
         if await_mode != planned {
             return Err(ProviderReplayRejection::AwaitModeChanged.into());

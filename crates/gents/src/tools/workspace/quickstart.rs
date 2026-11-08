@@ -11,8 +11,9 @@ use super::{
     HostExecutorContext, RepositoryPlacementRef, WorkspaceAdapterKind, WorkspaceDocuments,
     CAP_CREATE_WORKSPACE, CAP_OBSERVE_DIRTY_BASE, CAP_SEAL_WORKSPACE,
 };
+use crate::documents::apply_desired_state_plan;
 use crate::store::config_client::{
-    apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
+    read_desired_state_record_in_txn, ConfigAccess,
     DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use crate::Collection;

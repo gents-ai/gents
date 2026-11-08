@@ -1061,7 +1061,7 @@ async fn labeled_session_rows_in_txn(
     for row in rows {
         match gents_protocol::session::decode_session_row(row) {
             Ok(row) => decoded.push(row),
-            Err(error) => undecodable.push(error),
+            Err(error) => undecodable.push(error.into()),
         }
     }
     Ok(LabeledSessionRows {

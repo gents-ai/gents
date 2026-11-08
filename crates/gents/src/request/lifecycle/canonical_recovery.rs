@@ -73,6 +73,7 @@ pub(in crate::request::lifecycle) async fn request_segments(
         Some(session_id),
         requester,
     )
+    .map_err(anyhow::Error::from)
 }
 
 async fn validate_selection(

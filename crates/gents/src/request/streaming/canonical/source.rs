@@ -238,4 +238,5 @@ pub(super) async fn load_source_in_txn(
             .filter(|row| row.segment.source == prepared.source)
             .collect()
     })
+    .map_err(anyhow::Error::from)
 }

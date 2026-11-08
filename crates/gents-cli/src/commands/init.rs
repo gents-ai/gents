@@ -315,7 +315,7 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
         node_builder = node_builder
             .with_document_projector(gents::store::local::document_projector(
                 initialized_identity.identity.clone(),
-                ceiling,
+                std::sync::Arc::new(ceiling),
             )?)
             .with_node_identity_did(node_identity_did.clone())
             .with_node_acp_enabled();
@@ -2675,7 +2675,8 @@ mod tests {
                 .await
                 .unwrap()
                 .with_document_projector(
-                    gents::store::local::document_projector(identity.clone(), ceiling).unwrap(),
+                    gents::store::local::document_projector(identity.clone(), std::sync::Arc::new(ceiling))
+                        .unwrap(),
                 )
                 .with_node_identity_did(identity.did())
                 .with_node_acp_enabled()

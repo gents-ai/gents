@@ -275,7 +275,7 @@ async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committe
         crate::request::lifecycle::RequestSigner::Identity(fixture.agent_identity.as_ref()),
     )
     .await?;
-    let generation = crate::triggers::engine::event_delivery::event_admission_generation(
+    let generation = crate::documents::automation::event_admission_generation(
         &serde_json::from_value(source("WorkA").add)?,
         &serde_json::from_value(trigger(true).add)?,
         &serde_json::from_value(
@@ -285,7 +285,7 @@ async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committe
             )
             .add,
         )?,
-        &crate::triggers::engine::event_delivery::EventConfigDocIds {
+        &crate::documents::automation::EventConfigDocIds {
             trigger: trigger_doc_id,
             source: trigger_record["data"]["EventSource"][0]["_docID"]
                 .as_str()

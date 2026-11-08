@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 fn goal_id(owner: &str, session: &str, id: u64) -> String {
     if id == 1 {
-        crate::goal::deterministic_goal_id(owner, session)
+        gents_protocol::goal::deterministic_goal_id(owner, session)
     } else {
         crate::goal::replacement_goal_identity(owner, session, &format!("assignment-{id}")).goal_id
     }
@@ -295,7 +295,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 let assignment = &version["assignment"];
                 let goal_identity = assignment["goal"].as_u64().unwrap();
                 let creation_key = if goal_identity == 1 {
-                    crate::goal::deterministic_goal_creation_key(identity.did(), &session)
+                    gents_protocol::goal::deterministic_goal_creation_key(identity.did(), &session)
                 } else {
                     crate::goal::replacement_goal_identity(
                         identity.did(),
@@ -332,7 +332,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             }
             for (id, ()) in claims {
                 let creation_key = if id == 1 {
-                    crate::goal::deterministic_goal_creation_key(identity.did(), &session)
+                    gents_protocol::goal::deterministic_goal_creation_key(identity.did(), &session)
                 } else {
                     crate::goal::replacement_goal_identity(
                         identity.did(),

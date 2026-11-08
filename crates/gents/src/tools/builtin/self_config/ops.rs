@@ -430,7 +430,7 @@ impl SelfConfigCore {
         let shared =
             shared_receipt(txn, request.target, &self.node_did, &unique_value, &merged).await?;
         let plan = replacement_plan(request.target, &merged)?;
-        crate::store::config_client::apply_desired_state_plan_with_node_binding(
+        crate::documents::apply_desired_state_plan_with_node_binding(
             txn,
             &plan,
             self.node_binding(),

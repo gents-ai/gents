@@ -1679,7 +1679,7 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_accep
                     } else {
                         plan
                     };
-                    crate::store::config_client::apply_desired_state_plan(txn, &plan).await
+                    crate::documents::apply_desired_state_plan(txn, &plan).await
                 })
             })
             .await;

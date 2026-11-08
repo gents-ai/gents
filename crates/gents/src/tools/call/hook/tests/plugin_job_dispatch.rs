@@ -278,7 +278,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
         .transact_write("test.plugin_job_target", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                crate::documents::apply_desired_state_plan(txn, plan).await
             })
         })
         .await
@@ -321,7 +321,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
         "agents": {"enabled": true, "target_ids": if options.caller_targets { vec!["t-worker"] } else { Vec::new() }},
         "integrations": {"plugins": [{"plugin": "team/plugin", "job": hook.job_tools.get(TOOL).unwrap().settings}]},
     })).unwrap();
-    crate::store::config_client::write_tools_document(&owner, &tools)
+    crate::documents::write_tools_document(&owner, &tools)
         .await
         .unwrap();
     if options.driver {
@@ -356,7 +356,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
             agent_executor_queue_capacities: Default::default(),
         });
         let (_sender, receiver) = tokio::sync::watch::channel(snapshot);
-        runtime.bind_snapshot(Box::new(receiver)).unwrap();
+        runtime.bind_snapshot(crate::runtime::snapshot::ActiveSnapshotAgentIdentities::boxed(receiver)).unwrap();
         let admission = crate::runtime::service::RuntimeServiceAdmission::default();
         if !options.kicks {
             admission
@@ -1931,7 +1931,7 @@ impl Step0 {
                                         update: node,
                                     },
                                 ])?;
-                            crate::store::config_client::apply_desired_state_plan(txn, &plan).await
+                            crate::documents::apply_desired_state_plan(txn, &plan).await
                         })
                     })
                     .await

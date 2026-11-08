@@ -48,7 +48,7 @@ async fn history_on(
 async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
     use crate::store::identity::NodeIdentity;
     use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
-    use gents_protocol::row::AwaitMode;
+    use gents_protocol::tool_call::AwaitMode;
     let (db, user, client, binding) =
         crate::test_support::signed_test_node("provider-history").await;
     let session_id = "session-steering-provider-history";
@@ -2591,7 +2591,7 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
 async fn retry_frontier_matches_lean_admission() {
     use crate::store::identity::NodeIdentity;
     use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
-    use gents_protocol::row::AwaitMode;
+    use gents_protocol::tool_call::AwaitMode;
     let (db, user, client, binding) = crate::test_support::signed_test_node("retry-frontier").await;
     let node = &db.node;
     let node_did = db.node_identity.did();

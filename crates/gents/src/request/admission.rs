@@ -1882,7 +1882,7 @@ mod tests {
                             update: record,
                         },
                     ])?;
-                    crate::store::config_client::apply_desired_state_plan(txn, &plan).await
+                    crate::documents::apply_desired_state_plan(txn, &plan).await
                 })
             })
             .await

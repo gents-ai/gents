@@ -161,7 +161,7 @@ async fn resume_on_retry_returns_the_same_child() {
 async fn completed_resume_retry_does_not_switch_a_profile_moved_again() {
     let limited = Limited::new(&usage_limit()).await;
     let first = limited.resume_on(&limited.b).await.unwrap();
-    crate::store::config_client::switch_profile_account(
+    crate::inference::profile_switch::switch_profile_account(
         &limited.access,
         limited.f.identity.did(),
         PROFILE,
@@ -196,7 +196,7 @@ async fn generated_resume_on_cases_drive_account_preflight_and_receipt_recovery(
                 assert!(case.expected["children"].as_array().unwrap().is_empty());
                 assert_eq!(case.outcome, "unavailable");
                 let limited = Limited::new(&usage_limit()).await;
-                crate::store::config_client::switch_profile_account(
+                crate::inference::profile_switch::switch_profile_account(
                     &limited.access,
                     limited.f.identity.did(),
                     PROFILE,
@@ -246,7 +246,7 @@ async fn generated_resume_on_cases_drive_account_preflight_and_receipt_recovery(
 #[tokio::test]
 async fn moved_profile_retry_rejects_a_disabled_target_account() {
     let limited = Limited::new(&usage_limit()).await;
-    crate::store::config_client::switch_profile_account(
+    crate::inference::profile_switch::switch_profile_account(
         &limited.access,
         limited.f.identity.did(),
         PROFILE,
@@ -275,7 +275,7 @@ async fn moved_profile_retry_rejects_a_disabled_target_account() {
 #[tokio::test]
 async fn moved_profile_retry_rejects_a_removed_target_account() {
     let limited = Limited::new(&usage_limit()).await;
-    crate::store::config_client::switch_profile_account(
+    crate::inference::profile_switch::switch_profile_account(
         &limited.access,
         limited.f.identity.did(),
         PROFILE,

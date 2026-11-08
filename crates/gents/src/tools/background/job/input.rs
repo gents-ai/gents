@@ -1767,7 +1767,7 @@ pub(crate) mod tests {
             "integrations": {"plugins": [{"plugin": "acme/engine", "job": settings}]},
         }))
         .unwrap();
-        crate::store::config_client::write_tools_document(&owner, &tools)
+        crate::documents::write_tools_document(&owner, &tools)
             .await
             .unwrap();
         let agent = agent_access(&node);
@@ -1846,7 +1846,7 @@ pub(crate) mod tests {
             agent_snapshots: Default::default(),
         };
         let (_snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(agent_snapshot());
-        runtime.bind_snapshot(Box::new(snapshot_rx)).unwrap();
+        runtime.bind_snapshot(crate::runtime::snapshot::ActiveSnapshotAgentIdentities::boxed(snapshot_rx)).unwrap();
         Job {
             node,
             access: agent,

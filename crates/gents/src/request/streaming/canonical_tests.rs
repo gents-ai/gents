@@ -1580,7 +1580,7 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
         .unwrap()
         .iter()
         .map(gents_protocol::output::rows::decode_output_segment_row)
-        .collect::<anyhow::Result<Vec<_>>>()
+        .collect::<Result<Vec<_>, _>>()
         .unwrap();
     let close = rows.iter().find(|row| row.segment.close.is_some()).unwrap();
     assert!(
@@ -1925,7 +1925,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
         lifecycle.request().requester_did.clone(),
         a.clone(),
         deadline,
-        gents_protocol::row::AwaitMode::Foreground,
+        gents_protocol::tool_call::AwaitMode::Foreground,
     )
     .unwrap();
     let mut replay_dispatch = crate::tools::call::lifecycle::ToolCallLifecycle::from_accepted(
@@ -1934,7 +1934,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
         lifecycle.request().requester_did.clone(),
         b.clone(),
         deadline,
-        gents_protocol::row::AwaitMode::Foreground,
+        gents_protocol::tool_call::AwaitMode::Foreground,
     )
     .unwrap();
     let (first_start, replay_start) = tokio::join!(

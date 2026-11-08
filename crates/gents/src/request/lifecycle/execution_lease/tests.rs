@@ -124,7 +124,7 @@ async fn managed_agent_signs_transcript_and_plugin_effect_blocks() {
         lifecycle.request().requester_did.clone(),
         accepted,
         lifecycle.claimed_deadline_at().unwrap(),
-        gents_protocol::row::AwaitMode::Foreground,
+        gents_protocol::tool_call::AwaitMode::Foreground,
     )
     .unwrap();
     tool.start_running().await.unwrap();
@@ -1060,7 +1060,7 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
         OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
         StreamDeclaration, StreamPayload, ToolResultPart, TranscriptMessage,
     };
-    use gents_protocol::row::AwaitMode;
+    use gents_protocol::tool_call::AwaitMode;
 
     let (node, _dir, identity, agent) = test_node().await;
 

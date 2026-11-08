@@ -94,8 +94,10 @@ async fn stage_reset_resume(
                 let Some(provider) = backend.provider_kind.oauth_provider() else {
                     return Ok(None);
                 };
-                txn.runtime_oauth_account_served_before(runtime, node_did, provider, pick, started)
-                    .await?
+                crate::inference::auth::credential::runtime_oauth_account_served_before(
+                    txn, runtime, node_did, provider, pick, started,
+                )
+                .await?
             }
             None => backend.enabled,
         };

@@ -204,7 +204,7 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
                 user.transact_write("test.goal.other_agent", |txn| {
                     let plan = &plan;
                     Box::pin(async move {
-                        crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                        crate::documents::apply_desired_state_plan(txn, plan).await
                     })
                 })
                 .await

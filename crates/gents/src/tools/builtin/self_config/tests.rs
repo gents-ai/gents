@@ -459,10 +459,8 @@ impl SelfConfigFixture {
     }
 
     async fn grant_pack_install_to(&self, agent_did: &str) {
-        use crate::store::config_client::{
-            apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
-            DesiredStateApplyPlan,
-        };
+        use crate::documents::apply_desired_state_plan;
+        use crate::store::config_client::{read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan};
         let tools_id = format!("{agent_did}:tools");
         self.user_access
             .transact_write("test.self_config.grant_pack_install", |txn| {
@@ -4386,7 +4384,7 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
         .transact_write("test.foreign_tools", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                crate::documents::apply_desired_state_plan(txn, plan).await
             })
         })
         .await
@@ -4895,13 +4893,13 @@ async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
         "endpoint": "http://127.0.0.1:1/v1", "auth": stored,
     }))
     .unwrap();
-    let secret = crate::inference::auth::credential::BackendCredential {
+    let secret = crate::documents::backend_credential::BackendCredential {
         credential_id: stored["id"].as_str().unwrap().to_owned(),
         node_did: fixture.node_did().to_owned(),
         provider_kind: backend.provider_kind.as_str().to_owned(),
         endpoint: backend.endpoint.clone(),
         version: stored["version"].as_str().unwrap().to_owned(),
-        secret: crate::inference::auth::credential::BackendCredentialSecret::ApiKey {
+        secret: crate::documents::backend_credential::BackendCredentialSecret::ApiKey {
             key: raw_key["key"].as_str().unwrap().to_owned(),
         },
     };
@@ -4910,12 +4908,12 @@ async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
         .transact_write("test.raw_key.credential", |txn| {
             let secret = &secret;
             Box::pin(async move {
-                crate::inference::auth::credential::put_backend_credential_in_txn(txn, secret).await
+                crate::documents::backend_credential::put_backend_credential_in_txn(txn, secret).await
             })
         })
         .await
         .unwrap();
-    crate::store::config_client::write_inference_backend_document(fixture.user_access(), &backend)
+    crate::documents::write_inference_backend_document(fixture.user_access(), &backend)
         .await
         .unwrap();
     for result in [
@@ -5021,7 +5019,7 @@ async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
         }))
         .unwrap();
         async move {
-            crate::store::config_client::write_inference_backend_document(access, &backend)
+            crate::documents::write_inference_backend_document(access, &backend)
                 .await
                 .unwrap();
         }
@@ -5134,7 +5132,7 @@ async fn backend_choice_uses_runtime_visible_default_in_agent_transaction() {
                 "auth": {"kind":"node_oauth", "account_ref": account},
             }))
             .unwrap();
-            crate::store::config_client::write_inference_backend_document(
+            crate::documents::write_inference_backend_document(
                 fixture.user_access(),
                 &backend,
             )
@@ -5191,7 +5189,7 @@ async fn account_choice_core(name: &str) -> (SelfConfigFixture, SelfConfigCore) 
             "endpoint": "http://127.0.0.1:1/v1", "auth": auth,
         }))
         .unwrap();
-        crate::store::config_client::write_inference_backend_document(access, &backend)
+        crate::documents::write_inference_backend_document(access, &backend)
             .await
             .unwrap();
     }
@@ -5206,7 +5204,7 @@ async fn account_choice_core(name: &str) -> (SelfConfigFixture, SelfConfigCore) 
             "model_name": "test-model",
         }))
         .unwrap();
-        crate::store::config_client::write_inference_profile_document(access, &profile)
+        crate::documents::write_inference_profile_document(access, &profile)
             .await
             .unwrap();
     }
@@ -5253,7 +5251,7 @@ async fn account_choice_core(name: &str) -> (SelfConfigFixture, SelfConfigCore) 
         .transact_write("test.compaction", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                crate::documents::apply_desired_state_plan(txn, plan).await
             })
         })
         .await
@@ -5353,7 +5351,7 @@ async fn grok_accounts_core(
         "auth": {"kind":"node_oauth","account_ref":"g2"},
     }))
     .unwrap();
-    crate::store::config_client::write_inference_backend_document(access, &backend)
+    crate::documents::write_inference_backend_document(access, &backend)
         .await
         .unwrap();
     let profile: crate::documents::InferenceProfile = serde_json::from_value(json!({
@@ -5361,7 +5359,7 @@ async fn grok_accounts_core(
         "model_name": "test-model",
     }))
     .unwrap();
-    crate::store::config_client::write_inference_profile_document(access, &profile)
+    crate::documents::write_inference_profile_document(access, &profile)
         .await
         .unwrap();
     fixture
@@ -5706,7 +5704,7 @@ async fn agent_clone_inherited_compaction_cannot_switch_account() {
                     });
                 }
                 let plan = crate::store::config_client::DesiredStateApplyPlan::new(documents)?;
-                crate::store::config_client::apply_desired_state_plan(txn, &plan).await
+                crate::documents::apply_desired_state_plan(txn, &plan).await
             })
         })
         .await
@@ -6377,7 +6375,7 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
     }]))
     .unwrap();
     for document in [&claude, &keyed, &unobserved] {
-        crate::store::config_client::write_inference_backend_document(access, document)
+        crate::documents::write_inference_backend_document(access, document)
             .await
             .unwrap();
     }
@@ -6492,7 +6490,7 @@ async fn modeled_resource_reads_use_resource_category_and_native_access() {
         .transact_write("test.read_exposure.task", |txn| {
             let task_plan = &task_plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, task_plan).await
+                crate::documents::apply_desired_state_plan(txn, task_plan).await
             })
         })
         .await
@@ -6578,7 +6576,7 @@ async fn automation_read_preserves_native_selected_agent_visibility() {
         .transact_write("test.automation_read.other_task", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                crate::documents::apply_desired_state_plan(txn, plan).await
             })
         })
         .await
@@ -7029,7 +7027,7 @@ async fn seed_account_view(
             "auth": auth,
         }))
         .unwrap();
-        crate::store::config_client::write_inference_backend_document(access, &backend)
+        crate::documents::write_inference_backend_document(access, &backend)
             .await
             .unwrap();
     }
@@ -7040,7 +7038,7 @@ async fn seed_account_view(
         "model_name": "model-x",
     }))
     .unwrap();
-    crate::store::config_client::write_inference_profile_document(access, &profile)
+    crate::documents::write_inference_profile_document(access, &profile)
         .await
         .unwrap();
     crate::inference::usage_observation::record_usage(
@@ -7413,7 +7411,7 @@ async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() 
     let access = fixture.user_access();
     let mut stored = crate::load_agent(node, &target).await.unwrap().unwrap();
     stored.enabled = false;
-    crate::store::config_client::write_agent_document(access, &stored)
+    crate::documents::write_agent_document(access, &stored)
         .await
         .unwrap();
     let mut args = ConfigureAgentParams {
@@ -7487,13 +7485,13 @@ async fn public_prompt_edits_require_an_existing_unshared_context_without_partia
     let access = fixture.user_access();
     let mut missing = crate::load_agent(node, &missing_id).await.unwrap().unwrap();
     missing.context_id = None;
-    crate::store::config_client::write_agent_document(access, &missing)
+    crate::documents::write_agent_document(access, &missing)
         .await
         .unwrap();
     let shared = crate::load_agent(node, &shared_id).await.unwrap().unwrap();
     let mut sibling = crate::load_agent(node, &sibling_id).await.unwrap().unwrap();
     sibling.context_id = shared.context_id;
-    crate::store::config_client::write_agent_document(access, &sibling)
+    crate::documents::write_agent_document(access, &sibling)
         .await
         .unwrap();
     let query = "query { Agent(order: {agent_did: ASC}) { agent_did display_name context_id inference_profile_id enabled } AgentContext(order: {context_id: ASC}) { context_id display_name system_prompt tools_id } }";
@@ -8405,7 +8403,7 @@ async fn install_chat_account_fences(fixture: &SelfConfigFixture) {
             "auth": auth,
         }))
         .unwrap();
-        crate::store::config_client::write_inference_backend_document(access, &backend)
+        crate::documents::write_inference_backend_document(access, &backend)
             .await
             .unwrap();
     }
@@ -8415,7 +8413,7 @@ async fn install_chat_account_fences(fixture: &SelfConfigFixture) {
             "model_name": "test-model",
         }))
         .unwrap();
-        crate::store::config_client::write_inference_profile_document(access, &profile)
+        crate::documents::write_inference_profile_document(access, &profile)
             .await
             .unwrap();
     }

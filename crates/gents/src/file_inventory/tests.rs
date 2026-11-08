@@ -131,7 +131,7 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
             .transact_readonly("test.inventory.direct_session", |txn| {
                 let tool = &tool;
                 Box::pin(async move {
-                    crate::session::load_agent_session_owner_in_txn(
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
                         txn,
                         tool.node_did(),
                         tool.session_id(),

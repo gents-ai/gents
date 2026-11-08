@@ -550,7 +550,7 @@ mod tests {
     async fn trigger_worker_inspection_reads_canonical_output_status_and_goal() {
         use crate::store::identity::NodeIdentity;
         use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
-        use gents_protocol::row::AwaitMode;
+        use gents_protocol::tool_call::AwaitMode;
         let (message, caller, _) =
             super::super::agent_tools_tests::started("agent-session-inspection").await;
         let node = message.admission.node.clone();

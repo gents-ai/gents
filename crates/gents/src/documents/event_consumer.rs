@@ -6,7 +6,7 @@ use crate::documents::{
     Callback, CallbackBinding, ConcurrencyMode, EventSource, MissingReference, Task, Trigger,
     TriggerSource,
 };
-use crate::store::config_client::event_source_cursor::{self, ConsumerBinding, CursorRecord};
+use crate::store::config_client::event_source_cursor::{self, CursorRecord, ResolvedConsumerBinding};
 use crate::store::config_client::{
     read_desired_state_document_in_txn, read_desired_state_record_in_txn, ConfigApplyTxn,
     ConfigurationNodeBinding,
@@ -212,7 +212,7 @@ pub(crate) async fn load_or_seed_for_source(
 
 /// The selected Agent is resolved only when a cursor must be created, so an
 /// existing cursor stays readable after its consumer configuration changes.
-async fn load_or_seed_for_source_with_node_binding(
+pub(crate) async fn load_or_seed_for_source_with_node_binding(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     consumer: &EventConsumer,
@@ -225,15 +225,8 @@ async fn load_or_seed_for_source_with_node_binding(
         return Ok(record);
     }
     let writer = consumer_agent(txn, owner, consumer).await?;
-    event_source_cursor::load_or_seed_for_source(
-        txn,
-        owner,
-        consumer,
-        collection,
-        &writer,
-        node_binding,
-    )
-    .await
+    event_source_cursor::seed_for_source(txn, owner, consumer, collection, &writer, node_binding)
+        .await
 }
 
 /// Cursor creation belongs to the configuration transaction, including a
@@ -418,19 +411,19 @@ pub(crate) async fn checkpoint_prefix(
         source.source_collection == collection && source.group.is_none(),
         "event source binding changed before checkpoint"
     );
-    event_source_cursor::checkpoint_arrival_prefix(
+    event_source_cursor::checkpoint_prefix_for_binding(
         txn,
         owner,
         consumer,
-        &ConsumerBinding {
-            source_collection: source.source_collection,
+        collection,
+        through,
+        legacy_serial_busy,
+        &ResolvedConsumerBinding {
             agent_did,
             enabled,
             serial,
             filter: source.filter,
         },
-        through,
-        legacy_serial_busy,
     )
     .await
 }
@@ -449,4 +442,16 @@ pub(crate) async fn acknowledge_fire(
         "arrival prefix remains unadmitted"
     );
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) async fn advance(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    consumer: &EventConsumer,
+    collection: &str,
+    after: &str,
+) -> Result<()> {
+    let writer = consumer_agent(txn, owner, consumer).await?;
+    event_source_cursor::persist_checkpoint(txn, owner, consumer, collection, after, &writer).await
 }

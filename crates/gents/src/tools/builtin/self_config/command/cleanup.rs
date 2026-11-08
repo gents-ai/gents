@@ -208,7 +208,7 @@ async fn cleanup_in_txn(
     }
     crate::store::config_client::validate_desired_state_plan(txn, plan).await?;
     if !preview {
-        crate::store::config_client::apply_desired_state_plan(txn, plan).await?;
+        crate::documents::apply_desired_state_plan(txn, plan).await?;
         for (_, target, id) in targets {
             anyhow::ensure!(
                 ops::read_owned_doc(txn, *target, owner, id)

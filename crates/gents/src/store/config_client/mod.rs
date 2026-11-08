@@ -109,7 +109,7 @@ pub use desired_state::plan::{
     stale_expectation, DesiredStateApplyCounts, DesiredStateApplyDocument, DesiredStateApplyPlan,
     DesiredStateExpectation, DriftedDocument, StaleExpectation,
 };
-#[cfg(test)]
+pub(crate) use desired_state::plan::document_identity;
 pub(crate) use desired_state::projection::canonical_struct_fields;
 pub use desired_state::projection::{config_projection, desired_state_document_digest};
 pub(crate) use desired_state::read::read_desired_state_document_in_txn;

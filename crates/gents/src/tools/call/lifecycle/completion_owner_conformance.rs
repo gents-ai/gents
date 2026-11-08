@@ -1005,7 +1005,7 @@ async fn a_retried_over_bound_wake_is_refused_again() {
                         update: node_input,
                     },
                 ])?;
-                crate::store::config_client::apply_desired_state_plan(txn, &plan).await
+                crate::documents::apply_desired_state_plan(txn, &plan).await
             })
         })
         .await

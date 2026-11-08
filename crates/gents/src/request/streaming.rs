@@ -28,7 +28,7 @@ pub struct AcceptedToolCall {
     pub(crate) tool_name: String,
     pub(crate) execution_generation: String,
     pub(crate) arguments: gents_protocol::output::PayloadRef,
-    pub(crate) await_mode: gents_protocol::row::AwaitMode,
+    pub(crate) await_mode: gents_protocol::tool_call::AwaitMode,
 }
 
 /// Maximum UTF-8 byte length of the reasoning preview persisted while a

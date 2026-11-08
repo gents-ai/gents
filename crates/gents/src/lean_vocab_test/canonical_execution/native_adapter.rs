@@ -165,7 +165,7 @@ async fn create_signed_fixture_request(
     access: &crate::ConfigAccess,
     identity: &dyn NodeIdentity,
     spec: crate::request::lifecycle::RequestSpec,
-) -> Result<crate::request::watcher::AgentRequest> {
+) -> Result<gents_protocol::row::AgentRequest> {
     let create = crate::request::lifecycle::build_signed_request(
         spec,
         crate::request::lifecycle::RequestSigner::Identity(identity),
@@ -187,7 +187,7 @@ async fn create_signed_fixture_request(
     let response = access
         .transact_write("test.native_execution.create_signed_request", |txn| {
             let mutation = create
-                .graphql_mutation_selecting(crate::request::watcher::AGENT_REQUEST_FIELDS)
+                .graphql_mutation_selecting(gents_protocol::row::AGENT_REQUEST_FIELDS)
                 .map_err(anyhow::Error::msg);
             let actor = &actor;
             let agent_doc = &agent_doc;
@@ -241,7 +241,7 @@ async fn create_client_fixture_request(
     agent_access: &crate::ConfigAccess,
     user: &dyn NodeIdentity,
     spec: crate::request::lifecycle::RequestSpec,
-) -> Result<crate::request::watcher::AgentRequest> {
+) -> Result<gents_protocol::row::AgentRequest> {
     let create = crate::request::lifecycle::build_signed_client_request(
         owner,
         spec,
@@ -252,12 +252,12 @@ async fn create_client_fixture_request(
     let query = format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
         crate::store::graphql::escape_graphql_string(&create.request_id),
-        crate::request::admission::SIGNED_REQUEST_FIELDS
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
     );
     let response = fixture_query(agent_access, &query).await?;
     let row: AgentRequestRow = crate::store::graphql::first_row(&response, "AgentRequest")?
         .context("signed client request disappeared")?;
-    row.try_into()
+    Ok(row.try_into()?)
 }
 
 #[expect(
@@ -268,7 +268,7 @@ async fn claim_fixture_request(
     node: Arc<EmbeddedNode>,
     node_did: &str,
     agent: &dyn NodeIdentity,
-    request: crate::request::watcher::AgentRequest,
+    request: gents_protocol::row::AgentRequest,
     admission: Option<crate::request::admission::ClientClaimAdmission>,
     duration: u64,
     generation: String,
@@ -370,14 +370,14 @@ impl NativeCanonicalExecution {
         &self,
         segment: &gents_protocol::output::OutputSegment,
     ) -> Result<String> {
-        let variables = crate::session::canonical_rows::output_segment_create_variables(segment)?;
+        let variables = gents_protocol::output::rows::output_segment_create_variables(segment)?;
         self.access
             .transact_write("test.native_execution.replicate_segment", |txn| {
                 let variables = &variables;
                 Box::pin(async move {
                     let response = txn
                         .execute_with_variables(
-                            crate::session::canonical_rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                            gents_protocol::output::rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
                             variables,
                         )
                         .await?;
@@ -420,7 +420,7 @@ impl NativeCanonicalExecution {
         let request = crate::store::graphql::escape_graphql_string(&self.request_doc_id);
         let response = self.query(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
+            gents_protocol::row::AGENT_REQUEST_FIELDS,
         )).await;
         anyhow::ensure!(
             !response.has_errors(),
@@ -445,7 +445,7 @@ impl NativeCanonicalExecution {
         }
         let response = self.query(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} lifecycle_state terminal_output }} }}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
+            gents_protocol::row::AGENT_REQUEST_FIELDS,
         )).await;
         anyhow::ensure!(
             !response.has_errors(),
@@ -556,7 +556,7 @@ impl NativeCanonicalExecution {
         let request = crate::store::graphql::escape_graphql_string(&self.request_doc_id);
         let segments = self.query(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
-            crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,
+            gents_protocol::output::rows::AGENT_OUTPUT_SEGMENT_FIELDS,
         )).await;
         anyhow::ensure!(
             !segments.has_errors(),
@@ -570,8 +570,8 @@ impl NativeCanonicalExecution {
             .and_then(serde_json::Value::as_array)
             .context("native completed tool source query omitted rows")?
             .iter()
-            .map(crate::session::canonical_rows::decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()?
+            .map(gents_protocol::output::rows::decode_output_segment_row)
+            .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .filter(|row| {
                 matches!(&row.segment.source,
@@ -586,7 +586,7 @@ impl NativeCanonicalExecution {
         self.segment_ids.insert(closing.doc_id.clone(), record.id);
         let messages = self.query(&format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
-            crate::session::canonical_rows::AGENT_MESSAGE_FIELDS,
+            gents_protocol::output::rows::AGENT_MESSAGE_FIELDS,
         )).await;
         anyhow::ensure!(
             !messages.has_errors(),
@@ -600,8 +600,8 @@ impl NativeCanonicalExecution {
             .and_then(serde_json::Value::as_array)
             .context("native completed tool result query omitted rows")?
             .iter()
-            .map(crate::session::canonical_rows::decode_transcript_message_row)
-            .collect::<Result<Vec<_>>>()?
+            .map(gents_protocol::output::rows::decode_transcript_message_row)
+            .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .filter(|row| {
                 matches!(&row.message.publication,
@@ -640,7 +640,7 @@ impl NativeCanonicalExecution {
         let request = crate::store::graphql::escape_graphql_string(&self.request_doc_id);
         let response = self.query(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
+            gents_protocol::row::AGENT_REQUEST_FIELDS,
         )).await;
         anyhow::ensure!(
             !response.has_errors(),
@@ -718,7 +718,7 @@ impl NativeCanonicalExecution {
         }
         let segments = self.query(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
-            crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,
+            gents_protocol::output::rows::AGENT_OUTPUT_SEGMENT_FIELDS,
         )).await;
         anyhow::ensure!(
             !segments.has_errors(),
@@ -732,7 +732,7 @@ impl NativeCanonicalExecution {
             .and_then(serde_json::Value::as_array)
             .context("recovered segment query omitted rows")?
         {
-            let row = crate::session::canonical_rows::decode_output_segment_row(row)?;
+            let row = gents_protocol::output::rows::decode_output_segment_row(row)?;
             if self.segment_ids.contains_key(&row.doc_id) {
                 continue;
             }
@@ -752,7 +752,7 @@ impl NativeCanonicalExecution {
         }
         let messages = self.query(&format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
-            crate::session::canonical_rows::AGENT_MESSAGE_FIELDS,
+            gents_protocol::output::rows::AGENT_MESSAGE_FIELDS,
         )).await;
         anyhow::ensure!(
             !messages.has_errors(),
@@ -766,7 +766,7 @@ impl NativeCanonicalExecution {
             .and_then(serde_json::Value::as_array)
             .context("recovered header query omitted rows")?
         {
-            let row = crate::session::canonical_rows::decode_transcript_message_row(row)?;
+            let row = gents_protocol::output::rows::decode_transcript_message_row(row)?;
             if self.message_ids.contains_key(&row.doc_id) {
                 continue;
             }
@@ -810,7 +810,7 @@ impl NativeCanonicalExecution {
         let request = crate::store::graphql::escape_graphql_string(&self.request_doc_id);
         let segments = self.query(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
-            crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,
+            gents_protocol::output::rows::AGENT_OUTPUT_SEGMENT_FIELDS,
         )).await;
         anyhow::ensure!(
             !segments.has_errors(),
@@ -824,8 +824,8 @@ impl NativeCanonicalExecution {
             .and_then(serde_json::Value::as_array)
             .context("native segment query omitted rows")?
             .iter()
-            .map(crate::session::canonical_rows::decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()?;
+            .map(gents_protocol::output::rows::decode_output_segment_row)
+            .collect::<Result<Vec<_>, _>>()?;
         decoded_segments.sort_by_key(|row| {
             self.segment_ids
                 .get(&row.doc_id)
@@ -846,7 +846,7 @@ impl NativeCanonicalExecution {
 
         let messages = self.query(&format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
-            crate::session::canonical_rows::AGENT_MESSAGE_FIELDS,
+            gents_protocol::output::rows::AGENT_MESSAGE_FIELDS,
         )).await;
         anyhow::ensure!(
             !messages.has_errors(),
@@ -860,8 +860,8 @@ impl NativeCanonicalExecution {
             .and_then(serde_json::Value::as_array)
             .context("native message query omitted rows")?
             .iter()
-            .map(crate::session::canonical_rows::decode_transcript_message_row)
-            .collect::<Result<Vec<_>>>()?;
+            .map(gents_protocol::output::rows::decode_transcript_message_row)
+            .collect::<Result<Vec<_>, _>>()?;
         decoded_messages.sort_by_key(|row| row.message.sequence);
         self.messages = decoded_messages
             .iter()
@@ -1269,7 +1269,7 @@ impl NativeCanonicalExecution {
             .query(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} terminal_output }} }}"#,
                 crate::store::graphql::escape_graphql_string(&self.request_doc_id),
-                crate::request::admission::SIGNED_REQUEST_FIELDS,
+                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
             ))
             .await;
         anyhow::ensure!(
@@ -1286,12 +1286,12 @@ impl NativeCanonicalExecution {
                     AgentRequest(filter: {{ _docID: {{ _eq: "{parent}" }} }}, limit: 1) {{ {} }}
                     AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{parent}" }} }}) {{ _docID }}
                     AgentMessage(filter: {{ request_doc_id: {{ _eq: "{parent}" }} }}) {{ _docID }}
-                }}"#, crate::request::admission::SIGNED_REQUEST_FIELDS),
+                }}"#, gents_protocol::request_admission::SIGNED_REQUEST_FIELDS),
             ).await;
             let parent: AgentRequestRow =
                 crate::store::graphql::first_row(&response, "AgentRequest")?
                     .context("title parent disappeared")?;
-            crate::request::admission::verify_historical_auxiliary_receipt(&row, &parent)?;
+            crate::store::identity::request_receipt::verify_historical_auxiliary_receipt(&row, &parent)?;
             anyhow::ensure!(
                 parent.lifecycle_state == Some(RequestLifecycleState::Completed),
                 "title execution changed its terminal parent"
@@ -1650,7 +1650,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             let fixture_epoch_seconds = FIXTURE_EPOCH_SECONDS;
             let now = fixture_time_at(fixture_epoch_seconds, seed.lease.now)?;
             let expiry = fixture_time_at(fixture_epoch_seconds, seed.lease.effective_expiry)?;
-            let lookup = fixture_query(&access, &format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#, crate::store::graphql::escape_graphql_string(&request_doc_id), crate::request::watcher::AGENT_REQUEST_FIELDS)).await?;
+            let lookup = fixture_query(&access, &format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#, crate::store::graphql::escape_graphql_string(&request_doc_id), gents_protocol::row::AGENT_REQUEST_FIELDS)).await?;
             anyhow::ensure!(
                 !lookup.has_errors(),
                 "read native pending request: {:?}",
@@ -1662,7 +1662,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 row.lifecycle_state == Some(RequestLifecycleState::Pending),
                 "native signed request was not pending"
             );
-            let queued: crate::request::watcher::AgentRequest = row.try_into()?;
+            let queued: gents_protocol::row::AgentRequest = row.try_into()?;
             let (verified, admission) = verifier
                 .verify_fresh_for_claim_at(&queued, agent.as_ref(), now)
                 .await
@@ -1679,7 +1679,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 seed.lease.request == RequestLifecycleState::Processing,
             )
             .await?;
-            let claimed = fixture_query(&access, &format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#, crate::store::graphql::escape_graphql_string(&request_doc_id), crate::request::watcher::AGENT_REQUEST_FIELDS)).await?;
+            let claimed = fixture_query(&access, &format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#, crate::store::graphql::escape_graphql_string(&request_doc_id), gents_protocol::row::AGENT_REQUEST_FIELDS)).await?;
             anyhow::ensure!(
                 !claimed.has_errors(),
                 "read native owned request: {:?}",
@@ -2260,7 +2260,7 @@ impl NativeCanonicalExecution {
         let response = self.access
             .execute(&format!(
                 r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
-                crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,
+                gents_protocol::output::rows::AGENT_OUTPUT_SEGMENT_FIELDS,
             ))
             .await?;
         let rows = response["data"]["AgentOutputSegment"]
@@ -2268,8 +2268,8 @@ impl NativeCanonicalExecution {
             .context("auxiliary closure query omitted rows")?;
         let matching = rows
             .iter()
-            .map(crate::session::canonical_rows::decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()?
+            .map(gents_protocol::output::rows::decode_output_segment_row)
+            .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .filter(|row| row.segment == prepared)
             .collect::<Vec<_>>();
@@ -2372,7 +2372,7 @@ impl NativeCanonicalExecution {
         let request = crate::store::graphql::escape_graphql_string(&self.request_doc_id);
         let response = self.query(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
-            crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,
+            gents_protocol::output::rows::AGENT_OUTPUT_SEGMENT_FIELDS,
         )).await;
         anyhow::ensure!(
             !response.has_errors(),
@@ -2386,8 +2386,8 @@ impl NativeCanonicalExecution {
             .context("partial closure query omitted rows")?;
         let closing_row = rows
             .iter()
-            .map(crate::session::canonical_rows::decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()?
+            .map(gents_protocol::output::rows::decode_output_segment_row)
+            .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .find(|row| row.segment.close.is_some())
             .context("accepted partial close did not persist its closure")?;
@@ -3322,7 +3322,7 @@ async fn generated_renewal_commits_while_ordinary_write_gate_is_held() {
     let request = crate::store::graphql::escape_graphql_string(&request_doc_id);
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} }} }}"#,
-        crate::request::watcher::AGENT_REQUEST_FIELDS,
+        gents_protocol::row::AGENT_REQUEST_FIELDS,
     );
     let row = native.query(&query).await;
     let stale: AgentRequestRow = crate::store::graphql::first_row(&row, "AgentRequest")

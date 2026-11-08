@@ -6,7 +6,7 @@ use crate::request::streaming::DefraStreamWriter;
 use crate::store::identity::NodeIdentity;
 use crate::tools::call::lifecycle::ToolCallLifecycle;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_protocol::row::AwaitMode;
+use gents_protocol::tool_call::AwaitMode;
 use gents_protocol::{
     message::{AssistantContent, Message, ToolCall, ToolFunction},
     output::PresentationPart,

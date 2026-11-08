@@ -133,6 +133,26 @@ pub fn session_scope_filter(
     )
 }
 
+impl From<&super::AgentSession> for SessionScope {
+    fn from(session: &super::AgentSession) -> Self {
+        Self {
+            node_did: session.node_did.clone(),
+            session_id: session.session_id.clone(),
+            requester_did: session.requester_did.clone(),
+        }
+    }
+}
+
+impl From<&super::SessionReference> for SessionScope {
+    fn from(source: &super::SessionReference) -> Self {
+        Self {
+            node_did: source.node_did.clone(),
+            session_id: source.session_id.clone(),
+            requester_did: source.requester_did.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SessionScope {
     pub node_did: String,

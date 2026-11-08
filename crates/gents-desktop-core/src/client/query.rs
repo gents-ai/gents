@@ -630,16 +630,21 @@ where
     parse_row_array(rows, root)
 }
 
-pub(super) fn parse_canonical_rows<T>(
+pub(super) fn parse_canonical_rows<T, E>(
     data: &Value,
     root: &str,
-    decode: impl Fn(&Value) -> Result<T>,
-) -> Result<Vec<T>> {
+    decode: impl Fn(&Value) -> std::result::Result<T, E>,
+) -> Result<Vec<T>>
+where
+    E: Into<anyhow::Error>,
+{
     let rows = data
         .get(root)
         .and_then(Value::as_array)
         .ok_or_else(|| anyhow!("query result missing canonical row array {root}"))?;
-    rows.iter().map(decode).collect()
+    rows.iter()
+        .map(|row| decode(row).map_err(Into::into))
+        .collect()
 }
 
 pub(super) fn parse_row_array<T>(rows: &Value, root: &str) -> Result<Vec<T>>

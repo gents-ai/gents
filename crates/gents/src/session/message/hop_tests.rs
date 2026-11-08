@@ -3,7 +3,7 @@ use super::*;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_session_message, PublishedAdmissionOptions,
 };
-use gents_protocol::row::AwaitMode;
+use gents_protocol::tool_call::AwaitMode;
 
 /// The accepted tool row does not carry its calling request's id; the id is
 /// read from the calling request document, as the owning lifecycle does.

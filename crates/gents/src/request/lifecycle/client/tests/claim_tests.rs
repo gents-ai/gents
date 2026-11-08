@@ -621,7 +621,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         recover_claim, submit, ClaimPause,
     };
     use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
-    use gents_protocol::row::AwaitMode;
+    use gents_protocol::tool_call::AwaitMode;
 
     let model = &crate::lean_vocab_test::lean_contract_snapshot().client_process_claim_cases;
     let grant_model = &crate::lean_vocab_test::lean_contract_snapshot().client_control_grant_cases;

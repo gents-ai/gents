@@ -415,7 +415,7 @@ impl ConfigReferences {
                                 .context("trigger event source missing")?,
                         )?;
                         ensure!(
-                            crate::triggers::engine::durable::outcome_source_allowed(
+                            super::event_trigger::outcome_source_allowed(
                                 &source.source_collection,
                                 task.emit_outcome,
                             ),

@@ -169,7 +169,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
                         update: node_input,
                     },
                 ])?;
-                crate::store::config_client::apply_desired_state_plan(txn, &plan).await
+                crate::documents::apply_desired_state_plan(txn, &plan).await
             })
         })
         .await

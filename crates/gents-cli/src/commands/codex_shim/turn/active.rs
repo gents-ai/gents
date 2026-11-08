@@ -489,7 +489,7 @@ async fn load_thread_request_rows(
                 }}
             }}"#)).await?;
             let values=response.pointer("/data/AgentRequest").and_then(Value::as_array).context("active request query omitted rows")?;
-            let rows=values.iter().cloned().map(decode_request_row).collect::<Result<Vec<_>>>()?;
+            let rows=values.iter().cloned().map(decode_request_row).collect::<Result<Vec<_>, _>>()?;
             let mut labels=BTreeSet::new();
             for row in &rows {anyhow::ensure!(labels.insert(row.request_id.clone()),"ambiguous scoped active request label");}
             Ok(rows)

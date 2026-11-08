@@ -8,7 +8,7 @@ use super::inference_backend::{
 };
 use super::InferenceBackend;
 use crate::store::config_client::{
-    CapturedEventGrants, ConfigApplyTxn, ConfigurationNodeBinding, DesiredStateApplyCounts,
+    PendingEventGrants, ConfigApplyTxn, ConfigurationNodeBinding, DesiredStateApplyCounts,
     DesiredStateApplyPlan, DesiredStateSemantics,
 };
 use crate::Collection;
@@ -24,7 +24,7 @@ impl DesiredStateSemantics for DocumentSemantics {
         &self,
         txn: &ConfigApplyTxn<'_>,
         plan: &DesiredStateApplyPlan,
-    ) -> Result<Box<dyn CapturedEventGrants>> {
+    ) -> Result<Box<dyn PendingEventGrants>> {
         Ok(Box::new(event_grants::capture(txn, plan).await?))
     }
 
@@ -79,7 +79,7 @@ impl DesiredStateSemantics for DocumentSemantics {
 }
 
 #[async_trait::async_trait]
-impl CapturedEventGrants for event_grants::Capture {
+impl PendingEventGrants for event_grants::Capture {
     async fn grant_changes(self: Box<Self>, txn: &ConfigApplyTxn<'_>) -> Result<()> {
         event_grants::grant_changes(txn, *self).await
     }

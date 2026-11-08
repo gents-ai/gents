@@ -516,9 +516,8 @@ async fn configure_bash_output_budget(
     agent_did: &str,
     budget: i64,
 ) {
-    use crate::store::config_client::{
-        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
+    use crate::documents::apply_desired_state_plan;
+    use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     // The request's Agent resolves its tools by the `{agent_did}:tools` id the
     // fixture wrote; a differently named document is never read.
     let tools_id = format!("{agent_did}:tools");
