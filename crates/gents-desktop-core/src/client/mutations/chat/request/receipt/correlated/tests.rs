@@ -246,14 +246,9 @@ async fn generated_receipt_traces_bind_the_native_signed_preparation() -> Result
                 "prepare" => {
                     let journal = facts.client(number(input, "journal")?)?;
                     let proposal = facts.proposal(&input["intent"], &input["proposal"]).await?;
-                    let scope = records
-                        .iter()
-                        .filter(|record| record.intent.client_did == journal)
-                        .cloned()
-                        .collect::<Vec<_>>();
                     let (reserved, result) = prepare(
                         &journal,
-                        &scope,
+                        &records,
                         &proposal,
                         input["durable"]
                             .as_bool()

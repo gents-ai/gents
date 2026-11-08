@@ -124,8 +124,9 @@ impl Record {
 /// Returned proposals remain staged data until the existing journal's atomic,
 /// durable reservation succeeds. Matching callers reuse the stored result;
 /// a later allocator proposal never replaces their original signed bytes.
-/// `journal` is the client key whose journal holds `records` (Lean
-/// `prepareAt`): a proposal signed by another key is refused before any write.
+/// `journal` is the client key whose journal is decided (Lean `prepareAt`):
+/// a proposal signed by another key is refused before any write, and only
+/// that key's records among `records` decide the proposal.
 pub(crate) fn prepare(
     journal: &str,
     records: &[Record],
@@ -135,12 +136,17 @@ pub(crate) fn prepare(
     if journal.is_empty() || proposal.intent.client_did != journal {
         return (None, Decision::Refused);
     }
-    if let Some(decision) = recover(records, &proposal.intent) {
+    let mine = records
+        .iter()
+        .filter(|record| record.intent.client_did == journal)
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Some(decision) = recover(&mine, &proposal.intent) {
         return (None, decision);
     }
     if !durable
         || !proposal.bound()
-        || records.iter().any(|record| {
+        || mine.iter().any(|record| {
             record.reference.request.request_id == proposal.reference.request.request_id
         })
     {

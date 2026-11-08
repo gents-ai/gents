@@ -112,6 +112,7 @@ pub(crate) async fn update(
     reference: &Reference,
     observation: Option<Outcome>,
 ) -> Result<Record> {
+    let journal: &str = node.node_identity_did().unwrap_or_default();
     super::require_client_signer(node, &intent.client_did)?;
     ConfigAccess::transact_local_idempotent(
         node,
@@ -135,7 +136,7 @@ pub(crate) async fn update(
                 let mut records = [*record];
                 if let Some(outcome) = observation {
                     correlated::observe(
-                        &intent.client_did,
+                        journal,
                         &mut records,
                         &intent.client_did,
                         &intent.request_id,
@@ -144,7 +145,7 @@ pub(crate) async fn update(
                     );
                 } else {
                     correlated::acknowledge(
-                        &intent.client_did,
+                        journal,
                         &mut records,
                         &intent.client_did,
                         &intent.request_id,
