@@ -109,8 +109,12 @@ owned loop admits a turn's calls one at a time (a non-read call is dispatched
 alone, and a read batch awaits each call's admission and receipt before the
 next), so while one call's admission or receipt is in flight the only
 concurrent writers of its request and session documents are its running
-children, at most `maxBackgroundedPerParent`. Two more attempts outlast them.
-Admitting sibling calls concurrently is outside this bound: each then contends
+children, at most `maxBackgroundedPerParent`, and the request's execution
+lease renewal. Renewals of one lease are at least half its duration apart
+(`RequestExecutionLease.consecutive_renewals_obey_cadence`), longer than this
+attempt series for any lease of at least a few seconds, so at most one renewal
+lands in it. Two more attempts outlast them; the second is the renewal's
+(`tla/BackgroundAdmissionContention` `RenewalBudget`). Admitting sibling calls concurrently is outside this bound: each then contends
 with every sibling commit and can exhaust it
 (`tla/BackgroundAdmissionContention`, #3592). This is not a guarantee under
 unbounded external writes. -/

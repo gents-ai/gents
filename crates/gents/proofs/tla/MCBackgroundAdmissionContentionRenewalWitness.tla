@@ -1,0 +1,4 @@
+---- MODULE MCBackgroundAdmissionContentionRenewalWitness ----
+EXTENDS BackgroundAdmissionContention
+
+====
