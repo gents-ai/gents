@@ -1533,11 +1533,22 @@ mod tests {
         let node = std::sync::Arc::new(
             defra_node::Node::builder()
                 .with_node_identity_did(root.did())
+                .with_node_acp_enabled()
                 .build()
                 .await
                 .unwrap(),
         );
         ensure_runtime_schemas(&node).await.unwrap();
+        crate::store::identity::GrantSet::AgentBaseline
+            .grant(
+                &crate::store::config_client::ConfigAccess::local_as(
+                    node.clone(),
+                    identity::Did::new(root.did()).unwrap(),
+                ),
+                &identity::Did::new(agent.did()).unwrap(),
+            )
+            .await
+            .unwrap();
         let denied = super::terminalize_pending_request_rejection(
             &node,
             "missing-doc",
