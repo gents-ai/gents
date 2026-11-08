@@ -722,8 +722,13 @@ async fn signed_current_receipt_opens_generation_and_revocation_closes_it() {
         .unwrap()
         .expect("approved generation remains configured");
     assert!(
-        ready_record.is_chat_ready_at(Utc::now()),
-        "send gate opens only after both legs"
+        ready_record.is_enrollment_ready_at(Utc::now()),
+        "the route gate opens only after both legs"
+    );
+    // Chat writes also need the HTTP write path the enrollment never supplies.
+    assert_eq!(
+        ready_record.chat_refusal_at(Utc::now()),
+        Some(crate::client::ChatRouteCause::NoEndpoint)
     );
     let stable = sync_state
         .upsert_enrollment_peer(
@@ -1957,7 +1962,7 @@ async fn pending_request_requires_the_exact_current_applied_route() {
             _ => unreachable!(),
         }
         assert!(
-            mismatched.is_chat_ready_at(Utc::now()),
+            mismatched.is_enrollment_ready_at(Utc::now()),
             "cached readiness remains true: {field}"
         );
         let mismatched = core
