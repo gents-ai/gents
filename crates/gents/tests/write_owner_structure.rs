@@ -825,7 +825,7 @@ const OAUTH_ROW_READERS: &[&str] = &[
 
 #[rustfmt::skip]
 const OAUTH_ROW_READ_ALLOWLIST: &[(&str, usize)] = &[
-    ("crates/gents-desktop-bridge/src/accounts.rs", 2),
+    ("crates/gents-desktop-bridge/src/accounts/provider.rs", 2),
     ("crates/gents/src/runtime/agent/document_view/load.rs", 1),
     ("crates/gents/src/runtime/agent/document_view/mod.rs", 1),
 ];

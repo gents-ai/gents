@@ -33,16 +33,6 @@ impl PromptSubscriptions {
         self.windows.contains_key(window)
     }
 
-    pub(crate) fn contains_token(&self, window: &str, token: &str) -> bool {
-        self.windows
-            .get(window)
-            .is_some_and(|tokens| tokens.contains(token))
-    }
-
-    pub(crate) fn token_count(&self) -> usize {
-        self.windows.values().map(BTreeSet::len).sum()
-    }
-
     pub(crate) fn subscribe(&mut self, window: &str, token: String) {
         self.windows
             .entry(window.to_owned())
@@ -317,7 +307,6 @@ pub(crate) async fn watch_queue(
     }
 }
 
-#[cfg(feature = "tauri-host")]
 pub fn spawn_plugin_approvals_watch<R>(
     app: tauri::AppHandle<R>,
     home: PathBuf,

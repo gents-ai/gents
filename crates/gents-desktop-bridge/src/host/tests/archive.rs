@@ -3,7 +3,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
-use super::super::{approvals::AttachmentApprovals, protocol, ClientHost};
+use super::super::{protocol, ClientHost};
 
 async fn archive(host: &ClientHost, archived: bool, revision: &str) -> Value {
     let command: protocol::ClientCommand = serde_json::from_value(json!({
@@ -14,13 +14,9 @@ async fn archive(host: &ClientHost, archived: bool, revision: &str) -> Value {
     }))
     .unwrap();
     assert!(!command.is_cancellable());
-    host.execute(
-        command,
-        &AttachmentApprovals::default(),
-        CancellationToken::new(),
-    )
-    .await
-    .unwrap()
+    host.execute(command, CancellationToken::new())
+        .await
+        .unwrap()
 }
 
 fn check_receipt(
@@ -122,11 +118,7 @@ async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
     }))
     .unwrap();
     assert!(second
-        .execute(
-            invalid,
-            &AttachmentApprovals::default(),
-            CancellationToken::new()
-        )
+        .execute(invalid, CancellationToken::new())
         .await
         .is_err());
     let history: protocol::ClientCommand = serde_json::from_value(json!({
