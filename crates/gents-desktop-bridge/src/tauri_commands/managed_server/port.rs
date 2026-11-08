@@ -1,9 +1,10 @@
 use super::authority::{parse_tool_ceiling, suggested_tool_root};
-use super::native::native_error;
 use super::preference::read_initialized_did;
 use crate::error::{BridgeError, BridgeErrorCode};
+use crate::state::DesktopAppState;
 use crate::types::{ManagedServerState, ManagedServerStatus};
-use gents_desktop_core::local_runtime::OperatorIdentityInteraction;
+use gents::store::config_client::ClientSigningCapability;
+use gents_desktop_core::local_runtime::HostedRuntimeStatusError;
 use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
 use std::path::Path;
 use std::time::Duration;
@@ -12,9 +13,59 @@ pub(super) enum PortReadiness {
     Ready(ManagedServerStatus),
     Foreign(ForeignRuntime),
     Booting,
-    Outdated { version: Option<String> },
+    Outdated {
+        version: Option<String>,
+    },
     Occupied(u16),
     NotListening,
+    /// The runtime publicly reports ready, but the User could not read its
+    /// private status, so its authority (tool root, ceiling) is unobserved.
+    StatusUnreadable {
+        public: ManagedServerStatus,
+        cause: HostedRuntimeStatusError,
+    },
+}
+
+/// The status reader is the desktop's User principal: the running client's
+/// identity, else the desktop's existing client key. The co-hosted runtime's
+/// node key is never a substitute.
+pub(super) async fn user_status_signer(state: &DesktopAppState) -> Option<ClientSigningCapability> {
+    use gents::store::identity::NodeIdentity as _;
+    if let Some(core) = crate::state::current_core(state) {
+        return core.node_identity().client_signing_capability().ok();
+    }
+    let paths = state.policy.desktop_paths.clone();
+    match tokio::task::spawn_blocking(move || {
+        gents_desktop_core::client::PrincipalIdentity::load_existing(&paths)
+            .and_then(|user| Ok(user.client_signing_capability()?))
+    })
+    .await
+    {
+        Ok(Ok(capability)) => Some(capability),
+        Ok(Err(error)) => {
+            tracing::debug!(target: "gents_desktop::managed_server", error = %format!("{error:#}"), "no client identity to read managed runtime status");
+            None
+        }
+        Err(error) => {
+            tracing::warn!(target: "gents_desktop::managed_server", error = %error, "loading the client identity failed");
+            None
+        }
+    }
+}
+
+pub(super) fn status_unreadable_error(cause: &HostedRuntimeStatusError) -> BridgeError {
+    let code = match cause {
+        HostedRuntimeStatusError::NoUserSigner => BridgeErrorCode::ClientNotRunning,
+        HostedRuntimeStatusError::Denied { .. } => BridgeErrorCode::PermissionDenied,
+        HostedRuntimeStatusError::Failed(_) => BridgeErrorCode::Backend,
+    };
+    BridgeError::new(
+        code,
+        format!(
+            "The local Node is running, but this client could not read its status: {}",
+            gents_protocol::error_chain::ErrorChain(cause)
+        ),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,25 +115,17 @@ pub(super) fn occupied_port_message(port: u16) -> String {
     )
 }
 
-pub(super) async fn observe_port_readiness(node_home: &Path) -> Result<PortReadiness, BridgeError> {
-    observe_port_readiness_with_identity_interaction(
-        node_home,
-        OperatorIdentityInteraction::Prevent,
-    )
-    .await
-}
-
-pub(super) async fn observe_port_readiness_with_identity_interaction(
+pub(super) async fn observe_port_readiness(
     node_home: &Path,
-    interaction: OperatorIdentityInteraction,
+    user: Option<&ClientSigningCapability>,
 ) -> Result<PortReadiness, BridgeError> {
     let config = gents_server::server_host::ServerConfig::standard(node_home.to_path_buf());
-    observe_port_readiness_at(&config, interaction).await
+    observe_port_readiness_at(&config, user).await
 }
 
 pub(super) async fn observe_port_readiness_at(
     config: &gents_server::server_host::ServerConfig,
-    interaction: OperatorIdentityInteraction,
+    user: Option<&ClientSigningCapability>,
 ) -> Result<PortReadiness, BridgeError> {
     let node_home = &config.home;
     let Some(payload) = default_port_payload(config).await? else {
@@ -118,16 +161,18 @@ pub(super) async fn observe_port_readiness_at(
         graphql.as_str(),
     );
     record.local_node_home = Some(node_home.to_string_lossy().into_owned());
-    let private =
-        gents_desktop_core::local_runtime::fetch_hosted_runtime_status(&record, interaction)
-            .await
-            .map_err(native_error)?;
-    Ok(match private {
-        Some(payload) => {
-            classify_port_payload(config.http_port, initialized_did.as_deref(), payload)
-        }
-        None => PortReadiness::Ready(status),
-    })
+    Ok(
+        match gents_desktop_core::local_runtime::fetch_hosted_runtime_status(&record, user).await {
+            Ok(Some(payload)) => {
+                classify_port_payload(config.http_port, initialized_did.as_deref(), payload)
+            }
+            Ok(None) => PortReadiness::Ready(status),
+            Err(cause) => PortReadiness::StatusUnreadable {
+                public: status,
+                cause,
+            },
+        },
+    )
 }
 
 pub(super) fn classify_port_payload(
@@ -152,20 +197,23 @@ pub(super) fn classify_port_payload(
     }
 }
 
+/// A ready runtime whose private status the User cannot read is an error with
+/// its cause: callers must not treat it as absent and launch over it.
 pub(super) async fn matching_external_server(
     node_home: &std::path::Path,
-    interaction: OperatorIdentityInteraction,
+    user: Option<&ClientSigningCapability>,
 ) -> Result<Option<ManagedServerStatus>, BridgeError> {
-    Ok(
-        match observe_port_readiness_with_identity_interaction(node_home, interaction).await? {
-            PortReadiness::Ready(status) => Some(status),
-            PortReadiness::Foreign(_)
-            | PortReadiness::Booting
-            | PortReadiness::Outdated { .. }
-            | PortReadiness::Occupied(_)
-            | PortReadiness::NotListening => None,
-        },
-    )
+    Ok(match observe_port_readiness(node_home, user).await? {
+        PortReadiness::Ready(status) => Some(status),
+        PortReadiness::StatusUnreadable { cause, .. } => {
+            return Err(status_unreadable_error(&cause))
+        }
+        PortReadiness::Foreign(_)
+        | PortReadiness::Booting
+        | PortReadiness::Outdated { .. }
+        | PortReadiness::Occupied(_)
+        | PortReadiness::NotListening => None,
+    })
 }
 
 fn managed_status_from_payload(payload: serde_json::Value, live_did: &str) -> ManagedServerStatus {
@@ -210,8 +258,11 @@ async fn default_port_payload(
     }
 }
 
-pub(super) async fn ensure_default_port_identity(node_home: &Path) -> Result<(), BridgeError> {
-    match observe_port_readiness(node_home).await? {
+pub(super) async fn ensure_default_port_identity(
+    node_home: &Path,
+    user: Option<&ClientSigningCapability>,
+) -> Result<(), BridgeError> {
+    match observe_port_readiness(node_home, user).await? {
         PortReadiness::Foreign(foreign) => Err(BridgeError::new(
             BridgeErrorCode::InvalidArgument,
             foreign.message(),
@@ -221,6 +272,7 @@ pub(super) async fn ensure_default_port_identity(node_home: &Path) -> Result<(),
             occupied_port_message(port),
         )),
         PortReadiness::Ready(_)
+        | PortReadiness::StatusUnreadable { .. }
         | PortReadiness::Booting
         | PortReadiness::Outdated { .. }
         | PortReadiness::NotListening => Ok(()),
@@ -233,7 +285,10 @@ pub(super) fn ensure_native_owns_running_endpoint(
 ) -> Result<(), BridgeError> {
     if matches!(
         port,
-        PortReadiness::Ready(_) | PortReadiness::Booting | PortReadiness::Outdated { .. }
+        PortReadiness::Ready(_)
+            | PortReadiness::StatusUnreadable { .. }
+            | PortReadiness::Booting
+            | PortReadiness::Outdated { .. }
     ) && !native_job_loaded
     {
         return Err(BridgeError::new(

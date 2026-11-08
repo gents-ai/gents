@@ -299,7 +299,7 @@ async fn managed_schema_fetched_across_a_route_change_is_ignored() {
     core.shutdown().await.expect("shutdown");
 }
 #[tokio::test]
-async fn managed_readiness_authenticates_explicit_start_and_keeps_passive_reads_cold() {
+async fn managed_readiness_reads_status_as_the_user_and_never_the_node_key() {
     use identity::Identity as _;
     use wiremock::matchers::{header_regex, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -360,34 +360,46 @@ async fn managed_readiness_authenticates_explicit_start_and_keeps_passive_reads_
         tool_ceiling: ManagedServerToolCeiling::Readwrite,
         tool_root: Some(root),
     };
-    let passive = observe_port_readiness_at(&config, OperatorIdentityInteraction::Prevent)
+    let unsigned = observe_port_readiness_at(&config, None).await.unwrap();
+    let PortReadiness::StatusUnreadable { public, cause } = unsigned else {
+        panic!("without a User signer the private status is unread, not anonymous")
+    };
+    assert!(matches!(
+        cause,
+        gents_desktop_core::local_runtime::HostedRuntimeStatusError::NoUserSigner
+    ));
+    assert!(validate_ready_runtime(&public, &authority, &home).is_err());
+    assert!(server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .all(|request| !request.headers.contains_key("authorization")));
+    let error = status_unreadable_error(&cause);
+    assert_eq!(error.code, BridgeErrorCode::ClientNotRunning);
+
+    let user = gents::KeyIdentity::load_or_create(temp.path().join("user.key"), None).unwrap();
+    let user = user.client_signing_capability().unwrap();
+    let signed = observe_port_readiness_at(&config, Some(&user))
         .await
         .unwrap();
-    let PortReadiness::Ready(passive) = passive else {
-        panic!("public status is ready")
+    let PortReadiness::Ready(signed) = signed else {
+        panic!("the User reads the runtime's private status")
     };
-    assert!(validate_ready_runtime(&passive, &authority, &home).is_err());
-    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
-    let explicit = observe_port_readiness_at(&config, OperatorIdentityInteraction::Allow)
-        .await
-        .unwrap();
-    let PortReadiness::Ready(explicit) = explicit else {
-        panic!("authenticated runtime is ready")
-    };
-    validate_ready_runtime(&explicit, &authority, &home).unwrap();
+    validate_ready_runtime(&signed, &authority, &home).unwrap();
     let wrong_root = EffectiveManagedAuthority {
         tool_root: Some(temp.path().join("elsewhere")),
         ..authority.clone()
     };
-    assert!(validate_ready_runtime(&explicit, &wrong_root, &home).is_err());
+    assert!(validate_ready_runtime(&signed, &wrong_root, &home).is_err());
     std::fs::remove_file(&key_path).unwrap();
-    let cached = observe_port_readiness_at(&config, OperatorIdentityInteraction::Prevent)
+    let PortReadiness::Ready(_) = observe_port_readiness_at(&config, Some(&user))
         .await
-        .unwrap();
-    let PortReadiness::Ready(cached) = cached else {
-        panic!("cached authority remains available")
+        .unwrap()
+    else {
+        panic!("the status read never depended on the node key")
     };
-    validate_ready_runtime(&cached, &authority, &home).unwrap();
+    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
     let count = server
         .received_requests()
         .await
@@ -397,7 +409,7 @@ async fn managed_readiness_authenticates_explicit_start_and_keeps_passive_reads_
         .count();
     std::fs::write(home.join("init.json"), r#"{"node_did":"did:key:foreign"}"#).unwrap();
     assert!(matches!(
-        observe_port_readiness_at(&config, OperatorIdentityInteraction::Allow)
+        observe_port_readiness_at(&config, Some(&user))
             .await
             .unwrap(),
         PortReadiness::Foreign(_)

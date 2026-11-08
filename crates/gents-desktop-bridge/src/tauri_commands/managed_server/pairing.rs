@@ -1,4 +1,4 @@
-use super::port::matching_external_server;
+use super::port::{matching_external_server, user_status_signer};
 use crate::local_pairing::{
     ensure_managed_runtime_pairing, observe_managed_runtime_schema, retry_managed_pairing,
     ManagedPairingTarget, PairingFailure, MANAGED_PAIRING_ATTEMPTS, MANAGED_PAIRING_RETRY_DELAY,
@@ -6,7 +6,6 @@ use crate::local_pairing::{
 use crate::state::{current_core, DesktopAppState};
 use crate::types::ManagedServerStatus;
 use gents_desktop_core::client::ClientCore;
-use gents_desktop_core::local_runtime::OperatorIdentityInteraction;
 use std::sync::Arc;
 
 pub(super) async fn pairing_is_ready(state: &DesktopAppState, node_did: Option<&str>) -> bool {
@@ -29,18 +28,22 @@ pub(in crate::tauri_commands) async fn start_running_managed_pairing(
         tracing::warn!("managed pairing requires a local node home");
         return;
     };
-    let target =
-        match matching_external_server(&node_home, OperatorIdentityInteraction::Prevent).await {
-            Ok(status) => status.as_ref().and_then(pairing_target),
-            Err(error) => {
-                tracing::warn!(
-                    target: "gents_desktop::managed_server",
-                    error = %error,
-                    "failed to inspect native managed runtime for background pairing"
-                );
-                None
-            }
-        };
+    let target = match matching_external_server(
+        &node_home,
+        user_status_signer(state).await.as_ref(),
+    )
+    .await
+    {
+        Ok(status) => status.as_ref().and_then(pairing_target),
+        Err(error) => {
+            tracing::warn!(
+                target: "gents_desktop::managed_server",
+                error = %error,
+                "failed to inspect native managed runtime for background pairing"
+            );
+            None
+        }
+    };
     let Some(target) = target else { return };
     if let Err(error) = core
         .refresh_local_standard_peer(&node_home, &target.node_name)
@@ -98,7 +101,7 @@ pub(super) async fn enroll_managed_runtime(
     let node_home = state.policy.node_home.clone().ok_or_else(|| {
         PairingFailure::Permanent("managed enrollment requires a local node home".into())
     })?;
-    let status = matching_external_server(&node_home, OperatorIdentityInteraction::Allow)
+    let status = matching_external_server(&node_home, user_status_signer(state).await.as_ref())
         .await
         .map_err(|error| PairingFailure::Transient(error.to_string()))?
         .ok_or_else(|| PairingFailure::Permanent("managed runtime is not running".into()))?;

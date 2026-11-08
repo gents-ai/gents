@@ -394,26 +394,41 @@ pub fn augment_peer_status_payload_for_desktop(mut payload: Value, status_url: &
     payload
 }
 
-/// Private status uses only the existing co-hosted endpoint authority. Passive
-/// observation may use an unlocked signer but must not load a cold identity.
+/// Why the User could not read a co-hosted runtime's private status. The read
+/// never falls back to the runtime's node key or to an unsigned request, so
+/// each cause is reported to the caller instead of being masked.
+#[derive(Debug, thiserror::Error)]
+pub enum HostedRuntimeStatusError {
+    /// This desktop holds no User signing capability to present.
+    #[error("runtime status is unavailable without this client's signing identity")]
+    NoUserSigner,
+    /// The runtime refused the User's signed status read.
+    #[error("runtime {node_did} denied this client's status read (HTTP {status})")]
+    Denied { node_did: String, status: u16 },
+    #[error(transparent)]
+    Failed(#[from] anyhow::Error),
+}
+
+/// Private status is read as the desktop's User principal through the
+/// client-signed endpoint, as every other desktop read is (HttpAccess.lean
+/// `readsAs`: the private part of `/status` admits the node's admin and reads
+/// as its caller). The co-hosted runtime's node key is never loaded.
 pub async fn fetch_hosted_runtime_status(
     record: &crate::client::PeerRecord,
-    interaction: OperatorIdentityInteraction,
-) -> Result<Option<Value>> {
-    let node_did = record.node_did.clone();
-    let record = record.clone();
-    let endpoint =
-        tokio::task::spawn_blocking(move || interaction.runtime_endpoint(&record)).await?;
-    let Some(endpoint) = endpoint else {
+    user: Option<&gents::store::config_client::ClientSigningCapability>,
+) -> Result<Option<Value>, HostedRuntimeStatusError> {
+    if record.operator_graphql().is_none() {
         return Ok(None);
-    };
-    if endpoint.is_anonymous() {
-        return Err(gents::store::config_client::ConfigClientError::ClientAgentSignerRequired)
-            .context("runtime status is unavailable without a held signing capability");
     }
-    fetch_runtime_status_for_node(&endpoint, &node_did)
-        .await
-        .map(Some)
+    let user = user.ok_or(HostedRuntimeStatusError::NoUserSigner)?;
+    let endpoint = operator_endpoint(record, user).ok_or(HostedRuntimeStatusError::NoUserSigner)?;
+    match read_runtime_status(&endpoint, &record.node_did).await? {
+        RuntimeStatusRead::Payload(payload) => Ok(Some(payload)),
+        RuntimeStatusRead::Refused(status) => Err(HostedRuntimeStatusError::Denied {
+            node_did: record.node_did.clone(),
+            status: status.as_u16(),
+        }),
+    }
 }
 
 /// Observe the selected runtime using the caller's existing HTTP identity.
@@ -422,6 +437,27 @@ pub async fn fetch_runtime_status_for_node(
     endpoint: &gents::store::config_client::GraphqlEndpoint,
     node_did: &str,
 ) -> Result<Value> {
+    match read_runtime_status(endpoint, node_did).await? {
+        RuntimeStatusRead::Payload(payload) => Ok(payload),
+        RuntimeStatusRead::Refused(status) => {
+            Err(anyhow::Error::from(crate::error::BridgeError::new(
+                crate::error::BridgeErrorCode::PermissionDenied,
+                format!("runtime status refused this client (HTTP {status})"),
+            )))
+        }
+    }
+}
+
+enum RuntimeStatusRead {
+    Payload(Value),
+    /// The runtime answered 401 or 403 to the caller's signed request.
+    Refused(reqwest::StatusCode),
+}
+
+async fn read_runtime_status(
+    endpoint: &gents::store::config_client::GraphqlEndpoint,
+    node_did: &str,
+) -> Result<RuntimeStatusRead> {
     anyhow::ensure!(
         !endpoint.is_anonymous(),
         "runtime status requires an authenticated caller"
@@ -437,8 +473,14 @@ pub async fn fetch_runtime_status_for_node(
                 error,
                 format!("sending runtime status request to {status_url}"),
             )
-        })?
-        .error_for_status()?;
+        })?;
+    if matches!(
+        response.status(),
+        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+    ) {
+        return Ok(RuntimeStatusRead::Refused(response.status()));
+    }
+    let response = response.error_for_status()?;
     anyhow::ensure!(
         response.status().is_success(),
         "runtime status returned HTTP {}",
@@ -454,9 +496,8 @@ pub async fn fetch_runtime_status_for_node(
         payload.get("node_did").and_then(Value::as_str) == Some(node_did),
         "runtime status belongs to a different node"
     );
-    Ok(augment_peer_status_payload_for_desktop(
-        payload,
-        &status_url,
+    Ok(RuntimeStatusRead::Payload(
+        augment_peer_status_payload_for_desktop(payload, &status_url),
     ))
 }
 

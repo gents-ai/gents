@@ -539,7 +539,7 @@ fn cached_runtime_operator_endpoint_does_not_infer_authority_from_registry() {
 }
 
 #[tokio::test]
-async fn passive_runtime_status_without_held_capability_is_explicitly_unavailable() {
+async fn runtime_status_without_a_user_signer_is_explicitly_unavailable() {
     use wiremock::MockServer;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().to_owned();
@@ -554,18 +554,95 @@ async fn passive_runtime_status_without_held_capability_is_explicitly_unavailabl
     .await
     .unwrap();
     let record = hosted_record(&home, &did, &graphql);
-    let error =
-        super::fetch_hosted_runtime_status(&record, super::OperatorIdentityInteraction::Prevent)
-            .await
-            .unwrap_err();
-    assert!(error
-        .to_string()
-        .contains("unavailable without a held signing capability"));
-    assert!(matches!(
-        error.downcast_ref::<gents::store::config_client::ConfigClientError>(),
-        Some(gents::store::config_client::ConfigClientError::ClientAgentSignerRequired)
-    ));
+    let error = super::fetch_hosted_runtime_status(&record, None)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, super::HostedRuntimeStatusError::NoUserSigner),
+        "{error:#}"
+    );
     assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+/// W7 regression: the managed-runtime status check signs as the User and never
+/// opens the co-hosted runtime's node key, even when that key is on disk; a
+/// refusal is a typed denial rather than an anonymous retry.
+#[tokio::test]
+async fn hosted_runtime_status_reads_as_the_user_and_never_loads_the_node_key() {
+    use identity::Identity as _;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("node");
+    std::fs::create_dir_all(&home).unwrap();
+    let key_path = home.join("node.key");
+    let node = gents::store::identity::load_or_create_file_identity(&key_path).unwrap();
+    let did = node.did().unwrap().to_string();
+    let server = MockServer::start().await;
+    let graphql = format!("{}/api/v0/graphql", server.uri());
+    seed_home(&home, &did, &graphql);
+    std::fs::write(
+        home.join("init.json"),
+        json!({ "node_name": "Local", "node_did": did, "key_path": key_path }).to_string(),
+    )
+    .unwrap();
+    let user = gents::KeyIdentity::load_or_create(directory.path().join("user.key"), None).unwrap();
+    let capability = user.client_signing_capability().unwrap();
+    let record = hosted_record(&home, &did, &graphql);
+    Mock::given(method("GET"))
+        .and(path("/status"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"node_did":did,"tool_root":"/w"})),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    let payload = super::fetch_hosted_runtime_status(&record, Some(&capability))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(payload["tool_root"], "/w");
+    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
+    let requests = server.received_requests().await.unwrap();
+    let bearer = requests[0]
+        .headers
+        .get("authorization")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .strip_prefix("Bearer ")
+        .unwrap();
+    assert_eq!(
+        identity::from_token(bearer.as_bytes())
+            .unwrap()
+            .did()
+            .unwrap()
+            .to_string(),
+        gents::NodeIdentity::did(&user)
+    );
+
+    Mock::given(method("GET"))
+        .and(path("/status"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    let error = super::fetch_hosted_runtime_status(&record, Some(&capability))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            super::HostedRuntimeStatusError::Denied { node_did, status: 403 } if node_did == &did
+        ),
+        "{error:#}"
+    );
+    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
+    assert!(server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .all(|request| request.headers.contains_key("authorization")));
 }
 
 #[test]
@@ -645,9 +722,11 @@ async fn managed_readiness_status_rejects_redirects_without_forwarding_authority
         .expect(0)
         .mount(&server)
         .await;
+    let caller =
+        gents::KeyIdentity::load_or_create(directory.path().join("caller.key"), None).unwrap();
     let error = super::fetch_hosted_runtime_status(
         &hosted_record(&home, &did, &graphql),
-        super::OperatorIdentityInteraction::Allow,
+        Some(&caller.client_signing_capability().unwrap()),
     )
     .await
     .unwrap_err();

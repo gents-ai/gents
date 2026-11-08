@@ -621,12 +621,17 @@ async fn foreign_host_is_refused_on_public_private_and_independently_authenticat
     }
 }
 
+/// The desktop's managed-runtime status check reads as the User through the
+/// client-signed endpoint. It never loads the hosted runtime's node key, and
+/// without a User signer it sends nothing rather than reading anonymously.
 #[tokio::test]
-async fn managed_readiness_status_requires_a_held_hosted_node_key() {
+async fn managed_readiness_status_reads_as_the_user_never_the_node_key() {
     use gents_desktop_core::local_runtime::{
-        fetch_hosted_runtime_status, OperatorIdentityInteraction,
+        fetch_hosted_runtime_status, HostedRuntimeStatusError,
     };
+    use identity::Identity as _;
     let f = Fixture::start().await;
+    // A home whose init.json names a node key: reading status must not open it.
     let home = f._temp.path().join("runtime-home");
     std::fs::create_dir_all(&home).unwrap();
     let graphql = format!("{}/api/v0/graphql", f.endpoint);
@@ -634,6 +639,15 @@ async fn managed_readiness_status_requires_a_held_hosted_node_key() {
         home.join("runtime.json"),
         serde_json::json!({
             "node_name":"test-runtime", "node_did": f.owner.did(), "graphql":graphql,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        home.join("init.json"),
+        serde_json::json!({
+            "node_name":"test-runtime", "node_did": f.owner.did(),
+            "key_path": home.join("missing-node.key"),
         })
         .to_string(),
     )
@@ -654,35 +668,48 @@ async fn managed_readiness_status_requires_a_held_hosted_node_key() {
     assert!(public.get("tool_root").is_none());
     let calls = f.status_requests.load(std::sync::atomic::Ordering::SeqCst);
     assert_eq!(calls, 1);
-    let error = fetch_hosted_runtime_status(&record, OperatorIdentityInteraction::Prevent)
+
+    let error = fetch_hosted_runtime_status(&record, None)
         .await
-        .unwrap_err();
+        .expect_err("no User signer means no status read");
     assert!(
-        matches!(
-            error.downcast_ref::<gents::store::config_client::ConfigClientError>(),
-            Some(gents::store::config_client::ConfigClientError::ClientAgentSignerRequired)
-        ),
+        matches!(error, HostedRuntimeStatusError::NoUserSigner),
         "{error:#}"
     );
     assert_eq!(
         f.status_requests.load(std::sync::atomic::Ordering::SeqCst),
-        calls
+        calls,
+        "an unsigned private status read is never sent"
     );
-    record.graphql = Some("http://127.0.0.1:1/api/v0/graphql".into());
-    let error = fetch_hosted_runtime_status(&record, OperatorIdentityInteraction::Prevent)
+
+    let user = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        f.admin.private_key_bytes(),
+    )
+    .unwrap();
+    f.query_bearers.lock().unwrap().clear();
+    let private = fetch_hosted_runtime_status(&record, Some(&user))
         .await
-        .expect_err("authority never follows a repointed endpoint");
-    assert!(
-        matches!(
-            error.downcast_ref::<gents::store::config_client::ConfigClientError>(),
-            Some(gents::store::config_client::ConfigClientError::ClientAgentSignerRequired)
-        ),
-        "{error:#}"
-    );
+        .unwrap()
+        .expect("a local runtime record has a status endpoint");
+    assert_eq!(private["tool_root"], "/private/operator/workspace");
     assert_eq!(
         f.status_requests.load(std::sync::atomic::Ordering::SeqCst),
-        calls
+        calls + 1
     );
+    let bearers = f.query_bearers.lock().unwrap().clone();
+    assert!(!bearers.is_empty(), "private status reads the node's data");
+    for bearer in bearers {
+        let token = bearer.strip_prefix("Bearer ").unwrap();
+        assert_eq!(
+            identity::from_token(token.as_bytes())
+                .unwrap()
+                .did()
+                .unwrap()
+                .to_string(),
+            f.admin.did(),
+            "private status reads as the User, not the node"
+        );
+    }
 }
 
 #[tokio::test]
