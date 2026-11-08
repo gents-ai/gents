@@ -267,7 +267,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
         "agent-target" => Page {
             what: "a named route to an agent for agent_new (tools grant). TARGET_ID goes in target_id or argv.",
             commands: &["agent-target list", "agent-target get TARGET_ID", "agent-target [preview] create|edit TARGET_ID  set: target fields"],
-            notes: "Choose an existing agent or create a helper. A new session does not require cloning the role. name is passed to agent_new; agent_did selects the helper. Use the exact Agent DID from its creation receipt or agent list. Omit target_node_did on create for a local helper; set it explicitly for a remote node. Updates preserve the destination when omitted. Dispatch acceptance does not prove the helper started or replied.",
+            notes: "Choose an existing agent or create a helper. A new session does not require cloning the role: to delegate to your own role, set agent_did to your own Agent DID (agent get). name is passed to agent_new; agent_did selects the helper. Use the exact Agent DID from its creation receipt or agent list. Omit target_node_did on create for a local helper; set it explicitly for a remote node. Updates preserve the destination when omitted. Dispatch acceptance does not prove the helper started or replied.",
             next: "read tools get, then tools update: preserve set.agents, set enabled true and add this ID to target_ids. Selecting targets alone leaves delegation disabled. Use options.agent to grant another caller; tools apply next request.",
         },
         "execution" => Page {
