@@ -70,7 +70,9 @@ def traces (journal : Journal) : List Action → List Json
       traces next actions
 
 /-- Callers' own journals are keyed by `caller.requester`; the
-`foreign_signer_*` case runs a proposal signed by key 2 in key 1's journal. -/
+`foreign_signer_*` case runs a proposal signed by key 2 in key 1's journal and
+the `foreign_journal_*` cases deliver key 1's observation and acknowledgement
+to key 2's journal. -/
 def cases : List Case :=
   let caller : Caller := ⟨1, 30⟩
   let intent : Intent := ⟨caller, 2, 100⟩
@@ -100,6 +102,10 @@ def cases : List Case :=
       prep { intent with caller := ⟨2, 31⟩ } fresh true]⟩
   , ⟨"foreign_signer_cannot_write_a_client_journal", [], [start,
       .prepare 1 { intent with caller := ⟨2, 31⟩ } fresh true]⟩
+  , ⟨"foreign_journal_cannot_observe", [],
+      [start, .observe 2 caller prepared .accepted, retry]⟩
+  , ⟨"foreign_journal_cannot_acknowledge", [],
+      [start, accepted, .acknowledge 2 caller prepared, retry]⟩
   , ⟨"failed_durable_prepare_has_no_effect", [],
       [prep intent prepared false, .reconnect, start]⟩
   , ⟨"same_preparation_does_not_depend_on_new_write", [],
@@ -128,7 +134,7 @@ def casesJson : String := (toJson (cases.map fun c => Json.mkObj
   [("name", toJson c.name), ("initial", journalJson c.initial),
    ("trace", toJson (traces c.initial c.actions))])).compress
 
-example : cases.length = 23 := by decide
+example : cases.length = 25 := by decide
 end Conformance.ClientSubmissionReceiptContracts
 
 def main : IO Unit := IO.println Conformance.ClientSubmissionReceiptContracts.casesJson

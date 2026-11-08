@@ -257,10 +257,13 @@ under a different signer is a distinct caller whose record lives in that
 signer's own journal.
 
 External premise: request identity is not unique across signers at the owner
-either. `AgentRequest.request_id` carries no unique index; the owner receipt a
-caller reconciles is scoped by node, session and requester and must carry the
-retained admission signature (`reconcile_client_request`), so one signer can
-never settle another signer's request. -/
+either. `AgentRequest.request_id` carries no unique index, so both owner reads
+a caller reconciles through are scoped by its own key: with retained bytes,
+`reconcile_client_request` filters node, session and requester and requires
+the retained admission signer and signature; without them,
+`reconcile_unretained_submission` filters node, session, requester and
+admission signer, all the caller's client key. Another signer's request with
+the same identity is therefore never evidence for this caller's send. -/
 
 def scope (journal : Journal) (key : Nat) : Journal :=
   journal.filter fun record => record.intent.caller.requester == key
@@ -440,77 +443,141 @@ theorem prepareAt_retains_unresolved (key : Nat) (journal : Journal) (intent : I
 
 /-! ### What the person is shown
 
-`DeliveryView` is the per-submission state a client shows for a caller
-record; it never claims more than the journal and the owner receipt prove.
-Each view names its cause and the next action: `sending` replays the retained
-identical bytes, `delivered` and `notDelivered` are settled, and `unconfirmed`
-can only be checked again.
+`Saved` is what a client knows about one saved send; `affordances` is what it
+shows and offers. It never claims more than the journal and the owner receipt
+prove, and no view leaves the person without a way forward.
 
-Decision pending (reported, not taken): an unresolved send without retained
-bytes, where the owner shows no request, has no proof either way. Policy
-`wait` (the native caller today, `DeliveryUnconfirmed`) never authorizes a new
-identity, so a send that landed late is never duplicated, but a send that
-never lands leaves the person checking forever. Policy `refuse` (the `.refused`
-branch of `result`) reports it not delivered and lets the person resend a new
-identity, which duplicates the turn if the original commit landed. The
-conservative `wait` stays in force until that decision is made; TLA
-`ClientSubmissionContention` (`Unretained` configurations) traces both. -/
+An undecided send keeps its signed bytes in the journal (`.retained`): the
+person may check it again or resume it, which replays the identical bytes, and
+it is never discarded while it can still be proven. A send whose bytes are no
+longer retained (`.unretained`: an older uncorrelated send, or a lost or reset
+journal) has only the owner's visible request as evidence, and its absence
+proves nothing because the original commit may still be in flight. Reporting
+it not delivered would invite a resend that duplicates the turn if the
+original lands (TLA `ClientSubmissionContention`, `Unretained`); waiting with
+no way out leaves the composer blocked forever (`UnretainedWait`). Decision:
+the person may set it aside. Setting aside never claims non-delivery and mints
+no identity; a late landing of the original still appears in the session, and
+anything the person writes next is a new authored message. -/
+
+inductive Unknown where
+  | retained
+  | unretained
+  deriving DecidableEq, Repr
+
+inductive Saved where
+  /-- The send or its check is in flight. -/
+  | sending
+  /-- No reply was recorded and nothing is in flight. -/
+  | unsent
+  | delivered
+  | notDelivered
+  | unknown (why : Unknown)
+  deriving DecidableEq, Repr
 
 inductive DeliveryView where
   | sending
   | delivered
   | notDelivered
-  | unconfirmed
+  | awaiting
+  | unprovable
   deriving DecidableEq, Repr
 
-inductive UnretainedPolicy where
-  | wait
-  | refuse
+structure Affordances where
+  view : DeliveryView
+  check : Bool
+  resume : Bool
+  dismiss : Bool
+  setAside : Bool
+  blocksComposer : Bool
   deriving DecidableEq, Repr
 
-/-- `ownerShows` is the owner's visible request with a completed publication
-marker; its absence alone proves nothing. -/
-def deliveryView (policy : UnretainedPolicy) (record : Record) (ownerShows : Bool) :
-    DeliveryView :=
+/-- `mailbox` marks an answer to a mailbox question: a delivered answer keeps
+the question answered, so it also blocks answering again. -/
+def affordances (saved : Saved) (mailbox : Bool) : Affordances :=
+  match saved with
+  | .sending => ⟨.sending, false, false, false, false, true⟩
+  | .unsent => ⟨.awaiting, true, true, false, false, true⟩
+  | .delivered => ⟨.delivered, true, false, false, false, mailbox⟩
+  | .notDelivered => ⟨.notDelivered, true, false, true, false, false⟩
+  | .unknown .retained => ⟨.awaiting, true, true, false, false, true⟩
+  | .unknown .unretained => ⟨.unprovable, true, false, false, true, true⟩
+
+/-- Whether the person may author a replacement send under a new identity. -/
+def mayResendNewIdentity (view : DeliveryView) : Bool := view == .notDelivered
+
+/-- A view that blocks the composer is in flight, a delivered mailbox answer,
+or offers Resume or Set aside. -/
+theorem blocking_views_offer_a_way_forward (saved : Saved) (mailbox : Bool)
+    (blocks : (affordances saved mailbox).blocksComposer = true) :
+    saved = .sending ∨ saved = .delivered ∨ (affordances saved mailbox).resume = true ∨
+      (affordances saved mailbox).setAside = true := by
+  cases saved with
+  | unknown why => cases why <;> simp [affordances]
+  | _ => simp_all [affordances]
+
+/-- Only a send that can no longer be proven may be set aside. -/
+theorem set_aside_only_without_bytes (saved : Saved) (mailbox : Bool)
+    (offered : (affordances saved mailbox).setAside = true) :
+    saved = .unknown .unretained := by
+  cases saved with
+  | unknown why => cases why <;> simp_all [affordances]
+  | _ => simp_all [affordances]
+
+/-- Only a proven non-delivery authorizes a new identity: an unprovable send is
+never shown as not delivered. -/
+theorem only_proven_non_delivery_authorizes_a_resend (saved : Saved) (mailbox : Bool)
+    (resend : mayResendNewIdentity (affordances saved mailbox).view = true) :
+    saved = .notDelivered := by
+  cases saved with
+  | unknown why => cases why <;> simp_all [affordances, mayResendNewIdentity]
+  | _ => simp_all [affordances, mayResendNewIdentity]
+
+/-- A journal record whose last reconcile could not decide. -/
+def savedOf (record : Record) : Saved :=
   match record.outcome with
   | .accepted => .delivered
   | .notDelivered => .notDelivered
-  | .unresolved =>
-    if ownerShows then .delivered
-    else if record.retainedBytes then .sending
-    else match policy with
-      | .wait => .unconfirmed
-      | .refuse => .notDelivered
+  | .unresolved => .unknown (if record.retainedBytes then .retained else .unretained)
 
-/-- Whether the person may author a replacement send under a new identity. -/
-def mayResendNewIdentity : DeliveryView → Bool
-  | .notDelivered => true
-  | _ => false
-
-theorem wait_never_authorizes_a_new_identity_for_an_unproven_send (record : Record)
-    (unresolved : record.outcome = .unresolved) (ownerShows : Bool) :
-    mayResendNewIdentity (deliveryView .wait record ownerShows) = false := by
-  unfold deliveryView
-  rw [unresolved]
-  cases ownerShows <;> cases record.retainedBytes <;> rfl
-
-theorem refuse_authorizes_a_resend_without_proof (record : Record)
-    (unresolved : record.outcome = .unresolved) (unretained : record.retainedBytes = false) :
-    mayResendNewIdentity (deliveryView .refuse record false) = true := by
-  simp [deliveryView, unresolved, unretained, mayResendNewIdentity]
-
-/-- Under either policy a journal-written record reaches the unproven
-unretained view only through a row the journal did not write. -/
-theorem journal_records_never_show_unconfirmed (policy : UnretainedPolicy)
-    (journal : Journal) (inv : retainsUnresolved journal) (record : Record)
-    (member : record ∈ journal) (ownerShows : Bool) :
-    deliveryView policy record ownerShows ≠ .unconfirmed := by
-  unfold deliveryView
+/-- A journal-written record never reaches the unprovable view: it keeps its
+bytes until it settles. -/
+theorem journal_records_never_show_unprovable (journal : Journal)
+    (inv : retainsUnresolved journal) (record : Record) (member : record ∈ journal) :
+    savedOf record ≠ .unknown .unretained := by
+  unfold savedOf
   split
   · simp
   · simp
   · rename_i unresolved
     rw [inv record member unresolved]
-    cases ownerShows <;> simp
+    simp
+
+def savedJson : Saved → Json
+  | .sending => toJson "sending"
+  | .unsent => toJson "unsent"
+  | .delivered => toJson "delivered"
+  | .notDelivered => toJson "notDelivered"
+  | .unknown .retained => toJson "unknownRetained"
+  | .unknown .unretained => toJson "unknownUnretained"
+
+def viewJson : DeliveryView → Json
+  | .sending => toJson "sending"
+  | .delivered => toJson "delivered"
+  | .notDelivered => toJson "notDelivered"
+  | .awaiting => toJson "awaiting"
+  | .unprovable => toJson "unprovable"
+
+def allSaved : List Saved :=
+  [.sending, .unsent, .delivered, .notDelivered, .unknown .retained, .unknown .unretained]
+
+def deliveryViewCasesJson : String :=
+  (toJson (allSaved.flatMap fun saved => [false, true].map fun mailbox =>
+    let shown := affordances saved mailbox
+    Json.mkObj [("saved", savedJson saved), ("mailbox", toJson mailbox),
+      ("view", viewJson shown.view), ("check", toJson shown.check),
+      ("resume", toJson shown.resume), ("dismiss", toJson shown.dismiss),
+      ("setAside", toJson shown.setAside), ("blocksComposer", toJson shown.blocksComposer),
+      ("mayResendNewIdentity", toJson (mayResendNewIdentity shown.view))])).compress
 
 end ClientSubmissionReceipt
