@@ -749,11 +749,11 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_publication_cases_drive_request_patch_cache_admission",
         },
         ConformanceConsumer::RustTest {
-            id: "e2e_runtime::session_input_edit::generated_remote_edits_replicate_signed_effect_and_receipt",
+            id: "e2e_runtime::session_input_edit::generated_client_edits_publish_concurrently_with_signed_effect_and_receipt",
             package: "gents",
             source_path: "crates/gents/tests/e2e_runtime/session_input_edit.rs",
             module_path: "e2e_runtime::session_input_edit",
-            function: "generated_remote_edits_replicate_signed_effect_and_receipt",
+            function: "generated_client_edits_publish_concurrently_with_signed_effect_and_receipt",
         },
         ConformanceConsumer::RustTest {
             id: "runtime::agent::p2p_reconcile::session_commands::tests::generated_session_command_discovery_uses_held_agent_and_native_visibility",

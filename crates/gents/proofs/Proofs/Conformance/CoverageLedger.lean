@@ -1454,8 +1454,13 @@ def caseCoverage : List CoverageEntry :=
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "session_input_edit_cases"
+      "SessionInputEditCases"
+      "e2e_runtime::session_input_edit::generated_client_edits_publish_concurrently_with_signed_effect_and_receipt")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "session_input_edit_cases"
       "SessionInputEditRemoteCases"
-      "e2e_runtime::session_input_edit::generated_remote_edits_replicate_signed_effect_and_receipt")
+      "The has_peer cases (remote_applied, revoked_enrollment_rejected, missing_route_rejected) model edit commands delivered by peer replication, gated on current enrollment and an applied route. P2P carries only discovery and enrollment, so no edit command arrives by peer delivery and no native test can bind these cases. The deletion pass removes them with CommandAuthority's peer branch and the runtime's requester_peer_id authority path.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "session_input_edit_client_observation_cases"
