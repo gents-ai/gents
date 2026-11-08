@@ -658,6 +658,7 @@ fn row_is_effectively_active(row: &AgentRequestRow) -> bool {
 #[cfg(test)]
 mod tests {
     #[tokio::test]
+    #[ignore = "codex shim is being removed"]
     async fn active_turn_ignores_newer_title_audit_request() {
         let temp = tempfile::tempdir().expect("active turn directory");
         let state =

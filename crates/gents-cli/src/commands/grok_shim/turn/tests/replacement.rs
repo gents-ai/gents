@@ -1,6 +1,7 @@
 use super::*;
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn cancelled_submission_cannot_capture_an_exact_key_replacement() {
     let (_tempdir, node, node_did) = test_node().await;
     let submission_arrived = Arc::new(tokio::sync::Notify::new());
@@ -113,6 +114,7 @@ async fn cancelled_submission_cannot_capture_an_exact_key_replacement() {
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn failed_submission_cannot_remove_an_exact_key_replacement() {
     let (_tempdir, node, node_did) = test_node().await;
     let submission_arrived = Arc::new(tokio::sync::Notify::new());

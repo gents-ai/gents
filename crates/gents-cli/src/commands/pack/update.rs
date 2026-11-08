@@ -306,10 +306,61 @@ mod tests {
         crate::commands::init::init(init_args)
             .await
             .expect("identity-only init");
-        let slot = format!(
-            "worker={}:default-profile",
-            crate::home_state::resolve_node_did(Some(home.path()), None).unwrap()
-        );
+        let node_did = crate::home_state::resolve_node_did(Some(home.path()), None).unwrap();
+        let profile_id = format!("{node_did}:default-profile");
+        // An identity-only init publishes no inference profile; the home's
+        // client configures the one the worker slot names.
+        {
+            use gents::store::config_client::{
+                apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+            };
+            let (access, _) = crate::resolve_config_access(Some(home.path()), None)
+                .await
+                .unwrap();
+            let backend_id = format!("{node_did}:default-backend");
+            let documents = [
+                (
+                    gents::Collection::InferenceBackend,
+                    serde_json::json!({
+                        "node_did": node_did, "backend_id": backend_id, "name": "Test inference",
+                        "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:1/v1",
+                        "auth": {"kind": "unauthenticated"},
+                    }),
+                ),
+                (
+                    gents::Collection::InferenceProfile,
+                    serde_json::json!({
+                        "node_did": node_did, "profile_id": profile_id,
+                        "backend_id": backend_id, "model_name": "test-model",
+                    }),
+                ),
+            ];
+            let plan = DesiredStateApplyPlan::new(
+                documents
+                    .into_iter()
+                    .map(|(collection, value)| DesiredStateApplyDocument {
+                        collection,
+                        add: value.clone(),
+                        update: value,
+                    })
+                    .collect(),
+            )
+            .unwrap();
+            access
+                .transact_write("test.pack_update.profile", |txn| {
+                    let plan = &plan;
+                    Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+                })
+                .await
+                .unwrap();
+            access
+                .local_node()
+                .unwrap()
+                .shutdown()
+                .await
+                .expect("node shutdown");
+        }
+        let slot = format!("worker={profile_id}");
         let _ = super::super::test_support::fixture_pack_source("dependee_fixture", home.path());
         let install = |fixture: &str, explicit: bool| {
             let package = super::super::test_support::fixture_dir(fixture)

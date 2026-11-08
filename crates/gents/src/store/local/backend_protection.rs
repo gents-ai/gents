@@ -212,6 +212,54 @@ impl PreflightProtectedBackendStore<'_> {
         })
         .await?
         .map_err(|error| BackendProtectionError::Schema(error.into()))?;
+        self.start_node_with_plugins(key, runtime, http, p2p, ceiling, plugins)
+            .await
+    }
+
+    /// Starts the node for a caller that already holds the home's exclusive
+    /// plugin store lock: the installed plugins it projects are read under
+    /// that guard, because a shared lock taken here would refuse against the
+    /// caller's own exclusive one.
+    pub async fn start_node_under_plugin_store(
+        self,
+        key: &StoreKey,
+        runtime: Arc<dyn crate::store::identity::NodeIdentity>,
+        http: Option<defra_node::HttpConfig>,
+        p2p: Option<defra_node::P2PConfig>,
+        guard: &crate::plugin::store::StoreGuard,
+    ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
+        if runtime.did() != self.node_did {
+            return Err(BackendProtectionError::WrongNode);
+        }
+        let plugin_home = guard.home().to_owned();
+        let plugins =
+            tokio::task::spawn_blocking(move || crate::plugin::store::list_records(&plugin_home))
+                .await?
+                .map_err(|error| {
+                    BackendProtectionError::Schema(
+                        crate::plugin::store::PublishedPluginReadError::Read(error).into(),
+                    )
+                })?;
+        self.start_node_with_plugins(
+            key,
+            runtime,
+            http,
+            p2p,
+            crate::tools::surface::ToolCeiling::meta_only(),
+            plugins,
+        )
+        .await
+    }
+
+    async fn start_node_with_plugins(
+        self,
+        key: &StoreKey,
+        runtime: Arc<dyn crate::store::identity::NodeIdentity>,
+        http: Option<defra_node::HttpConfig>,
+        p2p: Option<defra_node::P2PConfig>,
+        ceiling: crate::tools::surface::ToolCeiling,
+        plugins: Vec<crate::plugin::store::InstalledPlugin>,
+    ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
         let projection =
             super::document_projector_with_installed_plugins(runtime, ceiling, plugins)
                 .map_err(|error| BackendProtectionError::Schema(error.into()))?;

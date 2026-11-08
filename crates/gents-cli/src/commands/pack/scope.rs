@@ -91,6 +91,28 @@ pub(crate) async fn resolve_scope_owner(
 ) -> Result<(gents::store::config_client::ConfigAccess, String)> {
     let (access, _) =
         crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
+    scope_owner(scope, access).await
+}
+
+/// [`resolve_scope_owner`] for a home whose exclusive plugin store lock the
+/// caller holds.
+pub(crate) async fn resolve_home_owner_under_plugin_store(
+    home: &std::path::Path,
+    guard: &gents::plugin::store::StoreGuard,
+) -> Result<(gents::store::config_client::ConfigAccess, String)> {
+    let (access, _) = crate::resolve_config_access_under_plugin_store(home, guard).await?;
+    let scope = ScopeArgs {
+        home: Some(home.to_path_buf()),
+        graphql: None,
+        node_did: None,
+    };
+    scope_owner(&scope, access).await
+}
+
+async fn scope_owner(
+    scope: &ScopeArgs,
+    access: gents::store::config_client::ConfigAccess,
+) -> Result<(gents::store::config_client::ConfigAccess, String)> {
     let owner = super::super::config::binding::resolve_target_node_did(
         scope.node_did.as_deref(),
         if scope.node_did.is_some() {

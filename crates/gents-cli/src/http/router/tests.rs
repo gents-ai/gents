@@ -120,53 +120,34 @@ async fn backend_discovery_requires_authenticated_identity() {
 
 #[tokio::test]
 async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_observed_build() {
-    use gents::store::config_client::ConfigAccess;
     use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
     use gents_protocol::serve_lifecycle::control::{
         RuntimeControlCommand, RuntimeControlDisposition, RuntimeControlReceipt, RuntimeOperation,
         RUNTIME_CONTROL_PATH, RUNTIME_CONTROL_VERSION,
     };
     let temp = tempfile::tempdir().unwrap();
-    let paths = DesktopPaths::from_root(temp.path().join("operator"));
-    paths.ensure_root_dirs().await.unwrap();
-    let identity = Arc::new(PrincipalIdentity::load_or_create(&paths).await.unwrap());
+    // Runtime control admits only the Node's own signer; the enrolled User
+    // configures the Agent the runtime starts over its fresh backend admission.
+    let home = crate::shared::test_support::ClientHome::new().await;
+    let identity = home.home.identity.clone();
     let foreign_paths = DesktopPaths::from_root(temp.path().join("foreign"));
     foreign_paths.ensure_root_dirs().await.unwrap();
     let foreign = PrincipalIdentity::load_or_create(&foreign_paths)
         .await
         .unwrap();
     let owner = identity.did().to_owned();
-    let node = Arc::new(
-        gents::defra_node::Node::builder()
-            .with_node_identity_did(&owner)
-            .with_node_acp_enabled()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents::ensure_runtime_schemas(&node).await.unwrap();
-    ConfigAccess::transact_local_write(&node, None, "test.runtime_control.setup", |txn| {
-        let owner = &owner;
-        Box::pin(async move {
-            txn.execute_with_variables(
-                "mutation($node: NodeMutationInputArg!, $backend: InferenceBackendMutationInputArg!) { create_Node(input: $node) { _docID } create_InferenceBackend(input: $backend) { _docID } }",
-                &json!({
-                    "node": {"node_did": owner, "default_agent_did": "fixture", "enabled": true},
-                    "backend": {"node_did": owner, "backend_id": "fixture", "name": "Fixture",
-                        "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:9/v1",
-                        "auth": {"kind": "unauthenticated"}, "enabled": true, "probe_status": "healthy"},
-                }),
-            ).await?;
-            Ok::<_, anyhow::Error>(())
-        })
-    }).await.unwrap();
+    let node = home.node().clone();
+    let binding = home.agent("fixture").await;
+    home.mark_backend_healthy(&binding).await;
     let runtime = gents::Gents::builder()
         .node(node.clone())
+        .backend_admission(home.home.backend_admission())
         .identity(identity.clone())
         .tool_ceiling(gents::ToolCeiling::meta_only())
         .agent("fixture")
-        .backend_id("fixture")
-        .model_name("fixture")
+        .identity_binding(binding.clone())
+        .backend_id(format!("{}:backend", binding.agent_did))
+        .model_name("test-model")
         .done()
         .build()
         .await
@@ -203,7 +184,9 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
         .unwrap();
     let url = format!("http://{addr}{RUNTIME_CONTROL_PATH}");
     let graphql = format!("http://{addr}/api/v0/graphql");
-    let endpoint = desktop_endpoint(&graphql, &identity);
+    let endpoint = GraphqlEndpoint::as_principal(&graphql, identity.did())
+        .with_client_signing_capability(identity.client_signing_capability().unwrap())
+        .unwrap();
     let command = |operation| RuntimeControlCommand {
         version: RUNTIME_CONTROL_VERSION,
         node_did: owner.clone(),
@@ -320,7 +303,6 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
 
 #[tokio::test]
 async fn operator_inventory_authenticates_and_reads_native_metadata() {
-    use gents::store::config_client::ConfigAccess;
     use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
     use gents_protocol::file_inventory::{
         DirectFileInventoryRequest, FileInventoryObservation, FileInventoryReadAction,
@@ -328,82 +310,48 @@ async fn operator_inventory_authenticates_and_reads_native_metadata() {
     };
 
     let temp = tempfile::tempdir().unwrap();
-    let paths = DesktopPaths::from_root(temp.path().join("runtime"));
-    paths.ensure_root_dirs().await.unwrap();
-    let identity = Arc::new(PrincipalIdentity::load_or_create(&paths).await.unwrap());
-    let user_paths = DesktopPaths::from_root(temp.path().join("user"));
-    user_paths.ensure_root_dirs().await.unwrap();
-    let user = PrincipalIdentity::load_or_create(&user_paths)
-        .await
-        .unwrap();
+    // The enrolled User holds the operator grants and configures the Node
+    // through its own client-signed endpoint.
+    let home = crate::shared::test_support::ClientHome::new().await;
+    let identity = home.home.identity.clone();
+    let user = &home.user;
     let foreign_paths = DesktopPaths::from_root(temp.path().join("foreign"));
     foreign_paths.ensure_root_dirs().await.unwrap();
     let foreign = PrincipalIdentity::load_or_create(&foreign_paths)
         .await
         .unwrap();
-    let db_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let db_addr = db_listener.local_addr().unwrap();
-    let node = Arc::new(
-        gents::defra_node::Node::builder()
-            .with_node_identity_did(identity.did())
-            .with_node_acp_enabled()
-            .with_http(gents::defra_node::HttpConfig::with_listener(db_listener).unwrap())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents::ensure_runtime_schemas(&node).await.unwrap();
+    let node = home.node().clone();
     let owner = identity.did();
-    let db_endpoint = desktop_endpoint(format!("http://{db_addr}/api/v0/graphql"), &identity);
+    // The foreign client may read documents on this Node, but no session of
+    // the User's is visible to it.
+    let admin = gents::ConfigAccess::local_as(node.clone(), identity::Did::new(owner).unwrap());
+    for permission in [
+        gents::store::config_client::NodePermission::DocumentRead,
+        gents::store::config_client::NodePermission::DocumentUpdate,
+    ] {
+        admin
+            .grant_node_permission(&identity::Did::new(foreign.did()).unwrap(), permission)
+            .await
+            .unwrap();
+    }
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap();
-    for did in [user.did(), foreign.did()] {
-        for relation in ["read-document", "update-document"] {
-            let response = db_endpoint
-                .authorize(
-                    client
-                        .post(format!("http://{db_addr}/api/v0/acp/node/relationship"))
-                        .json(&json!({"Relation": relation, "TargetActor": did})),
-                )
-                .unwrap()
-                .send()
-                .await
-                .unwrap();
-            assert!(
-                response.status().is_success(),
-                "{}",
-                response.text().await.unwrap()
-            );
-        }
-    }
-    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
+    let access = home.access.clone();
     let session_id = "operator-http-session";
-    let user_did = user.did().to_owned();
-    access.transact_write("test.inventory.http_setup", |txn| {
-        let user_did = &user_did;
-        Box::pin(async move {
-            txn.execute_with_variables(
-                "mutation($node: NodeMutationInputArg!, $backend: InferenceBackendMutationInputArg!, $session: AgentSessionMutationInputArg!) { create_Node(input: $node) { _docID } create_InferenceBackend(input: $backend) { _docID } create_AgentSession(input: $session) { _docID } }",
-                &json!({
-                    "node": {"node_did": owner, "default_agent_did": "fixture", "enabled": true},
-                    "backend": {"node_did": owner, "backend_id": "fixture", "name": "Fixture",
-                        "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:9/v1",
-                        "auth": {"kind": "unauthenticated"}, "enabled": true, "probe_status": "healthy"},
-                    "session": {"session_id": session_id, "node_did": owner, "requester_did": user_did,
-                        "agent_did": "fixture", "created_at": "2026-10-24T00:00:00Z"},
-                })).await?;
-            Ok::<_, anyhow::Error>(())
-        })
-    }).await.unwrap();
+    let binding = home.agent("fixture").await;
+    home.mark_backend_healthy(&binding).await;
+    home.agent_session(&binding, session_id).await;
     let runtime = gents::Gents::builder()
         .node(node.clone())
+        .backend_admission(home.home.backend_admission())
         .identity(identity.clone())
         .tool_ceiling(gents::ToolCeiling::meta_only())
         .agent("fixture")
-        .backend_id("fixture")
-        .model_name("fixture")
+        .identity_binding(binding.clone())
+        .backend_id(format!("{}:backend", binding.agent_did))
+        .model_name("test-model")
         .done()
         .build()
         .await
@@ -423,7 +371,7 @@ async fn operator_inventory_authenticates_and_reads_native_metadata() {
         axum::serve(listener, app).await.unwrap();
     }));
     let graphql = format!("http://{addr}/api/v0/graphql");
-    let endpoint = desktop_endpoint(&graphql, &user);
+    let endpoint = crate::shared::test_support::user_endpoint(&graphql, user);
     let foreign_endpoint = desktop_endpoint(&graphql, &foreign);
     let url = format!("http://{addr}{FILE_INVENTORY_OPERATOR_PATH}");
     let demand = DirectFileInventoryRequest {
@@ -443,7 +391,8 @@ async fn operator_inventory_authenticates_and_reads_native_metadata() {
         .await
         .unwrap();
     assert!(response.status().is_client_error());
-    let wrong_audience = desktop_endpoint("http://other.invalid/api/v0/graphql", &user)
+    let wrong_audience =
+        crate::shared::test_support::user_endpoint("http://other.invalid/api/v0/graphql", user)
         .authorization()
         .unwrap()
         .unwrap();
@@ -881,28 +830,13 @@ async fn account_usage_route_refuses_unsigned_and_foreign_signers() {
     let key = |name: &str| -> Arc<dyn gents::NodeIdentity> {
         Arc::new(gents::KeyIdentity::load_or_create(temp.path().join(name), None).unwrap())
     };
-    let (identity, owner, other) = (key("runtime.key"), key("owner.key"), key("other.key"));
-    let node = Arc::new(
-        crate::shared::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents::store::schema::migration::ensure_all_runtime_migrations(node.clone())
-        .await
-        .unwrap();
-    let access =
-        gents::ConfigAccess::local_as(node.clone(), identity::Did::new(owner.did()).unwrap());
-    access
-        .write(
-            "test.usage.node",
-            &format!(
-                "mutation {{ create_Node(input: {{node_did: \"{}\"}}) {{ _docID }} }}",
-                gents::store::graphql::escape_graphql_string(identity.did())
-            ),
-        )
-        .await
-        .unwrap();
+    // The owner is the enrolled User that published the Node; the runtime
+    // authenticates its signed reads against the Node it can see.
+    let home = crate::shared::test_support::ClientHome::new().await;
+    let identity = home.home.identity.clone();
+    let owner = home.user_signer();
+    let other = key("other.key");
+    let node = home.node().clone();
     let mut state = state();
     state.node_did = identity.did().into();
     *state.enrollment_decisions.write().await = Some(

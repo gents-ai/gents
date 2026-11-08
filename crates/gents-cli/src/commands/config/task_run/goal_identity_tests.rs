@@ -242,9 +242,8 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
 #[tokio::test]
 async fn manual_task_replay_keeps_signed_goal_identity_without_observing_current_goal() -> Result<()>
 {
-    let (identity, endpoint, source, server) =
-        crate::request_helpers::goal_input_tests::fixture(true, false, None, None).await?;
-    let access = ConfigAccess::Graphql(endpoint);
+    let source = crate::request_helpers::goal_input_tests::fixture(true, false, None, None).await?;
+    let access = ConfigAccess::Graphql(source.graphql.clone());
     for reference in [
         None,
         Some(GoalAssignmentInput {
@@ -254,13 +253,13 @@ async fn manual_task_replay_keeps_signed_goal_identity_without_observing_current
     ] {
         let mut input = crate::request_helpers::goal_input_tests::authored_input();
         input.goal_assignment = reference.clone();
-        let row = super::tests::signed_task_receipt(&identity, &source.agent_did, input).await?;
+        let row = super::tests::signed_task_receipt(&source, input).await?;
         let receipt: AgentRequestRow = serde_json::from_value(row)?;
         let selected =
-            prepare_task_run_goal_id(&access, identity.did(), "chat", true, Some(&receipt)).await?;
+            prepare_task_run_goal_id(&access, &source.node_did, "chat", true, Some(&receipt))
+                .await?;
         assert_eq!(selected, reference.map(|reference| reference.goal_id));
     }
-    server.abort();
-    assert!(source.queries.lock().unwrap().is_empty());
+    assert_eq!(source.exchanges(), 0);
     Ok(())
 }

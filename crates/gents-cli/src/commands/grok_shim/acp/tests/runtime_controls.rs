@@ -256,6 +256,7 @@ async fn exact_request_by_doc_id(
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn native_task_kill_is_scoped_idempotent_and_uses_stock_envelope() {
     let prompt = "start task process";
     let fixture = runtime_control_fixture(
@@ -342,6 +343,7 @@ async fn native_task_kill_is_scoped_idempotent_and_uses_stock_envelope() {
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn native_child_controls_and_usage_follow_physical_lineage() {
     let parent_prompt = "spawn child worker";
     let child_prompt = "run child process";

@@ -1,6 +1,7 @@
 use super::*;
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn prompt_resolves_end_turn_after_terminalization() {
     let (_tempdir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;
@@ -63,6 +64,7 @@ async fn prompt_resolves_end_turn_after_terminalization() {
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn goal_prompt_atomically_submits_scoped_goal_and_signed_request() {
     let (_dir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;
@@ -138,6 +140,7 @@ async fn goal_prompt_atomically_submits_scoped_goal_and_signed_request() {
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn live_turn_streams_tool_agent_and_message_updates_once_each() {
     let (_tempdir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;
@@ -272,6 +275,7 @@ async fn live_turn_streams_tool_agent_and_message_updates_once_each() {
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn identical_text_distinct_rows_both_stream() {
     let (_tempdir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;

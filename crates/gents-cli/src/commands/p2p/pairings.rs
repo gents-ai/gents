@@ -578,8 +578,8 @@ mod tests {
     fn push_template_health_keys_off_replicating_not_subscribed_collections() {
         let desired = vec![desired_row(
             "peer-a",
-            "conversation",
-            &["AgentRequest", "AgentMessage"],
+            gents::runtime::agent::p2p_reconcile::templates::MACHINE_TEMPLATE,
+            &[gents::runtime::agent::p2p_reconcile::templates::NODE_DIRECTORY_COLLECTION],
             &["/ip4/1/tcp/4001"],
         )];
         let applied = vec![applied("peer-a", &[], &["/ip4/1/tcp/4001"])];
@@ -600,8 +600,8 @@ mod tests {
     fn push_template_without_applied_replicator_is_unhealthy() {
         let desired = vec![desired_row(
             "peer-a",
-            "conversation",
-            &["AgentRequest"],
+            gents::runtime::agent::p2p_reconcile::templates::MACHINE_TEMPLATE,
+            &[gents::runtime::agent::p2p_reconcile::templates::NODE_DIRECTORY_COLLECTION],
             &["/ip4/1/tcp/4001"],
         )];
         let applied = vec![applied("peer-a", &[], &[])];

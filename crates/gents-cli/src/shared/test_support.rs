@@ -305,6 +305,14 @@ impl ClientHome {
         &self.home.node
     }
 
+    /// The User's key as a shareable signer, for owners that hold one.
+    pub(crate) fn user_signer(&self) -> std::sync::Arc<dyn gents::NodeIdentity> {
+        std::sync::Arc::new(
+            gents::KeyIdentity::load_existing(self._user_dir.path().join("user.key"), None)
+                .unwrap(),
+        )
+    }
+
     pub(crate) fn node_did(&self) -> &str {
         self.home.did()
     }
@@ -378,6 +386,110 @@ impl ClientHome {
             .await
             .unwrap();
         binding
+    }
+}
+
+impl ClientHome {
+    /// The managed Agent's own signed access on this home, holding the
+    /// baseline grants production projects from its Agent document.
+    pub(crate) async fn agent_access(
+        &self,
+        binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    ) -> gents::store::config_client::ConfigAccess {
+        use gents::store::config_client::ConfigAccess;
+        let agent =
+            gents::store::identity::resolve_agent_identity(self.home.identity.as_ref(), binding)
+                .unwrap();
+        gents::store::identity::GrantSet::AgentBaseline
+            .grant(
+                &ConfigAccess::local_as(
+                    self.node().clone(),
+                    ::identity::Did::new(self.node_did()).unwrap(),
+                ),
+                &::identity::Did::new(agent.did()).unwrap(),
+            )
+            .await
+            .unwrap();
+        ConfigAccess::local_managed_agent(
+            self.node().clone(),
+            agent.did().parse().unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap()
+    }
+
+    /// Records the Agent's placeholder backend as probed healthy, as the
+    /// User marks a test backend, so a builder runtime admits it.
+    pub(crate) async fn mark_backend_healthy(
+        &self,
+        binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    ) {
+        gents::inference::backends::registry::set_backend_probe_status_as(
+            &self.access,
+            self.node_did(),
+            &format!("{}:backend", binding.agent_did),
+            "healthy",
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Creates `session_id` as the managed Agent and relates it to that
+    /// Agent, as the runtime's own sessions are owned. Returns its document.
+    pub(crate) async fn agent_session(
+        &self,
+        binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+        session_id: &str,
+    ) -> String {
+        let access = self.agent_access(binding).await;
+        let node_did = self.node_did().to_owned();
+        let agent_did = binding.agent_did.clone();
+        access
+            .transact_write("test.client_home.agent_session", |txn| {
+                let (node_did, agent_did) = (&node_did, &agent_did);
+                Box::pin(async move {
+                    let (agent_doc, _) =
+                        gents::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            gents::Collection::Agent,
+                            node_did,
+                            agent_did,
+                        )
+                        .await?
+                        .expect("published Agent");
+                    let response = txn
+                        .execute_with_variables(
+                            "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) {_docID} }",
+                            &serde_json::json!({"input": {
+                                "node_did": node_did, "session_id": session_id,
+                                "requester_did": agent_did, "agent_did": agent_did,
+                                "created_at": "2026-10-24T00:00:00Z",
+                                "relationships_pending": false,
+                            }}),
+                        )
+                        .await?;
+                    let session_doc =
+                        gents::store::graphql::created_doc_id(&response, "AgentSession")?;
+                    txn.add_resource_relationship(
+                        "AgentSession",
+                        &session_doc,
+                        "parent",
+                        "agents",
+                        &agent_doc,
+                    )
+                    .await?;
+                    txn.add_actor_relationship(
+                        "AgentSession",
+                        &session_doc,
+                        "working_agent",
+                        &agent_did.parse()?,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(session_doc)
+                })
+            })
+            .await
+            .unwrap()
     }
 }
 

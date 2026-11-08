@@ -132,6 +132,7 @@ async fn remove(args: PluginRemoveArgs) -> Result<()> {
     crate::commands::pack::ensure_home_plugins_unreferenced(
         &home,
         &std::collections::BTreeSet::from([format!("{namespace}/{name}")]),
+        &guard,
     )
     .await?;
     let removed =

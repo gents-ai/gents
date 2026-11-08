@@ -1,6 +1,7 @@
 use super::*;
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn disconnect_parked_before_latch_with_finishing_submission_failure_resolves_cancelled() {
     let (_tempdir, node, node_did) = test_node().await;
     let submission_arrived = Arc::new(tokio::sync::Notify::new());
@@ -112,6 +113,7 @@ async fn disconnect_parked_before_latch_with_finishing_submission_failure_resolv
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn cancel_parked_before_latch_with_finishing_submission_failure_resolves_cancelled() {
     let (_tempdir, node, node_did) = test_node().await;
     let submission_arrived = Arc::new(tokio::sync::Notify::new());

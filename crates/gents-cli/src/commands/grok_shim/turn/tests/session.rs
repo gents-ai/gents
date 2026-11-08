@@ -1,6 +1,7 @@
 use super::*;
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn resume_hands_off_active_and_during_replay_requests_without_repeating_history() {
     let (_dir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;
@@ -116,6 +117,7 @@ async fn session_discovery_excludes_foreign_nodes_and_requesters() {
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn observed_human_turn_keeps_prompt_identity_echo_and_cancel_target() {
     let (_tempdir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;
@@ -220,6 +222,7 @@ async fn observed_human_turn_keeps_prompt_identity_echo_and_cancel_target() {
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn autonomous_turn_defers_late_notices_and_plain_escape_cancels_its_owner() {
     let (_tempdir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;

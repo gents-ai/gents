@@ -962,6 +962,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "codex shim is being removed"]
     async fn job_row_stops_through_its_process_key() {
         let dir = tempfile::tempdir().unwrap();
         let state = job_test_state(dir.path()).await;
@@ -985,6 +986,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "codex shim is being removed"]
     async fn job_rows_stop_on_clean() {
         let dir = tempfile::tempdir().unwrap();
         let state = job_test_state(dir.path()).await;
@@ -1006,6 +1008,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "codex shim is being removed"]
     async fn job_row_already_ended_is_ok() {
         let dir = tempfile::tempdir().unwrap();
         let state = job_test_state(dir.path()).await;

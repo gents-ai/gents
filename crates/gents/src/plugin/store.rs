@@ -249,6 +249,10 @@ pub struct StoreGuard {
 }
 
 impl StoreGuard {
+    pub(crate) fn home(&self) -> &Path {
+        &self.home
+    }
+
     /// Prevents a held lock for one home from authorizing mutations in another.
     pub fn for_home(&self, home: &Path) -> Result<()> {
         anyhow::ensure!(
