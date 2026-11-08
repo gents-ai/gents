@@ -228,3 +228,34 @@ it.each([
     expect(entry.presentation.command).toBe(command);
   },
 );
+
+it("preserves user boundaries and updates concurrent action summaries after settlement", () => {
+  const timeline = (second: string): RenderedTimelineItem[] => [
+    { kind: "toolGroup", itemKey: "before", tools: [tool("old", "success")] },
+    {
+      kind: "userMessage",
+      itemKey: "user",
+      ownsTurn: true,
+      content: "Next task",
+      reconstruction: { state: "ready" },
+    },
+    {
+      kind: "toolGroup",
+      itemKey: "after",
+      tools: [tool("first", "running"), tool("second", second)],
+    },
+  ];
+  const view = render(
+    <MessageList timelineItems={timeline("running")} compactTools />,
+  );
+  expect(view.container.textContent).toMatch(
+    /Ran 1 command[\s\S]*Next task[\s\S]*Running 2 commands/,
+  );
+  view.rerender(
+    <MessageList timelineItems={timeline("success")} compactTools />,
+  );
+  expect(view.container.textContent).toMatch(
+    /Next task[\s\S]*Ran 1 command[\s\S]*command-first/,
+  );
+  expect(view.container.textContent).not.toContain("Running 2 commands");
+});
