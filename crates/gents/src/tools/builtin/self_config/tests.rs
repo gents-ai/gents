@@ -5552,6 +5552,74 @@ async fn agent_management_profile_pick_cannot_switch_account() {
 }
 
 #[tokio::test]
+async fn a_created_agent_with_host_tools_names_the_users_root_reader_grant() {
+    let (fixture, core) = account_choice_core("created-root-access").await;
+    let root = fixture.admitted_workspace_root().await;
+    let create = |argv: &[&str]| {
+        agent_params(
+            "create",
+            None,
+            &argv.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
+        )
+        .unwrap()
+    };
+    let hosted: Value = serde_json::from_str(
+        &model_agent_mutate(
+            &core,
+            fixture.agent.as_ref(),
+            &create(&[
+                "--display-name", "Scout", "--system-prompt", "Find.", "--preset", "readonly",
+                "--root", root.as_str(), "--profile", "p-grok",
+            ]),
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    let created = hosted["agent_did"].as_str().unwrap();
+    let access = &hosted["host_root_access"];
+    assert_eq!(access["state"], "waiting_for_user", "{hosted}");
+    assert_eq!(
+        access["user_command"],
+        format!("gents config workspace-root grant-reader --graphql GRAPHQL_URL --path {root} --agent-did {created}"),
+        "{hosted}"
+    );
+    assert!(
+        !access["how_to_proceed"].as_str().unwrap().contains("policy grant"),
+        "{hosted}"
+    );
+    let ceiled = core
+        .clone()
+        .with_process_ceiling(crate::tools::surface::SelfConfigProcessCeiling {
+            file_mode: crate::tools::surface::FileToolMode::ReadOnly,
+            bash_mode: crate::tools::surface::BashMode::ReadOnly,
+            root: Some(std::path::PathBuf::from(&root)),
+        });
+    let inspected: Value =
+        serde_json::from_str(&agent_inspect(&ceiled, created).await.unwrap()).unwrap();
+    let observed = &inspected["effective_config"]["runtime_effective"]["root_access"];
+    assert_eq!(observed["state"], "requires_user_grant", "{inspected}");
+    assert_eq!(observed["user_command"], access["user_command"], "{inspected}");
+    let own: Value =
+        serde_json::from_str(&agent_inspect(&ceiled, fixture.agent_did()).await.unwrap()).unwrap();
+    assert!(
+        own["effective_config"]["runtime_effective"].get("root_access").is_none(),
+        "{own}"
+    );
+    let conversational: Value = serde_json::from_str(
+        &model_agent_mutate(
+            &core,
+            fixture.agent.as_ref(),
+            &create(&["--display-name", "Planner", "--system-prompt", "Plan.", "--profile", "p-grok"]),
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(conversational.get("host_root_access").is_none(), "{conversational}");
+}
+
+#[tokio::test]
 async fn agent_preview_agrees_with_the_account_choice_fence() {
     let (fixture, core) = account_choice_core("preview-pick").await;
     let root = fixture.admitted_workspace_root().await;

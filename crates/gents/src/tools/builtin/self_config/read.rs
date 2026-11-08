@@ -127,6 +127,7 @@ impl SelfConfigCore {
         let process_ceiling = self.process_ceiling();
         let effective_file_mode = requested_file_mode.meet(process_ceiling.file_mode);
         let effective_bash_mode = requested_bash_mode.meet(process_ceiling.bash_mode);
+        let mut root_access = Value::Null;
         let effective_root = if effective_file_mode != crate::tools::surface::FileToolMode::Off
             || effective_bash_mode != crate::tools::surface::BashMode::Off
         {
@@ -136,6 +137,9 @@ impl SelfConfigCore {
                 self.node_did(),
             )
             .await?;
+            // The root policy is read as the caller; another Agent's own access
+            // to it is a relationship only a User grants and the caller cannot see.
+            let foreign = self.identity()?.as_str() != self.agent_did();
             if let Some(tools) = canonical_tools.as_mut() {
                 let stored_root = tools.host.as_ref().and_then(|host| host.root.clone());
                 crate::tools::surface::canonicalize_tools_root(
@@ -149,11 +153,22 @@ impl SelfConfigCore {
                 .and_then(|tools| tools.host.as_ref())
                 .and_then(|host| host.root.as_deref())
                 .filter(|root| !root.trim().is_empty());
-            crate::tools::surface::resolve_effective_tool_root(
+            let effective = crate::tools::surface::resolve_effective_tool_root(
                 self.agent_did(),
                 configured_root.map(Path::new),
                 process_ceiling.root.as_deref(),
-            )?
+            )?;
+            if let (true, true, Some(root)) = (foreign, policy.configured, effective.as_deref()) {
+                let published =
+                    crate::tools::surface::published_root_covering_in_txn(txn, self.node_did(), root)
+                        .await?;
+                root_access = crate::tools::surface::reader_grant_step(
+                    self.agent_did(),
+                    published.as_deref(),
+                    false,
+                );
+            }
+            effective
         } else {
             None
         };
@@ -253,7 +268,7 @@ impl SelfConfigCore {
             }
             automation.insert(target.collection_name().into(), Value::Array(selected));
         }
-        Ok(json!({
+        let mut effective = json!({
             "node_did": self.node_did(), "agent_did": self.agent_did(),
             "agent": anchor.doc, "context": anchor.context, "inference_profile": anchor.profile,
             "documents": documents, "skills": skills, "automation": automation,
@@ -283,7 +298,11 @@ impl SelfConfigCore {
                 "confirmed_by": "resolved host policy; sandbox availability and command enforcement are checked at execution time",
             },
             "effect_timing": EFFECT_TIMING_NOTE,
-        }))
+        });
+        if !root_access.is_null() {
+            effective["runtime_effective"]["root_access"] = root_access;
+        }
+        Ok(effective)
     }
 
     pub(crate) async fn task_owned(

@@ -329,7 +329,7 @@ if len(engineers) == 1:
                                    for key, collection in [("agents", "Agent"), ("contexts", "AgentContext"), ("tools", "Tools")]):
                             continue
                         for expected in group.get("expect", []):
-                            if expected.get("agent_did") != "engineer" or not any(
+                            if expected.get("agent_did") != "gents:agent-slot:engineer" or not any(
                                 item.get("field") == "tools_id" and item.get("equals") == tools[0]["tools_id"]
                                 for item in expected.get("context", [])
                             ):
@@ -342,15 +342,17 @@ if len(engineers) == 1:
                                     value = value.get(part) if isinstance(value, dict) else None
                                 if assertion["equals"] == value:
                                     continue
+                                # Frozen case expectations predate the shipped grant; each may be restaged only to it.
+                                pre_policy = ["node", "agent", "tools", "profile", "backend", "mcp_service", "automation"]
                                 known_baselines = {
-                                    "built_ins": (None, {"enable_schema_tool": True}),
+                                    "built_ins": ([None], {"enable_schema_tool": True}),
                                     "self_config.self_config_categories": (
-                                        ["agent", "tools", "profile", "node", "backend", "mcp_service", "automation"],
-                                        ["node", "agent", "tools", "profile", "backend", "mcp_service", "automation"],
+                                        [["agent", "tools", "profile", "node", "backend", "mcp_service", "automation"], pre_policy],
+                                        pre_policy + ["policy"],
                                     ),
                                 }
                                 baseline = known_baselines.get(assertion["field"])
-                                if baseline is None or assertion["equals"] != baseline[0] or value != baseline[1]:
+                                if baseline is None or assertion["equals"] not in baseline[0] or value != baseline[1]:
                                     raise ValueError(
                                         f"{path}: unexpected Engineer invariant mismatch for {assertion['field']}: "
                                         f"expected {assertion['equals']!r}, input {value!r}"

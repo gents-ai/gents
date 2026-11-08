@@ -1895,7 +1895,8 @@ async fn composition_help_and_field_placement_match_the_accepted_calls() {
         let help = help.as_str().unwrap();
         assert!(help.contains("ID is allocated"), "{help}");
         assert!(help.contains("WorkspaceRoot access"), "{help}");
-        assert!(help.contains(r#"["help","tools"]"#), "{help}");
+        assert!(help.contains("host_root_access"), "{help}");
+        assert!(help.contains("Never widen your own Tools"), "{help}");
         assert!(
             !help.contains("Agent fields") && !help.contains("AgentContext fields"),
             "{help}"
@@ -1911,16 +1912,13 @@ async fn composition_help_and_field_placement_match_the_accepted_calls() {
     let root_help = ok(&tools, json!({"argv":["help","tools"]})).await;
     let root_help = root_help.as_str().unwrap();
     assert!(
-        root_help.contains("Node owner or administrator"),
-        "{root_help}"
-    );
-    assert!(
-        root_help.contains("own authenticated client"),
+        root_help.contains("Only a User (the Node owner or an administrator)"),
         "{root_help}"
     );
     assert!(root_help.contains("gents config workspace-root grant-reader --graphql GRAPHQL_URL --path PUBLISHED_ROOT --agent-did AGENT_DID"), "{root_help}");
+    // An Agent never manages WorkspaceRoot readers, so help must not steer it to policy.
     assert!(
-        root_help.contains("policy grant --collection WorkspaceRoot"),
+        !root_help.contains("policy grant --collection WorkspaceRoot"),
         "{root_help}"
     );
     let error = structured_failure(&tools, json!({"argv":["execution","create"],"target_id":"limits","options":{"display_name":"Limits"}})).await;

@@ -63,7 +63,8 @@ pub use root_admission::{
     WorkspaceRootDocument, WorkspaceRootPolicy,
 };
 pub(crate) use root_admission::{
-    load_workspace_root_policy_in_txn, resolve_admitted_tool_root, RootExecutionGuard,
+    load_workspace_root_policy_in_txn, published_root_covering_in_txn, reader_grant_step,
+    resolve_admitted_tool_root, RootExecutionGuard,
 };
 pub use root_publication::{
     delete_workspace_root, grant_workspace_root_reader, revoke_workspace_root_reader,

@@ -307,6 +307,7 @@ async fn agent_apply_in_txn(
     };
     let mut documents = Vec::new();
     let mut doc: Agent;
+    let mut root_access = Value::Null;
     match &op {
         agent::AgentOperation::Create(input) => {
             let mut context: AgentContext = match input.clone_from.as_deref() {
@@ -417,6 +418,23 @@ async fn agent_apply_in_txn(
                     stored_root.as_deref(),
                 )?;
                 apply_tool_grant_selection(&mut tools, args.enable_lsp, args.network_mode);
+                // A new Agent DID holds no WorkspaceRoot relationship yet.
+                let root = tools.host.as_ref().and_then(|host| host.root.clone());
+                if let (true, Some(root)) = (
+                    policy.configured
+                        && crate::tools::surface::ResolvedToolSelection::from_document(&tools)?
+                            .requires_filesystem_root(),
+                    root,
+                ) {
+                    let published = crate::tools::surface::published_root_covering_in_txn(
+                        txn,
+                        owner,
+                        std::path::Path::new(&root),
+                    )
+                    .await?;
+                    root_access =
+                        crate::tools::surface::reader_grant_step(&id, published.as_deref(), true);
+                }
                 validate_tool_network_selection(args.network_mode)?;
                 context.tools_id = Some(tools.tools_id.clone());
                 if let Some(held) = held {
@@ -548,5 +566,5 @@ async fn agent_apply_in_txn(
         )
         .await?;
     }
-    ordered! {"committed":!preview,"admitted":true,"operation":operation,"agent_did":id,"agent":doc,"make_default":args.make_default}.pretty()
+    ordered! {"committed":!preview,"admitted":true,"operation":operation,"agent_did":id,"host_root_access":root_access,"agent":doc,"make_default":args.make_default}.pretty()
 }
