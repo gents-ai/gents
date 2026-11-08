@@ -56,6 +56,18 @@ See `../README.md` for how this fits the broader formal-verification model.
   test); `ReserveSingleAttempt` is the found reservation race ("a partial read
   lost to a newer merge" in the live backgrounding run); `ShortBudget` shows
   the overlap premise is load-bearing.
+- `PackUxWatch` — a pack page's live data watch (`desktop_ux_data_watch`)
+  racing runtime restarts, window node selection, unwatch and window
+  destruction. The task re-acquires the endpoint at every connect, backs off
+  on transient failures, and sends each snapshot under the registry lock only
+  while its watch is registered; the runtime re-sends a full snapshot on every
+  connect. `NoCrossNodeDelivery`, `RegistryReleased`, `EventualResume` and
+  `NoLeakedWatch` hold with every guard. `Transient` is the observed defect
+  (one read timeout ends the watch); `StaleEndpoint` reuses the endpoint
+  captured at start; `NodeSwitch` drops the selection cancel;
+  `UnlockedDeliver` checks the token and then sends outside the lock;
+  `NoDestroyCancel` keeps a destroyed window's registry entry. Lean
+  `ClientShell.PackWatch` owns the per-task phases.
 - `SessionHeadObservation` — a session's observed request head and the
   client that projects it on reopen (#3604). The runtime claims a session's
   requests one at a time; each claim or admission refusal names the incoming
@@ -178,6 +190,17 @@ in the same second, the client reopens, B completes and never appears);
 ./scripts/run-tlc.sh MCSessionHeadObservationNoHeadSeed
 ```
 
+For PackUxWatch — the green model checks clean; the five diagnostics are
+EXPECTED to report the violation named in their config:
+```bash
+./scripts/run-tlc.sh MCPackUxWatch
+./scripts/run-tlc.sh MCPackUxWatchTransient
+./scripts/run-tlc.sh MCPackUxWatchStaleEndpoint
+./scripts/run-tlc.sh MCPackUxWatchNodeSwitch
+./scripts/run-tlc.sh MCPackUxWatchUnlockedDeliver
+./scripts/run-tlc.sh MCPackUxWatchNoDestroyCancel
+```
+
 Each run directly, from this directory, is:
 ```bash
 java -cp <tla2tools.jar> tlc2.TLC -workers 2 -metadir <scratch dir> \
@@ -261,6 +284,12 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCSessionHeadObservationNoLivePreference.cfg` | `Order = "noLive"`, `Refusals = FALSE` | `ReplyObserved` intentionally VIOLATED: B's claim ranks below A's same-second terminalization | 620 distinct states; 1,056 generated | 11 | <1s |
 | `MCSessionHeadObservationNoTerminalizationOrder.cfg` | `Order = "noTerminal"`, `Refusals = TRUE` | `ReplyObserved` intentionally VIOLATED: B refused in A's second loses the random tie | 838 distinct states; 1,406 generated | 11 | <1s |
 | `MCSessionHeadObservationNoHeadSeed.cfg` | `Order = "lean"`, `HeadSeed = FALSE` | `ReplyObserved` intentionally VIOLATED: the head is B but the reader reads only nonterminal rows | 572 distinct states; 984 generated | 11 | <1s |
+| `MCPackUxWatch.cfg` | all guards, `MaxRestarts = MaxFaults = MaxRev = 1`, `MaxSelects = 2` | Passes `TypeOK`, `NoCrossNodeDelivery`, `RegistryReleased`, `EventualResume`, `NoLeakedWatch` | 2,542 distinct states; 11,271 generated | 15 | 1s (OpenJDK 25, 2 workers) |
+| `MCPackUxWatchTransient.cfg` | `RetryTransient = FALSE`, `MaxRestarts = 0`, `MaxSelects = 0` | `EventualResume` intentionally VIOLATED: Start, Write, Connect, SendAtomic, ReadTimeout ends the watch | 115 distinct states; 368 generated | 10 | <1s |
+| `MCPackUxWatchStaleEndpoint.cfg` | `Reacquire = FALSE`, `MaxSelects = 0` | `EventualResume` intentionally VIOLATED: after Restart every Connect uses the old endpoint | 710 distinct states; 2,784 generated | 13 | <1s |
+| `MCPackUxWatchNodeSwitch.cfg` | `CancelOnSelect = FALSE` | `NoCrossNodeDelivery` intentionally VIOLATED: Start, Select("B"), Connect, SendAtomic | 122 distinct states before counterexample; 262 generated | 6 | <1s |
+| `MCPackUxWatchUnlockedDeliver.cfg` | `AtomicDeliver = FALSE` | `NoCrossNodeDelivery` intentionally VIOLATED: Connect, Check, Select("B"), SendChecked | 347 distinct states before counterexample; 1,009 generated | 7 | <1s |
+| `MCPackUxWatchNoDestroyCancel.cfg` | `CancelOnDestroy = FALSE` | `RegistryReleased` intentionally VIOLATED: Start, Destroy | 34 distinct states before counterexample; 54 generated | 4 | <1s |
 
 The nine BackgroundAdmissionContention rows used TLC2 `2026.11.06.222357`
 (rev `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and
