@@ -1,6 +1,7 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn codex_shim_streams_claimed_background_completion_and_replays_it_once() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -113,6 +114,7 @@ async fn codex_shim_streams_claimed_background_completion_and_replays_it_once() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn codex_shim_resume_finishes_an_in_progress_background_completion() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");

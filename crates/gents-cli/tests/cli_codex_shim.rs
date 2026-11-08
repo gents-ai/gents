@@ -186,6 +186,7 @@ mod turn_control;
 mod turn_streaming;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");

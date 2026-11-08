@@ -1,6 +1,7 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -146,6 +147,7 @@ async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");

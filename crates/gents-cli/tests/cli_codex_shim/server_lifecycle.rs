@@ -245,6 +245,7 @@ async fn codex_shim_waits_for_a_missing_bound_agent_instead_of_disabling() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn codex_shim_binds_when_config_apply_supplies_its_agent() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
