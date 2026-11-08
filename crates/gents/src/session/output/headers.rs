@@ -2,10 +2,10 @@ use anyhow::Result;
 use gents_protocol::output::MessagePublication;
 use std::collections::BTreeSet;
 
-use super::super::canonical_rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS};
-use super::super::query::session_scope_filter;
 use super::access::{rows_value, ReadAccess, ReadCache, SessionHeaderRows};
 use super::CanonicalOutputReadError;
+use gents_protocol::output::rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS};
+use gents_protocol::session::session_scope_filter;
 
 pub(super) async fn load_header(
     access: ReadAccess<'_, '_>,
@@ -13,7 +13,7 @@ pub(super) async fn load_header(
     node_did: &str,
     requester_did: Option<&str>,
     cache: &mut ReadCache,
-) -> Result<super::super::canonical_rows::TranscriptMessageRow> {
+) -> Result<gents_protocol::output::rows::TranscriptMessageRow> {
     find_header(access, header_doc_id, node_did, requester_did, cache)
         .await?
         .ok_or_else(|| {
@@ -30,7 +30,7 @@ async fn find_header(
     node_did: &str,
     requester_did: Option<&str>,
     cache: &mut ReadCache,
-) -> Result<Option<super::super::canonical_rows::TranscriptMessageRow>> {
+) -> Result<Option<gents_protocol::output::rows::TranscriptMessageRow>> {
     anyhow::ensure!(
         !header_doc_id.trim().is_empty(),
         "canonical header id is blank"
@@ -52,7 +52,7 @@ async fn find_header(
         let response = access.query(&query, "load_canonical_header").await?;
         rows_value(&response, "AgentMessage")?
             .iter()
-            .map(decode_transcript_message_row)
+            .map(|row| decode_transcript_message_row(row).map_err(anyhow::Error::from))
             .collect::<Result<Vec<_>>>()?
     };
     match headers.len() {
@@ -99,11 +99,11 @@ async fn find_header(
 
 async fn coordinate_twins(
     access: ReadAccess<'_, '_>,
-    header: &super::super::canonical_rows::TranscriptMessageRow,
+    header: &gents_protocol::output::rows::TranscriptMessageRow,
     node_did: &str,
     requester_did: Option<&str>,
     cache: &mut ReadCache,
-) -> Result<Vec<super::super::canonical_rows::TranscriptMessageRow>> {
+) -> Result<Vec<gents_protocol::output::rows::TranscriptMessageRow>> {
     let session_id = &header.message.session_id;
     let scope = session_scope_filter(node_did, session_id, requester_did);
     let key = &header.message.message_key;
@@ -143,13 +143,13 @@ async fn coordinate_twins(
     }
     sessions[session_id]
         .coordinate_matches(key, sequence)
-        .map(decode_transcript_message_row)
+        .map(|row| decode_transcript_message_row(row).map_err(anyhow::Error::from))
         .collect()
 }
 
 fn validate_fork(
-    child: &super::super::canonical_rows::TranscriptMessageRow,
-    origin: &super::super::canonical_rows::TranscriptMessageRow,
+    child: &gents_protocol::output::rows::TranscriptMessageRow,
+    origin: &gents_protocol::output::rows::TranscriptMessageRow,
 ) -> Result<()> {
     use gents_protocol::output::origin::{validate_fork_metadata, ObservedMessage};
     validate_fork_metadata(
@@ -178,12 +178,12 @@ pub(super) enum OriginWalk {
 /// Returns the deepest origin reached, validated hop by hop.
 pub(super) async fn validate_origin_chain(
     access: ReadAccess<'_, '_>,
-    first: &super::super::canonical_rows::TranscriptMessageRow,
+    first: &gents_protocol::output::rows::TranscriptMessageRow,
     node_did: &str,
     requester_did: Option<&str>,
     cache: &mut ReadCache,
     walk: OriginWalk,
-) -> Result<super::super::canonical_rows::TranscriptMessageRow> {
+) -> Result<gents_protocol::output::rows::TranscriptMessageRow> {
     let mut active = BTreeSet::new();
     active.insert(first.doc_id.clone());
     let mut child = first.clone();

@@ -3,10 +3,10 @@ use defra_node::Node as EmbeddedNode;
 
 use std::sync::Arc;
 
-use crate::request::lifecycle::SessionMessageTarget;
-use crate::session::origin::SessionScope;
 use crate::store::config_client::ConfigAccess;
 use crate::tools::surface::AgentToolConfig;
+use gents_protocol::request_lifecycle::SessionMessageTarget;
+use gents_protocol::session::SessionScope;
 
 pub(crate) async fn target_agent_exists(
     access: &ConfigAccess,
@@ -100,7 +100,7 @@ pub(crate) fn target_scope(caller_agent_did: &str, target: &SessionMessageTarget
 
 pub(crate) async fn agent_list(
     _node: &Arc<EmbeddedNode>,
-    _caller: &crate::AgentRequest,
+    _caller: &gents_protocol::row::AgentRequest,
     tools: &AgentToolConfig,
 ) -> Result<serde_json::Value> {
     let agents = tools

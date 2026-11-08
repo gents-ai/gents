@@ -1,6 +1,6 @@
 use super::*;
-use crate::request::watcher::AgentRequest;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
+use gents_protocol::row::AgentRequest;
 
 async fn signed_reply(
     node: &EmbeddedNode,
@@ -87,7 +87,7 @@ async fn persisted_request(
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
         escape_graphql_string(doc_id),
-        crate::request::admission::SIGNED_REQUEST_FIELDS
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
     );
     let response = node.execute(&query).await;
     let record = rows::<gents_protocol::row::AgentRequestRow>(&response, "AgentRequest")

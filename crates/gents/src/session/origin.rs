@@ -3,40 +3,23 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use crate::session::{
-    decode_session_row, public_request_filter, session_scope_filter, AGENT_SESSION_FIELDS,
-};
+use crate::session::public_request_filter;
 use crate::store::config_client::{ConfigAccess, ConfigRead};
 use crate::store::graphql::{escape_graphql_string, graphql_string_list_literal};
 use gents_protocol::row::AgentRequestRow;
-use gents_protocol::session::AgentSession;
+use gents_protocol::session::{
+    decode_session_row, session_scope_filter, AgentSession, SessionScope, AGENT_SESSION_FIELDS,
+};
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SessionScope {
-    pub node_did: String,
-    pub session_id: String,
-    pub requester_did: Option<String>,
-}
-
-impl SessionScope {
-    pub fn of_request(request: &crate::AgentRequest) -> Self {
-        Self {
-            node_did: request.node_did.clone(),
-            session_id: request.session_id.clone(),
-            requester_did: request.requester_did.clone(),
-        }
-    }
-
-    fn of_row(row: &Value) -> Option<Self> {
-        Some(Self {
-            node_did: row.get("node_did")?.as_str()?.to_string(),
-            session_id: row.get("session_id")?.as_str()?.to_string(),
-            requester_did: row
-                .get("requester_did")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-        })
-    }
+fn scope_of_row(row: &Value) -> Option<SessionScope> {
+    Some(SessionScope {
+        node_did: row.get("node_did")?.as_str()?.to_string(),
+        session_id: row.get("session_id")?.as_str()?.to_string(),
+        requester_did: row
+            .get("requester_did")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,7 +59,10 @@ where
         .unwrap_or_default())
 }
 
-async fn session_rows<R>(access: &R, filter: &str) -> Result<Vec<crate::session::SessionOwnerRow>>
+async fn session_rows<R>(
+    access: &R,
+    filter: &str,
+) -> Result<Vec<gents_protocol::session::SessionOwnerRow>>
 where
     R: ConfigRead + ?Sized,
 {
@@ -87,7 +73,7 @@ where
     )
     .await?
     .iter()
-    .map(decode_session_row)
+    .map(|row| decode_session_row(row).map_err(anyhow::Error::from))
     .collect()
 }
 
@@ -103,33 +89,13 @@ async fn sessions(access: &ConfigAccess, filter: &str) -> Result<Vec<AgentSessio
 /// same row as [`AGENT_SESSION_FIELDS`].
 pub const STARTER_INDEX_FIELDS: &str = "started_by_node_did started_by_session_id";
 
-impl From<&AgentSession> for SessionScope {
-    fn from(session: &AgentSession) -> Self {
-        Self {
-            node_did: session.node_did.clone(),
-            session_id: session.session_id.clone(),
-            requester_did: session.requester_did.clone(),
-        }
-    }
-}
-
-impl From<&gents_protocol::session::SessionReference> for SessionScope {
-    fn from(source: &gents_protocol::session::SessionReference) -> Self {
-        Self {
-            node_did: source.node_did.clone(),
-            session_id: source.session_id.clone(),
-            requester_did: source.requester_did.clone(),
-        }
-    }
-}
-
-fn decode_indexed_session(row: &Value) -> Result<crate::session::SessionOwnerRow> {
+fn decode_indexed_session(row: &Value) -> Result<gents_protocol::session::SessionOwnerRow> {
     let mut row = row.clone();
     if let Some(fields) = row.as_object_mut() {
         fields.remove("started_by_node_did");
         fields.remove("started_by_session_id");
     }
-    decode_session_row(&row)
+    Ok(decode_session_row(&row)?)
 }
 
 /// The verified starter of one `AgentSession` row selected with
@@ -270,10 +236,7 @@ where
                 .await?
                 .iter()
                 .filter_map(|row| {
-                    Some((
-                        row.get("_docID")?.as_str()?.to_owned(),
-                        SessionScope::of_row(row)?,
-                    ))
+                    Some((row.get("_docID")?.as_str()?.to_owned(), scope_of_row(row)?))
                 }),
         );
     }
@@ -400,7 +363,7 @@ pub async fn task_triggered_opening(access: &ConfigAccess, scope: &SessionScope)
         &format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(opening),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ),
         "AgentRequest",
     )
@@ -432,7 +395,8 @@ pub async fn task_triggered_opening(access: &ConfigAccess, scope: &SessionScope)
             request.caused_by_trigger_kind.as_deref(),
             Some("event" | "schedule")
         )
-        || crate::request::admission::verify_request_receipt_signature(&request).is_err()
+        || crate::store::identity::request_receipt::verify_request_receipt_signature(&request)
+            .is_err()
     {
         return Ok(false);
     }
@@ -539,7 +503,7 @@ pub fn group_caused(rows: &[Value]) -> BTreeMap<String, Vec<CausedRequest>> {
             text("request_id"),
             text("_docID"),
             text("created_at"),
-            SessionScope::of_row(row),
+            scope_of_row(row),
         ) else {
             continue;
         };
@@ -718,7 +682,7 @@ pub async fn lineage(access: &ConfigAccess, scope: &SessionScope) -> Result<Sess
     );
     for row in collection(access, &query, "AgentRequest").await? {
         let (Some(target), Some(cause)) = (
-            SessionScope::of_row(&row),
+            scope_of_row(&row),
             row.get("caused_by_parent_request_doc_id")
                 .and_then(Value::as_str),
         ) else {
@@ -766,7 +730,7 @@ pub(crate) async fn verified_starter_in_txn(
         .execute(&format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(opening),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ))
         .await?;
     let Some([row]) = response["data"]["AgentRequest"]
@@ -790,7 +754,8 @@ pub(crate) async fn verified_starter_in_txn(
             .and_then(|input| input.started_by.as_ref())
             != Some(source)
         || source.session_id.is_empty()
-        || crate::request::admission::verify_request_receipt_signature(&request).is_err()
+        || crate::store::identity::request_receipt::verify_request_receipt_signature(&request)
+            .is_err()
     {
         return Ok(None);
     }
@@ -824,7 +789,7 @@ pub(crate) async fn issue_creation_receipt_in_txn(
         .execute(&format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(opening),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ))
         .await?;
     let Some(rows) = response["data"]["AgentRequest"].as_array() else {
@@ -840,7 +805,8 @@ pub(crate) async fn issue_creation_receipt_in_txn(
         || request.session_id.as_deref() != Some(session_id)
         || request.requester_did.as_deref() != requester_did
         || request.agent_did.as_deref() != Some(agent_did)
-        || crate::request::admission::verify_request_receipt_signature(&request).is_err()
+        || crate::store::identity::request_receipt::verify_request_receipt_signature(&request)
+            .is_err()
     {
         return Ok(None);
     }
@@ -1032,7 +998,7 @@ async fn verified_agent_new_creation_matching(
         &format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(&receipt.opening_request_doc_id),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ),
         "AgentRequest",
     )
@@ -1049,7 +1015,8 @@ async fn verified_agent_new_creation_matching(
         || request.agent_did.as_deref() != Some(session.agent_did.as_str())
         || request.requester_did.as_deref() != Some(caller_agent)
         || request.admission_signer_did.as_deref() != Some(caller_agent)
-        || crate::request::admission::verify_request_receipt_signature(&request).is_err()
+        || crate::store::identity::request_receipt::verify_request_receipt_signature(&request)
+            .is_err()
     {
         return Ok(false);
     }
@@ -1089,7 +1056,7 @@ async fn verified_agent_new_creation_matching(
         &format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(parent_doc),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ),
         "AgentRequest",
     )
@@ -1104,7 +1071,8 @@ async fn verified_agent_new_creation_matching(
         || parent.session_id.as_deref() != Some(caller.session_id.as_str())
         || parent.requester_did != caller.requester_did
         || request.caused_by_parent_request_id.as_deref() != Some(parent.request_id.as_str())
-        || crate::request::admission::verify_request_receipt_signature(&parent).is_err()
+        || crate::store::identity::request_receipt::verify_request_receipt_signature(&parent)
+            .is_err()
     {
         return Ok(false);
     }
@@ -1231,7 +1199,7 @@ where
         &format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(parent_doc),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ),
         "AgentRequest",
     )
@@ -1249,7 +1217,8 @@ where
     if request.requester_did.as_deref() != parent.agent_did.as_deref()
         || request.admission_signer_did.as_deref() != parent.agent_did.as_deref()
         || request.caused_by_parent_request_id.as_deref() != Some(parent.request_id.as_str())
-        || crate::request::admission::verify_request_receipt_signature(&parent).is_err()
+        || crate::store::identity::request_receipt::verify_request_receipt_signature(&parent)
+            .is_err()
     {
         return Ok(None);
     }
@@ -1315,7 +1284,7 @@ pub(super) async fn agent_new_binding_in_txn(
         &format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(parent_doc),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ),
         "AgentRequest",
     )
@@ -1333,7 +1302,8 @@ pub(super) async fn agent_new_binding_in_txn(
     if request.requester_did.as_deref() != parent.agent_did.as_deref()
         || request.admission_signer_did.as_deref() != parent.agent_did.as_deref()
         || request.caused_by_parent_request_id.as_deref() != Some(parent.request_id.as_str())
-        || crate::request::admission::verify_request_receipt_signature(&parent).is_err()
+        || crate::store::identity::request_receipt::verify_request_receipt_signature(&parent)
+            .is_err()
     {
         return Ok(None);
     }
@@ -1420,7 +1390,7 @@ where
         &format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(parent_doc),
-            crate::request::admission::SIGNED_REQUEST_FIELDS
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
         ),
         "AgentRequest",
     )
@@ -1432,7 +1402,8 @@ where
     if parent.request_id != parent_id
         || parent.agent_did.as_deref() != Some(signer)
         || request.requester_did.as_deref() != Some(signer)
-        || crate::request::admission::verify_request_receipt_signature(&parent).is_err()
+        || crate::store::identity::request_receipt::verify_request_receipt_signature(&parent)
+            .is_err()
     {
         return Ok(None);
     }

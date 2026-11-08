@@ -6,8 +6,6 @@ use serde::{Deserialize, Serialize};
 use crate::store::graphql::escape_graphql_string;
 
 mod archive;
-pub mod canonical_rows;
-pub(crate) mod child_ownership;
 pub mod mailbox;
 pub mod message;
 pub mod origin;
@@ -52,15 +50,12 @@ pub use compaction_entries::{compaction_key, load_compaction_entries};
 pub(crate) use compaction_entries::{
     save_exact_compaction_entry, NewExactSessionCompaction, StaleCompactionGeneration,
 };
-pub use control::{
-    resume_session_with_access, stop_session_with_access,
-    SessionStopReceipt,
-};
+pub use control::{resume_session_with_access, stop_session_with_access, SessionStopReceipt};
+pub(crate) use fork::message_tool_references;
 pub use fork::{
     fork, fork_edit_on, fork_on, fork_via_http, is_user_turn, publish_fork_relationships,
     ForkBoundary, ForkError, ForkOutcome, ForkParams, ForkRelationshipIntent,
 };
-pub(crate) use fork::message_tool_references;
 #[cfg(test)]
 pub(crate) use history::load_history_with_access;
 pub use history::{load_history, sequence_message_key};
@@ -99,11 +94,7 @@ pub use output::CanonicalOutputReadError;
 pub(crate) use output::CanonicalReplayScope;
 pub(crate) use query::session_is_stopped;
 pub(crate) use query::session_stopped_in_txn;
-pub(crate) use query::validate_agent_session;
-pub use query::{
-    client_requester_scope, decode_session_row, public_request_filter, session_scope_filter,
-    AGENT_SESSION_FIELDS,
-};
+pub use query::{client_requester_scope, public_request_filter};
 pub(crate) use query::{
     load_session_agent_did, load_session_agent_selection, load_session_requester_scope,
     require_session,
@@ -111,10 +102,7 @@ pub(crate) use query::{
 pub use request_output::{
     observe_request_output, CanonicalPresentation, CanonicalRequestOutput, CanonicalSelectedSource,
 };
-pub use rows::SessionOwnerRow;
 pub use sessions::close_session;
-pub use sessions::load_agent_session_owner_in_txn;
-pub use sessions::load_agent_session_row_in_txn;
 pub(crate) use sessions::{
     ensure_reserved_session_in_txn, ensure_session_in_txn, finalize_agent_new_session_in_txn,
     finalize_plugin_job_session_in_txn, finalize_reserved_runtime_session_in_txn,

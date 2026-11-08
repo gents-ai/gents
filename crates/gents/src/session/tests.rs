@@ -48,7 +48,7 @@ async fn history_on(
 async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
     use crate::store::identity::NodeIdentity;
     use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
-    use crate::tools::call::lifecycle::AwaitMode;
+    use gents_protocol::row::AwaitMode;
     let (db, user, client, binding) =
         crate::test_support::signed_test_node("provider-history").await;
     let session_id = "session-steering-provider-history";
@@ -658,9 +658,8 @@ async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
     let doc = escape_graphql_string(row["_docID"].as_str().unwrap());
     // Ordinary mutations are not client-signed; the owning Agent removes the
     // message it authored through its own managed signer.
-    let agent =
-        crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
-            .unwrap();
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
     let agent_access = crate::ConfigAccess::local_managed_agent(
         db.node.clone(),
         identity::Did::new(agent.did()).unwrap(),
@@ -1036,17 +1035,17 @@ async fn delete_session_rows(client: &crate::ConfigAccess, collection: &str, ses
         crate::store::graphql::mutation_documents(&response, &format!("delete_{collection}"))
             .unwrap()
             .unwrap();
-    assert!(!deleted.is_empty(), "{collection} rows of {session} must exist");
+    assert!(
+        !deleted.is_empty(),
+        "{collection} rows of {session} must exist"
+    );
     let remaining = client
         .execute(&format!(
             r#"{{ {collection}(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID }} }}"#
         ))
         .await
         .unwrap();
-    assert!(remaining["data"][collection]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert!(remaining["data"][collection].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -1104,10 +1103,8 @@ async fn a_reader_granted_only_the_fork_reads_its_whole_retained_transcript() {
             .await
             .unwrap();
     let sharee_did = identity::Did::new(sharee.did()).unwrap();
-    let admin = crate::ConfigAccess::local_as(
-        db.node.clone(),
-        identity::Did::new(node_did).unwrap(),
-    );
+    let admin =
+        crate::ConfigAccess::local_as(db.node.clone(), identity::Did::new(node_did).unwrap());
     for permission in [NodePermission::DocumentRead, NodePermission::CollectionGet] {
         admin
             .grant_node_permission(&sharee_did, permission)
@@ -1160,7 +1157,10 @@ async fn a_reader_granted_only_the_fork_reads_its_whole_retained_transcript() {
         3,
         "the source grant is effective"
     );
-    assert_eq!(sharee_reads(child.to_owned()).await, reads("source_session"));
+    assert_eq!(
+        sharee_reads(child.to_owned()).await,
+        reads("source_session")
+    );
     share(&source_doc, false).await;
     share(&child_doc, true).await;
     assert!(reads("child_session"));
@@ -1231,8 +1231,7 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
     use crate::NodeIdentity as _;
     const SOURCE: &str = "retained-source";
     const CHILD: &str = "retained-child";
-    let (mut db, user, client, binding) =
-        fork_reader_node("retained-edit-fork").await;
+    let (mut db, user, client, binding) = fork_reader_node("retained-edit-fork").await;
     let node_did = db.node_identity.did().to_owned();
     let messages = (1..=3)
         .map(|sequence| format!("retained-{sequence}"))
@@ -1590,7 +1589,7 @@ pub(crate) async fn import_history_observation(
     sequence: u32,
     tool_call: Option<(&str, &str)>,
 ) {
-    use canonical_rows::*;
+    use gents_protocol::output::rows::*;
     let segment = history_observation_segment(
         request_id,
         session_id,
@@ -1790,7 +1789,7 @@ pub(crate) async fn import_history_observation_as(
     sequence: u32,
     tool_call: Option<(&str, &str)>,
 ) {
-    use canonical_rows::*;
+    use gents_protocol::output::rows::*;
     let segment = history_observation_segment(
         request_id,
         session_id,
@@ -2262,7 +2261,10 @@ pub(crate) async fn publish_signed_history(
         )
         .unwrap();
         lifecycle.begin_owned_execution(&writer).await.unwrap();
-        let key = canonical_rows::authored_message_key(&lifecycle.request().doc_id, "prompt");
+        let key = gents_protocol::output::rows::authored_message_key(
+            &lifecycle.request().doc_id,
+            "prompt",
+        );
         writer
             .publish_authored_message(&lifecycle, "prompt", &Message::user(message))
             .await
@@ -2343,7 +2345,7 @@ async fn signed_claimed_authored_request_with_retry(
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{ {} }} }}"#,
             escape_graphql_string(request_id),
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
+            gents_protocol::row::AGENT_REQUEST_FIELDS,
         ))
         .await
         .unwrap();
@@ -2453,7 +2455,7 @@ async fn concurrent_keyed_appends_resolve_sequence_conflicts_without_duplicates(
 #[tokio::test]
 async fn single_header_transaction_matches_bulk_coordinate_validation() {
     use crate::store::identity::NodeIdentity;
-    use canonical_rows::{
+    use gents_protocol::output::rows::{
         decode_transcript_message_row, transcript_message_create_variables, AGENT_MESSAGE_FIELDS,
         CREATE_AGENT_MESSAGE_MUTATION,
     };
@@ -2589,7 +2591,7 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
 async fn retry_frontier_matches_lean_admission() {
     use crate::store::identity::NodeIdentity;
     use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
-    use crate::tools::call::lifecycle::AwaitMode;
+    use gents_protocol::row::AwaitMode;
     let (db, user, client, binding) = crate::test_support::signed_test_node("retry-frontier").await;
     let node = &db.node;
     let node_did = db.node_identity.did();
@@ -2687,11 +2689,12 @@ async fn retry_frontier_matches_lean_admission() {
                     header.message.role == gents_protocol::output::MessageRole::Assistant
                 })
                 .max_by_key(|header| header.message.sequence)
-                .map_or(gents_protocol::output::TerminalOutput::NoMessage, |header| {
-                    gents_protocol::output::TerminalOutput::Message {
+                .map_or(
+                    gents_protocol::output::TerminalOutput::NoMessage,
+                    |header| gents_protocol::output::TerminalOutput::Message {
                         message_doc_id: header.doc_id.clone(),
-                    }
-                });
+                    },
+                );
             parent
                 .terminalize_owned(
                     crate::request::lifecycle::RequestTerminalOutcome::Dead,
@@ -2790,7 +2793,7 @@ async fn unsigned_starter_cannot_populate_the_index() {
         .started_by
         .as_ref()
         .unwrap();
-    let scope = crate::session::origin::SessionScope::from(source);
+    let scope = gents_protocol::session::SessionScope::from(source);
     for provenance in [session.provenance.clone(), None] {
         let session = &session;
         access
@@ -2813,7 +2816,7 @@ async fn unsigned_starter_cannot_populate_the_index() {
             .await
             .unwrap();
     }
-    let child_scope = crate::session::origin::SessionScope::from(&session);
+    let child_scope = gents_protocol::session::SessionScope::from(&session);
     assert!(
         crate::session::origin::started_by(&access, &child_scope)
             .await

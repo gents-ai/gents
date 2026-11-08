@@ -71,7 +71,7 @@ pub(crate) async fn load_history_through_sequence(
 
 pub(crate) async fn load_sequenced_history_for_request(
     node: &std::sync::Arc<EmbeddedNode>,
-    request: &crate::request::watcher::AgentRequest,
+    request: &gents_protocol::row::AgentRequest,
     through_sequence: Option<u32>,
     after_sequence: Option<u32>,
     provider_profile: crate::turn::provider_input::ProviderInputProfile,
@@ -95,7 +95,7 @@ pub(crate) async fn load_sequenced_history_for_request(
 
 pub(crate) async fn retry_has_published_input(
     node: &std::sync::Arc<EmbeddedNode>,
-    request: &crate::request::watcher::AgentRequest,
+    request: &gents_protocol::row::AgentRequest,
 ) -> Result<bool> {
     let access = crate::store::config_client::ConfigAccess::local_as(
         node.clone(),
@@ -111,13 +111,13 @@ pub(crate) async fn retry_has_published_input(
             "retry parent chain contains a cycle"
         );
         let parent = crate::store::graphql::escape_graphql_string(&parent_id);
-        let scope = super::query::session_scope_filter(
+        let scope = gents_protocol::session::session_scope_filter(
             &request.node_did,
             &request.session_id,
             request.requester_did.as_deref(),
         );
         let key = crate::store::graphql::escape_graphql_string(
-            &super::canonical_rows::authored_message_key(&parent_id, "prompt"),
+            &gents_protocol::output::rows::authored_message_key(&parent_id, "prompt"),
         );
         let query = format!(
             r#"{{

@@ -14,6 +14,7 @@ use crate::store::graphql::{
     escape_graphql_string, graphql_with_transaction_retry, rows, single_mutation_document,
     validate_collection_identifier, validate_graphql_name,
 };
+use gents_protocol::row::MAILBOX_COLLECTION;
 
 mod dismiss;
 mod domain;
@@ -38,7 +39,6 @@ pub use notification::{
 #[cfg(test)]
 mod notification_tests;
 
-pub const MAILBOX_COLLECTION: &str = "MailboxItem";
 pub const FILE_MAILBOX_ITEM_TOOL_NAME: &str = "file_mailbox_item";
 
 pub const MAILBOX_FIELDS: &str = r#"

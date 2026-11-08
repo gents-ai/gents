@@ -77,10 +77,10 @@ pub(crate) struct CanonicalProviderCoordinate {
 }
 
 struct ReconstructedScopedMessage {
-    header: super::canonical_rows::TranscriptMessageRow,
-    origin: super::canonical_rows::TranscriptMessageRow,
+    header: gents_protocol::output::rows::TranscriptMessageRow,
+    origin: gents_protocol::output::rows::TranscriptMessageRow,
     message: gents_protocol::message::Message,
-    segments: Vec<super::canonical_rows::OutputSegmentRow>,
+    segments: Vec<gents_protocol::output::rows::OutputSegmentRow>,
 }
 
 #[cfg(test)]

@@ -5,16 +5,16 @@ use gents_protocol::output::{OutputSource, PayloadRef};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use super::super::canonical_rows::{
-    decode_output_segment_row, decode_scoped_request_output_segments,
-    decode_transcript_message_row, AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,
-};
-use super::super::query::session_scope_filter;
 use super::access::{rows_value, ReadAccess, ReadCache};
 use super::reconstruct::{
     reconstruct_scoped_message, reconstruct_scoped_message_with_facts, source_rows,
 };
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use gents_protocol::output::rows::{
+    decode_output_segment_row, decode_scoped_request_output_segments,
+    decode_transcript_message_row, AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,
+};
+use gents_protocol::session::session_scope_filter;
 
 /// Resolve one exact header inside an existing authoritative transaction.  This
 /// is deliberately keyed by physical document identity: terminal selection and
@@ -49,7 +49,7 @@ pub(crate) async fn load_canonical_message_segments_in_txn(
     requester_did: Option<&str>,
 ) -> Result<(
     gents_protocol::output::TranscriptMessage,
-    Vec<super::super::canonical_rows::OutputSegmentRow>,
+    Vec<gents_protocol::output::rows::OutputSegmentRow>,
 )> {
     let reconstructed = reconstruct_scoped_message_with_facts(
         ReadAccess::Txn(txn),
@@ -111,7 +111,7 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
 
     pub(crate) fn observe_headers(
         &mut self,
-        headers: &[super::super::canonical_rows::TranscriptMessageRow],
+        headers: &[gents_protocol::output::rows::TranscriptMessageRow],
     ) {
         for header in headers {
             self.cache
@@ -130,7 +130,7 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
         request_doc_id: &str,
         session_id: &str,
         source: &OutputSource,
-    ) -> Result<Vec<super::super::canonical_rows::OutputSegmentRow>> {
+    ) -> Result<Vec<gents_protocol::output::rows::OutputSegmentRow>> {
         let rows = source_rows(
             ReadAccess::Txn(self.txn),
             request_doc_id,
@@ -391,7 +391,7 @@ pub(crate) async fn load_request_headers_in_txn(
     node_did: &str,
     requester_did: Option<&str>,
     request_doc_id: &str,
-) -> Result<Vec<super::super::canonical_rows::TranscriptMessageRow>> {
+) -> Result<Vec<gents_protocol::output::rows::TranscriptMessageRow>> {
     anyhow::ensure!(
         !request_doc_id.trim().is_empty(),
         "request header lookup requires request document id"
@@ -404,7 +404,7 @@ pub(crate) async fn load_request_headers_in_txn(
     let response = txn.execute(&query).await?;
     let headers = rows_value(&response, "AgentMessage")?
         .iter()
-        .map(decode_transcript_message_row)
+        .map(|row| decode_transcript_message_row(row).map_err(anyhow::Error::from))
         .collect::<Result<Vec<_>>>()?;
     let mut sequences = std::collections::BTreeSet::new();
     for header in &headers {
@@ -434,7 +434,7 @@ pub(crate) async fn load_source_rows_in_txn(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-) -> Result<Vec<super::super::canonical_rows::OutputSegmentRow>> {
+) -> Result<Vec<gents_protocol::output::rows::OutputSegmentRow>> {
     Ok(source_rows(
         ReadAccess::Txn(txn),
         request_doc_id,

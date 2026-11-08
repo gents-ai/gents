@@ -71,7 +71,7 @@ fn current_input_selection_matches_lean_owner() {
                     kind => kind.to_owned(),
                 };
                 row.message.message_key =
-                    super::super::canonical_rows::authored_message_key(&input.request, &key);
+                    gents_protocol::output::rows::authored_message_key(&input.request, &key);
                 (!is_current_admission_input(&row.message, &case.current_request)).then_some(index)
             })
             .collect::<Vec<_>>();
@@ -84,8 +84,8 @@ fn header(
     session_id: &str,
     request_doc_id: Option<&str>,
     publication: MessagePublication,
-) -> super::super::canonical_rows::TranscriptMessageRow {
-    super::super::canonical_rows::TranscriptMessageRow {
+) -> gents_protocol::output::rows::TranscriptMessageRow {
+    gents_protocol::output::rows::TranscriptMessageRow {
         doc_id: doc_id.into(),
         message: TranscriptMessage {
             native_request_id: None,
@@ -224,7 +224,7 @@ async fn cached_output_reconstruction_request_size_benchmark() {
                     presentation: PayloadPresentation::Full,
                 },
             }];
-            rows.push(super::super::canonical_rows::OutputSegmentRow { doc_id, segment });
+            rows.push(gents_protocol::output::rows::OutputSegmentRow { doc_id, segment });
             headers.push(message);
         }
         let mut cache = ReadCache::default();
@@ -348,8 +348,8 @@ async fn create_authored_header(
     };
     create_doc(
         node,
-        super::super::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
-        super::super::canonical_rows::transcript_message_create_variables(&header).unwrap(),
+        gents_protocol::output::rows::CREATE_AGENT_MESSAGE_MUTATION,
+        gents_protocol::output::rows::transcript_message_create_variables(&header).unwrap(),
         "create_AgentMessage",
     )
     .await
@@ -357,7 +357,7 @@ async fn create_authored_header(
 
 #[tokio::test]
 async fn reused_scan_observes_payload_segments_replicated_after_their_close() {
-    use super::super::canonical_rows::{
+    use gents_protocol::output::rows::{
         output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
     let node = crate::test_support::node_builder().build().await.unwrap();

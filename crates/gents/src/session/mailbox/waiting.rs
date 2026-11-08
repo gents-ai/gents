@@ -66,8 +66,10 @@ pub(crate) async fn required_question_in_txn(
         super::MAILBOX_FIELDS,
     );
     let response = txn.execute_local_response(&query).await?;
-    let items =
-        crate::store::graphql::rows::<MailboxItemRow>(&response, super::MAILBOX_COLLECTION)?;
+    let items = crate::store::graphql::rows::<MailboxItemRow>(
+        &response,
+        gents_protocol::row::MAILBOX_COLLECTION,
+    )?;
     Ok(!awaiting_question_ids(&items, parent, Utc::now()).is_empty())
 }
 

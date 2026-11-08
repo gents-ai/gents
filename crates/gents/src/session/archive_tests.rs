@@ -63,10 +63,14 @@ async fn read_as(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> Result<A
         |txn| {
             Box::pin(async move {
                 let rows = txn
-                    .cursor_rows("AgentSession", crate::session::AGENT_SESSION_FIELDS, "")
+                    .cursor_rows(
+                        "AgentSession",
+                        gents_protocol::session::AGENT_SESSION_FIELDS,
+                        "",
+                    )
                     .await?;
                 anyhow::ensure!(rows.len() == 1, "expected one authorized session");
-                Ok(crate::session::decode_session_row(&rows[0])?.session)
+                Ok(gents_protocol::session::decode_session_row(&rows[0])?.session)
             })
         },
     )
@@ -79,8 +83,7 @@ async fn signer_as_actor(node: &EmbeddedNode, actor: &str, cid: &str) -> Result<
     let (block, signature) = node.authorized_signed_block_bytes(cid, Some(actor)).await?;
     let block = defra_core::block::Block::from_dag_cbor(&block)?;
     let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
-    db::block::verify::verified_signature_signer_did(&block, &signature)
-        .map_err(anyhow::Error::msg)
+    db::block::verify::verified_signature_signer_did(&block, &signature).map_err(anyhow::Error::msg)
 }
 
 async fn create_session(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> Result<String> {
@@ -145,8 +148,8 @@ async fn work_rows(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> serde_
                     .execute(&format!(
                         "{{ AgentRequest {{ _docID request_id lifecycle_state content }} \
                 AgentMessage {{ {} }} AgentOutputSegment {{ {} }} }}",
-                        crate::session::canonical_rows::AGENT_MESSAGE_FIELDS,
-                        crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS
+                        gents_protocol::output::rows::AGENT_MESSAGE_FIELDS,
+                        gents_protocol::output::rows::AGENT_OUTPUT_SEGMENT_FIELDS
                     ))
                     .await?;
                 Ok::<_, anyhow::Error>(value["data"].clone())
@@ -353,7 +356,9 @@ async fn concurrent_archive_calls_commit_one_revision() {
             .await
             .unwrap(),
     );
-    crate::test_support::acp_policies::install_identity_acp_policies(&node).await.unwrap();
+    crate::test_support::acp_policies::install_identity_acp_policies(&node)
+        .await
+        .unwrap();
     node.add_collection(gents_protocol::schemas::AGENT_SESSION)
         .await
         .unwrap();

@@ -1,8 +1,8 @@
 use super::{MailboxAction, MailboxItem, MailboxStatus};
-use crate::request::watcher::AgentRequest;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::{escape_graphql_string, rows, single_mutation_document};
 use anyhow::{ensure, Context, Result};
+use gents_protocol::row::AgentRequest;
 
 pub(crate) async fn claim_reply_in_txn(
     txn: &ConfigApplyTxn<'_>,
@@ -21,7 +21,7 @@ pub(crate) async fn claim_reply_in_txn(
         super::MAILBOX_FIELDS,
     );
     let response = txn.execute_local_response(&query).await?;
-    let items = rows::<MailboxItem>(&response, super::MAILBOX_COLLECTION)?;
+    let items = rows::<MailboxItem>(&response, gents_protocol::row::MAILBOX_COLLECTION)?;
     let Some(item) = items.first() else {
         return Ok(());
     };
@@ -31,7 +31,7 @@ pub(crate) async fn claim_reply_in_txn(
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
         escape_graphql_string(&request.doc_id),
-        crate::request::admission::SIGNED_REQUEST_FIELDS,
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
     );
     let response = txn.execute_local_response(&query).await?;
     let records = rows::<gents_protocol::row::AgentRequestRow>(&response, "AgentRequest")?;
@@ -40,7 +40,7 @@ pub(crate) async fn claim_reply_in_txn(
         .next()
         .context("mailbox reply request disappeared")?;
     let authenticated =
-        crate::request::admission::verify_request_receipt_signature(&record).is_ok();
+        crate::store::identity::request_receipt::verify_request_receipt_signature(&record).is_ok();
     let replay = item.parsed_status() == Some(MailboxStatus::Acted)
         && item.resolved_doc_id.as_deref() == Some(request.doc_id.as_str());
     let recipient_authorized = if authenticated && !replay {
@@ -52,7 +52,7 @@ pub(crate) async fn claim_reply_in_txn(
         let decisions = txn
             .observe_document_access(
                 &subject,
-                super::MAILBOX_COLLECTION,
+                gents_protocol::row::MAILBOX_COLLECTION,
                 std::slice::from_ref(&item.doc_id),
                 defra_node::DocumentAccessMode::Named {
                     permission: "update".into(),

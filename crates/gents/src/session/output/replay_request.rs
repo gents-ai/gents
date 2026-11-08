@@ -123,7 +123,7 @@ impl ReplayRequestReader for crate::store::config_client::ConfigAccess {
 pub(crate) async fn validate_canonical_replay_boundary(
     access: &crate::store::config_client::ConfigAccess,
     scope: CanonicalReplayScope<'_>,
-    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
+    boundary: &gents_protocol::transcript::SourceBoundary,
 ) -> Result<()> {
     validated_canonical_replay_boundary(ReadAccess::Config(access), access, scope, boundary)
         .await
@@ -134,10 +134,10 @@ pub(super) async fn validated_canonical_replay_boundary(
     access: ReadAccess<'_, '_>,
     requests: &impl ReplayRequestReader,
     scope: CanonicalReplayScope<'_>,
-    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
+    boundary: &gents_protocol::transcript::SourceBoundary,
 ) -> Result<(
     BTreeSet<String>,
-    Option<crate::turn::provider_context_reduction::TranscriptFactRef>,
+    Option<gents_protocol::transcript::TranscriptFactRef>,
 )> {
     crate::turn::provider_context_reduction::validate_source_boundary(
         boundary,

@@ -12,7 +12,7 @@ use super::{replay_violation, CanonicalReplayScope};
 pub(crate) async fn resolve_canonical_replay_tags_on(
     access: &crate::store::config_client::ConfigAccess,
     scope: CanonicalReplayScope<'_>,
-    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
+    boundary: &gents_protocol::transcript::SourceBoundary,
     tags: &[gents_loop::claude_messages_body::ReplayTag],
 ) -> Result<
     Vec<(
@@ -28,7 +28,7 @@ pub(crate) async fn resolve_canonical_replay_tags_on(
 pub(crate) async fn resolve_canonical_replay_tags(
     access: &crate::ConfigAccess,
     scope: CanonicalReplayScope<'_>,
-    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
+    boundary: &gents_protocol::transcript::SourceBoundary,
     tags: &[gents_loop::claude_messages_body::ReplayTag],
 ) -> Result<
     Vec<(
@@ -43,7 +43,7 @@ async fn resolve_canonical_replay_tags_using(
     access: ReadAccess<'_, '_>,
     requests: &impl super::replay_request::ReplayRequestReader,
     scope: CanonicalReplayScope<'_>,
-    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
+    boundary: &gents_protocol::transcript::SourceBoundary,
     tags: &[gents_loop::claude_messages_body::ReplayTag],
 ) -> Result<
     Vec<(
@@ -117,7 +117,7 @@ async fn resolve_canonical_replay_tags_using(
 pub(crate) async fn resolve_canonical_replay_tag(
     access: &crate::ConfigAccess,
     scope: CanonicalReplayScope<'_>,
-    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
+    boundary: &gents_protocol::transcript::SourceBoundary,
     tag: &gents_loop::claude_messages_body::ReplayTag,
 ) -> Result<Vec<gents_loop::claude_messages_body::ResolvedReplayEvidence>> {
     Ok(

@@ -5,8 +5,8 @@ use serde::Deserialize;
 
 use std::sync::Arc;
 
-use crate::request::lifecycle::SessionMessageCause;
 use crate::store::graphql::escape_graphql_string;
+use gents_protocol::request_lifecycle::SessionMessageCause;
 
 use super::plan::{Plan, PlannedWrite};
 
@@ -203,7 +203,7 @@ async fn observe_unconfirmed_child(
             let doc = escape_graphql_string(&receipt.request_doc_id);
             let response = access.execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, limit: 2) {{ {} }} }}"#,
-                crate::SIGNED_REQUEST_FIELDS,
+                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
             )).await?;
             let Some([row]) = response["data"]["AgentRequest"].as_array().map(Vec::as_slice) else {
                 return Ok(None);
@@ -230,7 +230,7 @@ async fn observe_unconfirmed_child(
             );
             bound.session_doc_id.clone_from(&row.session_doc_id);
             bound.agent_doc_id.clone_from(&row.agent_doc_id);
-            if !crate::request::admission::signed_request_matches_create(&row, &bound)? {
+            if !crate::store::identity::request_receipt::signed_request_matches_create(&row, &bound)? {
                 return Ok(None);
             }
             let session_doc = row.session_doc_id.as_deref().expect("nonempty session binding");
@@ -247,7 +247,7 @@ async fn observe_unconfirmed_child(
                     if !owned(&request_owners, request_doc) || !owned(&session_owners, session_doc) {
                         return Ok::<_, anyhow::Error>(false);
                     }
-                    let session = crate::session::load_agent_session_owner_in_txn(txn, &expected.node_did, &expected.session_id).await?;
+                    let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, &expected.node_did, &expected.session_id).await?;
                     let agent = crate::store::config_client::read_desired_state_record_in_txn(
                         txn, crate::Collection::Agent, &expected.node_did, &expected.agent_did,
                     ).await?;
@@ -263,7 +263,7 @@ async fn observe_unconfirmed_child(
             let Some(source) = expected.input.started_by.as_ref() else {
                 return Ok(None);
             };
-            let target = crate::session::origin::SessionScope {
+            let target = gents_protocol::session::SessionScope {
                 node_did: expected.node_did.clone(),
                 session_id: expected.session_id.clone(),
                 requester_did: Some(expected.requester_did.clone()),
@@ -271,7 +271,7 @@ async fn observe_unconfirmed_child(
             if !crate::session::origin::verified_agent_new_creation_for_opening(
                 &access,
                 &target,
-                &crate::session::origin::SessionScope::from(source),
+                &gents_protocol::session::SessionScope::from(source),
                 &receipt.request_doc_id,
             ).await? {
                 return Ok(None);
@@ -343,8 +343,8 @@ async fn commit_once(
 ) -> std::result::Result<SessionMessageReceipt, CommitError> {
     let delivery = report_delivery.then(|| plan.delivery().as_str().to_owned());
     let tool_call_id = lifecycle.tool_call_id().to_owned();
-    let receipt_for =
-        move |enqueued: &crate::request::lifecycle::EnqueuedAgentRequest| SessionMessageReceipt {
+    let receipt_for = move |enqueued: &gents_protocol::request_lifecycle::EnqueuedAgentRequest| {
+        SessionMessageReceipt {
             ok: true,
             session_id: enqueued.session_id.clone(),
             request_id: enqueued.request_id.clone(),
@@ -353,7 +353,8 @@ async fn commit_once(
             delivery: delivery.clone(),
             await_mode: "background".to_owned(),
             status: "running".to_owned(),
-        };
+        }
+    };
     let binding = lifecycle.background_receipt_binding()?;
     let start = lifecycle.dispatch_start()?;
     let (start, binding, plan, receipt_for) = (&start, &binding, &plan, &receipt_for);
@@ -422,7 +423,7 @@ async fn commit_once(
             }
         })?;
     lifecycle.mark_started(started_at);
-    crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+    crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
         &lifecycle.access()?,
         lifecycle.node_did(),
         lifecycle.actor(),
@@ -437,7 +438,7 @@ async fn stage_agent_new_in_txn(
     cause: &SessionMessageCause,
     plan: &Plan,
 ) -> anyhow::Result<(
-    crate::request::lifecycle::EnqueuedAgentRequest,
+    gents_protocol::request_lifecycle::EnqueuedAgentRequest,
     gents_protocol::request_admission::AgentRequestCreate,
 )> {
     let mut create = agent_new_create(plan)
@@ -477,7 +478,7 @@ async fn stage_agent_new_in_txn(
                     .context("new child lacks Agent binding")?,
             )
             .await?;
-            crate::request::lifecycle::EnqueuedAgentRequest {
+            gents_protocol::request_lifecycle::EnqueuedAgentRequest {
                 doc_id,
                 request_id: create.request_id.clone(),
                 session_id: create.session_id.clone(),
@@ -509,7 +510,7 @@ pub(crate) async fn stage_planned_write_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     cause: &SessionMessageCause,
     plan: &Plan,
-) -> std::result::Result<crate::request::lifecycle::EnqueuedAgentRequest, CommitError> {
+) -> std::result::Result<gents_protocol::request_lifecycle::EnqueuedAgentRequest, CommitError> {
     if plan.interrupt_before_publish {
         let create = match &plan.write {
             PlannedWrite::Request { create, .. } | PlannedWrite::Goal { create, .. } => create,
@@ -580,7 +581,7 @@ pub(crate) async fn stage_planned_write_in_txn(
                 }
                 let response = txn.execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ {} }} }}"#,
-                escape_graphql_string(&doc_id), crate::SIGNED_REQUEST_FIELDS,
+                escape_graphql_string(&doc_id), gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
             )).await?;
                 let [row] = response["data"]["AgentRequest"]
                     .as_array()
@@ -606,7 +607,7 @@ pub(crate) async fn stage_planned_write_in_txn(
             if let Some(expected_head) = &plan.steer_head {
                 validate_steer_in_txn(txn, &create, &doc_id, expected_head.as_deref()).await??;
             }
-            Ok(crate::request::lifecycle::EnqueuedAgentRequest {
+            Ok(gents_protocol::request_lifecycle::EnqueuedAgentRequest {
                 doc_id,
                 request_id: create.request_id.clone(),
                 session_id: create.session_id.clone(),
@@ -649,7 +650,7 @@ async fn validate_steer_in_txn(
         }} }}"#,
         escape_graphql_string(&create.node_did),
         escape_graphql_string(&create.session_id),
-        crate::request::admission::SIGNED_REQUEST_FIELDS, claimed_or_processing = RequestLifecycleState::graphql_list([RequestLifecycleState::Claimed, RequestLifecycleState::Processing])
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS, claimed_or_processing = RequestLifecycleState::graphql_list([RequestLifecycleState::Claimed, RequestLifecycleState::Processing])
     )).await?;
     let rows: Vec<gents_protocol::row::AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;
@@ -664,7 +665,7 @@ async fn validate_steer_in_txn(
     let Some(row) = rows.into_iter().next() else {
         return Ok(Ok(()));
     };
-    let head = crate::request::watcher::AgentRequest::try_from(row)?;
+    let head = gents_protocol::row::AgentRequest::try_from(row)?;
     let pending = crate::request::lifecycle::queue::pending_with_new_candidate_in_txn(
         txn,
         &create.node_did,

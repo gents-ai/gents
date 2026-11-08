@@ -3,8 +3,8 @@ use defra_node::Node as EmbeddedNode;
 
 use std::sync::Arc;
 
-use crate::session::origin::SessionScope;
 use crate::store::config_client::ConfigAccess;
+use gents_protocol::session::SessionScope;
 
 pub fn agent_interrupt_allowed(
     caller_session: &str,

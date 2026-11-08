@@ -3,8 +3,8 @@ use defra_node::Node as EmbeddedNode;
 
 use std::sync::Arc;
 
-use crate::request::lifecycle::{SessionMessageCause, SessionMessageTarget};
 use crate::store::config_client::ConfigAccess;
+use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
 
 use super::{AgentMessageDelivery, Delivery, RenderedBody};
 
@@ -92,13 +92,14 @@ pub(super) async fn target_goal_assignment(
         "session_message.target_goal",
         |txn| {
             Box::pin(async move {
-                let Some(session) = crate::session::load_agent_session_row_in_txn(
-                    txn,
-                    &target.node_did,
-                    &target.session_id,
-                    Some(&cause.caller_agent_did),
-                )
-                .await?
+                let Some(session) =
+                    crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+                        txn,
+                        &target.node_did,
+                        &target.session_id,
+                        Some(&cause.caller_agent_did),
+                    )
+                    .await?
                 else {
                     return Ok(None);
                 };
@@ -226,8 +227,8 @@ pub(crate) async fn plan_with_delivery(
             .await?
         }
     };
-    let hop = crate::request::lifecycle::next_request_hop(
-        crate::request::lifecycle::RequestHopCause::CrossSession {
+    let hop = gents_protocol::request_lifecycle::next_request_hop(
+        gents_protocol::request_lifecycle::RequestHopCause::CrossSession {
             cause_hop: cause.caller_hop,
         },
         own_hop,

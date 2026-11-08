@@ -132,14 +132,18 @@ async fn apply_in_txn(
         escape_graphql_string(session_id)
     );
     let rows = txn
-        .cursor_rows("AgentSession", super::AGENT_SESSION_FIELDS, &filter)
+        .cursor_rows(
+            "AgentSession",
+            gents_protocol::session::AGENT_SESSION_FIELDS,
+            &filter,
+        )
         .await?;
     anyhow::ensure!(rows.len() <= 1, "session archive scope is ambiguous");
-    let row = super::decode_session_row(
+    let row = gents_protocol::session::decode_session_row(
         rows.first()
             .context("session archive target is absent or unreadable")?,
     )?;
-    super::query::validate_agent_session(&row.session)?;
+    gents_protocol::session::validate_agent_session(&row.session)?;
     let (decision, session) = apply_transition(row.session, expected_revision, archived, now);
     let outcome = match decision {
         Decision::Applied => {

@@ -1,5 +1,5 @@
-use anyhow::Result;
 use anyhow::Context as _;
+use anyhow::Result;
 use gents_protocol::output::reconstruction::{
     fork_copy_observations, reconstruct_message, ObservedSegment,
 };
@@ -8,14 +8,14 @@ use rapidhash::{HashSetExt, RapidHashSet};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use super::super::canonical_rows::{
-    decode_output_segment_row, decode_scoped_request_output_segments, AGENT_OUTPUT_SEGMENT_FIELDS,
-};
 use super::access::{rows_value, ReadAccess, ReadCache, RequestOutputRows};
 use super::headers::{load_header, validate_origin_chain, OriginWalk};
 use super::ReconstructedScopedMessage;
 #[cfg(test)]
 use super::{record_request_output_scan, SOURCE_OUTPUT_QUERIES};
+use gents_protocol::output::rows::{
+    decode_output_segment_row, decode_scoped_request_output_segments, AGENT_OUTPUT_SEGMENT_FIELDS,
+};
 
 async fn request_rows(
     access: ReadAccess<'_, '_>,
@@ -49,7 +49,7 @@ pub(super) async fn source_rows(
     source: &OutputSource,
     node_did: &str,
     requester_did: Option<&str>,
-) -> Result<Vec<super::super::canonical_rows::OutputSegmentRow>> {
+) -> Result<Vec<gents_protocol::output::rows::OutputSegmentRow>> {
     #[cfg(test)]
     let _ = SOURCE_OUTPUT_QUERIES
         .try_with(|queries| queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
@@ -57,12 +57,12 @@ pub(super) async fn source_rows(
         txn.cursor_rows(
             "AgentOutputSegment",
             AGENT_OUTPUT_SEGMENT_FIELDS,
-            &super::super::canonical_rows::source_output_segments_filter(request_doc_id, source)?,
+            &gents_protocol::output::rows::source_output_segments_filter(request_doc_id, source)?,
         )
         .await?
     } else {
         let query =
-            super::super::canonical_rows::source_output_segments_query(request_doc_id, source)?;
+            gents_protocol::output::rows::source_output_segments_query(request_doc_id, source)?;
         let response = access.query(&query, "load_output_source").await?;
         rows_value(&response, "AgentOutputSegment")?.to_vec()
     };
@@ -119,7 +119,7 @@ pub(super) async fn preload_request_output_segments(
             requester_did,
         )?;
         let allowed = chunk.iter().cloned().collect::<BTreeSet<_>>();
-        let mut grouped: BTreeMap<String, Vec<super::super::canonical_rows::OutputSegmentRow>> =
+        let mut grouped: BTreeMap<String, Vec<gents_protocol::output::rows::OutputSegmentRow>> =
             BTreeMap::new();
         for row in rows {
             anyhow::ensure!(
@@ -145,12 +145,12 @@ pub(super) async fn preload_request_output_segments(
 
 pub(super) async fn load_referenced_segments(
     access: ReadAccess<'_, '_>,
-    header: &super::super::canonical_rows::TranscriptMessageRow,
+    header: &gents_protocol::output::rows::TranscriptMessageRow,
     request_hint: Option<&str>,
     node_did: &str,
     requester_did: Option<&str>,
     cache: &mut ReadCache,
-) -> Result<Vec<super::super::canonical_rows::OutputSegmentRow>> {
+) -> Result<Vec<gents_protocol::output::rows::OutputSegmentRow>> {
     let requester = requester_did
         .map(|did| format!(r#""{}""#, crate::store::graphql::escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
@@ -187,7 +187,7 @@ pub(super) async fn load_referenced_segments(
         let rows = rows_value(&response, "AgentOutputSegment")?;
         closures.extend(
             rows.iter()
-                .map(decode_output_segment_row)
+                .map(|row| decode_output_segment_row(row).map_err(anyhow::Error::from))
                 .collect::<Result<Vec<_>>>()?,
         );
     }
@@ -248,10 +248,10 @@ pub(super) async fn load_referenced_segments(
 /// at their physical identities.
 async fn load_fork_copies(
     access: ReadAccess<'_, '_>,
-    header: &super::super::canonical_rows::TranscriptMessageRow,
+    header: &gents_protocol::output::rows::TranscriptMessageRow,
     node_did: &str,
     requester_did: Option<&str>,
-) -> Result<Vec<super::super::canonical_rows::OutputSegmentRow>> {
+) -> Result<Vec<gents_protocol::output::rows::OutputSegmentRow>> {
     let logicals = header
         .message
         .payload_references()
@@ -268,17 +268,17 @@ async fn load_fork_copies(
     }
     let session_id = &header.message.session_id;
     let filter = logicals.into_iter().collect::<Vec<_>>().join(", ");
-    let scope = super::super::query::session_scope_filter(node_did, session_id, requester_did);
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{ AgentOutputSegment(filter: {{ {scope}, request_doc_id: {{ _in: [{filter}] }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
     );
     let response = access.query(&query, "load_fork_output_copies").await?;
-    decode_scoped_request_output_segments(
+    Ok(decode_scoped_request_output_segments(
         rows_value(&response, "AgentOutputSegment")?,
         node_did,
         Some(session_id),
         requester_did,
-    )
+    )?)
 }
 
 /// Resolves a fork header from the copies in its own session, refining
@@ -287,7 +287,7 @@ async fn load_fork_copies(
 /// before destination-owned copies existed.
 async fn reconstruct_fork_copy(
     access: ReadAccess<'_, '_>,
-    header: &super::super::canonical_rows::TranscriptMessageRow,
+    header: &gents_protocol::output::rows::TranscriptMessageRow,
     node_did: &str,
     requester_did: Option<&str>,
     cache: &mut ReadCache,
@@ -314,7 +314,7 @@ async fn reconstruct_fork_copy(
         .with_context(|| format!("reconstructing fork copy {}", header.doc_id))?;
     let segments = presented
         .iter()
-        .map(|record| super::super::canonical_rows::OutputSegmentRow {
+        .map(|record| gents_protocol::output::rows::OutputSegmentRow {
             doc_id: record.doc_id.to_owned(),
             segment: record.segment.clone(),
         })
@@ -380,7 +380,7 @@ pub(super) async fn reconstruct_scoped_message_with_facts(
     )
     .await?;
     let request_hint = origin.message.request_doc_id.clone();
-    let reconstruct = |segments: &[super::super::canonical_rows::OutputSegmentRow]| {
+    let reconstruct = |segments: &[gents_protocol::output::rows::OutputSegmentRow]| {
         let observed = segments
             .iter()
             .map(|row| ObservedSegment {

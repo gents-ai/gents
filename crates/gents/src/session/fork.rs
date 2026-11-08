@@ -8,21 +8,22 @@ use gents_protocol::output::{
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::{json, Value};
 
-use super::canonical_rows::{
-    decode_transcript_message_row, OutputSegmentRow, AGENT_MESSAGE_FIELDS,
-    CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-};
 use super::compaction_entries::{
     compaction_key, validate_compaction_chain, CompactionGenerationRow,
 };
 use super::history::sequence_message_key;
 use super::output::reader::load_canonical_message_segments_in_txn;
-use super::query::session_scope_filter;
-use super::sessions::{
-    ensure_session_in_txn, load_agent_session_owner_in_txn, load_agent_session_row_in_txn,
+use super::sessions::ensure_session_in_txn;
+use crate::store::config_client::agent_session::{
+    load_agent_session_owner_in_txn, load_agent_session_row_in_txn,
 };
-use crate::session::origin::SessionScope;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use gents_protocol::output::rows::{
+    decode_transcript_message_row, OutputSegmentRow, AGENT_MESSAGE_FIELDS,
+    CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+};
+use gents_protocol::session::session_scope_filter;
+use gents_protocol::session::SessionScope;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EditForkBinding {
@@ -517,7 +518,9 @@ fn fork_closure_records<'a>(
 
 /// The physical tools a header names, as hydration selects them, refining
 /// `FileInventory.messageTools`.
-pub(crate) fn message_tool_references(message: &TranscriptMessage) -> impl Iterator<Item = String> + '_ {
+pub(crate) fn message_tool_references(
+    message: &TranscriptMessage,
+) -> impl Iterator<Item = String> + '_ {
     let delivery = match &message.publication {
         MessagePublication::ToolDelivery { tool_call_doc_id } => Some(tool_call_doc_id.clone()),
         _ => None,
@@ -773,7 +776,7 @@ async fn fork_in_txn(
     }
     let headers = rows(&snapshot, "AgentMessage")?
         .iter()
-        .map(decode_transcript_message_row)
+        .map(|row| decode_transcript_message_row(row).map_err(anyhow::Error::from))
         .collect::<Result<Vec<_>>>()?;
     let mut sequences = BTreeSet::new();
     for header in &headers {
@@ -908,8 +911,11 @@ async fn fork_in_txn(
         let response = txn
             .execute_client_signed_create(
                 CREATE_AGENT_MESSAGE_MUTATION,
-                &crate::session::canonical_rows::fork_message_bound_variables(txn, &child_header)
-                    .await?,
+                &crate::store::config_client::session_children::fork_message_bound_variables(
+                    txn,
+                    &child_header,
+                )
+                .await?,
                 gents_protocol::schemas::AGENT_MESSAGE,
             )
             .await?;
@@ -934,7 +940,7 @@ async fn fork_in_txn(
                 let response = txn
                     .execute_client_signed_create(
                         CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-                        &crate::session::canonical_rows::fork_output_segment_bound_variables(
+                        &crate::store::config_client::session_children::fork_output_segment_bound_variables(
                             txn, &copy,
                         )
                         .await?,

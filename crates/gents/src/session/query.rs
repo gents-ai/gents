@@ -1,11 +1,6 @@
-use super::rows::SessionOwnerRow;
 use super::*;
 use anyhow::Context;
-
-/// Fields for one canonical `AgentSession` read. Nested values are DefraDB
-/// JSON scalar columns: read the bare field name, never an object subselection.
-pub const AGENT_SESSION_FIELDS: &str = "session_id node_did requester_did agent_did \
-created_at closed_at stopped_at archived_at archive_revision title provenance observation tags _docID";
+use gents_protocol::session::{decode_session_row, session_scope_filter, AGENT_SESSION_FIELDS};
 
 pub(crate) async fn session_stopped_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
@@ -60,92 +55,6 @@ pub(crate) async fn session_is_stopped(
     .await
 }
 
-pub(crate) fn validate_agent_session(
-    session: &gents_protocol::session::AgentSession,
-) -> Result<()> {
-    for (name, value) in [
-        ("session_id", session.session_id.as_str()),
-        ("node_did", session.node_did.as_str()),
-        ("agent_did", session.agent_did.as_str()),
-    ] {
-        anyhow::ensure!(!value.trim().is_empty(), "session {name} must be nonblank");
-    }
-    if let Some(requester) = session.requester_did.as_deref() {
-        anyhow::ensure!(
-            !requester.trim().is_empty(),
-            "session requester_did must be nonblank when present"
-        );
-    }
-    chrono::DateTime::parse_from_rfc3339(&session.created_at)
-        .context("session created_at is invalid")?;
-    if let Some(closed_at) = session.closed_at.as_deref() {
-        chrono::DateTime::parse_from_rfc3339(closed_at).context("session closed_at is invalid")?;
-    }
-    if let Some(archived_at) = session.archived_at.as_deref() {
-        chrono::DateTime::parse_from_rfc3339(archived_at)
-            .context("session archived_at is invalid")?;
-    }
-    anyhow::ensure!(
-        session.archive_revision <= i64::MAX as u64,
-        "session archive revision exceeds the database integer range"
-    );
-    if let Some(stopped_at) = session.stopped_at.as_deref() {
-        chrono::DateTime::parse_from_rfc3339(stopped_at)
-            .context("session stopped_at is invalid")?;
-    }
-    if let Some(observation) = session.observation.as_ref() {
-        chrono::DateTime::parse_from_rfc3339(&observation.last_activity_at)
-            .context("session last_activity_at is invalid")?;
-        if let Some(preview) = observation.preview.as_deref() {
-            anyhow::ensure!(
-                preview.chars().count() <= 240,
-                "session preview exceeds the 240-character bound"
-            );
-        }
-    }
-    if let Some(title) = session.title.as_ref() {
-        anyhow::ensure!(
-            !title.text.trim().is_empty(),
-            "session title text must be nonblank"
-        );
-    }
-    Ok(())
-}
-
-pub fn decode_session_row(row: &serde_json::Value) -> Result<SessionOwnerRow> {
-    let doc_id = row
-        .get("_docID")
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .context("AgentSession row omitted _docID")?
-        .to_string();
-    let mut document = row.clone();
-    document
-        .as_object_mut()
-        .context("AgentSession row is not an object")?
-        .remove("_docID");
-    let session: gents_protocol::session::AgentSession =
-        serde_json::from_value(document).context("decoding canonical AgentSession")?;
-    validate_agent_session(&session)?;
-    Ok(SessionOwnerRow { doc_id, session })
-}
-
-pub fn session_scope_filter(
-    node_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-) -> String {
-    let requester = match requester_did {
-        Some(did) => format!("\"{}\"", escape_graphql_string(did)),
-        None => "null".to_string(),
-    };
-    format!(
-        r#"node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, requester_did: {{ _eq: {requester} }}"#,
-        escape_graphql_string(node_did),
-        escape_graphql_string(session_id)
-    )
-}
-
 pub fn public_request_filter(scope: &str) -> String {
     let purpose = format!(
         r#"purpose: {{ _eq: "{}" }}"#,
@@ -164,7 +73,7 @@ pub(super) async fn load_agent_session_row(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-) -> Result<Option<SessionOwnerRow>> {
+) -> Result<Option<gents_protocol::session::SessionOwnerRow>> {
     load_agent_session_rows(node, node_did, session_id, requester_did)
         .await
         .and_then(|mut rows| {
@@ -179,7 +88,7 @@ pub(super) async fn load_agent_session_rows(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-) -> Result<Vec<SessionOwnerRow>> {
+) -> Result<Vec<gents_protocol::session::SessionOwnerRow>> {
     let scope = session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{
@@ -197,7 +106,9 @@ pub(super) async fn load_agent_session_rows(
     .await?;
 
     let rows = crate::store::graphql::rows::<serde_json::Value>(&resp, "AgentSession")?;
-    rows.iter().map(decode_session_row).collect()
+    rows.iter()
+        .map(|row| decode_session_row(row).map_err(anyhow::Error::from))
+        .collect()
 }
 
 #[cfg(test)]
@@ -258,12 +169,14 @@ pub(crate) async fn require_session(
         actor,
         "session.require_for_completion",
         |txn| {
-            Box::pin(super::load_agent_session_row_in_txn(
-                txn,
-                node_did,
-                session_id,
-                requester_did,
-            ))
+            Box::pin(
+                crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+                    txn,
+                    node_did,
+                    session_id,
+                    requester_did,
+                ),
+            )
         },
     )
     .await?;
@@ -286,12 +199,14 @@ pub(crate) async fn load_session_agent_selection(
         Some(actor.clone()),
         "session.agent_selection",
         |txn| {
-            Box::pin(super::load_agent_session_row_in_txn(
-                txn,
-                node_did,
-                session_id,
-                requester_did,
-            ))
+            Box::pin(
+                crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+                    txn,
+                    node_did,
+                    session_id,
+                    requester_did,
+                ),
+            )
         },
     )
     .await?
@@ -308,9 +223,11 @@ pub(crate) async fn load_session_agent_did(
         None,
         "session.resolve_agent_actor",
         |txn| {
-            Box::pin(super::load_agent_session_owner_in_txn(
-                txn, node_did, session_id,
-            ))
+            Box::pin(
+                crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    txn, node_did, session_id,
+                ),
+            )
         },
     )
     .await?
@@ -327,7 +244,11 @@ pub async fn client_requester_scope(
     access
         .transact_readonly("session.client_requester_scope", |txn| {
             Box::pin(async move {
-                match super::load_agent_session_owner_in_txn(txn, node_did, session_id).await? {
+                match crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    txn, node_did, session_id,
+                )
+                .await?
+                {
                     Some(row) => row
                         .session
                         .requester_did

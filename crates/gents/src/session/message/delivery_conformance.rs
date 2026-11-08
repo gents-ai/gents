@@ -56,7 +56,7 @@ async fn remote_delivery_waits_for_authenticated_http_transport() {
             .await
             .unwrap(),
     );
-    let cause = crate::request::lifecycle::SessionMessageCause {
+    let cause = gents_protocol::request_lifecycle::SessionMessageCause {
         caller_node_did: root.did().into(),
         caller_agent_did: agent.did().into(),
         caller_session_id: "source-session".into(),
@@ -68,7 +68,7 @@ async fn remote_delivery_waits_for_authenticated_http_transport() {
         tool_call_doc_id: "tool-doc".into(),
         correlation: None,
     };
-    let target = crate::request::lifecycle::SessionMessageTarget {
+    let target = gents_protocol::request_lifecycle::SessionMessageTarget {
         node_did: "target-runtime".into(),
         agent_did: intent["target"].as_str().unwrap().into(),
         session_id: "target-session".into(),

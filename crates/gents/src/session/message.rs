@@ -1,14 +1,14 @@
 #[cfg(test)]
-use crate::request::lifecycle::{SessionMessageCause, SessionMessageTarget};
-#[cfg(test)]
-use crate::session::origin::SessionScope;
-#[cfg(test)]
 use crate::store::config_client::ConfigAccess;
 #[cfg(test)]
 use crate::store::graphql::escape_graphql_string;
 #[cfg(test)]
 use crate::tools::surface::AgentToolConfig;
 use anyhow::Result;
+#[cfg(test)]
+use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
+#[cfg(test)]
+use gents_protocol::session::SessionScope;
 use serde::Deserialize;
 
 #[cfg(test)]
