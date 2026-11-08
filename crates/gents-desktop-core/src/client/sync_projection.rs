@@ -325,7 +325,7 @@ mod tests {
         assert!(health
             .last_error
             .unwrap()
-            .contains("update the app and the runtime to the same version"));
+            .contains("use matching Gents versions"));
         assert_eq!(health.quarantined_dag_count, Some(1));
 
         let before_database_observation = project_sync_health(&ClientSyncStateSnapshot {
