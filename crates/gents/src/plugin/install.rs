@@ -342,6 +342,10 @@ struct StagedPluginRecords {
     previous: Vec<(String, String, Option<InstalledPlugin>)>,
 }
 
+/// Holds the plugin store lock from staging through the node's configuration
+/// commit, where installed pins are rechecked (`plugin_replacement_conflict_in_txn`),
+/// so a concurrent publisher cannot change a pinned artifact between that check
+/// and the configuration write.
 pub(crate) struct StagedPluginInstall {
     records: Option<StagedPluginRecords>,
     cleanup: crate::drop_cleanup::DropCleanup,

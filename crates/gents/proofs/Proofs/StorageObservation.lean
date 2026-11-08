@@ -21,20 +21,6 @@ def toContract : StorageObservation -> String
   | .readVisible => "readVisible"
   | .lostAcknowledged => "lostAcknowledged"
 
-def fromContract? : String -> Option StorageObservation
-  | "noMutation" => some .noMutation
-  | "inFlight" => some .inFlight
-  | "successAcknowledged" => some .successAcknowledged
-  | "mutationFailed" => some .mutationFailed
-  | "staleObserved" => some .staleObserved
-  | "readVisible" => some .readVisible
-  | "lostAcknowledged" => some .lostAcknowledged
-  | _ => none
-
-theorem fromContract_toContract (obs : StorageObservation) :
-    fromContract? obs.toContract = some obs := by
-  cases obs <;> rfl
-
 instance : HasTerminal StorageObservation where
   isTerminal obs := obs = .readVisible ∨ obs = .lostAcknowledged
   isTerminal_dec obs :=

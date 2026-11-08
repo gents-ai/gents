@@ -73,21 +73,6 @@ theorem malformed_head_does_not_poison
     admissibleRows (bad :: rest) = admissibleRows rest := by
   simp [admissibleRows, hBad]
 
-def controlContinuation (requestHop : Nat) : RawLineage :=
-  { hasParentRequestId := true
-  , hasParentRequestDocId := true
-  , hasParentToolCallId := false
-  , hasParentToolCallDocId := false
-  , requestHop
-  , requestOnlyControl := true
-  , controlAllowedAtDepthZero := true
-  }
-
-theorem control_continuation_is_admissible (depth : Nat) :
-    admissible (controlContinuation depth) = true := by
-  simp [admissible, edgePairsCoherent, pairCoherent, parentShapeCoherent,
-    depthCoherent, controlContinuation]
-
 /-- A busy session receives the message either as a queued turn or as a steer
 into its active turn; the receipt names which one the caller chose. -/
 inductive Delivery where
@@ -125,11 +110,6 @@ theorem session_message_write_names_its_caller (delivery : Delivery) (callerHop 
     edge and hop, written by the same single writer. -/
 def jobSpawnWrite : Nat → Nat → SessionMessageWrite :=
   sessionMessageWrite .request
-
-/-- A plugin job's message to a child session is a session message, delivered
-    as a new request or as a queued continuation like `agent_message`. -/
-def jobMessageWrite : Delivery → Nat → Nat → SessionMessageWrite :=
-  sessionMessageWrite
 
 /-- One calling tool call may name many requests: a job's spawns and messages
     all carry the job call's edge, and ingest admits every one of them. -/
