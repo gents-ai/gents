@@ -255,6 +255,8 @@ async fn a_collection_grant_cannot_bypass_native_document_acp() {
     );
     let administrator =
         ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
+    // Beyond the baseline, production Agents hold CollectionGet through datastore tools and
+    // DocumentDelete through goal-create or self-config node operation sources.
     for did in [user.did(), reader.did()] {
         for permission in [
             acp::NodePermission::CollectionGet,
@@ -394,6 +396,8 @@ mod plugin {
         );
         let runtime_did = identity::Did::new(runtime.did()).unwrap();
         let owner = ConfigAccess::local_as(node.clone(), runtime_did.clone());
+        // Beyond the baseline, production Agents hold CollectionGet through datastore tools and
+        // DocumentDelete through goal-create or self-config node operation sources.
         for permission in [
             acp::NodePermission::CollectionGet,
             acp::NodePermission::DocumentRead,

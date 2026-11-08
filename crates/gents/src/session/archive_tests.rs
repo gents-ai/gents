@@ -169,6 +169,7 @@ async fn archive_restore_survive_reopen_and_reject_stale_windows_without_stoppin
         EmbeddedNode::builder()
             .data_path(&data)
             .with_node_identity_did(actor.did())
+            .with_node_acp_owner(actor.did().to_owned())
             .build()
             .await
             .unwrap(),
@@ -204,6 +205,7 @@ async fn archive_restore_survive_reopen_and_reject_stale_windows_without_stoppin
         EmbeddedNode::builder()
             .data_path(&data)
             .with_node_identity_did(actor.did())
+            .with_node_acp_owner(actor.did().to_owned())
             .build()
             .await
             .unwrap(),
@@ -263,6 +265,7 @@ async fn archive_authority_is_native_acp_and_never_requester_scope() {
     let node = Arc::new(
         EmbeddedNode::builder()
             .with_node_identity_did(owner.did())
+            .with_node_acp_owner(owner.did().to_owned())
             .build()
             .await
             .unwrap(),
@@ -300,6 +303,13 @@ resources:
         .unwrap();
     let id = create_session(&node, &owner).await.unwrap();
     let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(owner.did()).unwrap());
+    // Managed Agents hold only the AgentBaseline node grant; `denied` holds none.
+    for agent in [&writer, &reader] {
+        crate::store::identity::GrantSet::AgentBaseline
+            .grant(&access, &::identity::Did::new(agent.did()).unwrap())
+            .await
+            .unwrap();
+    }
     access
         .add_actor_relationship(
             "AgentSession",
@@ -350,6 +360,7 @@ async fn concurrent_archive_calls_commit_one_revision() {
     let node = Arc::new(
         EmbeddedNode::builder()
             .with_node_identity_did(actor.did())
+            .with_node_acp_owner(actor.did().to_owned())
             .build()
             .await
             .unwrap(),

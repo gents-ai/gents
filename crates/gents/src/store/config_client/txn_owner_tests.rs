@@ -1902,10 +1902,20 @@ resources:
     let node = Arc::new(
         EmbeddedNode::builder()
             .with_node_identity_did(owner)
+            .with_node_acp_owner(owner)
             .build()
             .await
             .unwrap(),
     );
+    // Both managed Agents hold the production Agent baseline, so the DAC
+    // relationship alone decides which of them can read the fact.
+    let owner_access = ConfigAccess::local_as(node.clone(), identity::Did::new(owner).unwrap());
+    for executor in [reader_did, denied_did] {
+        crate::store::identity::GrantSet::AgentBaseline
+            .grant(&owner_access, &identity::Did::new(executor).unwrap())
+            .await
+            .unwrap();
+    }
     let policy_id = node
         .add_dac_policy_as(
             &defra_core::RequestContext::default().with_identity(Some(owner.to_owned())),
@@ -2019,20 +2029,33 @@ resources:
 async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
     let home = tempfile::tempdir().unwrap();
     let key_path = home.path().join("owner.key");
-    let key =
-        tokio::task::spawn_blocking(move || crate::KeyIdentity::load_or_create(key_path, None))
-            .await
-            .unwrap()
-            .unwrap();
+    let (key, reader_agent) = tokio::task::spawn_blocking(move || {
+        let key = crate::KeyIdentity::load_or_create(key_path, None).unwrap();
+        let binding = crate::store::identity::provision_agent_identity(&key).unwrap();
+        let reader = crate::store::identity::resolve_agent_identity(&key, &binding).unwrap();
+        (key, reader)
+    })
+    .await
+    .unwrap();
     let owner = key.did();
-    const READER: &str = "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR";
+    let reader_did = reader_agent.did();
     let node = Arc::new(
         EmbeddedNode::builder()
             .with_node_identity_did(owner)
+            .with_node_acp_owner(owner)
             .build()
             .await
             .unwrap(),
     );
+    // The independent reader is a managed Agent with the production Agent
+    // baseline; only its DAC relationship on the fact varies below.
+    crate::store::identity::GrantSet::AgentBaseline
+        .grant(
+            &ConfigAccess::local_as(node.clone(), identity::Did::new(owner).unwrap()),
+            &identity::Did::new(reader_did).unwrap(),
+        )
+        .await
+        .unwrap();
     let policy = node
         .add_dac_policy_as(
             &defra_core::RequestContext::default().with_identity(Some(owner.to_owned())),
@@ -2054,7 +2077,7 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
             Box::pin(async move {
                 txn.execute(&format!(
             "mutation {{ add_IndependentReadFact(input: {{requester_did: \"{}\"}}) {{ _docID }} }}",
-            crate::store::graphql::escape_graphql_string(READER),
+            crate::store::graphql::escape_graphql_string(reader_did),
         ))
                 .await
             })
@@ -2074,7 +2097,7 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
                     "IndependentReadFact",
                     &id,
                     "reader",
-                    READER,
+                    reader_did,
                 )
                 .await
                 .unwrap();
@@ -2084,7 +2107,7 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
                     "IndependentReadFact",
                     &id,
                     "reader",
-                    READER,
+                    reader_did,
                 )
                 .await
                 .unwrap();
@@ -2093,7 +2116,7 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
         let ids = vec![id.clone()];
         let owners = ConfigAccess::transact_local_readonly(
             &node,
-            Some(identity::Did::new(READER).unwrap()),
+            Some(identity::Did::new(reader_did).unwrap()),
             "test.independent_reader.observe",
             move |txn| {
                 let ids = ids.clone();
@@ -2138,7 +2161,7 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
                     );
                     let observed = txn
                         .document_owners_as(
-                            &identity::Did::new(READER).unwrap(),
+                            &identity::Did::new(reader_did).unwrap(),
                             "IndependentReadFact",
                             &ids,
                         )
@@ -2148,7 +2171,7 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
                         authorized.then_some(owner),
                         "source snapshot step {step}"
                     );
-                    let reader = identity::Did::new(READER).unwrap();
+                    let reader = identity::Did::new(reader_did).unwrap();
                     let named = || defra_node::DocumentAccessMode::Named {
                         permission: "read".to_owned(),
                         node_permission: acp::nac::NodePermission::DocumentRead,
@@ -2156,8 +2179,12 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
                     assert_eq!(
                         txn.observe_document_access(&reader, "IndependentReadFact", &ids, named(),)
                             .await?,
-                        [defra_node::DocumentAccessDecision::Unavailable],
-                        "disabled node ACP at step {step}"
+                        [if authorized {
+                            defra_node::DocumentAccessDecision::Allowed
+                        } else {
+                            defra_node::DocumentAccessDecision::Denied
+                        }],
+                        "named read decision at step {step}"
                     );
                     assert_eq!(
                         txn.observe_document_access(

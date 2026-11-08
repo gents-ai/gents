@@ -46,11 +46,19 @@ async fn modeled_provider_inputs_require_the_selected_agent_to_read_exact_docume
     let node = Arc::new(
         defra_node::Node::builder()
             .with_node_identity_did(user)
+            .with_node_acp_enabled()
             .build()
             .await?,
     );
     let user_access = ConfigAccess::local_as(node.clone(), identity::Did::new(user)?);
     let actor = identity::Did::new(agent)?;
+    // The sibling is also a managed Agent holding the baseline, so its refusal is
+    // the document policy's, not a missing node grant.
+    for agent_did in [&actor, &identity::Did::new(sibling)?] {
+        crate::store::identity::GrantSet::AgentBaseline
+            .grant(&user_access, agent_did)
+            .await?;
+    }
     let context = defra_core::RequestContext::default().with_identity(Some(user.to_owned()));
     let policy = node
         .add_dac_policy_with_counter_as(&context, &case.policy_yaml, 0)
@@ -171,10 +179,16 @@ async fn modeled_inference_inputs_require_each_selected_native_document() -> any
     let node = Arc::new(
         defra_node::Node::builder()
             .with_node_identity_did(user)
+            .with_node_acp_enabled()
             .build()
             .await?,
     );
     let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user)?);
+    for agent_did in [agent, sibling] {
+        crate::store::identity::GrantSet::AgentBaseline
+            .grant(&access, &identity::Did::new(agent_did)?)
+            .await?;
+    }
     let context = defra_core::RequestContext::default().with_identity(Some(user.to_owned()));
     let policy = node
         .add_dac_policy_with_counter_as(&context, &case.policy_yaml, 0)

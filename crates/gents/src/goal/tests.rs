@@ -128,11 +128,21 @@ async fn auto_resume_access() -> (crate::ConfigAccess, String) {
     let node = std::sync::Arc::new(
         EmbeddedNode::builder()
             .with_node_identity_did(root.did())
+            .with_node_acp_enabled()
             .build()
             .await
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
+    // Production projects the AgentBaseline from each live Agent document; this
+    // fixture has no projection pass, so the node admin grants it.
+    crate::store::identity::GrantSet::AgentBaseline
+        .grant(
+            &crate::ConfigAccess::local_as(node.clone(), identity::Did::new(root.did()).unwrap()),
+            &identity::Did::new(agent.did()).unwrap(),
+        )
+        .await
+        .unwrap();
     let access = crate::ConfigAccess::local_managed_agent(
         node,
         identity::Did::new(agent.did()).unwrap(),

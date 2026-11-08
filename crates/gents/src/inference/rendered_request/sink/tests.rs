@@ -135,6 +135,7 @@ async fn failed_capture_publication_rolls_back_bound_blocks_and_record() {
     let node = Arc::new(
         EmbeddedNode::builder()
             .with_node_identity_did(root.did())
+            .with_node_acp_enabled()
             .build()
             .await
             .unwrap(),
@@ -166,6 +167,16 @@ async fn failed_capture_publication_rolls_back_bound_blocks_and_record() {
         node.add_collection(&bound).await.unwrap();
     }
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    // Production projects the AgentBaseline from each live Agent document; this
+    // fixture has no projection pass, so the node admin grants it to both the
+    // capturing Agent and its sibling, which the ownership policy must still refuse.
+    let node_admin = ConfigAccess::local_as(node.clone(), root.did().parse().unwrap());
+    for executor in [agent.did(), sibling.did()] {
+        crate::store::identity::GrantSet::AgentBaseline
+            .grant(&node_admin, &executor.parse().unwrap())
+            .await
+            .unwrap();
+    }
     let access = ConfigAccess::local_managed_agent(
         node.clone(),
         agent.did().parse().unwrap(),
