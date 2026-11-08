@@ -304,10 +304,6 @@ resources:
     let id = create_session(&node, &owner).await.unwrap();
     let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(owner.did()).unwrap());
     // Managed Agents hold only the AgentBaseline node grant; `denied` holds none.
-    // NAC-PORT-QUESTION: `read_as` reads the AgentSession collection through a
-    // cursor, and AgentBaseline has no CollectionGet. The HTTP archive test above
-    // grants CollectionGet to its agents directly, outside GrantSet. Confirm whether
-    // these agents need it before adding it here.
     for agent in [&writer, &reader] {
         crate::store::identity::GrantSet::AgentBaseline
             .grant(&access, &::identity::Did::new(agent.did()).unwrap())

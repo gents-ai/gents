@@ -301,25 +301,23 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
         fresh_backend
             .initialize(
                 &store_key,
-                initialized_identity.node_identity_did.as_deref(),
+                Some(initialized_identity.node_identity_did.as_str()),
             )
             .await?;
     }
     let mut node_builder =
         gents::store::local::store_key::persistent_builder(&data_dir, &store_key)?;
-    if let Some(node_identity_did) = initialized_identity.node_identity_did.as_ref() {
-        let ceiling = crate::resolve_helpers::host_tool_ceiling(
-            stored.tool_ceiling,
-            stored.tool_root.as_deref().map(Path::new),
-        )?;
-        node_builder = node_builder
-            .with_document_projector(gents::store::local::document_projector(
-                initialized_identity.identity.clone(),
-                std::sync::Arc::new(ceiling),
-            )?)
-            .with_node_identity_did(node_identity_did.clone())
-            .with_node_acp_enabled();
-    }
+    let ceiling = crate::resolve_helpers::host_tool_ceiling(
+        stored.tool_ceiling,
+        stored.tool_root.as_deref().map(Path::new),
+    )?;
+    node_builder = node_builder
+        .with_document_projector(gents::store::local::document_projector(
+            initialized_identity.identity.clone(),
+            std::sync::Arc::new(ceiling),
+        )?)
+        .with_node_identity_did(initialized_identity.node_identity_did.clone())
+        .with_node_acp_enabled();
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let graphql_url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
     node_builder = node_builder.with_http(gents::defra_node::HttpConfig::with_listener(listener)?);
@@ -774,7 +772,7 @@ struct HomeIdentity {
     identity_backend: Option<String>,
     keychain_label: Option<String>,
     secure_enclave_label: Option<String>,
-    node_identity_did: Option<String>,
+    node_identity_did: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -958,7 +956,7 @@ async fn initialize_home_store(
 fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<HomeIdentity> {
     if let Some(stored) = read_init_config(options.home)? {
         let identity = crate::home_state::load_initialized_home_identity(options.home, &stored)?;
-        let node_identity_did = Some(identity.did().to_string());
+        let node_identity_did = identity.did().to_string();
         return Ok(HomeIdentity {
             identity,
             key_path: stored.key_path,
@@ -985,7 +983,7 @@ fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<Home
                 identity_backend: None,
                 keychain_label: None,
                 secure_enclave_label: None,
-                node_identity_did: Some(node_identity_did),
+                node_identity_did,
             })
         }
         IdentityBackendArg::MacosKeychain => {
@@ -1012,7 +1010,7 @@ fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<Home
                 identity_backend: Some("macos-keychain".to_string()),
                 keychain_label: Some(label.to_string()),
                 secure_enclave_label: None,
-                node_identity_did: Some(did),
+                node_identity_did: did,
             })
         }
         IdentityBackendArg::MacosSecureEnclave => {
@@ -1041,7 +1039,7 @@ fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<Home
                 identity_backend: Some("macos-secure-enclave".to_string()),
                 keychain_label: None,
                 secure_enclave_label: Some(label.to_string()),
-                node_identity_did: Some(did),
+                node_identity_did: did,
             })
         }
     }

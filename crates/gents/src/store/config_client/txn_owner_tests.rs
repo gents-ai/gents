@@ -2176,10 +2176,6 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
                         permission: "read".to_owned(),
                         node_permission: acp::nac::NodePermission::DocumentRead,
                     };
-                    // NAC-PORT-QUESTION: this expectation was Unavailable only
-                    // because node ACP was disabled. With NAC enabled and the
-                    // Agent baseline granted, the decision is the DAC
-                    // relationship's. Confirm Allowed/Denied against the build.
                     assert_eq!(
                         txn.observe_document_access(&reader, "IndependentReadFact", &ids, named(),)
                             .await?,
