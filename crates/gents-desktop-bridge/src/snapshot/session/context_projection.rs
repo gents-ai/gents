@@ -332,7 +332,7 @@ mod order_profile_tests {
     #[test]
     fn partial_store_display_meter_matches_configured_grouped_and_native_order() {
         let agent = serde_json::from_value(serde_json::json!({
-            "agent_did": "agent", "node_did": "did:test:meter",
+            "agent_did": "agent", "node_did": "did:test:meter", "creation_nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "inference_profile_id": "profile"
         }))
         .expect("agent");

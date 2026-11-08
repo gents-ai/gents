@@ -349,7 +349,7 @@ mod tests {
                         "node_did":"did:test:agent","tags":["private-node"]
                     })).unwrap()),
                     agent_configs: vec![serde_json::from_value(serde_json::json!({
-                        "node_did":"did:test:agent","agent_did":"agent",
+                        "node_did":"did:test:agent","agent_did":"agent","creation_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "inference_profile_id":"profile","tags":["private-agent"]
                     })).unwrap()],
                     runtime: None,
