@@ -211,7 +211,7 @@ impl EmbeddedHome {
             &path,
         )
         .await?;
-        let _ = served.set((node.clone(), identity.clone()));
+        let _ = served.set((Arc::downgrade(&node), identity.clone()));
         if initialize_schemas {
             ensure_runtime_schemas(&node)
                 .await
@@ -352,7 +352,7 @@ impl EmbeddedHome {
             &self.path,
         )
         .await?;
-        let _ = served.set((node.clone(), self.identity.clone()));
+        let _ = served.set((Arc::downgrade(&node), self.identity.clone()));
         self.node = node;
         self.backend_admission = admission;
         self.client_endpoint = Some(client_endpoint);
@@ -406,7 +406,11 @@ fn release_unstopped_node<H>(node: Arc<EmbeddedNode>, held: H) {
 }
 
 /// The node a trial endpoint serves, set once the node has started.
-type ServedNode = Arc<std::sync::OnceLock<(Arc<EmbeddedNode>, Arc<dyn NodeIdentity>)>>;
+/// The node a trial home's HTTP route serves. The node owns the HTTP server
+/// that holds this cell, so it is held weakly: a strong reference would keep a
+/// dropped home's node (and its threads and descriptors) alive.
+type ServedNode =
+    Arc<std::sync::OnceLock<(std::sync::Weak<EmbeddedNode>, Arc<dyn NodeIdentity>)>>;
 
 async fn trial_http(served: ServedNode) -> Result<(crate::defra_node::HttpConfig, String)> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -443,7 +447,10 @@ fn agent_identity_routes(served: ServedNode) -> axum::Router {
                             "Connect this client before creating an agent.",
                         );
                     };
-                    let Some((node, runtime)) = served.get() else {
+                    let Some((node, runtime)) = served
+                        .get()
+                        .and_then(|(node, runtime)| Some((node.upgrade()?, runtime)))
+                    else {
                         return failure(
                             StatusCode::SERVICE_UNAVAILABLE,
                             "The runtime is still starting.",
@@ -456,7 +463,7 @@ fn agent_identity_routes(served: ServedNode) -> axum::Router {
                         );
                     }
                     match crate::store::identity::provision_agent_identity_authorized(
-                        node,
+                        &node,
                         runtime.as_ref(),
                         &caller,
                     )
