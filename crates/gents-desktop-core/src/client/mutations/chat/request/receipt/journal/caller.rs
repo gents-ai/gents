@@ -60,6 +60,8 @@ pub(crate) async fn recover(node: &Arc<EmbeddedNode>, intent: &Intent) -> Result
 /// The proposal is signed before entering the transaction; no owner submission
 /// is authorized until this function returns its committed record.
 pub(crate) async fn reserve(node: &Arc<EmbeddedNode>, proposal: &Record) -> Result<Record> {
+    let journal: &str = node.node_identity_did().unwrap_or_default();
+    super::require_client_signer(node, &proposal.intent.client_did)?;
     ConfigAccess::transact_local_idempotent(
         node,
         Some(identity::Did::new(&proposal.intent.client_did)?),
@@ -74,7 +76,7 @@ pub(crate) async fn reserve(node: &Arc<EmbeddedNode>, proposal: &Record) -> Resu
                 Some((_, Entry::Publication(_))) => anyhow::bail!("request identity belongs to a configuration publication"),
                 None => Vec::new(),
             };
-            let (staged, decision) = correlated::prepare(&records, proposal, true);
+            let (staged, decision) = correlated::prepare(journal, &records, proposal, true);
             anyhow::ensure!(decision != Decision::Refused, "caller submission binding was refused");
             if let Some(record) = staged {
                 let id = escape_graphql_string(&record.intent.request_id);
@@ -110,6 +112,7 @@ pub(crate) async fn update(
     reference: &Reference,
     observation: Option<Outcome>,
 ) -> Result<Record> {
+    super::require_client_signer(node, &intent.client_did)?;
     ConfigAccess::transact_local_idempotent(
         node,
         Some(identity::Did::new(&intent.client_did)?),
@@ -132,6 +135,7 @@ pub(crate) async fn update(
                 let mut records = [*record];
                 if let Some(outcome) = observation {
                     correlated::observe(
+                        &intent.client_did,
                         &mut records,
                         &intent.client_did,
                         &intent.request_id,
@@ -140,6 +144,7 @@ pub(crate) async fn update(
                     );
                 } else {
                     correlated::acknowledge(
+                        &intent.client_did,
                         &mut records,
                         &intent.client_did,
                         &intent.request_id,

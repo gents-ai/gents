@@ -124,11 +124,17 @@ impl Record {
 /// Returned proposals remain staged data until the existing journal's atomic,
 /// durable reservation succeeds. Matching callers reuse the stored result;
 /// a later allocator proposal never replaces their original signed bytes.
+/// `journal` is the client key whose journal holds `records` (Lean
+/// `prepareAt`): a proposal signed by another key is refused before any write.
 pub(crate) fn prepare(
+    journal: &str,
     records: &[Record],
     proposal: &Record,
     durable: bool,
 ) -> (Option<Record>, Decision) {
+    if journal.is_empty() || proposal.intent.client_did != journal {
+        return (None, Decision::Refused);
+    }
     if let Some(decision) = recover(records, &proposal.intent) {
         return (None, decision);
     }
@@ -167,12 +173,16 @@ fn unique(records: &[Record], client_did: &str, request_id: &str) -> Option<usiz
 /// The outcome must come from the existing signed owner-receipt reconciler;
 /// transport absence and elapsed time are not non-delivery observations.
 pub(crate) fn observe(
+    journal: &str,
     records: &mut [Record],
     client_did: &str,
     request_id: &str,
     reference: &Reference,
     outcome: Outcome,
 ) {
+    if client_did != journal {
+        return;
+    }
     let Some(index) = unique(records, client_did, request_id) else {
         return;
     };
@@ -189,11 +199,15 @@ pub(crate) fn observe(
 /// Acknowledgement retires replay bytes, not the canonical request binding.
 /// A stale restored caller must still receive the same confirmed outcome.
 pub(crate) fn acknowledge(
+    journal: &str,
     records: &mut [Record],
     client_did: &str,
     request_id: &str,
     reference: &Reference,
 ) {
+    if client_did != journal {
+        return;
+    }
     let Some(index) = unique(records, client_did, request_id) else {
         return;
     };

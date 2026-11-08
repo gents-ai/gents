@@ -217,9 +217,16 @@ async fn generated_receipt_traces_bind_the_native_signed_preparation() -> Result
             let input = &step["input"];
             let decision = match input["kind"].as_str().context("receipt action")? {
                 "prepare" => {
+                    let journal = facts.client(number(input, "journal")?)?;
                     let proposal = facts.proposal(&input["intent"], &input["proposal"]).await?;
+                    let scope = records
+                        .iter()
+                        .filter(|record| record.intent.client_did == journal)
+                        .cloned()
+                        .collect::<Vec<_>>();
                     let (reserved, result) = prepare(
-                        &records,
+                        &journal,
+                        &scope,
                         &proposal,
                         input["durable"]
                             .as_bool()
@@ -231,12 +238,14 @@ async fn generated_receipt_traces_bind_the_native_signed_preparation() -> Result
                     facts.decision_json(result)?
                 }
                 "observe" | "acknowledge" => {
+                    let journal = facts.client(number(input, "journal")?)?;
                     let caller = &input["caller"];
                     let client = facts.client(number(caller, "requester")?)?;
                     let request = identity(number(caller, "request")?);
                     let reference = facts.reference(&input["prepared"], context).await?;
                     if input["kind"] == "observe" {
                         observe(
+                            &journal,
                             &mut records,
                             &client,
                             &request,
@@ -244,7 +253,7 @@ async fn generated_receipt_traces_bind_the_native_signed_preparation() -> Result
                             serde_json::from_value(input["outcome"].clone())?,
                         );
                     } else {
-                        acknowledge(&mut records, &client, &request, &reference);
+                        acknowledge(&journal, &mut records, &client, &request, &reference);
                     }
                     Value::Null
                 }
@@ -284,6 +293,19 @@ impl Journals {
     }
 }
 
+/// The modeled journal family as a set: grouped by caller key, then request.
+/// Lean lists it in reservation order; journals are separate stores.
+fn by_caller(rows: &Value) -> Result<Vec<Value>> {
+    let mut rows = rows.as_array().context("modeled journal")?.clone();
+    rows.sort_by_key(|row| {
+        (
+            row["intent"]["caller"]["requester"].as_u64(),
+            row["intent"]["caller"]["request"].as_u64(),
+        )
+    });
+    Ok(rows)
+}
+
 #[tokio::test]
 async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result<()> {
     use super::super::journal;
@@ -299,21 +321,19 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
             {
                 continue;
             }
-            // The history runs against the journal of the desktop whose client
-            // prepares its first submission; its node identity is that key.
+            // Each modeled journal is the local store of the client whose key
+            // is its node identity, opened the way production opens it.
             let mut facts = Facts::new()?;
             let mut journals = Journals::default();
-            let local =
-                facts.client(number(&steps[0]["input"]["intent"]["caller"], "requester")?)?;
-            journals.open(&local).await?;
             let context = &steps[0]["input"]["intent"];
             for step in steps {
                 let input = &step["input"];
                 match input["kind"].as_str().context("receipt action")? {
                     "prepare" => {
+                        let key = facts.client(number(input, "journal")?)?;
                         let proposal = facts.proposal(&input["intent"], &input["proposal"]).await?;
                         let output =
-                            match journal::caller::reserve(journals.open(&local).await?, &proposal)
+                            match journal::caller::reserve(journals.open(&key).await?, &proposal)
                                 .await
                             {
                                 Ok(record) => record.result(),
@@ -333,6 +353,7 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
                         );
                     }
                     "observe" | "acknowledge" => {
+                        let key = facts.client(number(input, "journal")?)?;
                         let mut binding = facts.intent(context)?;
                         binding.client_did =
                             facts.client(number(&input["caller"], "requester")?)?;
@@ -344,7 +365,7 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
                             None
                         };
                         let _ = journal::caller::update(
-                            journals.open(&local).await?,
+                            journals.open(&key).await?,
                             &binding,
                             &reference,
                             observation,
@@ -354,42 +375,40 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
                     "reconnect" => {}
                     _ => anyhow::bail!("unknown receipt action"),
                 }
-                let mut rows = Vec::new();
-                for node in journals.0.values() {
+                let mut records = Vec::new();
+                for (key, node) in &journals.0 {
                     let response = graphql_with_transaction_retry(
                         node,
                         "{ PendingChatSubmission { payload } }",
                         "test.receipt.snapshot",
                     )
                     .await?;
-                    rows.extend(
-                        response
-                            .data
-                            .as_ref()
-                            .and_then(|data| data["PendingChatSubmission"].as_array())
-                            .context("journal snapshot")?
-                            .iter()
-                            .cloned(),
-                    );
+                    for row in response
+                        .data
+                        .as_ref()
+                        .and_then(|data| data["PendingChatSubmission"].as_array())
+                        .context("journal snapshot")?
+                    {
+                        let envelope: Value =
+                            serde_json::from_str(row["payload"].as_str().context("payload")?)?;
+                        let record = serde_json::from_value::<Record>(envelope["record"].clone())?;
+                        assert_eq!(
+                            &record.intent.client_did, key,
+                            "{}: a journal holds only its own key's records",
+                            case["name"]
+                        );
+                        records.push(record);
+                    }
                 }
-                let mut records = Vec::new();
-                for row in &rows {
-                    let envelope: Value =
-                        serde_json::from_str(row["payload"].as_str().context("payload")?)?;
-                    records.push(serde_json::from_value::<Record>(
-                        envelope["record"].clone(),
-                    )?);
-                }
-                records.sort_by(|a, b| a.intent.request_id.cmp(&b.intent.request_id));
                 assert_eq!(
-                    facts.records_json(&records)?,
-                    step["after"],
+                    by_caller(&facts.records_json(&records)?)?,
+                    by_caller(&step["after"])?,
                     "{} after {}",
                     case["name"],
                     input["kind"]
                 );
                 for record in &records {
-                    let node = journals.open(&local).await?;
+                    let node = journals.open(&record.intent.client_did).await?;
                     let scoped = journal::caller::lookup(
                         node,
                         &record.intent.client_did,
@@ -429,7 +448,7 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
             journals.shutdown().await;
             count += 1;
         }
-        anyhow::ensure!(count >= 15, "durable traces were not exercised");
+        anyhow::ensure!(count >= 18, "durable traces were not exercised");
         Ok::<(), anyhow::Error>(())
     }
     .await;
