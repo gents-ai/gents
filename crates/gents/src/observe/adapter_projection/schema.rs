@@ -178,32 +178,6 @@ pub fn adapter_projection_eval_jsonl_record_schema(kind: AdapterProjectionKind) 
     })
 }
 
-pub fn adapter_projection_schema_index() -> Value {
-    let projections = [
-        AdapterProjectionKind::AtifTrajectory,
-        AdapterProjectionKind::OpenAiCodexRunTrace,
-        AdapterProjectionKind::LangGraphStateHistory,
-        AdapterProjectionKind::MultiAgentTask,
-    ];
-    json!({
-        "projection_version": ADAPTER_PROJECTION_VERSION,
-        "source_projection_id": RUN_TIMELINE_PROJECTION_ID,
-        "schemas": projections
-            .iter()
-            .map(|kind| {
-                json!({
-                    "projection_id": kind.id(),
-                    "title": kind.title(),
-                    "native_json_schema_id": adapter_projection_native_json_schema(*kind).get("$id").cloned().unwrap_or(Value::Null),
-                    "json_schema_id": adapter_projection_json_schema(*kind).get("$id").cloned().unwrap_or(Value::Null),
-                    "jsonl_record_schema_id": adapter_projection_jsonl_record_schema(*kind).get("$id").cloned().unwrap_or(Value::Null),
-                    "eval_jsonl_record_schema_id": adapter_projection_eval_jsonl_record_schema(*kind).get("$id").cloned().unwrap_or(Value::Null)
-                })
-            })
-            .collect::<Vec<_>>()
-    })
-}
-
 fn projection_json_schema(kind: AdapterProjectionKind) -> Value {
     match kind {
         AdapterProjectionKind::AtifTrajectory => atif::atif_projection_schema(),

@@ -191,34 +191,6 @@ async fn persist_background_completion_with_message_canonical_inner(
 
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn persist_background_completion_with_message_waking(
-    node: &std::sync::Arc<EmbeddedNode>,
-    parent: &AgentRequest,
-    notification_content: &str,
-    message_key: &str,
-    wake_content: &str,
-    queue: RequestQueue,
-    existing_notification_doc_id: Option<&str>,
-    wake: gents_protocol::request_lifecycle::RequestHopCause,
-) -> Result<EnqueuedBackgroundCompletionInput> {
-    let access =
-        crate::ConfigAccess::local_as(node.clone(), identity::Did::new(&parent.agent_did)?);
-    persist_background_completion_with_message_waking_with_access(
-        &access,
-        node,
-        parent,
-        notification_content,
-        message_key,
-        wake_content,
-        queue,
-        existing_notification_doc_id,
-        wake,
-    )
-    .await
-}
-
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn persist_background_completion_with_message_waking_with_access(
     access: &crate::ConfigAccess,
     node: &std::sync::Arc<EmbeddedNode>,
@@ -524,6 +496,7 @@ async fn background_completion_transaction_attempt(
         );
         return Ok(EnqueuedBackgroundCompletionInput {
             request,
+            #[cfg(test)]
             message_sequence: row.message.sequence,
             created_request: false,
         });
@@ -719,6 +692,7 @@ async fn background_completion_transaction_attempt(
 
     Ok(EnqueuedBackgroundCompletionInput {
         request: Some(request),
+        #[cfg(test)]
         message_sequence,
         created_request,
     })

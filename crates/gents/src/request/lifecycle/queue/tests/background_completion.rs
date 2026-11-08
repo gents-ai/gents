@@ -533,33 +533,6 @@ async fn a_returned_result_is_admitted_into_a_paired_client_session() {
     assert_eq!(sessions["AgentSession"][0]["requester_did"], desktop.did());
 }
 
-async fn root_parent(db: &TestDb, session_id: &str) -> AgentRequest {
-    insert_signed_queue_request(db, "parent-request", session_id, &RequestInput::default()).await;
-    let request = crate::request::binding::load_agent_request(&db.node, "parent-request")
-        .await
-        .unwrap()
-        .unwrap();
-    let mut lifecycle = RequestLifecycle::new_with_node_did(
-        db.node.clone(),
-        db.agent_did(),
-        db.node_did(),
-        request,
-        60,
-    );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    let writer = DefraStreamWriter::new(db.node.clone(), db.agent_did(), Duration::ZERO);
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
-    lifecycle
-        .terminalize_owned(
-            RequestTerminalOutcome::Completed,
-            gents_protocol::output::TerminalOutput::NoMessage,
-            None,
-        )
-        .await
-        .unwrap();
-    lifecycle.request().clone()
-}
-
 fn background_hints(parent: &AgentRequest) -> RequestQueue {
     RequestQueue {
         delivery: Default::default(),
@@ -570,53 +543,6 @@ fn background_hints(parent: &AgentRequest) -> RequestQueue {
         queued_after_request_id: Some(parent.request_id.clone()),
         interrupted_request_id: None,
         background_completion_wake_version: None,
-    }
-}
-
-fn wake_agent_request(
-    parent: &AgentRequest,
-    doc_id: &str,
-    request_id: &str,
-    hints: &RequestQueue,
-) -> AgentRequest {
-    AgentRequest {
-        retry_parent_request_doc_id: None,
-        purpose: gents_protocol::request_admission::RequestPurpose::Normal,
-        doc_id: doc_id.to_string(),
-        request_id: request_id.to_string(),
-        node_did: parent.node_did.clone(),
-        requester_did: Some(parent.node_did.clone()),
-        agent_did: parent.agent_did.clone(),
-        session_id: parent.session_id.clone(),
-        content: "review notifications".to_string(),
-        max_total_tokens: None,
-        input: RequestInput {
-            queue: Some(background_wake_queue(
-                hints,
-                hints.queued_after_request_id.clone(),
-            )),
-            ..Default::default()
-        },
-        execution_origin: Some("scheduled".to_string()),
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_lease_secs: None,
-        request_hop: 0,
-        caused_by_parent_request_id: Some(parent.request_id.clone()),
-        caused_by_parent_request_doc_id: Some(parent.doc_id.clone()),
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        workspace_id: None,
-        workspace_owner_node_did: None,
-        workspace_authority: None,
-        workspace_seal_hash: None,
     }
 }
 

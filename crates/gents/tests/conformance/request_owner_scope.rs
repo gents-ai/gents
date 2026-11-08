@@ -122,7 +122,6 @@ fn foreign_did(db: &support::TestDb) -> String {
 #[derive(Debug, Deserialize)]
 struct ConvergenceRow {
     lifecycle_state: RequestLifecycleState,
-    node_did: String,
     failure_reason: Option<String>,
     terminalized_at: Option<String>,
     terminal_redrive_attempts: Option<i64>,
@@ -390,7 +389,6 @@ async fn fetch_convergence_row(
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
                 lifecycle_state
-                node_did
                 failure_reason
                 terminalized_at
                 terminal_redrive_attempts

@@ -441,10 +441,6 @@ impl ActiveRuntimeSnapshot {
         &self.active_event_triggers
     }
 
-    pub(crate) fn active_tasks(&self) -> &RapidHashMap<String, ResolvedTask> {
-        &self.active_tasks
-    }
-
     pub(crate) fn tool_surface(&self, agent_did: &str) -> Option<&Arc<ToolSurface>> {
         self.tool_surfaces.get(agent_did)
     }

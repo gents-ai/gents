@@ -13,41 +13,6 @@ pub(super) async fn load_timeline_session(
     decode_timeline_session_rows(rows, node_did, session_id, requester_did)
 }
 
-pub(super) async fn load_timeline_sessions(
-    access: &ConfigAccess,
-    scopes: &[(String, String, Option<String>)],
-) -> Result<Vec<TimelineSessionRow>> {
-    const BATCH_SIZE: usize = 64;
-    let fields = gents_protocol::session::AGENT_SESSION_FIELDS;
-    let mut sessions = Vec::new();
-    for batch in scopes.chunks(BATCH_SIZE) {
-        let selections = batch
-            .iter()
-            .enumerate()
-            .map(|(index, (node_did, session_id, requester_did))| {
-                let scope = gents_protocol::session::session_scope_filter(
-                    node_did,
-                    session_id,
-                    requester_did.as_deref(),
-                );
-                format!("s{index}: AgentSession(filter: {{ {scope} }}, limit: 2) {{ {fields} }}")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        let response = access.execute(&format!("{{ {selections} }}")).await?;
-        for (index, (node_did, session_id, requester_did)) in batch.iter().enumerate() {
-            let alias = format!("s{index}");
-            let rows = super::query_helpers::decode_rows(&response, &alias)?;
-            if let Some(session) =
-                decode_timeline_session_rows(rows, node_did, session_id, requester_did.as_deref())?
-            {
-                sessions.push(session);
-            }
-        }
-    }
-    Ok(sessions)
-}
-
 fn decode_timeline_session_rows(
     rows: Vec<serde_json::Value>,
     node_did: &str,
@@ -204,24 +169,6 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        let scopes = [
-            (
-                owner_a.to_owned(),
-                "shared-label".to_owned(),
-                Some(user_a.did().to_owned()),
-            ),
-            (
-                owner_b.to_owned(),
-                "shared-label".to_owned(),
-                Some(user_b.did().to_owned()),
-            ),
-        ];
-        let a = load_timeline_sessions(&access_a, &scopes).await.unwrap();
-        let b = load_timeline_sessions(&access_b, &scopes).await.unwrap();
-        assert_eq!(a.len(), 1);
-        assert_eq!(b.len(), 1);
-        assert_eq!(a[0].session.agent_did, binding_a.agent_did);
-        assert_eq!(b[0].session.agent_did, binding_b.agent_did);
         first.node.shutdown().await.expect("first node shutdown");
         second.node.shutdown().await.expect("second node shutdown");
     }

@@ -288,7 +288,6 @@ impl GentsBuilder {
             #[cfg(test)]
             router_dispatch_probe: None,
             rendered_request_capture_factory: self.rendered_request_capture_factory,
-            manual_trigger_handle: Arc::new(tokio::sync::OnceCell::new()),
             enrollment_authority: Arc::default(),
             operator_tool_root: self.tool_ceiling.root().map(std::path::PathBuf::from),
             plugins: Arc::new(crate::runtime::agent::plugin_executor(

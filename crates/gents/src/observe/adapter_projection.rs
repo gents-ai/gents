@@ -25,7 +25,6 @@ pub use jsonl::{adapter_projection_jsonl_records, adapter_projection_native_json
 pub use schema::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_json_schema,
     adapter_projection_jsonl_record_schema, adapter_projection_native_json_schema,
-    adapter_projection_schema_index,
 };
 pub use validate::validate_adapter_projection_contract;
 

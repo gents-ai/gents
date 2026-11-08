@@ -27,7 +27,6 @@ use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, RuntimeNode};
 use crate::tools::surface::AgentToolSurfaceConfig;
 use crate::triggers::engine::event_source::EventSource;
-use crate::triggers::engine::manual_source::ManualSource;
 use crate::triggers::engine::production_materializer::{
     execution_origin_for_trigger_kind, ProductionMaterializer,
 };

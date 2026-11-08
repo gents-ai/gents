@@ -254,7 +254,8 @@ pub fn request_origin(row: &gents_protocol::row::AgentRequestRow) -> RequestOrig
     RequestOrigin::Person
 }
 
-pub fn request_owns_user_turn(input: &gents_protocol::request_input::RequestInput) -> bool {
+#[cfg(test)]
+pub(crate) fn request_owns_user_turn(input: &gents_protocol::request_input::RequestInput) -> bool {
     input.queue.as_ref().is_none_or(|hints| {
         matches!(
             hints.source,

@@ -119,7 +119,6 @@ pub struct EventSource {
     subscription_seed_failures: BTreeMap<String, String>,
     reconciled_generation: u64,
     #[allow(dead_code)]
-    reconcile_debounce: Duration,
     cancel: CancellationToken,
     source_schema_cache: SourceSchemaCache,
     collection_id_to_name: RapidHashMap<String, String>,
@@ -373,7 +372,6 @@ impl EventSource {
             desired_collections: RapidHashSet::new(),
             subscription_seed_failures: BTreeMap::new(),
             reconciled_generation: 0,
-            reconcile_debounce: Duration::from_millis(250),
             cancel,
             source_schema_cache: SourceSchemaCache::default(),
             collection_id_to_name: RapidHashMap::new(),

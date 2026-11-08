@@ -341,31 +341,6 @@ async fn insert_runtime_queue_request(
         .unwrap()
 }
 
-async fn insert_signed_queue_request(
-    db: &TestDb,
-    request_id: &str,
-    session_id: &str,
-    input: &RequestInput,
-) -> String {
-    use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
-    };
-    let mut create = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        request_id,
-        db.node_did(),
-        db.agent_did(),
-        db.agent_did(),
-        session_id,
-        "work",
-        "interactive",
-        "2026-10-21T00:00:00Z",
-        AgentRequestAdmissionRecord::local_self(db.agent_did()),
-    );
-    create.input = input.clone();
-    publish_signed_queue_request(db, &mut create).await
-}
-
 async fn publish_signed_queue_request(
     db: &TestDb,
     create: &mut gents_protocol::request_admission::AgentRequestCreate,

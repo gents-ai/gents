@@ -11,7 +11,6 @@ pub(crate) mod durable;
 pub(crate) mod event_delivery;
 pub(crate) mod event_source;
 pub(crate) mod goal_source;
-pub(crate) mod manual_source;
 pub(crate) mod production_materializer;
 pub(crate) mod schedule_source;
 pub mod subscription_source;
@@ -43,9 +42,7 @@ pub async fn run_trigger_engine(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TriggerKind {
     Schedule,
-    #[allow(dead_code)]
     Event,
-    #[allow(dead_code)]
     Manual,
 }
 
@@ -170,11 +167,9 @@ pub enum FireResult {
     Duplicate {
         request_id: String,
     },
-    #[allow(dead_code)]
     Fired {
         request_id: String,
     },
-    #[allow(dead_code)]
     Skipped {
         reason: String,
     },
@@ -257,11 +252,8 @@ pub(crate) trait MaterializerHandle: Send + Sync {
 }
 
 pub(crate) struct TriggerEngine {
-    #[allow(dead_code)]
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
-    #[allow(dead_code)]
     materializer: Arc<dyn MaterializerHandle>,
-    #[allow(dead_code)]
     per_trigger_locks: Mutex<TriggerLockMap>,
 }
 
@@ -309,7 +301,6 @@ impl TriggerEngine {
         }
     }
 
-    #[allow(dead_code)]
     async fn dispatch(&self, intent: FireIntent) -> FireResult {
         if let Some(error) = intent.well_formed_error() {
             let result = FireResult::Rejected {

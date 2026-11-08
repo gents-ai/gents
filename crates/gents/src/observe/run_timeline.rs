@@ -32,17 +32,6 @@ pub struct RunTimelineRows {
     pub rendered_request_refs: Vec<TimelineRenderedRequestRef>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct RunActivityRows {
-    #[serde(default)]
-    pub sessions: Vec<TimelineSessionRow>,
-    #[serde(default)]
-    pub inference_calls: Vec<TimelineInferenceCallRow>,
-    #[serde(default)]
-    pub tool_calls: Vec<TimelineToolCallRow>,
-    pub truncated: bool,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunTimeline {
     pub request_id: String,
