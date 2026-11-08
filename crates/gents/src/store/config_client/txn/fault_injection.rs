@@ -32,6 +32,7 @@ tokio::task_local! {
 
 struct SuccessfulMutationPause {
     after: usize,
+    every: bool,
     reached: Arc<tokio::sync::Notify>,
     release: Arc<tokio::sync::Notify>,
     fired: AtomicBool,
@@ -51,7 +52,9 @@ tokio::task_local! {
     static SUCCESSFUL_MUTATION_TRACE: Arc<std::sync::Mutex<Vec<Option<&'static str>>>>;
 }
 
-pub(super) async fn after_successful_mutation_for_test(operation: Option<&'static str>) -> Result<()> {
+pub(super) async fn after_successful_mutation_for_test(
+    operation: Option<&'static str>,
+) -> Result<()> {
     let Ok(fault) = SUCCESSFUL_MUTATION_FAULT.try_with(Arc::clone) else {
         return Ok(());
     };
@@ -66,7 +69,12 @@ pub(super) async fn after_successful_mutation_for_test(operation: Option<&'stati
         return Err(ConfigClientError::InjectedMutationFailure { count });
     }
     if let Some(pause) = fault.pause.as_ref() {
-        if pause.after == count && !pause.fired.swap(true, Ordering::Relaxed) {
+        let due = if pause.every {
+            count >= pause.after
+        } else {
+            pause.after == count
+        };
+        if due && (!pause.fired.swap(true, Ordering::Relaxed) || pause.every) {
             pause.reached.notify_one();
             pause.release.notified().await;
         }
@@ -384,6 +392,34 @@ impl ConfigApplyTxn<'_> {
     where
         F: Future,
     {
+        Self::with_successful_mutation_pauses(after, false, reached, release, future).await
+    }
+
+    /// Pauses after every successful mutation of `future`'s transactions, every
+    /// attempt included, until each pause is released.
+    pub(crate) async fn with_each_successful_mutation_pause<F>(
+        reached: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        future: F,
+    ) -> (F::Output, usize)
+    where
+        F: Future,
+    {
+        let (output, _, count) =
+            Self::with_successful_mutation_pauses(1, true, reached, release, future).await;
+        (output, count)
+    }
+
+    async fn with_successful_mutation_pauses<F>(
+        after: usize,
+        every: bool,
+        reached: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        future: F,
+    ) -> (F::Output, bool, usize)
+    where
+        F: Future,
+    {
         assert!(after > 0);
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after: None,
@@ -393,6 +429,7 @@ impl ConfigApplyTxn<'_> {
             receipt_fired: AtomicBool::new(false),
             pause: Some(SuccessfulMutationPause {
                 after,
+                every,
                 reached,
                 release,
                 fired: AtomicBool::new(false),

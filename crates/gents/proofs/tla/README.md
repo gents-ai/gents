@@ -49,21 +49,38 @@ See `../README.md` for how this fits the broader formal-verification model.
   health handling, and the rule that missed a pairing change during the first
   read.
 - `BackgroundAdmissionContention` — concurrent writers of one request's
-  background budget (#3592). Each accepted `spawn_process` call runs an
-  admission transaction (reads the request's `AgentToolCall` rows, bumps
+  `AgentRequest` document and session documents during a turn (#3592). Each
+  accepted `spawn_process` call runs a dispatch start (reads the request to
+  fence on its lease, moves its own row to running), an admission
+  transaction (reads the request's `AgentToolCall` rows and fence, bumps
   `AgentRequest.background_admission_sequence`, creates the child) and a
-  receipt transaction (rereads the tool rows, takes the next `AgentMessage`
-  sequence, refreshes the `AgentSession` observation); running children
-  write those session-scoped documents when they finish. Commits follow
-  DefraDB's optimistic rule: a commit aborts when a key it read or wrote
-  changed after its snapshot, and a call whose bounded attempts all abort is
-  lost. `BudgetBound`, `NoConflictLoss`, `ReceiptOnce` and `EveryCallSettles`
-  hold in the owned loop's order, where `run_batch` admits a turn's calls one
-  at a time. `Concurrent` admits every sibling at once and loses a call to
-  conflicts (the #3592 regression schedule); `Unfenced` drops the sequence
-  bump and overfills the budget; `ShortBudget` gives `Max` attempts and loses
-  a call to its running children, so the Lean `receiptContentionAttempts`
-  bound must exceed `Max`.
+  receipt transaction (rereads the tool rows and request, takes the next
+  `AgentMessage` sequence, refreshes the `AgentSession` observation); running
+  children write those session-scoped documents when they finish, and the
+  execution lease renewal task CASes the request's deadline at each due
+  poll beside the turn. Commits follow DefraDB's optimistic rule: a commit
+  aborts when a document it read or wrote changed after its snapshot (writers
+  of different fields of one request document conflict, as the
+  `request_row_writers` tests show), and a transaction whose bounded attempts
+  all abort is lost. `BudgetBound`, `NoConflictLoss`, `ReceiptOnce`,
+  `LeaseLive` and `EveryCallSettles` hold in the owned loop's order, where
+  `run_batch` runs a turn's calls one at a time, under the renewal cadence
+  premise (Lean `consecutive_renewals_obey_cadence`: at most one renewal lands
+  in one call's attempt series), and with the renewal owner re-driving a poll
+  whose attempts all abort. The renewal guarantee is the weaker one: a poll
+  can be exhausted by admission bumps (`RenewalWitness`), and only the
+  re-drive keeps the lease live. `LeaseLapse` is the found race: waiting for
+  the next poll, as the code did, leaves a lease period no due poll with
+  margin, and sequential admissions lapse the lease while the turn runs.
+  `Concurrent` admits every sibling at once and loses a call to conflicts
+  (the #3592 regression schedule); `Unfenced` drops the sequence bump and
+  overfills the budget; `ShortBudget` gives `Max` attempts and loses a call to
+  its running children; `RenewalBudget` gives `Max + 1` and loses an
+  admission to the children plus one renewal, so the second extra attempt of
+  the Lean `receiptContentionAttempts` bound is the renewal's; `Unspaced`
+  drops the cadence premise and loses an admission to back-to-back renewals;
+  `StartWitness` reproduces the traced renewal/dispatch-start conflict that
+  green absorbs.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
@@ -156,19 +173,29 @@ Its three diagnostics are EXPECTED to report violations. `UntypedRead` reads a m
 ```
 
 For BackgroundAdmissionContention — the green model (the owned loop's
-admission order) checks clean, including `EveryCallSettles`:
+order, two cadence-spaced lease renewals, re-driven renewal polls) checks
+clean, including `EveryCallSettles`:
 ```bash
 ./scripts/run-tlc.sh MCBackgroundAdmissionContention
 ```
 
-Its three diagnostics are EXPECTED to report violations. `Concurrent`
-reproduces #3592 (`NoConflictLoss`: an admission loses every attempt to
-sibling commits), `Unfenced` violates `BudgetBound`, and `ShortBudget`
-violates `NoConflictLoss` with only running children writing:
+Its eight diagnostics are EXPECTED to report violations. `LeaseLapse`
+reproduces the renewal race (`LeaseLive`), `Concurrent` reproduces #3592
+(`NoConflictLoss`: an admission loses every attempt to sibling commits),
+`Unfenced` violates `BudgetBound`, `ShortBudget` violates `NoConflictLoss`
+with only running children writing, `RenewalBudget` violates
+`NoConflictLoss` with the children and one renewal, `Unspaced` violates
+`NoConflictLoss` with back-to-back renewals, `RenewalWitness` violates
+`RenewalNeverLost`, and `StartWitness` violates `StartNeverConflicts`:
 ```bash
+./scripts/run-tlc.sh MCBackgroundAdmissionContentionLeaseLapse
 ./scripts/run-tlc.sh MCBackgroundAdmissionContentionConcurrent
 ./scripts/run-tlc.sh MCBackgroundAdmissionContentionUnfenced
 ./scripts/run-tlc.sh MCBackgroundAdmissionContentionShortBudget
+./scripts/run-tlc.sh MCBackgroundAdmissionContentionRenewalBudget
+./scripts/run-tlc.sh MCBackgroundAdmissionContentionUnspaced
+./scripts/run-tlc.sh MCBackgroundAdmissionContentionRenewalWitness
+./scripts/run-tlc.sh MCBackgroundAdmissionContentionStartWitness
 ```
 
 Each run directly, from this directory, is:
@@ -373,16 +400,21 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCReplicatedRequestConvergenceUntypedRead.cfg` | `UntypedRead = TRUE` | `NoTerminalErrorWhileDeliverable` intentionally VIOLATED: write, then a read shows `Error` | 63 distinct states before counterexample; 137 generated | 4 | <1s |
 | `MCReplicatedRequestConvergenceHealthIgnored.cfg` | `HealthRereads = "never"` | `ProjectionCurrent` intentionally VIOLATED: the pairing returns unread and the view stays `NotConnected` | 79 distinct states before counterexample; 180 generated | 5 | <1s |
 | `MCReplicatedRequestConvergenceHealthAwaitingOnly.cfg` | `HealthRereads = "awaiting"` | `ProjectionCurrent` intentionally VIOLATED: the pairing comes up while the first read is in flight, and that read publishes `NotConnected` | 85 distinct states before counterexample; 184 generated | 5 | <1s |
-| `MCBackgroundAdmissionContention.cfg` | `N = 4`, `Max = 2`, `Attempts = 4`, sequential admission, sequence bump | Passes `TypeOK`, `BudgetBound`, `NoConflictLoss`, `ReceiptOnce`, `EveryCallSettles` | 1,021 distinct states; 1,560 generated | 24 | <1s |
-| `MCBackgroundAdmissionContentionConcurrent.cfg` | as green, concurrent admission | `NoConflictLoss` intentionally VIOLATED: call 1's admission aborts on all 4 attempts while siblings commit | 2,831,405 distinct states before counterexample; 7,054,901 generated | 15 | 14s |
-| `MCBackgroundAdmissionContentionUnfenced.cfg` | concurrent, no sequence bump, `Attempts = 100` | `BudgetBound` intentionally VIOLATED: concurrent admissions all count one live row and commit | 796 distinct states before counterexample; 1,110 generated | 8 | <1s |
-| `MCBackgroundAdmissionContentionShortBudget.cfg` | sequential, `Attempts = 2` | `NoConflictLoss` intentionally VIOLATED: two running children finish during one call's transaction | 402 distinct states before counterexample; 522 generated | 21 | <1s |
+| `MCBackgroundAdmissionContention.cfg` | `N = 4`, `Max = 2`, `Attempts = 4`, `StartAttempts = RenewAttempts = 4`, `Renewals = 2`, `RenewTicks = 1`, sequential, sequence bump, re-driven polls, cadence-spaced renewals | Passes `TypeOK`, `BudgetBound`, `NoConflictLoss`, `ReceiptOnce`, `LeaseLive`, `EveryCallSettles` | 417,891 distinct states; 918,452 generated | 48 | 13s |
+| `MCBackgroundAdmissionContentionLeaseLapse.cfg` | as green, `Renewals = 1`, `RedriveLostPoll = FALSE` | `LeaseLive` intentionally VIOLATED: the admission bumps of calls 1 to 4 abort all 4 attempts of the one due poll while call 4's receipt is pending | 76,748 distinct states before counterexample; 154,916 generated | 33 | 1s |
+| `MCBackgroundAdmissionContentionConcurrent.cfg` | as green, concurrent admission, `Renewals = 0` | `NoConflictLoss` intentionally VIOLATED: call 1's admission aborts on all 4 attempts while siblings and their children commit | 6,698,408 distinct states before counterexample; 19,430,220 generated | 21 | 38s |
+| `MCBackgroundAdmissionContentionUnfenced.cfg` | concurrent, no sequence bump, `Attempts = 100`, `Renewals = 0` | `BudgetBound` intentionally VIOLATED: concurrent admissions all count one live row and commit | 26,480 distinct states before counterexample; 55,615 generated | 13 | <1s |
+| `MCBackgroundAdmissionContentionShortBudget.cfg` | sequential, `Attempts = 2`, `Renewals = 0` | `NoConflictLoss` intentionally VIOLATED: two running children finish during call 2's receipt | 230 distinct states before counterexample; 302 generated | 21 | <1s |
+| `MCBackgroundAdmissionContentionRenewalBudget.cfg` | as green, `Attempts = 3` (`Max + 1`), `Renewals = 1` | `NoConflictLoss` intentionally VIOLATED: two children finish and one renewal commits during call 2's receipt; with `Renewals = 0` the same bound passes | 4,382 distinct states before counterexample; 8,084 generated | 21 | <1s |
+| `MCBackgroundAdmissionContentionUnspaced.cfg` | as green, `RenewalSpaced = FALSE` | `NoConflictLoss` intentionally VIOLATED: two back-to-back renewals and two children exhaust call 2's 4 receipt attempts | 33,653 distinct states before counterexample; 68,174 generated | 25 | <1s |
+| `MCBackgroundAdmissionContentionRenewalWitness.cfg` | green constants | `RenewalNeverLost` intentionally VIOLATED: admission bumps exhaust a renewal poll, which green's re-drive recovers | 286,417 distinct states before counterexample; 580,008 generated | 33 | 1s |
+| `MCBackgroundAdmissionContentionStartWitness.cfg` | green constants | `StartNeverConflicts` intentionally VIOLATED: a renewal commits while call 1's dispatch start is open, the traced conflict | 46 distinct states before counterexample; 94 generated | 7 | <1s |
 
-The four BackgroundAdmissionContention rows used TLC2 2.19 (rev `5a47802`)
-with Homebrew OpenJDK 25.0.2 on macOS arm64, `-workers auto` using 16
-workers. The green run checked its temporal property over the complete state
-space. The counts before each counterexample vary with the worker count; with
-`-workers 2` every diagnostic reached the same violation.
+The nine BackgroundAdmissionContention rows used TLC2 `2026.11.06.222357`
+(rev `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and
+`-workers 2`. The green run checked its temporal property over the complete
+state space. The counts before each counterexample vary with the worker
+count.
 
 The multi-collection run's final temporal-property pass dominated runtime: TLC completed BFS first, then checked 16 temporal branches over 34,635,520 total distinct states in 19min 27s.
 

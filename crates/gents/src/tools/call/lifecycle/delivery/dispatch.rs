@@ -47,6 +47,10 @@ impl ToolCallLifecycle {
         self.started_at = Some(started_at);
     }
 
+    /// The dispatch reads the request document to fence on its lease, so a
+    /// renewal committing meanwhile aborts an attempt; renewals are at least
+    /// half a lease apart, so the Standard attempts absorb the one that can
+    /// land (`tla/BackgroundAdmissionContention`).
     pub(in crate::tools::call::lifecycle) async fn start_running_canonical_with_time(
         &mut self,
         fixture_now: Option<DateTime<Utc>>,

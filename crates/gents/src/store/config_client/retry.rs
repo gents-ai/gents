@@ -7,9 +7,12 @@ use crate::store::graphql::GraphqlResponseError;
 pub(super) const TRANSACT_CONFLICT_MAX_RETRIES: u32 = 3;
 pub(super) const RECEIPT_WRITE_MAX_RETRIES: u32 = 4;
 /// `Background.receiptContentionAttempts`: outlasts the running children that
-/// may write while the owned loop admits one call at a time. This is bounded
-/// retry, not a progress guarantee under concurrent sibling admissions or
-/// unbounded concurrent writes.
+/// may write while the owned loop admits one call at a time, plus the one
+/// execution lease renewal that may commit during the attempt series (an
+/// admission reads and writes the request document, and renewals are at least
+/// half a lease apart). This is bounded retry, not a progress guarantee under
+/// concurrent sibling admissions, a lease shorter than twice the attempt
+/// series, or unbounded concurrent writes.
 pub(super) const REQUEST_SIBLING_MAX_ATTEMPTS: u32 =
     crate::tools::call::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT as u32 + 2;
 

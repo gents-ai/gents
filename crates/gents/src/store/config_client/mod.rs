@@ -80,7 +80,8 @@ where
         || retry::is_transaction_storage_failure(error)
 }
 
-#[cfg(test)]
+/// Whether `error` is a typed DefraDB transaction conflict, after every
+/// attempt the transaction owner allowed.
 pub(crate) fn is_classified_transaction_conflict<E>(error: &E) -> bool
 where
     E: TransactionFailure + ?Sized,
