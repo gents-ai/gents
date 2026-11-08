@@ -1,4 +1,6 @@
 use anyhow::Result;
+use gents::pack::PackChangeError;
+use gents::plugin::authority::GrantError;
 use serde_json::{json, Value};
 
 use super::registry::{resolve_registry_url, RegistryClient};
@@ -102,7 +104,7 @@ pub(crate) async fn outdated(args: PackOutdatedArgs) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
+pub(crate) async fn update(args: PackUpdateArgs) -> Result<(), PackChangeError> {
     let packs = outdated_packs(&args.scope, args.registry.as_deref()).await?;
     let selected = select_packs(&packs, args.package.as_deref())?;
 
@@ -145,16 +147,22 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
         };
         match crate::request_helpers::capture_report(super::install(install_args)).await {
             Ok(_) => updated.push(coordinate),
+            Err(
+                refusal @ (PackChangeError::Edited { .. }
+                | PackChangeError::Grant(GrantError::Ungranted { .. })),
+            ) if args.package.is_some() => return Err(refusal),
             Err(error) => failed.push(json!({ "pack": coordinate, "error": format!("{error:#}") })),
         }
     }
 
     let any_failed = !failed.is_empty();
     crate::print_json(&json!({ "updated": updated, "failed": failed, "current": current }))?;
-    anyhow::ensure!(
-        !any_failed,
-        "updating failed for at least one pack; see \"failed\" in the report above"
-    );
+    if any_failed {
+        return Err(anyhow::anyhow!(
+            "updating failed for at least one pack; see \"failed\" in the report above"
+        )
+        .into());
+    }
     Ok(())
 }
 

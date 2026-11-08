@@ -96,7 +96,8 @@ pub(super) async fn apply_pack_documents(
                 let report = super::installation::install_in_txn(
                     txn, owner, pack, documents, policy, None, None, None,
                 )
-                .await?;
+                .await
+                .map_err(super::PackChangeError::into_anyhow)?;
                 super::installation::validate_plugin_replacements_in_txn(
                     txn,
                     owner,

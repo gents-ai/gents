@@ -141,7 +141,8 @@ impl PackInstaller {
                 }
             },
         )
-        .await?;
+        .await
+        .map_err(|error| error.into_anyhow())?;
         let discovery = plugin_discovery_calls(
             &plugins
                 .iter()

@@ -1019,16 +1019,17 @@ pub(crate) fn print_ndjson(value: &Value) -> Result<()> {
         .context("writing NDJSON record to stdout")
 }
 
-pub(crate) async fn capture_report<F>(command: F) -> Result<Value>
+pub(crate) async fn capture_report<F, E>(command: F) -> Result<Value, E>
 where
-    F: std::future::Future<Output = Result<()>>,
+    F: std::future::Future<Output = Result<(), E>>,
+    E: From<anyhow::Error>,
 {
     CAPTURED_REPORT
         .scope(std::cell::RefCell::new(None), async move {
             command.await?;
             CAPTURED_REPORT
                 .with(|report| report.borrow_mut().take())
-                .ok_or_else(|| anyhow::anyhow!("the command produced no report"))
+                .ok_or_else(|| anyhow::anyhow!("the command produced no report").into())
         })
         .await
 }

@@ -13,7 +13,7 @@ use super::super::{
     HomePackInstall, InstalledVia, PackInferenceBindingPreview, PackInferenceBindings,
     PackInstallOptions,
 };
-use super::{DriftPolicy, InstallReport, InstalledPackPlugin, PackIdentity};
+use super::{DriftPolicy, InstallReport, InstalledPackPlugin, PackChangeError, PackIdentity};
 
 pub(crate) fn sdl_paths(manifest: &super::super::PackManifest) -> std::collections::BTreeSet<&str> {
     let mut paths: std::collections::BTreeSet<&str> = manifest
@@ -1375,7 +1375,8 @@ pub async fn install_prepared_document_pack(
         grant_authority,
         true,
     )
-    .await?;
+    .await
+    .map_err(|error| error.into_anyhow())?;
     let root_coordinate = format!(
         "{}/{}",
         archive.manifest().metadata.namespace,
@@ -1486,7 +1487,7 @@ pub async fn install_prepared_document_graph(
     home: Option<&Path>,
     consent: bool,
     explicit: bool,
-) -> Result<(InstallReport, Vec<crate::plugin::store::InstalledPlugin>)> {
+) -> Result<(InstallReport, Vec<crate::plugin::store::InstalledPlugin>), PackChangeError> {
     let stages = document_graph_stages(archive, prepared, explicit)?;
     let (reports, plugins) = install_document_graph(
         access,
@@ -1695,7 +1696,8 @@ pub async fn apply_hosted_document_graph(
             policy,
             graph.node_binding.as_ref(),
         )
-        .await;
+        .await
+        .map_err(PackChangeError::into_anyhow);
     }
     let (root, dependencies) = graph
         .identities
@@ -1722,7 +1724,8 @@ pub async fn apply_hosted_document_graph(
         policy,
         graph.node_binding.as_ref(),
     )
-    .await?;
+    .await
+    .map_err(PackChangeError::into_anyhow)?;
     super::validate_plugin_replacements_in_txn(txn, owner, std::slice::from_ref(root)).await?;
     super::write_installed_plugin_identity(
         txn,
@@ -1789,11 +1792,10 @@ pub(super) async fn apply_document_graph_in_txn(
     records: &[StageRecord],
     policy: DriftPolicy,
     node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
-) -> Result<Vec<InstallReport>> {
-    anyhow::ensure!(
-        records.len() == identities.len(),
-        "pack stage records do not match the document graph"
-    );
+) -> Result<Vec<InstallReport>, PackChangeError> {
+    if records.len() != identities.len() {
+        return Err(anyhow::anyhow!("pack stage records do not match the document graph").into());
+    }
     let mut reports = Vec::new();
     for ((identity, documents), record) in identities.iter().zip(documents).zip(records) {
         if let Some(snapshot) = &record.snapshot {
@@ -1804,11 +1806,9 @@ pub(super) async fn apply_document_graph_in_txn(
                 snapshot.record.digest.as_deref(),
             )
             .await?;
-            anyhow::ensure!(
-                current.as_ref() == Some(snapshot),
-                "installed dependency {} changed during preparation; retry the install",
-                identity.coordinate
-            );
+            if current.as_ref() != Some(snapshot) {
+                return Err(anyhow::anyhow!("installed dependency {} changed during preparation; retry the install", identity.coordinate).into());
+            }
             if !record.reconfigure {
                 reports.push(InstallReport::default());
                 continue;
@@ -1840,10 +1840,13 @@ pub(super) async fn install_document_graph(
     home: Option<&Path>,
     consent: bool,
     node_binding: Option<crate::store::config_client::ConfigurationNodeBinding>,
-) -> Result<(
-    Vec<InstallReport>,
-    Vec<crate::plugin::store::InstalledPlugin>,
-)> {
+) -> Result<
+    (
+        Vec<InstallReport>,
+        Vec<crate::plugin::store::InstalledPlugin>,
+    ),
+    PackChangeError,
+> {
     let access = access.clone();
     let owner = owner.to_owned();
     let home = home.map(Path::to_owned);
@@ -1988,7 +1991,8 @@ pub(super) async fn install_document_graph(
                             .collect();
                         ensure_plugin_references_resolve(&packs, home.as_deref(), &digests)
                     })
-                    .await??;
+                    .await
+                    .map_err(anyhow::Error::from)??;
                     apply_document_graph_in_txn(
                         txn,
                         owner,
@@ -2009,12 +2013,12 @@ pub(super) async fn install_document_graph(
         if let Some(stage) = plugin_stage {
             if let Err(cleanup) = stage.finish(!rejected).await {
                 return Err(match result {
-                    Err(failure) => failure
-                        .error
+                    Err(failure) => anyhow::Error::from(failure.error)
                         .context(format!("plugin store cleanup failed: {cleanup:#}")),
                     Ok(_) => cleanup
                         .context("plugin store cleanup failed after committed pack transaction"),
-                });
+                }
+                .into());
             }
         }
         #[cfg(test)]
@@ -2022,20 +2026,23 @@ pub(super) async fn install_document_graph(
             pause.completed.notify_one();
         }
         result
-            .map_err(|error| error.error)
             .map(|reports| (reports, plugins))
-            .with_context(|| {
-                if rejected {
-                    "pack document transaction was rejected; local plugin records were restored"
-                } else {
-                    "pack document outcome was not confirmed; local plugins remain published"
+            .map_err(|failure| match failure.error {
+                PackChangeError::Other(error) => {
+                    PackChangeError::Other(error.context(if rejected {
+                        "pack document transaction was rejected; local plugin records were restored"
+                    } else {
+                        "pack document outcome was not confirmed; local plugins remain published"
+                    }))
                 }
+                refusal => refusal,
             })
     })
     .await
     .context("owned pack installation task failed")?
 }
 
+#[cfg(test)]
 #[expect(
     clippy::too_many_arguments,
     reason = "the document and plugin owners share an installation outcome"
