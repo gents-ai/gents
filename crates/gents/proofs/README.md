@@ -637,6 +637,7 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/Callback.lean` | Callback invocation lifecycle, action-journal prefix, and claim uniqueness |
 | `Proofs/Client.lean` | Barrel for client turn-state derivation and client theorems |
 | `Proofs/ClientShell.lean` | Barrel for multi-session shell workflow modules |
+| `Proofs/ClientShell/SessionLoad.lean` | Selected-session load presentation (`projectSessionLoadingStatus`) and its follow-up machine: every status without an action has a read running or queued, a bounded re-read scheduled, or is the runtime-connection blocker (`phase_has_exit`); waiting phases offer retry once re-reads are spent; a reply for another target fails visibly. Conformance: `Proofs/Conformance/ClientSessionLoad.lean`, replayed by the desktop `tests/lean-conformance/session-loading-status.test.ts`. TLA companion: `tla/DesktopUpdateListener.tla`. |
 | `Proofs/ClientShell/ObservationScope.lean` | Shared client observation focus while external frontend attachments are present; the last detachment restores current shell intent. |
 | `Proofs/ClientShell/Voice.lean` | Explicit dictation and live conversation epochs; stop, disconnection, view disposal and scope changes reject late completions. |
 | `Proofs/ClientShell/Settings.lean` | Physical document and composite revision guards, canonical editable fields, and post-save editor baseline adoption. |
@@ -712,7 +713,7 @@ Semantic submodules:
 | `Proofs.Triggers.SerialSupport` | `Counting`, `Preservation` |
 | `Proofs.Client` | `Types`, `Lifecycle`, `Terminal`, `Replacement`, `Output` |
 | `Proofs.StorageFailure` | typed storage-full classification, retained signed submissions and retry suppression |
-| `Proofs.ClientShell` | `Types`, `Submission`, `Transition`, `Projection`, `Timeline`, `PresentationAgreement`, `ObservationOrdering`, `Theorems` |
+| `Proofs.ClientShell` | `Types`, `Submission`, `Transition`, `Projection`, `Timeline`, `PresentationAgreement`, `ObservationOrdering`, `SessionLoad`, `Theorems` |
 | `Proofs.CommandPolicy` | `Types`, `Validation`, `Sandbox`, `Env`, `Theorems` |
 | `Proofs.ToolExecution` | standalone health/schema preflight and retry eligibility model |
 | `Proofs.ManagedExec` | `State`, `Transition`, `Executable`, `Properties`, `Composed`, `Ownership` |

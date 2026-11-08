@@ -8,6 +8,7 @@ import Proofs.ClientShell.PresentationAgreement
 import Proofs.ClientShell.Timeline
 import Proofs.ClientShell.Theorems
 import Proofs.ClientShell.ObservationOrdering
+import Proofs.ClientShell.SessionLoad
 import Proofs.ClientShell.InferenceObservation
 import Proofs.ClientShell.RequestCacheIdentity
 import Proofs.ClientShell.ObservationScope

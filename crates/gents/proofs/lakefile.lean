@@ -15,6 +15,7 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.HttpAccess,
   `Proofs.Conformance.MetricsScrapeAccess,
   `Proofs.Conformance.ClientObservationOrdering,
+  `Proofs.Conformance.ClientSessionLoad,
   `Proofs.Conformance.RuntimeConnectionObservation,
   `Proofs.Conformance.RuntimeConnectionReprobe,
   `Proofs.Conformance.EnrollmentActivation,

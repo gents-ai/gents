@@ -77,6 +77,22 @@ See `../README.md` for how this fits the broader formal-verification model.
   without the head read) break each remaining guard. A refusal admitted while
   another turn is live deliberately leaves the live turn as the head, so
   neither property claims it.
+- `DesktopUpdateListener` — the last leg of the desktop's event path: the
+  bridge emitter (`spawn_client_update_task`: coalesced watch wakes, one
+  `desktop://client-updated` event each), Tauri delivery (an event with no
+  registered handler is dropped, never replayed), the frontend's asynchronous
+  listener registration, the projection drain loop and the selected session's
+  load phases. A read sees the versions committed before it starts. A
+  selected request that has not reached its owner answers `pending`, and the
+  runtime may catch up with no store notice at all, since the desktop holds no
+  replica of a remote runtime's session. `ViewConverges` and `NoStuckPending`
+  hold with four guards: a full read once the listener resolves, re-listening
+  after a rejected registration, bounded re-reads of a waiting phase followed
+  by the retry action (Lean `ClientSessionLoad.phase_has_exit`), and a visible
+  failure for a reply that cannot be shown. `RegistrationGap` is the observed
+  defect (a commit between the startup read and registration is dropped and
+  the view stays a version behind); `ListenFailure`, `PendingNoEvent` and
+  `SupersededMismatch` each drop one remaining guard.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
@@ -178,6 +194,23 @@ in the same second, the client reopens, B completes and never appears);
 ./scripts/run-tlc.sh MCSessionHeadObservationNoHeadSeed
 ```
 
+For DesktopUpdateListener — the green model (every guard on, one rejected
+registration, one bridge mismatch, one selection change, silent and noticed
+arrival) checks clean, including both liveness properties:
+```bash
+./scripts/run-tlc.sh MCDesktopUpdateListener
+```
+
+Its four diagnostics are EXPECTED to report violations. `RegistrationGap`
+violates `ViewConverges`; `ListenFailure`, `PendingNoEvent` and
+`SupersededMismatch` violate `NoStuckPending`:
+```bash
+./scripts/run-tlc.sh MCDesktopUpdateListenerRegistrationGap
+./scripts/run-tlc.sh MCDesktopUpdateListenerListenFailure
+./scripts/run-tlc.sh MCDesktopUpdateListenerPendingNoEvent
+./scripts/run-tlc.sh MCDesktopUpdateListenerSupersededMismatch
+```
+
 Each run directly, from this directory, is:
 ```bash
 java -cp <tla2tools.jar> tlc2.TLC -workers 2 -metadir <scratch dir> \
@@ -261,6 +294,11 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCSessionHeadObservationNoLivePreference.cfg` | `Order = "noLive"`, `Refusals = FALSE` | `ReplyObserved` intentionally VIOLATED: B's claim ranks below A's same-second terminalization | 620 distinct states; 1,056 generated | 11 | <1s |
 | `MCSessionHeadObservationNoTerminalizationOrder.cfg` | `Order = "noTerminal"`, `Refusals = TRUE` | `ReplyObserved` intentionally VIOLATED: B refused in A's second loses the random tie | 838 distinct states; 1,406 generated | 11 | <1s |
 | `MCSessionHeadObservationNoHeadSeed.cfg` | `Order = "lean"`, `HeadSeed = FALSE` | `ReplyObserved` intentionally VIOLATED: the head is B but the reader reads only nonterminal rows | 572 distinct states; 984 generated | 11 | <1s |
+| `MCDesktopUpdateListener.cfg` | `MaxVersion = 2`, `ListenFailures = 1`, `Mismatches = 1`, `Selections = 1`, `RereadBudget = 2`, every guard on | Passes `TypeOK`, `ViewConverges`, `NoStuckPending` | 2,298 distinct states; 7,005 generated | 18 | <1s |
+| `MCDesktopUpdateListenerRegistrationGap.cfg` | as green, `FullAfterListen = FALSE` | `ViewConverges` intentionally VIOLATED: the startup read takes version 1, the arrival commit is dropped before registration, the listener resolves and nothing reads version 2 | 2,937 distinct states; 9,480 generated | 18 | <1s |
+| `MCDesktopUpdateListenerListenFailure.cfg` | as green, `Relisten = FALSE` | `NoStuckPending` intentionally VIOLATED: registration rejects once and the owed full read never starts ('Opening session' with no follow-up) | 1,200 distinct states; 3,626 generated | 16 | <1s |
+| `MCDesktopUpdateListenerPendingNoEvent.cfg` | as green, `PendingReread = FALSE` | `NoStuckPending` intentionally VIOLATED: a `pending` read, then a silent arrival; 'Waiting for session update' stays with no action | 1,318 distinct states; 3,501 generated | 16 | <1s |
+| `MCDesktopUpdateListenerSupersededMismatch.cfg` | as green, `MismatchExit = FALSE` | `NoStuckPending` intentionally VIOLATED: a reply for another target is dropped and the load stays `loading` with no read behind it | 2,026 distinct states; 6,289 generated | 17 | <1s |
 
 The nine BackgroundAdmissionContention rows used TLC2 `2026.11.06.222357`
 (rev `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and
@@ -271,6 +309,10 @@ count.
 The six SessionHeadObservation rows used TLC2 `2026.11.06.222357` (rev
 `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the
 liveness rows checked `ReplyObserved` over the complete state space.
+
+The five DesktopUpdateListener rows used TLC2 `2026.11.06.222357` (rev
+`d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the
+green run checked both temporal properties over the complete state space.
 
 ## PairingTransport derived requirements
 
