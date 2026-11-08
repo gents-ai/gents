@@ -15,6 +15,7 @@ async fn workspace_completion_requires_selected_managed_agent() {
     let node = Arc::new(
         defra_node::Node::builder()
             .with_node_identity_did(runtime.did())
+            .with_node_acp_enabled()
             .build()
             .await
             .unwrap(),
