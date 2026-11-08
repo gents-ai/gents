@@ -42,8 +42,6 @@ function snapshot(configured: boolean, running: boolean): DesktopClientSnapshot 
     client: running
       ? {
           clientDid: "did:key:startup-fixture",
-          localPeerId: "local-peer",
-          listenAddresses: ["127.0.0.1:9191"],
           p2pHealth: {
             status: "healthy",
             connectedPeerCount: 1,
@@ -55,12 +53,6 @@ function snapshot(configured: boolean, running: boolean): DesktopClientSnapshot 
           },
           syncHealth: null,
           enrollmentRequests: [],
-          bootstrapErrors: [],
-          lastMutationError: null,
-          focusedRequestId: null,
-          configuredPeerCount: 1,
-          dialedPeerCount: 1,
-          peerIssueCount: 0,
           rowCount: 42,
           approxSerializedBytes: 2048,
           operatorConfigAuthoritativeNodeDids: configured ? [deployment.nodeDid] : [],

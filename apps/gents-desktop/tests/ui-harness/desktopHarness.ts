@@ -1766,15 +1766,11 @@ export function createDesktopUiHarness(
         initToolCeiling: freshHome ? null : "ReadWrite",
         initToolRoot: freshHome ? null : "/tmp/gents-bombadil/workspace",
         desktopHome: "/tmp/gents-bombadil/desktop",
-        peerDirectoryPath: "/tmp/gents-bombadil/peers.json",
-        nodeDataDir: "/tmp/gents-bombadil/node",
         diagnosticsHint:
           scenario === "startup-port-in-use"
             ? "journalctl --user --since '1 hour ago' SYSLOG_IDENTIFIER=gents-desktop SYSLOG_IDENTIFIER=gents-runtime. Runtime startup errors: /home/me/.local/share/gents/desktop/logs/runtime-errors.log"
             : "native logging",
         nodeHomeExists: !freshHome,
-        desktopHomeExists: true,
-        peerDirectoryExists: true,
         clientStateExists: true,
         savedPeers: !provisioned
           ? []
@@ -1791,17 +1787,9 @@ export function createDesktopUiHarness(
       },
       client: {
         clientDid: "did:key:desktop-harness",
-        localPeerId: "peer-bombadil-local",
-        listenAddresses: ["/ip4/127.0.0.1/tcp/9292"],
         p2pHealth: health,
         syncHealth,
         enrollmentRequests,
-        bootstrapErrors: [],
-        lastMutationError: null,
-        focusedRequestId: null,
-        configuredPeerCount: deployments.length,
-        dialedPeerCount: deployments.length,
-        peerIssueCount: 0,
         rowCount,
         approxSerializedBytes: rowCount * 512,
         operatorConfigAuthoritativeNodeDids: freshHome ? [] : [NODE_DID],
@@ -4334,8 +4322,6 @@ function createDeployment(): DeploymentView {
         { state: "ready", agentDid: "ops" },
       ],
     },
-    routes: [],
-    pairing: [],
     lastError: null,
     node: {
       nodeDid: NODE_DID,

@@ -201,7 +201,6 @@ pub async fn session_snapshot(
     .await
     .map_err(BridgeError::classify_transport_error)?;
     if let Some(snapshot) = snapshot.as_mut() {
-        snapshot.read_through_operator = None;
         if let (Some(node), Some(requests), Some(selected)) = (
             node_did.as_deref(),
             fresh_requests.as_ref(),

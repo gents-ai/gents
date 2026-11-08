@@ -43,7 +43,9 @@ fn project_message_with_dependencies(
             | Err(
                 gents_protocol::output::origin::OriginError::Denied { .. }
                 | gents_protocol::output::origin::OriginError::Unavailable { .. },
-            ) => project_canonical_message(row, output_segments, denied_segments, dependency_denials),
+            ) => {
+                project_canonical_message(row, output_segments, denied_segments, dependency_denials)
+            }
             Err(error) => CanonicalMessageProjection::Invalid(
                 gents_protocol::output::ReconstructionError::InvalidStructure {
                     detail: error.to_string(),
@@ -771,7 +773,6 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
         timeline_items,
         timeline_page: None,
         projection_revision: None,
-        read_through_operator: None,
         messages,
         tool_calls,
     })
@@ -1129,8 +1130,8 @@ mod canonical_projection_tests {
 
     fn fork_copy(doc_id: &str, logical: &str, text: &str) -> OutputSegmentRow {
         use gents_protocol::output::{
-            OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose,
-            StreamDeclaration, StreamPayload,
+            OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose, StreamDeclaration,
+            StreamPayload,
         };
         OutputSegmentRow {
             doc_id: doc_id.to_string(),
@@ -1188,7 +1189,14 @@ mod canonical_projection_tests {
         }
         assert!(
             matches!(
-                project_message_with_dependencies(&child, &observed(&child_only), &[], &[], &[], &[]),
+                project_message_with_dependencies(
+                    &child,
+                    &observed(&child_only),
+                    &[],
+                    &[],
+                    &[],
+                    &[]
+                ),
                 CanonicalMessageProjection::Loading(_)
             ),
             "a fork without copies still waits for its origin"
@@ -1196,7 +1204,14 @@ mod canonical_projection_tests {
         let mut foreign = copies.clone();
         foreign[0].segment.session_id = "parent".to_string();
         assert!(matches!(
-            project_message_with_dependencies(&child, &observed(&child_only), &foreign, &[], &[], &[]),
+            project_message_with_dependencies(
+                &child,
+                &observed(&child_only),
+                &foreign,
+                &[],
+                &[],
+                &[]
+            ),
             CanonicalMessageProjection::Loading(_)
         ));
     }

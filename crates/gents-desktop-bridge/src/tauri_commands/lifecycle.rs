@@ -109,7 +109,7 @@ where
     if let Some(core) = current_core(&state) {
         super::managed_server::pairing::start_running_managed_pairing(&state, Arc::clone(&core))
             .await;
-        return build_client_snapshot_with_grants(Some(&core), Some(&state.policy), grants)
+        return build_client_snapshot_with_grants(Some(&core), &state.policy, grants)
             .await
             .map_err(BridgeError::untyped);
     }
@@ -136,7 +136,7 @@ where
 
     super::managed_server::pairing::start_running_managed_pairing(&state, Arc::clone(&core)).await;
 
-    build_client_snapshot_with_grants(Some(&core), Some(&state.policy), grants)
+    build_client_snapshot_with_grants(Some(&core), &state.policy, grants)
         .await
         .map_err(BridgeError::untyped)
 }
@@ -156,7 +156,7 @@ where
     shutdown_client_under_managed_lifecycle(&app, &state).await?;
 
     let grants = snapshot_grants(&state);
-    build_client_snapshot_with_grants(None, Some(&state.policy), grants)
+    build_client_snapshot_with_grants(None, &state.policy, grants)
         .await
         .map_err(BridgeError::untyped)
 }
@@ -202,7 +202,7 @@ pub async fn desktop_client_snapshot(
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let core = current_core(&state);
     let grants = snapshot_grants(&state);
-    build_client_snapshot_with_grants(core.as_ref(), Some(&state.policy), grants)
+    build_client_snapshot_with_grants(core.as_ref(), &state.policy, grants)
         .await
         .map_err(BridgeError::untyped)
 }

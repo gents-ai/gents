@@ -317,7 +317,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ChatSubmissionQuery,
         ClientUpdateEvent,
         SyncHealthView,
-        PairingCollectionStatusView,
         DesktopOperationsSnapshot,
         SessionProvenanceView,
         InterruptRequestResult,

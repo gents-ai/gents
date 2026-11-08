@@ -15,8 +15,6 @@ function makeDeployment(overrides: Partial<DeploymentView> = {}): DeploymentView
     dialSucceeded: true,
     runtimeConnection: "connected",
     chatSafe: true,
-    routes: [],
-    pairing: [],
     lastError: null,
     node: { nodeDid: "did:key:z6MkRemote" },
     nodeConfig: null,

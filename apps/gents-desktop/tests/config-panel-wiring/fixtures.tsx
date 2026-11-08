@@ -13,8 +13,6 @@ export const deployment: DeploymentView = {
   dialSucceeded: true,
   runtimeConnection: "connected",
   chatSafe: true,
-  routes: [],
-  pairing: [],
   lastError: null,
   node: {
     nodeDid: "did:key:z6MkAgent",
@@ -380,12 +378,8 @@ export const bootstrap: BootstrapSummary = {
   initToolCeiling: "Readwrite",
   initToolRoot: "/tmp/work",
   desktopHome: "/tmp/gents",
-  peerDirectoryPath: "/tmp/gents/peers.json",
-  nodeDataDir: "/tmp/gents/node",
   diagnosticsHint: "native logging",
   nodeHomeExists: true,
-  desktopHomeExists: true,
-  peerDirectoryExists: true,
   clientStateExists: false,
   savedPeers: [],
 };

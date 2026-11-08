@@ -12,10 +12,10 @@ use gents_protocol::row::{
 
 use super::super::types::{
     normalize_optional, AgentContext, AgentEnvironmentView, AgentReadinessStatusView,
-    AgentReadinessUnknownReasonView, AgentUnavailableReasonView, AgentView, ClientRouteStatusView,
-    DeploymentView, DesktopRuntimeSnapshot, InferenceProfile, MailboxItemView,
-    NodeReadinessSourceView, NodeReadinessView, RuntimeView, SessionSummary, SkillView,
-    TaskRecentRunsView, TaskRunSummaryView, TaskView, Tools, TriggerView,
+    AgentReadinessUnknownReasonView, AgentUnavailableReasonView, AgentView, DeploymentView,
+    DesktopRuntimeSnapshot, InferenceProfile, MailboxItemView, NodeReadinessSourceView,
+    NodeReadinessView, RuntimeView, SessionSummary, SkillView, TaskRecentRunsView,
+    TaskRunSummaryView, TaskView, Tools, TriggerView,
 };
 use super::runtime_tasks::{
     recent_runs_for_task_views, session_summaries, source_matches_node, task_run_histories,
@@ -314,41 +314,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 runtime_connection,
                 chat_safe,
                 pairing_ready,
-                routes: status
-                    .map(|status| {
-                        status
-                            .routes
-                            .iter()
-                            .map(|route| ClientRouteStatusView {
-                                route_id: route.route_id.clone(),
-                                direction: route.direction.clone(),
-                                directory_id: route.directory_id.clone(),
-                                transport_peer_id: route.transport_peer_id.clone(),
-                                address: route.address.clone(),
-                                template: route.template.clone(),
-                                desired: route.desired,
-                                applied: route.applied,
-                                live_match: route.live_match,
-                                filter_summary: route.filter_summary.clone(),
-                                last_error: route.last_error.clone(),
-                                retry_count: route.retry_count,
-                                last_retry_at: super::system_time_rfc3339(route.last_retry_at),
-                                last_retry_error_class: route
-                                    .last_retry_error_class
-                                    .map(|class| format!("{class:?}")),
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-                pairing: status
-                    .map(|status| {
-                        status
-                            .pairing
-                            .iter()
-                            .map(super::to_pairing_collection_view)
-                            .collect()
-                    })
-                    .unwrap_or_default(),
                 last_error: status.and_then(|status| status.last_error.clone()),
                 node,
                 node_config,
@@ -397,25 +362,9 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
 
     DesktopRuntimeSnapshot {
         client_did: core.node_identity().did().to_owned(),
-        local_peer_id: core.local_peer_id().to_string(),
-        listen_addresses: core.listen_addresses().to_vec(),
         p2p_health: to_health_view(&sync_state.transport),
         sync_health: super::project_client_sync_health(&sync_state),
         enrollment_requests,
-        bootstrap_errors: core.bootstrap_errors().to_vec(),
-        last_mutation_error: core.last_mutation_error(),
-        focused_request_id: core.store().focused_request_id(),
-        configured_peer_count: sync_state.peers.len(),
-        dialed_peer_count: sync_state
-            .peers
-            .iter()
-            .filter(|status| status.dial_succeeded)
-            .count(),
-        peer_issue_count: sync_state
-            .peers
-            .iter()
-            .filter(|status| status.last_error.is_some())
-            .count(),
         row_count: store.row_count(),
         approx_serialized_bytes: store.approx_serialized_bytes(),
         operator_config_authoritative_node_dids: {

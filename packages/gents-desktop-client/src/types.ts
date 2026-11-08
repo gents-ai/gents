@@ -26,7 +26,6 @@ export type {
   MailboxQuestion,
   MailboxQuestionAnswer,
   MailboxQuestionOption,
-  PairingCollectionStatusView,
   RuntimeSnapshot,
   SyncHealthView,
   RuntimeView,

@@ -12,16 +12,15 @@ use std::time::SystemTime;
 use chrono::{DateTime, Utc};
 use gents_desktop_core::client::{
     load_peer_records, project_sync_health, ClientCore, ClientSyncStateSnapshot, DesktopPaths,
-    P2PHealth, PairingCollectionStatus, SyncHealth,
+    P2PHealth, SyncHealth,
 };
-use gents_desktop_core::remote_admin::PairingErrorClass;
 
 use super::config::ResolvedBridgePolicy;
 use super::types::{
     normalize_optional, DesktopBootstrapSummary, DesktopClientSnapshot, InitConfigStatus,
-    P2PHealthView, PairingCollectionStatusView, SavedPeerView, SyncHealthView,
+    P2PHealthView, SavedPeerView, SyncHealthView,
 };
-use projection::{project_bootstrap_summary, project_client_snapshot, SnapshotGrants};
+use projection::{project_client_snapshot, SnapshotGrants};
 
 fn to_health_view(health: &P2PHealth) -> P2PHealthView {
     P2PHealthView {
@@ -49,44 +48,12 @@ pub(crate) fn to_sync_health_view(health: &SyncHealth) -> SyncHealthView {
     }
 }
 
-pub(crate) fn to_pairing_collection_view(
-    status: &PairingCollectionStatus,
-) -> PairingCollectionStatusView {
-    PairingCollectionStatusView {
-        collection_id: status.collection_id.clone(),
-        pairing_retry_count: status.pairing_retry_count,
-        last_retry_at: system_time_rfc3339(status.last_retry_at),
-        last_retry_error_class: pairing_error_class_label(status.last_retry_error_class),
-        stuck_since: system_time_rfc3339(status.stuck_since),
-    }
-}
-
 pub(crate) fn project_client_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealthView> {
     project_sync_health(sync).map(|health| to_sync_health_view(&health))
 }
 
-fn pairing_error_class_label(class: Option<PairingErrorClass>) -> Option<String> {
-    class.map(|class| format!("{class:?}"))
-}
-
 pub(crate) fn system_time_rfc3339(value: Option<SystemTime>) -> Option<String> {
     value.map(|value| DateTime::<Utc>::from(value).to_rfc3339())
-}
-
-pub async fn build_bootstrap_summary() -> Result<DesktopBootstrapSummary, String> {
-    let node_home = gents_desktop_core::local_runtime::default_node_home()
-        .map_err(|error| error.to_string())?;
-    let desktop_paths = DesktopPaths::discover().map_err(|error| error.to_string())?;
-    let full = build_bootstrap_summary_raw(&desktop_paths, Some(node_home.as_path())).await?;
-    Ok(project_bootstrap_summary(full, SnapshotGrants::all()))
-}
-
-pub async fn build_bootstrap_summary_for_policy(
-    policy: &ResolvedBridgePolicy,
-) -> Result<DesktopBootstrapSummary, String> {
-    let full =
-        build_bootstrap_summary_raw(&policy.desktop_paths, policy.node_home.as_deref()).await?;
-    Ok(project_bootstrap_summary(full, policy.snapshot_grants))
 }
 
 async fn build_bootstrap_summary_raw(
@@ -120,12 +87,8 @@ async fn build_bootstrap_summary_raw(
             .as_ref()
             .and_then(|config| normalize_optional(config.tool_root.as_deref())),
         desktop_home: desktop_paths.root().display().to_string(),
-        peer_directory_path: desktop_paths.peer_directory_path().display().to_string(),
-        node_data_dir: desktop_paths.node_data_dir().display().to_string(),
         diagnostics_hint: crate::logging::diagnostics_hint(desktop_paths.root()),
         node_home_exists,
-        desktop_home_exists: desktop_paths.root().exists(),
-        peer_directory_exists: desktop_paths.peer_directory_path().exists(),
         client_state_exists: desktop_paths.client_state_exists(),
         saved_peers: peer_records
             .iter()
@@ -262,20 +225,11 @@ pub(crate) use session::{attach_context_history_rows, render_transcript_rows_wit
 
 pub async fn build_client_snapshot_with_grants(
     core: Option<&Arc<ClientCore>>,
-    policy: Option<&ResolvedBridgePolicy>,
+    policy: &ResolvedBridgePolicy,
     grants: SnapshotGrants,
 ) -> Result<DesktopClientSnapshot, String> {
-    let bootstrap = match policy {
-        Some(policy) => {
-            build_bootstrap_summary_raw(&policy.desktop_paths, policy.node_home.as_deref()).await?
-        }
-        None => {
-            let node_home = gents_desktop_core::local_runtime::default_node_home()
-                .map_err(|error| error.to_string())?;
-            let desktop_paths = DesktopPaths::discover().map_err(|error| error.to_string())?;
-            build_bootstrap_summary_raw(&desktop_paths, Some(node_home.as_path())).await?
-        }
-    };
+    let bootstrap =
+        build_bootstrap_summary_raw(&policy.desktop_paths, policy.node_home.as_deref()).await?;
     let client = match core {
         Some(core) => Some(build_runtime_snapshot(core.as_ref()).await),
         None => None,
