@@ -196,6 +196,54 @@ pub(crate) async fn load_workspace_root_policy_in_txn(
     ))
 }
 
+/// The stored path of the enabled WorkspaceRoot, visible to the transaction's
+/// actor, whose resolution contains `root`. Reader grants name a root by this
+/// exact stored path, which can differ from its canonical resolution.
+pub(crate) async fn published_root_covering_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    root: &Path,
+) -> Result<Option<String>> {
+    let complete = txn.collection_has_no_document_policy("WorkspaceRoot");
+    let response = txn
+        .execute(&workspace_root_query(complete, node_did))
+        .await
+        .context("querying WorkspaceRoot paths in configuration transaction")?;
+    for document in decode_workspace_root_rows(&response)? {
+        let Some(path) = document.root_path.filter(|_| document.enabled.unwrap_or(false)) else {
+            continue;
+        };
+        let Ok(published) = resolve_configured_tool_root(Path::new(path.trim())) else {
+            continue;
+        };
+        if matches!(
+            resolve_admitted_tool_root(root, [published.as_path()]),
+            Ok(RootAdmission::Admitted(_))
+        ) {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
+/// The step a Node administrator takes so `agent_did` may run host tools under
+/// a published root. WorkspaceRoot `reader` is managed only by the Node's owner
+/// and administrators (`workspace_roots.reader_manager`), so an Agent creating
+/// another Agent never grants it, even with relationship delegation.
+pub(crate) fn reader_grant_step(agent_did: &str, published_root: Option<&str>) -> serde_json::Value {
+    let path = published_root.unwrap_or("PUBLISHED_ROOT");
+    serde_json::json!({
+        "state": "waiting_for_user",
+        "answer": format!(
+            "Saved, but {agent_did} cannot use its host tools yet: a User must grant it reader on the published WorkspaceRoot {path}. Until then the runtime cannot load its tools and reports the agent unavailable."
+        ),
+        "user_command": format!(
+            "gents config workspace-root grant-reader --graphql GRAPHQL_URL --path {path} --agent-did {agent_did}"
+        ),
+        "how_to_proceed": "Keep these Tools and give the User user_command to run from their own client; no config or policy call, and no change to your own Tools, can grant it.",
+    })
+}
+
 pub async fn load_workspace_root_policy(
     node: &defra_node::Node,
     ceiling_root: Option<&Path>,
