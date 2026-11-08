@@ -981,7 +981,11 @@ async fn wait_for_readiness_revision(core: &ClientCore, agent: &str, expected: &
     let mut updates = core.store_change_updates();
     loop {
         let snapshot = core.store().snapshot();
-        if let Some(row) = snapshot.node_readiness.iter().find(|row| row.node_did == agent) {
+        if let Some(row) = snapshot
+            .node_readiness
+            .iter()
+            .find(|row| row.node_did == agent)
+        {
             let actual = chrono::DateTime::parse_from_rfc3339(&row.updated_at)?;
             if actual >= expected {
                 anyhow::ensure!(
@@ -1143,8 +1147,10 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
                 sleep(Duration::from_millis(100)).await;
             }
         }).await.context("waiting for silent provider observation")??;
+        // The second member holds no node read: enrollment alone grants no
+        // document access, so the route's native node gate refuses it.
         let denied = call(other.node_identity(), key.clone()).await?;
-        anyhow::ensure!(denied.status() == reqwest::StatusCode::NOT_FOUND, "another enrolled identity read private activity: {}", denied.status());
+        anyhow::ensure!(denied.status() == reqwest::StatusCode::FORBIDDEN, "an enrolled identity without node read was not refused: {}", denied.status());
         let mut cross_session = key.clone();
         cross_session.session = Uuid::new_v4().to_string();
         let denied = call(owner.node_identity(), cross_session).await?;

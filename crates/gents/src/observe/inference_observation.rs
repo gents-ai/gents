@@ -175,28 +175,46 @@ impl Drop for InferenceObservationGuard {
     }
 }
 
+/// Lean `ClientInferenceObservation.ActivityResponse`.
+#[derive(Debug)]
+pub enum InferenceObservationRead {
+    /// The caller holds no native node read.
+    Forbidden,
+    Unavailable,
+    Visible(InferenceSnapshot),
+}
+
 impl crate::runtime::agent::Gents {
-    /// Returns only a currently claimed request visible to the authenticated actor.
+    /// Returns only a currently claimed request visible to the authenticated
+    /// actor, after the route's native node read gate (Lean `activityResponse`).
     pub async fn read_inference_observation(
         &self,
         actor: identity::Did,
         key: &InferenceKey,
-    ) -> anyhow::Result<Option<InferenceSnapshot>> {
+    ) -> anyhow::Result<InferenceObservationRead> {
         if key.node != self.node_did() {
-            return Ok(None);
+            return Ok(InferenceObservationRead::Unavailable);
         }
-        let visible = observation_visible(self.observation_node(), &actor, key).await?;
+        let Some(visible) = observation_visible(self.observation_node(), &actor, key).await? else {
+            return Ok(InferenceObservationRead::Forbidden);
+        };
         Ok(visible
             .then(|| self.inference_observations().snapshot(key))
-            .flatten())
+            .flatten()
+            .map_or(
+                InferenceObservationRead::Unavailable,
+                InferenceObservationRead::Visible,
+            ))
     }
 }
 
+/// `None` when the actor holds no native node read; otherwise whether the
+/// session and active request are visible to it.
 async fn observation_visible(
     node: &Arc<defra_node::Node>,
     actor: &identity::Did,
     key: &InferenceKey,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<Option<bool>> {
     let scope = format!(
         r#"node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}"#,
         crate::store::graphql::escape_graphql_string(&key.node),
@@ -213,8 +231,16 @@ async fn observation_visible(
         "inference_observation.authorize",
         |txn| {
             Box::pin(async {
+                if !txn
+                    .actor_holds_node_permission(
+                        crate::store::config_client::NodePermission::DocumentRead,
+                    )
+                    .await?
+                {
+                    return Ok::<_, anyhow::Error>(None);
+                }
                 let response = txn.execute(&query).await?;
-                Ok::<_, anyhow::Error>(activity_visible(&response))
+                Ok::<_, anyhow::Error>(Some(activity_visible(&response)))
             })
         },
     )
@@ -283,6 +309,35 @@ mod tests {
         }
     }
 
+    #[test]
+    fn route_gate_matches_lean() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().inference_route_cases;
+        assert!(!cases.is_empty());
+        for case in cases {
+            let sessions = case["sessions"].as_u64().unwrap() as usize;
+            let requests = case["requests"].as_u64().unwrap() as usize;
+            let state = if case["active"].as_bool().unwrap() {
+                "processing"
+            } else {
+                "completed"
+            };
+            let response = serde_json::json!({"data": {
+                "AgentSession": vec![serde_json::json!({"_docID":"session"}); sessions],
+                "AgentRequest": vec![serde_json::json!({"_docID":"request", "lifecycle_state":state}); requests],
+            }});
+            let visible = case["holds_node_read"]
+                .as_bool()
+                .unwrap()
+                .then(|| activity_visible(&response));
+            let observed = match visible {
+                None => "forbidden",
+                Some(true) => "visible",
+                Some(false) => "unavailable",
+            };
+            assert_eq!(observed, case["expected"].as_str().unwrap(), "{case}");
+        }
+    }
+
     #[tokio::test]
     async fn delegated_reader_requires_both_document_permissions() {
         use crate::NodeIdentity;
@@ -341,7 +396,10 @@ resources:
                 Ok::<_, anyhow::Error>((crate::store::graphql::created_doc_id(&session, "AgentSession")?, crate::store::graphql::created_doc_id(&request, "AgentRequest")?))
             })
         }).await.unwrap();
-        assert!(!observation_visible(&node, &actor, &key).await.unwrap());
+        assert_eq!(
+            observation_visible(&node, &actor, &key).await.unwrap(),
+            Some(false)
+        );
         node.add_dac_actor_relationship(
             owner.did(),
             "AgentSession",
@@ -351,7 +409,10 @@ resources:
         )
         .await
         .unwrap();
-        assert!(!observation_visible(&node, &actor, &key).await.unwrap());
+        assert_eq!(
+            observation_visible(&node, &actor, &key).await.unwrap(),
+            Some(false)
+        );
         node.add_dac_actor_relationship(
             owner.did(),
             "AgentRequest",
@@ -361,7 +422,23 @@ resources:
         )
         .await
         .unwrap();
-        assert!(observation_visible(&node, &actor, &key).await.unwrap());
+        assert_eq!(
+            observation_visible(&node, &actor, &key).await.unwrap(),
+            Some(true)
+        );
+        // A revoked node read refuses the route even though both documents
+        // stay visible to the actor (Lean `without_node_read_activity_is_forbidden`).
+        crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            owner.did().parse().unwrap(),
+        )
+        .revoke_node_permission(&actor, acp::nac::NodePermission::DocumentRead)
+        .await
+        .unwrap();
+        assert_eq!(
+            observation_visible(&node, &actor, &key).await.unwrap(),
+            None
+        );
         node.shutdown().await.expect("node shutdown");
     }
 

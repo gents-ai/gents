@@ -703,6 +703,42 @@ impl ConfigApplyTxn<'_> {
         }
     }
 
+    /// Whether this transaction's actor holds `permission` natively, as NAC
+    /// reports it; with NAC disabled no node permission is enforced. An
+    /// observation only: every operation it gates is still checked natively.
+    pub(crate) async fn actor_holds_node_permission(
+        &self,
+        permission: super::super::NodePermission,
+    ) -> Result<bool> {
+        let TxnBackend::Embedded {
+            node,
+            native_operations,
+            ..
+        } = &self.backend
+        else {
+            return Err(ConfigClientError::TransactionAuthorizationUnsupported);
+        };
+        let actor = identity::Did::new(
+            self.actor_did()
+                .ok_or(ConfigClientError::NodePermissionActorRequired)?,
+        )
+        .map_err(ConfigClientError::NodePermissionIdentity)?;
+        let node = Arc::clone(node);
+        execute_owned_native(
+            async move {
+                let nac = node.nac_manager();
+                if !nac.is_enabled().await {
+                    return Ok(true);
+                }
+                nac.check_permission(&actor, permission).await
+            },
+            Arc::clone(native_operations),
+            self.operation,
+        )
+        .await?
+        .map_err(ConfigClientError::NativePermissionObservation)
+    }
+
     /// Execute exactly once inside this snapshot; conflict replay is the outer `transact` owner's job.
     pub async fn execute(&self, document: &str) -> Result<Value> {
         self.execute_with_variables(document, &json!({})).await
