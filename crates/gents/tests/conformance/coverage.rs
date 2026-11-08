@@ -1554,10 +1554,10 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "client_request_patch_publication_cases".into(),
         "ClientRequestPatchPublicationCases".into(),
     ));
-    assert!(!snapshot.client_session_delivery_cases.is_empty());
+    assert!(!snapshot.client_direct_session_read_cases.is_empty());
     emitted.insert((
-        "client_session_delivery_cases".into(),
-        "ClientSessionDeliveryCases".into(),
+        "client_direct_session_read_cases".into(),
+        "ClientDirectSessionReadCases".into(),
     ));
     assert!(!snapshot.storage_failure_cases.is_empty());
     emitted.insert(("storage_failure_cases".into(), "StorageFailureCases".into()));

@@ -525,11 +525,11 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_ancestry_scope_cases_use_the_lean_composition",
         },
         ConformanceConsumer::RustTest {
-            id: "gents_protocol::client_protocol::tests::generated_session_delivery_cases_match_the_lean_classification",
-            package: "gents-protocol",
-            source_path: "crates/gents-protocol/src/client_protocol/tests.rs",
-            module_path: "gents_protocol::client_protocol::tests",
-            function: "generated_session_delivery_cases_match_the_lean_classification",
+            id: "client::query::tests::projection_and_patches::direct_session_read_matches_the_lean_model",
+            package: "gents-desktop-core",
+            source_path: "crates/gents-desktop-core/src/client/query/tests/projection_and_patches.rs",
+            module_path: "client::query::tests::projection_and_patches",
+            function: "direct_session_read_matches_the_lean_model",
         },
         ConformanceConsumer::RustTest {
             id: "gents_protocol::database_error::tests::generated_storage_failures_preserve_recovery_evidence",

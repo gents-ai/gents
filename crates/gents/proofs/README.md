@@ -1342,21 +1342,10 @@ representable; provider-input sanitation owns the stricter boundary.
 - unordered scoped observations resolve only a unique retry tip; output readiness
   cannot alter execution status
 
-`deriveSessionDelivery` extends the same projection to a selected session whose
-canonical `AgentSession` row has not replicated back. It reads four signals and
-no clock: the client's own `AgentRequest` (`SubmittedAttempt`, an `AttemptView`
-with the node's replicated claim), the client-to-runtime pairing, and the row.
-The row wins (`canonical_row_wins`); duplicate or out-of-scope rows are faults;
-without the row, the node's claim or a lifecycle past pending is `accepted`,
-otherwise the pairing decides `delivering` or `notConnected`
-(`pairing_down_is_not_connected`). A sent request with no row is never an error
-(`sent_without_row_is_never_an_error`, `waiting_for_claim_without_row_is_in_flight`),
-and the result depends on the signals alone
-(`deriveSessionDelivery_determined_by_signals`). `client_session_delivery_cases`
-emits the classification over every signal and lifecycle combination for the
-`gents_protocol::client_protocol` consumer. `tla/ReplicatedRequestConvergence`
-carries the cross-node side: the desktop's legs, event-driven reads and
-eventual visibility.
+A selected-session read is a direct runtime read (`directSessionRead`): an
+absent or hidden session is an ordinary empty result, and only a duplicate or
+out-of-scope row is an integrity fault. `client_direct_session_read_cases`
+emits it for the desktop-core selected-session reader.
 
 `client-state-machine.md` and external fixtures still need migration to this
 target contract.

@@ -1296,9 +1296,9 @@ def caseCoverage : List CoverageEntry :=
       "client::core::writes::request_patch::tests::generated_publication_cases_drive_request_patch_cache_admission")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_session_delivery_cases"
-      "ClientSessionDeliveryCases"
-      "gents_protocol::client_protocol::tests::generated_session_delivery_cases_match_the_lean_classification")
+      "client_direct_session_read_cases"
+      "ClientDirectSessionReadCases"
+      "client::query::tests::projection_and_patches::direct_session_read_matches_the_lean_model")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "storage_failure_cases"
