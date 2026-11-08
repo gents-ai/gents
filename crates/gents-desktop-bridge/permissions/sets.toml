@@ -190,6 +190,7 @@ permissions = [
   "allow-desktop-managed-server-restart",
   "allow-desktop-managed-server-reset",
   "allow-desktop-managed-server-validate-root",
+  "allow-desktop-agent-workspace-root-select",
   "allow-desktop-managed-server-open-login-items",
   "allow-desktop-open-db-explorer",
 ]
@@ -203,6 +204,7 @@ permissions = [
   "allow-desktop-config-components-apply",
   "allow-desktop-config-components-patch",
   "allow-desktop-agent-save",
+  "allow-desktop-agent-identity-provision",
   "allow-desktop-skill-save",
   "allow-desktop-skill-delete",
   "allow-desktop-task-delete",

@@ -94,6 +94,7 @@ const COMMANDS: &[&str] = &[
     "desktop_config_components_apply",
     "desktop_config_components_patch",
     "desktop_agent_save",
+    "desktop_agent_identity_provision",
     "desktop_skill_save",
     "desktop_skill_delete",
     "desktop_task_delete",

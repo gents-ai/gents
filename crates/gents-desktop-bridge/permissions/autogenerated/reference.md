@@ -50,6 +50,32 @@ Denies the desktop_agent_delete command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-agent-identity-provision`
+
+</td>
+<td>
+
+Enables the desktop_agent_identity_provision command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-agent-identity-provision`
+
+</td>
+<td>
+
+Denies the desktop_agent_identity_provision command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-agent-save`
 
 </td>
