@@ -20,7 +20,6 @@ use gents::runtime::agent::p2p_reconcile::enrollment_member_authority::{
 };
 
 use gents::runtime::agent::p2p_reconcile::enrollment_projection::ApprovedStatusEnrollment;
-#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::client::core) struct EnrollmentAuthorizationGeneration {
     pub request_digest: String,
