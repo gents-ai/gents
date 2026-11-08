@@ -311,6 +311,13 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         requester,
         owner,
     );
+    assert!(!outbound.contains_key("ProviderReductionDisplay"));
+    assert_and_eq_filter(
+        returning
+            .get("ProviderReductionDisplay")
+            .expect("reduction display filter"),
+        &[("requester_did", requester), ("node_did", owner)],
+    );
     for filters in [&outbound, &returning] {
         assert_and_eq_filter(
             filters
