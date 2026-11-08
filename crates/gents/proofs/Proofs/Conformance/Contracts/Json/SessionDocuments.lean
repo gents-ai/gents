@@ -23,7 +23,8 @@ def scopeJson (s : AgentSession.Scope) : Json := Json.mkObj
 def requestJson (r : AgentSession.RequestFact) : Json := Json.mkObj
   [("purpose", toJson r.purpose.toWire), ("scope", scopeJson r.scope), ("agent", toJson r.agent),
    ("created_at", toJson r.createdAt), ("doc_id", toJson r.observed.docId),
-   ("request_id", toJson r.observed.requestId), ("state", toJson r.observed.state.toDefraDB)]
+   ("request_id", toJson r.observed.requestId), ("state", toJson r.observed.state.toDefraDB),
+   ("terminalized_at", toJson r.terminalizedAt)]
 private def provenanceJson (p : AgentSession.Provenance) : Json := Json.mkObj
   [("task_id", toJson p.task),
    ("parent_request_doc_id", toJson p.parentRequestDoc),
@@ -389,7 +390,13 @@ def sessionDocumentsJson : String := (Json.mkObj
       selectionJson "title_only_has_no_public_head" [titleRequest] 1 10 none,
       selectionJson "absent_requester_exact" [old] 1 10 (some none),
       selectionJson "foreign_agent" [old] 9 10 none,
-      selectionJson "foreign_session" [old] 1 9 none]),
+      selectionJson "foreign_session" [old] 1 9 none,
+      selectionJson "same_second_claim_after_completion" [finishedPredecessor, sameSecondClaim] 1 10 none,
+      selectionJson "same_second_claim_after_completion_reverse" [sameSecondClaim, finishedPredecessor] 1 10 none,
+      selectionJson "same_second_later_terminalization" [finishedPredecessor, sameSecondCompletion] 1 10 none,
+      selectionJson "same_second_later_terminalization_reverse" [sameSecondCompletion, finishedPredecessor] 1 10 none,
+      selectionJson "same_second_live_outranks_later_refusal" [sameSecondClaim, sameSecondRefusal] 1 10 none,
+      selectionJson "earlier_second_live_loses" [{ sameSecondClaim with createdAt := 1 }, finishedPredecessor] 1 10 none]),
    ("edit_anchors", toJson (editAnchorCases.map editAnchorJson)),
    ("edit_fork_bindings", toJson (editForkCases.map editForkJson)),
    ("fork", toJson [

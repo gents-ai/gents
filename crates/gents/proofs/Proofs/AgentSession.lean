@@ -420,17 +420,94 @@ theorem observed_starter_is_signed (indexed : Option (Nat × SessionId))
 theorem ensure_cannot_rebind_agent (current requested : Document)
     (agent : current.agent ≠ requested.agent) : ensure? (some current) requested = none := by
   simp [ensure?, agent]
-/-- Authoritative query projection, not another writable request/index. -/
+/-- Authoritative query projection, not another writable request/index.
+`terminalizedAt` is the runtime-written terminal time (sub-second); a live row
+has none. -/
 structure RequestFact where
   purpose : RequestPurpose
   scope : Scope
   agent : AgentDid
   createdAt : Time
   observed : RequestObservation
+  terminalizedAt : Option Time := none
   deriving DecidableEq, Repr
-def newer (a b : RequestFact) : Bool :=
-  a.createdAt > b.createdAt ||
-    (a.createdAt == b.createdAt && a.observed.requestId > b.observed.requestId)
+
+def liveRank (r : RequestFact) : Nat :=
+  if HasTerminal.isTerminal r.observed.state then 0 else 1
+
+def terminalRank (r : RequestFact) : Nat := r.terminalizedAt.getD 0
+
+/-- The canonical latest-request order. `created_at` is signed by the requester
+with whole-second precision, so requests sharing a second have no admission
+order of their own, and `request_id` is a random identifier, not an order.
+Within one second a live request is newer than a terminal one, so the head
+errs toward a busy session and never toward an idle one; among terminal rows
+the later runtime terminalization is newer; `request_id` only separates rows
+that carry no other evidence. Under the `request_id`-only tie a request
+claimed in the same second as its predecessor's completion could lose to that
+predecessor and never be observed (#3604). -/
+abbrev newerP (a b : RequestFact) : Prop :=
+  a.createdAt > b.createdAt ∨ (a.createdAt = b.createdAt ∧
+    (liveRank a > liveRank b ∨ (liveRank a = liveRank b ∧
+      (terminalRank a > terminalRank b ∨ (terminalRank a = terminalRank b ∧
+        a.observed.requestId > b.observed.requestId)))))
+
+def newer (a b : RequestFact) : Bool := decide (newerP a b)
+
+theorem newer_irrefl (a : RequestFact) : newer a a = false := by
+  unfold newer newerP
+  simp only [decide_eq_false_iff_not]
+  try dsimp only [Time, RequestId]
+  omega
+
+theorem newer_trans {a b c : RequestFact} (hab : newer a b = true) (hbc : newer b c = true) :
+    newer a c = true := by
+  unfold newer newerP at *
+  simp only [decide_eq_true_eq] at *
+  try dsimp only [Time, RequestId] at *
+  omega
+
+/-- The order is total up to equal keys: a row that is not newer than `b`
+is no newer than anything `b` is no newer than. -/
+theorem not_newer_trans {a b c : RequestFact} (hab : newer a b = false) (hbc : newer b c = false) :
+    newer a c = false := by
+  unfold newer newerP at *
+  simp only [decide_eq_false_iff_not] at *
+  try dsimp only [Time, RequestId] at *
+  omega
+
+theorem newer_of_newer_not_newer {a b c : RequestFact} (hab : newer a b = true)
+    (hcb : newer c b = false) : newer a c = true := by
+  unfold newer newerP at *
+  simp only [decide_eq_true_eq, decide_eq_false_iff_not] at *
+  try dsimp only [Time, RequestId] at *
+  omega
+
+/-- A request claimed in the same second its predecessor finished is the
+session's latest, whatever their random `request_id`s (#3604). -/
+theorem live_newer_than_same_second_terminal (a b : RequestFact)
+    (hc : a.createdAt = b.createdAt) (ha : ¬ HasTerminal.isTerminal a.observed.state)
+    (hb : HasTerminal.isTerminal b.observed.state) : newer a b = true := by
+  have hla : liveRank a = 1 := by simp [liveRank, ha]
+  have hlb : liveRank b = 0 := by simp [liveRank, hb]
+  unfold newer newerP
+  simp only [decide_eq_true_eq]
+  try dsimp only [Time, RequestId] at *
+  omega
+
+/-- Same-second terminal rows follow their runtime terminalization order, so a
+finished claim stays the head after its completion. -/
+theorem later_terminalization_newer (a b : RequestFact)
+    (hc : a.createdAt = b.createdAt) (ha : HasTerminal.isTerminal a.observed.state)
+    (hb : HasTerminal.isTerminal b.observed.state) (ht : terminalRank b < terminalRank a) :
+    newer a b = true := by
+  have hla : liveRank a = 0 := by simp [liveRank, ha]
+  have hlb : liveRank b = 0 := by simp [liveRank, hb]
+  unfold newer newerP
+  simp only [decide_eq_true_eq]
+  try dsimp only [Time, RequestId] at *
+  omega
+
 def newest : List RequestFact → Option RequestFact
   | [] => none
   | row :: rest => match newest rest with
@@ -458,30 +535,31 @@ theorem newest_member (rows : List RequestFact) (r : RequestFact)
       · simp only [Option.some.injEq] at h; subst r
         exact List.mem_cons_of_mem _ (ih hn)
 
+theorem newest_none (rows : List RequestFact) (h : newest rows = none) : rows = [] := by
+  cases rows with
+  | nil => rfl
+  | cons row rest =>
+    simp only [newest] at h
+    cases hn : newest rest with
+    | none => rw [hn] at h; simp at h
+    | some p => rw [hn] at h; dsimp only at h; split at h <;> simp at h
+
 theorem newest_maximal (rows : List RequestFact) (r : RequestFact)
-    (h : newest rows = some r) : ∀ candidate ∈ rows,
-      candidate.createdAt < r.createdAt ∨
-      (candidate.createdAt = r.createdAt ∧ candidate.observed.requestId ≤ r.observed.requestId) := by
+    (h : newest rows = some r) : ∀ candidate ∈ rows, newer candidate r = false := by
   induction rows generalizing r with
   | nil => simp [newest] at h
   | cons row rest ih =>
     simp only [newest] at h
     cases hn : newest rest with
     | none =>
-      have empty : rest = [] := by
-        cases rest with
-        | nil => rfl
-        | cons a tail =>
-          simp only [newest] at hn
-          cases ht : newest tail with
-          | none => simp [ht] at hn
-          | some p =>
-            simp only [ht] at hn
-            split at hn <;> simp_all
+      have empty := newest_none rest hn
       subst rest
       simp only [newest, Option.some.injEq] at h
       subst r
-      simp
+      intro candidate hm
+      simp only [List.mem_singleton] at hm
+      subst candidate
+      exact newer_irrefl _
     | some previous =>
       have hb := ih previous hn
       simp only [hn] at h
@@ -491,22 +569,18 @@ theorem newest_maximal (rows : List RequestFact) (r : RequestFact)
         subst r
         intro candidate hm
         rcases List.mem_cons.mp hm with he | he
-        · subst candidate; exact Or.inr ⟨rfl, Nat.le_refl _⟩
-        · have bound := hb candidate he
-          simp only [newer, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq,
-            beq_iff_eq] at hc
-          dsimp only [Time, RequestId] at *
-          omega
+        · subst candidate; exact newer_irrefl _
+        · have hcp := hb candidate he
+          cases hcr : newer candidate row
+          · rfl
+          · have := newer_trans hcr hc
+            simp [hcp] at this
       · rename_i hc
         simp only [Option.some.injEq] at h
         subst r
         intro candidate hm
         rcases List.mem_cons.mp hm with he | he
-        · subst candidate
-          simp only [newer, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq,
-            beq_iff_eq] at hc
-          dsimp only [Time, RequestId] at *
-          omega
+        · subst candidate; simpa using hc
         · exact hb candidate he
 
 theorem newest_filter_preserves (rows : List RequestFact) (r : RequestFact)
@@ -518,14 +592,7 @@ theorem newest_filter_preserves (rows : List RequestFact) (r : RequestFact)
     simp only [newest] at h
     cases hn : newest rest with
     | none =>
-      have empty : rest = [] := by
-        cases rest with
-        | nil => rfl
-        | cons a tail =>
-          simp only [newest] at hn
-          cases ht : newest tail with
-          | none => simp [ht] at hn
-          | some previous => simp only [ht] at hn; split at hn <;> simp_all
+      have empty := newest_none rest hn
       subst rest
       simp only [newest, Option.some.injEq] at h
       subst r
@@ -542,11 +609,7 @@ theorem newest_filter_preserves (rows : List RequestFact) (r : RequestFact)
         | some filtered =>
           have hm := newest_member _ filtered hf
           have hb := newest_maximal rest previous hn filtered (List.mem_filter.mp hm).1
-          have hbetter : newer row filtered = true := by
-            simp only [newer, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq,
-              beq_iff_eq] at hc ⊢
-            dsimp only [Time, RequestId] at *
-            omega
+          have hbetter : newer row filtered = true := newer_of_newer_not_newer hc hb
           simp [hbetter]
       · rename_i hc
         simp only [Option.some.injEq] at h
@@ -577,8 +640,7 @@ theorem latest_maximal (rows : List RequestFact) (node session : Nat)
     (hs : candidate.scope.session = session)
     (hp : candidate.purpose = .normal)
     (hr : requester.all (fun scope => candidate.scope.requester == scope) = true) :
-    candidate.createdAt < r.createdAt ∨
-      (candidate.createdAt = r.createdAt ∧ candidate.observed.requestId ≤ r.observed.requestId) := by
+    newer candidate r = false := by
   apply newest_maximal _ r h candidate
   simp [List.mem_filter, hm, ha, hs, hp, hr]
 
