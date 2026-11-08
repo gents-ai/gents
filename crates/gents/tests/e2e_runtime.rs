@@ -6,6 +6,8 @@ mod adapter_projection_external_fixtures;
 mod completion_retry_tape;
 #[path = "e2e_runtime/defradb_time_travel.rs"]
 mod defradb_time_travel;
+#[path = "e2e_runtime/disabled_agent_sweep.rs"]
+mod disabled_agent_sweep;
 #[path = "e2e_runtime/document_config_bootstrap.rs"]
 mod document_config_bootstrap;
 #[path = "e2e_runtime/fork_invariants.rs"]

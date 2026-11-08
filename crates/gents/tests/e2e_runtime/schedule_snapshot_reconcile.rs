@@ -9,7 +9,7 @@ use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::{
     fetch_runtime_snapshot_as, is_routed_ready_after, RuntimeSnapshot,
 };
-use crate::support::{managed_agent_fixture, test_db};
+use crate::support::{managed_agent_fixture, test_db, ManagedAgentFixture};
 
 const UNUSED_BACKEND_ENDPOINT: &str = "http://127.0.0.1:9/v1";
 
@@ -50,15 +50,23 @@ async fn create_task(
     apply_documents(access, vec![(gents::Collection::Task, serde_json::json!({"node_did":owner,"task_id":task_id,"display_name":task_id,"agent_did":agent_did,"prompt_template":prompt_template}))]).await;
 }
 
-async fn create_schedule(access: &ConfigAccess, owner: &str, schedule_id: &str, task_id: &str) {
-    let trigger = serde_json::json!({
+fn schedule_trigger(
+    owner: &str,
+    schedule_id: &str,
+    task_id: &str,
+    enabled: bool,
+) -> serde_json::Value {
+    serde_json::json!({
         "node_did": owner,
         "trigger_id": schedule_id,
         "task_id": task_id,
         "source": {"kind": "schedule", "schedule_id": schedule_id},
-        "enabled": true,
+        "enabled": enabled,
         "concurrency": "serial",
-    });
+    })
+}
+
+async fn create_schedule(access: &ConfigAccess, owner: &str, schedule_id: &str, task_id: &str) {
     apply_documents(
         access,
         vec![
@@ -66,23 +74,41 @@ async fn create_schedule(access: &ConfigAccess, owner: &str, schedule_id: &str, 
                 gents::Collection::Schedule,
                 serde_json::json!({"node_did":owner,"schedule_id":schedule_id,"cadence":{"kind":"interval","interval_secs":60}}),
             ),
-            (gents::Collection::Trigger, trigger),
+            (
+                gents::Collection::Trigger,
+                schedule_trigger(owner, schedule_id, task_id, true),
+            ),
         ],
     )
     .await;
 }
 
-async fn set_trigger_enabled_and_cursor(
+/// The configuring User edits the Trigger's desired state.
+async fn set_schedule_trigger_enabled(
     access: &ConfigAccess,
     owner: &str,
     trigger_id: &str,
+    task_id: &str,
     enabled: bool,
-    next_run_at: Option<&str>,
 ) {
-    let next_run_at = next_run_at
-        .map(escape_graphql_string)
-        .map(|value| format!(r#", next_run_at: "{value}""#))
-        .unwrap_or_default();
+    apply_documents(
+        access,
+        vec![(
+            gents::Collection::Trigger,
+            schedule_trigger(owner, trigger_id, task_id, enabled),
+        )],
+    )
+    .await;
+}
+
+/// The scheduling cursor is the runtime's own observation, written by the
+/// Node runtime that owns the trigger cursor.
+async fn set_trigger_cursor(
+    db: &crate::support::TestDb,
+    owner: &str,
+    trigger_id: &str,
+    next_run_at: &str,
+) {
     let mutation = format!(
         r#"mutation {{
             update_Trigger(
@@ -90,14 +116,19 @@ async fn set_trigger_enabled_and_cursor(
                     node_did: {{ _eq: "{}" }},
                     trigger_id: {{ _eq: "{}" }}
                 }},
-                input: {{ enabled: {enabled}{next_run_at} }}
+                input: {{ next_run_at: "{}" }}
             ) {{ _docID }}
         }}"#,
         escape_graphql_string(owner),
         escape_graphql_string(trigger_id),
+        escape_graphql_string(next_run_at),
     );
-    let response = access
-        .write("test.disable_schedule_trigger", &mutation)
+    let runtime = ConfigAccess::local_as(
+        db.node.clone(),
+        db.node_identity.did().parse().expect("runtime DID"),
+    );
+    let response = runtime
+        .write("test.schedule_trigger_cursor", &mutation)
         .await
         .unwrap();
     let updated = match response.pointer("/data/update_Trigger") {
@@ -107,7 +138,7 @@ async fn set_trigger_enabled_and_cursor(
     };
     assert!(
         updated,
-        "trigger update must match exactly one owner-scoped document: {response}"
+        "trigger cursor update must match exactly one owner-scoped document: {response}"
     );
 }
 
@@ -145,6 +176,16 @@ where
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+/// Scheduled requests belong to the Agent that runs them.
+fn agent_reader(db: &crate::support::TestDb, fixture: &ManagedAgentFixture) -> ConfigAccess {
+    ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        fixture.agent.did().parse().expect("Agent DID"),
+        fixture.agent.as_ref(),
+    )
+    .expect("working Agent reader")
 }
 
 async fn fetch_schedule_agent_requests(
@@ -254,13 +295,12 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
         reconciled.active_generation
     );
 
-    let due = (Utc::now() - ChronoDuration::seconds(60)).to_rfc3339();
-    set_trigger_enabled_and_cursor(
+    set_schedule_trigger_enabled(
         &fixture.access,
         &node_did,
         "schedule-reconcile-alpha",
+        "task-reconcile-alpha",
         false,
-        Some(&due),
     )
     .await;
     let disabled = wait_for_runtime_snapshot(&fixture.access, &node_did, |snapshot| {
@@ -272,16 +312,25 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
         "post-disable reconcile should be clean, got error={:?}",
         disabled.last_reconcile_error
     );
+    let due = (Utc::now() - ChronoDuration::seconds(60)).to_rfc3339();
+    set_trigger_cursor(&db, &node_did, "schedule-reconcile-alpha", &due).await;
 
-    let requests_after_reconcile =
-        fetch_schedule_agent_requests(&fixture.access, &node_did, "schedule-reconcile-alpha")
-            .await
-            .len();
+    let requests_after_reconcile = fetch_schedule_agent_requests(
+        &agent_reader(&db, &fixture),
+        &node_did,
+        "schedule-reconcile-alpha",
+    )
+    .await
+    .len();
     tokio::time::sleep(Duration::from_millis(1_500)).await;
     assert_eq!(
-        fetch_schedule_agent_requests(&fixture.access, &node_did, "schedule-reconcile-alpha")
-            .await
-            .len(),
+        fetch_schedule_agent_requests(
+            &agent_reader(&db, &fixture),
+            &node_did,
+            "schedule-reconcile-alpha"
+        )
+        .await
+        .len(),
         requests_after_reconcile,
         "a disabled Trigger must stop firing after its generation is active"
     );
@@ -349,11 +398,13 @@ async fn scheduled_fire_persists_task_content_and_trigger_writeback() {
         reconciled.last_reconcile_error
     );
 
-    set_trigger_enabled_and_cursor(&fixture.access, &node_did, TRIGGER_ID, true, Some(&due)).await;
+    set_trigger_cursor(&db, &node_did, TRIGGER_ID, &due).await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     let request = loop {
-        let requests = fetch_schedule_agent_requests(&fixture.access, &node_did, TRIGGER_ID).await;
+        let requests =
+            fetch_schedule_agent_requests(&agent_reader(&db, &fixture), &node_did, TRIGGER_ID)
+                .await;
         if let Some(request) = requests.into_iter().next() {
             break request;
         }

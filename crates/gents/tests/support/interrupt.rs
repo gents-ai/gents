@@ -409,11 +409,10 @@ pub async fn wait_for_provider_output_contains(
     }
 }
 
-pub async fn wait_for_request_lifecycle_state(
-    node: &EmbeddedNode,
-    request_doc_id: &str,
-    expected: &str,
-) {
+pub async fn wait_for_request_lifecycle_state<R>(node: &R, request_doc_id: &str, expected: &str)
+where
+    R: super::snapshots::SnapshotReader + ?Sized,
+{
     let expected = RequestLifecycleState::parse(expected)
         .expect("expected request lifecycle state must be canonical");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
@@ -436,11 +435,14 @@ pub async fn wait_for_request_lifecycle_state(
 /// [`REQUEST_TERMINAL_PUBLICATION_MARGIN`]; terminal publication is
 /// scheduler-bound on a loaded host, so a short fixed bound flakes under the
 /// full parallel suite.
-pub async fn wait_for_request_terminal_state(
-    node: &EmbeddedNode,
+pub async fn wait_for_request_terminal_state<R>(
+    node: &R,
     request_doc_id: &str,
     budget: Duration,
-) -> RequestLifecycleState {
+) -> RequestLifecycleState
+where
+    R: super::snapshots::SnapshotReader + ?Sized,
+{
     let deadline = tokio::time::Instant::now() + budget;
     loop {
         let snapshot = fetch_request_snapshot(node, request_doc_id).await;

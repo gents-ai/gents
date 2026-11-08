@@ -167,6 +167,15 @@ async fn load_candidates(
         let data = response
             .get("data")
             .context("background wake query has no data")?;
+        if ["failed", "successors", "pending"]
+            .iter()
+            .any(|name| data.get(name).is_none())
+        {
+            // A denied actor (a disabled Agent holds no baseline) does not
+            // block the healthy actors' scans; its rows stay for a later tick.
+            tracing::warn!(agent_did = %actor, "background wake scan omitted rows for this actor");
+            continue;
+        }
         append_unique_rows(
             &mut failed,
             &mut seen_failed,
