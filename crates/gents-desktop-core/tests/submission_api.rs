@@ -1,17 +1,15 @@
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
-use gents::store::identity::NodeIdentity;
+use anyhow::{Context, Result};
+use gents::store::config_client::ConfigAccess;
 use gents_desktop_core::client::{
-    initialize_local_standard_peer, ClientCore, ClientCoreOptions, DesktopPaths,
-    SubmitRequestOptions,
+    ClientCore, ClientCoreOptions, DesktopPaths, SubmitRequestOptions,
 };
+use gents_desktop_core::test_fixtures::ServedRuntimeHome;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
-use tokio::time::{sleep, Instant};
 use uuid::Uuid;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -22,8 +20,8 @@ async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
     let session_id = Uuid::new_v4().to_string();
     core.submit_request(&session_id, &node_did, "hello", Some(&agent_did))
         .await?;
-    let response = core
-        .node()
+    let response = runtime
+        .user_access()
         .execute(&format!(
             r#"{{
                 AgentSession(filter: {{
@@ -36,13 +34,8 @@ async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
             gents::store::graphql::escape_graphql_string(&node_did),
             gents::store::graphql::escape_graphql_string(&node_did),
         ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "projection query failed: {:?}",
-        response.errors
-    );
-    let data = response.data.context("projection query data")?;
+        .await?;
+    let data = &response["data"];
     {
         let collection = "AgentSession";
         assert!(
@@ -53,7 +46,7 @@ async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
         );
     }
     Arc::new(core).shutdown().await?;
-    Arc::new(runtime).shutdown().await?;
+    runtime.shutdown().await;
     Ok(())
 }
 
@@ -73,7 +66,7 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
         .await?;
 
     let request: AgentRequestRow = query_single(
-        core.node(),
+        &runtime.user_access(),
         &format!(
             r#"{{
                 AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
@@ -132,7 +125,7 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
     );
     assert_eq!(core.store().snapshot().requests.len(), 1);
     Arc::new(core).shutdown().await?;
-    Arc::new(runtime).shutdown().await?;
+    runtime.shutdown().await;
     Ok(())
 }
 
@@ -163,17 +156,17 @@ async fn resend_preserves_request_lineage_without_caller_inference_overrides() -
         }}"#,
         request_id = original.request_id,
     );
-    let resp = core.node().execute(&force_stale).await;
-    assert!(
-        !resp.has_errors(),
-        "forcing stale state failed: {:?}",
-        resp.errors
-    );
+    runtime
+        .user_graphql_access()
+        .write("test.submission_api.force_stale", &force_stale)
+        .await
+        .context("forcing stale state")?;
+    core.refresh_store().await?;
 
     let resent = core.resend_request(&original.request_id).await?;
 
     let new_row: AgentRequestRow = query_single(
-        core.node(),
+        &runtime.user_access(),
         &format!(
             r#"{{
                 AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
@@ -207,95 +200,41 @@ async fn resend_preserves_request_lineage_without_caller_inference_overrides() -
     );
 
     Arc::new(core).shutdown().await?;
-    Arc::new(runtime).shutdown().await?;
+    runtime.shutdown().await;
     Ok(())
 }
 
+/// A desktop whose client key is the User of a served runtime, routed to it
+/// as its co-hosted local runtime, with one published chat Agent.
 async fn start_core_with_local_route(
     root: &Path,
-) -> Result<(ClientCore, ClientCore, String, String)> {
-    let node_home = root.join("node-home");
-    std::fs::create_dir_all(&node_home)?;
-    let key_path = node_home.join("node.key");
-    let identity = gents::store::identity::KeyIdentity::load_or_create(&key_path, None)?;
-    let node_did = identity.did().to_string();
-    let binding = gents::store::identity::provision_agent_identity(&identity)?;
-    let key_path_text = key_path.display().to_string();
-    std::fs::write(
-        node_home.join("init.json"),
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "node_name": "amy",
-            "node_did": node_did.as_str(),
-            "key_path": key_path_text,
-        }))?,
-    )?;
-    let runtime = ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(root.join("runtime")),
-        ClientCoreOptions::local_only(),
-    )
-    .await?;
-    let runtime_addr = wait_for_connectable_iroh_addr(&runtime).await?;
-
-    let client_paths = DesktopPaths::from_root(root.join("client"));
-    initialize_local_standard_peer(
-        client_paths.peer_directory_path(),
-        "Test Local Runtime",
-        &runtime_addr,
-        &node_did,
-        "http://127.0.0.1:1/api/v0/graphql",
-        node_home.to_str().context("node home path is not UTF-8")?,
-    )
-    .await?;
+) -> Result<(ServedRuntimeHome, ClientCore, String, String)> {
     let client = ClientCore::start_with_paths_and_options(
-        client_paths,
+        DesktopPaths::from_root(root.join("client")),
         ClientCoreOptions::local_simulated_route(),
     )
     .await?;
-    client.add_local_standard_peer_for_test(&node_did).await?;
-    Ok((runtime, client, node_did, binding.agent_did))
+    let runtime =
+        ServedRuntimeHome::start_unpublished_for(Arc::new(client.node_identity().clone())).await;
+    runtime.publish_node(serde_json::json!({})).await;
+    let agent = runtime.publish_chat_agent().await;
+    runtime.connect(&client).await;
+    let node_did = runtime.node_did().to_owned();
+    Ok((runtime, client, node_did, agent.agent_did))
 }
 
-async fn query_single<T>(node: &defra_node::Node, query: &str, root: &str) -> Result<T>
+async fn query_single<T>(access: &ConfigAccess, query: &str, root: &str) -> Result<T>
 where
     T: for<'de> Deserialize<'de>,
 {
-    let response = node.execute(query).await;
-    if response.has_errors() {
-        bail!(
-            "query {root} failed: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
-
-    let row = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get(root))
-        .and_then(|rows| rows.as_array())
+    let response = access
+        .execute(query)
+        .await
+        .with_context(|| format!("query {root}"))?;
+    let row = response["data"][root]
+        .as_array()
         .and_then(|rows| rows.first())
         .cloned()
         .with_context(|| format!("missing row for {root}"))?;
     Ok(serde_json::from_value(row)?)
-}
-
-async fn wait_for_connectable_iroh_addr(core: &ClientCore) -> Result<String> {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let addrs = core.p2p().listen_addresses().await?;
-        if let Some(addr) = addrs
-            .into_iter()
-            .find(|addr| addr.contains("/p2p/") || addr.starts_with("endpoint"))
-        {
-            return Ok(addr);
-        }
-        if Instant::now() >= deadline {
-            bail!("timed out waiting for desktop listen address");
-        }
-        sleep(Duration::from_millis(100)).await;
-    }
 }
