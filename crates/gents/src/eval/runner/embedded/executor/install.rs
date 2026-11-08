@@ -190,6 +190,13 @@ pub(super) async fn install(
         )])?,
     )
     .await?;
+    // The selected Agent is the trial node's default Agent
+    // (`Recipient.defaultAgent`), which holds the relationship-management set
+    // that projects a new Agent's baseline when it creates one.
+    crate::store::identity::GrantSet::PolicyDelegate
+        .grant(&schema_access, &::identity::Did::new(&agent_did)?)
+        .await
+        .context("granting the selected trial Agent policy delegation")?;
     let root_readers = config
         .agents
         .iter()

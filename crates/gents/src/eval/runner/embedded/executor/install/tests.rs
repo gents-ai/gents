@@ -321,6 +321,18 @@ async fn every_installed_trial_agent_can_read_its_operational_collections() {
         );
     }
     assert!(agents.iter().any(|agent| agent["agent_did"] == selected));
+    // The selected default Agent can project the baseline of an Agent it creates.
+    let selected_did = ::identity::Did::new(&selected).unwrap();
+    for permission in crate::store::identity::GrantSet::PolicyDelegate.permissions() {
+        assert!(
+            home.node
+                .nac_manager()
+                .check_permission(&selected_did, *permission)
+                .await
+                .unwrap(),
+            "the selected trial Agent lacks {permission:?}"
+        );
+    }
     home.node.shutdown().await.unwrap();
 }
 
