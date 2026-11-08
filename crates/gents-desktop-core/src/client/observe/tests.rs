@@ -534,31 +534,64 @@ fn generated_runtime_connection_observations_drive_the_owner() {
         "Proofs/Conformance/RuntimeConnectionObservation.lean",
     )
     .unwrap();
-    let cases: Vec<serde_json::Value> = serde_json::from_str(&output).unwrap();
+    let contract: serde_json::Value = serde_json::from_str(&output).unwrap();
+    let cases = contract["cases"].as_array().unwrap();
     assert!(!cases.is_empty());
     let (store, _) = ObservedStore::new(ClientStore::default());
     for case in cases {
-        let status = match case["status"].as_str().unwrap() {
-            "connecting" => RuntimeConnectionStatus::Connecting,
-            "connected" => RuntimeConnectionStatus::Connected,
-            "disconnected" => RuntimeConnectionStatus::Disconnected,
-            "denied" => RuntimeConnectionStatus::Denied,
-            other => panic!("unexpected status {other}"),
-        };
-        let event = match case["event"].as_str().unwrap() {
-            "sourceStarted" => RuntimeConnectionEvent::SourceStarted,
-            "subscriptionsReady" => RuntimeConnectionEvent::SubscriptionsReady,
-            "snapshotSucceeded" => RuntimeConnectionEvent::SnapshotSucceeded,
-            "transportFailed" => RuntimeConnectionEvent::TransportFailed,
-            "permissionDenied" => RuntimeConnectionEvent::PermissionDenied,
-            other => panic!("unexpected event {other}"),
-        };
+        let status = lean_status(case["status"].as_str().unwrap());
         store.set_runtime_connection("node", Some(status));
-        store.observe_runtime_connection("node", event);
+        store.observe_runtime_connection("node", lean_event(case["event"].as_str().unwrap()));
         assert_eq!(
             store.runtime_connection("node").unwrap().as_str(),
-            case["expected"].as_str().unwrap()
+            case["expected"].as_str().unwrap(),
+            "{case}"
         );
+    }
+    let ends = contract["streamEnds"].as_array().unwrap();
+    assert_eq!(ends.len(), 4);
+    for case in ends {
+        let end = match case["end"].as_str().unwrap() {
+            "renewalDue" => remote::StreamEnd::Ended(gents::store::config_client::SubscriptionEnd::RenewalDue),
+            "completed" => remote::StreamEnd::Ended(gents::store::config_client::SubscriptionEnd::Completed),
+            "deniedFailure" => remote::StreamEnd::Failed { denied: true },
+            "transportFailure" => remote::StreamEnd::Failed { denied: false },
+            other => panic!("unexpected stream end {other}"),
+        };
+        let expected = case["event"].as_str().map(lean_event);
+        assert_eq!(
+            format!("{:?}", remote::stream_end_event(end)),
+            format!("{expected:?}"),
+            "{case}"
+        );
+    }
+    assert_eq!(
+        u64::try_from(RESYNC_RETRY_DELAY.as_millis()).unwrap(),
+        contract["transportRetryDelayMs"].as_u64().unwrap()
+    );
+}
+
+fn lean_status(name: &str) -> RuntimeConnectionStatus {
+    match name {
+        "connecting" => RuntimeConnectionStatus::Connecting,
+        "connected" => RuntimeConnectionStatus::Connected,
+        "disconnected" => RuntimeConnectionStatus::Disconnected,
+        "denied" => RuntimeConnectionStatus::Denied,
+        "noEndpoint" => RuntimeConnectionStatus::NoEndpoint,
+        other => panic!("unexpected status {other}"),
+    }
+}
+
+fn lean_event(name: &str) -> RuntimeConnectionEvent {
+    match name {
+        "sourceStarted" => RuntimeConnectionEvent::SourceStarted,
+        "subscriptionsReady" => RuntimeConnectionEvent::SubscriptionsReady,
+        "snapshotSucceeded" => RuntimeConnectionEvent::SnapshotSucceeded,
+        "transportFailed" => RuntimeConnectionEvent::TransportFailed,
+        "permissionDenied" => RuntimeConnectionEvent::PermissionDenied,
+        "renewed" => RuntimeConnectionEvent::Renewed,
+        "endpointMissing" => RuntimeConnectionEvent::EndpointMissing,
+        other => panic!("unexpected event {other}"),
     }
 }
 
@@ -671,14 +704,7 @@ fn generated_denied_reprobe_schedule_drives_the_sources() {
     assert!(!cases.is_empty());
     for case in cases {
         let denials = u32::try_from(case["denials"].as_u64().unwrap()).unwrap();
-        let event = match case["event"].as_str().unwrap() {
-            "sourceStarted" => RuntimeConnectionEvent::SourceStarted,
-            "subscriptionsReady" => RuntimeConnectionEvent::SubscriptionsReady,
-            "snapshotSucceeded" => RuntimeConnectionEvent::SnapshotSucceeded,
-            "transportFailed" => RuntimeConnectionEvent::TransportFailed,
-            "permissionDenied" => RuntimeConnectionEvent::PermissionDenied,
-            other => panic!("unexpected event {other}"),
-        };
+        let event = lean_event(case["event"].as_str().unwrap());
         assert_eq!(
             u64::from(remote::next_denials(denials, event)),
             case["nextDenials"].as_u64().unwrap(),
@@ -690,4 +716,181 @@ fn generated_denied_reprobe_schedule_drives_the_sources() {
             "{case}"
         );
     }
+}
+
+/// The User's observer of a served runtime, with the runtime's Node
+/// published by the User.
+async fn served_observer(
+    home: &crate::test_fixtures::ServedRuntimeHome,
+) -> (tempfile::TempDir, Arc<ObservedStore>, ObserverHandle) {
+    let directory = tempfile::tempdir().unwrap();
+    let mut peer = PeerRecord::new("runtime", "", home.node_did());
+    peer.graphql = Some(home.graphql().to_owned());
+    let mut peers = PeerDirectory::open_writer(directory.path().join("peers.json"))
+        .await
+        .unwrap();
+    peers.upsert(peer).await.unwrap();
+    let configured = ClientSyncStateOwner::new(Default::default(), peers, Vec::new());
+    let (store, _) = ObservedStore::new(ClientStore::default());
+    let handle = spawn_observer(
+        store.clone(),
+        configured,
+        home.user().client_signing_capability().unwrap(),
+    );
+    (directory, store, handle)
+}
+
+async fn node_doc_id(home: &crate::test_fixtures::ServedRuntimeHome) -> String {
+    let rows = home
+        .user_graphql_access()
+        .execute(&format!(
+            "{{ Node(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
+            gents::store::graphql::escape_graphql_string(home.node_did())
+        ))
+        .await
+        .unwrap();
+    rows["data"]["Node"][0]["_docID"].as_str().unwrap().to_owned()
+}
+
+/// Locally minted bearers last `DEFRADB_BEARER_LIFETIME` (60s) and each
+/// subscription ends for renewal at half of it; this waits for a real one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn planned_renewal_keeps_the_runtime_connected() {
+    let home = crate::test_fixtures::ServedRuntimeHome::start().await;
+    let (_directory, store, handle) = served_observer(&home).await;
+    wait_for_connection(&store, home.node_did(), RuntimeConnectionStatus::Connected).await;
+    let before = handle.metrics_snapshot();
+    let mut shown = vec![RuntimeConnectionStatus::Connected];
+    let mut changes = store.subscribe_changes();
+    tokio::time::timeout(Duration::from_secs(45), async {
+        loop {
+            let metrics = handle.metrics_snapshot();
+            if metrics.subscription_renewals > before.subscription_renewals
+                || metrics.transport_failures > before.transport_failures
+            {
+                break;
+            }
+            tokio::select! {
+                changed = changes.changed() => changed.unwrap(),
+                () = tokio::time::sleep(Duration::from_millis(20)) => {}
+            }
+            if let Some(status) = store.runtime_connection(home.node_did()) {
+                if shown.last() != Some(&status) {
+                    shown.push(status);
+                }
+            }
+        }
+    })
+    .await
+    .expect("the subscriptions reach their renewal point");
+    let after = handle.metrics_snapshot();
+    assert_eq!(
+        after.transport_failures, before.transport_failures,
+        "a planned renewal is not a transport failure; shown {shown:?}"
+    );
+    assert!(after.subscription_renewals > before.subscription_renewals);
+    let physical = node_doc_id(&home).await;
+    home.user_graphql_access()
+        .write(
+            "test.observer.after_renewal",
+            &format!(
+                "mutation {{ update_Node(docID: \"{}\", input: {{display_name: \"after renewal\"}}) {{ _docID }} }}",
+                gents::store::graphql::escape_graphql_string(&physical)
+            ),
+        )
+        .await
+        .unwrap();
+    wait_for_name(&store, Some("after renewal")).await;
+    assert_eq!(shown, vec![RuntimeConnectionStatus::Connected], "{shown:?}");
+    assert_eq!(
+        store.runtime_connection(home.node_did()),
+        Some(RuntimeConnectionStatus::Connected)
+    );
+    handle.shutdown().await;
+    home.shutdown().await;
+}
+
+#[tokio::test]
+async fn peer_without_an_endpoint_shows_no_endpoint_until_it_has_one() {
+    let directory = tempfile::tempdir().unwrap();
+    let key_path = directory.path().join("client.key");
+    let client =
+        tokio::task::spawn_blocking(move || KeyIdentity::load_or_create(key_path, None).unwrap())
+            .await
+            .unwrap();
+    // An enrollment-only peer: discovery reached it, but it publishes no
+    // operator GraphQL endpoint.
+    let enrolled = PeerRecord::new("enrolled", "", "did:test:enrolled");
+    let peers = PeerDirectory::open_writer(directory.path().join("peers.json"))
+        .await
+        .unwrap();
+    let configured = ClientSyncStateOwner::new(Default::default(), peers, Vec::new());
+    configured.upsert_for_test(enrolled.clone()).await.unwrap();
+    let (store, _) = ObservedStore::new(ClientStore::default());
+    let handle = spawn_observer(
+        store.clone(),
+        configured.clone(),
+        client.client_signing_capability().unwrap(),
+    );
+    wait_for_connection(&store, "did:test:enrolled", RuntimeConnectionStatus::NoEndpoint).await;
+
+    let (stalled_url, _queries, stalled_task) = stalled_runtime().await;
+    let mut reachable = enrolled.clone();
+    reachable.graphql = Some(stalled_url);
+    configured.upsert_for_test(reachable).await.unwrap();
+    wait_for_connection(&store, "did:test:enrolled", RuntimeConnectionStatus::Connecting).await;
+
+    configured.upsert_for_test(enrolled.clone()).await.unwrap();
+    wait_for_connection(&store, "did:test:enrolled", RuntimeConnectionStatus::NoEndpoint).await;
+
+    let current = configured
+        .records()
+        .into_iter()
+        .find(|record| record.node_did == "did:test:enrolled")
+        .unwrap();
+    configured.remove_for_test(&current).await.unwrap();
+    let mut notices = store.subscribe_changes();
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while store.runtime_connection("did:test:enrolled").is_some() {
+            notices.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("a removed peer has no connection status");
+    handle.shutdown().await;
+    stalled_task.abort();
+}
+
+/// External premise for `RuntimeConnectionObservation.StreamEnd`: the pinned
+/// served runtime does not refuse a User whose household grant was revoked.
+/// The SSE handshake is accepted and the open and new streams stay silent,
+/// and a read answers without errors and without the selected root, so
+/// neither denial surface the access owner classifies (HTTP 401/403, a
+/// `PERMISSION_DENIED` envelope) is produced.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revoked_user_is_answered_without_a_classified_denial() {
+    let home = crate::test_fixtures::ServedRuntimeHome::start().await;
+    let access = home.user_graphql_access();
+    let query = "subscription { Node(showDeleted: true) { _docID _deleted } }";
+    let mut open = access.subscribe(query).await.unwrap();
+    gents::store::identity::GrantSet::HouseholdOwner
+        .revoke(
+            &home.runtime_access(),
+            &::identity::Did::new(home.user().did()).unwrap(),
+        )
+        .await
+        .unwrap();
+    let read = access.execute("{ Node { _docID } }").await.unwrap();
+    assert!(read.get("errors").is_none(), "{read}");
+    assert!(read["data"].get("Node").is_none(), "{read}");
+    let mut resubscribed = access.subscribe(query).await.unwrap();
+    for stream in [&mut open, &mut resubscribed] {
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), stream.recv())
+                .await
+                .is_err(),
+            "the stream stays silent after revocation"
+        );
+    }
+    home.shutdown().await;
 }

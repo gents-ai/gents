@@ -18,6 +18,8 @@ pub struct ObserverMetrics {
     pub local_write_redundant_fetches: AtomicU64,
     pub fetch_failures: AtomicU64,
     pub transcript_invalidations: AtomicU64,
+    pub transport_failures: AtomicU64,
+    pub subscription_renewals: AtomicU64,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +34,8 @@ pub struct ObserverMetricsSnapshot {
     pub local_write_redundant_fetches: u64,
     pub fetch_failures: u64,
     pub transcript_invalidations: u64,
+    pub transport_failures: u64,
+    pub subscription_renewals: u64,
 }
 
 impl ObserverMetrics {
@@ -49,6 +53,8 @@ impl ObserverMetrics {
                 .load(Ordering::Relaxed),
             fetch_failures: self.fetch_failures.load(Ordering::Relaxed),
             transcript_invalidations: self.transcript_invalidations.load(Ordering::Relaxed),
+            transport_failures: self.transport_failures.load(Ordering::Relaxed),
+            subscription_renewals: self.subscription_renewals.load(Ordering::Relaxed),
         }
     }
 }
@@ -157,6 +163,8 @@ pub enum RuntimeConnectionStatus {
     Connected,
     Disconnected,
     Denied,
+    /// The peer has no operator GraphQL endpoint to observe.
+    NoEndpoint,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -166,16 +174,21 @@ pub(crate) enum RuntimeConnectionEvent {
     SnapshotSucceeded,
     TransportFailed,
     PermissionDenied,
+    Renewed,
+    EndpointMissing,
 }
 
 impl RuntimeConnectionEvent {
-    fn status(self) -> RuntimeConnectionStatus {
-        match self {
+    /// `RuntimeConnectionObservation.observe`.
+    fn observe(self, status: Option<RuntimeConnectionStatus>) -> Option<RuntimeConnectionStatus> {
+        Some(match self {
             Self::SourceStarted | Self::SubscriptionsReady => RuntimeConnectionStatus::Connecting,
             Self::SnapshotSucceeded => RuntimeConnectionStatus::Connected,
             Self::TransportFailed => RuntimeConnectionStatus::Disconnected,
             Self::PermissionDenied => RuntimeConnectionStatus::Denied,
-        }
+            Self::Renewed => return status,
+            Self::EndpointMissing => RuntimeConnectionStatus::NoEndpoint,
+        })
     }
 }
 
@@ -186,6 +199,7 @@ impl RuntimeConnectionStatus {
             Self::Connected => "connected",
             Self::Disconnected => "disconnected",
             Self::Denied => "denied",
+            Self::NoEndpoint => "noEndpoint",
         }
     }
 }
@@ -248,7 +262,9 @@ impl ObservedStore {
     }
 
     pub(crate) fn observe_runtime_connection(&self, node_did: &str, event: RuntimeConnectionEvent) {
-        self.set_runtime_connection(node_did, Some(event.status()));
+        if let Some(status) = event.observe(self.runtime_connection(node_did)) {
+            self.set_runtime_connection(node_did, Some(status));
+        }
     }
 
     pub(crate) fn set_runtime_connection(

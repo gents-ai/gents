@@ -20,6 +20,7 @@ pub use projection_store::{
     StoreProjectionRevision, StoreUpdateNotice,
 };
 
+/// `RuntimeConnectionObservation.transportRetryDelayMs`.
 const RESYNC_RETRY_DELAY: Duration = Duration::from_millis(250);
 
 fn resync_retry_ready(retry_not_before: Option<Instant>, now: Instant) -> bool {
@@ -188,7 +189,6 @@ pub fn spawn_observer(
                         clear_node(&store, removed);
                         pending.remove(removed);
                         retry_at.remove(removed);
-                        store.set_runtime_connection(removed, None);
                     }
                     loads.cancel_stale(&sources);
                 }
@@ -196,13 +196,7 @@ pub fn spawn_observer(
                     let Some(notice) = notice else { break; };
                     if let Some(source) = sources.entries.get_mut(&notice.node).filter(|source| source.generation == notice.generation && !source.denied) {
                         source.ready = notice.ready;
-                        let event = if notice.denied {
-                            RuntimeConnectionEvent::PermissionDenied
-                        } else if notice.ready {
-                            RuntimeConnectionEvent::SubscriptionsReady
-                        } else {
-                            RuntimeConnectionEvent::TransportFailed
-                        };
+                        let event = notice.event();
                         match event {
                             RuntimeConnectionEvent::PermissionDenied => {
                                 loads.cancel(&notice.node);
@@ -213,7 +207,7 @@ pub fn spawn_observer(
                             RuntimeConnectionEvent::TransportFailed => loads.cancel(&notice.node),
                             _ => {}
                         }
-                        sources.observe(&notice.node, event, &store, Instant::now());
+                        sources.observe(&notice.node, event, &store, Instant::now(), &metrics_for_task);
                         if notice.ready {
                             pending.insert(notice.node);
                         }
@@ -245,7 +239,7 @@ pub fn spawn_observer(
                         Ok(snapshot) => {
                             let rows = snapshot.row_count();
                             if store.replace_reloaded_snapshot_at_read(&captured, Some(&node), snapshot) {
-                                sources.observe(&node, RuntimeConnectionEvent::SnapshotSucceeded, &store, Instant::now());
+                                sources.observe(&node, RuntimeConnectionEvent::SnapshotSucceeded, &store, Instant::now(), &metrics_for_task);
                                 metrics_for_task.scope_reloads.fetch_add(1, Ordering::Relaxed);
                                 metrics_for_task.docs_fetched.fetch_add(rows as u64, Ordering::Relaxed);
                             } else {
@@ -258,11 +252,11 @@ pub fn spawn_observer(
                             metrics_for_task.fetch_failures.fetch_add(1, Ordering::Relaxed);
                             if error.permission_denied() {
                                 clear_node(&store, &node);
-                                sources.observe(&node, RuntimeConnectionEvent::PermissionDenied, &store, Instant::now());
+                                sources.observe(&node, RuntimeConnectionEvent::PermissionDenied, &store, Instant::now(), &metrics_for_task);
                                 pending.remove(&node);
                                 retry_at.remove(&node);
                             } else {
-                                sources.observe(&node, RuntimeConnectionEvent::TransportFailed, &store, Instant::now());
+                                sources.observe(&node, RuntimeConnectionEvent::TransportFailed, &store, Instant::now(), &metrics_for_task);
                                 pending.insert(node.clone());
                                 retry_at.insert(node, Instant::now() + RESYNC_RETRY_DELAY);
                             }

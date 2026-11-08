@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,6 +10,7 @@ use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::Instant;
 
 use super::{ObservedStore, ObserverMetrics, RuntimeConnectionEvent, RESYNC_RETRY_DELAY};
+use gents::store::config_client::SubscriptionEnd;
 use crate::client::query::{is_transcript_content_collection, OBSERVED_COLLECTIONS};
 use crate::client::PeerRecord;
 
@@ -18,6 +19,23 @@ pub(super) struct Notice {
     pub generation: u64,
     pub ready: bool,
     pub denied: bool,
+    /// The subscriptions were re-armed after a planned renewal.
+    pub renewed: bool,
+}
+
+impl Notice {
+    /// The `RuntimeConnectionObservation.Event` this notice publishes.
+    pub(super) fn event(&self) -> RuntimeConnectionEvent {
+        if self.denied {
+            RuntimeConnectionEvent::PermissionDenied
+        } else if !self.ready {
+            RuntimeConnectionEvent::TransportFailed
+        } else if self.renewed {
+            RuntimeConnectionEvent::Renewed
+        } else {
+            RuntimeConnectionEvent::SubscriptionsReady
+        }
+    }
 }
 
 pub(super) struct Source {
@@ -40,6 +58,8 @@ pub(super) struct Sources {
     pub entries: BTreeMap<String, Source>,
     denials: BTreeMap<String, u32>,
     generation: u64,
+    /// Every node this owner last published a connection status for.
+    observed: BTreeSet<String>,
 }
 
 const REPROBE_BASE_MS: u64 = 1000;
@@ -62,7 +82,9 @@ pub(super) fn next_denials(denials: u32, event: RuntimeConnectionEvent) -> u32 {
         RuntimeConnectionEvent::SnapshotSucceeded => 0,
         RuntimeConnectionEvent::SourceStarted
         | RuntimeConnectionEvent::SubscriptionsReady
-        | RuntimeConnectionEvent::TransportFailed => denials,
+        | RuntimeConnectionEvent::TransportFailed
+        | RuntimeConnectionEvent::Renewed
+        | RuntimeConnectionEvent::EndpointMissing => denials,
     }
 }
 
@@ -75,7 +97,17 @@ impl Sources {
         event: RuntimeConnectionEvent,
         store: &ObservedStore,
         now: Instant,
+        metrics: &ObserverMetrics,
     ) {
+        match event {
+            RuntimeConnectionEvent::TransportFailed => {
+                metrics.transport_failures.fetch_add(1, Ordering::Relaxed);
+            }
+            RuntimeConnectionEvent::Renewed => {
+                metrics.subscription_renewals.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
+        }
         store.observe_runtime_connection(node, event);
         let denials = self.denials.get(node).copied().unwrap_or_default();
         if matches!(event, RuntimeConnectionEvent::PermissionDenied) {
@@ -106,6 +138,9 @@ impl Sources {
         self.entries.len() != before
     }
 
+    /// Starts, keeps or drops each peer's source and owns every node's
+    /// connection status: a peer without an operator endpoint shows
+    /// `noEndpoint`, and a node no longer in the directory has no status.
     pub(super) fn reconcile(
         &mut self,
         peers: &[PeerRecord],
@@ -114,13 +149,26 @@ impl Sources {
         store: &Arc<ObservedStore>,
         metrics: &Arc<ObserverMetrics>,
     ) {
+        let mut unavailable = BTreeSet::new();
         let endpoints: BTreeMap<_, _> = peers
             .iter()
             .filter_map(|peer| {
-                crate::local_runtime::operator_endpoint(peer, capability)
-                    .map(|endpoint| (peer.node_did.clone(), endpoint))
+                let endpoint = crate::local_runtime::operator_endpoint(peer, capability);
+                if endpoint.is_none() {
+                    unavailable.insert(peer.node_did.clone());
+                }
+                endpoint.map(|endpoint| (peer.node_did.clone(), endpoint))
             })
             .collect();
+        let observed: BTreeSet<String> =
+            endpoints.keys().chain(&unavailable).cloned().collect();
+        for removed in self.observed.difference(&observed) {
+            store.set_runtime_connection(removed, None);
+        }
+        for node in unavailable.iter().filter(|node| !endpoints.contains_key(*node)) {
+            store.observe_runtime_connection(node, RuntimeConnectionEvent::EndpointMissing);
+        }
+        self.observed = observed;
         self.entries.retain(|node, source| {
             endpoints
                 .get(node)
@@ -158,6 +206,28 @@ impl Sources {
     }
 }
 
+/// How a source's subscriptions ended (`RuntimeConnectionObservation.StreamEnd`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StreamEnd {
+    Ended(SubscriptionEnd),
+    /// `denied` is the access owner's classification of the failure.
+    Failed { denied: bool },
+}
+
+/// `RuntimeConnectionObservation.streamEndEvent`.
+pub(super) fn stream_end_event(end: StreamEnd) -> Option<RuntimeConnectionEvent> {
+    match end {
+        StreamEnd::Ended(SubscriptionEnd::RenewalDue) => None,
+        StreamEnd::Ended(SubscriptionEnd::Completed) | StreamEnd::Failed { denied: false } => {
+            Some(RuntimeConnectionEvent::TransportFailed)
+        }
+        StreamEnd::Failed { denied: true } => Some(RuntimeConnectionEvent::PermissionDenied),
+    }
+}
+
+/// A planned renewal re-arms at once and reports `renewed` once armed; any
+/// other end reports a failure (`RuntimeConnectionObservation.streamEndEvent`)
+/// and re-arms after `transportRetryDelayMs` unless it was a denial.
 async fn observe(
     node: String,
     endpoint: GraphqlEndpoint,
@@ -166,22 +236,32 @@ async fn observe(
     store: Arc<ObservedStore>,
     metrics: Arc<ObserverMetrics>,
 ) {
+    let mut renewing = false;
     loop {
-        let denied = if let Err(error) =
-            connected(&node, &endpoint, generation, &notices, &store, &metrics).await
-        {
-            tracing::warn!(node_did = %node, error = %error, "runtime subscription disconnected");
-            error.permission_denied()
-        } else {
-            false
+        let ended = match connected(&node, &endpoint, generation, renewing, &notices, &store, &metrics).await {
+            Ok(end) => StreamEnd::Ended(end),
+            Err(error) => {
+                tracing::warn!(node_did = %node, error = %error, "runtime subscription disconnected");
+                StreamEnd::Failed {
+                    denied: error.permission_denied(),
+                }
+            }
         };
+        // Changes committed while no subscription is armed are not delivered.
         store.observe_request_event(None);
+        let Some(event) = stream_end_event(ended) else {
+            renewing = true;
+            continue;
+        };
+        renewing = false;
+        let denied = matches!(event, RuntimeConnectionEvent::PermissionDenied);
         if notices
             .send(Notice {
                 node: node.clone(),
                 generation,
                 ready: false,
                 denied,
+                renewed: false,
             })
             .is_err()
         {
@@ -201,10 +281,11 @@ async fn connected(
     node: &str,
     endpoint: &GraphqlEndpoint,
     generation: u64,
+    renewed: bool,
     notices: &mpsc::UnboundedSender<Notice>,
     store: &Arc<ObservedStore>,
     metrics: &Arc<ObserverMetrics>,
-) -> Result<()> {
+) -> Result<SubscriptionEnd> {
     let access = ConfigAccess::Graphql(endpoint.clone());
     let mut streams = Vec::with_capacity(OBSERVED_COLLECTIONS.len() + 2);
     for collection in OBSERVED_COLLECTIONS
@@ -223,13 +304,6 @@ async fn connected(
         let metrics = metrics.clone();
         tasks.spawn(async move {
             while let Some(envelope) = stream.recv().await? {
-                if envelope
-                    .get("errors")
-                    .and_then(serde_json::Value::as_array)
-                    .is_some_and(|errors| !errors.is_empty())
-                {
-                    anyhow::bail!("runtime GraphQL subscription returned errors");
-                }
                 let rows = envelope
                     .get("data")
                     .and_then(|data| data.get(collection))
@@ -252,7 +326,7 @@ async fn connected(
                     store.request_resync(Some(&node));
                 }
             }
-            Ok::<(), anyhow::Error>(())
+            Ok::<_, anyhow::Error>(stream.end().unwrap_or(SubscriptionEnd::Completed))
         });
     }
     notices
@@ -261,10 +335,11 @@ async fn connected(
             generation,
             ready: true,
             denied: false,
+            renewed,
         })
         .context("runtime observer stopped")?;
-    if let Some(result) = tasks.join_next().await {
-        result??;
+    match tasks.join_next().await {
+        Some(result) => Ok(result??),
+        None => Ok(SubscriptionEnd::Completed),
     }
-    Ok(())
 }

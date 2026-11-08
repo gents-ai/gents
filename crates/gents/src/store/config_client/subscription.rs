@@ -15,6 +15,18 @@ type Events = Pin<
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Why a subscription's stream ended without an error
+/// (`RuntimeConnectionObservation.StreamEnd`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubscriptionEnd {
+    /// Half the locally minted bearer lifetime elapsed. The pinned DefraDB
+    /// HTTP server authenticates a subscription only at its handshake, so the
+    /// stream ends to re-authenticate; it is not a transport failure.
+    RenewalDue,
+    /// The runtime sent `complete` or closed the response.
+    Completed,
+}
+
 /// Pinned DefraDB sends `next` GraphQL envelopes and `complete` over SSE; it
 /// provides no initial snapshot. Arm this stream before reading a snapshot and
 /// repeat that sequence after every disconnect. Dropping it closes the response.
@@ -23,22 +35,33 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct GraphqlSubscription {
     events: Option<Events>,
     renew_at: Option<Instant>,
+    ended: Option<SubscriptionEnd>,
 }
 
 impl GraphqlSubscription {
+    /// How the stream ended, once `recv` has returned `Ok(None)`.
+    pub fn end(&self) -> Option<SubscriptionEnd> {
+        self.ended
+    }
+
     pub async fn recv(&mut self) -> Result<Option<Value>> {
         let Some(events) = self.events.as_mut() else {
             return Ok(None);
         };
         let event = match self.renew_at {
             Some(deadline) => tokio::select! {
-                _ = tokio::time::sleep_until(deadline) => None,
+                _ = tokio::time::sleep_until(deadline) => {
+                    self.events = None;
+                    self.ended = Some(SubscriptionEnd::RenewalDue);
+                    return Ok(None);
+                }
                 event = events.next() => event,
             },
             None => events.next().await,
         };
         let Some(event) = event else {
             self.events = None;
+            self.ended = Some(SubscriptionEnd::Completed);
             return Ok(None);
         };
         let event = match event {
@@ -51,6 +74,7 @@ impl GraphqlSubscription {
         match event.event.as_str() {
             "complete" => {
                 self.events = None;
+                self.ended = Some(SubscriptionEnd::Completed);
                 Ok(None)
             }
             "next" => {
@@ -113,6 +137,7 @@ impl ConfigAccess {
         Ok(GraphqlSubscription {
             events: Some(Box::pin(response.bytes_stream().eventsource())),
             renew_at,
+            ended: None,
         })
     }
 }

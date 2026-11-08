@@ -628,7 +628,14 @@ async fn managed_readiness_status_rejects_redirects_without_forwarding_authority
     let (home, did) = hosted_home(directory.path());
     let server = MockServer::start().await;
     let graphql = format!("{}/api/v0/graphql", server.uri());
-    seed_home(&home, &did, &graphql);
+    // Re-point only the live runtime state: `init.json` keeps the runtime
+    // key path the hosted record opens.
+    std::fs::write(
+        home.join("runtime.json"),
+        json!({"graphql": graphql, "node_name": "Local", "node_did": did, "p2p_transport": "iroh"})
+            .to_string(),
+    )
+    .unwrap();
     Mock::given(method("GET"))
         .and(path("/status"))
         .respond_with(

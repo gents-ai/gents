@@ -501,10 +501,18 @@ impl ClientSyncStateOwner {
     }
 
     #[cfg(test)]
-    pub(super) async fn upsert_for_test(&self, record: PeerRecord) -> anyhow::Result<()> {
+    pub(in crate::client) async fn upsert_for_test(&self, record: PeerRecord) -> anyhow::Result<()> {
         let mut directory = self.directory.write().await;
         directory.upsert(record).await?;
         self.publish_persisted_directory(directory.records().to_vec());
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) async fn remove_for_test(&self, expected: &PeerRecord) -> anyhow::Result<()> {
+        self.queue_removal(expected, super::super::peer_directory::RemovalCause::Operator)
+            .await?;
+        self.complete_removal_if_matches(expected).await?;
         Ok(())
     }
 
