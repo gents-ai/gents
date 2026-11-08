@@ -1339,10 +1339,8 @@ async fn serve_foreground(
                     match bind_grok_shim(GrokShimBindArgs {
                         background_executions: background_execution_registry.clone(),
                         node: node.clone(),
-                        actor: identity::Did::new(identity.did().to_owned())
-                            .context("server node DID is not ACP-addressable")?,
                         runtime_identity: identity.clone(),
-                        graphql: runtime_graphql.clone(),
+                        graphql_url: graphql_url.clone(),
                         agent_did: args.grok_shim_agent_did.clone(),
                         node_did: identity.did().to_string(),
                         node_name: node_name.clone(),

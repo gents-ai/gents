@@ -1,6 +1,5 @@
 use super::*;
 use serde_json::json;
-use std::sync::Arc;
 
 fn config(owner: &str, tools: &str) -> desired_state::DesiredStateManifest {
     serde_json::from_value(json!({
@@ -71,55 +70,58 @@ async fn tools_id(access: &ConfigAccess, owner: &str, id: &str) -> Result<Option
 
 #[tokio::test]
 async fn imports_complete_candidate_and_recreates_only_the_scoped_tombstone() -> Result<()> {
-    let node = Arc::new(crate::shared::test_support::node_builder().build().await?);
-    gents::ensure_runtime_schemas(&node).await?;
-    let access = ConfigAccess::local(node.clone());
-    let first = config("owner-a", "tools");
-    let foreign = config("owner-b", "tools");
+    let client = crate::shared::test_support::ClientHome::new().await;
+    let peer_dir = tempfile::tempdir()?;
+    let peer = gents::KeyIdentity::load_or_create(peer_dir.path().join("peer.key"), None)?;
+    let owner_a = client.node_did().to_owned();
+    let owner_b = gents::NodeIdentity::did(&peer).to_owned();
+    let access = client.access.clone();
+    let first = config(&owner_a, "tools");
+    let foreign = config(&owner_b, "tools");
     let counts = apply_config(&access, &first, None, false).await?;
     assert_eq!(counts.get(Collection::AgentContext), 1);
     assert_eq!(counts.get(Collection::Tools), 1);
     apply_config(&access, &foreign, None, false).await?;
-    let original = tools_id(&access, "owner-a", "tools").await?.unwrap();
-    let foreign_id = tools_id(&access, "owner-b", "tools").await?.unwrap();
+    let original = tools_id(&access, &owner_a, "tools").await?.unwrap();
+    let foreign_id = tools_id(&access, &owner_b, "tools").await?.unwrap();
 
-    let replacement = config("owner-a", "replacement");
+    let replacement = config(&owner_a, "replacement");
     let counts = apply_config(&access, &replacement, Some(&first), true).await?;
     assert_eq!(counts.get(Collection::Tools), 2);
-    assert!(tools_id(&access, "owner-a", "tools").await?.is_none());
+    assert!(tools_id(&access, &owner_a, "tools").await?.is_none());
     assert_eq!(
-        tools_id(&access, "owner-b", "tools").await?,
+        tools_id(&access, &owner_b, "tools").await?,
         Some(foreign_id.clone())
     );
     apply_config(&access, &first, Some(&replacement), true).await?;
     assert_ne!(
-        tools_id(&access, "owner-a", "tools").await?.unwrap(),
+        tools_id(&access, &owner_a, "tools").await?.unwrap(),
         original
     );
     assert_eq!(
-        tools_id(&access, "owner-b", "tools").await?,
+        tools_id(&access, &owner_b, "tools").await?,
         Some(foreign_id)
     );
 
     let rejected = access
         .transact_write("test.config_import.dangling_delete", |txn| {
+            let owner_a = &owner_a;
             Box::pin(async move {
-                apply_delete_collection(txn, Collection::Tools, "owner-a", &["tools".into()]).await
+                apply_delete_collection(txn, Collection::Tools, owner_a, &["tools".into()]).await
             })
         })
         .await;
     assert!(rejected.is_err());
-    assert!(tools_id(&access, "owner-a", "tools").await?.is_some());
-    node.shutdown().await.expect("node shutdown");
+    assert!(tools_id(&access, &owner_a, "tools").await?.is_some());
     Ok(())
 }
 
 #[tokio::test]
 async fn invalid_candidate_rolls_back_other_selected_writes() -> Result<()> {
-    let node = Arc::new(crate::shared::test_support::node_builder().build().await?);
-    gents::ensure_runtime_schemas(&node).await?;
-    let access = ConfigAccess::local(node.clone());
-    let valid = config("owner", "tools");
+    let client = crate::shared::test_support::ClientHome::new().await;
+    let owner = client.node_did().to_owned();
+    let access = client.access.clone();
+    let valid = config(&owner, "tools");
     apply_config(&access, &valid, None, false).await?;
     let mut invalid = valid.clone();
     invalid.contexts[0].tools_id = Some("missing".into());
@@ -127,12 +129,11 @@ async fn invalid_candidate_rolls_back_other_selected_writes() -> Result<()> {
     assert!(apply_config(&access, &invalid, Some(&valid), false)
         .await
         .is_err());
-    let exported = crate::config_bundle::build_config_export_bundle(&access, "owner").await?;
+    let exported = crate::config_bundle::build_config_export_bundle(&access, &owner).await?;
     assert_eq!(exported.config.tools[0].display_name, None);
     assert_eq!(
         exported.config.contexts[0].tools_id.as_deref(),
         Some("tools")
     );
-    node.shutdown().await.expect("node shutdown");
     Ok(())
 }

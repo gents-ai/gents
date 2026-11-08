@@ -1373,63 +1373,25 @@ mod tests {
         Json(json!({"data": {"AgentRequest": rows}})).into_response()
     }
 
-    async fn stable_test_prepared_request() -> (PreparedAgentRequest, Value) {
+    async fn stable_test_prepared_request() -> (
+        crate::shared::test_support::ClientHome,
+        PreparedAgentRequest,
+        Value,
+    ) {
         use gents::NodeIdentity;
-        let dir = tempfile::tempdir().unwrap();
-        let node_identity =
-            gents::KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap();
-        let user = gents::KeyIdentity::load_or_create(dir.path().join("user.key"), None).unwrap();
-        let node = Arc::new(
-            gents::defra_node::Node::builder()
-                .with_node_identity_did(node_identity.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access =
-            gents::ConfigAccess::local_as(node.clone(), ::identity::Did::new(user.did()).unwrap());
-        let binding = gents::store::identity::provision_agent_identity(&node_identity).unwrap();
-        let (node_doc, agent_doc) = access
-            .transact_write("receipt_fixture.identities", |txn| {
-                Box::pin(async {
-                    let node_row = txn.execute_with_variables(
-                        "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
-                        &json!({"input": {"node_did": node_identity.did()}}),
-                    ).await?;
-                    let agent_row = txn.execute_with_variables(
-                        "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
-                        &json!({"input": {"node_did": node_identity.did(), "agent_did": binding.agent_did,
-                            "creation_nonce": binding.creation_nonce}}),
-                    ).await?;
-                    Ok::<_, anyhow::Error>((
-                        gents::store::graphql::created_doc_id(&node_row, "Node")?,
-                        gents::store::graphql::created_doc_id(&agent_row, "Agent")?,
-                    ))
-                })
-            })
-            .await
-            .unwrap();
-        access
-            .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
-            .await
-            .unwrap();
-        access
-            .add_actor_relationship(
-                "Agent",
-                &agent_doc,
-                "executor",
-                &::identity::Did::new(&binding.agent_did).unwrap(),
-            )
-            .await
-            .unwrap();
+        let client = crate::shared::test_support::ClientHome::new().await;
+        let agent = client.agent("Receipt agent").await;
+        let access = client.access.clone();
+        let user = &client.user;
+        let node_did = client.node_did().to_owned();
+        let binding = agent;
         let create = gents::request::lifecycle::build_signed_client_request(
             &access,
             gents::RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 gents::RequestIdentity {
                     request_id: "stable-request-id".into(),
-                    node_did: node_identity.did().into(),
+                    node_did: node_did.clone(),
                     requester_did: Some(user.did().into()),
                     agent_did: binding.agent_did,
                     session_id: "session".into(),
@@ -1439,11 +1401,10 @@ mod tests {
                 },
                 gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
             ),
-            gents::RequestSigner::Identity(&user),
+            gents::RequestSigner::Identity(user),
         )
         .await
         .unwrap();
-        node.shutdown().await.unwrap();
         let receipt = json!({
             "_docID":"physical-receipt", "request_id":create.request_id, "purpose":"normal", "node_did":create.node_did,
             "requester_did":create.requester_did, "agent_did":create.agent_did, "session_id":create.session_id,
@@ -1457,81 +1418,122 @@ mod tests {
         });
         gents::verify_request_receipt_signature(&serde_json::from_value(receipt.clone()).unwrap())
             .unwrap();
-        (PreparedAgentRequest { create }, receipt)
+        drop(access);
+        (client, PreparedAgentRequest { create }, receipt)
+    }
+
+    /// Forwards every exchange to the served home and, once the request create
+    /// has been signed in its client-sign conversation, commits its
+    /// transaction upstream but answers the commit with `lost`: the write is
+    /// durable, its reply is not.
+    async fn lose_committed_submission_reply(
+        client: &crate::shared::test_support::ClientHome,
+        lost: fn() -> Response,
+    ) -> (
+        crate::shared::test_support::ForwardingProxy,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use crate::shared::test_support::{ForwardingProxy, ProxyDecision};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let creates = Arc::new(AtomicUsize::new(0));
+        let staged = Arc::new(AtomicBool::new(false));
+        let hook = {
+            let (creates, staged) = (creates.clone(), staged.clone());
+            Arc::new(move |path: String, _body: Bytes| {
+                let (creates, staged) = (creates.clone(), staged.clone());
+                Box::pin(async move {
+                    if path == "/api/v0/graphql/client-sign" {
+                        creates.fetch_add(1, Ordering::SeqCst);
+                        staged.store(true, Ordering::SeqCst);
+                    } else if path.starts_with("/api/v0/tx/") && staged.swap(false, Ordering::SeqCst)
+                    {
+                        return ProxyDecision::ForwardThenRespond(lost());
+                    }
+                    ProxyDecision::Forward
+                }) as futures_util::future::BoxFuture<'static, ProxyDecision>
+            })
+        };
+        (ForwardingProxy::spawn(client.graphql(), hook).await, creates)
+    }
+
+    async fn durable_request_rows(
+        client: &crate::shared::test_support::ClientHome,
+        request_id: &str,
+    ) -> usize {
+        let response = client
+            .access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
+                gents::store::graphql::escape_graphql_string(request_id)
+            ))
+            .await
+            .unwrap();
+        response["data"]["AgentRequest"].as_array().unwrap().len()
     }
 
     #[tokio::test]
     async fn transient_submission_recovers_committed_identity_without_reposting() {
-        let state = AmbiguousSubmitState::default();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind test endpoint");
-        let address = listener.local_addr().expect("test endpoint address");
-        let router = Router::new()
-            .route("/", post(ambiguous_submit_endpoint))
-            .with_state(state.clone());
-        let server = tokio::spawn(async move {
-            let _ = axum::serve(listener, router).await;
-        });
-        let (prepared, receipt) = stable_test_prepared_request().await;
-        *state.receipt.lock().unwrap() = receipt;
+        let (client, prepared, _) = stable_test_prepared_request().await;
+        // The commit is durable, but its response is replaced by a transient
+        // conflict at the transport boundary.
+        let (proxy, creates) = lose_committed_submission_reply(&client, || {
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"errors": [{
+                    "message": "transaction conflict. Please retry",
+                    "extensions": {"code": gents_protocol::database_error::TXN_CONFLICT_CODE}
+                }]})),
+            )
+                .into_response()
+        })
+        .await;
         let submitted = submit_prepared_agent_request_committed(
-            &gents::store::config_client::GraphqlEndpoint::anonymous(format!("http://{address}/")),
+            &crate::shared::test_support::user_endpoint(&proxy.graphql, &client.user),
             &prepared,
         )
         .await
         .expect("recover committed request");
         assert_eq!(submitted.request_id, "stable-request-id");
         assert_eq!(
-            state
-                .mutation_count
-                .load(std::sync::atomic::Ordering::SeqCst),
+            creates.load(std::sync::atomic::Ordering::SeqCst),
             1,
             "a committed mutation must not be posted again"
         );
-        assert_eq!(state.durable_ids.lock().expect("durable ids").len(), 1);
-        server.abort();
+        assert_eq!(durable_request_rows(&client, "stable-request-id").await, 1);
     }
 
     #[tokio::test]
     async fn transport_response_loss_recovers_committed_identity_without_reposting() {
-        let state = AmbiguousSubmitState {
-            lose_transport_response: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            ..Default::default()
-        };
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind test endpoint");
-        let address = listener.local_addr().expect("test endpoint address");
-        let router = Router::new()
-            .route("/", post(ambiguous_submit_endpoint))
-            .with_state(state.clone());
-        let server = tokio::spawn(async move {
-            let _ = axum::serve(listener, router).await;
-        });
-        let (prepared, receipt) = stable_test_prepared_request().await;
-        *state.receipt.lock().unwrap() = receipt;
+        let (client, prepared, _) = stable_test_prepared_request().await;
+        // The durable commit happened, then its response body failed. reqwest
+        // retains this transport error in the cause chain, which recovery must
+        // classify before querying the stable request id.
+        let (proxy, creates) = lose_committed_submission_reply(&client, || {
+            Response::new(Body::from_stream(stream::once(async {
+                Err::<Bytes, std::io::Error>(std::io::Error::other(
+                    "connection closed before message completed",
+                ))
+            })))
+        })
+        .await;
         let submitted = submit_prepared_agent_request_committed(
-            &gents::store::config_client::GraphqlEndpoint::anonymous(format!("http://{address}/")),
+            &crate::shared::test_support::user_endpoint(&proxy.graphql, &client.user),
             &prepared,
         )
         .await
         .expect("recover committed request after transport response loss");
         assert_eq!(submitted.request_id, "stable-request-id");
         assert_eq!(
-            state
-                .mutation_count
-                .load(std::sync::atomic::Ordering::SeqCst),
+            creates.load(std::sync::atomic::Ordering::SeqCst),
             1,
             "a committed mutation must not be posted again after response loss"
         );
-        assert_eq!(state.durable_ids.lock().expect("durable ids").len(), 1);
-        server.abort();
+        assert_eq!(durable_request_rows(&client, "stable-request-id").await, 1);
     }
 
     #[tokio::test]
     async fn submission_receipt_rejects_tampered_signed_content() {
-        let (prepared, mut receipt) = stable_test_prepared_request().await;
+        let (_client, prepared, mut receipt) = stable_test_prepared_request().await;
         receipt["content"] = json!("substituted content");
         let state = AmbiguousSubmitState::default();
         state

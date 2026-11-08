@@ -258,6 +258,15 @@ fn cli_identity_paths_under(
     gents_desktop_core::client::DesktopPaths::from_root(desktop.root().join("cli"))
 }
 
+/// DID of the CLI's existing User client key, shared by the CLI and its shims.
+pub(crate) fn cli_client_did() -> Result<identity::Did> {
+    let client =
+        gents_desktop_core::client::PrincipalIdentity::load_existing(&cli_identity_paths()?)
+            .context("CLI client identity is unavailable; initialize the CLI client first")?;
+    identity::Did::new(client.did().to_owned())
+        .context("CLI client DID is not ACP-addressable")
+}
+
 pub(crate) async fn load_client_identity() -> Result<gents_desktop_core::client::PrincipalIdentity>
 {
     let paths = cli_identity_paths()?;

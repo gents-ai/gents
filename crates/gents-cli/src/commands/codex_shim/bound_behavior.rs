@@ -48,71 +48,68 @@ mod tests {
     #[tokio::test]
     async fn same_labels_resolve_only_the_selected_node_binding() {
         use gents::store::config_client::{
-            apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
-            DesiredStateApplyPlan,
+            apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
         use gents::{Collection, NodeIdentity};
         use serde_json::json;
+        // Two Nodes share the profile and backend labels; the second is a peer
+        // whose rows the User also published on this node.
+        let client = crate::shared::test_support::ClientHome::new().await;
+        let node = client.node().clone();
         let dir = tempfile::tempdir().unwrap();
-        let node = Arc::new(
-            crate::shared::test_support::node_builder()
-                .data_path(dir.path().join("db"))
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
-        let first = gents::KeyIdentity::load_or_create(dir.path().join("first.key"), None).unwrap();
-        let second =
-            gents::KeyIdentity::load_or_create(dir.path().join("second.key"), None).unwrap();
-        for (identity, model, window) in [
-            (&first, "first-model", 32000),
-            (&second, "second-model", 64000),
+        let peer = gents::KeyIdentity::load_or_create(dir.path().join("peer.key"), None).unwrap();
+        let mut agents = Vec::new();
+        for (runtime, model, window) in [
+            (client.home.identity.as_ref(), "first-model", 32000),
+            (&peer as &dyn NodeIdentity, "second-model", 64000),
         ] {
-            let owner = identity.did();
-            gents::ensure_node(&node, owner).await.unwrap();
-            let plan = DesiredStateApplyPlan::new([
-                (Collection::Agent, json!({"node_did":owner,"agent_did":"same","inference_profile_id":"same-profile"})),
-                (Collection::InferenceProfile,json!({"node_did":owner,"profile_id":"same-profile","backend_id":"same-backend","model_name":model,"context_window":window})),
+            let owner = runtime.did();
+            let binding = gents::store::identity::provision_agent_identity(runtime).unwrap();
+            let mut documents = vec![
                 (Collection::InferenceBackend,json!({"node_did":owner,"backend_id":"same-backend","name":"Test","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
-            ].into_iter().map(|(collection,value)|DesiredStateApplyDocument {collection,add:value.clone(),update:value}).collect()).unwrap();
-            ConfigAccess::transact_local_write(&node, None, "codex.binding.fixture", |txn| {
-                let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
-            })
-            .await
-            .unwrap();
+                (Collection::InferenceProfile,json!({"node_did":owner,"profile_id":"same-profile","backend_id":"same-backend","model_name":model,"context_window":window})),
+                (Collection::Agent, json!({"node_did":owner,"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"inference_profile_id":"same-profile"})),
+            ];
+            if owner != client.node_did() {
+                documents.insert(0, (Collection::Node, json!({"node_did":owner})));
+            }
+            let plan = DesiredStateApplyPlan::new(documents.into_iter().map(|(collection,value)|DesiredStateApplyDocument {collection,add:value.clone(),update:value}).collect()).unwrap();
+            client
+                .access
+                .transact_write("codex.binding.fixture", |txn| {
+                    let plan = &plan;
+                    Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                })
+                .await
+                .unwrap();
+            agents.push((owner.to_owned(), binding.agent_did));
         }
+        let [(first, first_agent), (second, second_agent)] = <[_; 2]>::try_from(agents).unwrap();
         assert_eq!(
-            load_bound_model_selection_id(&node, first.did(), "same")
+            load_bound_model_selection_id(&node, &first, &first_agent)
                 .await
                 .unwrap(),
             "same-backend::first-model"
         );
+        // The peer's rows answer to the peer's actors; this runtime binds only
+        // its own Node and never resolves the shared labels across owners.
+        assert!(load_bound_model_selection_id(&node, &second, &second_agent)
+            .await
+            .is_err());
+        assert!(load_bound_model_selection_id(&node, &first, &second_agent)
+            .await
+            .is_err());
         assert_eq!(
-            load_bound_model_selection_id(&node, second.did(), "same")
-                .await
-                .unwrap(),
-            "same-backend::second-model"
-        );
-        assert_eq!(
-            load_bound_context_window(&node, first.did(), "same")
+            load_bound_context_window(&node, &first, &first_agent)
                 .await
                 .unwrap(),
             32000
         );
-        assert_eq!(
-            load_bound_context_window(&node, second.did(), "same")
-                .await
-                .unwrap(),
-            64000
-        );
-        assert!(load_bound_model_selection_id(&node, "did:missing", "same")
+        assert!(load_bound_model_selection_id(&node, "did:missing", &first_agent)
             .await
             .is_err());
-        assert!(load_bound_model_selection_id(&node, first.did(), "missing")
+        assert!(load_bound_model_selection_id(&node, &first, "missing")
             .await
             .is_err());
-        node.shutdown().await.expect("node shutdown");
     }
 }

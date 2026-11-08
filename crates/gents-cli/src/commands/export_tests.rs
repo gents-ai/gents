@@ -12,15 +12,16 @@ async fn native_export_keeps_long_fields_and_all_cursor_pages() {
     let node = Arc::new(gents::defra_node::Node::builder().build().await.unwrap());
     let access = ConfigAccess::local(node.clone());
     access
-        .add_collection("type ExportRecord { body: String group: String }")
+        .add_collection("type ExportRecord { body: String group: String seq: Int }")
         .await
         .unwrap();
     let long = format!("{}😀", "é".repeat(1500));
     let escaped = gents::store::graphql::escape_graphql_string(&long);
+    // DocIDs derive from content, so each row carries its own sequence.
     let inputs = (0..70)
         .map(|index| {
             format!(
-                "{{body:\"{escaped}\",group:\"{}\"}}",
+                "{{body:\"{escaped}\",group:\"{}\",seq:{index}}}",
                 if index == 69 { "skip" } else { "keep" }
             )
         })
@@ -54,6 +55,12 @@ async fn native_export_keeps_long_fields_and_all_cursor_pages() {
         .map(|line| serde_json::from_slice(line).unwrap())
         .collect();
     assert_eq!(rows.len(), 69);
+    assert_eq!(
+        rows.iter()
+            .map(|row| row["seq"].as_i64().unwrap())
+            .collect::<BTreeSet<_>>(),
+        (0..69).collect::<BTreeSet<_>>()
+    );
     for row in &rows {
         assert_eq!(row["body"], long);
         assert_eq!(row["group"], "keep");
@@ -82,9 +89,8 @@ async fn native_export_retains_relationship_ids() {
     )
     .await
     .unwrap();
-    let author_id = author["data"]["create_ExportAuthor"][0]["_docID"]
-        .as_str()
-        .unwrap();
+    let author_id = gents::store::graphql::created_doc_id(&author, "ExportAuthor").unwrap();
+    let author_id = author_id.as_str();
     let mutation = format!(
         r#"mutation {{ create_ExportBook(input:{{title:"Book",_authorID:"{}"}}) {{_docID}} }}"#,
         gents::store::graphql::escape_graphql_string(author_id)
@@ -92,9 +98,8 @@ async fn native_export_retains_relationship_ids() {
     let book = ConfigAccess::write_local(&node, "test.export.book", &mutation)
         .await
         .unwrap();
-    let book_id = book["data"]["create_ExportBook"][0]["_docID"]
-        .as_str()
-        .unwrap();
+    let book_id = gents::store::graphql::created_doc_id(&book, "ExportBook").unwrap();
+    let book_id = book_id.as_str();
     let output = tempfile::tempdir().unwrap();
     let collections = BTreeSet::from(["ExportAuthor".to_owned(), "ExportBook".to_owned()]);
     let files = access

@@ -119,9 +119,6 @@ impl AcpDelegate for AgentConnection {
                 Ok(request) => request,
                 Err(_) => return self.bootstrap.handle_acp(payload, outbound).await,
             };
-            if super::acp::requires_client_identity(&request.method) {
-                return self.bootstrap.handle_acp(payload, outbound).await;
-            }
             match self.route(&request).await {
                 Ok(Some(service)) => service.handle_acp(payload, outbound).await,
                 route => {

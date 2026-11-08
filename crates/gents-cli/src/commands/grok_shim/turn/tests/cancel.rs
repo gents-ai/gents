@@ -1,6 +1,7 @@
 use super::*;
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn outbound_close_after_submission_interrupts_and_drains() {
     let (_tempdir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;

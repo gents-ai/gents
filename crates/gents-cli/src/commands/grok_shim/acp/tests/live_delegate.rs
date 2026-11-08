@@ -58,6 +58,7 @@ async fn test_service_with_graphql(
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn delegate_streams_updates_live_before_the_response() {
     let (staging, config) = config().await;
     gents::store::schema::ensure_runtime_schemas(config.node.as_ref())

@@ -307,24 +307,50 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_backend_uses_exact_owner_observation_without_discovery() {
-        let node = Arc::new(
-            crate::shared::test_support::fixture_node_builder()
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
+        use gents::store::config_client::{
+            apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+        };
+        let client = crate::shared::test_support::ClientHome::new().await;
+        let owner = client.node_did().to_owned();
+        let peer_dir = tempfile::tempdir().unwrap();
+        let peer = gents::KeyIdentity::load_or_create(peer_dir.path().join("peer.key"), None)
+            .unwrap();
+        let foreign = gents::NodeIdentity::did(&peer).to_owned();
         let backend: InferenceBackend = serde_json::from_value(json!({
-            "node_did": OWNER, "backend_id": "claude-max", "name": "Claude",
+            "node_did": owner, "backend_id": "claude-max", "name": "Claude",
             "provider_kind": "ClaudeCliSubscription", "endpoint": "claude-cli://subscription",
             "auth": BackendAuth::NodeOAuth { account_ref: None },
         }))
         .unwrap();
-        let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(OWNER).unwrap());
-        for (owner, status) in [(OWNER, "healthy"), ("did:key:foreign", "unhealthy")] {
+        let access = client.access.clone();
+        let node = json!({"node_did": foreign});
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: gents::Collection::Node,
+            add: node.clone(),
+            update: node,
+        }])
+        .unwrap();
+        access
+            .transact_write("test.diagnose.foreign_node", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            })
+            .await
+            .unwrap();
+        for (owner, status) in [(owner.as_str(), "healthy"), (foreign.as_str(), "unhealthy")] {
             let mut value = backend.clone();
             value.node_did = owner.to_owned();
-            seed_backend(&access, &value, Some(status)).await;
+            gents::store::config_client::write_inference_backend_document(&access, &value)
+                .await
+                .unwrap();
+            gents::inference::backends::registry::set_backend_probe_status_as(
+                &access,
+                &value.node_did,
+                &value.backend_id,
+                status,
+            )
+            .await
+            .unwrap();
         }
         let report = backend_check(&access, &backend, &BTreeSet::from(["claude-sonnet-5"]))
             .await

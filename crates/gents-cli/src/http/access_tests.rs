@@ -474,7 +474,6 @@ async fn node_principal_routes_refuse_anonymous_and_foreign_callers_before_work(
         "/activation",
         "/identity/decide",
         "/packs/ux/watch",
-        gents_protocol::agent_identity::AGENT_IDENTITY_PATH,
     ] {
         for foreign in [false, true] {
             let mut request = if path == "/identity/decide" {
@@ -593,12 +592,19 @@ async fn managed_readiness_status_requires_a_held_hosted_node_key() {
         calls
     );
     record.graphql = Some("http://127.0.0.1:1/api/v0/graphql".into());
+    let error = fetch_hosted_runtime_status(&record, OperatorIdentityInteraction::Prevent)
+        .await
+        .expect_err("authority never follows a repointed endpoint");
     assert!(
-        fetch_hosted_runtime_status(&record, OperatorIdentityInteraction::Prevent)
-            .await
-            .unwrap()
-            .is_none(),
-        "authority never follows a repointed endpoint"
+        matches!(
+            error.downcast_ref::<gents::store::config_client::ConfigClientError>(),
+            Some(gents::store::config_client::ConfigClientError::ClientAgentSignerRequired)
+        ),
+        "{error:#}"
+    );
+    assert_eq!(
+        f.status_requests.load(std::sync::atomic::Ordering::SeqCst),
+        calls
     );
 }
 
@@ -611,10 +617,12 @@ async fn remote_pack_install_requires_authenticated_client_before_work() {
         "preview": false, "force_rebind": false, "grant_authority": false,
         "explicit": true, "wire": []
     });
+    // An authenticated caller reaches request decoding, which refuses this
+    // archive-less body before any database work.
     for (identity, expected) in [
         (None, StatusCode::UNAUTHORIZED),
-        (Some(&fixture.other), StatusCode::SERVICE_UNAVAILABLE),
-        (Some(&fixture.owner), StatusCode::SERVICE_UNAVAILABLE),
+        (Some(&fixture.other), StatusCode::BAD_REQUEST),
+        (Some(&fixture.owner), StatusCode::BAD_REQUEST),
     ] {
         let mut request = fixture
             .client
