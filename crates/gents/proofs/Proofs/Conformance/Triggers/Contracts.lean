@@ -1,4 +1,5 @@
-import Proofs.Conformance.Triggers.Trace
+import Proofs.Conformance.Triggers.Materialization
+import Proofs.Properties.Safety
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.TriggerContracts

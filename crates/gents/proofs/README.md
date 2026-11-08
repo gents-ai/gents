@@ -701,7 +701,7 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/Conformance/CoverageLedger.lean` | Checked ledger mapping every emitted conformance domain to a Rust consumer, accepted boundary, or accepted follow-up |
 | `Proofs/Conformance/Contracts.lean` | Test-time JSON extraction surface for Rust vocabularies, finite state counts, transition tables, legal/illegal transition pairs, witness rows, ClientShell cases, and the coverage ledger |
 | `Proofs/Conformance/ClientShell/Contracts.lean` | Generated finite ClientShell step/projection cases for frontend and desktop shell tests |
-| `Proofs/Conformance/Triggers.lean` | Barrel for trigger lifecycle/materialization conformance |
+| `Proofs/Conformance/Triggers.lean` | Barrel for trigger materialization lineage and dispatch-case conformance |
 
 Semantic submodules:
 
@@ -723,7 +723,7 @@ Semantic submodules:
 | `Proofs.BackendHealth` | `State`, `Transition`, `Properties`, `Executable` |
 | `Proofs.Fleet` | `State`, `Transition`, `Executable`, `Properties` |
 | `Proofs.CompletionRetry` | `State`, `Transition`, `Executable`, `Properties` |
-| `Proofs.Conformance.Triggers` | `Lifecycle`, `Materialization`, `Trace` |
+| `Proofs.Conformance.Triggers` | `Materialization`, `Contracts` |
 
 The top-level barrel imports remain the stable entry points for downstream code.
 
