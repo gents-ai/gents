@@ -13,11 +13,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::session;
 use crate::tools::background::status::LiveToolOutputRegistry;
-use crate::tools::call::lifecycle::{
-    AwaitMode, CancelCause, InterruptDisposition, ToolCallLifecycle,
-};
+use crate::tools::call::lifecycle::{CancelCause, InterruptDisposition, ToolCallLifecycle};
 use crate::tools::mcp::meta::selected_remote_identity;
 use crate::truncation::TruncationLimits;
+use gents_protocol::tool_call::AwaitMode;
 
 pub(crate) mod persistence;
 #[cfg(test)]
@@ -979,8 +978,7 @@ impl BackgroundExecutionRegistry {
             }
         };
         if lifecycle.is_terminal() {
-            if won && lifecycle.await_mode() == crate::tools::call::lifecycle::AwaitMode::Background
-            {
+            if won && lifecycle.await_mode() == gents_protocol::tool_call::AwaitMode::Background {
                 let notification = async {
                     let calling_request_id = lifecycle.calling_request_id().await?;
                     let (status, output, reason) = match &receipt {
@@ -1022,7 +1020,7 @@ impl BackgroundExecutionRegistry {
                         status,
                         &output,
                         reason,
-                        crate::request::lifecycle::RequestHopCause::Continuation,
+                        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
                     )
                     .await
                 }
@@ -1297,7 +1295,7 @@ pub struct DefraSessionHook {
 }
 
 struct SteeringInputSource {
-    request: crate::request::watcher::AgentRequest,
+    request: gents_protocol::row::AgentRequest,
     verifier: crate::request::admission::AgentRequestAdmissionVerifier,
     agent_identity: Arc<dyn crate::store::identity::NodeIdentity>,
     natural_finish_allowed: bool,
@@ -1344,7 +1342,7 @@ impl DefraSessionHook {
 
     pub(crate) fn with_steering_inputs(
         mut self,
-        request: crate::request::watcher::AgentRequest,
+        request: gents_protocol::row::AgentRequest,
         verifier: crate::request::admission::AgentRequestAdmissionVerifier,
         agent_identity: Arc<dyn crate::store::identity::NodeIdentity>,
         natural_finish_allowed: bool,

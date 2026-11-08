@@ -140,7 +140,7 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
         "bash",
         "{}",
         Utc::now() + chrono::Duration::minutes(5),
-        crate::tools::call::lifecycle::AwaitMode::Background,
+        gents_protocol::tool_call::AwaitMode::Background,
     )
     .await;
     lifecycle.start_running().await.unwrap();
@@ -1368,7 +1368,7 @@ async fn accepted_hook_tool_lifecycle(
     tool_name: &str,
     arguments: &str,
     deadline_at: chrono::DateTime<chrono::Utc>,
-    await_mode: crate::tools::call::lifecycle::AwaitMode,
+    await_mode: gents_protocol::tool_call::AwaitMode,
 ) -> crate::tools::call::lifecycle::ToolCallLifecycle {
     accept_hook_tool_call(hook, internal_call_id, tool_name, arguments, None).await;
     let state = hook.state.lock().await;
@@ -1407,7 +1407,7 @@ async fn accepted_session_message_lifecycle(
         crate::tools::native::AGENT_NEW_TOOL_NAME,
         &arguments,
         deadline_at,
-        crate::tools::call::lifecycle::AwaitMode::Background,
+        gents_protocol::tool_call::AwaitMode::Background,
     )
     .await
 }
@@ -1761,7 +1761,7 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
         "wait_process",
         r#"{"tool_call_id":"missing"}"#,
         chrono::Utc::now() + chrono::Duration::minutes(5),
-        crate::tools::call::lifecycle::AwaitMode::Foreground,
+        gents_protocol::tool_call::AwaitMode::Foreground,
     )
     .await;
     loser.start_running().await.unwrap();
@@ -1790,7 +1790,7 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
         "wait_process",
         r#"{"tool_call_id":"missing"}"#,
         chrono::Utc::now() + chrono::Duration::minutes(5),
-        crate::tools::call::lifecycle::AwaitMode::Foreground,
+        gents_protocol::tool_call::AwaitMode::Foreground,
     )
     .await;
     conflicting.start_running().await.unwrap();
@@ -2833,7 +2833,7 @@ async fn interruption_leaves_background_workers_running() {
             "bash",
             "{}",
             deadline,
-            crate::tools::call::lifecycle::AwaitMode::Background,
+            gents_protocol::tool_call::AwaitMode::Background,
         )
         .await;
         lifecycle.start_running().await.unwrap();
@@ -2872,7 +2872,7 @@ async fn interruption_leaves_background_workers_running() {
         "bash",
         "{}",
         deadline,
-        crate::tools::call::lifecycle::AwaitMode::Background,
+        gents_protocol::tool_call::AwaitMode::Background,
     )
     .await;
     unrelated.start_running().await.unwrap();
@@ -2942,7 +2942,8 @@ async fn interruption_leaves_background_workers_running() {
 
 #[tokio::test]
 async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
-    use crate::tools::call::lifecycle::{AwaitMode, InterruptDisposition, ToolCallState};
+    use crate::tools::call::lifecycle::{InterruptDisposition, ToolCallState};
+    use gents_protocol::tool_call::AwaitMode;
     let cases = crate::lean_vocab_test::lean_interrupt_disposition_cases();
     assert!(!cases.is_empty());
     let dir = tempfile::tempdir().unwrap();
@@ -3043,7 +3044,7 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
         "slow_tool",
         "{}",
         deadline,
-        crate::tools::call::lifecycle::AwaitMode::Foreground,
+        gents_protocol::tool_call::AwaitMode::Foreground,
     )
     .await;
     outer.start_running().await.unwrap();

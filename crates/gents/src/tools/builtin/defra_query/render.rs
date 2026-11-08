@@ -1,6 +1,7 @@
 use anyhow::{bail, Result};
 use serde_json::Value;
 
+use crate::store::config_client::schema_introspection::validate_identifier;
 use crate::store::graphql::escape_graphql_string;
 
 pub fn render_filter(filter: &Value) -> Result<String> {
@@ -32,10 +33,6 @@ fn render_value(value: &Value) -> Result<String> {
             Ok(format!("{{ {} }}", parts.join(", ")))
         }
     }
-}
-
-pub(crate) fn validate_identifier(name: &str) -> Result<()> {
-    Ok(crate::store::graphql::validate_graphql_name(name)?)
 }
 
 #[cfg(test)]

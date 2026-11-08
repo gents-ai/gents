@@ -1,8 +1,8 @@
 use super::presentation::{diagnostic_replay_matches, terminal_diagnostic_presentation};
 use super::*;
-use crate::session::canonical_rows::{
-    decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
-    AGENT_OUTPUT_SEGMENT_FIELDS,
+use gents_protocol::output::rows::{
+    AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS, decode_output_segment_row,
+    decode_transcript_message_row,
 };
 use crate::store::graphql::escape_graphql_string;
 use crate::tools::call::lifecycle::admission_fixture::{
@@ -111,7 +111,7 @@ async fn observe(tool: &ToolCallLifecycle, query: &str) -> Observed {
 
 async fn tool_delivery_rows(
     tool: &ToolCallLifecycle,
-) -> Vec<crate::session::canonical_rows::TranscriptMessageRow> {
+) -> Vec<gents_protocol::output::rows::TranscriptMessageRow> {
     let session = crate::store::graphql::escape_graphql_string(&tool.session_id);
     let response = observe(
         tool,
@@ -127,7 +127,7 @@ async fn tool_delivery_rows(
         .unwrap()
         .iter()
         .map(decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()
+        .collect::<Result<Vec<_>, _>>()
         .unwrap()
 }
 
@@ -281,7 +281,7 @@ async fn failed_streaming_tool_preserves_raw_prefix_and_publishes_terminal_failu
         .unwrap()
         .iter()
         .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()
+        .collect::<Result<Vec<_>, _>>()
         .unwrap();
     let tool_rows = rows
         .iter()
@@ -377,7 +377,7 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
             .unwrap()
             .iter()
             .map(decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap();
         let tool_rows = rows
             .iter()
@@ -494,7 +494,7 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
             .unwrap()
             .iter()
             .map(decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap()
             .into_iter()
             .map(|row| row.doc_id)
@@ -787,7 +787,7 @@ async fn spawned_background_replays_parent_provenance_and_never_authors_a_child_
         .unwrap()
         .iter()
         .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()
+        .collect::<Result<Vec<_>, _>>()
         .unwrap()
         .into_iter()
         .filter(|row| {
@@ -929,7 +929,7 @@ async fn background_bridge_completion_closes_its_source_and_notifies_without_a_s
         "completed",
         final_bytes,
         None,
-        crate::request::lifecycle::RequestHopCause::Continuation,
+        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
     )
     .await
     .unwrap();
@@ -957,7 +957,7 @@ async fn background_bridge_completion_closes_its_source_and_notifies_without_a_s
         .unwrap()
         .iter()
         .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()
+        .collect::<Result<Vec<_>, _>>()
         .unwrap()
         .into_iter()
         .filter(|row| {
@@ -1089,7 +1089,7 @@ async fn concurrent_background_bridge_completion_replays_one_exact_closure() {
         .unwrap()
         .iter()
         .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()
+        .collect::<Result<Vec<_>, _>>()
         .unwrap()
         .into_iter()
         .filter(|row| {

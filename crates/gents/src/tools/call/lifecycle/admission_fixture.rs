@@ -5,7 +5,8 @@ use defra_node::Node as EmbeddedNode;
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::request::streaming::DefraStreamWriter;
 use crate::store::identity::NodeIdentity;
-use crate::tools::call::lifecycle::{AwaitMode, ToolCallLifecycle};
+use crate::tools::call::lifecycle::ToolCallLifecycle;
+use gents_protocol::tool_call::AwaitMode;
 
 pub struct PublishedAdmissionOptions {
     pub name: String,
@@ -294,7 +295,7 @@ async fn complete_child_managed_inner(
     .unwrap();
     let response = access.execute(&format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{child_id_escaped}" }} }}) {{ {} }} }}"#,
-        crate::request::watcher::AGENT_REQUEST_FIELDS,
+        gents_protocol::row::AGENT_REQUEST_FIELDS,
     )).await.unwrap();
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
@@ -539,7 +540,7 @@ pub(crate) async fn claimed_signed_request_create_as_agent(
     let request_id = crate::store::graphql::escape_graphql_string(&create.request_id);
     let query = format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-        crate::request::watcher::AGENT_REQUEST_FIELDS,
+        gents_protocol::row::AGENT_REQUEST_FIELDS,
     );
     let row: gents_protocol::row::AgentRequestRow = if local_self {
         let result = actor_access.execute(&query).await.unwrap();
@@ -667,7 +668,7 @@ pub async fn published_admission_with_owner(
     let response = agent_access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
+            gents_protocol::row::AGENT_REQUEST_FIELDS,
         ))
         .await?;
     let row: gents_protocol::row::AgentRequestRow =
@@ -827,7 +828,7 @@ pub(crate) async fn pending_client_fixture_request(
     let response = agent_access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS
+            gents_protocol::row::AGENT_REQUEST_FIELDS
         ))
         .await?;
     let row: gents_protocol::row::AgentRequestRow =
@@ -906,7 +907,7 @@ pub(crate) async fn materialize_session_message(
     prompt: &str,
 ) -> anyhow::Result<crate::session::message::SessionMessageReceipt> {
     let caller = request.request();
-    let cause = crate::request::lifecycle::SessionMessageCause {
+    let cause = gents_protocol::request_lifecycle::SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
         caller_agent_did: caller.agent_did.clone(),
         caller_session_id: caller.session_id.clone(),
@@ -921,7 +922,7 @@ pub(crate) async fn materialize_session_message(
             .to_owned(),
         correlation: None,
     };
-    let target = crate::request::lifecycle::SessionMessageTarget {
+    let target = gents_protocol::request_lifecycle::SessionMessageTarget {
         node_did: target_node_did.to_owned(),
         agent_did: caller.agent_did.clone(),
         session_id: uuid::Uuid::new_v4().to_string(),

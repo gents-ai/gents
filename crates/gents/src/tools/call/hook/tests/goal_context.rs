@@ -130,11 +130,11 @@ async fn claim_request_fixture(
 ) {
     let access = ConfigAccess::local(node.clone());
     let response = access.execute(&format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{{}}}}}"#,
-        crate::store::graphql::escape_graphql_string(request_id), crate::store::graphql::escape_graphql_string(session), crate::request::admission::SIGNED_REQUEST_FIELDS)).await.unwrap();
+        crate::store::graphql::escape_graphql_string(request_id), crate::store::graphql::escape_graphql_string(session), gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)).await.unwrap();
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
     assert_eq!(
-        crate::verify_request_receipt_signature(&row).is_ok(),
+        crate::store::identity::request_receipt::verify_request_receipt_signature(&row).is_ok(),
         signature_valid
     );
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(

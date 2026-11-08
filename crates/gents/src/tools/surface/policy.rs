@@ -666,7 +666,7 @@ impl ToolPolicySurface {
             .iter()
             .filter(|collection| {
                 let key = (
-                    crate::plugin::application_write::WRITE_TOOL_NAME.to_string(),
+                    gents_protocol::plugin::WRITE_TOOL_NAME.to_string(),
                     (*collection).clone(),
                 );
                 match &self.write_tools {
@@ -927,7 +927,7 @@ fn write_scope_from_selection(
         for collection in &selection.application_write_collections {
             grants.insert(
                 (
-                    crate::plugin::application_write::WRITE_TOOL_NAME.into(),
+                    gents_protocol::plugin::WRITE_TOOL_NAME.into(),
                     collection.clone(),
                 ),
                 BTreeSet::from(["*".into()]),

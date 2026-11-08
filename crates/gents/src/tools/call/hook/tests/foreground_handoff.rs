@@ -122,7 +122,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
         "bash_unrestricted",
         "{}",
         deadline,
-        crate::tools::call::lifecycle::AwaitMode::Foreground,
+        gents_protocol::tool_call::AwaitMode::Foreground,
     )
     .await;
     lifecycle.start_running().await.unwrap();
@@ -237,7 +237,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
                 "held_background_tool",
                 "{}",
                 deadline,
-                crate::tools::call::lifecycle::AwaitMode::Background,
+                gents_protocol::tool_call::AwaitMode::Background,
             )
             .await
             .unwrap();
@@ -253,7 +253,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
             "held_background_tool",
             "{}",
             deadline,
-            crate::tools::call::lifecycle::AwaitMode::Background,
+            gents_protocol::tool_call::AwaitMode::Background,
         )
         .await
         .unwrap();
@@ -360,7 +360,7 @@ async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_ex
         "bash_unrestricted",
         "{}",
         deadline,
-        crate::tools::call::lifecycle::AwaitMode::Foreground,
+        gents_protocol::tool_call::AwaitMode::Foreground,
     )
     .await;
     lifecycle.start_running().await.unwrap();
@@ -439,7 +439,7 @@ async fn refused_foreground_handoff_can_be_retried() {
         "bash_unrestricted",
         "{}",
         deadline,
-        crate::tools::call::lifecycle::AwaitMode::Foreground,
+        gents_protocol::tool_call::AwaitMode::Foreground,
     )
     .await;
     lifecycle.start_running().await.unwrap();
@@ -574,7 +574,7 @@ async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() 
                 "held_background_tool",
                 "{}",
                 deadline,
-                crate::tools::call::lifecycle::AwaitMode::Background,
+                gents_protocol::tool_call::AwaitMode::Background,
             )
             .await
             .unwrap(),
@@ -627,7 +627,7 @@ async fn interrupted_foreground_with_unverified_exit_remains_background_controll
             "held_background_tool",
             "{}",
             deadline,
-            crate::tools::call::lifecycle::AwaitMode::Background,
+            gents_protocol::tool_call::AwaitMode::Background,
         )
         .await;
         occupied.start_running().await.unwrap();
@@ -639,7 +639,7 @@ async fn interrupted_foreground_with_unverified_exit_remains_background_controll
         "bash",
         "{}",
         deadline,
-        crate::tools::call::lifecycle::AwaitMode::Foreground,
+        gents_protocol::tool_call::AwaitMode::Foreground,
     )
     .await;
     lifecycle.start_running().await.unwrap();
@@ -689,7 +689,7 @@ async fn interrupted_foreground_with_unverified_exit_remains_background_controll
         "held_background_tool",
         "{}",
         deadline,
-        crate::tools::call::lifecycle::AwaitMode::Background,
+        gents_protocol::tool_call::AwaitMode::Background,
     )
     .await;
     let refusal = overflow.start_running().await.unwrap_err();
@@ -757,7 +757,7 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
         "bash",
         "{}",
         deadline,
-        crate::tools::call::lifecycle::AwaitMode::Foreground,
+        gents_protocol::tool_call::AwaitMode::Foreground,
     )
     .await;
     lifecycle.start_running().await.unwrap();
@@ -874,7 +874,7 @@ async fn confirmation_before_worker_release_keeps_typed_stop_receipt() {
         "bash",
         "{}",
         deadline,
-        crate::tools::call::lifecycle::AwaitMode::Foreground,
+        gents_protocol::tool_call::AwaitMode::Foreground,
     )
     .await;
     lifecycle.start_running().await.unwrap();
@@ -924,7 +924,7 @@ async fn interruption_before_native_registration_cancels_without_starting_proces
         "bash",
         "{}",
         deadline,
-        crate::tools::call::lifecycle::AwaitMode::Foreground,
+        gents_protocol::tool_call::AwaitMode::Foreground,
     )
     .await;
     lifecycle.start_running().await.unwrap();
@@ -962,7 +962,7 @@ async fn interrupt_sweep_preserves_confirmed_timeout_intent() {
         "bash",
         "{}",
         deadline,
-        crate::tools::call::lifecycle::AwaitMode::Foreground,
+        gents_protocol::tool_call::AwaitMode::Foreground,
     )
     .await;
     lifecycle.start_running().await.unwrap();

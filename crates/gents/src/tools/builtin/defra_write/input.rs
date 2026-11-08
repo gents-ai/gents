@@ -1,51 +1,7 @@
 use anyhow::{bail, Result};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::store::graphql::escape_graphql_string;
-
-pub(crate) fn parameters(schema: &str) -> Result<Value> {
-    let base = schema.trim_end_matches('!');
-    let mut shape = if let Some(item) = base.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-        json!({"type":"array", "items":parameters(item)?})
-    } else {
-        match base {
-            "String" | "ID" | "DateTime" | "Blob" => json!({"type":"string"}),
-            "Int" => json!({"type":"integer"}),
-            "Float32" | "Float64" | "Float" => json!({"type":"number"}),
-            "Boolean" => json!({"type":"boolean"}),
-            "JSON" => json!({"type":["object", "array", "string", "number", "boolean"]}),
-            _ => bail!("unsupported bounded write field type `{schema}`"),
-        }
-    };
-    if !schema.ends_with('!') {
-        if let Some(kind) = shape.get("type").cloned() {
-            let mut kinds = match kind {
-                Value::Array(kinds) => kinds,
-                kind => vec![kind],
-            };
-            kinds.push(json!("null"));
-            shape["type"] = Value::Array(kinds);
-        }
-    }
-    Ok(shape)
-}
-
-/// Lean `CompletionRetry.CountCarrier.canCarry`: DateTime and ID take text
-/// input but store no count (an ID accepts only a document ID).
-pub fn can_hold_canonical_count(schema: &str) -> bool {
-    if matches!(schema.trim_end_matches('!'), "DateTime" | "ID") {
-        return false;
-    }
-    parameters(schema).is_ok_and(|shape| match shape.get("type") {
-        Some(Value::Array(kinds)) => kinds.iter().any(admits_count),
-        Some(kind) => admits_count(kind),
-        None => false,
-    })
-}
-
-fn admits_count(kind: &Value) -> bool {
-    matches!(kind.as_str(), Some("integer" | "number" | "string"))
-}
 
 pub(crate) fn validate_input(
     schema: &str,

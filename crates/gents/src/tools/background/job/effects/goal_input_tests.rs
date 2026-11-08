@@ -47,14 +47,14 @@ async fn stored(access: &ConfigAccess, request_id: &str) -> AgentRequestRow {
         .execute(&format!(
             r#"{{AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{{}}}}}"#,
             escape_graphql_string(request_id),
-            crate::request::admission::SIGNED_REQUEST_FIELDS
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
         ))
         .await
         .unwrap();
     let rows = response["data"]["AgentRequest"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
     let row: AgentRequestRow = serde_json::from_value(rows[0].clone()).unwrap();
-    crate::request::admission::verify_request_receipt_signature(&row).unwrap();
+    crate::store::identity::request_receipt::verify_request_receipt_signature(&row).unwrap();
     row
 }
 
@@ -239,7 +239,7 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
                 .transact_readonly("test.delivery.session_doc", |txn| {
                     Box::pin(async {
                         Ok::<_, anyhow::Error>(
-                            crate::session::load_agent_session_owner_in_txn(
+                            crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
                                 txn,
                                 f.identity.did(),
                                 &session,

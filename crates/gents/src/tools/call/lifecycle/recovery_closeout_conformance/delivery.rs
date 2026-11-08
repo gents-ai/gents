@@ -3,7 +3,8 @@ use crate::tools::call::lifecycle::admission_fixture::{
     complete_child_managed_verified, published_session_message,
     published_session_message_with_owner, PublishedAdmissionOptions,
 };
-use crate::tools::call::lifecycle::{AwaitMode, ToolCallLifecycle};
+use gents_protocol::tool_call::AwaitMode;
+use crate::tools::call::lifecycle::ToolCallLifecycle;
 use std::sync::Arc;
 
 use super::fixtures::{completion_obligations, update};
@@ -283,7 +284,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
                 background_completion_wake_version: None,
             },
             None,
-            crate::request::lifecycle::RequestHopCause::Continuation,
+            gents_protocol::request_lifecycle::RequestHopCause::Continuation,
         )
         .await
         .unwrap();

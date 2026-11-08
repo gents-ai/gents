@@ -183,7 +183,7 @@ impl ToolSurface {
         if self
             .write_tools
             .iter()
-            .any(|decl| decl.collection == crate::session::mailbox::MAILBOX_COLLECTION)
+            .any(|decl| decl.collection == gents_protocol::row::MAILBOX_COLLECTION)
         {
             // Mailbox-capable event-trigger stages require explicit human-owner
             // lineage from the source document.
@@ -310,7 +310,7 @@ impl ToolSurface {
             names.push(DEFRA_QUERY_TOOL_NAME.to_string());
         }
         if !self.application_write_collections.is_empty() {
-            names.push(crate::plugin::application_write::WRITE_TOOL_NAME.into());
+            names.push(gents_protocol::plugin::WRITE_TOOL_NAME.into());
         }
         if self.lsp.is_some() {
             names.push(crate::tools::native::lsp::LSP_TOOL_NAME.to_string());
@@ -545,7 +545,7 @@ impl ToolSurface {
                     decl.tool_name
                 );
             }
-            if decl.collection == crate::session::mailbox::MAILBOX_COLLECTION {
+            if decl.collection == gents_protocol::row::MAILBOX_COLLECTION {
                 let access = crate::ConfigAccess::local_managed_agent(
                     runtime.node.clone(),
                     datastore_actor.clone().expect("write actor was validated"),

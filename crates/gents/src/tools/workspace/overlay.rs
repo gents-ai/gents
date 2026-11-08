@@ -7,12 +7,12 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
-use crate::request::watcher::AgentRequest;
 use crate::store::graphql::escape_graphql_string;
 #[cfg(test)]
 use crate::store::graphql::{first_row, graphql_with_transaction_retry, rows};
 use crate::tools::native::{workspace_write_sandbox_enforced, WorkspaceAuthority};
 use crate::tools::surface::{resolve_configured_tool_root, FileToolMode};
+use gents_protocol::row::AgentRequest;
 
 #[cfg(test)]
 use super::binding::{admit_workspace_binding, new_binding, AdmitBinding};

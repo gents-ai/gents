@@ -2,9 +2,9 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use super::{
-    build_query, discovery_payload, introspection_query, parse_collection_schema, CollectionScope,
-    DefraQueryParams,
+use super::{build_query, discovery_payload, CollectionScope, DefraQueryParams};
+use crate::store::config_client::schema_introspection::{
+    introspection_query, parse_collection_schema, validate_identifier,
 };
 use crate::store::config_client::ConfigRead;
 
@@ -143,7 +143,7 @@ pub async fn execute_command(
     let collection = args.collection.as_deref().ok_or_else(|| {
         CollectionDiscoveryError(format!("collection is required; {COLLECTION_GUIDANCE}"))
     })?;
-    super::render::validate_identifier(collection)
+    validate_identifier(collection)
         .map_err(|error| CollectionDiscoveryError(format!("{error}; {COLLECTION_GUIDANCE}")))?;
     scope.ensure_allowed(collection)?;
     let allowed: &[&str] = match command {

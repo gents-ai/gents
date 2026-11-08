@@ -23,9 +23,8 @@ mod title_audit_usage;
 pub(crate) use title_audit_usage::load_parent_inclusive_budget_usage;
 pub(crate) use title_audit_usage::load_session_goal_usage;
 pub use title_audit_usage::{ParentAuditUsage, ParentAuditUsageObservation};
-mod shared;
-pub(crate) use shared::is_secret_env_name;
 mod session_message;
+mod shared;
 pub(crate) mod skills;
 #[cfg(test)]
 mod tests;

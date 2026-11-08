@@ -684,7 +684,7 @@ mod tests {
     use crate::tools::call::lifecycle::admission_fixture::{
         published_admission, PublishedAdmission, PublishedAdmissionOptions,
     };
-    use crate::tools::call::lifecycle::AwaitMode;
+    use gents_protocol::tool_call::AwaitMode;
     use serde_json::{json, Value};
     use std::sync::Arc;
 

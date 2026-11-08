@@ -2,7 +2,7 @@ use crate::tools::call::lifecycle::admission_fixture::{
     complete_child_managed_verified, published_admission, published_session_message,
     PublishedAdmission, PublishedAdmissionOptions,
 };
-use crate::tools::call::lifecycle::AwaitMode;
+use gents_protocol::tool_call::AwaitMode;
 
 use super::fixtures::completion_obligations;
 

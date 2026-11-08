@@ -6,10 +6,10 @@ pub(super) struct ExistingNotification {
 
 async fn existing_notification(
     access: &crate::ConfigAccess,
-    parent: &crate::AgentRequest,
+    parent: &gents_protocol::row::AgentRequest,
     message_key: &str,
 ) -> Result<Option<ExistingNotification>> {
-    let scope = crate::session::session_scope_filter(
+    let scope = gents_protocol::session::session_scope_filter(
         &parent.node_did,
         &parent.session_id,
         parent.requester_did.as_deref(),
@@ -50,7 +50,7 @@ async fn existing_notification(
 
 pub(super) async fn existing_tool_completion_notification(
     access: &crate::ConfigAccess,
-    parent: &crate::AgentRequest,
+    parent: &gents_protocol::row::AgentRequest,
     tool_call_id: &str,
 ) -> Result<Option<ExistingNotification>> {
     let key = background_completion_notification_message_key(tool_call_id, "tool");

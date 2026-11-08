@@ -14,12 +14,12 @@ fn plugin_writes_failure_keeps_a_typed_conflict_replayable() {
 
 #[tokio::test]
 async fn denied_plugin_write_rolls_back_completed_terminal_and_settles_failed() {
-    use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
     use crate::store::config_client::ConfigAccess;
     use crate::tools::call::lifecycle::admission_fixture::{
         published_admission_with_owner, PublishedAdmissionOptions,
     };
     use gents_protocol::job::{DataOp, DataWrite, PluginDataDeclaration};
+    use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
     use gents_protocol::output::OutputSource;
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -153,8 +153,8 @@ async fn denied_plugin_write_rolls_back_completed_terminal_and_settles_failed() 
                 .await
             })
         })
-    .await
-    .expect("the first plugin write is permitted for the same actor");
+        .await
+        .expect("the first plugin write is permitted for the same actor");
     tokio::time::timeout(
         std::time::Duration::from_secs(10),
         fixture.tool.complete("successful plugin output"),

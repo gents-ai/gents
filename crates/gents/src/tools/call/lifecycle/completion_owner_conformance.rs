@@ -53,14 +53,15 @@ async fn create_failed_wake(admission: &PublishedAdmission, mutation: &str) {
     access
         .transact_write("test.completion.failed_wake", |txn| {
             Box::pin(async move {
-                let session = crate::session::load_agent_session_row_in_txn(
-                    txn,
-                    node_did,
-                    session_id,
-                    Some(requester_did),
-                )
-                .await?
-                .context("fixture session unavailable")?;
+                let session =
+                    crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+                        txn,
+                        node_did,
+                        session_id,
+                        Some(requester_did),
+                    )
+                    .await?
+                    .context("fixture session unavailable")?;
                 anyhow::ensure!(
                     session.session.agent_did == agent_did,
                     "fixture Agent mismatch"
@@ -696,7 +697,7 @@ async fn background_wake_is_visible_to_the_owning_user_and_selected_agent() {
 
 pub(crate) struct SelectedBackgroundWake {
     pub admission: PublishedAdmission,
-    pub wake: crate::request::watcher::AgentRequest,
+    pub wake: gents_protocol::row::AgentRequest,
     pub notification_text: String,
     wait_header: String,
     wait_native: gents_protocol::message::Message,
@@ -838,7 +839,7 @@ pub(crate) async fn selected_background_wake_with_successor(
 
     let response = admission.client.execute(&format!(
         r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ {} lifecycle_state }} }}"#,
-        escape_graphql_string(&session), crate::request::watcher::AGENT_REQUEST_FIELDS,
+        escape_graphql_string(&session), gents_protocol::row::AGENT_REQUEST_FIELDS,
     )).await.unwrap();
     let requests = response["data"]["AgentRequest"].as_array().unwrap().clone();
     let wakes: Vec<gents_protocol::row::AgentRequestRow> = requests
@@ -1024,14 +1025,11 @@ async fn a_retried_over_bound_wake_is_refused_again() {
         .unwrap()
         .to_owned();
     let bound = 8;
-    let over_bound = crate::request::lifecycle::next_request_hop(
-        crate::request::lifecycle::RequestHopCause::CrossSession { cause_hop: bound },
+    let over_bound = gents_protocol::request_lifecycle::next_request_hop(
+        gents_protocol::request_lifecycle::RequestHopCause::CrossSession { cause_hop: bound },
         0,
     );
-    assert!(!crate::request::lifecycle::request_hop_within_bound(
-        Some(bound),
-        over_bound
-    ));
+    assert!(!gents_protocol::request_lifecycle::request_hop_within_bound(Some(bound), over_bound));
     let refused_wake = "refused-over-bound-wake";
     let input = RequestInput {
         queue: Some(RequestQueue {
@@ -1092,10 +1090,7 @@ async fn a_retried_over_bound_wake_is_refused_again() {
     assert_eq!(successor.len(), 1);
     let hop = successor[0]["request_hop"].as_u64().unwrap() as u32;
     assert_eq!(hop, over_bound);
-    assert!(!crate::request::lifecycle::request_hop_within_bound(
-        Some(bound),
-        hop
-    ));
+    assert!(!gents_protocol::request_lifecycle::request_hop_within_bound(Some(bound), hop));
     admission
         .node
         .shutdown()

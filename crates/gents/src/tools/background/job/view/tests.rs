@@ -23,7 +23,7 @@ use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::lifecycle::admission_fixture::{
     fixture_job_pin, published_admission, PublishedAdmissionOptions,
 };
-use crate::tools::call::lifecycle::AwaitMode;
+use gents_protocol::tool_call::AwaitMode;
 
 async fn new() -> Job {
     new_job(Some(&live_settings(JobPolicy::default())), None).await

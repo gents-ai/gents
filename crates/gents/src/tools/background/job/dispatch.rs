@@ -40,20 +40,20 @@ use crate::plugin::data::StampContext;
 use crate::plugin::job_calls::JobCaller;
 use crate::plugin::store::InstalledPlugin;
 use crate::plugin::PluginVerdict;
-use crate::request::lifecycle::SessionMessageCause;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::graphql_string_list_literal;
 use crate::tools::background::status::ProcessControlScope;
-use crate::tools::call::hook::persistence::{
-    count_live_backgrounded_rows_in, MAX_BACKGROUNDED_TOOLS_PER_PARENT,
-};
+use crate::tools::call::hook::persistence::count_live_backgrounded_rows_in;
 use crate::tools::call::hook::DefraSessionHook;
 use crate::tools::call::lifecycle::delivery::PluginToolWrites;
 use crate::tools::call::lifecycle::plugin_receipt::decide;
 use crate::tools::call::lifecycle::PluginJobTerminal;
-use crate::tools::call::lifecycle::{AwaitMode, ReceiptDecision, ToolRowKind};
 use crate::tools::call::lifecycle::{FailureClass, ToolCallLifecycle, ToolCallState};
+use crate::tools::call::lifecycle::{ReceiptDecision, ToolRowKind};
 use crate::tools::surface::EndpointScope;
+use gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
+use gents_protocol::request_lifecycle::SessionMessageCause;
+use gents_protocol::tool_call::AwaitMode;
 
 /// Runs step 0 of the running foreground job tool call `lifecycle` and ends
 /// it unless the output adopts a job. Returns the payload the model reads.
@@ -851,7 +851,7 @@ pub async fn adopt_step0(
             payload,
         } => {
             *lifecycle = flipped;
-            crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+            crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
                 &lifecycle.access()?,
                 lifecycle.node_did(),
                 lifecycle.actor(),
@@ -866,7 +866,7 @@ pub async fn adopt_step0(
             receipt,
         } => {
             *lifecycle = flipped;
-            crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+            crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
                 &lifecycle.access()?,
                 lifecycle.node_did(),
                 lifecycle.actor(),

@@ -183,7 +183,7 @@ impl BackgroundCompletionObserver {
                 tracing::warn!(agent_did = %actor, %error, "session relationship recovery failed; will retry");
             }
             if let Err(error) =
-                crate::session::child_ownership::recover_agent_session_child_relationships_with_access(
+                crate::store::config_client::session_children::recover_agent_session_child_relationships_with_access(
                     &access,
                     &self.local_did,
                     &actor,

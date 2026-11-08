@@ -31,7 +31,7 @@ impl DefraSessionHook {
                 CREATE_GOAL_TOOL_NAME,
                 args,
                 deadline_at,
-                crate::tools::call::lifecycle::AwaitMode::Foreground,
+                gents_protocol::tool_call::AwaitMode::Foreground,
             )
             .await?;
         lifecycle.start_running().await?;
@@ -143,7 +143,7 @@ impl DefraSessionHook {
                 GET_GOAL_TOOL_NAME,
                 args,
                 deadline_at,
-                crate::tools::call::lifecycle::AwaitMode::Foreground,
+                gents_protocol::tool_call::AwaitMode::Foreground,
             )
             .await?;
         lifecycle.start_running().await?;
@@ -264,7 +264,7 @@ impl DefraSessionHook {
                 UPDATE_GOAL_TOOL_NAME,
                 args,
                 deadline_at,
-                crate::tools::call::lifecycle::AwaitMode::Foreground,
+                gents_protocol::tool_call::AwaitMode::Foreground,
             )
             .await?;
         lifecycle.start_running().await?;

@@ -178,7 +178,7 @@ impl ToolCallLifecycle {
         // The settlement's output segment commits before its session
         // relationship; until it is published, session readers other than
         // the job's Agent cannot see the job's outcome.
-        crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+        crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
             &self.access()?,
             &self.node_did,
             &self.actor,
@@ -206,7 +206,7 @@ impl ToolCallLifecycle {
                 status,
                 &terminal.output,
                 terminal.reason.as_deref(),
-                crate::request::lifecycle::RequestHopCause::Continuation,
+                gents_protocol::request_lifecycle::RequestHopCause::Continuation,
             )
             .await?;
         }

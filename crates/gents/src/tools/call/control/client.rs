@@ -422,7 +422,7 @@ async fn claim_inner(
                 let claim_doc = claim["_docID"].as_str().context("control claim lacks document ID")?;
                 (claim_doc.to_owned(), claim["receipt_json"].as_str().map(str::to_owned))
             } else {
-                let Some(session) = crate::session::load_agent_session_owner_in_txn(txn, &intent.node_did, &intent.session_id).await? else { return Ok(None); };
+                let Some(session) = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, &intent.node_did, &intent.session_id).await? else { return Ok(None); };
                 if session.doc_id != intent.session_doc_id || session.session.agent_did != intent.agent_did { return Ok(None); }
                 let Some((agent_doc, agent_row)) = crate::store::config_client::read_desired_state_record_in_txn(txn, crate::Collection::Agent, &intent.node_did, &intent.agent_did).await? else { return Ok(None); };
                 let Some(lifecycle) = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id_in_txn(txn, node.clone(), &intent.tool_call_doc_id, &intent.node_did, &intent.session_id, intent.requester_did.as_deref()).await? else { return Ok(None); };
@@ -510,8 +510,9 @@ pub(crate) async fn execute_claimed(
     agent: &identity::Did,
     intent: Intent,
 ) -> Result<()> {
-    use crate::tools::call::lifecycle::{AwaitMode, ToolCallLifecycle, ToolRowKind};
+    use crate::tools::call::lifecycle::{ToolCallLifecycle, ToolRowKind};
     use gents_protocol::process_control::ToolControlReceiptOutcome;
+    use gents_protocol::tool_call::AwaitMode;
     let signer = access
         .managed_agent_signer()
         .context("tool control requires a managed Agent signer")?;
@@ -607,7 +608,7 @@ pub(crate) async fn execute_claimed(
         let receipt = &receipt;
         let intent = &intent;
         Box::pin(async move {
-            let session = crate::session::load_agent_session_owner_in_txn(txn, &intent.node_did, &intent.session_id).await?.context("receipt session is unavailable")?;
+            let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, &intent.node_did, &intent.session_id).await?.context("receipt session is unavailable")?;
             anyhow::ensure!(session.doc_id == intent.session_doc_id && session.session.agent_did == intent.agent_did, "receipt session scope changed");
             let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(txn, crate::Collection::Agent, &intent.node_did, &intent.agent_did).await?.context("receipt agent is unavailable")?;
             anyhow::ensure!(client_authority(txn, intent, &agent_doc).await? == Some(true), "receipt publication is not authorized");

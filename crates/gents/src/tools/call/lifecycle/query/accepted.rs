@@ -4,11 +4,11 @@ use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
 
 use crate::request::streaming::AcceptedToolCall;
-use crate::session::canonical_rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS};
 #[cfg(test)]
 use crate::store::config_client::ConfigAccess;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::escape_graphql_string;
+use gents_protocol::output::rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS};
 
 use super::ToolCallLifecycle;
 
@@ -72,7 +72,8 @@ impl ToolCallLifecycle {
         requester_did: Option<&str>,
         require_complete: bool,
     ) -> Result<AcceptedToolCall> {
-        let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+        let scope =
+            gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
         let tool_id = escape_graphql_string(tool_doc_id);
         let response = txn
             .execute(&format!(
@@ -110,7 +111,7 @@ impl ToolCallLifecycle {
             .as_u64()
             .and_then(|value| u32::try_from(value).ok())
             .context("accepted tool lacks valid message sequence")?;
-        let await_mode = crate::tools::call::lifecycle::AwaitMode::from_persisted(
+        let await_mode = gents_protocol::tool_call::AwaitMode::from_persisted(
             tool["await_mode"].as_str().unwrap_or("foreground"),
         )
         .context("accepted tool has an invalid await mode")?;

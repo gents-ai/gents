@@ -68,7 +68,7 @@ impl ConfigCommandTool {
                 let (tool_name, collection, result) = match entry {
                     SurfaceToolDecl::Create(decl) => {
                         let result = if decl.collection
-                            == crate::session::mailbox::MAILBOX_COLLECTION
+                            == gents_protocol::row::MAILBOX_COLLECTION
                         {
                             crate::session::mailbox::validate_mailbox_write_decl(&decl)
                         } else {

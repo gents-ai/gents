@@ -447,7 +447,7 @@ async fn job_chain(
             "agent_new",
             &format!("ancestor-{level}"),
             json!({}),
-            crate::tools::call::lifecycle::AwaitMode::Background,
+            gents_protocol::tool_call::AwaitMode::Background,
             false,
         )
         .await
@@ -475,7 +475,7 @@ async fn job_chain(
         let response = access
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ {} }} }}"#,
-                crate::request::watcher::AGENT_REQUEST_FIELDS,
+                gents_protocol::row::AGENT_REQUEST_FIELDS,
             ))
             .await
             .unwrap();
@@ -1833,7 +1833,7 @@ async fn non_job_control_on_another_plugin_or_out_of_scope_row_is_refused() {
             "agent_new",
             "foreign",
             json!({}),
-            crate::tools::call::lifecycle::AwaitMode::Background,
+            gents_protocol::tool_call::AwaitMode::Background,
             false,
         )
         .await

@@ -69,10 +69,7 @@ pub use query::{
     MAX_LIMIT,
 };
 pub use render::render_filter;
-pub use schema::{
-    diagnose_failed_query, discovery_payload, introspection_query, parse_collection_schema,
-    unknown_collection_message, CollectionSchema, SchemaField,
-};
+pub use schema::{diagnose_failed_query, discovery_payload, unknown_collection_message};
 
 pub const DEFRA_QUERY_TOOL_NAME: &str = "query";
 

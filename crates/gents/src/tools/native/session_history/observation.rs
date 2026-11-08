@@ -70,7 +70,7 @@ pub async fn load_pinned_request_context_observation(
         .as_deref()
         .filter(|id| !id.is_empty())
         .context("context request lacks physical identity")?;
-    let scope = crate::session::session_scope_filter(
+    let scope = gents_protocol::session::session_scope_filter(
         node_did,
         owner.session_id.as_deref().unwrap(),
         owner.requester_did.as_deref(),

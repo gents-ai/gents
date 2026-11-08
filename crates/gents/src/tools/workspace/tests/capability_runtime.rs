@@ -328,14 +328,14 @@ async fn runtime_seal_case(unowned: bool) {
     let response = node
         .execute(&format!(
             "{{ AgentRequest {{ {} }} }}",
-            crate::request::admission::SIGNED_REQUEST_FIELDS
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
         ))
         .await;
     let row: gents_protocol::row::AgentRequestRow =
         crate::store::graphql::first_row(&response, "AgentRequest")
             .unwrap()
             .unwrap();
-    let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();
+    let request = gents_protocol::row::AgentRequest::try_from(row).unwrap();
     admin
         .add_actor_relationship(
             "AgentRequest",

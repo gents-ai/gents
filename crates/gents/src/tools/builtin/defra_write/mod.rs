@@ -7,8 +7,7 @@ use crate::store::config_client::ConfigAccess;
 
 mod input;
 
-pub use input::can_hold_canonical_count;
-pub(crate) use input::parameters as field_parameters;
+pub(crate) use crate::store::config_client::schema_introspection::parameters as field_parameters;
 pub(crate) use input::validate_input as validate_field_input;
 
 pub(crate) fn field_literal(schema: &str, value: &Value) -> Result<String> {
@@ -105,7 +104,7 @@ impl BoundedWriteTool {
     }
 
     fn ensure_declaration(&self) -> Result<()> {
-        if self.decl.collection == crate::session::mailbox::MAILBOX_COLLECTION {
+        if self.decl.collection == gents_protocol::row::MAILBOX_COLLECTION {
             bail!(
                 "MailboxItem requires the dedicated stamped mailbox tool and cannot use BoundedWriteTool"
             );
@@ -165,7 +164,7 @@ impl BoundedWriteTool {
                         )
                     })?;
                 let schema = schema_field.kind.graphql_type_name();
-                input::parameters(schema)?;
+                field_parameters(schema)?;
                 Ok((field.name.clone(), schema.to_owned()))
             })
             .collect()
@@ -296,7 +295,7 @@ impl crate::inference::llm::tool::Tool for BoundedWriteTool {
             }
             properties.insert(
                 field.name.clone(),
-                input::parameters(&types[&field.name])
+                field_parameters(&types[&field.name])
                     .expect("field_types validates supported schemas"),
             );
             if field.required {

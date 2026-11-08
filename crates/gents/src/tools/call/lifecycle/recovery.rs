@@ -581,7 +581,7 @@ impl super::ToolCallLifecycle {
                     status,
                     "",
                     Some(reason),
-                    crate::request::lifecycle::RequestHopCause::Continuation,
+                    gents_protocol::request_lifecycle::RequestHopCause::Continuation,
                 )
                 .await
             }
@@ -628,7 +628,7 @@ impl super::ToolCallLifecycle {
                 tracing::warn!(doc_id = %row.doc_id, "skipping completion redrive without request_doc_id");
                 continue;
             };
-            let scope = crate::session::session_scope_filter(
+            let scope = gents_protocol::session::session_scope_filter(
                 node_did,
                 session_id,
                 row.requester_did.as_deref(),
@@ -660,9 +660,9 @@ impl super::ToolCallLifecycle {
             // (Lean `CausalHop.return_keeps_caller_hop`).
             let wake =
                 if super::ToolRowKind::of(&row.tool_name) == super::ToolRowKind::SessionMessage {
-                    crate::request::lifecycle::RequestHopCause::Return
+                    gents_protocol::request_lifecycle::RequestHopCause::Return
                 } else {
-                    crate::request::lifecycle::RequestHopCause::Continuation
+                    gents_protocol::request_lifecycle::RequestHopCause::Continuation
                 };
             let appended =
                 crate::tools::background::completion::append_background_tool_completion_for_parent(
@@ -1044,7 +1044,7 @@ async fn append_recovered_background_tool_completion(
             status,
             "",
             Some(reason),
-            crate::request::lifecycle::RequestHopCause::Continuation,
+            gents_protocol::request_lifecycle::RequestHopCause::Continuation,
         )
         .await
     {
@@ -1261,7 +1261,7 @@ async fn selected_running_parent<'a>(
     if row.node_did.as_deref() != Some(node_did) {
         return Ok(None);
     }
-    let scope = crate::session::session_scope_filter(
+    let scope = gents_protocol::session::session_scope_filter(
         node_did,
         &row.session_id,
         row.requester_did.as_deref(),
@@ -1338,7 +1338,7 @@ async fn selected_agent_observes_terminal_tool(
         ) else {
             continue;
         };
-        let scope = crate::session::session_scope_filter(
+        let scope = gents_protocol::session::session_scope_filter(
             node_did,
             &row.session_id,
             row.requester_did.as_deref(),

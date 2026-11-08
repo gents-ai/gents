@@ -29,11 +29,11 @@ use crate::plugin::store::{
     parse_coordinate, read_published_record, InstalledPlugin, PublishedPluginReadError,
 };
 use crate::plugin::GuestTrap;
-use crate::request::lifecycle::SessionMessageCause;
-use crate::session::origin::SessionScope;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::lifecycle::{PluginJobTerminal, ToolCallLifecycle, ToolCallState};
+use gents_protocol::request_lifecycle::SessionMessageCause;
+use gents_protocol::session::SessionScope;
 
 /// What one `run_step` did.
 #[derive(Debug, Clone, PartialEq, Eq)]

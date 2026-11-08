@@ -235,7 +235,7 @@ async fn load_tool_file_change_observation_source(
         .filter(|id| !id.is_empty())
         .context("file image observation has no physical identity")?
         .to_owned();
-    let scope = crate::session::origin::SessionScope {
+    let scope = gents_protocol::session::SessionScope {
         node_did: node_did.to_owned(),
         session_id: session_id.to_owned(),
         requester_did: requester_did.map(str::to_owned),
@@ -433,7 +433,7 @@ async fn load_tool_call_read_source(
         )
     })?;
 
-    let delivery_rows: Vec<&crate::session::canonical_rows::TranscriptMessageRow> = headers
+    let delivery_rows: Vec<&gents_protocol::output::rows::TranscriptMessageRow> = headers
         .iter()
         .filter(|row| {
             matches!(
@@ -443,7 +443,7 @@ async fn load_tool_call_read_source(
             )
         })
         .collect();
-    let replies: Vec<&crate::session::canonical_rows::TranscriptMessageRow> = delivery_rows
+    let replies: Vec<&gents_protocol::output::rows::TranscriptMessageRow> = delivery_rows
         .iter()
         .copied()
         .filter(|row| is_invocation_reply(&row.message, tool_call_doc_id))
@@ -534,7 +534,7 @@ async fn load_tool_call_read_source(
         // authored payload; its output lives on the call's tool_call segment.
         let response = source
             .execute(
-                &crate::session::canonical_rows::request_output_segments_query(
+                &gents_protocol::output::rows::request_output_segments_query(
                     &expected_request_doc_id,
                 ),
             )
@@ -543,7 +543,7 @@ async fn load_tool_call_read_source(
             .pointer("/data/AgentOutputSegment")
             .and_then(Value::as_array)
             .context("canonical tool output query omitted segments")?;
-        let rows = crate::session::canonical_rows::decode_scoped_request_output_segments(
+        let rows = gents_protocol::output::rows::decode_scoped_request_output_segments(
             values,
             node_did,
             Some(session_id),
@@ -690,10 +690,10 @@ async fn load_accepted_tool_call(
     requester_did: Option<&str>,
 ) -> Result<(
     ToolCallIdentityRow,
-    Vec<crate::session::canonical_rows::TranscriptMessageRow>,
+    Vec<gents_protocol::output::rows::TranscriptMessageRow>,
     Option<String>,
     String,
-    crate::session::canonical_rows::TranscriptMessageRow,
+    gents_protocol::output::rows::TranscriptMessageRow,
 )> {
     let call = load_tool_call_identity(
         source,
@@ -824,7 +824,7 @@ async fn load_accepted_tool_call(
         };
         let response = source
             .execute(
-                &crate::session::canonical_rows::request_output_segments_query(
+                &gents_protocol::output::rows::request_output_segments_query(
                     expected_request_doc_id,
                 ),
             )
@@ -884,12 +884,12 @@ async fn scoped_canonical_headers(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-) -> Result<Vec<crate::session::canonical_rows::TranscriptMessageRow>> {
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+) -> Result<Vec<gents_protocol::output::rows::TranscriptMessageRow>> {
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{ AgentMessage(filter: {{ {scope} }}, order: {{ sequence: ASC }}) {{ {fields} }} }}"#,
         scope = scope,
-        fields = crate::session::canonical_rows::AGENT_MESSAGE_FIELDS,
+        fields = gents_protocol::output::rows::AGENT_MESSAGE_FIELDS,
     );
 
     let resp = source.execute(&query).await?;
@@ -906,8 +906,9 @@ async fn scoped_canonical_headers(
         .cloned()
         .context("canonical header query omitted AgentMessage rows")?;
     rows.iter()
-        .map(crate::session::canonical_rows::decode_transcript_message_row)
-        .collect()
+        .map(gents_protocol::output::rows::decode_transcript_message_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
 }
 
 #[derive(Debug, Deserialize)]
@@ -944,7 +945,7 @@ async fn load_tool_call_identity(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<ToolCallIdentityRow> {
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let escaped_doc_id = escape_graphql_string(tool_call_doc_id);
     let query = format!(
         r#"{{
@@ -1440,8 +1441,8 @@ mod tests {
                 duplicate.message_key.push_str(":duplicate");
                 duplicate.sequence += 1;
                 txn.execute_with_variables(
-                    crate::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
-                    &crate::session::canonical_rows::transcript_message_create_variables(
+                    gents_protocol::output::rows::CREATE_AGENT_MESSAGE_MUTATION,
+                    &gents_protocol::output::rows::transcript_message_create_variables(
                         &duplicate,
                     )?,
                 )
@@ -1485,8 +1486,8 @@ mod tests {
                     tool_call_doc_id: doc_id.clone(),
                 };
                 txn.execute_with_variables(
-                    crate::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
-                    &crate::session::canonical_rows::transcript_message_create_variables(
+                    gents_protocol::output::rows::CREATE_AGENT_MESSAGE_MUTATION,
+                    &gents_protocol::output::rows::transcript_message_create_variables(
                         &malformed,
                     )?,
                 )

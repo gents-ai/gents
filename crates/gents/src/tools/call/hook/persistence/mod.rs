@@ -11,16 +11,17 @@ use crate::tools::background::status::{
     BackgroundToolArgs, CancelToolArgs, ProcessControlScope, ReadToolOutputOutcome, WaitToolArgs,
 };
 use crate::tools::call::lifecycle::query::load_tool_call_result;
-use crate::tools::call::lifecycle::{AwaitMode, CancelCause, FailureClass, ToolCallLifecycle};
+use crate::tools::call::lifecycle::{CancelCause, FailureClass, ToolCallLifecycle};
 use crate::tools::native::{
     AGENT_NEW_TOOL_NAME, CANCEL_PROCESS_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
     READ_PROCESS_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
 };
 use crate::truncation::{truncate_text, TruncationMode};
+use gents_protocol::tool_call::AwaitMode;
 
 use super::DefraSessionHook;
 
-pub(crate) const MAX_BACKGROUNDED_TOOLS_PER_PARENT: usize = 8;
+use gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
 
 mod background_control;
 mod background_tools;

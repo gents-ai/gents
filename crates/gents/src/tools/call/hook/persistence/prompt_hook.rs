@@ -227,7 +227,7 @@ impl DefraSessionHook {
                     tool_name,
                     args,
                     deadline_at,
-                    crate::tools::call::lifecycle::AwaitMode::Foreground,
+                    gents_protocol::tool_call::AwaitMode::Foreground,
                 )
                 .await?;
             lc.start_running().await?;
@@ -333,7 +333,7 @@ impl DefraSessionHook {
                     tool_name,
                     args,
                     deadline_at,
-                    crate::tools::call::lifecycle::AwaitMode::Foreground,
+                    gents_protocol::tool_call::AwaitMode::Foreground,
                 )
                 .await?;
             match denial {

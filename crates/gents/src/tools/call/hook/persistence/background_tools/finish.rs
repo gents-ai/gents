@@ -163,7 +163,7 @@ pub(in crate::tools::call::hook::persistence) async fn finish_background_executi
                             BACKGROUND_TIMEOUT_NOTIFICATION.0,
                             "",
                             Some(BACKGROUND_TIMEOUT_NOTIFICATION.1),
-                            crate::request::lifecycle::RequestHopCause::Continuation,
+                            gents_protocol::request_lifecycle::RequestHopCause::Continuation,
                         )
                         .await
                     })
@@ -202,7 +202,7 @@ pub(in crate::tools::call::hook::persistence) async fn finish_background_executi
                             "cancelled",
                             "",
                             Some(&cancel_reason),
-                            crate::request::lifecycle::RequestHopCause::Continuation,
+                            gents_protocol::request_lifecycle::RequestHopCause::Continuation,
                         )
                         .await
                     })
@@ -278,7 +278,7 @@ pub(in crate::tools::call::hook::persistence) async fn finish_background_executi
                             "completed",
                             &notification_result,
                             None,
-                            crate::request::lifecycle::RequestHopCause::Continuation,
+                            gents_protocol::request_lifecycle::RequestHopCause::Continuation,
                         )
                         .await
                     })
@@ -358,7 +358,7 @@ pub(in crate::tools::call::hook::persistence) async fn finish_background_executi
                             "failed",
                             &notification_result,
                             Some("tool_failed"),
-                            crate::request::lifecycle::RequestHopCause::Continuation,
+                            gents_protocol::request_lifecycle::RequestHopCause::Continuation,
                         )
                         .await
                     })
@@ -398,7 +398,7 @@ pub(in crate::tools::call::hook::persistence) async fn finish_background_executi
                         "failed",
                         &reason,
                         Some("tool_panicked"),
-                        crate::request::lifecycle::RequestHopCause::Continuation,
+                        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
                     )
                     .await
                 })

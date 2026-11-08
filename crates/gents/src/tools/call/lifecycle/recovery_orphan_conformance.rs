@@ -2,8 +2,9 @@ use crate::request::lifecycle::{RequestLifecycle, RequestTerminalOutcome, Termin
 use crate::tools::call::lifecycle::admission_fixture::{
     published_session_message_with_owner, PublishedAdmission, PublishedAdmissionOptions,
 };
-use crate::tools::call::lifecycle::{AwaitMode, ToolCallLifecycle};
+use crate::tools::call::lifecycle::ToolCallLifecycle;
 use gents_protocol::output::TerminalOutput;
+use gents_protocol::tool_call::AwaitMode;
 
 async fn terminalize_accepted_parent(
     admitted: &PublishedAdmission,

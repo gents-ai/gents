@@ -16,7 +16,7 @@ pub(crate) async fn append_background_tool_completion(
     status: &str,
     result: &str,
     reason: Option<&str>,
-    wake: crate::request::lifecycle::RequestHopCause,
+    wake: gents_protocol::request_lifecycle::RequestHopCause,
 ) -> Result<()> {
     let parent_request =
         crate::request::binding::load_agent_request_with_access(access, parent_request_id)
@@ -51,7 +51,7 @@ pub(crate) async fn append_background_tool_completion_for_parent(
     status: &str,
     result: &str,
     reason: Option<&str>,
-    wake: crate::request::lifecycle::RequestHopCause,
+    wake: gents_protocol::request_lifecycle::RequestHopCause,
 ) -> Result<()> {
     let parent_request = crate::request::binding::load_agent_request_by_doc_id_with_access(
         access,
@@ -79,7 +79,7 @@ pub(crate) async fn append_background_tool_completion_for_parent(
 async fn append_with_parent(
     node: &std::sync::Arc<EmbeddedNode>,
     access: &crate::ConfigAccess,
-    parent_request: &crate::AgentRequest,
+    parent_request: &gents_protocol::row::AgentRequest,
     parent_session_id: &str,
     parent_request_id: &str,
     tool_call_doc_id: &str,
@@ -87,7 +87,7 @@ async fn append_with_parent(
     status: &str,
     result: &str,
     reason: Option<&str>,
-    wake: crate::request::lifecycle::RequestHopCause,
+    wake: gents_protocol::request_lifecycle::RequestHopCause,
 ) -> Result<()> {
     anyhow::ensure!(
         parent_request.request_id == parent_request_id,
@@ -165,7 +165,7 @@ async fn append_with_parent(
 
 async fn stored_notification_text(
     access: &crate::ConfigAccess,
-    parent: &crate::AgentRequest,
+    parent: &gents_protocol::row::AgentRequest,
     notification_doc_id: &str,
 ) -> Result<String> {
     let (_, message) = crate::session::load_canonical_message(
@@ -230,9 +230,9 @@ struct NotificationDelivery<'a> {
 async fn ensure_notification_delivery(
     node: &std::sync::Arc<EmbeddedNode>,
     access: &crate::ConfigAccess,
-    parent: &crate::AgentRequest,
+    parent: &gents_protocol::row::AgentRequest,
     existing: Option<side_effects::ExistingNotification>,
-    wake: crate::request::lifecycle::RequestHopCause,
+    wake: gents_protocol::request_lifecycle::RequestHopCause,
     delivery: NotificationDelivery<'_>,
 ) -> Result<SideEffects> {
     let enqueued =

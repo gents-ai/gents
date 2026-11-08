@@ -8,7 +8,8 @@ use crate::store::config_client::{ConfigAccess, ConfigClientError};
 use crate::tools::background::job::control::control_by_doc_id;
 use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::hook::BackgroundExecutionRegistry;
-use crate::tools::call::lifecycle::{AwaitMode, CancelCause, ToolCallLifecycle, ToolRowKind};
+use crate::tools::call::lifecycle::{CancelCause, ToolCallLifecycle, ToolRowKind};
+use gents_protocol::tool_call::AwaitMode;
 
 pub mod client;
 
@@ -774,13 +775,14 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&data_path).unwrap();
-        let node_identity = Arc::new(
-            KeyIdentity::load_or_create(data_path.join("agent.key"), None).unwrap(),
-        );
+        let node_identity =
+            Arc::new(KeyIdentity::load_or_create(data_path.join("agent.key"), None).unwrap());
         let node = Arc::new(
             defra_node::Node::builder()
                 .data_path(&data_path)
-                .with_node_identity_did(crate::store::identity::NodeIdentity::did(node_identity.as_ref()))
+                .with_node_identity_did(crate::store::identity::NodeIdentity::did(
+                    node_identity.as_ref(),
+                ))
                 .build()
                 .await
                 .unwrap(),
@@ -878,12 +880,12 @@ mod tests {
             "session-1",
             "cancel-native-tool",
         )
-            .await
-            .unwrap()
-            .unwrap()
-            .doc_id()
-            .unwrap()
-            .to_owned();
+        .await
+        .unwrap()
+        .unwrap()
+        .doc_id()
+        .unwrap()
+        .to_owned();
         let process = crate::tools::exec::ownership::test_support::OwnedTestProcess::spawn(Some(
             registry.process_recorder("cancel-native-tool", &physical),
         ))
@@ -956,9 +958,9 @@ mod tests {
             "session-1",
             "cancel-native-tool",
         )
-            .await
-            .unwrap()
-            .expect("tool row");
+        .await
+        .unwrap()
+        .expect("tool row");
         assert!(row.is_cancelled());
         assert!(matches!(
             operator_process_control(&agent_access, &registry, Some(node_did), &command)
@@ -976,9 +978,9 @@ mod tests {
             "session-1",
             "sibling-native-tool",
         )
-            .await
-            .unwrap()
-            .expect("sibling row");
+        .await
+        .unwrap()
+        .expect("sibling row");
         assert!(sibling.is_running());
 
         let _ = std::fs::remove_dir_all(&data_path);
@@ -1070,7 +1072,7 @@ mod tests {
     async fn owned_cancel_persists_custom_completion_reason_for_redrive() {
         use crate::store::identity::NodeIdentity;
         use crate::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
-        use crate::SIGNED_REQUEST_FIELDS;
+        use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
         let data_path = std::env::temp_dir().join(format!(
             "agent-tool-control-custom-cancel-{}",
             uuid::Uuid::new_v4()
@@ -1194,7 +1196,9 @@ mod tests {
         );
         let message_key = format!("background-completion-notification:{tool_doc_id}:tool");
         let message_key = crate::store::graphql::escape_graphql_string(&message_key);
-        let notification_query = format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{message_key}" }} }}, limit: 2) {{ message_key session_id node_did requester_did role }} }}"#);
+        let notification_query = format!(
+            r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{message_key}" }} }}, limit: 2) {{ message_key session_id node_did requester_did role }} }}"#
+        );
         let notification_response = agent_access.execute(&notification_query).await.unwrap();
         let notifications = notification_response["data"]["AgentMessage"]
             .as_array()

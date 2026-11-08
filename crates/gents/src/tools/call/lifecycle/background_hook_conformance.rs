@@ -345,10 +345,10 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
         let input = &input;
         Box::pin(async move { txn.execute_with_variables("mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }", &serde_json::json!({"input":input})).await })
     }).await.unwrap();
-    let response = access.execute(&format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "scope-historical" }} }}) {{ {} }} }}"#, crate::request::watcher::AGENT_REQUEST_FIELDS)).await.unwrap();
+    let response = access.execute(&format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "scope-historical" }} }}) {{ {} }} }}"#, gents_protocol::row::AGENT_REQUEST_FIELDS)).await.unwrap();
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    let request: crate::request::watcher::AgentRequest = row.try_into().unwrap();
+    let request: gents_protocol::row::AgentRequest = row.try_into().unwrap();
     assert!(request.requester_did.is_none());
     let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
     let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(

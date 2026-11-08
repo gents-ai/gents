@@ -130,14 +130,15 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
             let (session_id, requester_did, node_did) =
                 (&session_id, &requester_did, &admission.node_did);
             Box::pin(async move {
-                let session = crate::session::load_agent_session_row_in_txn(
-                    txn,
-                    node_did,
-                    session_id,
-                    requester_did.as_deref(),
-                )
-                .await?
-                .unwrap();
+                let session =
+                    crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+                        txn,
+                        node_did,
+                        session_id,
+                        requester_did.as_deref(),
+                    )
+                    .await?
+                    .unwrap();
                 Ok::<_, anyhow::Error>(gents_protocol::file_inventory::FileInventoryAdmission {
                     session_doc_id: session.doc_id,
                     request: gents_protocol::session_hydration::HydrationRequest {

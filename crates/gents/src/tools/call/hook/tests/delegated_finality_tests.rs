@@ -2,17 +2,19 @@ use std::sync::Arc;
 
 use crate::request::admission::AgentRequestAdmissionVerifier;
 use crate::request::lifecycle::{
-    submit_client_request, ClaimOutcome, ExecutionOrigin, RequestLifecycle, SessionMessageCause,
-    SessionMessageTarget,
+    submit_client_request, ClaimOutcome, ExecutionOrigin, RequestLifecycle,
 };
-use crate::request::watcher::AgentRequest;
 use crate::session::message::{AgentMessageDelivery, Plan, RenderedBody};
 use crate::store::config_client::{
     ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use crate::store::identity::NodeIdentity;
-use crate::tools::call::lifecycle::{AwaitMode, FailureClass, ToolCallLifecycle};
+use crate::tools::call::lifecycle::{FailureClass, ToolCallLifecycle};
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+use gents_protocol::request_lifecycle::SessionMessageCause;
+use gents_protocol::request_lifecycle::SessionMessageTarget;
+use gents_protocol::row::AgentRequest;
+use gents_protocol::tool_call::AwaitMode;
 use serde_json::json;
 
 struct Fixture {
@@ -441,11 +443,11 @@ async fn cancelled_after_child_commit_recovers_relationships_in_the_actor_watche
     assert_eq!(request.requester_did.as_deref(), Some(fixture.parent.did()));
     let response = child_access.execute(&format!(
         "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{}\" }} }}) {{ {} relationships_pending }} }}",
-        crate::store::graphql::escape_graphql_string(doc), crate::SIGNED_REQUEST_FIELDS,
+        crate::store::graphql::escape_graphql_string(doc), gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
     )).await.unwrap();
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    crate::request::admission::verify_request_receipt_signature(&row).unwrap();
+    crate::store::identity::request_receipt::verify_request_receipt_signature(&row).unwrap();
     assert_eq!(
         row.admission_signer_did.as_deref(),
         Some(fixture.parent.did())
@@ -532,7 +534,7 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
         let query = format!(
             "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{}\" }} }}) {{ {} }} }}",
             crate::store::graphql::escape_graphql_string(&first.request_doc_id),
-            crate::SIGNED_REQUEST_FIELDS
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
         );
         let response = child_access.execute(&query).await.unwrap();
         let row: gents_protocol::row::AgentRequestRow =
@@ -663,7 +665,7 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
         let query = format!(
             "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{}\" }} }}) {{ {} }} }}",
             crate::store::graphql::escape_graphql_string(&receipt.request_doc_id),
-            crate::SIGNED_REQUEST_FIELDS
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
         );
         let row = child_access.execute(&query).await.unwrap();
         let row: gents_protocol::row::AgentRequestRow =
@@ -685,7 +687,7 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
             .is_some_and(|value| !value.is_empty()));
         let session_doc_id = row.session_doc_id.clone();
         let agent_doc_id = row.agent_doc_id.clone();
-        crate::request::admission::verify_request_receipt_signature(&row).unwrap();
+        crate::store::identity::request_receipt::verify_request_receipt_signature(&row).unwrap();
         let request = AgentRequest::try_from(row).unwrap();
         let (request, admission) = verifier
             .verify_fresh_for_claim_with_identity(&request, fixture.child.as_ref())
@@ -705,7 +707,9 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
                 Some(fixture.child.as_ref()),
             )
             .await;
-            let error = blocked.err().expect("a revoked parent's steering snapshot fails closed");
+            let error = blocked
+                .err()
+                .expect("a revoked parent's steering snapshot fails closed");
             assert!(
                 format!("{error:#}").contains("local agent-message source is unavailable"),
                 "{error:#}"
@@ -791,7 +795,7 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
                 .unwrap();
             let response = child_access.execute(&format!(
                 "{{ AgentRequest(filter: {{ request_id: {{ _eq: \"forged-source\" }} }}) {{ {} }} }}",
-                crate::SIGNED_REQUEST_FIELDS,
+                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
             )).await.unwrap();
             let row: gents_protocol::row::AgentRequestRow =
                 serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();

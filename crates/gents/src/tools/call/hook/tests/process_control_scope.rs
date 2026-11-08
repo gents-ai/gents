@@ -465,11 +465,12 @@ mod job_control {
     use crate::tools::call::lifecycle::admission_fixture::{
         fixture_job_pin, publish_accepted_on_claimed_request,
     };
-    use crate::tools::call::lifecycle::{AwaitMode, ToolCallLifecycle};
+    use crate::tools::call::lifecycle::ToolCallLifecycle;
     use gents_protocol::job::{
         JobBudget, JobControlKind, JobControlOutcome, JobPin, JobProgress, JobReadError, JobState,
     };
     use gents_protocol::plugin::{PluginExecutionReceipt, PluginExecutionVerdict};
+    use gents_protocol::tool_call::AwaitMode;
 
     struct JobHook {
         _dir: tempfile::TempDir,
