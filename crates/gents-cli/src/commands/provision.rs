@@ -18,8 +18,10 @@ use crate::{
 pub(crate) async fn provision(args: ProvisionArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
     let node_name = resolve_provision_node_name(&args);
+    let owner = crate::home_state::load_client_identity().await?;
     let identity = ensure_home_identity(
         &home_dir,
+        owner.did(),
         &node_name,
         args.bootstrap_file_identity,
         args.bootstrap_macos_keychain,
@@ -114,6 +116,7 @@ fn resolve_provision_node_name(args: &ProvisionArgs) -> String {
 )]
 async fn ensure_home_identity(
     home_dir: &Path,
+    owner: &str,
     node_name: &str,
     bootstrap_file_identity: bool,
     bootstrap_macos_keychain: bool,
@@ -134,8 +137,10 @@ async fn ensure_home_identity(
         anyhow::bail!("bootstrap identity flags are mutually exclusive");
     }
 
-    if let Some(report) = read_init_config(home_dir)?.and_then(report_from_stored_identity) {
-        return Ok(report);
+    if let Some(config) = read_init_config(home_dir)? {
+        if let Some(report) = existing_identity_report(home_dir, config)? {
+            return Ok(report);
+        }
     }
 
     if !bootstrap_file_identity && !bootstrap_macos_keychain && !bootstrap_macos_secure_enclave {
@@ -175,10 +180,24 @@ async fn ensure_home_identity(
         reset: false,
         store_key_custody,
         store_lock: &store_lock,
+        owner,
     })
     .await
     .with_context(|| format!("initializing identity metadata in {}", home_dir.display()))?;
     Ok(report_from_initialized_identity(initialized))
+}
+
+/// An initialized home is reported as existing only when its signer loads, so
+/// provisioning fails closed before opening the store or minting a key.
+fn existing_identity_report(
+    home_dir: &Path,
+    config: StoredInitConfig,
+) -> Result<Option<ProvisionIdentityReport>> {
+    if config.node_did.trim().is_empty() {
+        return Ok(None);
+    }
+    crate::home_state::load_initialized_home_identity(home_dir, &config)?;
+    Ok(report_from_stored_identity(config))
 }
 
 fn report_from_stored_identity(config: StoredInitConfig) -> Option<ProvisionIdentityReport> {
@@ -223,10 +242,14 @@ mod tests {
 
     #[tokio::test]
     async fn existing_provision_identity_remains_readable_while_runtime_holds_the_store() {
+        use gents::NodeIdentity as _;
         let temp = tempfile::tempdir().unwrap();
+        let owner = gents::KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
+        let owner = owner.did();
         let home = temp.path().join("home");
         let original = ensure_home_identity(
             &home,
+            owner,
             "owner",
             true,
             false,
@@ -241,6 +264,7 @@ mod tests {
         let runtime_lock = gents::store::local::home::lock_home_store(&home).unwrap();
         let observed = ensure_home_identity(
             &home,
+            owner,
             "different-requested-name",
             false,
             false,
@@ -266,6 +290,7 @@ mod tests {
         let _held = gents::store::local::home::lock_store(&new_home, &data).unwrap();
         let error = match ensure_home_identity(
             &new_home,
+            owner,
             "owner",
             true,
             false,

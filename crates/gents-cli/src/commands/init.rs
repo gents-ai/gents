@@ -190,6 +190,7 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
                 .clone()
                 .unwrap_or_else(|| default_key_path(&home_dir, &args.node_name))
         });
+        let owner = crate::home_state::load_client_identity().await?;
         let summary = write_identity_only_home_metadata(IdentityOnlyHomeOptions {
             home: &home_dir,
             node_name: &args.node_name,
@@ -202,6 +203,7 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
             reset: args.reset,
             store_key_custody: crate::cli::args::store_key_custody(args.store_key_custody),
             store_lock: &store_lock,
+            owner: owner.did(),
         })
         .await?;
         let output = json!({
@@ -752,6 +754,9 @@ pub(crate) struct IdentityOnlyHomeOptions<'a> {
     pub(crate) store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice,
     /// The home's held store lock; an empty store is protected under it.
     pub(crate) store_lock: &'a gents::store::local::home::StoreLock,
+    /// The init User: the client key that a fresh store's one-shot
+    /// bootstrap makes the node's native admin.
+    pub(crate) owner: &'a str,
 }
 
 struct HomeIdentityOptions<'a> {
@@ -796,13 +801,13 @@ pub(crate) async fn write_identity_only_home_metadata(
     // Every later opener requires the fresh-store provenance marker, so an
     // identity-only home protects its empty store exactly as full init does.
     let fresh_backend = if fs::read_dir(&data_dir)?.next().is_none() {
-        Some(
-            gents::store::local::backend_protection::FreshBackendStore::observe(
-                &data_dir,
-                options.store_lock,
-            )
-            .await?,
+        let fresh = gents::store::local::backend_protection::FreshBackendStore::observe(
+            &data_dir,
+            options.store_lock,
         )
+        .await?;
+        reserve_fresh_bootstrap(options.home).await?;
+        Some(fresh)
     } else {
         None
     };
@@ -849,6 +854,15 @@ pub(crate) async fn write_identity_only_home_metadata(
         fresh_backend
             .initialize(&store_key, Some(initialized_identity.identity.did()))
             .await?;
+        bootstrap_identity_only_owner(
+            options.home,
+            &data_dir,
+            &store_key,
+            options.store_lock,
+            initialized_identity.identity.clone(),
+            options.owner,
+        )
+        .await?;
     }
     write_init_config(options.home, &stored)?;
     let runtime_state_reset = if options.reset {
@@ -870,6 +884,40 @@ pub(crate) async fn write_identity_only_home_metadata(
         tool_root,
         runtime_state_reset,
     })
+}
+
+/// An identity-only home has no default Agent, so its fresh-store bootstrap
+/// grants only the init User's direct set, under the same consumed reservation
+/// and from the same Node principal as full initialization.
+async fn bootstrap_identity_only_owner(
+    home: &Path,
+    data_dir: &Path,
+    store_key: &gents::store::local::store_key::StoreKey,
+    store_lock: &gents::store::local::home::StoreLock,
+    runtime: Arc<dyn NodeIdentity>,
+    owner: &str,
+) -> Result<()> {
+    use gents::store::identity::GrantSet;
+    let runtime_did = identity::Did::new(runtime.did())?;
+    let (node, _admission) =
+        gents::store::local::backend_protection::ProtectedBackendStore::open(
+            data_dir, store_key, store_lock,
+        )
+        .await?
+        .preflight(store_key, Some(runtime_did.as_str()))
+        .await?
+        .start_node(store_key, runtime, None, None, home)
+        .await?;
+    let granted = GrantSet::HouseholdOwner
+        .grant(
+            &ConfigAccess::local_as(node.clone(), runtime_did),
+            &identity::Did::new(owner)?,
+        )
+        .await;
+    let shutdown = node.shutdown().await;
+    granted.context("granting the init User native administration")?;
+    shutdown.context("shutting down the bootstrap node")?;
+    Ok(())
 }
 
 /// Identity and key custody must survive an error or interruption before
@@ -1690,6 +1738,7 @@ mod tests {
     #[tokio::test]
     async fn an_identity_only_home_protects_its_fresh_store_for_later_openers() {
         let temp = tempfile::tempdir().unwrap();
+        let owner = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
         let home = temp.path().join("home");
         let data = default_data_dir(&home);
         let (lock_home, lock_data) = (home.clone(), data.clone());
@@ -1710,18 +1759,37 @@ mod tests {
             reset: false,
             store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
             store_lock: &lock,
+            owner: owner.did(),
         })
         .await
         .unwrap();
         let key = gents::store::local::store_key::open_home_store_key(&home, &data)
             .await
             .unwrap();
-        gents::store::local::backend_protection::ProtectedBackendStore::open(&data, &key, &lock)
-            .await
-            .expect("the identity-only store carries fresh provenance")
-            .preflight(&key, Some(&summary.node_did))
-            .await
-            .expect("the protected store is bound to the home's Node DID");
+        let config = read_init_config(&home).unwrap().unwrap();
+        let runtime = crate::home_state::load_initialized_home_identity(&home, &config).unwrap();
+        let (node, _admission) =
+            gents::store::local::backend_protection::ProtectedBackendStore::open(&data, &key, &lock)
+                .await
+                .expect("the identity-only store carries fresh provenance")
+                .preflight(&key, Some(&summary.node_did))
+                .await
+                .expect("the protected store is bound to the home's Node DID")
+                .start_node(&key, runtime, None, None, &home)
+                .await
+                .unwrap();
+        let owned = ConfigAccess::local_as(node.clone(), identity::Did::new(owner.did()).unwrap())
+            .collection_version(gents_protocol::schemas::NODE_NAME)
+            .await;
+        node.shutdown().await.unwrap();
+        assert!(
+            owned.unwrap().is_some(),
+            "the init User administers the identity-only node"
+        );
+        assert!(
+            home.join(".node-bootstrap-consumed").exists(),
+            "the bootstrap reservation is consumed"
+        );
     }
 
     fn overwrite(home: &Path, user_home: &Path) -> Result<gents::store::local::home::StoreLock> {
