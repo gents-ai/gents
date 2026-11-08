@@ -1267,8 +1267,7 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
         core.request_status_enrollment(&skewed).await.unwrap_err()
     );
     assert!(
-        error.contains("update the app and the runtime to the same version")
-            && error.contains("AgentSession"),
+        error.contains("use matching Gents versions") && error.contains("AgentSession"),
         "{error}"
     );
     assert!(
