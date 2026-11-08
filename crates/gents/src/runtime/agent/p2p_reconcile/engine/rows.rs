@@ -14,7 +14,6 @@ pub(super) struct PairingStateRow {
     pub(super) peer_id: Option<String>,
     #[serde(default)]
     pub(super) node_did: Option<String>,
-    pub(super) collections: Option<Vec<String>>,
     pub(super) replicator_addresses: Option<Vec<String>>,
     #[serde(default)]
     pub(super) template: Option<String>,
@@ -34,7 +33,6 @@ pub(super) struct AppliedStateRow {
     pub(super) doc_id: String,
     #[serde(default)]
     pub(super) peer_id: String,
-    collections: Option<Vec<String>>,
     pub(super) replicator_addresses: Option<Vec<String>>,
     #[serde(default)]
     replicator_filter: Option<String>,
@@ -45,7 +43,6 @@ pub(super) struct AppliedStateRow {
 impl AppliedStateRow {
     pub(super) fn into_applied(self) -> PairingApplied {
         PairingApplied {
-            collections: self.collections.unwrap_or_default().into_iter().collect(),
             replicator_addresses: self
                 .replicator_addresses
                 .unwrap_or_default()

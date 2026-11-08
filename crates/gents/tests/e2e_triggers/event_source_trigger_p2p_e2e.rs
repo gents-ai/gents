@@ -91,7 +91,6 @@ async fn p2p_refuses_to_replicate_an_application_event_source() {
     register_replicated_event_schema(db_agent.node.as_ref()).await;
 
     let writer = EmbeddedRemoteP2pAdmin::new(db_writer.node.clone());
-    let agent = EmbeddedRemoteP2pAdmin::new(db_agent.node.clone());
     let agent_addr = wait_for_listen_addr(db_agent.node.as_ref()).await;
     writer
         .connect(std::slice::from_ref(&agent_addr))
@@ -99,13 +98,15 @@ async fn p2p_refuses_to_replicate_an_application_event_source() {
         .expect("connect writer to agent");
     wait_for_connected_peer(db_writer.node.as_ref()).await;
 
-    for admin in [&writer, &agent] {
+    for node in [&db_writer.node, &db_agent.node] {
         assert!(
-            refuses_runtime_local(
-                admin
-                    .add_p2p_collections(&["ReplicatedEvent".to_owned()])
-                    .await
-            ),
+            !gents::store::identity::node_p2p(node)
+                .expect("P2P transport")
+                .get_collections()
+                .await
+                .expect("list P2P subscriptions")
+                .iter()
+                .any(|collection| collection == "ReplicatedEvent"),
             "an application collection must not be subscribed"
         );
     }

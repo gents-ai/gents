@@ -503,7 +503,6 @@ impl PairingStateStore for GraphqlPairingStateStore {
         }
 
         let peer_id = escape_graphql_string(peer_id);
-        let collections = graphql_nullable_string_array(&applied.state.collections);
         let replicator_addresses =
             graphql_nullable_string_array(&applied.state.replicator_addresses);
         let replicator_filter = graphql_nullable_filter_literal(&applied.state.replicator_filter);
@@ -523,7 +522,6 @@ impl PairingStateStore for GraphqlPairingStateStore {
                         peer_id: "{peer_id}",
                         node_did: "{}",
                         parent_linked: false,
-                        collections: {collections},
                         replicator_addresses: {replicator_addresses},
                         replicator_filter: {replicator_filter},
                         enrollment_request_digest: {digest},
@@ -533,7 +531,6 @@ impl PairingStateStore for GraphqlPairingStateStore {
                         updated_at: "{now}"
                     }},
                     update: {{
-                        collections: {collections},
                         replicator_addresses: {replicator_addresses},
                         replicator_filter: {replicator_filter},
                         enrollment_request_digest: {digest},

@@ -1,59 +1,23 @@
 #[test]
 fn self_pairing_row_is_not_materialized() {
-    let base = desired_from_pairing_row(
-        PairingStateRow {
-            node_did: Some("did:key:self".to_string()),
-            collections: None,
-            replicator_addresses: Some(vec!["iroh-ticket".to_string()]),
-            template: Some("machine".to_string()),
-            ..Default::default()
-        },
-        "did:key:self",
-    )
-    .expect("pairing row parses");
+    let base = PairingDesired {
+        replicator_addresses: set(&["iroh-ticket"]),
+        template_ids: set(&["machine"]),
+        ..Default::default()
+    };
 
-    assert!(merge_layered_desired("did:key:self", "did:key:self", base, None).is_none());
-}
-
-#[test]
-fn explicit_client_route_scopes_peer_registry_to_its_owner() {
-    let desired = desired_from_pairing_row(
-        PairingStateRow {
-            peer_id: Some("directory-a:runtime-to-client".to_string()),
-            node_did: Some("did:key:mandrake".to_string()),
-            replicator_addresses: Some(vec!["iroh-ticket".to_string()]),
-            template: Some("client".to_string()),
-            ..Default::default()
-        },
-        "did:key:phone",
-    )
-    .expect("explicit route parses")
-    .expect("route materializes");
-    // The runtime-to-client route scopes the signed PeerRegistry to the owner
-    // node; requester DIDs are not replicated for client routes.
-    let encoded = serde_json::to_string(
-        desired
-            .replicator_filter
-            .get("PeerRegistry")
-            .expect("registry filter"),
-    )
-    .unwrap();
-    assert!(encoded.contains("did:key:mandrake"));
-    assert!(!encoded.contains("did:key:phone"));
-    assert!(!desired.replicator_filter.contains_key("AgentRequest"));
+    assert!(merge_layered_desired("did:key:self", "did:key:self", Some(base), None).is_none());
 }
 
 #[test]
 fn merge_desired_unions_control_and_data_plane_state() {
     let control = PairingDesired {
-        collections: set(&["ControlA", "ControlB"]),
         replicator_addresses: set(&["/ip4/1/tcp/1/p2p/peer-a"]),
         replicator_collections: set(&["ControlA", "ControlB"]),
         replicator_filter: PairingFilters::new(),
         template_ids: BTreeSet::new(),
     };
     let data = PairingDesired {
-        collections: set(&["AgentRequest"]),
         replicator_addresses: set(&["/ip4/1/tcp/1/p2p/peer-a"]),
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: one_filter("AgentRequest", "node_did", "did:key:a"),
@@ -64,11 +28,6 @@ fn merge_desired_unions_control_and_data_plane_state() {
     assert_eq!(
         merged.replicator_collections,
         set(&["ControlA", "ControlB", "AgentRequest"])
-    );
-    assert_eq!(
-        merged.collections,
-        set(&["ControlA", "ControlB"]),
-        "data-plane collections must not expand the subscription set"
     );
     assert_eq!(
         merged.replicator_addresses,
@@ -87,7 +46,6 @@ fn merge_desired_unions_control_and_data_plane_state() {
 #[test]
 fn data_plane_only_desired_is_replicator_only() {
     let data = PairingDesired {
-        collections: set(&["AgentRequest"]),
         replicator_addresses: set(&["/ip4/1/tcp/1/p2p/peer-a"]),
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: one_filter("AgentRequest", "node_did", "did:key:a"),
@@ -95,10 +53,6 @@ fn data_plane_only_desired_is_replicator_only() {
     };
 
     let merged = merge_desired(None, Some(data)).expect("data-plane desired");
-    assert!(
-        merged.collections.is_empty(),
-        "data-plane-only desired must not subscribe to conversation collections"
-    );
     assert_eq!(merged.replicator_collections, set(&["AgentRequest"]));
     assert!(merged.replicator_filter.contains_key("AgentRequest"));
 }
@@ -117,7 +71,6 @@ fn data_plane_desired_rejects_foreign_node_did_scope() {
     let error = data_plane_desired_from_pairing_row(
         PairingStateRow {
             node_did: Some("did:key:someone-else".to_string()),
-            collections: None,
             replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
             template: Some("machine".to_string()),
             ..Default::default()
@@ -144,7 +97,6 @@ fn data_plane_desired_machine_scopes_owned_directory() {
     let desired = data_plane_desired_from_pairing_row(
         PairingStateRow {
             node_did: None,
-            collections: None,
             replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
             template: Some("machine".to_string()),
             ..Default::default()

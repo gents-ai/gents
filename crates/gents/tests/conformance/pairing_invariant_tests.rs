@@ -6,18 +6,15 @@ use crate::support::pairing_conformance::{PairingActual, PairingApplied, Pairing
 fn snap(desired: &[&str], actual: &[&str], applied: &[&str]) -> ObservedSnapshot {
     ObservedSnapshot {
         desired: PairingDesired {
-            collections: desired.iter().map(|s| s.to_string()).collect(),
-            replicator_addresses: Default::default(),
+            replicator_addresses: desired.iter().map(|s| s.to_string()).collect(),
             ..Default::default()
         },
         actual: PairingActual {
-            collections: actual.iter().map(|s| s.to_string()).collect(),
-            replicator_addresses: Default::default(),
+            replicator_addresses: actual.iter().map(|s| s.to_string()).collect(),
             connected: !desired.is_empty(),
         },
         applied: PairingApplied {
-            collections: applied.iter().map(|s| s.to_string()).collect(),
-            replicator_addresses: Default::default(),
+            replicator_addresses: applied.iter().map(|s| s.to_string()).collect(),
             ..Default::default()
         },
         read_failed: false,
@@ -29,7 +26,7 @@ fn safety_fails_on_phantom_applied() {
     let history = vec![snap(&[], &["c1"], &["c1"])];
     assert!(matches!(
         check_safety(&history),
-        Err(SafetyViolation::AppliedCollectionWithoutPriorDesired { .. })
+        Err(SafetyViolation::AppliedReplicatorWithoutPriorDesired { .. })
     ));
 }
 

@@ -413,6 +413,32 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         visible_to_agent(&agent_access.execute(&query).await?),
         reader_expected("explicit-revocation")
     );
+    user_access
+        .set_pairing_reader(
+            PairingObservation::Applied,
+            &doc,
+            PairingReadReason::ToolView,
+            &agent_did,
+            true,
+        )
+        .await?;
+    assert_eq!(
+        visible_to_agent(&agent_access.execute(&query).await?),
+        policy_expected("tool-only", "read")
+    );
+    user_access
+        .set_pairing_reader(
+            PairingObservation::Applied,
+            &doc,
+            PairingReadReason::ToolView,
+            &agent_did,
+            false,
+        )
+        .await?;
+    assert_eq!(
+        visible_to_agent(&agent_access.execute(&query).await?),
+        policy_expected("both-revoked", "read")
+    );
     assert_eq!(
         reader_expected("explicit-revocation"),
         policy_expected("both-revoked", "read")

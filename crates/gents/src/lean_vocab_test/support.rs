@@ -427,7 +427,6 @@ pub(crate) struct LeanContractSnapshot {
         std::collections::BTreeMap<String, Vec<LeanScopeCollectionRule>>,
     pub(crate) scope_node_route_cases: Vec<serde_json::Value>,
     pub(crate) scope_template_cases: Vec<serde_json::Value>,
-    pub(crate) scope_resolution_cases: Vec<serde_json::Value>,
     pub(crate) title_request_admission_cases: Vec<LeanTitleRequestAdmissionCase>,
     pub(crate) title_request_purpose_wire_cases: Vec<LeanTitleRequestPurposeWireCase>,
     pub(crate) title_text_cases: serde_json::Value,
@@ -1949,8 +1948,8 @@ pub(crate) struct LeanCanonicalPath {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanPairingReconcileSnapshot {
     pub(crate) connected: bool,
-    pub(crate) desired_collections: Vec<String>,
-    pub(crate) actual_collections: Vec<String>,
+    pub(crate) desired_replicators: Vec<String>,
+    pub(crate) actual_replicators: Vec<String>,
     pub(crate) converged: bool,
 }
 

@@ -735,7 +735,6 @@ mod tests {
 
     #[tokio::test]
     async fn plaintext_client_upgrade_preserves_identity_history_and_subscription_metadata() {
-        use gents::runtime::agent::p2p_reconcile::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
         use gents::store::config_client::ConfigAccess;
         use gents::store::graphql::escape_graphql_string;
 
@@ -843,17 +842,17 @@ mod tests {
                 >= 2
         );
 
-        let admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&plain));
         let sensitive = [
             "InferenceBackend".to_string(),
             "OAuthCredential".to_string(),
         ];
-        admin.add_p2p_collections(&sensitive).await.unwrap();
-        let old_subscriptions = admin.list_p2p_collections().await.unwrap();
+        let p2p = gents::store::identity::node_p2p(&plain).expect("plain node P2P");
+        p2p.add_collections(sensitive.to_vec()).await.unwrap();
+        let old_subscriptions = p2p.get_collections().await.unwrap();
         assert!(sensitive
             .iter()
             .all(|name| old_subscriptions.contains(name)));
-        drop(admin);
+        drop(p2p);
         drop(access);
         plain.shutdown().await.expect("shutdown node");
         drop(plain);
@@ -890,10 +889,12 @@ mod tests {
                 access.execute(&history_query).await.unwrap(),
                 expected_history
             );
-            let admin = EmbeddedRemoteP2pAdmin::new(core.node_arc());
-            let subscriptions = admin.list_p2p_collections().await.unwrap();
+            let subscriptions = gents::store::identity::node_p2p(&core.node_arc())
+                .expect("client P2P")
+                .get_collections()
+                .await
+                .unwrap();
             assert!(sensitive.iter().all(|name| subscriptions.contains(name)));
-            drop(admin);
             drop(access);
             let core = Arc::new(core);
             core.shutdown().await.unwrap();

@@ -6,15 +6,10 @@ use super::seeding::{seed_agent_request, seed_agent_tool_call};
 use super::*;
 
 /// Enrollment authorizes a peer for discovery and enrollment only. An approved
-/// member still cannot route addressed requests or tool rows over P2P: the
-/// agent-target-caller scope does not resolve, and both sides refuse request
-/// collections before the transport.
+/// member still cannot route addressed requests or tool rows over P2P: both
+/// sides refuse request collections before the transport.
 #[tokio::test]
 async fn approved_enrollment_does_not_open_peer_request_replication() {
-    assert!(
-        resolve_template(AGENT_TARGET_CALLER_TEMPLATE).is_none(),
-        "the agent-target-caller template must not resolve to a replication scope"
-    );
     let identity_temp = tempfile::tempdir().expect("identity tempdir");
     let coordinator_identity: Arc<dyn NodeIdentity> = Arc::new(
         KeyIdentity::load_or_create(identity_temp.path().join("coordinator.key"), None)
@@ -91,9 +86,11 @@ async fn approved_enrollment_does_not_open_peer_request_replication() {
             "{refused:?}"
         );
         assert!(admin
-            .list_p2p_collections()
+            .p2p()
+            .unwrap()
+            .get_collections()
             .await
-            .expect("list P2P subscriptions")
+            .unwrap()
             .is_empty());
     }
     tokio::time::sleep(Duration::from_millis(250)).await;

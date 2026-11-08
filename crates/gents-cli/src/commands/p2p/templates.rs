@@ -20,14 +20,11 @@ struct TemplateRow {
 fn delivery_str(d: &Delivery) -> &'static str {
     match d {
         Delivery::Push => "push",
-        Delivery::Replicate => "replicate",
     }
 }
 
 fn scope_str(s: &Scope) -> String {
     match s {
-        Scope::PeerDid { field } => field.to_string(),
-        Scope::Unscoped => "unscoped".to_string(),
         Scope::PerCollection(_) => "per-collection".to_string(),
         Scope::ClientRoute => "client-route".to_string(),
     }

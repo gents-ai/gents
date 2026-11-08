@@ -18,10 +18,8 @@ use super::{PairingActual, PairingApplied, PairingDesired};
 pub struct HarnessNode {
     pub id: NodeId,
     pub db: TestDb,
-    actual_collections: BTreeSet<String>,
     actual_replicator_addresses: BTreeSet<String>,
     actual_connected: bool,
-    applied_collections: BTreeSet<String>,
     applied_replicator_addresses: BTreeSet<String>,
     applied_replicator_filter: PairingFilters,
     drop_next_reconcile: bool,
@@ -52,10 +50,8 @@ impl Harness {
         let a = HarnessNode {
             id: "A".to_string(),
             db: test_db("pairing-conformance-a").await,
-            actual_collections: BTreeSet::new(),
             actual_replicator_addresses: BTreeSet::new(),
             actual_connected: false,
-            applied_collections: BTreeSet::new(),
             applied_replicator_addresses: BTreeSet::new(),
             applied_replicator_filter: PairingFilters::default(),
             drop_next_reconcile: false,
@@ -64,10 +60,8 @@ impl Harness {
         let b = HarnessNode {
             id: "B".to_string(),
             db: test_db("pairing-conformance-b").await,
-            actual_collections: BTreeSet::new(),
             actual_replicator_addresses: BTreeSet::new(),
             actual_connected: false,
-            applied_collections: BTreeSet::new(),
             applied_replicator_addresses: BTreeSet::new(),
             applied_replicator_filter: PairingFilters::default(),
             drop_next_reconcile: false,
@@ -103,19 +97,12 @@ impl Harness {
             Action::OperatorWrite {
                 node,
                 peer,
-                collections,
                 replicator_addresses,
                 replicator_filter,
             } => {
                 self.node_mut(node)?.desired_replicator_filter =
                     scenario_filter_to_pairing_filters(replicator_filter);
-                write_peer_pairing_desired(
-                    self.node(node)?,
-                    peer,
-                    collections,
-                    replicator_addresses,
-                )
-                .await?;
+                write_peer_pairing_desired(self.node(node)?, peer, replicator_addresses).await?;
                 self.record_observation().await?;
             }
             Action::OperatorDelete { node, peer } => {
@@ -129,12 +116,10 @@ impl Harness {
             }
             Action::PreseedActual {
                 node,
-                collections,
                 replicator_addresses,
                 connected,
             } => {
                 let node = self.node_mut(node)?;
-                node.actual_collections.extend(collections.iter().cloned());
                 node.actual_replicator_addresses
                     .extend(replicator_addresses.iter().cloned());
                 node.actual_connected = *connected;
@@ -227,10 +212,8 @@ impl Harness {
         let peer_id = peer_id_for_reconciler(id)?;
         let node = self.node_mut(id)?;
         node.drop_next_reconcile = false;
-        node.applied_collections.clear();
         node.applied_replicator_addresses.clear();
         let applied = read_peer_pairing_applied(node, peer_id).await?;
-        node.applied_collections = applied.collections;
         node.applied_replicator_addresses = applied.replicator_addresses;
         Ok(())
     }
@@ -239,12 +222,10 @@ impl Harness {
         Ok(ObservedSnapshot {
             desired: read_desired_state(&self.a, "B").await?,
             actual: PairingActual {
-                collections: self.b.actual_collections.clone(),
                 replicator_addresses: self.b.actual_replicator_addresses.clone(),
                 connected: self.b.actual_connected,
             },
             applied: PairingApplied {
-                collections: self.a.applied_collections.clone(),
                 replicator_addresses: self.a.applied_replicator_addresses.clone(),
                 replicator_filter: self.a.applied_replicator_filter.clone(),
             },
@@ -284,13 +265,11 @@ async fn apply_desired_state(
         .map(|address| (address.clone(), live_filter.clone()))
         .collect();
     let actual = RuntimePairingActual {
-        collections: peer.actual_collections.clone(),
         replicator_addresses: peer.actual_replicator_addresses.clone(),
         replicator_filters,
         ..Default::default()
     };
     let mut applied = PairingApplied {
-        collections: reconciler.applied_collections.clone(),
         replicator_addresses: reconciler.applied_replicator_addresses.clone(),
         replicator_filter: reconciler.applied_replicator_filter.clone(),
     };
@@ -299,7 +278,6 @@ async fn apply_desired_state(
         apply_op_to_actual(peer, op);
         update_applied_after_success(&mut applied, op, desired);
         reconciler.applied_replicator_filter = applied.replicator_filter.clone();
-        reconciler.applied_collections = applied.collections.clone();
         reconciler.applied_replicator_addresses = applied.replicator_addresses.clone();
         write_peer_pairing_applied(reconciler, peer_id, &applied).await?;
     }
@@ -308,12 +286,6 @@ async fn apply_desired_state(
 
 fn apply_op_to_actual(peer: &mut HarnessNode, op: &DiffOp) {
     match op {
-        DiffOp::InstallCollection(collection) => {
-            peer.actual_collections.insert(collection.clone());
-        }
-        DiffOp::TeardownCollection(collection) => {
-            peer.actual_collections.remove(collection);
-        }
         DiffOp::InstallReplicator(address) => {
             peer.actual_replicator_addresses.insert(address.clone());
         }
@@ -325,7 +297,6 @@ fn apply_op_to_actual(peer: &mut HarnessNode, op: &DiffOp) {
 
 #[derive(Deserialize)]
 struct DesiredRow {
-    collections: Option<Vec<String>>,
     replicator_addresses: Option<Vec<String>>,
 }
 
@@ -333,7 +304,6 @@ struct DesiredRow {
 struct AppliedRow {
     #[serde(rename = "_docID")]
     doc_id: String,
-    collections: Option<Vec<String>>,
     replicator_addresses: Option<Vec<String>>,
 }
 
@@ -349,7 +319,6 @@ async fn read_desired_state(node: &HarnessNode, peer: &str) -> Result<PairingDes
     let query = format!(
         r#"{{
             PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer}" }} }}) {{
-                collections
                 replicator_addresses
             }}
         }}"#
@@ -357,12 +326,6 @@ async fn read_desired_state(node: &HarnessNode, peer: &str) -> Result<PairingDes
     let resp = node.db.node.execute(&query).await;
     let row = first_optional_row::<DesiredRow>(&resp, "PeerPairingDesired");
     Ok(PairingDesired {
-        collections: row
-            .as_ref()
-            .and_then(|row| row.collections.clone())
-            .unwrap_or_default()
-            .into_iter()
-            .collect(),
         replicator_addresses: row
             .and_then(|row| row.replicator_addresses)
             .unwrap_or_default()
@@ -390,7 +353,6 @@ fn scenario_filter_to_pairing_filters(
 async fn write_peer_pairing_desired(
     node: &HarnessNode,
     peer: &str,
-    collections: &[String],
     replicator_addresses: &[String],
 ) -> Result<()> {
     let peer = escape_graphql_string(peer);
@@ -404,7 +366,6 @@ async fn write_peer_pairing_desired(
     );
     let doc_resp = node.db.node.execute(&doc_query).await;
     let doc = first_optional_row::<DesiredDocRow>(&doc_resp, "PeerPairingDesired");
-    let collections = graphql_string_array(collections);
     let replicator_addresses = graphql_string_array(replicator_addresses);
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let now = escape_graphql_string(&now);
@@ -420,7 +381,6 @@ async fn write_peer_pairing_desired(
                 update_PeerPairingDesired(
                     filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
                     input: {{
-                        collections: {collections},
                         replicator_addresses: {replicator_addresses},
                         created_at: "{created_at}",
                         updated_at: "{now}"
@@ -433,7 +393,6 @@ async fn write_peer_pairing_desired(
             r#"mutation {{
                 create_PeerPairingDesired(input: {{
                     peer_id: "{peer}",
-                    collections: {collections},
                     replicator_addresses: {replicator_addresses},
                     created_at: "{now}",
                     updated_at: "{now}"
@@ -467,12 +426,6 @@ async fn delete_peer_pairing_desired(node: &HarnessNode, peer: &str) -> Result<(
 async fn read_peer_pairing_applied(node: &HarnessNode, peer: &str) -> Result<PairingApplied> {
     let row = read_peer_pairing_applied_row(node, peer).await?;
     Ok(PairingApplied {
-        collections: row
-            .as_ref()
-            .and_then(|row| row.collections.clone())
-            .unwrap_or_default()
-            .into_iter()
-            .collect(),
         replicator_addresses: row
             .and_then(|row| row.replicator_addresses)
             .unwrap_or_default()
@@ -492,7 +445,6 @@ async fn read_peer_pairing_applied_row(
         r#"{{
             PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer}" }}, node_did: {{_eq: "{runtime}"}} }}) {{
                 _docID
-                collections
                 replicator_addresses
             }}
         }}"#
@@ -529,7 +481,6 @@ async fn write_peer_pairing_applied(
         let existing_doc_id = read_peer_pairing_applied_row(node, peer)
             .await?
             .map(|row| row.doc_id);
-        let collections = graphql_string_set_literal(&applied.collections);
         let replicator_addresses = graphql_string_set_literal(&applied.replicator_addresses);
         let now = chrono::Utc::now().to_rfc3339();
         let now = escape_graphql_string(&now);
@@ -539,7 +490,6 @@ async fn write_peer_pairing_applied(
                     update_PeerPairingApplied(
                         filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
                         input: {{
-                            collections: {collections},
                             replicator_addresses: {replicator_addresses},
                             updated_at: "{now}"
                         }}
@@ -552,7 +502,6 @@ async fn write_peer_pairing_applied(
                     create_PeerPairingApplied(input: {{
                         peer_id: "{escaped_peer}",
                         node_did: "{runtime}", parent_linked: false,
-                        collections: {collections},
                         replicator_addresses: {replicator_addresses},
                         created_at: "{now}",
                         updated_at: "{now}"

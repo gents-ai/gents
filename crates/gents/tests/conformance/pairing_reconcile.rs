@@ -37,7 +37,6 @@ fn merge_desired(
 #[tokio::test]
 async fn pairing_reconcile_scenarios_satisfy_safety_and_liveness() {
     for fixture in [
-        "install_teardown_happy_path.json",
         "replicator_install_teardown.json",
         "read_failure_noop.json",
         "unmanaged_survival.json",
@@ -116,7 +115,6 @@ fn layered_desired_merge_prefers_signed_data_plane_filter() {
             .clone(),
     );
     let layer = |filter| PairingDesired {
-        collections: BTreeSet::new(),
         replicator_addresses: set(&["addr"]),
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: [("AgentRequest".to_string(), filter)].into_iter().collect(),
@@ -135,67 +133,43 @@ fn layered_desired_merge_prefers_signed_data_plane_filter() {
     );
 }
 
-/// Lean `data_plane_none_base_no_subscription`: a data-plane layer replicates
-/// but never subscribes, whatever template supplied it.
-#[test]
-fn data_plane_layer_never_subscribes() {
-    for template in ["explicit-control", "app-collections"] {
-        let layer = PairingDesired {
-            collections: set(&["ChangeProposed"]),
-            replicator_addresses: set(&["addr-b"]),
-            replicator_collections: set(&["ChangeProposed"]),
-            replicator_filter: Default::default(),
-            template_ids: set(&[template]),
-        };
-        let merged = merge_desired(None, Some(layer)).expect("merged");
-        assert!(
-            merged.collections.is_empty(),
-            "{template}: a data-plane subscription must be cleared: {merged:?}"
-        );
-        assert!(merged.replicator_collections.contains("ChangeProposed"));
-    }
-}
-
-/// Lean `data_plane_subscription_eq_base` and `base_preserved`: merging keeps
-/// the control layer's subscriptions exactly and adds only replication.
+/// Lean `base_preserved` and `data_plane_filters_preserved`: merging keeps
+/// the control layer's replication and adds the data-plane layer's.
 #[test]
 fn data_plane_layer_adds_replication_beside_control_pairing() {
     let base = PairingDesired {
-        collections: set(&["ControlA", "ControlB"]),
         replicator_addresses: set(&["addr-b"]),
         replicator_collections: set(&["ControlA", "ControlB"]),
         replicator_filter: Default::default(),
-        template_ids: set(&["explicit-control"]),
+        template_ids: set(&["machine"]),
     };
     let data_plane = PairingDesired {
-        collections: set(&["ChangeProposed"]),
         replicator_addresses: set(&["addr-b"]),
         replicator_collections: set(&["ChangeProposed"]),
         replicator_filter: Default::default(),
-        template_ids: set(&["app-collections"]),
+        template_ids: set(&["client"]),
     };
     let merged = merge_desired(Some(base.clone()), Some(data_plane)).expect("merged");
-    assert_eq!(merged.collections, base.collections);
     assert!(merged.replicator_collections.contains("ControlA"));
     assert!(merged.replicator_collections.contains("ChangeProposed"));
     assert!(
         merged.replicator_filter.is_empty(),
         "both layers unscoped => no filter"
     );
-    assert!(merged.template_ids.contains("explicit-control"));
+    assert!(merged.template_ids.contains("machine"));
 }
 
 impl LeanPairingReconcileSnapshot {
     fn desired(&self) -> PairingDesired {
         PairingDesired {
-            collections: self.desired_collections.iter().cloned().collect(),
+            replicator_addresses: self.desired_replicators.iter().cloned().collect(),
             ..Default::default()
         }
     }
 
     fn actual(&self) -> PairingActual {
         PairingActual {
-            collections: self.actual_collections.iter().cloned().collect(),
+            replicator_addresses: self.actual_replicators.iter().cloned().collect(),
             ..Default::default()
         }
     }
@@ -221,13 +195,13 @@ fn generated_pairing_reconcile_cases_drive_production_projector() {
             case.name
         );
         assert!(
-            case.before.desired_collections.len() >= 2,
+            case.before.desired_replicators.len() >= 2,
             "{}: samples must be multi-resource, got {:?}",
             case.name,
-            case.before.desired_collections
+            case.before.desired_replicators
         );
         assert_eq!(
-            case.before.desired_collections, case.after.desired_collections,
+            case.before.desired_replicators, case.after.desired_replicators,
             "{}: sampled actions never rewrite desired state",
             case.name
         );
@@ -252,7 +226,7 @@ fn generated_pairing_reconcile_cases_drive_production_projector() {
                     case.name
                 );
                 assert_eq!(
-                    case.before.actual_collections, case.after.actual_collections,
+                    case.before.actual_replicators, case.after.actual_replicators,
                     "{}: dial must not change observed resources",
                     case.name
                 );
@@ -275,18 +249,18 @@ fn generated_pairing_reconcile_cases_drive_production_projector() {
                     );
                 }
             }
-            "reconcileInstall" => {
+            "reconcileInstallReplicator" => {
                 let installed: Vec<String> = case
                     .after
-                    .actual_collections
+                    .actual_replicators
                     .iter()
-                    .filter(|collection| !case.before.actual_collections.contains(*collection))
+                    .filter(|collection| !case.before.actual_replicators.contains(*collection))
                     .cloned()
                     .collect();
                 assert_eq!(
                     installed.len(),
                     1,
-                    "{}: one install must add exactly one collection, got {installed:?}",
+                    "{}: one install must add exactly one replicator, got {installed:?}",
                     case.name
                 );
                 let (first, rest) = before_ops.split_first().unwrap_or_else(|| {
@@ -297,7 +271,7 @@ fn generated_pairing_reconcile_cases_drive_production_projector() {
                 });
                 assert_eq!(
                     first,
-                    &DiffOp::InstallCollection(installed[0].clone()),
+                    &DiffOp::InstallReplicator(installed[0].clone()),
                     "{}: the projector's first op must be the modeled install; ops {before_ops:?}",
                     case.name
                 );

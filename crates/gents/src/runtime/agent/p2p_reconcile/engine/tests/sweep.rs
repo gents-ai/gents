@@ -44,7 +44,7 @@ async fn pairing_reconciler_retries_initial_enumeration_failure_then_cancels_cle
     let convergence_completed = Arc::new(tokio::sync::Notify::new());
     let store = MockStore {
         desired: Mutex::new(Ok(Some(PairingDesired {
-            collections: set(&["AgentRequest"]),
+            replicator_addresses: set(&["addr1"]),
             ..Default::default()
         }))),
         list_peer_ids_failures: Mutex::new(1),
@@ -104,7 +104,7 @@ async fn pairing_reconciler_retries_initial_enumeration_failure_then_cancels_cle
     assert_eq!(*store.list_peer_ids_calls.lock().unwrap(), 2);
     assert_eq!(
         *admin.emitted.lock().unwrap(),
-        vec![DiffOp::InstallCollection("AgentRequest".to_string())]
+        vec![DiffOp::InstallReplicator("addr1".to_string())]
     );
 
     cancel.cancel();

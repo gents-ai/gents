@@ -36,12 +36,6 @@ pub struct RemoteReplicator {
     pub filters: Option<defra_p2p_adapter::ReplicationFilters>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RemoteP2pDocument {
-    pub collection: String,
-    pub doc_id: String,
-}
-
 #[async_trait]
 pub trait RemoteP2pAdmin: Send + Sync {
     async fn peer_info(&self) -> RemoteP2pAdminResult<Vec<String>>;
@@ -62,38 +56,7 @@ pub trait RemoteP2pAdmin: Send + Sync {
     async fn delete_replicator(&self, id: &str, collections: &[String])
         -> RemoteP2pAdminResult<()>;
 
-    async fn list_p2p_collections(&self) -> RemoteP2pAdminResult<Vec<String>>;
-
     async fn resolve_collection_id(&self, name: &str) -> RemoteP2pAdminResult<Option<String>>;
 
     async fn resolve_collection_name(&self, id: &str) -> RemoteP2pAdminResult<Option<String>>;
-
-    async fn add_p2p_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()>;
-
-    async fn delete_p2p_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()>;
-
-    async fn list_p2p_documents(&self) -> RemoteP2pAdminResult<Vec<String>>;
-
-    async fn add_p2p_documents(&self, doc_ids: &[String]) -> RemoteP2pAdminResult<()>;
-
-    async fn delete_p2p_documents(&self, doc_ids: &[String]) -> RemoteP2pAdminResult<()>;
-
-    async fn sync_documents(
-        &self,
-        collection_name: &str,
-        doc_ids: &[String],
-        timeout: Option<std::time::Duration>,
-    ) -> RemoteP2pAdminResult<()>;
-
-    async fn sync_collection_versions(
-        &self,
-        version_ids: &[String],
-        timeout: Option<std::time::Duration>,
-    ) -> RemoteP2pAdminResult<()>;
-
-    async fn sync_branchable_collection(
-        &self,
-        collection_id: &str,
-        timeout: Option<std::time::Duration>,
-    ) -> RemoteP2pAdminResult<()>;
 }

@@ -13,8 +13,6 @@ pub enum Action {
         node: NodeId,
         peer: NodeId,
         #[serde(default)]
-        collections: Vec<String>,
-        #[serde(default)]
         replicator_addresses: Vec<String>,
         #[serde(default)]
         replicator_filter: std::collections::BTreeMap<String, ScenarioFilterPredicate>,
@@ -28,8 +26,6 @@ pub enum Action {
     },
     PreseedActual {
         node: NodeId,
-        #[serde(default)]
-        collections: Vec<String>,
         #[serde(default)]
         replicator_addresses: Vec<String>,
         #[serde(default)]

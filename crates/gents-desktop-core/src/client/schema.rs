@@ -41,7 +41,6 @@ pub fn subscribed_collection_names() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::subscribed_collection_names;
-    use gents::runtime::agent::p2p_reconcile::templates::CLIENT_INDEX_COLLECTIONS;
 
     #[test]
     fn desktop_subscriptions_are_exactly_the_modeled_protocol_allowlist() {
@@ -59,7 +58,6 @@ mod tests {
                 .collect::<std::collections::BTreeSet<_>>(),
             expected
         );
-        assert!(CLIENT_INDEX_COLLECTIONS.is_empty());
     }
 
     #[test]

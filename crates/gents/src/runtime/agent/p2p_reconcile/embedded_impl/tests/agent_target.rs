@@ -1,4 +1,6 @@
-use super::fixtures::{collection_values, runtime_test_node, wait_for_active_peer, wait_for_peer_info};
+use super::fixtures::{
+    collection_values, runtime_test_node, wait_for_active_peer, wait_for_peer_info,
+};
 use super::seeding::seed_agent_request;
 use super::*;
 
@@ -7,10 +9,6 @@ use super::*;
 /// or a selected push for it, and no return artifact reaches the caller.
 #[tokio::test]
 async fn embedded_agent_target_return_projection_is_refused_before_transport() {
-    assert!(
-        resolve_template(AGENT_TARGET_HOST_TEMPLATE).is_none(),
-        "the agent-target-host template must not resolve to a replication scope"
-    );
     let sender_test = runtime_test_node().await;
     let receiver_test = runtime_test_node().await;
     let sender = Arc::clone(&sender_test.node);
@@ -72,12 +70,16 @@ async fn embedded_agent_target_return_projection_is_refused_before_transport() {
         }],
     )
     .await;
-    assert!(pushed.is_err(), "a return request reached the P2P transport");
-    for admin in [&sender_admin, &receiver_admin] {
-        assert!(admin
-            .list_p2p_collections()
+    assert!(
+        pushed.is_err(),
+        "a return request reached the P2P transport"
+    );
+    for node in [&sender, &receiver] {
+        assert!(crate::store::identity::node_p2p(node)
+            .unwrap()
+            .get_collections()
             .await
-            .expect("list P2P subscriptions")
+            .unwrap()
             .is_empty());
     }
     tokio::time::sleep(Duration::from_millis(250)).await;

@@ -13,14 +13,12 @@ use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
 use super::*;
 use crate::defra_node::P2PConfig;
 use crate::ensure_runtime_schemas;
-use crate::runtime::agent::p2p_reconcile::templates::{
-    Scope, AGENT_TARGET_CALLER_TEMPLATE, AGENT_TARGET_HOST_TEMPLATE,
-};
+use crate::runtime::agent::p2p_reconcile::templates::Scope;
 use crate::runtime::agent::p2p_reconcile::GraphqlEnrollmentStore;
 use crate::runtime::agent::p2p_reconcile::{combine_filters, equality_filter};
-use crate::runtime::agent::p2p_reconcile::resolve_template;
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
+use defra_p2p_adapter::P2pDocumentRequest;
 use fixtures::{runtime_http_test_node, wait_for_active_peer, wait_for_peer_info};
 use gents_protocol::enrollment::{
     derive_enrollment_id, encode_offer, enrollment_schema_fingerprint, EnrollmentDecisionKind,
@@ -88,16 +86,14 @@ async fn explicit_file_image_push_refuses_runtime_local_collections() {
         pushed.is_err(),
         "file-change documents reached the P2P transport"
     );
-    assert!(sender_admin
-        .list_p2p_collections()
-        .await
-        .unwrap()
-        .is_empty());
-    assert!(receiver_admin
-        .list_p2p_collections()
-        .await
-        .unwrap()
-        .is_empty());
+    for node in [sender, receiver] {
+        assert!(crate::store::identity::node_p2p(node)
+            .unwrap()
+            .get_collections()
+            .await
+            .unwrap()
+            .is_empty());
+    }
 
     sender.shutdown().await.expect("node shutdown");
     receiver.shutdown().await.expect("node shutdown");
@@ -127,14 +123,10 @@ async fn protocol_allowlist_rejects_local_data_before_transport() {
             if allowed {
                 continue;
             }
-            for result in [
-                admin.add_p2p_collections(&[name.to_owned()]).await,
-                admin
-                    .add_replicator(&[], &[name.to_owned()], &PairingFilters::new())
-                    .await,
-                admin.sync_documents(name, &[], None).await,
-                admin.sync_branchable_collection(name, None).await,
-            ] {
+            for result in [admin
+                .add_replicator(&[], &[name.to_owned()], &PairingFilters::new())
+                .await]
+            {
                 assert!(
                     matches!(result, Err(RemoteP2pAdminError::RuntimeLocalCollection(collection)) if collection == name)
                 );

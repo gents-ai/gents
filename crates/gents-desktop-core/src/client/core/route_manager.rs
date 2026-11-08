@@ -944,7 +944,7 @@ fn route_status(
         || "no route filter".to_string(),
         |desired| {
             let collections = desired
-                .effective_replicator_collections()
+                .replicator_collections
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>();
@@ -1027,7 +1027,7 @@ fn record_failure(
 ) {
     let class = classify_remote_admin_error(error);
     sync_state.update_peer(record, |status| {
-        for collection in desired.effective_replicator_collections() {
+        for collection in &desired.replicator_collections {
             let status = ensure_pairing_status(status, collection);
             status.record_retry(class);
             status.update_stuck_indicator(SystemTime::now());

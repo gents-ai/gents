@@ -47,8 +47,10 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         node.add_collection(schema).await?;
     }
     for node in [candidate_node, admin_node] {
-        node.add_collection(gents_protocol::schemas::AGENT_SESSION).await?;
-        node.add_collection(gents_protocol::schemas::PEER_REGISTRY).await?;
+        node.add_collection(gents_protocol::schemas::AGENT_SESSION)
+            .await?;
+        node.add_collection(gents_protocol::schemas::PEER_REGISTRY)
+            .await?;
     }
     admin_node
         .add_collection(gents_protocol::schemas::NODE)
@@ -746,27 +748,6 @@ async fn collection_name_resolution_accepts_names_and_ids() {
     );
 }
 
-#[tokio::test]
-async fn embedded_collections_round_trip() {
-    let test = runtime_test_node().await;
-    let node = Arc::clone(&test.node);
-    let admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&node));
-    let collection_name = gents_protocol::schemas::NODE_DIRECTORY_ENTRY_NAME.to_string();
-
-    admin
-        .add_p2p_collections(std::slice::from_ref(&collection_name))
-        .await
-        .expect("add collection");
-
-    let collections = admin
-        .list_p2p_collections()
-        .await
-        .expect("list collections");
-    assert_eq!(collections, vec![collection_name]);
-
-    node.shutdown().await.expect("node shutdown");
-}
-
 /// Every builtin template's filter fields must be `@immutable` in the
 /// target collection's schema, or `add_replicator` rejects the install at
 /// pairing time.
@@ -801,17 +782,10 @@ async fn embedded_all_builtin_template_filters_pass_replicator_validation() {
             }
             _ => crate::runtime::agent::p2p_reconcile::templates::scope_filter(
                 &template.scope,
-                template.collections,
-                "did:key:z6MkPeerForFilterValidation",
                 "did:key:z6MkSelfForFilterValidation",
             ),
         };
         match &template.scope {
-            Scope::Unscoped => assert!(
-                filters.is_empty(),
-                "unscoped template '{}' unexpectedly has filters",
-                template.id
-            ),
             Scope::PerCollection(rules) => {
                 let filter_collections =
                     filters.keys().map(String::as_str).collect::<BTreeSet<_>>();
@@ -825,7 +799,6 @@ async fn embedded_all_builtin_template_filters_pass_replicator_validation() {
                     template.id
                 );
             }
-            Scope::PeerDid { .. } => {}
             Scope::ClientRoute => assert!(!filters.is_empty()),
         }
         // Register the same collection set production installs: a client
@@ -973,16 +946,14 @@ async fn embedded_filtered_replicator_refuses_runtime_local_request_collections(
         ),
         "{sender_refused:?}"
     );
-    assert!(sender_admin
-        .list_p2p_collections()
-        .await
-        .expect("list sender P2P subscriptions")
-        .is_empty());
-    assert!(receiver_admin
-        .list_p2p_collections()
-        .await
-        .expect("list receiver P2P subscriptions")
-        .is_empty());
+    for node in [&sender, &receiver] {
+        assert!(crate::store::identity::node_p2p(node)
+            .unwrap()
+            .get_collections()
+            .await
+            .unwrap()
+            .is_empty());
+    }
     tokio::time::sleep(Duration::from_millis(250)).await;
     assert!(
         collection_values(&receiver, "AgentRequest", "request_id")
@@ -1046,8 +1017,9 @@ async fn selected_push_refuses_app_collections_before_transport() {
     )
     .await;
     assert!(pushed.is_err(), "app collection reached the P2P transport");
-    assert!(sender_admin
-        .list_p2p_collections()
+    assert!(crate::store::identity::node_p2p(sender)
+        .unwrap()
+        .get_collections()
         .await
         .unwrap()
         .is_empty());

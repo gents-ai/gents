@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use defra_p2p_adapter::{P2PError, P2PResult, P2pDocumentRequest};
+use defra_p2p_adapter::{P2PError, P2PResult};
 use tokio::time::timeout;
 
 use crate::defra_node::Node as EmbeddedNode;
@@ -257,11 +257,6 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
         .await
     }
 
-    async fn list_p2p_collections(&self) -> RemoteP2pAdminResult<Vec<String>> {
-        let p2p = self.p2p()?;
-        self.run("get_collections", p2p.get_collections()).await
-    }
-
     async fn resolve_collection_id(&self, name: &str) -> RemoteP2pAdminResult<Option<String>> {
         resolve_embedded_collection_id(&self.node, name)
     }
@@ -269,106 +264,13 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
     async fn resolve_collection_name(&self, id: &str) -> RemoteP2pAdminResult<Option<String>> {
         resolve_embedded_collection_name(&self.node, id)
     }
-
-    async fn add_p2p_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()> {
-        self.require_protocol_collections(collections)?;
-        let p2p = self.p2p()?;
-        self.run("add_collections", p2p.add_collections(collections.to_vec()))
-            .await
-    }
-
-    async fn delete_p2p_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()> {
-        let p2p = self.p2p()?;
-        self.run(
-            "remove_collections",
-            p2p.remove_collections(collections.to_vec()),
-        )
-        .await
-    }
-
-    async fn list_p2p_documents(&self) -> RemoteP2pAdminResult<Vec<String>> {
-        let p2p = self.p2p()?;
-        let documents = self.run("get_documents", p2p.get_documents()).await?;
-        Ok(documents.into_iter().map(|d| d.doc_id).collect())
-    }
-
-    async fn add_p2p_documents(&self, _doc_ids: &[String]) -> RemoteP2pAdminResult<()> {
-        Err(RemoteP2pAdminError::LocalError(
-            "document subscriptions require an explicit protocol collection; use sync_documents"
-                .into(),
-        ))
-    }
-
-    async fn delete_p2p_documents(&self, doc_ids: &[String]) -> RemoteP2pAdminResult<()> {
-        let p2p = self.p2p()?;
-        let docs = document_requests(doc_ids);
-        self.run("remove_documents", p2p.remove_documents(docs))
-            .await
-    }
-
-    async fn sync_documents(
-        &self,
-        collection_name: &str,
-        doc_ids: &[String],
-        timeout_override: Option<Duration>,
-    ) -> RemoteP2pAdminResult<()> {
-        self.require_protocol_collections(&[collection_name.to_owned()])?;
-        let p2p = self.p2p()?;
-        let within = timeout_override.unwrap_or(self.timeout);
-        self.run_within(
-            "sync_documents",
-            within,
-            p2p.sync_documents(collection_name, doc_ids.to_vec(), Some(within)),
-        )
-        .await
-    }
-
-    async fn sync_collection_versions(
-        &self,
-        version_ids: &[String],
-        timeout_override: Option<Duration>,
-    ) -> RemoteP2pAdminResult<()> {
-        let p2p = self.p2p()?;
-        self.run_within(
-            "sync_collection_versions",
-            timeout_override.unwrap_or(self.timeout),
-            p2p.sync_collection_versions(version_ids.to_vec()),
-        )
-        .await
-    }
-
-    async fn sync_branchable_collection(
-        &self,
-        collection_id: &str,
-        timeout_override: Option<Duration>,
-    ) -> RemoteP2pAdminResult<()> {
-        self.require_protocol_collections(&[collection_id.to_owned()])?;
-        let p2p = self.p2p()?;
-        self.run_within(
-            "sync_branchable_collection",
-            timeout_override.unwrap_or(self.timeout),
-            p2p.sync_branchable_collection(collection_id),
-        )
-        .await
-    }
-}
-
-fn document_requests(doc_ids: &[String]) -> Vec<P2pDocumentRequest> {
-    doc_ids
-        .iter()
-        .cloned()
-        .map(|doc_id| P2pDocumentRequest {
-            collection: String::new(),
-            doc_id,
-        })
-        .collect()
 }
 
 #[cfg(test)]
 pub(super) async fn push_documents_to_peer(
     node: &Arc<EmbeddedNode>,
     peer_id: &str,
-    documents: Vec<P2pDocumentRequest>,
+    documents: Vec<defra_p2p_adapter::P2pDocumentRequest>,
 ) -> anyhow::Result<()> {
     use anyhow::Context as _;
 

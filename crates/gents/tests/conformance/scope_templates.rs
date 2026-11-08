@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use gents::runtime::agent::p2p_reconcile::templates::{
-    admit_app_collections, builtin_templates, resolve_template, single_string_eq, Delivery,
+    builtin_templates, resolve_template, single_string_eq, Delivery,
 };
 use gents::runtime::agent::p2p_reconcile::{
     client_route_collections, resolve_template_filters, PairingDirection, CLIENT_TEMPLATE,
@@ -57,7 +57,6 @@ fn protocol_routes_match_model_actions() {
         assert_eq!(
             match template.delivery {
                 Delivery::Push => "push",
-                Delivery::Replicate => "replicate",
             },
             case["delivery"].as_str().unwrap()
         );
@@ -89,12 +88,6 @@ fn protocol_routes_match_model_actions() {
             .collect::<BTreeSet<_>>(),
         modeled
     );
-    for case in &snapshot.scope_resolution_cases {
-        assert_eq!(
-            resolve_template(case["id"].as_str().unwrap()).is_some(),
-            case["supported"].as_bool().unwrap()
-        );
-    }
 }
 
 #[test]
@@ -121,12 +114,5 @@ fn runtime_data_has_no_replication_template_or_app_escape() {
             gents_protocol::schemas::is_replicated_protocol_collection(collection),
             allowed.iter().any(|name| name == collection)
         );
-    }
-    for requested in [
-        BTreeSet::new(),
-        BTreeSet::from(["CustomData".to_owned()]),
-        allowed.iter().cloned().collect(),
-    ] {
-        assert!(admit_app_collections(requested).is_none());
     }
 }

@@ -119,7 +119,11 @@ async fn assert_access_control(
     assert!(
         matches!(
             admin
-                .add_p2p_collections(&["NodeAccessProbe".to_string()])
+                .add_replicator(
+                    &[],
+                    &["NodeAccessProbe".to_string()],
+                    &gents::runtime::agent::p2p_reconcile::PairingFilters::default(),
+                )
                 .await,
             Err(gents::runtime::agent::p2p_reconcile::RemoteP2pAdminError::RuntimeLocalCollection(
                 ref name
@@ -127,12 +131,15 @@ async fn assert_access_control(
         ),
         "P2P carries only discovery and enrollment documents"
     );
-    let replicated = admin
-        .list_p2p_collections()
+    let replicated = gents::store::identity::node_p2p(node)
+        .expect("P2P transport")
+        .get_collections()
         .await
         .expect("in-process P2P listing acts as the node");
     assert!(
-        !replicated.iter().any(|collection| collection == "NodeAccessProbe"),
+        !replicated
+            .iter()
+            .any(|collection| collection == "NodeAccessProbe"),
         "a refused runtime-local collection is never replicated: {replicated:?}"
     );
 }

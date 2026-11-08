@@ -6,7 +6,6 @@ use super::templates::{to_replication_filters, PairingFilters};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairingDesired {
-    pub collections: BTreeSet<String>,
     pub replicator_addresses: BTreeSet<String>,
     #[serde(default)]
     pub replicator_collections: BTreeSet<String>,
@@ -18,15 +17,7 @@ pub struct PairingDesired {
 
 impl PairingDesired {
     pub fn has_wiring(&self) -> bool {
-        !self.collections.is_empty() || !self.replicator_addresses.is_empty()
-    }
-
-    pub fn effective_replicator_collections(&self) -> &BTreeSet<String> {
-        if self.replicator_collections.is_empty() {
-            &self.collections
-        } else {
-            &self.replicator_collections
-        }
+        !self.replicator_addresses.is_empty()
     }
 
     pub fn uses_agent_target_template(&self) -> bool {
@@ -38,7 +29,6 @@ impl PairingDesired {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairingActual {
-    pub collections: BTreeSet<String>,
     pub replicator_addresses: BTreeSet<String>,
     #[serde(default)]
     pub replicator_collections: BTreeMap<String, BTreeSet<String>>,
@@ -56,7 +46,6 @@ pub struct PairingActual {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairingApplied {
-    pub collections: BTreeSet<String>,
     pub replicator_addresses: BTreeSet<String>,
     #[serde(default)]
     pub replicator_filter: PairingFilters,
@@ -64,26 +53,18 @@ pub struct PairingApplied {
 
 impl PairingApplied {
     pub fn is_empty(&self) -> bool {
-        self.collections.is_empty() && self.replicator_addresses.is_empty()
+        self.replicator_addresses.is_empty()
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiffOp {
-    InstallCollection(String),
-    TeardownCollection(String),
     InstallReplicator(String),
     TeardownReplicator(String),
 }
 
 pub fn compute_pairing_diff(desired: &PairingDesired, actual: &PairingActual) -> Vec<DiffOp> {
     let mut ops = Vec::new();
-    for c in desired.collections.difference(&actual.collections) {
-        ops.push(DiffOp::InstallCollection(c.clone()));
-    }
-    for c in actual.collections.difference(&desired.collections) {
-        ops.push(DiffOp::TeardownCollection(c.clone()));
-    }
     for r in desired
         .replicator_addresses
         .difference(&actual.replicator_addresses)
@@ -105,21 +86,11 @@ pub fn compute_owned_pairing_diff(
     applied: &PairingApplied,
 ) -> Vec<DiffOp> {
     let mut ops = Vec::new();
-    for c in desired.collections.difference(&actual.collections) {
-        ops.push(DiffOp::InstallCollection(c.clone()));
-    }
-    for c in actual
-        .collections
-        .intersection(&applied.collections)
-        .filter(|c| !desired.collections.contains(*c))
-    {
-        ops.push(DiffOp::TeardownCollection(c.clone()));
-    }
     // A data-plane install can precede a merged control-plane layer, so compare
     // live carried collections to catch this ordering race.
     let filter_changed = desired.replicator_filter != applied.replicator_filter;
     let desired_live_filters = to_replication_filters(&desired.replicator_filter).ok();
-    let desired_replicator_collections = desired.effective_replicator_collections();
+    let desired_replicator_collections = &desired.replicator_collections;
     for r in applied
         .replicator_addresses
         .difference(&desired.replicator_addresses)
@@ -392,18 +363,15 @@ mod tests {
     #[test]
     fn changing_scoped_did_reinstalls_replicator() {
         let desired = PairingDesired {
-            collections: BTreeSet::new(),
             replicator_addresses: s(&["addr1"]),
             replicator_filter: filter("node_did", "did:key:bob"),
             ..Default::default()
         };
         let actual = PairingActual {
-            collections: BTreeSet::new(),
             replicator_addresses: s(&["addr1"]),
             ..Default::default()
         };
         let applied = PairingApplied {
-            collections: BTreeSet::new(),
             replicator_addresses: s(&["addr1"]),
             replicator_filter: filter("node_did", "did:key:alice"),
         };
@@ -420,13 +388,11 @@ mod tests {
     fn unchanged_filter_does_not_reinstall_replicator() {
         let f = filter("node_did", "did:key:bob");
         let desired = PairingDesired {
-            collections: BTreeSet::new(),
             replicator_addresses: s(&["addr1"]),
             replicator_filter: f.clone(),
             ..Default::default()
         };
         let actual = PairingActual {
-            collections: BTreeSet::new(),
             replicator_addresses: s(&["addr1"]),
             replicator_filters: BTreeMap::from([(
                 "addr1".to_string(),
@@ -435,7 +401,6 @@ mod tests {
             ..Default::default()
         };
         let applied = PairingApplied {
-            collections: BTreeSet::new(),
             replicator_addresses: s(&["addr1"]),
             replicator_filter: f,
         };
@@ -445,19 +410,16 @@ mod tests {
     #[test]
     fn changed_replicator_collections_reinstall_replicator() {
         let desired = PairingDesired {
-            collections: s(&["Network"]),
             replicator_addresses: s(&["addr1"]),
             replicator_collections: s(&["Network", "AgentRequest"]),
             ..Default::default()
         };
         let actual = PairingActual {
-            collections: s(&["Network"]),
             replicator_addresses: s(&["addr1"]),
             replicator_collections: BTreeMap::from([("addr1".to_string(), s(&["AgentRequest"]))]),
             ..Default::default()
         };
         let applied = PairingApplied {
-            collections: s(&["Network"]),
             replicator_addresses: s(&["addr1"]),
             ..Default::default()
         };
@@ -473,18 +435,16 @@ mod tests {
     #[test]
     fn matching_replicator_collections_do_not_reinstall() {
         let desired = PairingDesired {
-            collections: s(&["Network"]),
             replicator_addresses: s(&["addr1"]),
+            replicator_collections: s(&["Network"]),
             ..Default::default()
         };
         let actual = PairingActual {
-            collections: s(&["Network"]),
             replicator_addresses: s(&["addr1"]),
             replicator_collections: BTreeMap::from([("addr1".to_string(), s(&["Network"]))]),
             ..Default::default()
         };
         let applied = PairingApplied {
-            collections: s(&["Network"]),
             replicator_addresses: s(&["addr1"]),
             ..Default::default()
         };
@@ -494,17 +454,14 @@ mod tests {
     #[test]
     fn unobservable_replicator_collections_do_not_reinstall() {
         let desired = PairingDesired {
-            collections: s(&["Network"]),
             replicator_addresses: s(&["addr1"]),
             ..Default::default()
         };
         let actual = PairingActual {
-            collections: s(&["Network"]),
             replicator_addresses: s(&["addr1"]),
             ..Default::default()
         };
         let applied = PairingApplied {
-            collections: s(&["Network"]),
             replicator_addresses: s(&["addr1"]),
             ..Default::default()
         };
@@ -515,21 +472,16 @@ mod tests {
     fn owned_diff_tears_down_only_applied_extras() {
         let desired = PairingDesired::default();
         let actual = PairingActual {
-            collections: s(&["manual", "managed"]),
             replicator_addresses: s(&["/ip4/manual/p2p/p", "/ip4/managed/p2p/p"]),
             ..Default::default()
         };
         let applied = PairingApplied {
-            collections: s(&["managed"]),
             replicator_addresses: s(&["/ip4/managed/p2p/p"]),
             ..Default::default()
         };
         assert_eq!(
             compute_owned_pairing_diff(&desired, &actual, &applied),
-            vec![
-                DiffOp::TeardownCollection("managed".into()),
-                DiffOp::TeardownReplicator("/ip4/managed/p2p/p".into())
-            ]
+            vec![DiffOp::TeardownReplicator("/ip4/managed/p2p/p".into())]
         );
     }
 }

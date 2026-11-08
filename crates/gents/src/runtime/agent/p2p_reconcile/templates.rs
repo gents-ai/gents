@@ -1,4 +1,3 @@
-pub use gents_protocol::peer_schema::admit_app_collections;
 use gents_protocol::peer_schema::{
     compare_replicated_schema, ReplicatedCollectionIdentity, ReplicatedSchema, ReplicatedSchemaSkew,
 };
@@ -8,16 +7,14 @@ use serde_json::{Map, Value};
 
 pub use p2p::ReplicationFilter as FilterPredicate;
 
+/// Every protocol route pushes; no surviving template subscribes or replicates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Delivery {
     Push,
-    Replicate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Scope {
-    PeerDid { field: &'static str },
-    Unscoped,
     PerCollection(&'static [CollectionRule]),
     ClientRoute,
 }
@@ -25,7 +22,6 @@ pub enum Scope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DidSource {
     LocalDid,
-    PeerDid,
     HomeDid,
 }
 
@@ -195,7 +191,6 @@ pub fn decode_pairing_filters(raw: &str) -> serde_json::Result<PairingFilters> {
 
 pub const CLIENT_COLLECTIONS: &[&str] = &["PeerRegistry"];
 pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = CLIENT_COLLECTIONS;
-pub const CLIENT_INDEX_COLLECTIONS: [&str; 0] = [];
 pub const NODE_DIRECTORY_COLLECTION: &str = "NodeDirectoryEntry";
 
 const MACHINE_COLLECTIONS: &[&str] = &[NODE_DIRECTORY_COLLECTION];
@@ -205,10 +200,7 @@ const MACHINE_RULES: &[CollectionRule] = &[CollectionRule {
     source: DidSource::HomeDid,
 }];
 
-pub const AGENT_TARGET_CALLER_TEMPLATE: &str = "agent-target-caller";
-pub const AGENT_TARGET_HOST_TEMPLATE: &str = "agent-target-host";
 pub const MACHINE_TEMPLATE: &str = "machine";
-pub const CLIENT_INDEX_TEMPLATE: &str = "client-index";
 pub const CLIENT_TEMPLATE: &str = "client";
 
 static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
@@ -287,25 +279,13 @@ pub fn resolve_template(id: &str) -> Option<&'static ScopeTemplate> {
     BUILTIN_TEMPLATES.iter().find(|t| t.id == id)
 }
 
-pub fn scope_filter(
-    scope: &Scope,
-    collections: &[&str],
-    peer_did: &str,
-    local_did: &str,
-) -> PairingFilters {
+pub fn scope_filter(scope: &Scope, local_did: &str) -> PairingFilters {
     match scope {
-        Scope::PeerDid { field } => collections
-            .iter()
-            .map(|&col| (col.to_string(), equality_filter(*field, peer_did)))
-            .collect(),
-        Scope::Unscoped => BTreeMap::new(),
         Scope::PerCollection(rules) => rules
             .iter()
             .map(|rule| {
                 let value = match rule.source {
-                    DidSource::LocalDid => local_did,
-                    DidSource::PeerDid => peer_did,
-                    DidSource::HomeDid => local_did,
+                    DidSource::LocalDid | DidSource::HomeDid => local_did,
                 };
                 (
                     rule.collection.to_string(),

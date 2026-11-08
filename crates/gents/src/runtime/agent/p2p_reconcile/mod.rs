@@ -68,6 +68,4 @@ pub use templates::{
     FilterPredicate, PairingFilters, Scope, ScopeTemplate, CLIENT_COLLECTIONS, CLIENT_TEMPLATE,
     CLIENT_TO_RUNTIME_COLLECTIONS, NODE_DIRECTORY_COLLECTION,
 };
-pub use trait_def::{
-    RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteP2pDocument, RemoteReplicator,
-};
+pub use trait_def::{RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator};

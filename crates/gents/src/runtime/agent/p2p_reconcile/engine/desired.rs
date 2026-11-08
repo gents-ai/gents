@@ -1,85 +1,13 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
 
-#[cfg(test)]
-use super::super::templates::Delivery;
 use super::super::templates::{
     equality_filter, resolve_template, DidSource, PairingFilters, Scope,
 };
 use super::super::{policy, templates, PairingDesired};
 use super::rows::PairingStateRow;
 use super::EnrollmentEndpointEntry;
-
-#[cfg(test)]
-pub(super) fn desired_from_pairing_row(
-    row: PairingStateRow,
-    local_did: &str,
-) -> Result<Option<PairingDesired>> {
-    let replicator_addresses = row
-        .replicator_addresses
-        .unwrap_or_default()
-        .into_iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect::<BTreeSet<_>>();
-
-    let template_id = row
-        .template
-        .as_deref()
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .context("pairing row is missing its scope template")?;
-    let template = resolve_template(template_id)
-        .with_context(|| format!("unknown pairing scope template {template_id:?}"))?;
-
-    let peer_did = row.node_did.as_deref().map(str::trim).unwrap_or_default();
-    if peer_did.is_empty() && scope_requires_peer_did(&template.scope) {
-        anyhow::bail!(
-            "pairing row for peer-DID-dependent template {template_id:?} has a blank \
-             node_did; refusing to install an unscoped replicator (skipping peer)"
-        );
-    }
-    let (requester_did, owner_node_did, direction) = if template.scope == Scope::ClientRoute {
-        let route_id = row
-            .peer_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .context("client pairing row is missing its durable route key")?;
-        let direction = policy::client_route_direction(route_id)?;
-        (local_did, peer_did, direction)
-    } else {
-        (
-            peer_did,
-            local_did,
-            policy::PairingDirection::RuntimeToClient,
-        )
-    };
-    let replicator_collections = if template.scope == Scope::ClientRoute {
-        policy::client_route_collections(direction)
-    } else {
-        template.collections
-    }
-    .iter()
-    .map(|&collection| collection.to_string())
-    .collect::<BTreeSet<_>>();
-    let replicator_filter =
-        policy::resolve_template_filters(template, direction, requester_did, owner_node_did);
-
-    let subscription_collections = match template.delivery {
-        Delivery::Push => BTreeSet::new(),
-        Delivery::Replicate => replicator_collections.clone(),
-    };
-
-    Ok(Some(PairingDesired {
-        collections: subscription_collections,
-        replicator_addresses,
-        replicator_collections,
-        replicator_filter,
-        template_ids: BTreeSet::from([template.id.to_string()]),
-    }))
-}
 
 pub(super) fn data_plane_desired_from_pairing_row(
     mut row: PairingStateRow,
@@ -180,20 +108,10 @@ pub(super) fn data_plane_desired_from_pairing_row(
         .map(|&c| c.to_string())
         .collect::<BTreeSet<_>>();
 
-    let filter_collections = replicator_collections
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    let replicator_filter = data_plane_scope_filter(
-        &template.scope,
-        &filter_collections,
-        peer_did,
-        self_did,
-        client_route_direction,
-    );
+    let replicator_filter =
+        data_plane_scope_filter(&template.scope, peer_did, self_did, client_route_direction);
 
     Ok(Some(PairingDesired {
-        collections: BTreeSet::new(),
         replicator_addresses,
         replicator_collections,
         replicator_filter,
@@ -201,48 +119,22 @@ pub(super) fn data_plane_desired_from_pairing_row(
     }))
 }
 
-#[cfg(test)]
-fn scope_requires_peer_did(scope: &Scope) -> bool {
-    match scope {
-        Scope::PeerDid { .. } => true,
-        Scope::Unscoped => false,
-        Scope::PerCollection(rules) => rules
-            .iter()
-            .any(|rule| matches!(rule.source, DidSource::PeerDid)),
-        Scope::ClientRoute => true,
-    }
-}
-
 fn data_plane_scope_requires_signed_peer_did(scope: &Scope) -> bool {
-    match scope {
-        Scope::PeerDid { .. } | Scope::Unscoped => false,
-        Scope::PerCollection(rules) => rules
-            .iter()
-            .any(|rule| matches!(rule.source, DidSource::PeerDid)),
-        Scope::ClientRoute => true,
-    }
+    matches!(scope, Scope::ClientRoute)
 }
 
 fn data_plane_scope_filter(
     scope: &Scope,
-    collections: &[&str],
     signed_peer_did: &str,
     local_did: &str,
     client_route_direction: policy::PairingDirection,
 ) -> PairingFilters {
     match scope {
-        Scope::PeerDid { field } => collections
-            .iter()
-            .map(|&col| (col.to_string(), equality_filter(*field, local_did)))
-            .collect(),
-        Scope::Unscoped => BTreeMap::new(),
         Scope::PerCollection(rules) => rules
             .iter()
             .map(|rule| {
                 let value = match rule.source {
-                    DidSource::LocalDid => local_did,
-                    DidSource::PeerDid => signed_peer_did,
-                    DidSource::HomeDid => local_did,
+                    DidSource::LocalDid | DidSource::HomeDid => local_did,
                 };
                 (
                     rule.collection.to_string(),
@@ -272,15 +164,10 @@ pub fn merge_layered_desired(
     data_plane: Option<PairingDesired>,
 ) -> Option<PairingDesired> {
     let base = if peer_did == local_did { None } else { base };
-    let data_plane = data_plane.map(|mut desired| {
-        desired.collections.clear();
-        desired
-    });
     match (base, data_plane) {
         (None, None) => None,
         (Some(desired), None) | (None, Some(desired)) => Some(desired),
         (Some(mut left), Some(right)) => {
-            left.collections.extend(right.collections);
             // The data-plane layer comes from the verified PeerRegistry.
             if !right.replicator_addresses.is_empty() {
                 left.replicator_addresses = right.replicator_addresses;

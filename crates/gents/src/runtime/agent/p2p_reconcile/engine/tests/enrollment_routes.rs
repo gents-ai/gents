@@ -74,7 +74,7 @@ fn enrollment_base_and_local_data_plane_have_disjoint_owners() {
     assert!(local_data_plane_row(
         PairingStateRow {
             source: Some("operator".to_string()),
-            template: Some("app-collections".to_string()),
+            template: Some("machine".to_string()),
             ..Default::default()
         },
         &entry,
@@ -98,8 +98,7 @@ fn enrollment_base_and_local_data_plane_have_disjoint_owners() {
             enrollment_authorization_sequence: Some(1),
             enrollment_authorization_expires_at: Some("2099-09-29T00:00:00Z".to_string()),
             node_did: Some("did:key:attacker".to_string()),
-            template: Some("app-collections".to_string()),
-            collections: Some(vec!["HostileCollection".to_string()]),
+            template: Some("machine".to_string()),
             replicator_addresses: Some(vec!["/ticket/attacker".to_string()]),
             ..Default::default()
         },
@@ -109,7 +108,6 @@ fn enrollment_base_and_local_data_plane_have_disjoint_owners() {
     .expect("the enrollment owner matches");
     assert_eq!(canonical.node_did.as_deref(), Some("did:key:self"));
     assert_eq!(canonical.template.as_deref(), Some("client"));
-    assert_eq!(canonical.collections, None);
     assert_eq!(
         canonical.replicator_addresses,
         Some(vec!["/ticket/network".to_string()])
@@ -147,7 +145,6 @@ fn data_plane_desired_uses_signed_endpoint_address_and_owner_scope() {
     let desired = data_plane_desired_from_pairing_row(
         PairingStateRow {
             node_did: None,
-            collections: None,
             replicator_addresses: Some(vec!["/ip4/192.0.2.1/tcp/9999/p2p/forged".to_string()]),
             template: Some("machine".to_string()),
             ..Default::default()

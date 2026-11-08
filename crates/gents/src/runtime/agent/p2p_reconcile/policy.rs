@@ -147,7 +147,6 @@ impl ClientRouteIdentity {
             .map(|collection| (*collection).to_string())
             .collect();
         PairingDesired {
-            collections: Default::default(),
             replicator_addresses: [self.transport.address().to_string()].into_iter().collect(),
             replicator_collections,
             replicator_filter: resolve_template_filters(
@@ -180,12 +179,7 @@ pub fn resolve_template_filters(
 ) -> PairingFilters {
     match template.scope {
         Scope::ClientRoute => client_route_filters(direction, requester_did, owner_node_did),
-        _ => scope_filter(
-            &template.scope,
-            template.collections,
-            requester_did,
-            owner_node_did,
-        ),
+        _ => scope_filter(&template.scope, owner_node_did),
     }
 }
 
@@ -193,7 +187,6 @@ pub fn desired_route_is_applied(desired: &PairingDesired, applied: &PairingAppli
     !desired.replicator_addresses.is_empty()
         && desired.replicator_addresses == applied.replicator_addresses
         && desired.replicator_filter == applied.replicator_filter
-        && applied.collections.is_subset(&desired.collections)
 }
 
 fn client_route_filters(
