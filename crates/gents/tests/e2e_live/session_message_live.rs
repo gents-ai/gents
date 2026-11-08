@@ -112,7 +112,7 @@ async fn live_local_create_session() -> Result<()> {
     )
     .await;
     authorize_session_targets(
-        &db.node,
+        &db,
         &node_did,
         &orchestrator_agent_did,
         vec![AgentTargetDocument {
@@ -340,7 +340,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
     configure_standard_backgrounding_tools(
-        &db.node,
+        &db,
         &node_did,
         &orchestrator_agent_did,
         &background_worker_agent_did,
@@ -1047,7 +1047,7 @@ async fn live_cross_node_create_session() -> Result<()> {
     )
     .await;
     authorize_session_targets(
-        &db_a.node,
+        &db_a,
         &did_a,
         &orchestrator_agent_did,
         vec![AgentTargetDocument {
@@ -1276,7 +1276,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     )
     .await;
     authorize_session_targets(
-        &db.node,
+        &db,
         &node_did,
         &orchestrator_agent_did,
         vec![
@@ -1542,7 +1542,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     )
     .await;
     authorize_session_targets(
-        &db.node,
+        &db,
         &node_did,
         &orchestrator_agent_did,
         vec![agent_target(
@@ -1554,7 +1554,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     )
     .await;
     configure_bash_agent_tools(
-        &db.node,
+        &db,
         &node_did,
         blocker_agent_did.as_str(),
         workspace.path(),
@@ -1759,8 +1759,8 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
             relay_agent_did.as_str(),
         )
     };
-    authorize_session_targets(&db.node, &node_did, &orchestrator_agent_did, vec![relay()]).await;
-    authorize_session_targets(&db.node, &node_did, relay_agent_did.as_str(), vec![relay()]).await;
+    authorize_session_targets(&db, &node_did, &orchestrator_agent_did, vec![relay()]).await;
+    authorize_session_targets(&db, &node_did, relay_agent_did.as_str(), vec![relay()]).await;
     let mut node_config = ensure_node(&db.node, &node_did).await.expect("node_config");
     node_config.max_request_hop = Some(1);
     apply_fixture_documents(
@@ -1923,6 +1923,10 @@ impl LiveNode {
         }
     }
 
+    fn db(&self) -> &TestDb {
+        &self.db
+    }
+
     fn node(&self) -> &Arc<EmbeddedNode> {
         &self.db.node
     }
@@ -2033,14 +2037,14 @@ sentence that repeats, verbatim, every code word reported in the notifications."
         )
         .await;
     authorize_session_targets(
-        fx.node(),
+        fx.db(),
         &fx.did,
         &fx.orchestrator,
         vec![fx.target("middle", middle_agent_did.as_str())],
     )
     .await;
     configure_bash_agent_tools(
-        fx.node(),
+        fx.db(),
         &fx.did,
         middle_agent_did.as_str(),
         workspace.path(),
@@ -2048,7 +2052,7 @@ sentence that repeats, verbatim, every code word reported in the notifications."
     )
     .await;
     configure_bash_agent_tools(
-        fx.node(),
+        fx.db(),
         &fx.did,
         leaf_agent_did.as_str(),
         workspace.path(),
@@ -2288,14 +2292,14 @@ async fn live_agent_message_interrupt_steers() -> Result<()> {
         )
         .await;
     authorize_session_targets(
-        fx.node(),
+        fx.db(),
         &fx.did,
         &fx.orchestrator,
         vec![fx.target("worker", steered_agent_did.as_str())],
     )
     .await;
     configure_bash_agent_tools(
-        fx.node(),
+        fx.db(),
         &fx.did,
         steered_agent_did.as_str(),
         workspace.path(),
@@ -2482,14 +2486,14 @@ async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
         )
         .await;
     authorize_session_targets(
-        fx.node(),
+        fx.db(),
         &fx.did,
         &fx.orchestrator,
         vec![fx.target("worker", goal_worker_agent_did.as_str())],
     )
     .await;
     configure_bash_agent_tools(
-        fx.node(),
+        fx.db(),
         &fx.did,
         goal_worker_agent_did.as_str(),
         workspace.path(),
@@ -2710,7 +2714,7 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     )
     .await;
     configure_bash_agent_tools(
-        &db_b.node,
+        &db_b,
         &did_b,
         restart_worker_agent_did.as_str(),
         workspace.path(),
@@ -2731,7 +2735,7 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     )
     .await;
     authorize_session_targets(
-        &db_a.node,
+        &db_a,
         &did_a,
         &orchestrator,
         vec![agent_target(
@@ -3134,7 +3138,7 @@ async fn live_randomized_soak() -> Result<()> {
         ("blocker", blocker_agent_did.as_str()),
     ];
     authorize_session_targets(
-        fx.node(),
+        fx.db(),
         &fx.did,
         &fx.orchestrator,
         pool.iter()
@@ -3143,7 +3147,7 @@ async fn live_randomized_soak() -> Result<()> {
     )
     .await;
     configure_bash_agent_tools(
-        fx.node(),
+        fx.db(),
         &fx.did,
         blocker_agent_did.as_str(),
         workspace.path(),
@@ -3704,14 +3708,14 @@ fn blocked_bash_args(started: &str, release: &Path, done: &str) -> serde_json::V
 }
 
 async fn configure_bash_agent_tools(
-    node: &Arc<EmbeddedNode>,
+    db: &TestDb,
     node_did: &str,
     agent_did: &str,
     workspace: &Path,
     targets: Vec<AgentTargetDocument>,
 ) {
     configure_agent_tools(
-        node,
+        db,
         node_did,
         agent_did,
         None,
@@ -3973,13 +3977,13 @@ fn target_documents(targets: Vec<AgentTargetDocument>) -> Vec<(Collection, serde
 }
 
 async fn authorize_session_targets(
-    node: &Arc<EmbeddedNode>,
+    db: &TestDb,
     node_did: &str,
     agent_did: &str,
     targets: Vec<AgentTargetDocument>,
 ) {
     configure_agent_tools(
-        node,
+        db,
         node_did,
         agent_did,
         None,
@@ -3995,7 +3999,7 @@ async fn authorize_session_targets(
 }
 
 async fn configure_standard_backgrounding_tools(
-    node: &Arc<EmbeddedNode>,
+    db: &TestDb,
     node_did: &str,
     parent_agent_did: &str,
     child_agent_did: &str,
@@ -4011,7 +4015,7 @@ async fn configure_standard_backgrounding_tools(
         )
     }];
     configure_agent_tools(
-        node,
+        db,
         node_did,
         parent_agent_did,
         None,
@@ -4035,7 +4039,7 @@ async fn configure_standard_backgrounding_tools(
     .await;
 
     configure_agent_tools(
-        node,
+        db,
         node_did,
         child_agent_did,
         None,
