@@ -19,7 +19,7 @@ pub(crate) async fn observe_caused_request(
         .doc_id()
         .context("session-message row lacks physical identity")?;
     let access = lifecycle.access()?;
-    let Some(receipt) = load_receipt(
+    let Some(receipt) = load_receipt::<crate::tools::call::lifecycle::ToolCallLifecycle>(
         &access,
         tool_call_doc_id,
         lifecycle.node_did(),
