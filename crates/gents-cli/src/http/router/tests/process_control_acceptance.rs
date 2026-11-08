@@ -9,39 +9,28 @@ use gents_protocol::process_control::{
 };
 use serde_json::Value;
 
-use crate::commands::test_shim_fixtures::{
-    configure_runtime_agent,
-    streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse},
+use crate::commands::test_shim_fixtures::streaming_backend::{
+    MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse,
 };
 
 #[cfg(unix)]
 #[tokio::test]
 async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     let dir = tempfile::tempdir().unwrap();
-    let owner =
-        Arc::new(gents::KeyIdentity::load_or_create(dir.path().join("owner.key"), None).unwrap());
-    let user = gents::KeyIdentity::load_or_create(dir.path().join("user.key"), None).unwrap();
+    // The enrolled User publishes the Node and its managed Agent through its
+    // own client-signed endpoint; the runtime starts over the home's fresh
+    // backend admission.
+    let home = crate::shared::test_support::ClientHome::new().await;
+    let owner = home.home.identity.clone();
+    let user = &home.user;
     let foreign = gents::KeyIdentity::load_or_create(dir.path().join("foreign.key"), None).unwrap();
     let did = owner.did().to_owned();
-    let binding = gents::store::identity::provision_agent_identity(owner.as_ref()).unwrap();
+    let binding = home.agent("process-control").await;
     let agent_did = binding.agent_did.clone();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    let node = Arc::new(
-        gents::defra_node::Node::builder()
-            .enable_signing()
-            .with_http(gents::defra_node::HttpConfig::with_listener(listener).unwrap())
-            .data_path(dir.path().join("node"))
-            .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
-            .with_node_identity_did(&did)
-            .with_node_acp_enabled()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents::ensure_runtime_schemas(&node).await.unwrap();
+    let graphql = home.graphql().to_owned();
+    let node = home.node().clone();
     let admin = ConfigAccess::local_as(node.clone(), did.parse().unwrap());
-    for actor in [user.did(), foreign.did(), agent_did.as_str()] {
+    for actor in [foreign.did(), agent_did.as_str()] {
         for permission in [
             gents::store::config_client::NodePermission::DocumentRead,
             gents::store::config_client::NodePermission::DocumentUpdate,
@@ -53,36 +42,7 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
                 .unwrap();
         }
     }
-    let user_access = ConfigAccess::local_as(node.clone(), user.did().parse().unwrap());
-    let (node_doc, agent_doc) = user_access.transact_write("test.process_control.identities", |txn| {
-        Box::pin(async {
-            let node_row = txn.execute_with_variables(
-                "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
-                &serde_json::json!({"input": {"node_did": did}}),
-            ).await?;
-            let agent_row = txn.execute_with_variables(
-                "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
-                &serde_json::json!({"input": {"node_did": did, "agent_did": agent_did,
-                    "creation_nonce": binding.creation_nonce, "inference_profile_id": "fixture", "enabled": true}}),
-            ).await?;
-            Ok::<_, anyhow::Error>((
-                gents::store::graphql::created_doc_id(&node_row, "Node")?,
-                gents::store::graphql::created_doc_id(&agent_row, "Agent")?,
-            ))
-        })
-    }).await.unwrap();
-    user_access
-        .add_actor_relationship("Node", &node_doc, "runtime_reader", &did.parse().unwrap())
-        .await
-        .unwrap();
-    user_access
-        .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
-        .await
-        .unwrap();
-    user_access
-        .add_actor_relationship("Agent", &agent_doc, "executor", &agent_did.parse().unwrap())
-        .await
-        .unwrap();
+    let user_access = home.access.clone();
     let prompt = "start two background processes";
     let args = r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#;
     let backend = MockStreamingBackend::start_with_plans(
@@ -102,23 +62,18 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
         )],
     )
     .unwrap();
-    configure_runtime_agent(
-        &node,
-        &did,
-        &binding,
-        "process-control-backend",
-        backend.endpoint(),
-        "control-model",
-        false,
-    )
-    .await;
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    configure_background_bash(&home, &binding, &root, backend.endpoint(), "control-model").await;
+    home.mark_backend_healthy(&binding).await;
     let identity: Arc<dyn gents::NodeIdentity> = owner.clone();
     let records = dir.path().join("process-records");
     let runtime = gents::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
-            tool_ceiling: gents::ToolCeiling::readonly(),
+            // Host tools run only under an explicit workspace root.
+            tool_ceiling: gents::ToolCeiling::readonly_at(&root),
+            backend_admission: Some(home.home.backend_admission()),
             ..Default::default()
         },
     )
@@ -126,10 +81,14 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     .unwrap()
     .with_background_process_records(records.clone());
     let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
-    let running = tokio::spawn(runtime.run(shutdown_rx));
-    gents::eval::runner::embedded::wait_for_runtime_ready(&node, &did)
-        .await
-        .unwrap();
+    let mut running = tokio::spawn(runtime.run(shutdown_rx));
+    // A runtime that refuses its configuration exits; report that refusal
+    // rather than waiting out readiness.
+    tokio::select! {
+        ready = gents::eval::runner::embedded::wait_for_runtime_ready(&node, &did) => ready.unwrap(),
+        exited = &mut running => panic!("runtime exited before readiness: {:?}",
+            exited.map(|run| run.map_err(|error| format!("{error:#}")))),
+    }
 
     let session = "process-control-session";
     let request = gents::request::lifecycle::build_signed_client_request(
@@ -148,7 +107,7 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
             },
             gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
         ),
-        gents::RequestSigner::Identity(&user),
+        gents::RequestSigner::Identity(user),
     )
     .await
     .unwrap();
@@ -158,7 +117,7 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
 
     let workers = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            let response = ConfigAccess::local(node.clone()).execute(&format!(r#"{{AgentToolCall(filter: {{session_id: {{_eq: "{session}"}}, tool_name: {{_eq: "bash"}}, lifecycle_state: {{_eq: "running"}}}}) {{_docID tool_call_id await_mode}}}}"#)).await.unwrap();
+            let response = user_access.execute(&format!(r#"{{AgentToolCall(filter: {{session_id: {{_eq: "{session}"}}, tool_name: {{_eq: "bash"}}, lifecycle_state: {{_eq: "running"}}}}) {{_docID tool_call_id await_mode}}}}"#)).await.unwrap();
             let rows = response["data"]["AgentToolCall"].as_array().unwrap();
             if rows.len() == 2 {
                 let mut found = Vec::new();
@@ -188,7 +147,7 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     let sibling_call = command(&workers[1].0);
     let target = gents::tools::call::control::client::prepare(
         &user_access,
-        &user,
+        user,
         &did,
         &target_call.tool_call_doc_id,
         Some((&target_call.session_id, &target_call.tool_call_id)),
@@ -198,7 +157,7 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     .unwrap();
     let sibling = gents::tools::call::control::client::prepare(
         &user_access,
-        &user,
+        user,
         &did,
         &sibling_call.tool_call_doc_id,
         Some((&sibling_call.session_id, &sibling_call.tool_call_id)),
@@ -208,7 +167,6 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     .unwrap();
     // The client publishes each signed intent through its own client-signed
     // endpoint; the runtime only consumes it.
-    let graphql = format!("http://{addr}/api/v0/graphql");
     let owner_access = ConfigAccess::Graphql(
         GraphqlEndpoint::as_principal(&graphql, user.did())
             .with_client_signing_capability(user.client_signing_capability().unwrap())
@@ -289,7 +247,7 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     );
     assert!(!process_alive(workers[0].1));
     assert!(process_alive(workers[1].1));
-    let rows = ConfigAccess::local(node.clone()).execute(&format!(r#"{{AgentToolCall(filter: {{session_id: {{_eq: "{session}"}}, tool_name: {{_eq: "bash"}}}}) {{_docID lifecycle_state}}}}"#)).await.unwrap();
+    let rows = user_access.execute(&format!(r#"{{AgentToolCall(filter: {{session_id: {{_eq: "{session}"}}, tool_name: {{_eq: "bash"}}}}) {{_docID lifecycle_state}}}}"#)).await.unwrap();
     let rows = rows["data"]["AgentToolCall"].as_array().unwrap();
     assert!(rows.iter().any(
         |row| row["_docID"] == target.tool_call_doc_id && row["lifecycle_state"] == "cancelled"
@@ -335,4 +293,118 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
 fn process_alive(pid: i32) -> bool {
     // Signal zero checks the recorded child without sending it a signal.
     unsafe { libc::kill(pid, 0) == 0 }
+}
+
+/// Points the User's Agent at `endpoint` with background bash under `root`, as the
+/// User configures its Agent's tools, context, backend and Node default.
+async fn configure_background_bash(
+    home: &crate::shared::test_support::ClientHome,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    root: &std::path::Path,
+    endpoint: &str,
+    model: &str,
+) {
+    use gents::documents::{AgentContext, BashTools, HostTools, Tools};
+    use gents::store::config_client::{
+        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
+        DesiredStateApplyPlan,
+    };
+    use gents::Collection;
+
+    fn plan(docs: Vec<(Collection, Value)>) -> anyhow::Result<DesiredStateApplyPlan> {
+        Ok(DesiredStateApplyPlan::new(
+            docs.into_iter()
+                .map(|(collection, value)| DesiredStateApplyDocument {
+                    collection,
+                    add: value.clone(),
+                    update: value,
+                })
+                .collect(),
+        )?)
+    }
+
+    let node_did = home.node_did().to_owned();
+    let agent_did = binding.agent_did.clone();
+    let tools_id = format!("{agent_did}:tools");
+    let context_id = format!("{agent_did}:context");
+    let tools = Tools {
+        tools_id: tools_id.clone(),
+        node_did: node_did.clone(),
+        host: Some(HostTools {
+            root: Some(root.display().to_string()),
+            bash: Some(BashTools {
+                mode: gents::BashMode::ReadOnly,
+                read_only_commands: Some(vec!["sleep".into(), "printf".into()]),
+                background_enabled: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let context = AgentContext {
+        context_id: context_id.clone(),
+        node_did: node_did.clone(),
+        display_name: None,
+        description: None,
+        system_prompt: None,
+        tools_id: Some(tools_id),
+        compaction_id: None,
+        skill_ids: Vec::new(),
+        tags: Vec::new(),
+    };
+    let projected = plan(vec![
+        (Collection::Tools, serde_json::to_value(tools).unwrap()),
+        (Collection::AgentContext, serde_json::to_value(context).unwrap()),
+    ])
+    .unwrap();
+    home.access
+        .transact_write("test.process_control.projected", |txn| {
+            let projected = &projected;
+            Box::pin(async move { apply_desired_state_plan(txn, projected).await.map(|_| ()) })
+        })
+        .await
+        .unwrap();
+    // Host tools run only under a User-published root their Agent may read.
+    gents::tools::surface::set_workspace_root_with_readers(
+        &home.access,
+        &node_did,
+        &root.display().to_string(),
+        None,
+        true,
+        std::slice::from_ref(&agent_did),
+    )
+    .await
+    .unwrap();
+    home.access
+        .transact_write("test.process_control.agent", |txn| {
+            let (node_did, agent_did, context_id) = (&node_did, &agent_did, &context_id);
+            Box::pin(async move {
+                let read = |collection, id: String| async move {
+                    read_desired_state_record_in_txn(txn, collection, node_did, &id)
+                        .await
+                        .map(|found| found.expect("published fixture document").1)
+                };
+                let mut node = read(Collection::Node, node_did.clone()).await?;
+                node["default_agent_did"] = agent_did.as_str().into();
+                let mut agent = read(Collection::Agent, agent_did.clone()).await?;
+                agent["context_id"] = context_id.as_str().into();
+                let mut backend =
+                    read(Collection::InferenceBackend, format!("{agent_did}:backend")).await?;
+                backend["endpoint"] = endpoint.into();
+                backend["openai_wire_api"] = "chat_completions".into();
+                let mut profile =
+                    read(Collection::InferenceProfile, format!("{agent_did}:inference")).await?;
+                profile["model_name"] = model.into();
+                let plan = plan(vec![
+                    (Collection::InferenceBackend, backend),
+                    (Collection::InferenceProfile, profile),
+                    (Collection::Agent, agent),
+                    (Collection::Node, node),
+                ])?;
+                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+            })
+        })
+        .await
+        .unwrap();
 }
