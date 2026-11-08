@@ -250,17 +250,24 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
 
     let owner_home = home.join(".gents");
     let owner_home = owner_home.to_str().context("utf-8 owner home")?;
-    let remote = run_cli_json(
-        &elsewhere,
-        &[
-            "tools",
-            "explain",
-            "--home",
-            owner_home,
-            "--graphql",
-            &graphql,
-        ],
-    )?;
+    let remote_args = [
+        "tools",
+        "explain",
+        "--home",
+        owner_home,
+        "--graphql",
+        &graphql,
+    ];
+    // Private status reads as its caller: another client key is not an
+    // administrator of this node, so it is refused the ceiling and told why.
+    let foreign = run_cli_json(&elsewhere, &remote_args)
+        .expect_err("a foreign client key does not read the private ceiling");
+    assert!(
+        format!("{foreign:#}").contains("only the served Node and its native administrators"),
+        "{foreign:#}"
+    );
+    let home_text = home.to_str().context("utf-8 home")?;
+    let remote = run_cli_json_with_env(&elsewhere, &remote_args, &[("HOME", home_text)])?;
     assert_eq!(remote["node_did"], owner.as_str(), "{remote}");
     assert_eq!(
         remote["host_tool_ceiling"]["tool_ceiling"], "readonly",

@@ -299,7 +299,14 @@ struct HostCeiling {
 impl HostCeiling {
     fn from_status(status: &Value) -> Result<Self> {
         let field = |name: &str| status.get(name).and_then(Value::as_str).map(str::to_owned);
-        let mode_text = field("tool_ceiling").context("runtime status has no tool_ceiling")?;
+        let mode_text = field("tool_ceiling").with_context(|| {
+            format!(
+                "runtime status for node {} omits its tool ceiling: only the served Node and its \
+                 native administrators read private status, and this client key is neither; run \
+                 `gents tools explain` with the enrolled client key of that node",
+                field("node_did").unwrap_or_else(|| "(unknown)".to_owned())
+            )
+        })?;
         let mode = ToolCeilingArg::from_str(&mode_text, false)
             .map_err(|error| anyhow::anyhow!("runtime tool_ceiling {mode_text}: {error}"))?;
         let root = field("tool_root");
