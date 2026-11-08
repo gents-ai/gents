@@ -658,6 +658,7 @@ export function OnboardingWizard({
                     onChange={(event) => setCandidateName(event.target.value)}
                   />
                 </Field>
+                <button type="submit" hidden />
                 <p className="text-xs text-muted-foreground">
                   Enter the node’s status address, reachable from this device. The
                   node’s administrator must approve this device’s access request.
