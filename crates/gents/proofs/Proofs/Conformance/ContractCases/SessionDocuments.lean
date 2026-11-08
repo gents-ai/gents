@@ -78,6 +78,22 @@ def request (id time : Nat) : RequestFact :=
 def old := request 1 2
 def newerRequest := request 2 2
 
+/-- #3604: the predecessor finished in the same second its successor was
+admitted, and the successor's random id sorts lower. -/
+def finishedPredecessor : RequestFact :=
+  { request 9 7 with observed := ⟨109, 9, .completed⟩, terminalizedAt := some 7100 }
+def sameSecondClaim : RequestFact :=
+  { request 4 7 with observed := ⟨104, 4, .claimed⟩ }
+def sameSecondCompletion : RequestFact :=
+  { request 4 7 with observed := ⟨104, 4, .completed⟩, terminalizedAt := some 7600 }
+def sameSecondRefusal : RequestFact :=
+  { request 12 7 with observed := ⟨112, 12, .failed⟩, terminalizedAt := some 7900 }
+example : latest [finishedPredecessor, sameSecondClaim] 1 10 none = some sameSecondClaim := by decide
+example : latest [sameSecondCompletion, finishedPredecessor] 1 10 none = some sameSecondCompletion := by decide
+example : latest [sameSecondRefusal, sameSecondClaim] 1 10 none = some sameSecondClaim := by decide
+example : (advance session [finishedPredecessor, sameSecondClaim] sameSecondClaim "next" 8).observation.bind (·.latest) =
+    some sameSecondClaim.observed := by decide
+
 def titleRequest := { request 3 99 with purpose := .titleAudit }
 example : latest [old, titleRequest] scope.node scope.session none = some old := by decide
 example : advance session [old, titleRequest] titleRequest "title" 100 = session := by decide

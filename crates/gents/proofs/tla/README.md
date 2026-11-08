@@ -56,6 +56,27 @@ See `../README.md` for how this fits the broader formal-verification model.
   test); `ReserveSingleAttempt` is the found reservation race ("a partial read
   lost to a newer merge" in the live backgrounding run); `ShortBudget` shows
   the overlap premise is load-bearing.
+- `SessionHeadObservation` — a session's observed request head and the
+  client that projects it on reopen (#3604). The runtime claims a session's
+  requests one at a time; each claim or admission refusal names the incoming
+  request as `AgentSession.observation.latest_request` only when it is the
+  canonical latest (Lean `AgentSession.advance`), and a completion refreshes
+  the head only when it already names it. Writers commit in a serial order
+  (DefraDB's optimistic validation re-reads aborted transactions). The
+  reopened client reads the runtime as its User in two snapshots: nonterminal
+  requests with the observed head, then the head row by document ID; a load
+  overlapping a change event is discarded and re-run. `created_at` is
+  whole-second and `request_id` random, so a successor admitted in the second
+  its predecessor finished has no order of its own. `HeadFollowsBoundary` and
+  `ReplyObserved` hold under the Lean `AgentSession.newer` order (live over
+  terminal, then later terminalization, then `request_id`).
+  `RequestIdTie`/`RequestIdTieLiveness` are the found race: the claim loses
+  the random tie, the head keeps naming the finished predecessor, and the
+  reopened client never shows the successor's reply. `NoLivePreference`,
+  `NoTerminalizationOrder` (a same-second refusal) and `NoHeadSeed` (a reader
+  without the head read) break each remaining guard. A refusal admitted while
+  another turn is live deliberately leaves the live turn as the head, so
+  neither property claims it.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
@@ -136,6 +157,27 @@ with only running children writing, `RenewalBudget` violates
 ./scripts/run-tlc.sh MCBackgroundAdmissionContentionStartWitness
 ```
 
+For SessionHeadObservation — the green model (Lean order, head-seeded
+reader, claim and refusal paths, both random id orders) checks clean,
+including `ReplyObserved`:
+```bash
+./scripts/run-tlc.sh MCSessionHeadObservation
+```
+
+Its five diagnostics are EXPECTED to report violations. `RequestIdTie`
+violates `HeadFollowsBoundary` and `RequestIdTieLiveness` violates
+`ReplyObserved` with the #3604 schedule (A claimed and completed, B claimed
+in the same second, the client reopens, B completes and never appears);
+`NoLivePreference`, `NoTerminalizationOrder` and `NoHeadSeed` violate
+`ReplyObserved`:
+```bash
+./scripts/run-tlc.sh MCSessionHeadObservationRequestIdTie
+./scripts/run-tlc.sh MCSessionHeadObservationRequestIdTieLiveness
+./scripts/run-tlc.sh MCSessionHeadObservationNoLivePreference
+./scripts/run-tlc.sh MCSessionHeadObservationNoTerminalizationOrder
+./scripts/run-tlc.sh MCSessionHeadObservationNoHeadSeed
+```
+
 Each run directly, from this directory, is:
 ```bash
 java -cp <tla2tools.jar> tlc2.TLC -workers 2 -metadir <scratch dir> \
@@ -213,12 +255,22 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCBackgroundAdmissionContentionUnspaced.cfg` | as green, `RenewalSpaced = FALSE` | `NoConflictLoss` intentionally VIOLATED: two back-to-back renewals and two children exhaust call 2's 4 receipt attempts | 33,653 distinct states before counterexample; 68,174 generated | 25 | <1s |
 | `MCBackgroundAdmissionContentionRenewalWitness.cfg` | green constants | `RenewalNeverLost` intentionally VIOLATED: admission bumps exhaust a renewal poll, which green's re-drive recovers | 286,417 distinct states before counterexample; 580,008 generated | 33 | 1s |
 | `MCBackgroundAdmissionContentionStartWitness.cfg` | green constants | `StartNeverConflicts` intentionally VIOLATED: a renewal commits while call 1's dispatch start is open, the traced conflict | 46 distinct states before counterexample; 94 generated | 7 | <1s |
+| `MCSessionHeadObservation.cfg` | `Order = "lean"`, `HeadSeed = TRUE`, `Refusals = TRUE` | Passes `TypeOK`, `HeadFollowsBoundary`, `ReplyObserved` | 838 distinct states; 1,406 generated | 11 | <1s |
+| `MCSessionHeadObservationRequestIdTie.cfg` | `Order = "requestId"`, `Refusals = FALSE` | `HeadFollowsBoundary` intentionally VIOLATED: ClaimA, CompleteA, AdmitB, ClaimB leaves the head on A | 77 distinct states before counterexample; 99 generated | 6 | <1s |
+| `MCSessionHeadObservationRequestIdTieLiveness.cfg` | `Order = "requestId"`, `Refusals = FALSE` | `ReplyObserved` intentionally VIOLATED: the #3604 schedule; after reopen B completes and every load omits it | 620 distinct states; 1,056 generated | 11 | <1s |
+| `MCSessionHeadObservationNoLivePreference.cfg` | `Order = "noLive"`, `Refusals = FALSE` | `ReplyObserved` intentionally VIOLATED: B's claim ranks below A's same-second terminalization | 620 distinct states; 1,056 generated | 11 | <1s |
+| `MCSessionHeadObservationNoTerminalizationOrder.cfg` | `Order = "noTerminal"`, `Refusals = TRUE` | `ReplyObserved` intentionally VIOLATED: B refused in A's second loses the random tie | 838 distinct states; 1,406 generated | 11 | <1s |
+| `MCSessionHeadObservationNoHeadSeed.cfg` | `Order = "lean"`, `HeadSeed = FALSE` | `ReplyObserved` intentionally VIOLATED: the head is B but the reader reads only nonterminal rows | 572 distinct states; 984 generated | 11 | <1s |
 
 The nine BackgroundAdmissionContention rows used TLC2 `2026.11.06.222357`
 (rev `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and
 `-workers 2`. The green run checked its temporal property over the complete
 state space. The counts before each counterexample vary with the worker
 count.
+
+The six SessionHeadObservation rows used TLC2 `2026.11.06.222357` (rev
+`d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the
+liveness rows checked `ReplyObserved` over the complete state space.
 
 ## PairingTransport derived requirements
 

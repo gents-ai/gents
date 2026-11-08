@@ -7,6 +7,7 @@ fn fact(request_id: &str, created_at: &str, hop: u32) -> SessionRequestFact {
         requester_did: None,
         agent_did: "general".into(),
         created_at: created_at.into(),
+        terminalized_at: None,
         hop,
         observed: gents_protocol::session::SessionRequestObservation {
             request_doc_id: format!("doc-{request_id}"),

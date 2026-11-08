@@ -1,0 +1,4 @@
+---- MODULE MCSessionHeadObservationNoHeadSeed ----
+EXTENDS SessionHeadObservation
+
+====

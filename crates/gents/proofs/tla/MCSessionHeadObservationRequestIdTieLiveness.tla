@@ -1,0 +1,4 @@
+---- MODULE MCSessionHeadObservationRequestIdTieLiveness ----
+EXTENDS SessionHeadObservation
+
+====

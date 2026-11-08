@@ -1,0 +1,4 @@
+---- MODULE MCSessionHeadObservationRequestIdTie ----
+EXTENDS SessionHeadObservation
+
+====
