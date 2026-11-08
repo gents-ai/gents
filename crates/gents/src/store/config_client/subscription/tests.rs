@@ -53,6 +53,35 @@ async fn subscription_closes_for_reauthentication_without_waiting_for_data() {
     assert_eq!(subscription.end(), Some(SubscriptionEnd::RenewalDue));
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_taken_renewal_keeps_delivering_past_its_deadline() {
+    let wire = b"event: next\ndata: {\"data\":{\"Parcel\":[]}}\n\n";
+    let events = futures::stream::pending::<std::result::Result<Vec<u8>, reqwest::Error>>();
+    let late = futures::stream::once(async {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        Ok::<_, reqwest::Error>(wire.to_vec())
+    });
+    let mut subscription = GraphqlSubscription {
+        events: Some(Box::pin(late.chain(events).eventsource())),
+        renew_at: Some(Instant::now() + Duration::from_secs(1)),
+        ended: None,
+    };
+    assert_eq!(
+        subscription.take_renewal(),
+        Some(SUBSCRIPTION_RENEWAL_PERIOD)
+    );
+    assert_eq!(
+        SUBSCRIPTION_RENEWAL_PERIOD * 2,
+        crate::store::identity::DEFRADB_BEARER_LIFETIME
+    );
+    assert_eq!(subscription.take_renewal(), None);
+    assert_eq!(
+        subscription.recv().await.unwrap(),
+        Some(json!({"data":{"Parcel":[]}}))
+    );
+    assert_eq!(subscription.end(), None);
+}
+
 #[tokio::test]
 async fn runtime_completion_is_not_a_planned_renewal() {
     let wire = b"event: complete\ndata: {}\n\n";

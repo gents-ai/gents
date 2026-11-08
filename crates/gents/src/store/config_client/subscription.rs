@@ -15,6 +15,12 @@ type Events = Pin<
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long a subscription authorized by a locally minted bearer is kept
+/// before it re-authenticates: half the bearer lifetime
+/// (`RuntimeConnectionObservation.renewalPeriodMs`).
+pub const SUBSCRIPTION_RENEWAL_PERIOD: Duration =
+    Duration::from_secs(crate::store::identity::DEFRADB_BEARER_LIFETIME.as_secs() / 2);
+
 /// Why a subscription's stream ended without an error
 /// (`RuntimeConnectionObservation.StreamEnd`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,7 +37,9 @@ pub enum SubscriptionEnd {
 /// provides no initial snapshot. Arm this stream before reading a snapshot and
 /// repeat that sequence after every disconnect. Dropping it closes the response.
 /// Locally minted bearer expiry ends the stream early so its observer can renew
-/// authorization and resnapshot; delegated credentials remain caller-owned.
+/// authorization and resnapshot, unless the caller takes that cadence with
+/// [`GraphqlSubscription::take_renewal`]; delegated credentials remain
+/// caller-owned.
 pub struct GraphqlSubscription {
     events: Option<Events>,
     renew_at: Option<Instant>,
@@ -39,6 +47,16 @@ pub struct GraphqlSubscription {
 }
 
 impl GraphqlSubscription {
+    /// Takes re-authentication from this stream: it no longer ends at its
+    /// renewal deadline, and the returned period (`None` for a delegated
+    /// credential) is how long the caller may keep it before re-subscribing.
+    /// The pinned DefraDB HTTP server authorizes a subscription only at its
+    /// handshake, so a stream kept past the deadline keeps delivering; a
+    /// caller can therefore arm the replacement before dropping this one.
+    pub fn take_renewal(&mut self) -> Option<Duration> {
+        self.renew_at.take().map(|_| SUBSCRIPTION_RENEWAL_PERIOD)
+    }
+
     /// How the stream ended, once `recv` has returned `Ok(None)`.
     pub fn end(&self) -> Option<SubscriptionEnd> {
         self.ended
@@ -133,7 +151,7 @@ impl ConfigAccess {
         let renew_at = endpoint
             .delegated_authorization
             .is_none()
-            .then(|| started_at + crate::store::identity::DEFRADB_BEARER_LIFETIME / 2);
+            .then(|| started_at + SUBSCRIPTION_RENEWAL_PERIOD);
         Ok(GraphqlSubscription {
             events: Some(Box::pin(response.bytes_stream().eventsource())),
             renew_at,

@@ -68,7 +68,7 @@ pub(crate) mod transport_publication;
 mod txn;
 pub use acp::nac::NodePermission;
 pub use pack_effect::{PackApprovalError, PackEffectApprover, PackReplayTransport};
-pub use subscription::{GraphqlSubscription, SubscriptionEnd};
+pub use subscription::{GraphqlSubscription, SubscriptionEnd, SUBSCRIPTION_RENEWAL_PERIOD};
 pub use txn::TRACING_TARGET as TXN_TRACING_TARGET;
 pub use txn::{VerifiedPackTransactionError, VerifiedPackTxn};
 pub(crate) mod write_telemetry;
