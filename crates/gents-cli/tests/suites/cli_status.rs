@@ -174,7 +174,7 @@ async fn status_includes_p2p_runtime_info() -> Result<()> {
         .get(format!("http://127.0.0.1:{port}/metrics"))
         .header(
             reqwest::header::AUTHORIZATION,
-            crate::support::graphql::served_endpoint(&graphql)
+            crate::support::graphql::node_principal_endpoint(&graphql)
                 .authorization()?
                 .context("missing fixture operator")?,
         )
@@ -316,7 +316,7 @@ async fn status_and_metrics_surface_overridden_p2p_admission_knobs() -> Result<(
         .get(format!("http://127.0.0.1:{port}/metrics"))
         .header(
             reqwest::header::AUTHORIZATION,
-            crate::support::graphql::served_endpoint(&graphql)
+            crate::support::graphql::node_principal_endpoint(&graphql)
                 .authorization()?
                 .context("missing fixture operator")?,
         )

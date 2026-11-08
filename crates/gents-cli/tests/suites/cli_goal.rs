@@ -13,7 +13,7 @@ async fn goal_configuration_rejects_implicit_resume_and_clear_is_durable() -> Re
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let model_name = format!("mock-goal-cli-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "goal session opened")?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-goal-{}", Uuid::new_v4().simple());
@@ -34,6 +34,23 @@ async fn goal_configuration_rejects_implicit_resume_and_clear_is_durable() -> Re
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     let session_id = format!("goal-session-{}", Uuid::new_v4().simple());
+    // A goal binds to an existing session; the User opens it with a request
+    // and lets that turn settle before configuring the goal.
+    run_cli_json(
+        &home_dir,
+        &[
+            "request",
+            "submit",
+            "--graphql",
+            &graphql,
+            "--node-did",
+            &node_did,
+            "--session-id",
+            &session_id,
+            "--content",
+            "Open the goal session.",
+        ],
+    )?;
     let objective = "Finish the CLI durable goal";
     let set = run_cli_json(
         &home_dir,

@@ -10,22 +10,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::session::canonical_rows::{
-    output_segment_create_variables, transcript_message_create_variables,
-    CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-};
 use gents::store::config_client::ConfigAccess;
 use gents::tools::background::job::keys::{job_session_id, job_spawn_key};
 use gents_protocol::job::{
     JobBudget, JobCeiling, JobEffects, JobGuestPin, JobOrigin, JobPauseReason, JobPin, JobProgress,
     JobSpawn, JobState, JobStepOutput,
 };
-use gents_protocol::output::{
-    MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
-    OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
-    StreamDeclaration, StreamPayload, ToolResultPart, TranscriptMessage,
-};
-use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -293,188 +283,6 @@ pub(crate) async fn seed_child(
     Ok(())
 }
 
-/// Publishes the accepted assistant message that admits the tool row `row_doc_id`
-/// at sequence 1, which a Local stop loads before it ends the row.
-pub(crate) async fn seed_admission(
-    access: &ConfigAccess,
-    node_did: &str,
-    request_doc_id: &str,
-    session: &str,
-    row_doc_id: &str,
-    call: &str,
-) -> Result<()> {
-    let arguments = "{}";
-    let generation = format!("cli-job-fixture:{request_doc_id}");
-    let created_at = "2026-06-01T10:00:00Z";
-    let segment = OutputSegment {
-        node_did: node_did.into(),
-        requester_did: Some(node_did.into()),
-        session_id: session.into(),
-        request_doc_id: request_doc_id.into(),
-        source: OutputSource::ProviderTurn {
-            scope: CaptureScope {
-                kind: CaptureScopeKind::Inference,
-                seq: 1,
-            },
-            turn_index: 0,
-            attempt: 0,
-        },
-        writer: OutputWriter::RequestExecution {
-            execution_generation: generation.clone(),
-        },
-        ordinal: Some(0),
-        runs: vec![SegmentRun {
-            stream: 0,
-            bytes: arguments.len() as u32,
-            declaration: Some(StreamDeclaration {
-                block_index: 0,
-                part_index: 0,
-                payload: StreamPayload::ToolArguments {
-                    id: call.into(),
-                    call_id: Some(call.into()),
-                    name: "workflow".into(),
-                },
-            }),
-        }],
-        payload: arguments.into(),
-        close: Some(SourceClose::Closed {
-            outcome: OutputOutcome::Complete,
-            segments: 1,
-            stream_bytes: vec![arguments.len() as u64],
-        }),
-        created_at: created_at.into(),
-    };
-    let response = graphql_mutation_with_variables(
-        access,
-        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-        &output_segment_create_variables(&segment)?,
-    )
-    .await?;
-    let close_doc_id =
-        gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentOutputSegment")?;
-    let message = TranscriptMessage {
-        native_request_id: None,
-        message_key: gents::session::sequence_message_key(node_did, session, Some(node_did), 1),
-        session_id: session.into(),
-        node_did: node_did.into(),
-        requester_did: Some(node_did.into()),
-        request_doc_id: Some(request_doc_id.into()),
-        publication: MessagePublication::RequestExecution {
-            execution_generation: generation,
-        },
-        outcome: OutputOutcome::Complete,
-        sequence: 1,
-        role: MessageRole::Assistant,
-        native_id: None,
-        blocks: vec![MessageBlock::ToolCall {
-            tool_call_doc_id: row_doc_id.into(),
-            id: call.into(),
-            call_id: Some(call.into()),
-            name: "workflow".into(),
-            arguments: PayloadRef {
-                close_doc_id,
-                stream: 0,
-            },
-            signature: None,
-            additional_params: None,
-        }],
-        created_at: created_at.into(),
-    };
-    graphql_mutation_with_variables(
-        access,
-        CREATE_AGENT_MESSAGE_MUTATION,
-        &transcript_message_create_variables(&message)?,
-    )
-    .await?;
-    Ok(())
-}
-
-/// Publishes the background receipt a detached job row needs before its terminal.
-pub(crate) async fn seed_receipt(
-    access: &ConfigAccess,
-    node_did: &str,
-    request_doc_id: &str,
-    session: &str,
-    row_doc_id: &str,
-    call: &str,
-) -> Result<()> {
-    let text = "started";
-    let created_at = "2026-06-01T10:00:01Z";
-    let key = format!("{session}:background-receipt:{row_doc_id}");
-    let segment = OutputSegment {
-        node_did: node_did.into(),
-        requester_did: Some(node_did.into()),
-        session_id: session.into(),
-        request_doc_id: request_doc_id.into(),
-        source: OutputSource::Authored { key: key.clone() },
-        writer: OutputWriter::ToolExecution {
-            tool_call_doc_id: row_doc_id.into(),
-        },
-        ordinal: Some(0),
-        runs: vec![SegmentRun {
-            stream: 0,
-            bytes: text.len() as u32,
-            declaration: Some(StreamDeclaration {
-                block_index: 0,
-                part_index: 0,
-                payload: StreamPayload::ToolOutput,
-            }),
-        }],
-        payload: text.into(),
-        close: Some(SourceClose::Closed {
-            outcome: OutputOutcome::Complete,
-            segments: 1,
-            stream_bytes: vec![text.len() as u64],
-        }),
-        created_at: created_at.into(),
-    };
-    let response = graphql_mutation_with_variables(
-        access,
-        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-        &output_segment_create_variables(&segment)?,
-    )
-    .await?;
-    let close_doc_id =
-        gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentOutputSegment")?;
-    let message = TranscriptMessage {
-        native_request_id: None,
-        message_key: key,
-        session_id: session.into(),
-        node_did: node_did.into(),
-        requester_did: Some(node_did.into()),
-        request_doc_id: Some(request_doc_id.into()),
-        publication: MessagePublication::ToolDelivery {
-            tool_call_doc_id: row_doc_id.into(),
-        },
-        outcome: OutputOutcome::Complete,
-        sequence: 2,
-        role: MessageRole::User,
-        native_id: None,
-        blocks: vec![MessageBlock::ToolResult {
-            tool_call_doc_id: row_doc_id.into(),
-            id: call.into(),
-            call_id: Some(call.into()),
-            parts: vec![ToolResultPart::Text {
-                text: PresentedPayload {
-                    output: PayloadRef {
-                        close_doc_id,
-                        stream: 0,
-                    },
-                    presentation: PayloadPresentation::Full,
-                },
-            }],
-        }],
-        created_at: created_at.into(),
-    };
-    graphql_mutation_with_variables(
-        access,
-        CREATE_AGENT_MESSAGE_MUTATION,
-        &transcript_message_create_variables(&message)?,
-    )
-    .await?;
-    Ok(())
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn served_node_lists_shows_and_watches_ended_jobs() -> Result<()> {
     let served = ServedHome::start().await?;
@@ -576,85 +384,17 @@ async fn served_node_lists_shows_and_watches_ended_jobs() -> Result<()> {
 async fn local_access_refuses_watch_and_control_on_an_offline_home() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let node_home = tempdir.path().join("node-home");
+    // The refusal is decided by the access kind before any job lookup.
     let init = run_init_json(
         tempdir.path(),
         &[
-            "--identity-only",
             "--node-name",
             "cli-job-offline",
             "--home",
             node_home.to_str().context("node home utf8")?,
         ],
     )?;
-    let did = node_did_from_init(&init)?;
-    {
-        let node = initialized_node(tempdir.path(), &node_home, "cli-job-offline").await?;
-        gents::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::local(Arc::new(node));
-        let create = gents::build_signed_request(
-            gents::RequestSpec::new(
-                gents_protocol::request_admission::RequestPurpose::Normal,
-                gents::RequestIdentity {
-                    request_id: "request-call-running".into(),
-                    node_did: did.clone(),
-                    requester_did: None,
-                    agent_did: "general".into(),
-                    session_id: "job-s1".into(),
-                    content: "run".into(),
-                    execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
-                    created_at: "2026-06-01T10:00:00Z".into(),
-                },
-                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
-            ),
-            gents::RequestSigner::RegisteredTarget,
-        )
-        .await?;
-        let mutation = create
-            .graphql_mutation()
-            .map_err(|error| anyhow::anyhow!(error))?;
-        let request = graphql_mutation_with_variables(&access, &mutation, &json!({})).await?;
-        let request_doc_id =
-            gents_protocol::graphql::extract_mutation_doc_id(&request, "AgentRequest")?;
-        // A claimed request is processing; claim is not part of the signed receipt.
-        graphql_mutation_with_variables(
-            &access,
-            &format!(
-                r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "processing" }}) {{ _docID }} }}"#,
-                escape_graphql_string(&request_doc_id)
-            ),
-            &json!({}),
-        )
-        .await?;
-        let row = seed_job(
-            &access,
-            &did,
-            &request_doc_id,
-            "job-s1",
-            "call-running",
-            "running",
-            JobState::Running,
-            None,
-        )
-        .await?;
-        seed_admission(
-            &access,
-            &did,
-            &request_doc_id,
-            "job-s1",
-            &row,
-            "call-running",
-        )
-        .await?;
-        seed_receipt(
-            &access,
-            &did,
-            &request_doc_id,
-            "job-s1",
-            &row,
-            "call-running",
-        )
-        .await?;
-    }
+    node_did_from_init(&init)?;
     let home = node_home.to_str().context("node home utf8")?;
 
     let (code, _, stderr) = run_job(

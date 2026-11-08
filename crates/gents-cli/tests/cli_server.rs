@@ -291,8 +291,10 @@ async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
         "server exited without the report write failure:\n{stderr}"
     );
 
+    // Readiness is the runtime's own protected row; read it back as the Node.
+    let _runtime = identity_from_init(&init)?;
     let data_dir = home_dir.join(".gents").join("data");
-    let node =
+    let node = std::sync::Arc::new(
         gents::store::local::store_key::open_home_store_key(&home_dir.join(".gents"), &data_dir)
             .await?
             .encrypt(
@@ -300,27 +302,25 @@ async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
                     .data_path(&data_dir)
                     .with_storage_backend(StorageBackend::Regolith),
             )
+            .with_node_identity_did(&node_did)
             .build()
             .await
-            .with_context(|| format!("opening embedded node at {}", data_dir.display()))?;
-    let response = node
-        .execute(&format!(
-            r#"{{ NodeReadiness(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{
-                node_did snapshot_json updated_at
-            }} }}"#,
-            escape_graphql_string(&node_did),
-        ))
-        .await;
-    node.shutdown().await.expect("node shutdown");
-    anyhow::ensure!(
-        !response.has_errors(),
-        "reading agent readiness: {:?}",
-        response.errors
+            .with_context(|| format!("opening embedded node at {}", data_dir.display()))?,
     );
+    let response =
+        gents::store::config_client::ConfigAccess::local_as(node.clone(), node_did.parse()?)
+            .execute(&format!(
+                r#"{{ NodeReadiness(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{
+            node_did snapshot_json updated_at
+        }} }}"#,
+                escape_graphql_string(&node_did),
+            ))
+            .await;
+    node.shutdown().await.expect("node shutdown");
+    let response = response.context("reading agent readiness")?;
     let row = response
-        .data
-        .as_ref()
-        .and_then(|data| data["NodeReadiness"].get(0).cloned())
+        .pointer("/data/NodeReadiness/0")
+        .cloned()
         .context("server left no agent readiness row")?;
     let row: NodeReadinessRow = serde_json::from_value(row)?;
     let snapshot = decode_node_readiness_snapshot(&row, &node_did)
@@ -342,6 +342,7 @@ async fn server_rejects_ephemeral_http_port_before_publishing_readiness() -> Res
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
+    run_init_json(&home_dir, &["--node-name", "ephemeral-port"])?;
 
     let mut serve = spawn_server(&home_dir, 0)?;
     let status = wait_for_server_exit(&mut serve, SERVER_REJECTION_EXIT_TIMEOUT)?;
@@ -365,6 +366,15 @@ async fn server_rejects_unspecified_explicit_http_addresses() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let home = temp.path().join("home");
     fs::create_dir_all(&home)?;
+    run_init_json(
+        &home,
+        &[
+            "--home",
+            home.to_str().context("utf-8 home")?,
+            "--node-name",
+            "unspecified-address",
+        ],
+    )?;
     for address in ["0.0.0.0", "::"] {
         let stderr = run_cli_failure_stderr(
             &home,
@@ -621,7 +631,7 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
                     .any(|row| row["compaction_key"] == format!("nac-{phase}"))),
             "{phase}: principal could not read its row: {owner_rows}"
         );
-        let operator_authorization = support::graphql::served_endpoint(&graphql)
+        let operator_authorization = support::graphql::node_principal_endpoint(&graphql)
             .authorization()?
             .context("served principal authorization")?;
         for surface in ["self", "sessions"] {
@@ -673,7 +683,6 @@ fn port_replacement_requires_address_in_use_for_the_requested_address() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
-    const GROK_BEHAVIOR: &str = "port-live";
     const APPLIED_BACKEND: &str = "fresh-applied-grok-backend";
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -682,7 +691,7 @@ async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
     let model_name = format!("mock-grok-apply-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockModelEndpoint::start(&model_name)?;
     let agent_name = format!("cli-grok-apply-{}", Uuid::new_v4().simple());
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--node-name",
@@ -693,6 +702,9 @@ async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
+    // The applied Agent is a new Node-derived identity, published by the
+    // pack with its creation nonce.
+    let grok_agent = gents::store::identity::provision_agent_identity(&identity_from_init(&init)?)?;
     run_cli_text(
         &home_dir,
         &["config", "export", "--root", &root.to_string_lossy()],
@@ -718,7 +730,8 @@ async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
         .context("inference_profiles is not an array")?
         .push(profile);
     let mut agent = config["agents"][0].clone();
-    agent["agent_did"] = Value::String(GROK_BEHAVIOR.to_string());
+    agent["agent_did"] = Value::String(grok_agent.agent_did.clone());
+    agent["creation_nonce"] = Value::String(grok_agent.creation_nonce.clone());
     agent["inference_profile_id"] = Value::String(applied_profile);
     config["agents"]
         .as_array_mut()
@@ -739,7 +752,7 @@ async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
             "--grok-shim-socket-path",
             socket_path.to_str().context("socket path is not UTF-8")?,
             "--grok-shim-agent-did",
-            GROK_BEHAVIOR,
+            &grok_agent.agent_did,
         ],
         &[],
     )?;
@@ -791,19 +804,13 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     let default_agent_did = agent_did_from_init(&init)?;
 
     let (mcp_endpoint, _mcp_server) = mock_mcp_health_service().await?;
-    let runtime_home = std::path::PathBuf::from(init["home"].as_str().context("initialized home")?);
-    let data = gents::store::local::home::default_data_dir(&runtime_home);
-    let _store_claim = gents::store::local::home::lock_store(&runtime_home, &data)?;
-    let store_key =
-        gents::store::local::store_key::open_home_store_key(&runtime_home, &data).await?;
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let registration_graphql = format!("http://{}/api/v0/graphql", listener.local_addr()?);
-    let registration_node = gents::store::local::store_key::persistent_builder(&data, &store_key)?
-        .with_node_identity_did(node_did.clone())
-        .with_node_acp_enabled()
-        .with_http(gents::defra_node::HttpConfig::with_listener(listener)?)
-        .build()
-        .await?;
+    // MCP registration is a User-signed write; it is published through a
+    // configuring server before the observed server starts.
+    let registration_port = allocate_port()?;
+    let registration_graphql = graphql_url(registration_port);
+    let mut registration = spawn_server(&home_dir, registration_port)?;
+    wait_for_port(registration_port, &mut registration)?;
+    wait_for_runtime_ready(&registration_graphql, &node_did, Duration::from_secs(30)).await?;
     let register_home = home_dir.clone();
     let registration_node_did = node_did.clone();
     tokio::task::spawn_blocking(move || {
@@ -825,15 +832,14 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         )
     })
     .await??;
-    registration_node.shutdown().await?;
-    drop(registration_node);
-    drop(_store_claim);
+    registration.child.kill()?;
+    registration.child.wait()?;
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
-    let authorization = support::graphql::served_endpoint(&graphql)
+    let authorization = support::graphql::node_principal_endpoint(&graphql)
         .authorization()?
         .context("fixture operator is missing")?;
     let mut headers = reqwest::header::HeaderMap::new();
@@ -952,7 +958,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         .get(format!("http://127.0.0.1:{port}/status"))
         .header(
             reqwest::header::AUTHORIZATION,
-            support::graphql::served_endpoint(&graphql)
+            support::graphql::node_principal_endpoint(&graphql)
                 .authorization()?
                 .context("fixture operator is missing")?,
         )
@@ -1027,7 +1033,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             escape_graphql_string(&node_did),
         ),
     ] {
-        graphql_query(&graphql, &mutation)
+        support::graphql::node_graphql_query(&graphql, &mutation)
             .await
             .context("seeding self-view fixtures")?;
     }
@@ -1041,7 +1047,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
         StreamDeclaration, StreamPayload, TranscriptMessage,
     };
-    let request = graphql_query(
+    let request = support::graphql::node_graphql_query(
         &graphql,
         r#"{ AgentRequest(filter: { request_id: { _eq: "self-budget-req" } }, limit: 2) { _docID } }"#,
     )
@@ -1050,7 +1056,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         .as_str()
         .context("self-budget request physical ID")?;
     let access = gents::store::config_client::ConfigAccess::Graphql(
-        crate::support::graphql::served_endpoint(&graphql),
+        crate::support::graphql::node_principal_endpoint(&graphql),
     );
     let segment = OutputSegment {
         node_did: node_did.clone(),
@@ -1160,7 +1166,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             }}"#
         ),
     ] {
-        graphql_query(&graphql, &mutation)
+        support::graphql::node_graphql_query(&graphql, &mutation)
             .await
             .context("seeding foreign-principal fences")?;
     }
@@ -1169,7 +1175,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         .get(format!("http://127.0.0.1:{port}/status"))
         .header(
             reqwest::header::AUTHORIZATION,
-            support::graphql::served_endpoint(&graphql)
+            support::graphql::node_principal_endpoint(&graphql)
                 .authorization()?
                 .context("fixture operator is missing")?,
         )
@@ -1615,7 +1621,7 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
     .await?;
     wait_for_inference_call_state(&graphql, &request_id, "running").await?;
 
-    let authorization = support::graphql::served_endpoint(&graphql)
+    let authorization = support::graphql::node_principal_endpoint(&graphql)
         .authorization()?
         .context("fixture operator is missing")?;
     let mut headers = reqwest::header::HeaderMap::new();
@@ -1759,25 +1765,62 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
     Ok(())
 }
 
+/// Initializes a real home store at `agent_home`, then replaces the identity
+/// fields of its `init.json`: serve opens the initialized store before it
+/// resolves the configured identity.
+fn initialized_home_with_identity(
+    home_env: &std::path::Path,
+    agent_home: &std::path::Path,
+    identity: Value,
+) -> Result<String> {
+    let init = run_init_json(
+        home_env,
+        &[
+            "--home",
+            agent_home.to_str().context("utf-8 home")?,
+            "--node-name",
+            "mini-1-steward",
+        ],
+    )?;
+    let init_path = agent_home.join("init.json");
+    let mut config = read_json_file(&init_path)?;
+    for (field, value) in identity.as_object().context("identity fields")? {
+        config[field] = value.clone();
+    }
+    write_json_file(&init_path, &config)?;
+    if let Some(key_path) = init["key_path"].as_str() {
+        fs::remove_file(key_path)
+            .with_context(|| format!("removing initialized key {key_path}"))?;
+    }
+    config["node_did"]
+        .as_str()
+        .map(str::to_owned)
+        .context("initialized node DID")
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_rejects_real_initialized_did_without_key_path() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_env = tempdir.path().join("home-env");
     let agent_home = home_env.join(".gents");
     fs::create_dir_all(&agent_home)?;
-
-    let node_did = format!("did:key:z{}", Uuid::new_v4().simple());
-    write_json_file(
-        &agent_home.join("init.json"),
-        &serde_json::json!({
-            "home": agent_home.to_string_lossy(),
-            "node_name": "mini-1-steward",
-            "node_did": node_did,
-            "key_path": null,
-            "tool_ceiling": "Readonly",
-            "tool_root": tempdir.path().to_string_lossy()
-        }),
+    initialized_home_with_identity(
+        &home_env,
+        &agent_home,
+        serde_json::json!({ "key_path": null, "identity_backend": null }),
     )?;
+    let held_keys = || -> Result<Vec<std::path::PathBuf>> {
+        let keys = agent_home.join("keys");
+        if !keys.exists() {
+            return Ok(Vec::new());
+        }
+        let mut entries = fs::read_dir(keys)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        entries.sort();
+        Ok(entries)
+    };
+    let keys_before = held_keys()?;
 
     let port = allocate_port()?;
     let stderr = run_cli_failure_stderr(
@@ -1794,8 +1837,9 @@ async fn server_rejects_real_initialized_did_without_key_path() -> Result<()> {
         stderr.contains("has no key_path and unsupported identity_backend"),
         "expected no-key-path/backend error, got:\n{stderr}"
     );
-    assert!(
-        !agent_home.join("keys").exists(),
+    assert_eq!(
+        held_keys()?,
+        keys_before,
         "server must not create a fallback file-key identity for a no-key initialized home"
     );
 
@@ -1808,18 +1852,13 @@ async fn server_rejects_macos_keychain_identity_without_label() -> Result<()> {
     let home_env = tempdir.path().join("home-env");
     let agent_home = home_env.join(".gents");
     fs::create_dir_all(&agent_home)?;
-
-    let node_did = format!("did:key:z{}", Uuid::new_v4().simple());
-    write_json_file(
-        &agent_home.join("init.json"),
-        &serde_json::json!({
-            "home": agent_home.to_string_lossy(),
-            "node_name": "mini-1-steward",
-            "node_did": node_did,
+    initialized_home_with_identity(
+        &home_env,
+        &agent_home,
+        serde_json::json!({
             "key_path": null,
             "identity_backend": "macos-keychain",
-            "tool_ceiling": "Readonly",
-            "tool_root": tempdir.path().to_string_lossy()
+            "keychain_label": null,
         }),
     )?;
 
@@ -1852,19 +1891,14 @@ async fn server_rejects_real_initialized_did_with_missing_key_file_without_creat
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_env = tempdir.path().join("home-env");
     let agent_home = home_env.join(".gents");
-    let key_path = agent_home.join("keys").join("missing.key");
+    let key_path = agent_home.join("missing-keys").join("missing.key");
     fs::create_dir_all(&agent_home)?;
-
-    let node_did = format!("did:key:z{}", Uuid::new_v4().simple());
-    write_json_file(
-        &agent_home.join("init.json"),
-        &serde_json::json!({
-            "home": agent_home.to_string_lossy(),
-            "node_name": "mini-1-steward",
-            "node_did": node_did,
+    initialized_home_with_identity(
+        &home_env,
+        &agent_home,
+        serde_json::json!({
             "key_path": key_path.to_string_lossy(),
-            "tool_ceiling": "Readonly",
-            "tool_root": tempdir.path().to_string_lossy()
+            "identity_backend": null,
         }),
     )?;
 
@@ -1973,7 +2007,7 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
         .get(format!("http://127.0.0.1:{port}/status"))
         .header(
             reqwest::header::AUTHORIZATION,
-            support::graphql::served_endpoint(&graphql)
+            support::graphql::node_principal_endpoint(&graphql)
                 .authorization()?
                 .context("fixture operator is missing")?,
         )
@@ -2753,7 +2787,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn trace_of_a_served_home_reads_only_as_its_home() -> Result<()> {
+async fn trace_of_a_served_home_reads_only_as_its_user() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     let caller_dir = tempdir.path().join("caller");
@@ -2788,13 +2822,20 @@ async fn trace_of_a_served_home_reads_only_as_its_home() -> Result<()> {
 
     let trace = ["trace", "timeline", "--graphql", &graphql];
     let request = ["--request-id", "home-trace-req"];
-    let anonymous = run_cli_failure_stderr(&caller_dir, &[&trace[..], &request[..]].concat())?;
-    assert!(anonymous.contains("probably denied"), "{anonymous}");
+    // Every CLI caller holds its own User key: another User sees no such row.
+    let foreign = run_cli_failure_stderr(&caller_dir, &[&trace[..], &request[..]].concat())?;
+    assert!(foreign.contains("home-trace-req not found"), "{foreign}");
 
     let served_home = home_dir.join(".gents");
     let served_home = served_home.to_str().context("home path is not UTF-8")?;
-    let timeline = run_cli_json(
+    // Naming the home does not lend its User's key to another caller.
+    let named = run_cli_failure_stderr(
         &caller_dir,
+        &[&trace[..], &["--home", served_home], &request[..]].concat(),
+    )?;
+    assert!(named.contains("home-trace-req not found"), "{named}");
+    let timeline = run_cli_json(
+        &home_dir,
         &[&trace[..], &["--home", served_home], &request[..]].concat(),
     )?;
     assert_eq!(
@@ -2956,8 +2997,9 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
         "anonymous MCP write must fail"
     );
     let _identity = identity_from_init(&init)?;
-    let access =
-        gents::store::config_client::ConfigAccess::graphql_as(graphql.clone(), node_did.clone());
+    let access = gents::store::config_client::ConfigAccess::Graphql(
+        support::graphql::node_principal_endpoint(&graphql),
+    );
     access
         .add_collection("type McpParcel { reference: String status: String }")
         .await?;
@@ -3163,7 +3205,8 @@ impl McpHome {
         let port = allocate_port()?;
         let mut serve = vec!["--home", home_arg.as_str()];
         serve.extend_from_slice(serve_flags);
-        let (server, readiness) = spawn_server_with_ready_json(&home, port, &serve, &[])?;
+        // The server runs under the HOME whose CLI client key initialized it.
+        let (server, readiness) = spawn_server_with_ready_json(tempdir.path(), port, &serve, &[])?;
         anyhow::ensure!(
             readiness.get("status").and_then(Value::as_str) == Some("serving"),
             "server did not become ready: {readiness}"

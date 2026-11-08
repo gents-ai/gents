@@ -121,7 +121,7 @@ async fn seed_canonical_tool_transcript(
     };
     use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 
-    let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
+    let access = ConfigAccess::Graphql(crate::support::graphql::node_principal_endpoint(graphql));
     let generation = format!("codex-fixture:{request_doc_id}:{sequence}");
     let argument_segment = OutputSegment {
         node_did: node_did.into(),
@@ -410,7 +410,7 @@ pub(super) async fn seed_blank_materialized_completion(
     anyhow::ensure!(request_node_did == node_did);
     anyhow::ensure!(requester_did.as_deref() == Some(node_did));
     let generation = format!("codex-blank-{request_id}");
-    let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
+    let access = ConfigAccess::Graphql(crate::support::graphql::node_principal_endpoint(graphql));
     let segment = OutputSegment {
         node_did: node_did.to_owned(),
         requester_did: Some(node_did.to_owned()),
