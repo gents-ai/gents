@@ -2,6 +2,7 @@ pub(super) mod capture;
 pub(super) mod evidence;
 pub(crate) mod install;
 pub(super) mod outcome;
+mod root_grants;
 mod settle;
 mod stage;
 mod submit;

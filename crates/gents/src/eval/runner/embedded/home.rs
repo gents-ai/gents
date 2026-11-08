@@ -616,7 +616,7 @@ async fn fetch_runtime_snapshot(
     }))
 }
 
-async fn fetch_node_readiness_snapshot(
+pub(super) async fn fetch_node_readiness_snapshot(
     node: &EmbeddedNode,
     node_did: &str,
 ) -> Result<Option<gents_protocol::node_readiness::NodeReadinessSnapshot>> {

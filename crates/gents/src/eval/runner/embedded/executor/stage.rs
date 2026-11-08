@@ -29,7 +29,18 @@ const GRACE: Duration = Duration::from_secs(30);
 
 pub(super) async fn run_stages(spec: &TrialSpec, env: &StageEnv<'_>) -> Vec<StageEvidence> {
     let mut stages = Vec::new();
+    let mut root_grants = std::collections::BTreeSet::new();
     for authored in &spec.stages {
+        if let Err(error) = super::root_grants::grant_pending_root_readers(
+            env.home,
+            &spec.evaluator_did,
+            env.workspace,
+            &mut root_grants,
+        )
+        .await
+        {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(error.as_ref()), "the trial User could not grant pending root readers");
+        }
         let mut reviewed = authored.clone();
         if authored.review_previous {
             let feedback = stages
