@@ -707,4 +707,72 @@ describe("createSessionReads", () => {
       readSession(reads.sessionStore)?.timelineItems.map((item) => item.itemKey),
     ).toEqual(["other"]);
   });
+  it("fails visibly when the runtime answers for another session and nothing else will read", async () => {
+    const page = {
+      totalItems: 1,
+      totalItemsExact: true,
+      pageItems: 1,
+      hasOlder: false,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k1",
+    };
+    const wrong = session(["k1"], page);
+    wrong.sessionId = "session-9";
+    const fetchSessionSnapshot = vi.fn().mockResolvedValue(wrong);
+    const reads = readsFor({ fetchSessionSnapshot } as unknown as DesktopApiAdapter);
+    await reads.refreshSession("session-1");
+    expect(readSession(reads.sessionStore)).toBeNull();
+    expect(reads.sessionStore.getState().load).toMatchObject({
+      phase: "failed",
+      sessionId: "session-1",
+      reread: false,
+    });
+    expect(
+      projectSessionLoadingStatus({
+        selectedSessionId: "session-1",
+        selectedNodeDid: "did:key:test",
+        session: null,
+        sessionLoad: reads.sessionStore.getState().load,
+        operationalState: null,
+      }),
+    ).toMatchObject({ phase: "failed", action: "retryLocal" });
+  });
+
+  it("leaves a read whose selection moved to the read the move requested", async () => {
+    let release!: (value: DesktopSessionSnapshot) => void;
+    const fetchSessionSnapshot = vi.fn().mockReturnValue(
+      new Promise<DesktopSessionSnapshot>((resolve) => {
+        release = resolve;
+      }),
+    );
+    const store = createSelectionStore({
+      nodeDid: "did:key:test",
+      sessionId: "session-1",
+    });
+    const reads = readsFor(
+      { fetchSessionSnapshot } as unknown as DesktopApiAdapter,
+      store,
+    );
+    const first = reads.refreshSession("session-1");
+    store.setState({ sessionId: "session-2" });
+    release(
+      session(["k1"], {
+        totalItems: 1,
+        totalItemsExact: true,
+        pageItems: 1,
+        hasOlder: false,
+        hasNewer: false,
+        oldestItemKey: "k1",
+        newestItemKey: "k1",
+      }),
+    );
+    await first;
+    /* not failed: the load names the old target, so the shell shows the new
+       selection opening while its own read runs */
+    expect(reads.sessionStore.getState().load).toMatchObject({
+      phase: "loading",
+      sessionId: "session-1",
+    });
+  });
 });

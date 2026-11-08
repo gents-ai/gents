@@ -222,6 +222,25 @@ describe("createProjectionController", () => {
     expect(refreshSnapshot).not.toHaveBeenCalled();
   });
 
+  it("reads a selection that moved while its read ran, with no other request", async () => {
+    let selected = "session-1";
+    const first = deferred();
+    const refreshSession = vi.fn(async (sessionId: string | null) => {
+      if (sessionId === "session-1") await first.promise;
+      return null;
+    });
+    const projection = controller({ currentSessionId: () => selected, refreshSession });
+    const done = projection.request("session");
+    await vi.waitFor(() => expect(refreshSession).toHaveBeenCalledTimes(1));
+    selected = "session-2";
+    first.resolve();
+    await done;
+    expect(refreshSession.mock.calls.map(([id]) => id)).toEqual([
+      "session-1",
+      "session-2",
+    ]);
+  });
+
   it("drops queued trailing work when disposed", async () => {
     const pass = deferred();
     const readSessionUpdate = vi.fn(async () => {

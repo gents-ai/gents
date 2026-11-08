@@ -152,7 +152,7 @@ describe("reading a session with an open request", () => {
 });
 
 describe("a session waiting on its node", () => {
-  it("re-reads when the pairing changes and when the store changes, never on a timer", async () => {
+  it("re-reads when the pairing changes and when the store changes, ahead of its backoff", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const api = bridgeApi();
     const reads = [
@@ -206,7 +206,8 @@ describe("a session waiting on its node", () => {
         phase: "blocked",
         title: "Not connected to the node",
       });
-      await vi.advanceTimersByTimeAsync(60_000);
+      /* the first re-read waits out its backoff */
+      await vi.advanceTimersByTimeAsync(500);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
 
       await send("health");
@@ -224,6 +225,9 @@ describe("a session waiting on its node", () => {
       expect(phase()).toBe("loaded");
 
       await send("health");
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(4);
+      /* a shown session is never read on a timer */
+      await vi.advanceTimersByTimeAsync(120_000);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(4);
     } finally {
       stop();
@@ -278,7 +282,7 @@ describe("a session waiting on its node", () => {
     }
   });
 
-  it("waits for the update that brings a pending request rather than polling for it", async () => {
+  it("re-reads a pending request within a bounded backoff, then offers retry", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const api = bridgeApi();
     api.fetchSessionSnapshot.mockImplementation(async () => {
@@ -311,13 +315,96 @@ describe("a session waiting on its node", () => {
         return () => {};
       }),
     );
+    const status = () => app.view.getState().loadingStatus;
     try {
-      await vi.advanceTimersByTimeAsync(120_000);
-      expect(app.stores.session.getState().load.phase).toBe("pending");
+      await vi.advanceTimersByTimeAsync(0);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
+      expect(status()).toMatchObject({
+        title: "Waiting for session update",
+        action: null,
+      });
+      /* the runtime may catch up with no store notice: re-read at 1s, 2s,
+         4s, 8s and 15s, then stop and name the action */
+      for (const [gap, reads] of [
+        [1_000, 2],
+        [2_000, 3],
+        [4_000, 4],
+        [8_000, 5],
+        [15_000, 6],
+      ] as const) {
+        await vi.advanceTimersByTimeAsync(gap - 1);
+        expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(reads - 1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(reads);
+      }
+      expect(app.stores.session.getState().load).toMatchObject({
+        phase: "pending",
+        reread: false,
+      });
+      expect(status()).toMatchObject({
+        title: "Waiting for session update",
+        action: "retryLocal",
+      });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(6);
+
+      /* a notice still reads, and starts a fresh streak */
       void update?.({ reason: "store" });
       await vi.advanceTimersByTimeAsync(0);
-      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(7);
+      expect(status()).toMatchObject({ action: null });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(8);
+    } finally {
+      stop();
+    }
+  });
+
+  it("shows the session that arrives on a re-read with no store notice", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const api = bridgeApi();
+    const visible = sessionSnapshot({
+      sessionId: "s-1",
+      nodeDid: NODE_DID,
+      turnState: "running",
+      latestRequestId: "r-1",
+      liveCursor: null,
+      timelineItems: [],
+    });
+    api.fetchSessionSnapshot
+      .mockRejectedValueOnce(
+        new BridgeInvokeError({
+          code: "projectionPending",
+          message: "selected request has not reached the session owner yet",
+          retryable: true,
+          endpoint: null,
+        }),
+      )
+      .mockResolvedValue(visible);
+    const app = testApp({
+      api,
+      snapshot: running,
+      selection: { nodeDid: NODE_DID, sessionId: "s-1" },
+    });
+    const stop = startClientObservation(
+      app,
+      vi.fn(async () => () => {}),
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(app.stores.session.getState().load.phase).toBe("pending");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(app.stores.session.getState().load).toMatchObject({
+        phase: "loaded",
+        reread: false,
+      });
+      expect(app.stores.session.getState().session?.sessionId).toBe("s-1");
+      expect(app.view.getState().loadingStatus).toBeNull();
+      /* the shown request's tracking reads it once more; no timer follows */
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(3);
     } finally {
       stop();
     }

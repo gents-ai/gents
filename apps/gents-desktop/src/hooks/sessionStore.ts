@@ -45,6 +45,7 @@ export const IDLE_LOAD: SessionLoadState = {
   nodeDid: null,
   found: null,
   error: null,
+  reread: false,
 };
 
 export function createSessionStore(session: DesktopSessionSnapshot | null = null) {

@@ -10,6 +10,11 @@ import { desktopUpdateRefreshScope } from "./projectionController";
 import { timingConfig } from "./timing";
 import { errorText } from "../lib/errorText";
 
+/** Re-listen backoff after a rejected registration: doubling, capped. Each
+    rejection is still reported; only the wait between attempts is bounded. */
+const RELISTEN_FIRST_MS = 250;
+const RELISTEN_MAX_MS = 8_000;
+
 export function startClientObservation(
   { api, stores, view, actions, lifecycle, trackedRequestId }: DesktopApp,
   listenToUpdates: DesktopClientUpdatedListenerFactory,
@@ -44,27 +49,55 @@ export function startClientObservation(
       readSessionUpdate,
       onError: reportListenerError,
     });
-    /* Store and pairing-health events drive every read of a session whose
-       rows replicate here. */
-    void listenToDesktopClientUpdates(
-      async (event) => {
-        if (stopped) return;
-        const scope = desktopUpdateRefreshScope(
-          event.reason,
-          selection.getState().sessionId,
-          trackedRequestId(),
-          selectedSessionUnresolved(),
-        );
-        await controller.request(scope);
-      },
-      reportListenerError,
-      listenToUpdates,
-    )
-      .then((cleanup) => {
-        if (stopped) cleanup();
-        else unlisten = cleanup;
-      })
-      .catch(reportListenerError);
+    /* Store and pairing-health events drive the reads. Tauri drops an event
+       emitted while no handler is registered and never replays it, so the
+       full read that brings the view up to date starts only once the handler
+       is registered; a rejected registration is retried. */
+    let relistenTimer: ReturnType<typeof setTimeout> | undefined;
+    let relistenMs = RELISTEN_FIRST_MS;
+    let registrationError: string | null = null;
+    const listen = () => {
+      void listenToDesktopClientUpdates(
+        async (event) => {
+          if (stopped) return;
+          const scope = desktopUpdateRefreshScope(
+            event.reason,
+            selection.getState().sessionId,
+            trackedRequestId(),
+            selectedSessionUnresolved(),
+          );
+          await controller.request(scope);
+        },
+        reportListenerError,
+        listenToUpdates,
+      ).then(
+        (cleanup) => {
+          if (stopped) {
+            cleanup();
+            return;
+          }
+          unlisten = cleanup;
+          relistenMs = RELISTEN_FIRST_MS;
+          if (
+            registrationError !== null &&
+            stores.client.getState().error === registrationError
+          )
+            lifecycle.setError(null);
+          registrationError = null;
+          void controller.request("full").then(scheduleOperatorRead);
+        },
+        (listenerError: unknown) => {
+          if (stopped) return;
+          reportListenerError(listenerError);
+          registrationError = errorText(listenerError);
+          relistenTimer = setTimeout(() => {
+            relistenTimer = undefined;
+            if (!stopped) listen();
+          }, relistenMs);
+          relistenMs = Math.min(relistenMs * 2, RELISTEN_MAX_MS);
+        },
+      );
+    };
 
     let published = 0;
     const publishSelection = () => {
@@ -111,7 +144,7 @@ export function startClientObservation(
     });
 
     publishSelection();
-    void controller.request("session");
+    listen();
     const unsubscribeSelection = selection.subscribe((state, prev) => {
       if (state.nodeDid !== prev.nodeDid) publishSelection();
       if (state.nodeDid !== prev.nodeDid || state.sessionId !== prev.sessionId) {
@@ -138,6 +171,7 @@ export function startClientObservation(
 
     return () => {
       stopped = true;
+      clearTimeout(relistenTimer);
       controller.dispose();
       actions.invalidateSessionReads();
       clearTimeout(operatorTimer);

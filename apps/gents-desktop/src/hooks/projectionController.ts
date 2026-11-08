@@ -121,6 +121,9 @@ export function createProjectionController({
         if (work & SESSION) {
           settleOwed();
           const next = await refreshSession(sessionId);
+          /* a selection that moved while the read ran is read next; the read
+             it replaced dropped its answer */
+          if (currentSessionId() !== sessionId) enqueue(SESSION);
           if (
             work & INDEX_AFTER_TERMINAL &&
             !(work & SNAPSHOT) &&

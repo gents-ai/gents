@@ -268,3 +268,76 @@ describe("following the client while it runs", () => {
     }
   });
 });
+
+describe("registering for client updates", () => {
+  it("reads in full only once the listener is registered", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    let stop: (() => void) | undefined;
+    try {
+      const api = bridgeApi();
+      const app = testApp({ api, snapshot: running });
+      app.stores.selection.setState({ nodeDid: NODE_DID, sessionId: "s-1" });
+      let register!: () => void;
+      const registered = new Promise<void>((resolve) => {
+        register = resolve;
+      });
+      stop = startClientObservation(
+        app,
+        vi.fn(async () => {
+          await registered;
+          return () => {};
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      /* a read now would miss any change Tauri drops before registration */
+      expect(api.fetchSessionSnapshot).not.toHaveBeenCalled();
+      const snapshotsBefore = api.fetchDesktopSnapshot.mock.calls.length;
+      register();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
+      expect(api.fetchDesktopSnapshot.mock.calls.length).toBe(snapshotsBefore + 1);
+    } finally {
+      stop?.();
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-listens after a rejected registration, then reads in full", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    let stop: (() => void) | undefined;
+    try {
+      const api = bridgeApi();
+      const app = testApp({ api, snapshot: running });
+      app.stores.selection.setState({ nodeDid: NODE_DID, sessionId: "s-1" });
+      let attempts = 0;
+      let update: ((event: { reason?: string }) => Promise<void>) | undefined;
+      stop = startClientObservation(
+        app,
+        vi.fn(async (listener) => {
+          attempts += 1;
+          if (attempts <= 2) throw new Error("listen refused");
+          update = listener as typeof update;
+          return () => {};
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(attempts).toBe(1);
+      expect(app.stores.client.getState().error).toBe("listen refused");
+      expect(api.fetchSessionSnapshot).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(attempts).toBe(2);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(attempts).toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(attempts).toBe(3);
+      expect(app.stores.client.getState().error).toBeNull();
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
+      void update?.({ reason: "store" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
+    } finally {
+      stop?.();
+      vi.useRealTimers();
+    }
+  });
+});

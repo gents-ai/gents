@@ -35,6 +35,18 @@ const TRANSCRIPT_READ_SIZE = 80;
 const QUIET_AFTER_MS = 60_000;
 /** the least wait between full reads of a session that has gone quiet */
 const QUIET_READ_GAP_MS = 8_000;
+/** The re-reads a waiting phase is given, backing off. A selected request
+    that has not reached its owner, or a message still in delivery, may see
+    no store notice at all: the runtime holds no replica here. Once these are
+    spent the status offers its action instead (Lean
+    `ClientSessionLoad.rereadBudget`). */
+const WAITING_REREAD_MS = [1_000, 2_000, 4_000, 8_000, 15_000] as const;
+
+/** the delay before the next re-read of a waiting phase that has used
+    `used` re-reads, or null once they are spent */
+export function waitingRereadDelay(used: number): number | null {
+  return WAITING_REREAD_MS[used] ?? null;
+}
 
 /* a session's content apart from the store-wide revision, which moves when
    any document in the store changes */
@@ -68,6 +80,14 @@ export function createSessionReads({
   let readCost = 0;
   let changedAt = 0;
   let lastOutcome: string | null = null;
+  /* the scheduled re-read of a waiting phase, and the re-reads its streak has
+     used; any read the timer did not start begins a new streak */
+  let waitingTimer: ReturnType<typeof setTimeout> | undefined;
+  let waitingRereads = 0;
+  const cancelWaitingReread = () => {
+    clearTimeout(waitingTimer);
+    waitingTimer = undefined;
+  };
   const noteRead = (sessionId: string, outcome: string, started: number) => {
     readAt = performance.now();
     readCost = readAt - started;
@@ -91,19 +111,52 @@ export function createSessionReads({
   const setSessionLoad = (load: SessionLoadState) =>
     writeSessionLoad(sessionStore, load);
 
-  async function refreshSession(
+  function refreshSession(
     nextSessionId: string | null,
     nodeDidOverride?: string | null,
   ): Promise<DesktopSessionSnapshot | null> {
+    return readSelectedSession(nextSessionId, nodeDidOverride, false);
+  }
+
+  /* A waiting outcome schedules the next re-read while its streak has budget;
+     the load's `reread` says whether one follows. */
+  function scheduleWaitingReread(sessionId: string, nodeDid: string | null) {
+    const delay = waitingRereadDelay(waitingRereads);
+    if (delay === null) return false;
+    waitingRereads += 1;
+    const captured = refreshSeq;
+    waitingTimer = setTimeout(() => {
+      waitingTimer = undefined;
+      const selected = store.getState();
+      /* a newer read, or a moved selection, owns what follows */
+      if (
+        captured !== refreshSeq ||
+        selected.sessionId !== sessionId ||
+        (!!nodeDid && selected.nodeDid !== nodeDid)
+      )
+        return;
+      void readSelectedSession(sessionId, nodeDid, true);
+    }, delay);
+    return true;
+  }
+
+  async function readSelectedSession(
+    nextSessionId: string | null,
+    nodeDidOverride: string | null | undefined,
+    reread: boolean,
+  ): Promise<DesktopSessionSnapshot | null> {
     const currentRefresh = refreshSeq + 1;
     refreshSeq = currentRefresh;
+    cancelWaitingReread();
+    if (!reread) waitingRereads = 0;
     if (!nextSessionId) {
       setSession(null);
       setSessionLoad(IDLE_LOAD);
       return null;
     }
+    const selectedAt = store.getState();
     const nodeDid =
-      nodeDidOverride === undefined ? store.getState().nodeDid : nodeDidOverride;
+      nodeDidOverride === undefined ? selectedAt.nodeDid : nodeDidOverride;
     const previous = sessionStore.getState().load;
     const sameSelection =
       previous.sessionId === nextSessionId && previous.nodeDid === nodeDid;
@@ -116,6 +169,7 @@ export function createSessionReads({
       /* looking again doesn't bring a missing session back until it's found */
       found: sameSelection && previous.found === false ? false : null,
       error: sameSelection ? previous.error : null,
+      reread: true,
     });
     const started = performance.now();
     try {
@@ -130,7 +184,29 @@ export function createSessionReads({
         store.getState().sessionId === nextSessionId &&
         (!nodeDid || store.getState().nodeDid === nodeDid) &&
         (!next || next.sessionId === nextSessionId);
-      if (!stillCurrent) return null;
+      if (!stillCurrent) {
+        const selected = store.getState();
+        const moved =
+          selected.sessionId !== selectedAt.sessionId ||
+          selected.nodeDid !== selectedAt.nodeDid;
+        /* A newer read owns the load, or the moved selection has its own read
+           queued. Otherwise nothing else will read: the answer cannot be
+           shown and asking again asks the same question, so it fails
+           visibly. */
+        if (acceptsAsyncResult(refreshSeq, currentRefresh) && !moved) {
+          noteRead(nextSessionId, "mismatch", started);
+          setSessionLoad({
+            phase: "failed",
+            sessionId: nextSessionId,
+            nodeDid,
+            found: null,
+            error: "The runtime's answer did not match the selected session.",
+            reread: false,
+          });
+        }
+        return null;
+      }
+      waitingRereads = 0;
       setSession((current) => (next ? mergeSessionTipSnapshot(current, next) : null));
       noteRead(nextSessionId, next ? sessionSignature(next) : "missing", started);
       setSessionLoad({
@@ -139,6 +215,7 @@ export function createSessionReads({
         nodeDid,
         found: next !== null,
         error: null,
+        reread: false,
       });
       return next;
     } catch (error) {
@@ -156,12 +233,14 @@ export function createSessionReads({
           phase === "failed" ? `failed ${message}` : phase,
           started,
         );
+        const waiting = phase === "pending" || isSessionDeliveryPhase(phase);
         setSessionLoad({
           phase,
           sessionId: nextSessionId,
           nodeDid,
           found: code === "notFound" ? false : null,
           error: message,
+          reread: waiting && scheduleWaitingReread(nextSessionId, nodeDid),
         });
       }
       return null;
@@ -275,6 +354,7 @@ export function createSessionReads({
           nodeDid,
           found: null,
           error: error.message,
+          reread: false,
         });
       }
       throw error;
@@ -322,6 +402,7 @@ export function createSessionReads({
     loadSessionContextDetails,
     readTranscript,
     invalidateSessionReads() {
+      cancelWaitingReread();
       runEpoch += 1;
       refreshSeq += 1;
       liveSeq += 1;
