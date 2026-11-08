@@ -45,15 +45,6 @@ invoke("desktop_session_archive", {
     expectedRevision: "9007199254740993",
   },
 });
-invoke("desktop_session_history", {
-  request: {
-    nodeDid: "node",
-    visibility: "archived",
-    query: null,
-    cursor: null,
-    limit: 30,
-  },
-});
 invoke("desktop_session_archive", {
   request: {
     nodeDid: "node",

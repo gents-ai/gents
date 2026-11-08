@@ -26,10 +26,6 @@ export type {
   MailboxQuestion,
   MailboxQuestionAnswer,
   MailboxQuestionOption,
-  ToolSurfaceExplanationView,
-  NetworkStatusView,
-  NetworkReplicatorView,
-  NetworkSavedPeerView,
   PairingCollectionStatusView,
   RuntimeSnapshot,
   SyncHealthView,
@@ -140,7 +136,6 @@ export type {
   ToolDiffLineKind,
   ToolDiffLineView,
   ToolPresentationView,
-  RequestResendResult,
   RequestTimelineView,
   RunTimelineEventView,
 } from "./types/session.js";

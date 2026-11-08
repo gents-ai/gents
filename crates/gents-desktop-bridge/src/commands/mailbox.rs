@@ -46,16 +46,6 @@ fn mailbox_observation(
     })
 }
 
-pub fn list_mailbox(core: &ClientCore) -> Vec<MailboxItemView> {
-    core.store()
-        .snapshot()
-        .mailbox_items
-        .iter()
-        .filter(|row| row.status == "open")
-        .map(MailboxItemView::from)
-        .collect()
-}
-
 pub fn start_mailbox_request(core: &ClientCore, item_id: &str) -> Result<MailboxItemView> {
     let snapshot = core.store().snapshot();
     let row = snapshot

@@ -13,24 +13,13 @@ use self::single_flight::{
 };
 use crate::config::BootstrapPolicy;
 use crate::error::{BridgeError, BridgeErrorCode};
-use crate::snapshot::{build_bootstrap_summary_for_policy, build_client_snapshot_with_grants};
+use crate::snapshot::build_client_snapshot_with_grants;
 use crate::state::{current_core, snapshot_grants, DesktopAppState};
-use crate::types::{
-    ClientUpdateEvent, DesktopBootstrapSummary, DesktopClientSnapshot, DesktopInitRequest,
-};
+use crate::types::{ClientUpdateEvent, DesktopClientSnapshot, DesktopInitRequest};
 
 mod core_start;
 pub(super) mod exclusion;
 pub(crate) mod single_flight;
-
-#[tauri::command]
-pub async fn desktop_bootstrap_summary(
-    state: State<'_, DesktopAppState>,
-) -> Result<DesktopBootstrapSummary, BridgeError> {
-    build_bootstrap_summary_for_policy(&state.policy)
-        .await
-        .map_err(BridgeError::untyped)
-}
 
 #[tauri::command]
 pub async fn desktop_init_local_standard(

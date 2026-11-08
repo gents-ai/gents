@@ -1992,9 +1992,6 @@ export function createDesktopUiHarness(
     async setSessionArchived() {
       throw new Error("Archive controls are unavailable in this fixture.");
     },
-    async sessionHistory() {
-      throw new Error("Archive history is unavailable in this fixture.");
-    },
     async forkSessionBeforeMessage() {
       throw new Error("Message editing is unavailable in this fixture.");
     },
@@ -2259,9 +2256,6 @@ export function createDesktopUiHarness(
         truncated: false,
       };
     },
-    async resendRequest(requestId) {
-      return { requestId: `${requestId}-resend`, sessionId: "session-intro" };
-    },
     async retryRequest(requestId) {
       return {
         requestId: `${requestId}-retry`,
@@ -2311,79 +2305,6 @@ export function createDesktopUiHarness(
             status: "materialized",
             session_id: "session-intro",
             timestamp: STARTED_AT,
-          },
-        ],
-      };
-    },
-    async explainToolSurface(nodeDid, agentDid) {
-      if (nodeDid !== NODE_DID) {
-        throw new Error(
-          "tool-surface explanation for remote agents is not yet supported",
-        );
-      }
-      const agent = deployment.agents.find(
-        (candidate) => candidate.agentDid === agentDid,
-      );
-      const context = deployment.contexts.find(
-        (candidate) => candidate.context_id === agent?.contextId,
-      );
-      return {
-        agentDid,
-        enabled: agent?.enabled ?? true,
-        contextId: context?.context_id ?? null,
-        toolsId: context?.tools_id ?? null,
-        toolsSource: "context",
-        ceilingSource: "init_json",
-        mcpServicesOnline: true,
-        surface: {
-          tool_names: ["read_file", "list_files", "gents_exec"],
-          policy: {
-            requested: {
-              file_tools: ["read_file", "list_files", "write_file"],
-              meta: ["gents_exec"],
-            },
-            ceiling: { file_tools: ["read_file", "list_files"], meta: ["gents_exec"] },
-            runtime: {
-              file_tools: ["read_file", "list_files", "write_file"],
-              meta: ["gents_exec"],
-            },
-            effective: {
-              file_tools: ["read_file", "list_files"],
-              meta: ["gents_exec"],
-            },
-          },
-          included: { read_file: ["ceiling allows readonly file tools"] },
-          excluded: { write_file: ["ceiling is readonly"] },
-          unavailable: {},
-          warnings: [],
-        },
-      };
-    },
-    async fetchNetworkStatus() {
-      return {
-        localPeerId: "12D3KooWBombadilLocalPeer",
-        localPeerIdError: null,
-        listenAddresses: ["/ip4/127.0.0.1/tcp/9292/p2p/12D3KooWBombadilLocalPeer"],
-        listenAddressesError: null,
-        connectedPeers: [deployment.peerId],
-        connectedPeersError: null,
-        replicators: [
-          {
-            peerId: deployment.peerId,
-            address: deployment.addr,
-            collections: ["AgentRequest", "AgentResponse", "AgentMessage"],
-            status: 0,
-            lastStatusChange: TWO_HOURS_AGO,
-          },
-        ],
-        replicatorsError: null,
-        savedPeers: [
-          {
-            peerId: deployment.peerId,
-            label: deployment.label,
-            addr: deployment.addr,
-            nodeDid: deployment.nodeDid,
-            source: deployment.source,
           },
         ],
       };
@@ -2687,9 +2608,6 @@ export function createDesktopUiHarness(
     },
     async observeMailboxItem() {
       throw new Error("Native mailbox observation is unavailable in this harness");
-    },
-    async listMailbox() {
-      return deployment.mailboxItems;
     },
     async startMailboxRequest(itemId) {
       const item = deployment.mailboxItems.find((entry) => entry.itemId === itemId);

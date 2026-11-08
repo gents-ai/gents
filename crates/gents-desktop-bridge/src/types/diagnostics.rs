@@ -25,16 +25,3 @@ pub struct RunTimelineEventView {
     #[serde(flatten)]
     payload: super::json::WireObject,
 }
-
-#[derive(Debug, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolSurfaceExplanationView {
-    pub agent_did: String,
-    pub enabled: bool,
-    pub context_id: Option<String>,
-    pub tools_id: Option<String>,
-    pub tools_source: String,
-    pub ceiling_source: String,
-    pub mcp_services_online: bool,
-    pub surface: gents::tools::surface::ToolSurfaceExplanation,
-}

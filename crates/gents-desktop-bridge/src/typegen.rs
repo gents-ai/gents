@@ -8,7 +8,6 @@ use ts_rs::TS;
 use crate::accounts::usage::{AccountUsageView, ProviderUsageReadRequest, UsageWindowView};
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::inference_setup::InferenceSetupState;
-use crate::tauri_commands::chat::RequestResendResultView;
 use crate::tauri_commands::inference_setup::{
     ClaudeLoginRequest, ClaudeLoginResult, ClaudeLoginUrl, CodexLoginRequest, CodexLoginResult,
     CodexLoginUrl, GrokLoginRequest, GrokLoginResult, GrokLoginUrl,
@@ -310,7 +309,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ManagedServerResetResult,
         PeerRemoveResponse,
         EnrollmentRequestView,
-        NetworkStatusView,
         ToolServiceTestResult,
         TaskRunResult,
         ChatSendResult,
@@ -334,7 +332,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         MessageView,
         QuestionReplyView,
         ToolCallView,
-        RequestResendResultView,
         SessionContextDetailsRequest,
         gents::tools::native::SessionContextDetails,
         WorkspaceListingView,
@@ -378,7 +375,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         WorkflowPromoteView,
         gents_server::packs::EditedDocuments,
         RequestTimelineView,
-        ToolSurfaceExplanationView,
         BackendDisplayState,
         InstalledPacksView,
         PackSearchView,

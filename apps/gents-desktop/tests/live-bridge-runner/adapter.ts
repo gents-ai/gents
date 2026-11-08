@@ -73,13 +73,9 @@ export function createBridgeHttpAdapter(
     acknowledgeChatSubmission: async (receipt) => {
       await client.postJson("/desktop/chat/acknowledge", receipt);
     },
-    explainToolSurface: unsupported("explainToolSurface"),
-    fetchNetworkStatus: unsupported("fetchNetworkStatus"),
-    listMailbox: unsupported("listMailbox"),
     observeMailboxItem: unsupported("observeMailboxItem"),
     startMailboxRequest: unsupported("startMailboxRequest"),
     dismissMailboxItem: unsupported("dismissMailboxItem"),
-    resendRequest: unsupported("resendRequest"),
     retryRequest: unsupported("retryRequest"),
     forkSessionBeforeMessage: unsupported("forkSessionBeforeMessage"),
     saveSkillConfig: unsupported("saveSkillConfig"),
@@ -183,8 +179,6 @@ export function createBridgeHttpAdapter(
       client.postJson("/desktop/queue/edit", request),
     setSessionArchived: async (request) =>
       client.postJson("/desktop/session/archive", request),
-    sessionHistory: async (request) =>
-      client.postJson("/desktop/session/history", request),
     renameSession: async (request) => {
       await client.postJson("/desktop/session/rename", request);
     },

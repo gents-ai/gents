@@ -6,9 +6,8 @@
 
 [[set]]
 identifier = "core"
-description = "Bootstrap summary, aggregate snapshot, observer metrics"
+description = "Aggregate snapshot, observer metrics"
 permissions = [
-  "allow-desktop-bootstrap-summary",
   "allow-desktop-client-snapshot",
   "allow-desktop-observer-metrics",
 ]
@@ -34,7 +33,6 @@ permissions = [
   "allow-desktop-session-live-delta",
   "allow-desktop-session-rows",
   "allow-desktop-tool-file-changes",
-  "allow-desktop-session-history",
   "allow-desktop-session-goal",
 ]
 
@@ -47,11 +45,6 @@ permissions = ["allow-desktop-session-reload"]
 identifier = "trace-read"
 description = "Request timeline read"
 permissions = ["allow-desktop-request-timeline"]
-
-[[set]]
-identifier = "tool-surface-read"
-description = "Tool-surface explain (config family)"
-permissions = ["allow-desktop-tool-surface-explain"]
 
 [[set]]
 identifier = "chat-write"
@@ -74,7 +67,7 @@ permissions = [
 [[set]]
 identifier = "mailbox-read"
 description = "Owner-scoped mailbox envelope reads"
-permissions = ["allow-desktop-mailbox-list", "allow-desktop-mailbox-observe"]
+permissions = ["allow-desktop-mailbox-observe"]
 
 [[set]]
 identifier = "mailbox-control"
@@ -86,18 +79,16 @@ permissions = [
 
 [[set]]
 identifier = "resend-control"
-description = "Request resend / retry"
+description = "Request retry"
 permissions = [
-  "allow-desktop-request-resend",
   "allow-desktop-request-retry",
 ]
 
 [[set]]
 identifier = "fleet-read"
-description = "Peer status (by saved id) and network status"
+description = "Peer status (by saved id)"
 permissions = [
   "allow-desktop-peer-status-fetch",
-  "allow-desktop-network-status",
 ]
 
 [[set]]
@@ -148,12 +139,11 @@ permissions = ["allow-desktop-allowed-dirs-add", "allow-desktop-allowed-dirs-rem
 
 [[set]]
 identifier = "fleet-admin"
-description = "Authenticated peer enrollment, removal/rename, and P2P repair"
+description = "Authenticated peer enrollment, removal and rename"
 permissions = [
   "allow-desktop-peer-enroll-status",
   "allow-desktop-peer-remove",
   "allow-desktop-peer-rename",
-  "allow-desktop-p2p-repair",
 ]
 
 [[set]]
@@ -276,7 +266,6 @@ permissions = [
   "session-read",
   "session-control",
   "trace-read",
-  "tool-surface-read",
   "chat-write",
   "mailbox-read",
   "mailbox-control",

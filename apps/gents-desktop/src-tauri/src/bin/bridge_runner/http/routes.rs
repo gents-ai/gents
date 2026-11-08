@@ -4,7 +4,6 @@ mod operations_snapshot;
 mod retained_reasoning;
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
@@ -22,8 +21,8 @@ use gents_desktop_bridge::commands::mcp_health::{
 };
 use gents_desktop_bridge::commands::{
     delete_event_source_config, delete_schedule_config, delete_tools_config, delete_trigger_config,
-    rename_session, repair_p2p, run_schedule_config, run_task_config, save_agent_config,
-    save_backend_config, save_event_source_config, save_inference_profile_config, save_node_config,
+    rename_session, run_schedule_config, run_task_config, save_agent_config, save_backend_config,
+    save_event_source_config, save_inference_profile_config, save_node_config,
     save_schedule_config, save_task_config, save_tool_service_config, save_tools_config,
     save_trigger_config, send_chat_message, session_rows, set_backend_rotation_config,
     set_default_agent, test_tool_service_config,
@@ -445,10 +444,6 @@ pub(super) async fn handle_request(
                 &EnrollmentRequestView::from(enrollment),
             )?))
         }
-        ("POST", "/desktop/p2p/repair") => {
-            repair_p2p(fixture.desktop_core().as_ref(), Duration::from_millis(250)).await?;
-            snapshot_response(fixture).await
-        }
         ("POST", "/desktop/session/snapshot") => {
             let request = serde_json::from_str::<SessionSnapshotRequest>(&request.body)
                 .context("decoding session snapshot request")?;
@@ -639,18 +634,6 @@ pub(super) async fn handle_request(
                 "decoding session archive request",
             )?;
             let result = gents_desktop_bridge::commands::set_session_archived(
-                fixture.desktop_core().as_ref(),
-                request,
-            )
-            .await?;
-            Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
-        }
-        ("POST", "/desktop/session/history") => {
-            let request = decode::<gents_desktop_bridge::types::SessionHistoryRequest>(
-                &request.body,
-                "decoding session history request",
-            )?;
-            let result = gents_desktop_bridge::commands::session_history(
                 fixture.desktop_core().as_ref(),
                 request,
             )
