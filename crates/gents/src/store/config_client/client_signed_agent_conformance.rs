@@ -202,7 +202,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         "provider_kind":"OpenAiCompatible", "endpoint":format!("http://{discovery_address}/v1"),
         "auth":{"kind":"api_key", "key":"first-private-key"}
     }))?;
-    let metadata_doc = super::write_inference_backend_document(&access, &backend).await?;
+    let metadata_doc = crate::documents::inference_backend::write_inference_backend_document(&access, &backend).await?;
     let runtime_access =
         super::ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
     // Native ACP denies the runtime either by refusing the mutation or by
@@ -278,7 +278,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         .as_bool()
         .unwrap();
     assert_eq!(
-        super::write_inference_backend_document(&access, &moved)
+        crate::documents::inference_backend::write_inference_backend_document(&access, &moved)
             .await
             .is_ok(),
         moved_allowed
@@ -288,7 +288,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
     backend.auth = crate::documents::BackendAuth::ApiKey {
         key: "rotated-private-key".into(),
     };
-    super::write_inference_backend_document(&access, &backend).await?;
+    crate::documents::inference_backend::write_inference_backend_document(&access, &backend).await?;
     let rotated = read().await?;
     assert_ne!(
         rotated["data"]["InferenceBackendMetadata"][0]["credential_version"],
@@ -429,7 +429,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
     let catalog_before =
         read().await?["data"]["InferenceBackendObservation"][0]["catalogs"].clone();
     assert!(
-        super::write_inference_backend_document(&agent_access, &backend)
+        crate::documents::inference_backend::write_inference_backend_document(&agent_access, &backend)
             .await
             .is_err()
     );
@@ -574,7 +574,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
             .unwrap()
             .to_owned(),
     };
-    let recreated_doc = super::write_inference_backend_document(&access, &backend).await?;
+    let recreated_doc = crate::documents::inference_backend::write_inference_backend_document(&access, &backend).await?;
     assert_eq!(
         recreated_doc != metadata_doc,
         modeled.backend_genesis_distinct

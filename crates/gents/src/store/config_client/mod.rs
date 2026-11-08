@@ -14,7 +14,6 @@
 //! - `Option` fields omitted from an `update:` clause preserve the stored
 //!   value; explicit clearing requires `field: null`.
 
-mod agent_behavior;
 #[cfg(test)]
 mod agent_signer_conformance;
 mod application_failure;
@@ -38,6 +37,7 @@ pub(crate) use client_signed_agent::{
 #[cfg(test)]
 mod client_signed_agent_conformance;
 mod common;
+pub mod agent_session;
 mod desired_state;
 #[cfg(test)]
 mod dormant_file_request_conformance;
@@ -47,21 +47,22 @@ mod event_policy_conformance;
 pub(crate) mod event_source_cursor;
 mod graphql;
 mod inference_backend;
-mod inference_profile;
 mod node_deferred_operation;
 mod node_document_publication;
 mod node_permissions;
 mod pack_effect;
 mod pairing_reader;
-mod profile_switch;
 #[cfg(test)]
 mod query_tests;
+pub(crate) mod node_readiness;
 mod relationships;
 mod retry;
 mod schema_contract;
+pub mod schema_introspection;
 mod schema_install;
 mod schema_management;
 mod self_config_permission;
+pub(crate) mod session_children;
 mod subscription;
 pub(crate) mod transport_publication;
 mod txn;
@@ -96,7 +97,6 @@ pub(crate) fn classified_conflict_for_test() -> ConfigClientError {
 
 pub mod patch;
 
-pub use agent_behavior::write_agent_document;
 pub use authored_document::{
     create_authored_document, AuthoredDocumentCreateError, DocumentSchemaSource,
 };
@@ -124,14 +124,8 @@ pub(crate) use desired_state::validate::{validate_desired_state_plan, OutcomeSou
 pub(crate) use desired_state::{
     apply_desired_state_plan_with_node_binding, configuration_node_doc, ConfigurationNodeBinding,
 };
-pub(crate) use inference_backend::{backend_metadata_fields, write_inference_backend_in_txn};
-pub use inference_backend::{
-    list_inference_backends_in_txn, load_inference_backend_in_txn, serving_accounts,
-    write_inference_backend_document,
-};
-pub use inference_profile::{
-    agent_accounts, list_inference_profiles_in_txn, write_inference_profile_document,
-};
+pub(crate) use inference_backend::backend_metadata_fields;
+pub use inference_backend::{list_inference_backends_in_txn, load_inference_backend_in_txn};
 pub(crate) use node_deferred_operation::recover_deferred_node_operations;
 pub use node_deferred_operation::{
     maybe_link_deferred_operation_in_txn, require_node_update_in_txn, DeferredOperationError,
@@ -140,10 +134,6 @@ pub(crate) use node_document_publication::{
     publish_node_child_in_txn, publish_node_managers_in_txn, publish_secret_configuration_in_txn,
 };
 pub use pairing_reader::{PairingObservation, PairingReadReason};
-pub use profile_switch::{
-    switch_candidates, switch_profile_account, SwitchCandidate, SwitchPlan, SwitchReceipt,
-    SWITCH_COST,
-};
 pub(crate) use schema_contract::collection_schema_contract_digest;
 pub use schema_contract::{SchemaContractError, SchemaFieldDelta};
 pub use schema_install::{
@@ -151,7 +141,6 @@ pub use schema_install::{
     preview_schema_install, schema_install_mismatch, SchemaInstallError, SchemaInstallMismatch,
     SchemaInstallPlan,
 };
-pub use tools::write_tools_document;
 pub(crate) use txn::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT;
 pub use txn::{
     ConfigApplyTxn, ConfigCursor, IdempotentTransactionRetry, LocalConfigAccess,
@@ -163,8 +152,6 @@ pub use relationships::ConfigRelationshipGrant;
 pub use retry::TransactionFailure;
 pub use self_config_permission::{AgentSelfConfigPermission, AgentSelfConfigPermissionError};
 pub use write_telemetry::WriteTelemetryError;
-
-mod tools;
 
 use std::collections::BTreeSet;
 use std::sync::Arc;

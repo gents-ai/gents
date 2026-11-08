@@ -176,6 +176,21 @@ fn looks_like_tool_call_markup(text: &str) -> bool {
     .any(|marker| trimmed.contains(marker))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TranscriptFactRef {
+    pub doc_id: String,
+    pub sequence: i64,
+    pub commit_cid: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SourceBoundary {
+    pub boundary_version: u32,
+    pub request_doc_id: String,
+    pub request_commit_cid: String,
+    pub canonical_through: Option<TranscriptFactRef>,
+}
+
 #[cfg(test)]
 use crate as test_protocol;
 #[cfg(test)]

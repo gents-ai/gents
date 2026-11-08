@@ -12,6 +12,7 @@ pub mod live;
 pub mod origin;
 pub mod reconstruction;
 pub mod recovery;
+pub mod rows;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]

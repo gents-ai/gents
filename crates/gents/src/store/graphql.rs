@@ -87,6 +87,29 @@ impl From<ConfigClientError> for GraphqlResponseError {
 
 type Result<T, E = GraphqlResponseError> = std::result::Result<T, E>;
 
+pub(crate) fn selection_filter(
+    filter: Option<&str>,
+    equality: Option<(&str, &str)>,
+) -> Result<String, gents_protocol::graphql::GraphqlError> {
+    let mut clauses = Vec::new();
+    if let Some(filter) = filter.map(str::trim).filter(|s| !s.is_empty()) {
+        validate_graphql_filter_fragment(filter)?;
+        clauses.push(filter.to_owned());
+    }
+    if let Some((field, value)) = equality {
+        validate_graphql_name(field)?;
+        clauses.push(format!(
+            "{{ {field}: {{_eq:\"{}\"}} }}",
+            escape_graphql_string(value)
+        ));
+    }
+    Ok(match clauses.as_slice() {
+        [] => "{}".into(),
+        [only] => only.clone(),
+        _ => format!("{{_and:[{}]}}", clauses.join(",")),
+    })
+}
+
 /// Render a GraphQL string-list literal, emitting `null` for an empty list
 /// (never `[]`, which types as `JsonArray` and corrupts nillable array columns).
 pub fn graphql_string_list_literal<'a>(values: impl IntoIterator<Item = &'a str>) -> String {

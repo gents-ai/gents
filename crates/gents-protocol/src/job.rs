@@ -357,5 +357,7 @@ pub struct JobRowView {
     pub resume_of: Option<String>,
 }
 
+pub const MAX_BACKGROUNDED_TOOLS_PER_PARENT: usize = 8;
+
 #[cfg(test)]
 mod tests;

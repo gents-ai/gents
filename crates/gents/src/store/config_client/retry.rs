@@ -14,7 +14,7 @@ pub(super) const RECEIPT_WRITE_MAX_RETRIES: u32 = 4;
 /// concurrent sibling admissions, a lease shorter than twice the attempt
 /// series, or unbounded concurrent writes.
 pub(super) const REQUEST_SIBLING_MAX_ATTEMPTS: u32 =
-    crate::tools::call::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT as u32 + 2;
+    gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT as u32 + 2;
 
 /// Exposes the DefraDB access error a transaction callback failed with, so the
 /// transaction owner classifies conflicts and storage failures by type. A

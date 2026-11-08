@@ -9,7 +9,7 @@ use super::validate::{
 };
 use super::*;
 use crate::store::config_client::ConfigAccess;
-use crate::tools::builtin::defra_query::SchemaField;
+use crate::store::config_client::schema_introspection::SchemaField;
 use anyhow::Context;
 use defra_node::Node as EmbeddedNode;
 use serde_json::json;

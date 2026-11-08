@@ -467,6 +467,46 @@ pub fn project_node_readiness<'a>(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReconcilePhase {
+    Idle,
+    Debouncing,
+    Resolving,
+    Diffing,
+    Applying,
+}
+
+impl ReconcilePhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Debouncing => "debouncing",
+            Self::Resolving => "resolving",
+            Self::Diffing => "diffing",
+            Self::Applying => "applying",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReconcileResult {
+    Startup,
+    Noop,
+    Applied,
+    Error,
+}
+
+impl ReconcileResult {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Startup => "startup",
+            Self::Noop => "noop",
+            Self::Applied => "applied",
+            Self::Error => "error",
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "node_readiness/tests.rs"]
 mod tests;

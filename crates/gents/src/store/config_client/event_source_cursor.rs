@@ -175,11 +175,11 @@ async fn event_binding(
 
 fn cursor_key(owner: &str, consumer: &EventConsumer, collection: &str) -> String {
     match consumer {
-        EventConsumer::Trigger { trigger_id } => crate::triggers::engine::durable_fire_key(
+        EventConsumer::Trigger { trigger_id } => gents_protocol::trigger_delivery::durable_fire_key(
             "arrival-cursor",
             &[owner, trigger_id, collection],
         ),
-        EventConsumer::CallbackBinding { binding_id } => crate::triggers::engine::durable_fire_key(
+        EventConsumer::CallbackBinding { binding_id } => gents_protocol::trigger_delivery::durable_fire_key(
             "callback-arrival-cursor",
             &[owner, binding_id, collection],
         ),
@@ -423,10 +423,10 @@ async fn load_or_seed_for_source_with_node_binding(
     }
     let key = cursor_key(owner, consumer, collection);
     let schema = txn
-        .execute(&crate::tools::builtin::defra_query::schema::introspection_query(collection)?)
+        .execute(&super::schema_introspection::introspection_query(collection)?)
         .await?;
     let after =
-        if crate::tools::builtin::defra_query::schema::parse_collection_schema(schema.get("data"))
+        if super::schema_introspection::parse_collection_schema(schema.get("data"))
             .is_some()
         {
             let response = txn
@@ -573,7 +573,7 @@ pub(crate) async fn checkpoint_prefix(
             if !enabled {
                 return Ok(false);
             }
-            let filter = crate::triggers::engine::event_delivery::selection_filter(
+            let filter = crate::store::graphql::selection_filter(
                 source.filter.as_deref(),
                 Some(("_docID", doc_id)),
             )?;
@@ -669,7 +669,7 @@ async fn admitted_callback_arrival(
     source_doc_id: &str,
 ) -> Result<bool> {
     let key =
-        crate::triggers::callback::idempotency_key(binding_id, source_collection, source_doc_id);
+        gents_protocol::trigger_delivery::idempotency_key(binding_id, source_collection, source_doc_id);
     let response = txn
         .execute(&format!(
             "{{ CallbackInvocation(filter: {{owner_node_did: {{_eq: \"{}\"}}, idempotency_key: {{_eq: \"{}\"}}}}, limit: 2) {{ origin claimed_at claimed_callback }} }}",

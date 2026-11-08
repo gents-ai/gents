@@ -35,6 +35,7 @@ pub mod session;
 pub mod session_hydration;
 pub mod session_input_edit;
 pub mod timeline;
+pub mod tool_call;
 pub mod tool_service_health;
 pub mod transcript;
 pub mod trigger_delivery;

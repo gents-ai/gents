@@ -1293,3 +1293,32 @@ where
         fields.push(format!("{name}: {value}"));
     }
 }
+
+macro_rules! signed_request_receipt_fields {
+    () => {
+        r#"
+_docID request_id purpose node_did requester_did agent_did session_id session_doc_id agent_doc_id
+                retry_parent_request retry_parent_request_doc_id retry_root_request retry_key
+                content input max_total_tokens
+                execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_correlation
+                caused_by_trigger_context caused_by_source_doc_id caused_by_trigger_doc_id
+                created_at deadline execution_generation execution_lease_expires_at retry_count
+                max_retries valid_until request_hop caused_by_parent_request_id
+                caused_by_parent_request_doc_id caused_by_parent_tool_call_id
+                caused_by_parent_tool_call_doc_id workspace_id workspace_owner_node_did workspace_authority
+                workspace_seal_hash admission_kind
+                admission_signer_did admission_signature enrollment_request_id
+                enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence
+                enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id
+                runtime_source_kind
+"#
+    };
+}
+
+/// Historical receipt verification does not depend on mutable lifecycle state.
+pub const SIGNED_REQUEST_RECEIPT_FIELDS: &str = signed_request_receipt_fields!();
+
+/// Lifecycle is included for callers decoding the row, but is not part of the
+/// signed payload.
+pub const SIGNED_REQUEST_FIELDS: &str =
+    concat!("lifecycle_state ", signed_request_receipt_fields!());

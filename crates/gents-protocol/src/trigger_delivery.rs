@@ -129,3 +129,18 @@ pub struct EventSourceCursor {
     pub source_collection: String,
     pub after: String,
 }
+
+pub fn durable_fire_key(namespace: &str, components: &[&str]) -> String {
+    let mut key = format!("{}:{namespace}", namespace.chars().count());
+    for component in components {
+        key.push_str(&format!(":{}:{component}", component.chars().count()));
+    }
+    key
+}
+
+/// One per-document event invocation per binding and arrival; an edit after
+/// admission is not another arrival. Keys use `:` separators, unambiguous
+/// because collection and document IDs carry none.
+pub fn idempotency_key(binding_id: &str, source_collection: &str, source_doc_id: &str) -> String {
+    format!("{binding_id}:{source_collection}:{source_doc_id}")
+}

@@ -13,6 +13,7 @@ mod grant_sets;
 pub(crate) mod macos;
 mod provision_client;
 mod registered;
+pub mod request_receipt;
 
 pub use agent::{
     derive_agent_identity, provision_agent_identity, provision_agent_identity_authorized,

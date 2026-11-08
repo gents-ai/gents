@@ -1,5 +1,11 @@
 use serde::{Deserialize, Serialize};
 
+mod owner_row;
+pub use owner_row::{
+    decode_session_row, session_scope_filter, validate_agent_session, SessionOwnerRow,
+    SessionRowError, SessionScope, AGENT_SESSION_FIELDS, SESSION_SCOPE_FIELDS,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentSession {

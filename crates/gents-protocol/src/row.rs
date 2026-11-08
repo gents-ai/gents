@@ -11,6 +11,12 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::request_lifecycle::RequestLifecycleState;
 
+mod agent_request;
+pub use agent_request::{
+    normalize_optional_string, validate_agent_request, AgentRequest, AgentRequestRowError,
+    AGENT_REQUEST_FIELDS,
+};
+
 pub use crate::node_readiness::{
     decode_node_readiness_snapshot, effective_agent_readiness_admission,
     is_behavior_unavailable_rejection, project_node_readiness, project_node_readiness_source,
@@ -239,6 +245,8 @@ impl AgentRequestRow {
             .is_some_and(RequestLifecycleState::is_claimable)
     }
 }
+
+pub const MAILBOX_COLLECTION: &str = "MailboxItem";
 
 /// Replicated envelope for human attention. Clients render this row without
 /// hydrating the referenced transcript or domain document.

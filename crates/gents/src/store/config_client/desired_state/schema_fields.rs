@@ -1,6 +1,6 @@
 use super::plan::DesiredStateApplyPlan;
 use super::ConfigApplyTxn;
-use crate::tools::builtin::defra_query::SchemaField;
+use crate::store::config_client::schema_introspection::{self, SchemaField};
 use crate::Collection;
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -92,15 +92,15 @@ pub(super) async fn prefetch_declared_fields(
         .into_iter()
         .filter(|collection| {
             !introspected.contains_key(collection)
-                && crate::tools::builtin::defra_query::schema::introspection_query(collection)
+                && schema_introspection::introspection_query(collection)
                     .is_ok()
         })
         .collect();
     for page in wanted.chunks(INTROSPECTION_PAGE) {
         let names: Vec<&str> = page.iter().map(String::as_str).collect();
-        let query = crate::tools::builtin::defra_query::schema::introspection_query_many(&names)?;
+        let query = schema_introspection::introspection_query_many(&names)?;
         let response = txn.execute(&query).await?;
-        let schemas = crate::tools::builtin::defra_query::schema::parse_collection_schemas(
+        let schemas = schema_introspection::parse_collection_schemas(
             response.get("data"),
             names.len(),
         );
@@ -127,10 +127,10 @@ pub(super) async fn declared_fields<'a>(
 ) -> Result<Option<&'a BTreeMap<String, SchemaField>>> {
     if !introspected.contains_key(collection) {
         if let Ok(query) =
-            crate::tools::builtin::defra_query::schema::introspection_query(collection)
+            schema_introspection::introspection_query(collection)
         {
             let response = txn.execute(&query).await?;
-            let fields = crate::tools::builtin::defra_query::schema::parse_collection_schema(
+            let fields = schema_introspection::parse_collection_schema(
                 response.get("data"),
             )
             .map(|schema| {
@@ -173,7 +173,7 @@ pub(super) async fn validate_output_obligation_count_fields(
         };
         match fields.get(field) {
             Some(declared)
-                if crate::tools::builtin::defra_write::can_hold_canonical_count(declared.named_type()) => {}
+                if schema_introspection::can_hold_canonical_count(declared.named_type()) => {}
             Some(declared) => anyhow::bail!(
                 "DatastoreToolSurface {surface_id} tool {:?} output_obligation.expected_count_field {field:?} names a {} field of {}, which cannot carry the count; the runtime parses an integer or its canonical decimal spelling out of the call argument",
                 tool_name,
@@ -224,7 +224,7 @@ pub(super) async fn validate_event_source_live_fields(
     if let Some(field) = count_field {
         match fields.get(field) {
             Some(declared)
-                if crate::tools::builtin::defra_write::can_hold_canonical_count(
+                if schema_introspection::can_hold_canonical_count(
                     declared.named_type(),
                 ) => {}
             Some(declared) => anyhow::bail!(

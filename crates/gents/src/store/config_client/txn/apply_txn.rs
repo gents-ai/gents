@@ -306,7 +306,7 @@ impl<'a> ConfigApplyTxn<'a> {
                 .await
                 .map_err(ConfigClientError::BeginTask)?;
             let rollback_on_drop = RollbackOnDrop::PackReplay {
-                runtime: crate::runtime::drop_cleanup::DropCleanup::current(),
+                runtime: crate::drop_cleanup::DropCleanup::current(),
                 replay: replay.clone(),
                 armed: true,
             };
