@@ -255,6 +255,10 @@ async fn a_collection_grant_cannot_bypass_native_document_acp() {
     );
     let administrator =
         ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
+    // NAC-PORT-QUESTION: the reader Agent holds CollectionGet and DocumentDelete as direct
+    // permissions, which GrantSet::AgentBaseline omits. The collection-level grant is the
+    // subject under test (ACP must refuse what the collection grant allows), so it is kept
+    // here; confirm production Agents never hold these.
     for did in [user.did(), reader.did()] {
         for permission in [
             acp::NodePermission::CollectionGet,
@@ -394,6 +398,10 @@ mod plugin {
         );
         let runtime_did = identity::Did::new(runtime.did()).unwrap();
         let owner = ConfigAccess::local_as(node.clone(), runtime_did.clone());
+        // NAC-PORT-QUESTION: the managed Agent is granted CollectionGet and DocumentDelete,
+        // which GrantSet::AgentBaseline (DocumentRead, DocumentUpdate, DacRelationAdd) omits.
+        // Narrowing to the baseline could change plugin delete outcomes, so the grant is kept
+        // until the owner confirms a production plugin Agent holds these permissions.
         for permission in [
             acp::NodePermission::CollectionGet,
             acp::NodePermission::DocumentRead,
