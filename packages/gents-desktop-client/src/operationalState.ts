@@ -338,7 +338,8 @@ export function runtimeConnectionBlocksAdmission(connection: string | null | und
 
 /** `RuntimeConnectionObservation.presentation`: each status names its own
     reason, so an outage never reads as a connection attempt. A null status
-    is a peer the observer has not reconciled yet. */
+    is a peer the observer has not reconciled yet; the bridge never withholds
+    a reconciled status, since admission reads it. */
 export function projectRuntimeConnectionStatus(
   connection: string | null | undefined,
 ): OperationalStatus {

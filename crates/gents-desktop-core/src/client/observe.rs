@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::store::config_client::{ConfigAccess, TransactionFailure};
+use gents::store::config_client::ConfigAccess;
 use tokio::sync::{mpsc, watch};
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::Instant;
@@ -20,8 +20,8 @@ pub use projection_store::{
     StoreProjectionRevision, StoreUpdateNotice,
 };
 
-/// `RuntimeConnectionObservation.transportRetryDelayMs`.
-const RESYNC_RETRY_DELAY: Duration = Duration::from_millis(250);
+/// `RuntimeConnectionObservation.snapshotRetryDelayMs`.
+const SNAPSHOT_RETRY_DELAY: Duration = Duration::from_millis(250);
 
 fn resync_retry_ready(retry_not_before: Option<Instant>, now: Instant) -> bool {
     retry_not_before.is_none_or(|deadline| now >= deadline)
@@ -48,7 +48,7 @@ struct Load {
     node: String,
     id: u64,
     captured: projection_store::StoreReadFence,
-    result: anyhow::Result<ClientStore>,
+    result: Result<ClientStore, super::query::SnapshotReadError>,
 }
 
 struct InFlight {
@@ -195,8 +195,9 @@ pub fn spawn_observer(
                 notice = notice_rx.recv() => {
                     let Some(notice) = notice else { break; };
                     if let Some(source) = sources.entries.get_mut(&notice.node).filter(|source| source.generation == notice.generation && !source.denied) {
-                        source.ready = notice.ready;
-                        let event = notice.event();
+                        let event = notice.event;
+                        let armed = remote::armed_after(source.ready, event);
+                        source.ready = armed;
                         match event {
                             RuntimeConnectionEvent::PermissionDenied => {
                                 loads.cancel(&notice.node);
@@ -208,7 +209,7 @@ pub fn spawn_observer(
                             _ => {}
                         }
                         sources.observe(&notice.node, event, &store, Instant::now(), &metrics_for_task);
-                        if notice.ready {
+                        if armed {
                             pending.insert(notice.node);
                         }
                     }
@@ -226,7 +227,7 @@ pub fn spawn_observer(
                             if let Some(node) = loads.forget(error.id()) {
                                 tracing::warn!(node_did = %node, error = %error, "runtime snapshot task failed");
                                 pending.insert(node.clone());
-                                retry_at.insert(node, Instant::now() + RESYNC_RETRY_DELAY);
+                                retry_at.insert(node, Instant::now() + SNAPSHOT_RETRY_DELAY);
                             }
                             continue;
                         }
@@ -239,26 +240,28 @@ pub fn spawn_observer(
                         Ok(snapshot) => {
                             let rows = snapshot.row_count();
                             if store.replace_reloaded_snapshot_at_read(&captured, Some(&node), snapshot) {
-                                sources.observe(&node, RuntimeConnectionEvent::SnapshotSucceeded, &store, Instant::now(), &metrics_for_task);
+                                let event = remote::snapshot_event(remote::SnapshotOutcome::Succeeded);
+                                sources.observe(&node, event, &store, Instant::now(), &metrics_for_task);
                                 metrics_for_task.scope_reloads.fetch_add(1, Ordering::Relaxed);
                                 metrics_for_task.docs_fetched.fetch_add(rows as u64, Ordering::Relaxed);
                             } else {
                                 pending.insert(node.clone());
-                                retry_at.insert(node, Instant::now() + RESYNC_RETRY_DELAY);
+                                retry_at.insert(node, Instant::now() + SNAPSHOT_RETRY_DELAY);
                             }
                         }
                         Err(error) => {
                             tracing::warn!(node_did = %node, error = %error, "runtime snapshot failed");
                             metrics_for_task.fetch_failures.fetch_add(1, Ordering::Relaxed);
-                            if error.permission_denied() {
+                            let event = remote::snapshot_event(remote::snapshot_outcome(&error));
+                            if matches!(event, RuntimeConnectionEvent::PermissionDenied) {
                                 clear_node(&store, &node);
-                                sources.observe(&node, RuntimeConnectionEvent::PermissionDenied, &store, Instant::now(), &metrics_for_task);
+                                sources.observe(&node, event, &store, Instant::now(), &metrics_for_task);
                                 pending.remove(&node);
                                 retry_at.remove(&node);
                             } else {
-                                sources.observe(&node, RuntimeConnectionEvent::TransportFailed, &store, Instant::now(), &metrics_for_task);
+                                sources.observe(&node, event, &store, Instant::now(), &metrics_for_task);
                                 pending.insert(node.clone());
-                                retry_at.insert(node, Instant::now() + RESYNC_RETRY_DELAY);
+                                retry_at.insert(node, Instant::now() + SNAPSHOT_RETRY_DELAY);
                             }
                         }
                     }

@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import { FleetRow, type FleetRowProps } from "@source-inc/gents-desktop-fleet";
 import { deploymentStatus } from "@source-inc/gents-desktop-fleet";
-import type { DeploymentView, SyncHealthView } from "@source-inc/gents-desktop-client";
+import {
+  projectRuntimeConnectionStatus,
+  type DeploymentView,
+  type SyncHealthView,
+} from "@source-inc/gents-desktop-client";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
@@ -49,9 +53,12 @@ describe("fleet health visibility", () => {
         syncHealth(),
       ).label,
     ).toBe("Online");
-    expect(
-      deploymentStatus({ ...deployment, runtimeConnection: "disconnected" }).label,
-    ).toBe("Reconnecting");
+    // The label is the presentation owner's (its reason is checked against
+    // Lean in lean-conformance/runtime-connection); an outage never reads as
+    // a connection attempt.
+    const outage = deploymentStatus({ ...deployment, runtimeConnection: "disconnected" }).label;
+    expect(outage).toBe(projectRuntimeConnectionStatus("disconnected").shortLabel);
+    expect(outage).not.toBe(projectRuntimeConnectionStatus("connecting").shortLabel);
     expect(
       deploymentStatus({
         ...deployment,

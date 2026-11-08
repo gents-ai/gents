@@ -167,7 +167,7 @@ pub enum RuntimeConnectionStatus {
     NoEndpoint,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeConnectionEvent {
     SourceStarted,
     SubscriptionsReady,

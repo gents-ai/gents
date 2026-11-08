@@ -117,7 +117,8 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
         deployment.addr = String::new();
         deployment.graphql = None;
         deployment.dial_succeeded = false;
-        deployment.runtime_connection = None;
+        // `runtime_connection` stays: it is this client's own observation and
+        // admission reads it (`RuntimeConnectionObservation.presentation`).
         deployment.pairing_ready = None;
         deployment.last_error = None;
         for route in &mut deployment.routes {
@@ -502,6 +503,7 @@ mod tests {
         let client = projected.client.expect("client");
         assert!(client.listen_addresses.is_empty());
         let dep = &client.deployments[0];
+        assert_eq!(dep.runtime_connection.as_deref(), Some("connected"));
         assert!(dep.sessions.is_empty());
         assert!(dep.mailbox_items.is_empty());
         assert_eq!(dep.agent_environments[0].session_count, 0);
@@ -538,6 +540,7 @@ mod tests {
         let projected = project_client_snapshot(sample_snapshot(), SnapshotGrants::chat_package());
         let client = projected.client.as_ref().unwrap();
         let dep = &client.deployments[0];
+        assert_eq!(dep.runtime_connection.as_deref(), Some("connected"));
         assert_eq!(dep.routes.len(), 2);
         assert!(dep.routes.iter().all(|route| route.live_match));
         assert_eq!(dep.sessions.len(), 1);

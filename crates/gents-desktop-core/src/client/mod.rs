@@ -41,6 +41,7 @@ pub use principal_identity::PrincipalIdentity;
 pub(crate) use query::load_request_documents_on;
 pub use query::{
     load_node_scoped_snapshot, load_node_snapshot_on, load_request_prompt_ownership,
+    SnapshotReadError,
     load_request_prompt_ownership_on, load_session_compaction_entries,
     load_session_compaction_entries_on, load_session_context_store, load_session_context_store_on,
     load_session_diagnostics_store, load_session_diagnostics_store_on, load_session_live_store,
