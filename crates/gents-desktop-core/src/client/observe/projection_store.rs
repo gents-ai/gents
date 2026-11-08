@@ -154,6 +154,12 @@ enum StoreMutation {
 }
 
 impl StoreMutation {
+    /// A node reload publishing only the snapshot's rows for that node.
+    fn replace_node(node: &str, incoming: ClientStore) -> Self {
+        Self::ReplaceNode(node.to_owned(), incoming.node_rows(node))
+    }
+
+    /// The epochs the mutation moves.
     fn scope(&self, current: &ClientStore) -> StoreScope {
         match self {
             Self::Replace(_) => StoreScope::All,
@@ -162,9 +168,22 @@ impl StoreMutation {
         }
     }
 
-    /// Replacements are snapshot reloads; merges are patches.
-    fn reloads(&self) -> bool {
-        matches!(self, Self::Replace(_) | Self::ReplaceNode(_, _))
+    /// Whether a read captured at `captured` may still publish this mutation:
+    /// a snapshot reload checks the publication epochs of its `reloadCheck`
+    /// scope, a patch also checks the request-event epochs of its footprint.
+    fn accepts(
+        &self,
+        fences: &StoreReadFence,
+        captured: &StoreReadFence,
+        current: &ClientStore,
+        scope: &StoreScope,
+    ) -> bool {
+        match self {
+            Self::Replace(_) => fences.accepts_reload(captured, scope),
+            Self::ReplaceNode(node, incoming) => fences
+                .accepts_reload(captured, &current.replacement_check_scope(node, incoming)),
+            Self::Chat(_) | Self::Observer(_) => fences.accepts(captured, scope),
+        }
     }
 
     fn provenance(&self) -> ProvenanceUpdate {
@@ -351,7 +370,7 @@ impl ObservedStore {
     pub fn invalidate_node_after_denied_read(&self, node_did: &str) {
         let _ = self.update_if(
             None,
-            StoreMutation::ReplaceNode(node_did.to_owned(), ClientStore::default()),
+            StoreMutation::replace_node(node_did, ClientStore::default()),
         );
         self.request_resync(Some(node_did));
     }
@@ -477,7 +496,7 @@ impl ObservedStore {
     ) -> bool {
         let incoming = incoming.into_observer_projection();
         let mutation = match node_did {
-            Some(node) => StoreMutation::ReplaceNode(node.to_owned(), incoming),
+            Some(node) => StoreMutation::replace_node(node, incoming),
             None => StoreMutation::Replace(incoming),
         };
         self.update_if(Some(captured), mutation).is_some()
@@ -485,7 +504,9 @@ impl ObservedStore {
 
     /// Publish a structural database change without retaining its transcript
     /// payload; consumers reconcile with a bounded DefraDB projection for the
-    /// selected session. Tool-call changes also invalidate lineage.
+    /// selected session (`ClientDataPublication.transcriptInvalidation`). A
+    /// tool-call change also invalidates lineage and rejects every patch read
+    /// before it (`ClientDataPublication.provenanceInvalidation`).
     pub fn invalidate_projection(&self, provenance_changed: bool) -> u64 {
         let notice = {
             let mut state = self.state.write().expect("store snapshot lock poisoned");
@@ -588,11 +609,7 @@ impl ObservedStore {
             let mut state = self.state.write().expect("store snapshot lock poisoned");
             let scope = mutation.scope(&state.snapshot);
             if captured.is_some_and(|captured| {
-                if mutation.reloads() {
-                    !state.fences.accepts_reload(captured, &scope)
-                } else {
-                    !state.fences.accepts(captured, &scope)
-                }
+                !mutation.accepts(&state.fences, captured, &state.snapshot, &scope)
             }) {
                 return None;
             }

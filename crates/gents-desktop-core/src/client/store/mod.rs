@@ -207,67 +207,117 @@ impl Default for ClientStore {
 
 pub type SharedClientStore = Arc<ClientStore>;
 
+/// Ownership of the current rows a publication overwrites.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Overwritten {
+    Known,
+    /// An overwritten row has no known owner, or two owners claim it.
+    Unowned,
+    /// The doc index names a row that is not there.
+    Inconsistent,
+}
+
 impl ClientStore {
     pub(crate) fn merge_scope(&self, incoming: &ClientStore) -> StoreScope {
         let mut scope = StoreScope::default();
         scope.extend_rows(incoming);
+        match self.extend_overwritten_owners(incoming, &mut scope) {
+            Overwritten::Known => scope,
+            Overwritten::Unowned | Overwritten::Inconsistent => StoreScope::All,
+        }
+    }
 
+    /// Adds the owner of every current row `incoming` overwrites by merge key.
+    fn extend_overwritten_owners(&self, incoming: &ClientStore, scope: &mut StoreScope) -> Overwritten {
+        let mut overwritten = Overwritten::Known;
+        let mut unowned = || {
+            if overwritten == Overwritten::Known {
+                overwritten = Overwritten::Unowned;
+            }
+        };
         for row in &incoming.requests {
             if row.node_did.is_some()
                 && self
                     .unscoped_placeholder_request_ids
                     .contains(&row.request_id)
             {
-                return StoreScope::All;
+                unowned();
+                continue;
             }
             let Some(doc_id) = row.doc_id.as_deref() else {
                 continue;
             };
             match self.request_index_by_doc_id.get(doc_id) {
                 Some(Some(index)) => {
-                    let Some(previous) = self.requests.get(*index) else {
-                        return StoreScope::All;
+                    let Some(previous) = self
+                        .requests
+                        .get(*index)
+                        .filter(|previous| previous.doc_id.as_deref() == Some(doc_id))
+                    else {
+                        return Overwritten::Inconsistent;
                     };
-                    if previous.doc_id.as_deref() != Some(doc_id) {
-                        return StoreScope::All;
+                    match previous.node_did.as_deref() {
+                        Some(owner) => scope.insert_node(owner),
+                        None => unowned(),
                     }
-                    let Some(owner) = previous.node_did.as_deref() else {
-                        return StoreScope::All;
-                    };
-                    scope.insert_node(owner);
                 }
-                Some(None) => return StoreScope::All,
+                Some(None) => unowned(),
                 None => {}
             }
         }
 
         for mailbox in &incoming.mailbox_items {
             let Some(doc_id) = nonblank(Some(&mailbox.doc_id)) else {
-                return StoreScope::All;
+                unowned();
+                continue;
             };
             match self.mailbox_index_by_doc_id.get(doc_id) {
                 Some(Some(index)) => {
-                    let Some(previous) = self.mailbox_items.get(*index) else {
-                        return StoreScope::All;
+                    let Some(previous) = self
+                        .mailbox_items
+                        .get(*index)
+                        .filter(|previous| nonblank(Some(&previous.doc_id)) == Some(doc_id))
+                    else {
+                        return Overwritten::Inconsistent;
                     };
-                    if nonblank(Some(&previous.doc_id)) != Some(doc_id) {
-                        return StoreScope::All;
-                    }
                     scope.insert_node(&previous.node_did);
                 }
-                Some(None) => return StoreScope::All,
+                Some(None) => unowned(),
                 None => {}
             }
         }
 
-        scope
+        overwritten
     }
 
+    /// `ClientDataPublication.reloadFootprint`: the epochs a reload of
+    /// `node_did` publishing `incoming` (its `node_rows`) moves.
     pub(crate) fn replacement_scope(&self, node_did: &str, incoming: &ClientStore) -> StoreScope {
         let Some(node_did) = nonblank(Some(node_did)) else {
             return StoreScope::All;
         };
         let mut scope = self.merge_scope(incoming);
+        scope.insert_node(node_did);
+        scope
+    }
+
+    /// `ClientDataPublication.reloadCheck`: the epochs that reload checks. An
+    /// overwritten row without a known owner widens only the footprint: a
+    /// publication that changed such a row moved every scope, including the
+    /// shared epoch this check reads.
+    pub(crate) fn replacement_check_scope(
+        &self,
+        node_did: &str,
+        incoming: &ClientStore,
+    ) -> StoreScope {
+        let Some(node_did) = nonblank(Some(node_did)) else {
+            return StoreScope::All;
+        };
+        let mut scope = StoreScope::default();
+        scope.extend_rows(incoming);
+        if self.extend_overwritten_owners(incoming, &mut scope) == Overwritten::Inconsistent {
+            return StoreScope::All;
+        }
         scope.insert_node(node_did);
         scope
     }

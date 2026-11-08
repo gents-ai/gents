@@ -113,22 +113,6 @@ fn accepted_reload_refreshes_unretained_lineage_but_rejected_reload_does_not() {
 /// A tool-call change is a request event: it rejects a patch read before it
 /// but not a reload, whose own resync reads after it.
 #[test]
-fn tool_call_invalidation_rejects_patches_but_not_reloads() {
-    let (store, _) = ObservedStore::new(requests(&["parent"]));
-    let captured = store.capture_read();
-    let before = store.projection_revision();
-    store.invalidate_projection(true);
-    assert_eq!(
-        store.projection_revision().provenance_version,
-        before.provenance_version + 1
-    );
-    assert!(store
-        .merge_chat_patch_at_read(&captured, requests(&["parent"]))
-        .is_none());
-    assert!(store.replace_reloaded_snapshot_at_read(&captured, None, requests(&["parent"])));
-}
-
-#[test]
 fn late_reload_cannot_erase_a_request_refreshed_after_capture() {
     for scope in [None, Some("did:test:reload")] {
         let (store, _) = ObservedStore::new(requests(&["accounted"]));

@@ -22,7 +22,6 @@ pub(super) struct Notice {
 pub(super) struct Source {
     pub endpoint: GraphqlEndpoint,
     pub generation: u64,
-    pub ready: bool,
     pub denied: bool,
     reprobe_at: Option<Instant>,
     abort: AbortHandle,
@@ -79,7 +78,6 @@ impl Sources {
         let denials = self.denials.get(node).copied().unwrap_or_default();
         if matches!(event, RuntimeConnectionEvent::PermissionDenied) {
             if let Some(source) = self.entries.get_mut(node) {
-                source.ready = false;
                 source.denied = true;
                 source.reprobe_at = Some(now + reprobe_delay(denials));
                 source.abort.abort();
@@ -147,7 +145,6 @@ impl Sources {
                 Source {
                     endpoint,
                     generation: current,
-                    ready: false,
                     denied: false,
                     reprobe_at: None,
                     abort: task.abort_handle(),

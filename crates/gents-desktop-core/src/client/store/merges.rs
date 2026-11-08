@@ -643,6 +643,14 @@ impl ClientStore {
         ClientStore::from_rows(rows)
     }
 
+    /// `ClientDataPublication.publishedRows`: the rows of a snapshot that a
+    /// reload of `node_did` publishes. Rows the runtime returns for other
+    /// owners are dropped before the reload's footprint is computed.
+    pub(crate) fn node_rows(mut self, node_did: &str) -> Self {
+        retain_node_scope!(&mut self, node_did, true);
+        Self::from_rows(self.to_rows())
+    }
+
     pub fn replace_node_scope(&self, node_did: &str, snapshot: ClientStore) -> Self {
         let mut snapshot = snapshot;
         retain_node_scope!(&mut snapshot, node_did, true);
