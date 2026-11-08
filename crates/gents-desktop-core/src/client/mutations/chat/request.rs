@@ -189,66 +189,6 @@ pub async fn submit_task_request(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-#[cfg(test)]
-fn build_add_agent_request_field(
-    alias: &str,
-    request_id: &str,
-    node_did: &str,
-    requester_did: &str,
-    agent_did: &str,
-    session_id: &str,
-    retry_parent_request: &str,
-    retry_parent_request_doc_id: Option<&str>,
-    retry_root_request: &str,
-    content: &str,
-    created_at: &str,
-    retry_count: i64,
-    max_retries: i64,
-    backend_id: &str,
-    execution_origin: &str,
-    extra_fields: &str,
-) -> String {
-    let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_node_did = escape_graphql_string(node_did);
-    let escaped_requester_did = escape_graphql_string(requester_did);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_retry_parent = escape_graphql_string(retry_parent_request);
-    let retry_parent_doc_field = retry_parent_request_doc_id
-        .map(escape_graphql_string)
-        .map(|doc_id| format!(r#"retry_parent_request_doc_id: "{doc_id}","#))
-        .unwrap_or_default();
-    let escaped_retry_root = escape_graphql_string(retry_root_request);
-    let escaped_content = escape_graphql_string(content);
-    let escaped_created_at = escape_graphql_string(created_at);
-    let escaped_backend_id = escape_graphql_string(backend_id);
-    let escaped_execution_origin = escape_graphql_string(execution_origin);
-
-    format!(
-        r#"{alias}: add_AgentRequest(input: {{
-                request_id: "{escaped_request_id}",
-                node_did: "{escaped_node_did}",
-                requester_did: "{escaped_requester_did}",
-                agent_did: "{escaped_agent_did}",
-                session_id: "{escaped_session_id}",
-                retry_parent_request: "{escaped_retry_parent}",
-                {retry_parent_doc_field}
-                retry_root_request: "{escaped_retry_root}",
-                superseded_by_request: "",
-                content: "{escaped_content}",
-                lifecycle_state: "pending",
-                backend_id: "{escaped_backend_id}",
-                execution_origin: "{escaped_execution_origin}",
-                failure_reason: "",
-                created_at: "{escaped_created_at}",
-                retry_count: {retry_count},
-                max_retries: {max_retries}{extra_fields}
-            }}) {{ _docID }}
-        "#
-    )
-}
-
 /// Only `lifecycle_state=dead` with `failure_reason=Stale` is eligible — any
 /// other state would risk bypassing legitimate terminal classifications.
 #[allow(clippy::too_many_arguments)]
