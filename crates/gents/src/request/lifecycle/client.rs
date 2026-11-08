@@ -287,8 +287,12 @@ async fn reserve_client_targets(
     create: &AgentRequestCreate,
 ) -> Result<(String, String), ClientSubmissionError> {
     let actor = request_actor(access, create).map_err(ClientSubmissionError::Rejected)?;
+    // The reservation reads the session and selected Agent that the runtime
+    // and the User's configuration keep writing; the callback re-reads them
+    // and is transaction-only, so a confirmed conflict is rebuilt and an
+    // existing session is bound again (ClientSubmissionContention.tla).
     let (session, agent, created) = access
-        .transact_write_with_finality("request.client.reserve_session", |txn| {
+        .transact_signed_conflict_rebuild_with_finality("request.client.reserve_session", |txn| {
             let actor = &actor;
             Box::pin(async move { ensure_request_session_in_txn(txn, create, actor).await })
         })

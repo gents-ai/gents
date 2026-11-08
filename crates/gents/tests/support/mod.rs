@@ -13,6 +13,7 @@ pub mod accepted_turn;
 pub mod agent_requests;
 pub mod agent_transcript;
 pub mod builder_runtime;
+pub mod commit_race_proxy;
 pub mod conformance_consumers;
 pub mod enrollment;
 pub mod fixtures;
