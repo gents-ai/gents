@@ -56,6 +56,19 @@ See `../README.md` for how this fits the broader formal-verification model.
   test); `ReserveSingleAttempt` is the found reservation race ("a partial read
   lost to a newer merge" in the live backgrounding run); `ShortBudget` shows
   the overlap premise is load-bearing.
+  `Recovery` adds reconciliation of an unconfirmed submission while its
+  original commit may still land or abort: the retained signed bytes are
+  replayed only as the identical document, so green also holds
+  `UnconfirmedResolves`; `FreshReplay` answers absence with a freshly signed
+  request and duplicates the turn. `BytesLost` lets the caller lose those
+  bytes first (an older uncorrelated send or a reset journal; Lean
+  `journal_records_never_show_unconfirmed` excludes journal-written records),
+  leaving only the owner's visible request as evidence. Both readings of that
+  absence are red by design while the decision is pending: `Unretained`
+  (Lean's `.refused`, `UnretainedPolicy = "refuse"`) tells the person it was
+  not delivered, they resend, and the original lands (`CreatedOnce`);
+  `UnretainedWait` (the native `DeliveryUnconfirmed`) never resolves after the
+  original aborts (`UnconfirmedResolves`).
 - `SessionHeadObservation` — a session's observed request head and the
   client that projects it on reopen (#3604). The runtime claims a session's
   requests one at a time; each claim or admission refusal names the incoming
@@ -255,6 +268,13 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCBackgroundAdmissionContentionUnspaced.cfg` | as green, `RenewalSpaced = FALSE` | `NoConflictLoss` intentionally VIOLATED: two back-to-back renewals and two children exhaust call 2's 4 receipt attempts | 33,653 distinct states before counterexample; 68,174 generated | 25 | <1s |
 | `MCBackgroundAdmissionContentionRenewalWitness.cfg` | green constants | `RenewalNeverLost` intentionally VIOLATED: admission bumps exhaust a renewal poll, which green's re-drive recovers | 286,417 distinct states before counterexample; 580,008 generated | 33 | 1s |
 | `MCBackgroundAdmissionContentionStartWitness.cfg` | green constants | `StartNeverConflicts` intentionally VIOLATED: a renewal commits while call 1's dispatch start is open, the traced conflict | 46 distinct states before counterexample; 94 generated | 7 | <1s |
+| `MCClientSubmissionContention.cfg` | `Publications = 3`, `Attempts = 4`, `LostResponse`, `Recovery`, `ReplayIdentical`, no `BytesLost` | Passes `TypeOK`, `NoConflictLoss`, `CreatedOnce`, `EverySubmissionSettles`, `UnconfirmedResolves` | 174 distinct states; 314 generated | 12 | <1s (OpenJDK 25, 4 workers) |
+| `MCClientSubmissionContentionSingleAttempt.cfg` | `Publications = 1`, `Redrive = FALSE` | `NoConflictLoss` intentionally VIOLATED: ClientBegin, AgentPublish, ClientCommit | 16 distinct states; 18 generated | 6 | <1s |
+| `MCClientSubmissionContentionReserveSingleAttempt.cfg` | `Publications = 1`, `ReserveRedrive = FALSE` | `NoConflictLoss` intentionally VIOLATED: ReserveBegin, AgentPublish, ReserveCommit | 17 distinct states; 18 generated | 7 | <1s |
+| `MCClientSubmissionContentionShortBudget.cfg` | `Publications = Attempts = 4` | `NoConflictLoss` intentionally VIOLATED: four AgentPublish/ReserveCommit rounds | 123 distinct states; 163 generated | 12 | <1s |
+| `MCClientSubmissionContentionFreshReplay.cfg` | `Publications = 1`, `Attempts = 2`, `Recovery`, `ReplayIdentical = FALSE` | `CreatedOnce` intentionally VIOLATED: ClientCommitInFlight, ReconcileRetained (fresh request), OriginalLands | 45 distinct states; 58 generated | 9 | <1s |
+| `MCClientSubmissionContentionUnretained.cfg` | as `FreshReplay` with `ReplayIdentical`, `BytesLost`, `UnretainedPolicy = "refuse"` | `CreatedOnce` VIOLATED by design pending the reported decision: ClientCommitInFlight, LoseBytes, CheckUnretained (not delivered), OriginalLands, Resend (a duplicate turn) | 76 distinct states; 122 generated | 11 | <1s |
+| `MCClientSubmissionContentionUnretainedWait.cfg` | as `Unretained` with `UnretainedPolicy = "wait"` | `CreatedOnce` holds; `UnconfirmedResolves` VIOLATED by design pending the reported decision: ClientCommitInFlight, LoseBytes, OriginalAborts, then unconfirmed forever | 53 distinct states; 97 generated | 9 | <1s |
 | `MCSessionHeadObservation.cfg` | `Order = "lean"`, `HeadSeed = TRUE`, `Refusals = TRUE` | Passes `TypeOK`, `HeadFollowsBoundary`, `ReplyObserved` | 838 distinct states; 1,406 generated | 11 | <1s |
 | `MCSessionHeadObservationRequestIdTie.cfg` | `Order = "requestId"`, `Refusals = FALSE` | `HeadFollowsBoundary` intentionally VIOLATED: ClaimA, CompleteA, AdmitB, ClaimB leaves the head on A | 77 distinct states before counterexample; 99 generated | 6 | <1s |
 | `MCSessionHeadObservationRequestIdTieLiveness.cfg` | `Order = "requestId"`, `Refusals = FALSE` | `ReplyObserved` intentionally VIOLATED: the #3604 schedule; after reopen B completes and every load omits it | 620 distinct states; 1,056 generated | 11 | <1s |

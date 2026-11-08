@@ -1,0 +1,4 @@
+---- MODULE MCClientSubmissionContentionFreshReplay ----
+EXTENDS ClientSubmissionContention
+
+====
