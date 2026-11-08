@@ -531,7 +531,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::NETWORK_ENROLLMENT_REQUEST_NAME,
         gents_protocol::schemas::NETWORK_ENROLLMENT_REQUEST,
-        "bafyreih7u36s37itjkab6z33vayo6ig2sybwq2sn2bdvw3cnbjtjxks6aa"
+        "bafyreihxle4udjusqruxatzeljsmrn2katzbegaddxd4xft7fyy52bfkra"
     ),
     baseline_entry!(
         gents_protocol::schemas::NETWORK_ENROLLMENT_DECISION_NAME,
