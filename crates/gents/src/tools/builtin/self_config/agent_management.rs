@@ -433,7 +433,7 @@ async fn agent_apply_in_txn(
                     )
                     .await?;
                     root_access =
-                        crate::tools::surface::reader_grant_step(&id, published.as_deref());
+                        crate::tools::surface::reader_grant_step(&id, published.as_deref(), true);
                 }
                 validate_tool_network_selection(args.network_mode)?;
                 context.tools_id = Some(tools.tools_id.clone());

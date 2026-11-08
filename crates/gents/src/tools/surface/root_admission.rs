@@ -230,13 +230,22 @@ pub(crate) async fn published_root_covering_in_txn(
 /// a published root. WorkspaceRoot `reader` is managed only by the Node's owner
 /// and administrators (`workspace_roots.reader_manager`), so an Agent creating
 /// another Agent never grants it, even with relationship delegation.
-pub(crate) fn reader_grant_step(agent_did: &str, published_root: Option<&str>) -> serde_json::Value {
+/// `known_missing` is true for a newly created Agent, which holds no
+/// relationship yet; otherwise the caller cannot see the Agent's relationships.
+pub(crate) fn reader_grant_step(
+    agent_did: &str,
+    published_root: Option<&str>,
+    known_missing: bool,
+) -> serde_json::Value {
     let path = published_root.unwrap_or("PUBLISHED_ROOT");
+    let answer = if known_missing {
+        format!("Saved, but {agent_did} cannot use its host tools yet: a User must grant it reader on the published WorkspaceRoot {path}. Until then the runtime cannot load its tools and reports the agent unavailable.")
+    } else {
+        format!("{agent_did} uses host tools only if a User granted it reader on the published WorkspaceRoot {path}; without that grant the runtime cannot load its tools and the agent is unavailable (agent_new to it is not offered).")
+    };
     serde_json::json!({
-        "state": "waiting_for_user",
-        "answer": format!(
-            "Saved, but {agent_did} cannot use its host tools yet: a User must grant it reader on the published WorkspaceRoot {path}. Until then the runtime cannot load its tools and reports the agent unavailable."
-        ),
+        "state": if known_missing { "waiting_for_user" } else { "requires_user_grant" },
+        "answer": answer,
         "user_command": format!(
             "gents config workspace-root grant-reader --graphql GRAPHQL_URL --path {path} --agent-did {agent_did}"
         ),

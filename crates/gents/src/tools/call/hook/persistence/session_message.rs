@@ -39,8 +39,8 @@ fn unreachable_session_payload(
     let (message, next_call) = match (named, tools.agent_new_enabled()) {
         (Some(target), true) => (
             format!(
-                "'{requested}' names the agent '{}', not a session. Start it with agent_new as next_call shows; continue that conversation later with agent_message and the session_id agent_new returns.",
-                target.name
+                "'{requested}' names the agent '{}', not a session. Start it with agent_new as next_call shows; continue that conversation later with agent_message and the session_id agent_new returns. If agent_new is not among your tools, that agent is unavailable: read why with config agent get {}.",
+                target.name, target.agent_did
             ),
             start(target),
         ),

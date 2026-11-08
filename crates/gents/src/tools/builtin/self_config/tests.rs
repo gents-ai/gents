@@ -5588,6 +5588,24 @@ async fn a_created_agent_with_host_tools_names_the_users_root_reader_grant() {
         !access["how_to_proceed"].as_str().unwrap().contains("policy grant"),
         "{hosted}"
     );
+    let ceiled = core
+        .clone()
+        .with_process_ceiling(crate::tools::surface::SelfConfigProcessCeiling {
+            file_mode: crate::tools::surface::FileToolMode::ReadOnly,
+            bash_mode: crate::tools::surface::BashMode::ReadOnly,
+            root: Some(std::path::PathBuf::from(&root)),
+        });
+    let inspected: Value =
+        serde_json::from_str(&agent_inspect(&ceiled, created).await.unwrap()).unwrap();
+    let observed = &inspected["effective_config"]["runtime_effective"]["root_access"];
+    assert_eq!(observed["state"], "requires_user_grant", "{inspected}");
+    assert_eq!(observed["user_command"], access["user_command"], "{inspected}");
+    let own: Value =
+        serde_json::from_str(&agent_inspect(&ceiled, fixture.agent_did()).await.unwrap()).unwrap();
+    assert!(
+        own["effective_config"]["runtime_effective"].get("root_access").is_none(),
+        "{own}"
+    );
     let conversational: Value = serde_json::from_str(
         &model_agent_mutate(
             &core,
