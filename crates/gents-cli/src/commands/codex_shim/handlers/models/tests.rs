@@ -3,9 +3,7 @@ use crate::config_writes::write_agent_document;
 use gents::defra_node::Node as EmbeddedNode;
 use gents::documents::AdvertisedModel;
 use gents::documents::BackendAuth;
-use gents::store::config_client::{
-    write_inference_backend_document, write_inference_profile_document,
-};
+use gents::documents::{write_inference_backend_document, write_inference_profile_document};
 use gents::{record_model_catalog_in_txn, BackendProviderKind};
 use gents_protocol::row::{
     AgentReadinessEntry, AgentReadinessState, AgentReadinessUnavailableReason,

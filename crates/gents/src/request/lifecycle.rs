@@ -4,7 +4,8 @@ pub(crate) use client::stage_request_relationships_in_txn;
 pub(crate) use client::{
     bind_client_targets_in_txn, complete_client_request_relationships,
     ensure_request_session_in_txn, recover_delegated_client_request_relationships_with_access,
-    stage_client_request_in_txn, stage_pending_child_request_in_txn, stage_runtime_request_in_txn,
+    stage_admitted_request_in_txn, stage_client_request_in_txn, stage_pending_child_request_in_txn,
+    stage_runtime_request_in_txn, StageOptions,
 };
 pub use client::{
     build_signed_client_request, build_signed_client_request_in_txn, reconcile_client_request,
@@ -16,9 +17,9 @@ use anyhow::Result;
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-use crate::request::watcher::AgentRequest;
 use crate::session;
 use crate::store::graphql::{escape_graphql_string, response_has_documents};
+use gents_protocol::row::AgentRequest;
 
 mod background_wake_recovery;
 pub use background_wake_recovery::{background_wake_next_retry_at, background_wake_retry_delay};
@@ -69,15 +70,12 @@ pub use manual::{
 pub use materialize::{
     activate_workspace_bound_request,
     build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
-    build_signed_request, next_request_hop, request_hop_within_bound, task_fire_key,
-    write_task_delivery, write_task_delivery_local, EnqueuedAgentRequest, ParentLink,
-    RequestHopCapObservation, RequestHopCause, RequestIdentity, RequestSigner, RequestSpec,
-    RetryLink, TaskDeliveryAdmission,
+    build_signed_request, task_fire_key, write_task_delivery, write_task_delivery_local,
+    ParentLink, RequestIdentity, RequestSigner, RequestSpec, RetryLink, TaskDeliveryAdmission,
 };
 pub(crate) use materialize::{
     build_session_message_request,
-    write_pending_agent_request_with_lineage_workspace_and_conversation_title, SessionMessageCause,
-    SessionMessageTarget,
+    write_pending_agent_request_with_lineage_workspace_and_conversation_title,
 };
 pub use queue::enqueue_local_steering_request;
 pub use queue::validate_position as validate_queue_position;
@@ -176,7 +174,7 @@ pub fn retired_by_author(row: &gents_protocol::row::AgentRequestRow) -> bool {
 }
 
 pub fn folded_message_key(claimed_request_doc_id: &str, folded_request_doc_id: &str) -> String {
-    crate::session::canonical_rows::authored_message_key(
+    gents_protocol::output::rows::authored_message_key(
         claimed_request_doc_id,
         &queue::folded_input_key(folded_request_doc_id),
     )
@@ -198,7 +196,7 @@ pub fn input_message_owner(row: &gents_protocol::row::AgentRequestRow) -> Option
     }
     Some((
         doc.to_owned(),
-        crate::session::canonical_rows::authored_message_key(doc, "prompt"),
+        gents_protocol::output::rows::authored_message_key(doc, "prompt"),
     ))
 }
 

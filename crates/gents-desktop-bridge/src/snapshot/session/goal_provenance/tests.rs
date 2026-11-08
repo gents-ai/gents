@@ -6,11 +6,11 @@ pub(crate) async fn assert_paged_native_forks(
     opening: &gents_desktop_core::client::ClientStoreRows,
     followup: &gents_protocol::row::AgentRequestRow,
 ) {
-    use gents::session::canonical_rows::{
+    use gents::session::{ForkBoundary, ForkParams};
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
-    use gents::session::{ForkBoundary, ForkParams};
 
     let session = &opening.sessions[0];
     let node = gents::store::graphql::escape_graphql_string(&session.node_did);

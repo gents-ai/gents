@@ -205,7 +205,7 @@ pub(crate) async fn interrupt_active_session_in_txn(
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<String>> {
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let response = txn
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ {scope}, purpose: {{ _eq: "normal" }},
@@ -256,7 +256,7 @@ fn active_session_request_query(
     node_did: &str,
     requester_did: Option<&str>,
 ) -> String {
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     format!(
         r#"{{AgentRequest(filter:{{{scope},purpose:{{_eq:"normal"}},lifecycle_state:{{_in:{claimed_or_processing}}}}},limit:2){{_docID request_id node_did requester_did session_id lifecycle_state}}}}"#,
         claimed_or_processing = RequestLifecycleState::graphql_list([

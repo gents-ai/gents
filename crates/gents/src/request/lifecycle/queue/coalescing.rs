@@ -211,7 +211,7 @@ async fn matching_coalesced_pending_requests(
                 node_did: {{_eq: "{escaped_node_did}"}}, lifecycle_state: {{_eq: "{pending}"}}}},
             order: [{{created_at: ASC}}, {{request_id: ASC}}]
         ) {{{}}} }}"#,
-        crate::request::admission::SIGNED_REQUEST_FIELDS,
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         pending = RequestLifecycleState::Pending.as_str()
     );
     crate::store::config_client::ConfigAccess::transact_local_readonly(

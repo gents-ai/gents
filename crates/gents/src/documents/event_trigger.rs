@@ -418,7 +418,7 @@ impl EventSource {
     }
 
     pub fn validate_group(&self) -> anyhow::Result<()> {
-        use crate::runtime::snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS;
+        use super::automation::MAX_EVENT_TRIGGER_GROUP_DOCS;
         let correlation_field = self
             .correlation_field
             .as_deref()
@@ -505,4 +505,8 @@ impl EventSource {
         }
         Ok(())
     }
+}
+
+pub(crate) fn outcome_source_allowed(source_collection: &str, emit_outcome: bool) -> bool {
+    source_collection != "FireOutcome" || !emit_outcome
 }

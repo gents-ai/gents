@@ -40,14 +40,6 @@ pub async fn run_trigger_engine(
         .await;
 }
 
-pub(crate) fn durable_fire_key(namespace: &str, components: &[&str]) -> String {
-    let mut key = format!("{}:{namespace}", namespace.chars().count());
-    for component in components {
-        key.push_str(&format!(":{}:{component}", component.chars().count()));
-    }
-    key
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TriggerKind {
     Schedule,
@@ -98,8 +90,8 @@ fn trigger_prompt_header(intent: &FireIntent) -> String {
 pub struct FireIntent {
     pub trigger_id: Option<String>,
     pub trigger_kind: TriggerKind,
-    pub task: crate::runtime::snapshot::ResolvedTask,
-    pub concurrency: crate::runtime::snapshot::ConcurrencyMode,
+    pub task: crate::documents::automation::ResolvedTask,
+    pub concurrency: crate::documents::ConcurrencyMode,
     pub event_vars: serde_json::Value,
     pub doc_vars: Option<serde_json::Value>,
     pub correlation: Option<String>,
@@ -207,7 +199,7 @@ pub(crate) trait MaterializerHandle: Send + Sync {
     )]
     fn materialize(
         &self,
-        task: &crate::runtime::snapshot::ResolvedTask,
+        task: &crate::documents::automation::ResolvedTask,
         trigger_id: Option<&str>,
         trigger_kind: TriggerKind,
         trigger_doc_id: Option<&str>,
@@ -227,7 +219,7 @@ pub(crate) trait MaterializerHandle: Send + Sync {
     fn recover_admitted_fire(
         &self,
         _identity: &gents_protocol::trigger_delivery::FireIdentity,
-        _task: &crate::runtime::snapshot::ResolvedTask,
+        _task: &crate::documents::automation::ResolvedTask,
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = anyhow::Result<Option<String>>> + Send + '_>,
     > {
@@ -250,7 +242,7 @@ pub(crate) trait MaterializerHandle: Send + Sync {
 
     fn recover_goal_task_fire(
         &self,
-        task: &crate::runtime::snapshot::ResolvedTask,
+        task: &crate::documents::automation::ResolvedTask,
         durable_fire_key: &str,
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = anyhow::Result<Option<String>>> + Send + '_>,
@@ -631,7 +623,7 @@ impl TriggerEngine {
                     fire_key: key,
                     identity,
                     goal_id: intent.task.goal_objective_template.as_ref().map(|_| {
-                        crate::goal::deterministic_goal_id(
+                        gents_protocol::goal::deterministic_goal_id(
                             snapshot.agent(&intent.task.agent_did).unwrap().node_did(),
                             &session_id,
                         )
@@ -643,7 +635,7 @@ impl TriggerEngine {
                     goal_token_budget: intent.task.goal_token_budget,
                     goal_assignment_applied: false,
                     queued_serial: intent.concurrency
-                        == crate::runtime::snapshot::ConcurrencyMode::QueuedSerial,
+                        == crate::documents::ConcurrencyMode::QueuedSerial,
                     source_handoff_id: source_string("handoff_id"),
                     reply_session_id: source_string("reply_session_id"),
                     shard_id: source_string("shard_id"),
@@ -670,7 +662,7 @@ impl TriggerEngine {
                     scope.request = Some(serde_json::json!({"request_id": fire.request_id}));
                     Some(durable::PreparedFire {
                         replace_prior: intent.concurrency
-                            == crate::runtime::snapshot::ConcurrencyMode::LatestOnly,
+                            == crate::documents::ConcurrencyMode::LatestOnly,
                         target_existing: targeted_schedule
                             || snapshot
                                 .active_event_triggers()
@@ -760,7 +752,7 @@ impl TriggerEngine {
                 )
                 .await;
         };
-        if intent.concurrency == crate::runtime::snapshot::ConcurrencyMode::Parallel
+        if intent.concurrency == crate::documents::ConcurrencyMode::Parallel
             && intent.group_vars.is_none()
         {
             return self
@@ -862,7 +854,7 @@ impl TriggerEngine {
             }
         }
 
-        use crate::runtime::snapshot::ConcurrencyMode;
+        use crate::documents::ConcurrencyMode;
         match (intent.group_vars.is_some(), intent.concurrency) {
             (true, _) | (false, ConcurrencyMode::Parallel | ConcurrencyMode::QueuedSerial) => {}
             (false, ConcurrencyMode::Serial) => match self
@@ -999,7 +991,7 @@ impl TriggerEngine {
 pub(crate) fn validate_task_delivery_options(
     kind: TriggerKind,
     emit_outcome: bool,
-    concurrency: crate::runtime::snapshot::ConcurrencyMode,
+    concurrency: crate::documents::ConcurrencyMode,
     target_existing: bool,
 ) -> anyhow::Result<()> {
     if kind == TriggerKind::Event {
@@ -1011,13 +1003,12 @@ pub(crate) fn validate_task_delivery_options(
     );
     if kind == TriggerKind::Schedule {
         anyhow::ensure!(
-            target_existing
-                || concurrency != crate::runtime::snapshot::ConcurrencyMode::QueuedSerial,
+            target_existing || concurrency != crate::documents::ConcurrencyMode::QueuedSerial,
             "queued_serial requires an explicit session_id_template for scheduled delivery"
         );
     } else {
         anyhow::ensure!(
-            concurrency != crate::runtime::snapshot::ConcurrencyMode::QueuedSerial,
+            concurrency != crate::documents::ConcurrencyMode::QueuedSerial,
             "queued_serial requires a document event source"
         );
         anyhow::ensure!(

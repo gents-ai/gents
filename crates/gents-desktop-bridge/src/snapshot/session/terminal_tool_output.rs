@@ -1,8 +1,8 @@
-use gents::session::canonical_rows::OutputSegmentRow;
 use gents_protocol::output::reconstruction::{
     reconstruct_presented_payload, reconstruct_stream, tool_output_reference_owned,
     DependencyDenial, ObservedSegment,
 };
+use gents_protocol::output::rows::OutputSegmentRow;
 use gents_protocol::output::{
     OutputSource, OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload,
     ReconstructionError, StreamPayload,

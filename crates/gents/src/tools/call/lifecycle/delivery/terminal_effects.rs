@@ -18,7 +18,7 @@ pub(super) async fn retain_file_changes(
         changes.belongs_to(tool_call_doc_id),
         "file changes belong to another physical tool"
     );
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let binding = txn.execute(&format!(
         r#"{{ AgentToolCall(docID: "{}", filter: {{ request_doc_id: {{ _eq: "{}" }}, {scope} }}) {{ _docID }} }}"#,
         escape_graphql_string(tool_call_doc_id), escape_graphql_string(request_doc_id),
@@ -29,7 +29,7 @@ pub(super) async fn retain_file_changes(
         ),
         "file changes lost their physical tool binding"
     );
-    let session_scope = crate::session::origin::SessionScope {
+    let session_scope = gents_protocol::session::SessionScope {
         node_did: node_did.to_owned(),
         session_id: session_id.to_owned(),
         requester_did: requester_did.map(str::to_owned),

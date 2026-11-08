@@ -1,9 +1,9 @@
-use gents::session::canonical_rows::{
-    decode_transcript_message_row, TranscriptMessageRow, AGENT_MESSAGE_FIELDS,
-};
 use gents::session::{fork_on, fork_via_http, ForkError, ForkOutcome, ForkParams};
 use gents::store::graphql::escape_graphql_string;
 use gents::NodeIdentity;
+use gents_protocol::output::rows::{
+    decode_transcript_message_row, TranscriptMessageRow, AGENT_MESSAGE_FIELDS,
+};
 use gents_protocol::output::*;
 
 use crate::support::agent_requests::{canonical_now, RequestActors, RequestSeed};

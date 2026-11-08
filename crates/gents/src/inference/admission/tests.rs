@@ -21,7 +21,7 @@ use crate::lean_vocab_test::{
     lean_fleet_slot_accounting_case, lean_inference_slot_accounting_cases, lean_vocabulary_values,
     LeanContractVocabulary, LeanFleetSlotAccountingCase,
 };
-use crate::request::watcher::AgentRequest;
+use gents_protocol::row::AgentRequest;
 
 pub(super) async fn test_node() -> (
     crate::support::TestDb,
@@ -160,7 +160,7 @@ pub(super) async fn seeded_request(
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ {} }} }}"#,
         crate::store::graphql::escape_graphql_string(&doc_id),
-        crate::request::watcher::AGENT_REQUEST_FIELDS,
+        gents_protocol::row::AGENT_REQUEST_FIELDS,
     );
     let response = access.execute(&query).await.unwrap();
     let [row] = response["data"]["AgentRequest"]

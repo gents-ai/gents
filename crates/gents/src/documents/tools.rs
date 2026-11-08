@@ -13,6 +13,10 @@ use crate::tools::native::{CommandExecutionMode, CommandNetworkMode};
 use crate::tools::surface::{BashMode, FileToolMode};
 pub use gents_protocol::row::RetiredKey;
 
+mod persistence;
+
+pub use persistence::write_tools_document;
+
 /// Tool capabilities, execution policies, and dependencies referenced by a context.
 /// Groups are embedded in this document and share its ownership. Missing groups
 /// expose no capabilities. External service, surface, and target refs remain explicit.

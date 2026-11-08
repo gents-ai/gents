@@ -584,7 +584,7 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
         "completed",
         &"x".repeat(100),
         None,
-        crate::request::lifecycle::RequestHopCause::Continuation,
+        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
     )
     .await
     .expect("redrive after a budget change replays the published notice");

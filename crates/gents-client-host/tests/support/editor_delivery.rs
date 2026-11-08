@@ -125,10 +125,16 @@ pub async fn verify(
             let child = child_id.clone();
             let source = source_id.clone();
             Box::pin(async move {
-                let child = gents::session::load_agent_session_owner_in_txn(txn, &node, &child)
+                let child =
+                    gents::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn, &node, &child,
+                    )
                     .await?
                     .context("missing retained child")?;
-                let source = gents::session::load_agent_session_owner_in_txn(txn, &node, &source)
+                let source =
+                    gents::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn, &node, &source,
+                    )
                     .await?
                     .context("missing original source")?;
                 Ok::<_, anyhow::Error>((child, source))

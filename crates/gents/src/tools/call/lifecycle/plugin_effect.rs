@@ -7,13 +7,13 @@ use gents_protocol::output::{
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-use crate::session::canonical_rows::{
-    decode_scoped_request_output_segments, output_segment_bound_variables,
-    request_output_segments_filter, AGENT_OUTPUT_SEGMENT_FIELDS,
-    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-};
+use crate::store::config_client::session_children::output_segment_bound_variables;
 use crate::store::config_client::{ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::store::graphql::{created_doc_id, escape_graphql_string};
+use gents_protocol::output::rows::{
+    decode_scoped_request_output_segments, request_output_segments_filter,
+    AGENT_OUTPUT_SEGMENT_FIELDS, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+};
 
 use super::{ToolCallLifecycle, ToolCallState};
 use crate::plugin::tool_calls::{MAX_EFFECTS, MAX_PAYLOAD_BYTES};
@@ -88,7 +88,7 @@ impl ToolCallLifecycle {
                 let key = key.clone(); let internal_id = internal_id.clone();
                 Box::pin(async move {
                     let request_id = validate_parent(txn, &binding, &header, &generation, sequence, deadline, true).await?;
-                    let scope = crate::session::session_scope_filter(&binding.node_did, &binding.session_id,
+                    let scope = gents_protocol::session::session_scope_filter(&binding.node_did, &binding.session_id,
                         binding.requester_did.as_deref());
                     let parent = escape_graphql_string(&binding.tool_call_doc_id);
                     let result = txn.execute(&format!(r#"{{ AgentToolCall(filter: {{ {scope},
@@ -113,7 +113,7 @@ impl ToolCallLifecycle {
                         anyhow::ensure!(stored == arguments, "plugin effect replay changed arguments");
                         return Ok(child.to_owned());
                     }
-                    let (session_doc_id, selected_agent) = crate::session::canonical_rows::agent_session_child_binding_in_txn(
+                    let (session_doc_id, selected_agent) = crate::store::config_client::session_children::agent_session_child_binding_in_txn(
                         txn, &binding.node_did, &binding.session_id, binding.requester_did.as_deref()).await?;
                     let session_doc_id = escape_graphql_string(&session_doc_id);
                     let selected_agent = escape_graphql_string(&selected_agent);
@@ -148,7 +148,7 @@ impl ToolCallLifecycle {
                     Ok(child)
                 })
             }).await?;
-        crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+        crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
             &self.access()?,
             &self.node_did,
             &self.actor,
@@ -225,7 +225,7 @@ impl ToolCallLifecycle {
                 validate_parent(txn, &parent, &header, &generation, sequence, deadline, true).await?;
                 arguments_in_txn(txn, &parent, &child, &generation, &internal_id, &name).await?;
                 let now = Utc::now();
-                let scope = crate::session::session_scope_filter(&parent.node_did, &parent.session_id,
+                let scope = gents_protocol::session::session_scope_filter(&parent.node_did, &parent.session_id,
                     parent.requester_did.as_deref());
                 let result = txn.execute(&format!(r#"mutation {{ update_AgentToolCall(docID: "{}", filter: {{
                     {scope}, request_doc_id: {{ _eq: "{}" }}, plugin_parent_tool_call_doc_id: {{ _eq: "{}" }},
@@ -265,7 +265,7 @@ pub(super) async fn validate_parent(
         binding.requester_did.as_deref(),
     )
     .await?;
-    let scope = crate::session::session_scope_filter(
+    let scope = gents_protocol::session::session_scope_filter(
         &binding.node_did,
         &binding.session_id,
         binding.requester_did.as_deref(),

@@ -69,8 +69,8 @@ impl CompletionModel for BufferedReasoningShutdownProvider {
 }
 
 async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss: Option<&str>) {
-    use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
     use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
+    use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
     use gents_protocol::output::{OutputOutcome, PayloadRef, SourceClose, StreamPayload};
 
     let (db, user, access, mut agent_config) = held_daemon_fixture("daemon-lease").await;
@@ -807,7 +807,9 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                 gents_protocol::output::TerminalOutput::NoMessage => {
                     use gents_protocol::output::live::{project_live, LiveObservation, LiveTarget, LiveView, OwnerLiveness};
                     use gents_protocol::output::reconstruction::ObservedSegment;
-                    use crate::session::canonical_rows::{AGENT_OUTPUT_SEGMENT_FIELDS, decode_output_segment_row};
+                    use gents_protocol::output::rows::{
+                        decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS,
+                    };
                     let result = held_daemon_query(&agent_access, &format!(r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{escaped_doc}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#)).await;
                     assert!(!result.has_errors(), "{:?}", result.errors);
                     let records = result.data.as_ref().unwrap()["AgentOutputSegment"].as_array().unwrap()
@@ -1150,8 +1152,8 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
 
 #[tokio::test]
 async fn deadline_closes_received_openai_reasoning_without_another_provider_call() {
-    use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
     use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
+    use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
     use gents_protocol::output::{OutputOutcome, PayloadRef, SourceClose};
 
     let (db, user, access, mut agent_config) = held_daemon_fixture("daemon-lease").await;

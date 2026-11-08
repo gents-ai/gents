@@ -21,7 +21,7 @@ impl ToolCallLifecycle {
         operation: &'static str,
     ) -> Result<bool> {
         let publish_native_result = !(expected != ToolCallState::Pending
-            && self.await_mode == crate::tools::call::lifecycle::AwaitMode::Background
+            && self.await_mode == gents_protocol::tool_call::AwaitMode::Background
             && matches!(
                 self.kind(),
                 ToolRowKind::SessionMessage | ToolRowKind::PluginJob
@@ -51,7 +51,7 @@ impl ToolCallLifecycle {
         operation: &'static str,
     ) -> Result<bool> {
         let publish_native_result = !(expected != ToolCallState::Pending
-            && self.await_mode == crate::tools::call::lifecycle::AwaitMode::Background
+            && self.await_mode == gents_protocol::tool_call::AwaitMode::Background
             && matches!(
                 self.kind(),
                 ToolRowKind::SessionMessage | ToolRowKind::PluginJob
@@ -403,7 +403,7 @@ impl ToolCallLifecycle {
                                     crate::tools::call::lifecycle::file_inventory::Metadata::Unchanged,
                                     &doc_id,
                                     &request_doc_id,
-                                    &crate::session::origin::SessionScope {
+                                    &gents_protocol::session::SessionScope {
                                         node_did: node_did.clone(),
                                         session_id: session_id.clone(),
                                         requester_did: requester_did.clone(),
@@ -454,7 +454,7 @@ impl ToolCallLifecycle {
             self.failure_class = fields.failure;
             self.cancel_cause = fields.cancel;
         }
-        crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+        crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
             &self.access()?,
             &self.node_did,
             &self.actor,

@@ -6,7 +6,9 @@ mod document;
 mod labels;
 mod resolve;
 mod rows;
+mod runtime_account;
 mod serving;
+mod serving_accounts;
 mod sign_in;
 mod static_backend;
 pub(crate) mod token_endpoint;
@@ -50,17 +52,17 @@ pub(crate) use resolve::{
     runtime_account_query, RuntimeAccountSelection,
 };
 pub(crate) use rows::runtime_credential_access;
+use runtime_account::runtime_default_oauth_account_ref;
+pub(crate) use runtime_account::runtime_oauth_account_served_before;
 pub use rows::{
     list_oauth_credentials, list_oauth_credentials_on, lookup_oauth_credential_by_doc_id,
     lookup_oauth_credential_by_id, upsert_oauth_credential, upsert_oauth_credential_on,
 };
 use rows::{lookup_oauth_credential_by_id_on, provider_rows_in_txn};
 pub use serving::{backend_account, serving_account, AccountState, ServingAccount};
+pub use serving_accounts::{agent_accounts, serving_accounts};
 pub use sign_in::{store_sign_in, SignIn, SignInResult};
-pub(crate) use static_backend::{
-    backend_credential_in_txn, put_backend_credential_in_txn, resolve_runtime_backend_auth,
-    BackendCredential, BackendCredentialSecret,
-};
+pub(crate) use static_backend::resolve_runtime_backend_auth;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OAuthProduct {

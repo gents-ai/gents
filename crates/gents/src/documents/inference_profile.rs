@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
+mod persistence;
+
+pub use persistence::{list_inference_profiles_in_txn, write_inference_profile_document};
+
 /// Complete selectable inference preset; multiple profiles may select different
 /// models or efforts through the same backend without duplicating credentials.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
@@ -203,7 +207,7 @@ pub async fn upsert_inference_profile(
         |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan)
+                crate::documents::apply_desired_state_plan(txn, plan)
                     .await
                     .map(|_| ())
             })

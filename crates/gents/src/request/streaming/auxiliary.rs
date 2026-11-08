@@ -18,7 +18,7 @@ use super::{canonical::ProviderAttemptClose, DefraStreamWriter, StreamWriter};
 impl DefraStreamWriter {
     pub(crate) fn auxiliary_output_sink(
         &self,
-        request: crate::request::watcher::AgentRequest,
+        request: gents_protocol::row::AgentRequest,
         generation: String,
         profile: gents_loop::provider_input::ProviderInputProfile,
     ) -> AuxiliaryOutputSink {
@@ -46,7 +46,7 @@ struct State {
 /// uncommitted prefix.
 pub(crate) fn sink(
     node: Arc<EmbeddedNode>,
-    request: crate::request::watcher::AgentRequest,
+    request: gents_protocol::row::AgentRequest,
     generation: String,
     profile: gents_loop::provider_input::ProviderInputProfile,
     batch_interval: Duration,
@@ -69,7 +69,7 @@ async fn sink_result<T>(
 
 pub(crate) fn sink_with_writer(
     writer: Arc<DefraStreamWriter>,
-    request: crate::request::watcher::AgentRequest,
+    request: gents_protocol::row::AgentRequest,
     generation: String,
     profile: gents_loop::provider_input::ProviderInputProfile,
 ) -> AuxiliaryOutputSink {

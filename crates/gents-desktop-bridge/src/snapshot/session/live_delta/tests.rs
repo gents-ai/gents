@@ -1,6 +1,6 @@
 use super::*;
-use gents::session::canonical_rows::OutputSegmentRow;
 use gents_desktop_core::client::{ClientStoreRows, StoreProjectionRevision};
+use gents_protocol::output::rows::OutputSegmentRow;
 use gents_protocol::output::{
     OutputSegment, OutputSource, OutputWriter, SegmentRun, StreamDeclaration, StreamPayload,
 };

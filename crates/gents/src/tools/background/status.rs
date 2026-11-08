@@ -9,10 +9,10 @@ use serde::Deserialize;
 
 use crate::store::graphql::escape_graphql_string;
 
-use crate::session::canonical_rows::{
+use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
+use gents_protocol::output::rows::{
     decode_scoped_request_output_segments, request_output_segments_query,
 };
-use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
 use gents_protocol::output::{OutputSource, OutputWriter, PayloadRef};
 
 use self::r4c_args::{
@@ -412,7 +412,7 @@ pub(crate) async fn observe_canonical_tool_output_with_access(
 }
 
 pub(crate) fn canonical_tool_output_from_rows(
-    rows: Vec<crate::session::canonical_rows::OutputSegmentRow>,
+    rows: Vec<gents_protocol::output::rows::OutputSegmentRow>,
     tool_doc_id: &str,
     request_doc_id: &str,
 ) -> Result<CanonicalToolOutputObservation> {
@@ -676,7 +676,7 @@ pub async fn request_foreground_backgrounding(
                 .context("background request missing request document identity")?,
         )
         .await?
-            < crate::tools::call::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
+            < gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
         "background process limit reached; wait for a background process to finish"
     );
     let doc = escape_graphql_string(

@@ -23,7 +23,7 @@ async fn prompt_resolves_end_turn_after_terminalization() {
     let did_for_terminalize = node_did.clone();
     let handle = tokio::spawn(async move {
         loop {
-            let scope = gents::session::session_scope_filter(
+            let scope = gents_protocol::session::session_scope_filter(
                 &did_for_terminalize,
                 "session-1",
                 Some(&did_for_terminalize),

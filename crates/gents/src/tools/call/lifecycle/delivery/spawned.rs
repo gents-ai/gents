@@ -257,7 +257,7 @@ impl ToolCallLifecycle {
                             escape_graphql_string(service), escape_graphql_string(tool)),
                         None => String::new(),
                     };
-                    let (session_doc_id, selected_agent) = crate::session::canonical_rows::agent_session_child_binding_in_txn(
+                    let (session_doc_id, selected_agent) = crate::store::config_client::session_children::agent_session_child_binding_in_txn(
                         txn, &node_did, &session_id, requester_did.as_deref()).await?;
                     let session_doc_id = escape_graphql_string(&session_doc_id);
                     let selected_agent = escape_graphql_string(&selected_agent);
@@ -278,7 +278,7 @@ impl ToolCallLifecycle {
             }
         ).await?;
 
-        crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+        crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
             &self.access()?,
             &self.node_did,
             &self.actor,

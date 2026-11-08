@@ -138,7 +138,7 @@ pub(in crate::tools::background::job) async fn step_context_for(
         engine_provenance_operator: installed
             .as_ref()
             .is_some_and(|plugin| engine_guard(&runtime.home, plugin).is_ok()),
-        max_hop: crate::request::lifecycle::RequestHopCapObservation::of(
+        max_hop: gents_protocol::request_lifecycle::RequestHopCapObservation::of(
             txn.runtime_max_request_hop(&caller.node_did).await?,
         )
         .bound(),

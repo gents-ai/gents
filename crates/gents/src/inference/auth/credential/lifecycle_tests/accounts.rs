@@ -125,7 +125,7 @@ async fn a_label_change_is_validated_unique_and_renames_the_backend() {
 
     let mut custom = backend.clone();
     custom.name = "Custom".into();
-    crate::store::config_client::write_inference_backend_document(&access, &custom)
+    crate::documents::write_inference_backend_document(&access, &custom)
         .await
         .unwrap();
     set_account_label(&access, did, id, "Home").await.unwrap();
@@ -192,7 +192,7 @@ async fn a_sign_in_after_removing_the_only_account_takes_the_original_slot() {
             enabled: true,
             tags: Vec::new(),
         };
-        crate::store::config_client::write_inference_backend_document(&access, &original)
+        crate::documents::write_inference_backend_document(&access, &original)
             .await
             .unwrap();
         let profile = serde_json::from_value(json!({
@@ -202,7 +202,7 @@ async fn a_sign_in_after_removing_the_only_account_takes_the_original_slot() {
             "model_name": "model-x",
         }))
         .unwrap();
-        crate::store::config_client::write_inference_profile_document(&access, &profile)
+        crate::documents::write_inference_profile_document(&access, &profile)
             .await
             .unwrap();
     }

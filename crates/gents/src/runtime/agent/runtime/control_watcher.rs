@@ -7,8 +7,9 @@ use anyhow::Result;
 use tokio::sync::{mpsc, watch};
 
 use crate::runtime::snapshot::ResolvedRuntimeSnapshot;
-use crate::runtime::status::{ReconcilePhase, RuntimeStatusHandle};
+use crate::runtime::status::RuntimeStatusHandle;
 use crate::tools::surface::ToolRuntimeContext;
+use gents_protocol::node_readiness::ReconcilePhase;
 
 use super::super::document_view;
 use super::super::DocumentResolveContext;

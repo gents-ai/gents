@@ -1,11 +1,11 @@
 use super::*;
 use crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
 use crate::inference::auth::credential::{preset_account_backend, store_sign_in};
-use crate::request::admission::verify_request_receipt_signature;
 use crate::store::config_client::{
     apply_desired_state_plan, write_inference_backend_document, ConfigAccess,
     DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
+use crate::store::identity::request_receipt::verify_request_receipt_signature;
 use crate::store::identity::KeyIdentity;
 use crate::Collection;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
@@ -32,7 +32,7 @@ pub(crate) struct Fixture {
     pub session_doc_id: String,
     pub agent_doc_id: String,
     pub goal: GoalDocument,
-    pub parent: crate::request::watcher::AgentRequest,
+    pub parent: gents_protocol::row::AgentRequest,
     user_access: ConfigAccess,
     _db: crate::support::TestDb,
 }
@@ -145,8 +145,12 @@ impl Fixture {
         let session_doc_id = user_access
             .transact_readonly("test.goal_fixture.session_document", |txn| {
                 Box::pin(async {
-                    crate::session::load_agent_session_owner_in_txn(txn, identity.did(), SESSION)
-                        .await
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn,
+                        identity.did(),
+                        SESSION,
+                    )
+                    .await
                 })
             })
             .await
@@ -237,7 +241,7 @@ impl Fixture {
             agent_access.write("test.goal_fixture.terminal", &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{PARENT}" }} }}, input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#)).await.unwrap();
         }
         let rows = request_rows(&user_access).await;
-        let parent = crate::request::watcher::AgentRequest::try_from(
+        let parent = gents_protocol::row::AgentRequest::try_from(
             rows.into_iter().find(|r| r.request_id == PARENT).unwrap(),
         )
         .unwrap();

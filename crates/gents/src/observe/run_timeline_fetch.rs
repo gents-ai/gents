@@ -730,7 +730,7 @@ mod tests {
         use crate::tools::call::lifecycle::admission_fixture::{
             published_admission_with_owner, PublishedAdmissionOptions,
         };
-        use crate::tools::call::lifecycle::AwaitMode;
+        use gents_protocol::tool_call::AwaitMode;
 
         let (fixture, root) = published_admission_with_owner(PublishedAdmissionOptions {
             name: "job-timeline".into(),
@@ -932,7 +932,7 @@ mod tests {
             "auth": {"kind": "node_oauth"},
         }))
         .unwrap();
-        crate::store::config_client::write_inference_backend_document(&access, &original)
+        crate::documents::write_inference_backend_document(&access, &original)
             .await
             .unwrap();
         let sign_in = |who: &str| {

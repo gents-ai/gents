@@ -9,11 +9,11 @@ use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::session::origin::SessionScope;
 use crate::session::TxnCanonicalReader;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::escape_graphql_string;
 use crate::tools::surface::AgentToolConfig;
+use gents_protocol::session::SessionScope;
 
 const TEXT_CHARS: usize = 8_000;
 const TOOL_PREVIEW_CHARS: usize = 240;
@@ -200,7 +200,7 @@ async fn messages(
     target: &SessionScope,
     args: &AgentSessionReadArgs,
 ) -> Result<Value> {
-    let scope = crate::session::session_scope_filter(
+    let scope = gents_protocol::session::session_scope_filter(
         &target.node_did,
         &target.session_id,
         target.requester_did.as_deref(),
@@ -232,10 +232,13 @@ async fn messages(
     } else {
         args.limit.unwrap_or(6)
     };
-    let response = txn.execute(&format!("{{AgentMessage(filter: {{{scope}{bounds}{role}}}, order: {{sequence: DESC}}, limit: {}) {{{}}}}}", limit + 1, crate::session::canonical_rows::AGENT_MESSAGE_FIELDS)).await?;
+    let response = txn.execute(&format!("{{AgentMessage(filter: {{{scope}{bounds}{role}}}, order: {{sequence: DESC}}, limit: {}) {{{}}}}}", limit + 1, gents_protocol::output::rows::AGENT_MESSAGE_FIELDS)).await?;
     let headers = rows(&response, "AgentMessage")?
         .iter()
-        .map(crate::session::canonical_rows::decode_transcript_message_row)
+        .map(|row| {
+            gents_protocol::output::rows::decode_transcript_message_row(row)
+                .map_err(anyhow::Error::from)
+        })
         .collect::<Result<Vec<_>>>()?;
     let tool_calls = load_tool_call_summaries(txn, &scope, &headers, limit).await?;
     let mut reader =
@@ -271,7 +274,7 @@ async fn messages(
 }
 
 fn selected_tool_call_doc_ids(
-    headers: &[crate::session::canonical_rows::TranscriptMessageRow],
+    headers: &[gents_protocol::output::rows::TranscriptMessageRow],
     message_limit: usize,
 ) -> Vec<String> {
     let mut seen = RapidHashSet::new();
@@ -317,7 +320,7 @@ fn tool_call_batch_query(scope: &str, doc_ids: &[String]) -> Option<String> {
 async fn load_tool_call_summaries(
     txn: &ConfigApplyTxn<'_>,
     scope: &str,
-    headers: &[crate::session::canonical_rows::TranscriptMessageRow],
+    headers: &[gents_protocol::output::rows::TranscriptMessageRow],
     message_limit: usize,
 ) -> Result<RapidHashMap<String, Value>> {
     let doc_ids = selected_tool_call_doc_ids(headers, message_limit);
@@ -390,7 +393,7 @@ fn tool_summaries(
 
 pub(crate) async fn agent_session_read(
     node: &Arc<EmbeddedNode>,
-    caller: &crate::AgentRequest,
+    caller: &gents_protocol::row::AgentRequest,
     tools: &AgentToolConfig,
     args: &AgentSessionReadArgs,
 ) -> Result<Value> {
@@ -428,11 +431,11 @@ pub(crate) async fn agent_session_read(
         let args = args.clone();
         let observation_started_at = observation_started_at.clone();
         Box::pin(async move {
-            let scope = crate::session::session_scope_filter(&target.node_did, &target.session_id, target.requester_did.as_deref());
-            let response = txn.execute(&format!("{{AgentSession(filter: {{{scope}}}, limit: 2) {{{}}}}}", crate::session::AGENT_SESSION_FIELDS)).await?;
+            let scope = gents_protocol::session::session_scope_filter(&target.node_did, &target.session_id, target.requester_did.as_deref());
+            let response = txn.execute(&format!("{{AgentSession(filter: {{{scope}}}, limit: 2) {{{}}}}}", gents_protocol::session::AGENT_SESSION_FIELDS)).await?;
             let sessions = rows(&response, "AgentSession")?;
             anyhow::ensure!(sessions.len() == 1, "inspected session is unavailable or ambiguous");
-            let session = crate::session::decode_session_row(&sessions[0])?.session;
+            let session = gents_protocol::session::decode_session_row(&sessions[0])?.session;
             anyhow::ensure!(super::target::session_target_allowed(&session, &caller.node_did, &caller.agent_did, tools), "inspected session is no longer messageable");
             let unobserved = if active.is_none() {
                 match session.observation.as_ref().and_then(|view| view.latest_request.as_ref()) {
@@ -547,7 +550,7 @@ mod tests {
     async fn trigger_worker_inspection_reads_canonical_output_status_and_goal() {
         use crate::store::identity::NodeIdentity;
         use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
-        use crate::tools::call::lifecycle::AwaitMode;
+        use gents_protocol::row::AwaitMode;
         let (message, caller, _) =
             super::super::agent_tools_tests::started("agent-session-inspection").await;
         let node = message.admission.node.clone();
@@ -603,7 +606,7 @@ mod tests {
         let row = caller_access
             .execute(&format!(
                 r#"{{AgentRequest(filter: {{_docID: {{_eq: "{escaped}"}}}}) {{{}}}}}"#,
-                crate::request::watcher::AGENT_REQUEST_FIELDS
+                gents_protocol::row::AGENT_REQUEST_FIELDS
             ))
             .await
             .unwrap();
@@ -811,8 +814,11 @@ mod tests {
             result_message["text"], "",
             "full tool output must not appear in the message body"
         );
-        let scope =
-            crate::session::session_scope_filter(identity.did(), "read-worker", Some(signer.did()));
+        let scope = gents_protocol::session::session_scope_filter(
+            identity.did(),
+            "read-worker",
+            Some(signer.did()),
+        );
         let observation = gents_protocol::session::SessionObservation {
             reply_preview: None,
             last_activity_at: chrono::Utc::now().to_rfc3339(),
@@ -845,7 +851,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let foreign = crate::AgentRequest {
+        let foreign = gents_protocol::row::AgentRequest {
             node_did: foreign_identity.did().to_owned(),
             ..caller.clone()
         };

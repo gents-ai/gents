@@ -64,7 +64,7 @@ pub(crate) async fn persist_background_completion_with_message_canonical_with_ac
     queue: RequestQueue,
     existing_notification_doc_id: Option<&str>,
     native: &ToolNotificationPublication,
-    wake: crate::request::lifecycle::RequestHopCause,
+    wake: gents_protocol::request_lifecycle::RequestHopCause,
 ) -> Result<EnqueuedBackgroundCompletionInput> {
     let signer = access
         .managed_agent_signer()
@@ -105,7 +105,7 @@ async fn persist_background_completion_with_message_canonical_inner(
     queue: RequestQueue,
     existing_notification_doc_id: Option<&str>,
     native: &ToolNotificationPublication,
-    wake: crate::request::lifecycle::RequestHopCause,
+    wake: gents_protocol::request_lifecycle::RequestHopCause,
 ) -> Result<EnqueuedBackgroundCompletionInput> {
     anyhow::ensure!(
         queue.source == QueueSource::BackgroundCompletion && queue.policy == QueuePolicy::Coalesce,
@@ -155,7 +155,7 @@ async fn persist_background_completion_with_message_canonical_inner(
         )
         .await?;
 
-    crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+    crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
         access,
         &parent.node_did,
         &identity::Did::new(parent.agent_did.clone())?,
@@ -199,7 +199,7 @@ pub(crate) async fn persist_background_completion_with_message_waking(
     wake_content: &str,
     queue: RequestQueue,
     existing_notification_doc_id: Option<&str>,
-    wake: crate::request::lifecycle::RequestHopCause,
+    wake: gents_protocol::request_lifecycle::RequestHopCause,
 ) -> Result<EnqueuedBackgroundCompletionInput> {
     let access =
         crate::ConfigAccess::local_as(node.clone(), identity::Did::new(&parent.agent_did)?);
@@ -228,7 +228,7 @@ pub(crate) async fn persist_background_completion_with_message_waking_with_acces
     wake_content: &str,
     queue: RequestQueue,
     existing_notification_doc_id: Option<&str>,
-    wake: crate::request::lifecycle::RequestHopCause,
+    wake: gents_protocol::request_lifecycle::RequestHopCause,
 ) -> Result<EnqueuedBackgroundCompletionInput> {
     use gents_protocol::output::{
         OutputOutcome, OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose,
@@ -249,7 +249,7 @@ pub(crate) async fn persist_background_completion_with_message_waking_with_acces
             }}"#,
                             escape_graphql_string(&tool_key),
                             escape_graphql_string(&parent.doc_id),
-                            crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS
+                            gents_protocol::output::rows::AGENT_OUTPUT_SEGMENT_FIELDS
                         ))
                         .await?;
                     let tools = existing["data"]["AgentToolCall"]
@@ -268,7 +268,7 @@ pub(crate) async fn persist_background_completion_with_message_waking_with_acces
                             .context("fixture segment lookup")?;
                         let close = rows
                             .iter()
-                            .map(crate::session::canonical_rows::decode_output_segment_row)
+                            .map(gents_protocol::output::rows::decode_output_segment_row)
                             .collect::<Result<Vec<_>>>()?
                             .into_iter()
                             .find(|row| row.segment.source == source && row.segment.close.is_some())
@@ -277,7 +277,7 @@ pub(crate) async fn persist_background_completion_with_message_waking_with_acces
                     }
                     anyhow::ensure!(tools.is_empty(), "ambiguous fixture tool authority");
                     let (session_doc_id, agent_did) =
-                        crate::session::canonical_rows::agent_session_child_binding_in_txn(
+                        crate::store::config_client::session_children::agent_session_child_binding_in_txn(
                             txn,
                             &parent.node_did,
                             &parent.session_id,
@@ -341,8 +341,8 @@ pub(crate) async fn persist_background_completion_with_message_waking_with_acces
                     };
                     let created = txn
                         .execute_with_variables(
-                            crate::session::canonical_rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-                            &crate::session::canonical_rows::output_segment_bound_variables(
+                            gents_protocol::output::rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                            &crate::store::config_client::session_children::output_segment_bound_variables(
                                 txn, &segment,
                             )
                             .await?,
@@ -387,7 +387,7 @@ struct CompletionAttempt<'a> {
     queue: &'a RequestQueue,
     existing_notification_doc_id: Option<&'a str>,
     native: &'a ToolNotificationPublication,
-    wake: crate::request::lifecycle::RequestHopCause,
+    wake: gents_protocol::request_lifecycle::RequestHopCause,
     signer: Option<&'a crate::store::identity::ManagedAgentSigner>,
 }
 
@@ -411,7 +411,7 @@ async fn background_completion_transaction_attempt(
         signer,
     } = attempt;
 
-    let request_fields = crate::request::admission::SIGNED_REQUEST_FIELDS;
+    let request_fields = gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
     let escaped_session_id = escape_graphql_string(&parent.session_id);
     let escaped_node_did = escape_graphql_string(&parent.node_did);
     let notification_filter = match existing_notification_doc_id {
@@ -458,7 +458,7 @@ async fn background_completion_transaction_attempt(
                     retry_key
                 }}
             }}"#,
-            crate::session::canonical_rows::AGENT_MESSAGE_FIELDS,
+            gents_protocol::output::rows::AGENT_MESSAGE_FIELDS,
             pending = RequestLifecycleState::Pending.as_str()
         ))
         .await?;
@@ -475,7 +475,7 @@ async fn background_completion_transaction_attempt(
         "observed background notification disappeared"
     );
     if let Some(raw) = notifications.first() {
-        let row = crate::session::canonical_rows::decode_transcript_message_row(raw)?;
+        let row = gents_protocol::output::rows::decode_transcript_message_row(raw)?;
         let (_, reconstructed) = crate::session::load_canonical_message_in_txn(
             txn,
             &row.doc_id,
@@ -532,7 +532,7 @@ async fn background_completion_transaction_attempt(
     let current_hop =
         crate::session::load_session_current_hop_in_txn(txn, &parent.node_did, &parent.session_id)
             .await?;
-    let wake_hop = crate::request::lifecycle::next_request_hop(wake, current_hop);
+    let wake_hop = gents_protocol::request_lifecycle::next_request_hop(wake, current_hop);
     let pending_rows: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["pending"].clone())
             .context("decode pending AgentRequest rows")?;
@@ -608,11 +608,11 @@ async fn background_completion_transaction_attempt(
                 &parent.doc_id,
             );
             wake_input.goal_assignment = match &parent_scope {
-                crate::goal::RequestAssignmentScope::Referenced(reference) => {
+                gents_protocol::goal::RequestAssignmentScope::Referenced(reference) => {
                     Some(reference.clone())
                 }
-                crate::goal::RequestAssignmentScope::Unassigned
-                | crate::goal::RequestAssignmentScope::Unresolved { .. } => None,
+                gents_protocol::goal::RequestAssignmentScope::Unassigned
+                | gents_protocol::goal::RequestAssignmentScope::Unresolved { .. } => None,
             };
             let request_mutation =
                 super::mutation::session_request_create_mutation_at_hop_with_signer(
@@ -637,14 +637,15 @@ async fn background_completion_transaction_attempt(
                     && signer.is_some_and(|signer| signer.did() == parent.agent_did),
                 "background wake publication differs from its managed Agent actor"
             );
-            let session = crate::session::load_agent_session_row_in_txn(
-                txn,
-                &parent.node_did,
-                &parent.session_id,
-                parent.requester_did.as_deref(),
-            )
-            .await?
-            .context("background wake session is unavailable")?;
+            let session =
+                crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+                    txn,
+                    &parent.node_did,
+                    &parent.session_id,
+                    parent.requester_did.as_deref(),
+                )
+                .await?
+                .context("background wake session is unavailable")?;
             anyhow::ensure!(
                 session.session.agent_did == parent.agent_did,
                 "background wake session selects a different Agent"
@@ -732,9 +733,8 @@ async fn publish_native_tool_notification(
     expected_content: &str,
     native: &ToolNotificationPublication,
 ) -> Result<()> {
-    use crate::session::canonical_rows::{
-        transcript_message_bound_variables, CREATE_AGENT_MESSAGE_MUTATION,
-    };
+    use crate::store::config_client::session_children::transcript_message_bound_variables;
+    use gents_protocol::output::rows::CREATE_AGENT_MESSAGE_MUTATION;
     use gents_protocol::output::{
         MessageBlock, MessagePublication, MessageRole, OutputSource, OutputWriter,
         PayloadPresentation, PayloadRef, PresentedPayload, SourceClose, TranscriptMessage,

@@ -161,7 +161,7 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
         mode: crate::tools::surface::FileToolMode::ReadOnly,
         ..Default::default()
     });
-    crate::store::config_client::write_tools_document(&user_access, &tools_doc)
+    crate::documents::write_tools_document(&user_access, &tools_doc)
         .await
         .expect("write read-only Tools patch");
 
@@ -670,9 +670,9 @@ async fn patch_desired_document(
     id: &str,
     patch: serde_json::Value,
 ) {
+    use crate::documents::apply_desired_state_plan;
     use crate::store::config_client::{
-        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
-        DesiredStateApplyPlan,
+        read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     access
         .transact_write("test.patch_desired_document", |txn| {
@@ -1152,7 +1152,7 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
     assert_eq!(resolved.task.prompt_template, "do the thing");
     assert_eq!(
         resolved.cadence,
-        crate::runtime::snapshot::ScheduleCadence::Interval { interval_secs: 60 }
+        crate::documents::ScheduleCadence::Interval { interval_secs: 60 }
     );
     assert_eq!(
         resolved.concurrency,
@@ -1636,9 +1636,9 @@ async fn bind_subscription_backend(
     endpoint: &str,
     model: &str,
 ) {
+    use crate::documents::apply_desired_state_plan;
     use crate::store::config_client::{
-        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
-        DesiredStateApplyPlan,
+        read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     access.transact_write("test.subscription_backend", |txn| {
         Box::pin(async move {

@@ -39,9 +39,9 @@ async fn set_backend_capacity(
     backend_id: &str,
     max_concurrent: usize,
 ) {
+    use gents::documents::apply_desired_state_plan;
     use gents::store::config_client::{
-        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
-        DesiredStateApplyPlan,
+        read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let owner = db.node_identity.did();
     actors
@@ -138,7 +138,7 @@ pub async fn seed_session_message(
     content: &str,
     timestamp: &str,
 ) {
-    use gents::session::canonical_rows::{
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };

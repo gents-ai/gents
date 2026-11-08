@@ -468,7 +468,7 @@ async fn scoped_backend_replacement_preserves_observations_and_resets_defaults()
     backend.enabled = false;
     backend.tags = vec!["old".into()];
     let doc_id =
-        crate::store::config_client::write_inference_backend_document(&access, &backend).await?;
+        crate::documents::write_inference_backend_document(&access, &backend).await?;
     let catalogs = serde_json::json!([
         {"node_did":null,"observed_at":"2026-01-01T00:00:00Z","models":[{"model_name":"shared","display_name":null,"context_window":null,"max_context_window":null,"max_output_tokens":null,"reasoning_efforts":null}]},
         {"node_did":other_did,"observed_at":"2026-01-02T00:00:00Z","models":[{"model_name":"private","display_name":null,"context_window":null,"max_context_window":null,"max_output_tokens":null,"reasoning_efforts":null}]}
@@ -495,12 +495,12 @@ async fn scoped_backend_replacement_preserves_observations_and_resets_defaults()
     other.node_did = other_did.to_owned();
     other.backend_id = backend.backend_id.clone();
     other.endpoint = "http://other.example/v1".into();
-    crate::store::config_client::write_inference_backend_document(&access, &other).await?;
+    crate::documents::write_inference_backend_document(&access, &other).await?;
     let mut replacement = base_backend();
     replacement.node_did = owner.to_owned();
     replacement.backend_id = backend.backend_id.clone();
     let replaced_id =
-        crate::store::config_client::write_inference_backend_document(&access, &replacement)
+        crate::documents::write_inference_backend_document(&access, &replacement)
             .await?;
     assert_eq!(replaced_id, doc_id);
     let loaded = backend_for_user(&access, owner, &backend.backend_id)
@@ -576,7 +576,7 @@ async fn duplicate_backend_owner_keys_fail_without_overwriting_documents() -> Re
     let node = db.node.clone();
     let mut backend = base_backend();
     backend.node_did = db.node_identity.did().to_owned();
-    crate::store::config_client::write_inference_backend_document(&access, &backend).await?;
+    crate::documents::write_inference_backend_document(&access, &backend).await?;
     let mut distinct = backend.clone();
     distinct.backend_id = "distinct-control".into();
     seed_metadata(&access, metadata_input(&distinct)?).await?;
@@ -623,7 +623,7 @@ async fn backend_lists_skip_an_unknown_provider_kind_and_lookups_stay_strict() -
     let owner = db.node_identity.did().to_owned();
     let mut backend = base_backend();
     backend.node_did = owner.clone();
-    crate::store::config_client::write_inference_backend_document(&access, &backend).await?;
+    crate::documents::write_inference_backend_document(&access, &backend).await?;
     let mut future = metadata_input(&backend)?;
     future["backend_id"] = "future".into();
     future["provider_kind"] = "FutureProviderKind".into();
@@ -683,7 +683,7 @@ async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catal
     let node = db.node.clone();
     let mut backend = base_backend();
     backend.node_did = db.node_identity.did().to_owned();
-    crate::store::config_client::write_inference_backend_document(&access, &backend).await?;
+    crate::documents::write_inference_backend_document(&access, &backend).await?;
     let catalog = BackendModelCatalog {
         node_did: None,
         observed_at: "2026-09-09T10:00:00Z".into(),
@@ -720,7 +720,7 @@ async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catal
     );
     let mut changed = backend.clone();
     changed.endpoint = "http://127.0.0.1:9000/v1".into();
-    crate::store::config_client::write_inference_backend_document(&access, &changed).await?;
+    crate::documents::write_inference_backend_document(&access, &changed).await?;
     assert!(record_catalog_for_runtime(&node, &backend, catalog.clone())
         .await
         .is_err());
@@ -741,7 +741,7 @@ async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Re
     let node = db.node.clone();
     let mut backend = base_backend();
     backend.node_did = db.node_identity.did().to_owned();
-    crate::store::config_client::write_inference_backend_document(&access, &backend).await?;
+    crate::documents::write_inference_backend_document(&access, &backend).await?;
     let catalog = BackendModelCatalog {
         node_did: None,
         observed_at: "2026-09-09T10:00:00Z".into(),
@@ -855,7 +855,7 @@ async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result
     elsewhere.backend_id = "claude-elsewhere".into();
     elsewhere.endpoint = "http://127.0.0.1:1/v1".into();
     for backend in [&claude, &elsewhere] {
-        crate::store::config_client::write_inference_backend_document(&access, backend).await?;
+        crate::documents::write_inference_backend_document(&access, backend).await?;
     }
     let credential = crate::inference::auth::credential::OAuthCredential {
         doc_id: None,
@@ -980,7 +980,7 @@ async fn generated_catalog_refreshes_preserve_payload_commits_and_latest_freshne
         let mut backend = base_backend();
         backend.node_did = db.node_identity.did().to_owned();
         backend.backend_id = format!("catalog-case-{index}");
-        crate::store::config_client::write_inference_backend_document(&access, &backend).await?;
+        crate::documents::write_inference_backend_document(&access, &backend).await?;
         let row = stored_catalog_row(&access, &backend).await?;
         let doc_id = row["_docID"].as_str().unwrap();
         let fields = ["catalogs", "catalog_freshness"];
@@ -1052,7 +1052,7 @@ async fn catalog_freshness_survives_reopen_and_adopts_retained_payloads() -> Res
     let node = db.node.clone();
     let mut backend = base_backend();
     backend.node_did = db.node_identity.did().to_owned();
-    crate::store::config_client::write_inference_backend_document(&access, &backend).await?;
+    crate::documents::write_inference_backend_document(&access, &backend).await?;
     let case = crate::lean_vocab_test::lean_catalog_refresh_cases()
         .iter()
         .find(|case| case["witness"] == "catalog.delayed-change-after-identical")

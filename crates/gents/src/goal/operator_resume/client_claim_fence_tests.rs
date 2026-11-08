@@ -76,7 +76,7 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
             .into_iter()
             .find(|row| row.request_id == receipt.request_id)
             .unwrap();
-        let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();
+        let request = gents_protocol::row::AgentRequest::try_from(row).unwrap();
         let (_owner, authority) =
             crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
         let verifier =

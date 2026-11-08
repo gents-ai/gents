@@ -3,8 +3,6 @@ mod automation;
 mod load;
 mod snapshot;
 
-pub(crate) use automation::resolved_task_from;
-
 pub(crate) use apply::{apply_control_update, control_collection_names};
 #[cfg(test)]
 pub(crate) use load::load_document_runtime_view;

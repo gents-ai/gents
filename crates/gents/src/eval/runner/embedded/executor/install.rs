@@ -6,6 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
+use crate::documents::apply_desired_state_plan;
 use crate::documents::{InferenceSampling, PackConfig};
 use crate::eval::runner::embedded::home::EmbeddedHome;
 use crate::eval::runner::executor::{InferenceBinding, TrialFixtures, TrialSpec};
@@ -14,9 +15,7 @@ use crate::pack::{
     load_pack_install_config_with_provisioner, BoundPackConfig, DriftPolicy, InstalledVia,
     PackIdentity, PackInferenceBindings, PackInstallOptions, PackManifest,
 };
-use crate::store::config_client::{
-    apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
+use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::store::graphql::validate_collection_identifier;
 use crate::{Collection, ConfigAccess};
 
@@ -524,7 +523,7 @@ async fn install_session_fixture(
     readers: &[String],
 ) -> Result<()> {
     let session: gents_protocol::session::AgentSession = serde_json::from_value(document.clone())?;
-    crate::session::validate_agent_session(&session)?;
+    gents_protocol::session::validate_agent_session(&session)?;
     let actor = access
         .actor_did()
         .context("fixture session requires an authenticated creator")?;

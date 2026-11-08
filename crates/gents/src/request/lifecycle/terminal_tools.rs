@@ -3,7 +3,7 @@ use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, Outp
 use gents_protocol::row::{AgentRequestRow, AgentToolCallRow};
 use serde::Deserialize;
 
-use crate::session::canonical_rows::TranscriptMessageRow;
+use gents_protocol::output::rows::TranscriptMessageRow;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::{escape_graphql_string, response_has_documents};
 
@@ -91,7 +91,7 @@ pub(super) async fn account_tools_in_txn(
         .as_deref()
         .context("request missing session")?;
     let scope =
-        crate::session::session_scope_filter(agent, session, request.requester_did.as_deref());
+        gents_protocol::session::session_scope_filter(agent, session, request.requester_did.as_deref());
     let escaped_request = escape_graphql_string(request_id);
     let response = txn
         .execute_local_response(&format!(
@@ -359,7 +359,7 @@ mod tests {
                             .execute(&format!(
                                 r#"{{ AgentRequest(docID: "{}") {{ {} }} }}"#,
                                 escape_graphql_string(&request_doc),
-                                crate::request::watcher::AGENT_REQUEST_FIELDS,
+                                gents_protocol::row::AGENT_REQUEST_FIELDS,
                             ))
                             .await?;
                         let request: AgentRequestRow =

@@ -18,7 +18,7 @@ impl DefraSessionHook {
                 CANCEL_PROCESS_TOOL_NAME,
                 args,
                 deadline_at,
-                crate::tools::call::lifecycle::AwaitMode::Foreground,
+                gents_protocol::tool_call::AwaitMode::Foreground,
             )
             .await?;
         control_lifecycle.start_running().await?;

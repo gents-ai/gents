@@ -241,7 +241,7 @@ fn buffer_sender() -> (Arc<Mutex<Vec<String>>>, PromptSender) {
 fn fixture_request_filter(request: &gents_protocol::row::AgentRequestRow) -> String {
     format!(
         "{}, _docID: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}",
-        gents::session::session_scope_filter(
+        gents_protocol::session::session_scope_filter(
             request.node_did.as_deref().expect("fixture owner"),
             request.session_id.as_deref().expect("fixture session"),
             request.requester_did.as_deref()
@@ -329,7 +329,7 @@ async fn seed_canonical_text_message(
     role: gents_protocol::output::MessageRole,
     text: &str,
 ) {
-    use gents::session::canonical_rows::{
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
@@ -659,7 +659,8 @@ async fn wait_for_pending_request(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
 ) -> gents_protocol::row::AgentRequestRow {
-    let scope = gents::session::session_scope_filter(node_did, "session-1", Some(node_did));
+    let scope =
+        gents_protocol::session::session_scope_filter(node_did, "session-1", Some(node_did));
     loop {
         let response = node.execute(&format!("{{AgentRequest(filter: {{{scope}, lifecycle_state: {{_eq: \"pending\"}}}}) {{{}}}}}", gents::SIGNED_REQUEST_FIELDS)).await;
         ensure_no_errors(&response, "wait for fixture request").unwrap();

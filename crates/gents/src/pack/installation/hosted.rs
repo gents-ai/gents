@@ -185,7 +185,16 @@ impl HostedPackStage {
                     let installed = installed.clone();
                     Box::pin(async move {
                         txn.interpreter()
-                            .stage_plugin_delete_roots(&previous, &installed)
+                            .stage_plugin_delete_roots(
+                                &previous
+                                    .iter()
+                                    .map(|plugin| plugin.projected())
+                                    .collect::<Vec<_>>(),
+                                &installed
+                                    .iter()
+                                    .map(|plugin| plugin.projected())
+                                    .collect::<Vec<_>>(),
+                            )
                             .await?;
                         let reports = super::documents::apply_hosted_document_graph(
                             txn.interpreter(),

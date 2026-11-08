@@ -22,8 +22,8 @@ use gents::documents::{
     InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation, SkillDocument, Task,
     ToolServiceRegistry, Tools, Trigger, TriggerObservation,
 };
-use gents::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_protocol::client_protocol::ClientTurnState;
+use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_protocol::row::{
     AgentRequestRow, AgentToolCallRow, CompactionEntryRow, GoalRow, MailboxItemRow,
     NodeReadinessRow, NodeRuntimeRow,

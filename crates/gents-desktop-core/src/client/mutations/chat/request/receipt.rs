@@ -291,7 +291,7 @@ async fn owner_receipt(access: &ConfigAccess, create: &AgentRequestCreate) -> Re
 
 #[cfg(test)]
 async fn read_owner_receipt(access: &ConfigAccess, create: &AgentRequestCreate) -> Result<bool> {
-    let scope = gents::session::session_scope_filter(
+    let scope = gents_protocol::session::session_scope_filter(
         &create.node_did,
         &create.session_id,
         (!create.requester_did.is_empty()).then_some(create.requester_did.as_str()),

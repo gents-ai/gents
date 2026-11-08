@@ -46,9 +46,10 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     // The node's client key bounds the live profile with an execution.
     access
         .transact_write("test.artifact_live.profile", |txn| {
+            use gents::documents::apply_desired_state_plan;
             use gents::store::config_client::{
-                apply_desired_state_plan, read_desired_state_record_in_txn as read,
-                DesiredStateApplyDocument, DesiredStateApplyPlan,
+                read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
+                DesiredStateApplyPlan,
             };
             let did = &did;
             let agent_did = &agent_did;

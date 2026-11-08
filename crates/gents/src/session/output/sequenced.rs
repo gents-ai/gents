@@ -3,13 +3,13 @@ use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::{MessagePublication, MessageRole, OutputOutcome, OutputSource};
 use std::collections::BTreeSet;
 
-use super::super::canonical_rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS};
-use super::super::query::session_scope_filter;
 use super::super::SequencedMessage;
 use super::access::{ReadAccess, ReadCache};
 use super::reconstruct::{preload_request_output_segments, reconstruct_scoped_message_with_facts};
 use super::replay_candidates::provider_coordinate_for_candidate;
 use super::replay_violation;
+use gents_protocol::output::rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS};
+use gents_protocol::session::session_scope_filter;
 
 /// The owned loop rebuilds context, prompt and folded messages from admission
 /// input. Other publications belonging to that request (notably tool results
@@ -26,9 +26,9 @@ pub(super) fn is_current_admission_input(
         )
         && (["prompt", "context"].into_iter().any(|key| {
             header.message_key
-                == super::super::canonical_rows::authored_message_key(request_doc_id, key)
+                == gents_protocol::output::rows::authored_message_key(request_doc_id, key)
         }) || header.message_key.starts_with(
-            &super::super::canonical_rows::authored_message_key(
+            &gents_protocol::output::rows::authored_message_key(
                 request_doc_id,
                 &crate::request::lifecycle::queue::folded_input_key(""),
             ),
@@ -103,7 +103,7 @@ pub(in crate::session) async fn load_sequenced_messages_using(
         .and_then(serde_json::Value::as_array)
         .context("canonical history query omitted AgentMessage rows")?
         .iter()
-        .map(decode_transcript_message_row)
+        .map(|row| decode_transcript_message_row(row).map_err(anyhow::Error::from))
         .collect::<Result<Vec<_>>>()?;
     let mut cache = ReadCache {
         reuse_node_scans: true,

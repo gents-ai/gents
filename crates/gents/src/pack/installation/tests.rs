@@ -157,9 +157,7 @@ async fn edit_tools_owned(access: &ConfigAccess, owner: &str, id: &str, name: &s
     access
         .transact_write("test.edit", |txn| {
             let edit = &edit;
-            Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, edit).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, edit).await })
         })
         .await
         .unwrap();
@@ -997,9 +995,7 @@ async fn locally_installed_pack_agent_holds_the_projected_baseline() {
     user_access
         .transact_write("test.local_pack.profile", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await
         .unwrap();
@@ -1428,9 +1424,7 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
     access
         .transact_write("test.seed", |txn| {
             let seed = &seed;
-            Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, seed).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, seed).await })
         })
         .await
         .unwrap();
@@ -2771,7 +2765,7 @@ async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_document
         .transact_write("test.surviving_plugin_user", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan)
+                crate::documents::apply_desired_state_plan(txn, plan)
                     .await
                     .map(|_| ())
             })

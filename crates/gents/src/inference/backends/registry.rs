@@ -1,5 +1,4 @@
 mod catalog_freshness;
-pub mod observation_binding;
 pub use catalog_freshness::decode_backend_observation;
 
 pub use crate::documents::InferenceBackend;
@@ -496,9 +495,14 @@ pub async fn lookup_backend_observation_in_txn(
     let metadata_doc = metadata["_docID"]
         .as_str()
         .context("backend metadata has no physical ID")?;
-    observation_binding::bind_rows(node_did, backend_id, metadata_doc, rows)?
-        .map(|row| decode_backend_observation(row.clone()).context("decoding backend observation"))
-        .transpose()
+    crate::documents::inference_backend::observation_binding::bind_rows(
+        node_did,
+        backend_id,
+        metadata_doc,
+        rows,
+    )?
+    .map(|row| decode_backend_observation(row.clone()).context("decoding backend observation"))
+    .transpose()
 }
 
 pub async fn set_backend_probe_status(
@@ -745,7 +749,7 @@ async fn record_model_catalog_for_document_in_txn(
     let metadata_doc = row["_docID"]
         .as_str()
         .context("backend metadata has no physical ID")?;
-    let observation = observation_binding::bind_rows(
+    let observation = crate::documents::inference_backend::observation_binding::bind_rows(
         &backend.node_did,
         &backend.backend_id,
         metadata_doc,
@@ -870,7 +874,7 @@ pub async fn record_connection_catalog_on(
                             if raw.is_stored_secret() =>
                         {
                             let credential =
-                                crate::inference::auth::credential::backend_credential_in_txn(
+                                crate::documents::backend_credential::backend_credential_in_txn(
                                     txn, id,
                                 )
                                 .await?;

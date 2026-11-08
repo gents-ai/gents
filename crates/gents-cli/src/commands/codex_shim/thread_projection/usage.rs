@@ -146,8 +146,11 @@ async fn session_request_ids(
     session_id: &str,
     scope: UsageScope<'_>,
 ) -> Result<Vec<String>> {
-    let session_scope =
-        gents::session::session_scope_filter(scope.node_did, session_id, scope.requester_did);
+    let session_scope = gents_protocol::session::session_scope_filter(
+        scope.node_did,
+        session_id,
+        scope.requester_did,
+    );
     let session_scope = gents::session::public_request_filter(&session_scope);
     let escaped_agent_did = escape_graphql_string(scope.agent_did);
     let query = format!(

@@ -1,4 +1,3 @@
-use gents::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_protocol::message::Message;
 use gents_protocol::output::live::{
     project_live, LiveObservation, LiveTarget, LiveView, OwnerLiveness,
@@ -6,6 +5,7 @@ use gents_protocol::output::live::{
 use gents_protocol::output::reconstruction::{
     fork_copy_observations, reconstruct_message, DependencyDenial, ObservedSegment,
 };
+use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_protocol::output::{OutputSource, OutputWriter, ReconstructionError, TerminalOutput};
 
 #[derive(Debug, Clone, PartialEq)]

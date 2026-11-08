@@ -1,34 +1,5 @@
 use super::*;
 
-pub const GOAL_FIELDS: &str = r#"
-    _docID
-    goal_id
-    creation_key
-    session_id
-    node_did
-    objective
-    status
-    token_budget
-    tokens_used
-    token_usage_baseline
-    assignment_root_request_doc_id
-    active_time_seconds
-    active_started_at
-    consecutive_blocked_audits
-    last_blocked_request_id
-    last_blocked_reason
-    last_continued_from_request_id
-    continuation_sequence
-    wrapup_requested
-    wrapup_completed
-    infrastructure_retry_count
-    last_failure
-    completion_evidence
-    auto_resume_at_reset
-    created_at
-    updated_at
-"#;
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GoalDocument {
     #[serde(rename = "_docID")]
@@ -133,12 +104,4 @@ pub fn snapshot(goal: &GoalDocument, now: DateTime<Utc>) -> GoalSnapshot {
         created_at: goal.created_at.clone(),
         updated_at: goal.updated_at.clone(),
     }
-}
-
-pub fn deterministic_goal_id(node_did: &str, session_id: &str) -> String {
-    format!("{}:{node_did}:{session_id}", node_did.len())
-}
-
-pub fn deterministic_goal_creation_key(node_did: &str, session_id: &str) -> String {
-    format!("goal-create:{}:{node_did}:{session_id}", node_did.len())
 }

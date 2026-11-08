@@ -776,20 +776,28 @@ async fn resolve_config_access_inner(
     let http = Some(gents::defra_node::HttpConfig::with_listener(listener)?);
     let (node, _admission) = match plugin_guard {
         Some(guard) => {
-            protected
-                .start_node_under_plugin_store(
-                    &store_key,
-                    runtime_identity.clone(),
-                    http,
-                    None,
-                    guard,
-                )
-                .await?
+            gents::runtime::node_start::start_node_under_plugin_store(
+                protected,
+                &store_key,
+                runtime_identity.clone(),
+                http,
+                None,
+                gents::tools::surface::ToolCeiling::meta_only(),
+                guard,
+            )
+            .await?
         }
         None => {
-            protected
-                .start_node(&store_key, runtime_identity.clone(), http, None, &home_dir)
-                .await?
+            gents::runtime::node_start::start_node(
+                protected,
+                &store_key,
+                runtime_identity.clone(),
+                http,
+                None,
+                gents::tools::surface::ToolCeiling::meta_only(),
+                &home_dir,
+            )
+            .await?
         }
     };
     let migration_node = node.clone();

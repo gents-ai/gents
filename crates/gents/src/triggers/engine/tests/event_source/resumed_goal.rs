@@ -85,14 +85,14 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
         .execute(&format!(
             "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{ {} }} }}",
             escape_graphql_string(&receipt.request_id),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ))
         .await
         .unwrap();
     let rows: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone()).unwrap();
     assert_eq!(rows.len(), 1);
-    let child = crate::request::watcher::AgentRequest::try_from(rows[0].clone()).unwrap();
+    let child = gents_protocol::row::AgentRequest::try_from(rows[0].clone()).unwrap();
     assert_eq!(
         child.caused_by_correlation.as_deref(),
         Some("resumed-run-correlation")

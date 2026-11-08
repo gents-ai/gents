@@ -2,7 +2,8 @@ use crate::tools::call::lifecycle::admission_fixture::{
     complete_child_managed_verified, published_admission, published_session_message,
     PublishedAdmissionOptions,
 };
-use crate::tools::call::lifecycle::{AwaitMode, ToolCallLifecycle};
+use crate::tools::call::lifecycle::ToolCallLifecycle;
+use gents_protocol::tool_call::AwaitMode;
 
 #[cfg(unix)]
 mod background_owner;
@@ -69,8 +70,7 @@ async fn generated_native_missing_parent_restart_cases_defer() {
         let escaped = crate::store::graphql::escape_graphql_string(&tool_doc_id);
         let response = access.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state }} }}"#)).await.unwrap();
         assert_eq!(
-            response["data"]["AgentToolCall"][0]["lifecycle_state"],
-            "running",
+            response["data"]["AgentToolCall"][0]["lifecycle_state"], "running",
             "{name}"
         );
         admission
@@ -254,7 +254,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                             crate::store::graphql::escape_graphql_string(
                                 &message.caused_request_doc_id
                             ),
-                            crate::request::admission::SIGNED_REQUEST_FIELDS,
+                            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
                         ))
                         .await
                         .unwrap();
@@ -352,7 +352,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                             &goal,
                             r#"status: "corrupted-status""#,
                         )
-                            .await;
+                        .await;
                     }
                     "session_message_request_completed_live_goal_to_completed" => {
                         crate::goal::set_goal_from_access(
@@ -703,8 +703,7 @@ async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
             .await
             .unwrap();
         assert_eq!(
-            response["data"]["AgentToolCall"][0]["lifecycle_state"],
-            "running",
+            response["data"]["AgentToolCall"][0]["lifecycle_state"], "running",
             "{name}"
         );
         admission

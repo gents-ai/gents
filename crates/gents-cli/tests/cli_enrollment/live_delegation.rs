@@ -1,7 +1,8 @@
 use super::*;
+use gents::documents::apply_desired_state_plan;
 use gents::store::config_client::{
-    apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
-    DesiredStateApplyDocument, DesiredStateApplyPlan,
+    read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyDocument,
+    DesiredStateApplyPlan,
 };
 use gents::{Collection, Tools};
 use serde_json::json;

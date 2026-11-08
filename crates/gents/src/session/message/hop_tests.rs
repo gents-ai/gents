@@ -3,7 +3,7 @@ use super::*;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_session_message, PublishedAdmissionOptions,
 };
-use crate::tools::call::lifecycle::AwaitMode;
+use gents_protocol::row::AwaitMode;
 
 /// The accepted tool row does not carry its calling request's id; the id is
 /// read from the calling request document, as the owning lifecycle does.
@@ -186,7 +186,7 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
         )
     };
     let before = load_tool().await.unwrap().unwrap();
-    let receipt_before = load_receipt(
+    let receipt_before = load_receipt::<crate::tools::call::lifecycle::ToolCallLifecycle>(
         &crate::store::config_client::ConfigAccess::local_as(node.clone(), tool.actor().clone()),
         &tool_doc_id,
         tool.node_did(),
@@ -207,16 +207,18 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
         .await
         .unwrap();
     let staged = crate::request::binding::load_agent_request_by_doc_id_with_access(
-        &message.admission.tool.access().unwrap(), &enqueued.doc_id)
-        .await
-        .unwrap()
-        .unwrap();
+        &message.admission.tool.access().unwrap(),
+        &enqueued.doc_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(staged.request_id, enqueued.request_id);
     assert_eq!(staged.session_id, target.session_id);
     let after = load_tool().await.unwrap().unwrap();
     assert_eq!(after.state(), before.state());
     assert_eq!(after.is_running(), before.is_running());
-    let receipt_after = load_receipt(
+    let receipt_after = load_receipt::<crate::tools::call::lifecycle::ToolCallLifecycle>(
         &crate::store::config_client::ConfigAccess::local_as(node.clone(), tool.actor().clone()),
         &tool_doc_id,
         tool.node_did(),

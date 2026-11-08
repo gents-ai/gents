@@ -1238,7 +1238,7 @@ async fn announce_consumed_inputs(
             escape_graphql_string(state.local_requester_did()),
             escape_graphql_string(&current.session_id),
             escape_graphql_string(&current.request_doc_id),
-            gents::session::canonical_rows::AGENT_MESSAGE_FIELDS
+            gents_protocol::output::rows::AGENT_MESSAGE_FIELDS
         );
         let headers = query_node_json(&state.reader, &query).await?;
         let headers = headers
@@ -1252,7 +1252,7 @@ async fn announce_consumed_inputs(
         let raw_header = headers
             .first()
             .context("consumed input authored header is not yet visible")?;
-        let observed = gents::session::canonical_rows::decode_transcript_message_row(raw_header)?;
+        let observed = gents_protocol::output::rows::decode_transcript_message_row(raw_header)?;
         let (header, _) = gents::session::load_canonical_message(
             &access,
             &observed.doc_id,

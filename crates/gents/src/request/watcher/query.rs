@@ -1,9 +1,11 @@
 use rapidhash::{HashSetExt, RapidHashSet};
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_protocol::row::AgentRequestRow;
+use gents_protocol::row::{
+    AgentRequest, AgentRequestRow, AgentRequestRowError, AGENT_REQUEST_FIELDS,
+};
 
-use super::{AgentRequest, DefraWatcher};
+use super::DefraWatcher;
 
 mod rows;
 use rows::{is_aged_background_completion_wakeup, is_pending, preclaim_signal, PreclaimSignal};
@@ -21,40 +23,6 @@ enum WatcherScanError {
     #[error("request arrival scan for {actor} failed: {reason}")]
     Arrival { actor: String, reason: String },
 }
-
-pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
-                    _docID
-                    request_id
-                    purpose
-                    node_did
-                    requester_did
-                    agent_did
-                    session_id
-                    content
-                    retry_parent_request_doc_id
-                    max_total_tokens
-                    input
-                    execution_origin
-                    created_at
-                    deadline
-                    execution_generation
-                    execution_lease_secs
-                    execution_lease_expires_at
-                    request_hop
-                    caused_by_parent_request_id
-                    caused_by_parent_request_doc_id
-                    caused_by_parent_tool_call_id
-                    caused_by_parent_tool_call_doc_id
-                    caused_by_trigger_id
-                    caused_by_trigger_kind
-                    caused_by_source_doc_id
-                    caused_by_correlation
-                    caused_by_trigger_context
-                    workspace_id
-                    workspace_owner_node_did
-                    workspace_authority
-                    workspace_seal_hash
-"#;
 
 impl DefraWatcher {
     pub async fn try_fetch_request(&self, doc_id: &str) -> anyhow::Result<Option<AgentRequest>> {
@@ -202,7 +170,7 @@ impl DefraWatcher {
         )
         .into_iter()
         .map(AgentRequest::try_from)
-        .collect::<anyhow::Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, AgentRequestRowError>>()?;
         if requests.is_empty() {
             if let Some(error) = failure {
                 return Err(error.into());
@@ -224,7 +192,7 @@ impl DefraWatcher {
     async fn terminalize_incoherent_pending_request(
         &self,
         row: &AgentRequestRow,
-        error: &anyhow::Error,
+        error: &AgentRequestRowError,
     ) {
         let Some(agent_did) = row.agent_did.as_deref().filter(|did| !did.is_empty()) else {
             tracing::warn!(
@@ -358,12 +326,14 @@ pub(crate) fn agent_request_from_mutation_response(
     response: &defra_node::QueryResponse,
     field: &str,
 ) -> anyhow::Result<Option<AgentRequest>> {
-    crate::store::graphql::single_mutation_document(response, field)?
-        .cloned()
-        .map(serde_json::from_value::<AgentRequestRow>)
-        .transpose()?
-        .map(AgentRequest::try_from)
-        .transpose()
+    Ok(
+        crate::store::graphql::single_mutation_document(response, field)?
+            .cloned()
+            .map(serde_json::from_value::<AgentRequestRow>)
+            .transpose()?
+            .map(AgentRequest::try_from)
+            .transpose()?,
+    )
 }
 
 fn prioritize_aged_background_wakes(

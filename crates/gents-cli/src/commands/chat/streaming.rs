@@ -62,7 +62,7 @@ struct ChatToolProgressMarker {
 /// filter, so later rows in the collection would hide this request.
 pub(super) fn chat_progress_query(request: &SubmittedRequest) -> String {
     let request_doc_id = &request.request_doc_id;
-    let scope = gents::session::session_scope_filter(
+    let scope = gents_protocol::session::session_scope_filter(
         &request.node_did,
         &request.session_id,
         request.requester_did.as_deref(),
@@ -965,7 +965,7 @@ async fn account_problems(
         let access = gents::store::config_client::ConfigAccess::Graphql(graphql.clone());
         let did = submitted.node_did.as_str();
         anyhow::Ok((
-            gents::store::config_client::agent_accounts(&access, did, agent_did).await?,
+            gents::inference::auth::credential::agent_accounts(&access, did, agent_did).await?,
             gents::inference::auth::credential::list_accounts(&access, did).await?,
         ))
     };

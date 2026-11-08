@@ -1,5 +1,5 @@
 use crate::client::source_matches_node;
-use gents::inference::backends::registry::observation_binding;
+use gents::documents::inference_backend::observation_binding;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -31,7 +31,7 @@ impl CycleFixture {
     }
 
     async fn write(&self, backend: &InferenceBackend) {
-        crate::store::config_client::write_inference_backend_document(&self.user, backend)
+        crate::documents::write_inference_backend_document(&self.user, backend)
             .await
             .unwrap();
     }
@@ -284,7 +284,7 @@ async fn disabled_and_removed_backends_are_probed_again_when_observed_enabled() 
         .transact_write("test.backend.remove", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                crate::documents::apply_desired_state_plan(txn, plan).await
             })
         })
         .await

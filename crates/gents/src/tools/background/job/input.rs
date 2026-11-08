@@ -20,7 +20,6 @@ use crate::plugin::job_calls::job_state;
 use crate::provider_usage::{sum_charged_from_persisted_parts, sum_persisted_usage_columns};
 use crate::request::admission::load_request_context;
 use crate::request::binding::load_agent_request_by_doc_id_with_access;
-use crate::request::watcher::AgentRequest;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, ConfigRead};
 use crate::store::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::tools::background::job::admit::{meet, StepChild};
@@ -37,6 +36,7 @@ use crate::tools::call::lifecycle::{
     load_tool_call_arguments, CausedRequestTerminal, ToolCallState,
 };
 use crate::tools::workspace::request_workspace_cwd;
+use gents_protocol::row::AgentRequest;
 
 #[cfg(test)]
 tokio::task_local! {
@@ -1341,7 +1341,7 @@ pub(crate) mod tests {
         let response = agent
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-                crate::request::watcher::AGENT_REQUEST_FIELDS,
+                gents_protocol::row::AGENT_REQUEST_FIELDS,
             ))
             .await
             .unwrap();
@@ -1596,7 +1596,7 @@ pub(crate) mod tests {
     use crate::tools::call::lifecycle::admission_fixture::{
         fixture_job_pin, publish_accepted_on_claimed_request,
     };
-    use crate::tools::call::lifecycle::AwaitMode;
+    use gents_protocol::tool_call::AwaitMode;
 
     fn node_identity() -> &'static crate::KeyIdentity {
         static IDENTITY: std::sync::OnceLock<crate::KeyIdentity> = std::sync::OnceLock::new();
@@ -1821,7 +1821,7 @@ pub(crate) mod tests {
         let response = agent
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "request-1" }} }}) {{ {} }} }}"#,
-                crate::request::watcher::AGENT_REQUEST_FIELDS
+                gents_protocol::row::AGENT_REQUEST_FIELDS
             ))
             .await
             .unwrap();
@@ -1846,7 +1846,7 @@ pub(crate) mod tests {
             agent_snapshots: Default::default(),
         };
         let (_snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(agent_snapshot());
-        runtime.bind_snapshot(snapshot_rx).unwrap();
+        runtime.bind_snapshot(Box::new(snapshot_rx)).unwrap();
         Job {
             node,
             access: agent,
@@ -2426,7 +2426,7 @@ pub(crate) mod tests {
         assert!(keys.len() > 60);
         let secret: Vec<&String> = keys
             .iter()
-            .filter(|key| crate::tools::native::is_secret_env_name(key))
+            .filter(|key| crate::documents::callback::is_secret_env_name(key))
             .collect();
         assert!(secret.is_empty(), "{secret:?}");
         let value = serde_json::to_value(&input).unwrap();

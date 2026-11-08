@@ -671,14 +671,14 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
     let result = node
         .execute(&format!(
             "{{ AgentRequest {{ {} }} }}",
-            crate::request::admission::SIGNED_REQUEST_FIELDS
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
         ))
         .await;
     let row: gents_protocol::row::AgentRequestRow =
         crate::store::graphql::first_row(&result, "AgentRequest")
             .unwrap()
             .unwrap();
-    let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();
+    let request = gents_protocol::row::AgentRequest::try_from(row).unwrap();
     let mut owner = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         &did,
@@ -1154,14 +1154,14 @@ async fn artifact_alternate_owner(
         .node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{id}" }} }}) {{ {} }} }}"#,
-            crate::request::admission::SIGNED_REQUEST_FIELDS
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
         ))
         .await;
     let row: gents_protocol::row::AgentRequestRow =
         crate::store::graphql::first_row(&result, "AgentRequest")
             .unwrap()
             .unwrap();
-    let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();
+    let request = gents_protocol::row::AgentRequest::try_from(row).unwrap();
     let mut owner = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         fx.node.clone(),
         did,

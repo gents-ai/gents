@@ -247,3 +247,13 @@ impl CallbackInvocationOrigin {
         }
     }
 }
+
+/// Configuration validation and command environments share this predicate, so
+/// no configured field may carry a name a command environment would strip.
+pub(crate) fn is_secret_env_name(key: &str) -> bool {
+    let key = key.to_ascii_uppercase();
+    key.contains("KEY")
+        || key.contains("SECRET")
+        || key.contains("TOKEN")
+        || key.contains("PASSWORD")
+}

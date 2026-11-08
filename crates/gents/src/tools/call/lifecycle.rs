@@ -50,32 +50,6 @@ impl ToolCallState {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-pub enum AwaitMode {
-    #[default]
-    Foreground,
-    Background,
-}
-
-impl AwaitMode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            AwaitMode::Foreground => "foreground",
-            AwaitMode::Background => "background",
-        }
-    }
-
-    pub fn from_persisted(s: &str) -> Option<Self> {
-        match s {
-            "foreground" => Some(AwaitMode::Foreground),
-            "background" => Some(AwaitMode::Background),
-            _ => None,
-        }
-    }
-
-    pub const ALL: &'static [AwaitMode] = &[AwaitMode::Foreground, AwaitMode::Background];
-}
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum InterruptDisposition {
     Cancel,
@@ -131,6 +105,7 @@ impl CancelCause {
     ];
 }
 
+use gents_protocol::tool_call::AwaitMode;
 use std::sync::Arc;
 
 use defra_node::Node as EmbeddedNode;
@@ -151,6 +126,7 @@ pub(crate) mod plugin_receipt;
 pub use plugin_receipt::ReceiptDecision;
 mod recovery;
 pub(crate) mod runtime;
+mod session_message_call;
 mod transition;
 
 pub use gents_loop::tool_call_lifecycle::{FailureClass, ToolOutcome};

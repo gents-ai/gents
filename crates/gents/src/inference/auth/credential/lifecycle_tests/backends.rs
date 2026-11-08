@@ -77,7 +77,7 @@ async fn each_accounts_backend_keeps_its_own_models() {
             enabled: true,
             tags: Vec::new(),
         };
-        crate::store::config_client::write_inference_backend_document(&access, &original)
+        crate::documents::write_inference_backend_document(&access, &original)
             .await
             .unwrap();
         store(&access, product.sign_in(&did, "a", "refresh-a")).await;
@@ -157,7 +157,7 @@ async fn a_lost_backend_comes_back_at_the_next_sign_in() {
             .transact_write("test.backend_rm", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                    crate::documents::apply_desired_state_plan(txn, plan).await
                 })
             })
             .await
@@ -195,7 +195,7 @@ async fn an_unrelated_invalid_profile_does_not_block_an_account_backend() {
         access
             .transact_readonly("test.invalid_profile", |txn| {
                 Box::pin(async move {
-                    crate::store::config_client::list_inference_profiles_in_txn(txn, did).await
+                    crate::documents::list_inference_profiles_in_txn(txn, did).await
                 })
             })
             .await

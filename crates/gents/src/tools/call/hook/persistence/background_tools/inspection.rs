@@ -19,7 +19,7 @@ impl DefraSessionHook {
                 WAIT_PROCESS_TOOL_NAME,
                 args,
                 parent_deadline_at,
-                crate::tools::call::lifecycle::AwaitMode::Foreground,
+                gents_protocol::tool_call::AwaitMode::Foreground,
             )
             .await?;
         lifecycle.start_running().await?;
@@ -138,7 +138,7 @@ impl DefraSessionHook {
                 LIST_PROCESSES_TOOL_NAME,
                 args,
                 deadline_at,
-                crate::tools::call::lifecycle::AwaitMode::Foreground,
+                gents_protocol::tool_call::AwaitMode::Foreground,
             )
             .await?;
         lifecycle.start_running().await?;
@@ -195,7 +195,7 @@ impl DefraSessionHook {
                 READ_PROCESS_TOOL_NAME,
                 args,
                 deadline_at,
-                crate::tools::call::lifecycle::AwaitMode::Foreground,
+                gents_protocol::tool_call::AwaitMode::Foreground,
             )
             .await?;
         lifecycle.start_running().await?;

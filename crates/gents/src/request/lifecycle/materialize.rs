@@ -1,12 +1,8 @@
 use super::*;
 use anyhow::Context;
-
-#[derive(Debug, Clone)]
-pub struct EnqueuedAgentRequest {
-    pub doc_id: String,
-    pub request_id: String,
-    pub session_id: String,
-}
+use gents_protocol::request_lifecycle::{
+    EnqueuedAgentRequest, SessionMessageCause, SessionMessageTarget,
+};
 
 /// A pending fire or EventGroup state persisted before the upgrade can still
 /// name a retired graph trigger as its cause; such a request is never created.
@@ -554,7 +550,7 @@ pub(crate) async fn write_pending_auxiliary_request(
     );
     let create = build_signed_request(spec, RequestSigner::Identity(signer)).await?;
     let mutation = create
-        .graphql_mutation_selecting(crate::request::watcher::AGENT_REQUEST_FIELDS)
+        .graphql_mutation_selecting(gents_protocol::row::AGENT_REQUEST_FIELDS)
         .map_err(anyhow::Error::msg)?;
     let response = crate::store::config_client::ConfigAccess::local_with_agent_signer(
         node.clone(),
@@ -568,79 +564,6 @@ pub(crate) async fn write_pending_auxiliary_request(
         "create_AgentRequest",
     )?
     .context("auxiliary request creation omitted its exact durable request")
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RequestHopCause {
-    Root,
-    CrossSession { cause_hop: u32 },
-    Return,
-    Continuation,
-}
-
-pub fn next_request_hop(cause: RequestHopCause, own: u32) -> u32 {
-    match cause {
-        RequestHopCause::Root => 0,
-        RequestHopCause::CrossSession { cause_hop } => own.max(cause_hop.saturating_add(1)),
-        RequestHopCause::Return | RequestHopCause::Continuation => own,
-    }
-}
-
-pub fn request_hop_within_bound(max_request_hop: Option<u32>, hop: u32) -> bool {
-    max_request_hop.is_none_or(|bound| hop <= bound)
-}
-
-/// Lean `CausalHop` observation of a Node's `max_request_hop`: only a Node the
-/// reader can see supplies a cap, so a hidden or absent Node is unavailable
-/// rather than unset.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RequestHopCapObservation {
-    Unavailable,
-    Visible(Option<u32>),
-}
-
-impl RequestHopCapObservation {
-    /// The cap a reader observed: `None` when it could not read the Node.
-    pub fn of(observed: Option<Option<u32>>) -> Self {
-        observed.map_or(Self::Unavailable, Self::Visible)
-    }
-
-    /// Lean `CausalHop.admitObservedHop`: no decision without a visible Node.
-    pub fn admit(self, hop: u32) -> Option<bool> {
-        match self {
-            Self::Unavailable => None,
-            Self::Visible(cap) => Some(request_hop_within_bound(cap, hop)),
-        }
-    }
-
-    /// Lean `CausalHop.observedHopBound`.
-    pub fn bound(self) -> Option<u32> {
-        match self {
-            Self::Unavailable => Some(0),
-            Self::Visible(cap) => cap,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct SessionMessageCause {
-    pub(crate) caller_node_did: String,
-    pub(crate) caller_agent_did: String,
-    pub(crate) caller_session_id: String,
-    pub(crate) caller_requester_did: Option<String>,
-    pub(crate) caller_request_id: String,
-    pub(crate) caller_request_doc_id: String,
-    pub(crate) caller_hop: u32,
-    pub(crate) tool_call_id: String,
-    pub(crate) tool_call_doc_id: String,
-    pub(crate) correlation: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct SessionMessageTarget {
-    pub(crate) node_did: String,
-    pub(crate) agent_did: String,
-    pub(crate) session_id: String,
 }
 
 /// A same-node session message is signed by the operator's own DID, so this
@@ -1114,7 +1037,7 @@ impl RequestLifecycle {
 }
 
 pub(super) struct LabeledSessionRows {
-    pub(super) decoded: Vec<session::SessionOwnerRow>,
+    pub(super) decoded: Vec<gents_protocol::session::SessionOwnerRow>,
     pub(super) undecodable: Vec<anyhow::Error>,
 }
 
@@ -1127,7 +1050,7 @@ async fn labeled_session_rows_in_txn(
             r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             escape_graphql_string(&request.node_did),
             escape_graphql_string(&request.session_id),
-            session::AGENT_SESSION_FIELDS,
+            gents_protocol::session::AGENT_SESSION_FIELDS,
         ))
         .await?;
     let rows = response["data"]["AgentSession"]
@@ -1136,7 +1059,7 @@ async fn labeled_session_rows_in_txn(
     let mut decoded = Vec::new();
     let mut undecodable = Vec::new();
     for row in rows {
-        match session::decode_session_row(row) {
+        match gents_protocol::session::decode_session_row(row) {
             Ok(row) => decoded.push(row),
             Err(error) => undecodable.push(error),
         }
@@ -1315,7 +1238,7 @@ pub(super) async fn apply_request_session_projection(
         now,
     )
     .await?;
-    let owner = session::load_agent_session_row_in_txn(
+    let owner = crate::store::config_client::agent_session::load_agent_session_row_in_txn(
         txn,
         &request.node_did,
         &request.session_id,
@@ -1400,7 +1323,7 @@ async fn project_refused_request_onto_session_in_txn(
         now,
     )
     .await?;
-    let owner = session::load_agent_session_row_in_txn(
+    let owner = crate::store::config_client::agent_session::load_agent_session_row_in_txn(
         txn,
         &request.node_did,
         &request.session_id,
@@ -1721,7 +1644,7 @@ async fn stage_task_delivery_with_receipt(
             );
             let generation = expected_event_source
                 .context("event source generation is required for admission")?;
-            crate::store::config_client::event_source_cursor::validate_event_admission(
+            crate::documents::event_consumer::validate_event_admission(
                 txn, fire, generation,
             )
             .await?;
@@ -1777,7 +1700,7 @@ async fn stage_task_delivery_with_receipt(
                 .identity
                 .trigger_id
                 .starts_with(&format!("manual:{}:", fire.task_id));
-        let session = crate::session::load_agent_session_row_in_txn(
+        let session = crate::store::config_client::agent_session::load_agent_session_row_in_txn(
             txn,
             &create.node_did,
             &create.session_id,
@@ -1849,7 +1772,7 @@ async fn stage_task_delivery_with_receipt(
     }
     let query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}) {{ {} }} }}",
         escape_graphql_string(&fire.identity.owner_did), escape_graphql_string(&fire.request_id),
-        crate::request::watcher::AGENT_REQUEST_FIELDS);
+        gents_protocol::row::AGENT_REQUEST_FIELDS);
     let response = txn.execute(&query).await?;
     let rows = response
         .pointer("/data/AgentRequest")
@@ -1888,7 +1811,7 @@ async fn stage_task_delivery_with_receipt(
                 | gents_protocol::request_admission::AgentRequestAdmissionKind::RuntimeInternal
         );
         if created || agent_owned {
-            let session = session::load_agent_session_row_in_txn(
+            let session = crate::store::config_client::agent_session::load_agent_session_row_in_txn(
                 txn,
                 &request.node_did,
                 &request.session_id,
@@ -1959,7 +1882,7 @@ async fn stage_task_delivery_with_receipt(
                 .await?;
             }
         }
-        let session = session::load_agent_session_row_in_txn(
+        let session = crate::store::config_client::agent_session::load_agent_session_row_in_txn(
             txn,
             &request.node_did,
             &request.session_id,
@@ -2219,7 +2142,7 @@ mod task_delivery_tests {
             task_id: "task".into(),
             request_id: format!("trigger-request:{key}"),
             session_id: session_id.clone(),
-            goal_id: Some(crate::goal::deterministic_goal_id(
+            goal_id: Some(gents_protocol::goal::deterministic_goal_id(
                 PIN_FIXED_DID,
                 &session_id,
             )),
@@ -2531,7 +2454,7 @@ mod task_delivery_tests {
         let request_row = access
             .execute(&format!(
                 "{{ AgentRequest {{ {} }} }}",
-                crate::request::watcher::AGENT_REQUEST_FIELDS
+                gents_protocol::row::AGENT_REQUEST_FIELDS
             ))
             .await
             .unwrap();

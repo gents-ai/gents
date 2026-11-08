@@ -1,11 +1,11 @@
 mod behavior;
-mod callback;
+pub mod callback;
 mod compaction;
 mod context;
 mod datastore_tool_surface;
 mod eval_definition;
-mod event_trigger;
-mod inference_backend;
+pub mod event_trigger;
+pub mod inference_backend;
 mod inference_execution;
 mod inference_profile;
 mod inference_sampling;
@@ -14,6 +14,10 @@ mod installation_validation;
 mod projection_acp;
 pub use projection_acp::parse_projection_resource_map;
 mod agent_target;
+pub mod automation;
+pub(crate) mod backend_credential;
+pub(crate) mod desired_state;
+pub(crate) mod event_consumer;
 mod pack_config;
 mod principal;
 mod references;
@@ -28,6 +32,7 @@ mod task_validation;
 pub mod template;
 mod tools;
 mod trigger;
+mod unattended_admission;
 mod write_tool;
 
 pub use principal::{load_node, Node};
@@ -37,6 +42,11 @@ pub use callback::{
     CallbackModule, PortCardinality, PortSpec, WorkspaceAgentSelection, WorkspaceReaderSelection,
 };
 pub use compaction::CompactionConfig;
+pub use desired_state::apply_desired_state_plan;
+#[allow(unused_imports)]
+pub(crate) use desired_state::{
+    apply_desired_state_plan_with_node_binding, validate_desired_state_plan,
+};
 pub use context::AgentContext;
 pub use eval_definition::{
     EvalCapture, EvalCase, EvalCheckRef, EvalContinuation, EvalDefinition, EvalFixtureDocument,
@@ -49,16 +59,19 @@ pub use installation::{
 pub use pack_config::PackConfig;
 pub(crate) use references::{references_of, RequiredReference};
 pub use references::{ConfigReferences, MissingReference};
+pub(crate) use unattended_admission::observe_unattended_agent_in_txn;
 
 #[allow(unused_imports)]
 pub(crate) use behavior::{list_agent_records, load_agent_record};
-pub use behavior::{list_agents, load_agent, upsert_agent, Agent};
+pub use behavior::{list_agents, load_agent, upsert_agent, write_agent_document, Agent};
 
 pub use inference_backend::{
     AdvertisedModel, BackendAuth, BackendAuthSelection, BackendAuthSelectionFields,
     BackendModelCatalog, ClaudePlatform, InferenceBackend, InferenceBackendMetadata,
     InferenceBackendObservation, InvalidBackendAuthSelection,
 };
+pub use inference_backend::write_inference_backend_document;
+pub(crate) use inference_backend::{backend_metadata_fields, write_inference_backend_in_txn};
 pub use inference_execution::{
     InferenceExecution, InferenceRetryPolicy, MAX_DEADLINE_DURATION_SECS,
 };
@@ -68,8 +81,8 @@ pub use inference_sampling::InferenceSampling;
 pub(crate) use inference_profile::load_inference_profile_record;
 pub use inference_profile::{
     default_inference_profile_id_for_agent, default_inference_profile_id_for_node,
-    list_inference_profile_records, load_inference_profile, upsert_inference_profile,
-    InferenceProfile,
+    list_inference_profile_records, list_inference_profiles_in_txn, load_inference_profile,
+    upsert_inference_profile, write_inference_profile_document, InferenceProfile,
 };
 
 pub use serde_helpers::deserialize_dual_shape;
@@ -90,7 +103,7 @@ pub(crate) use surface_tool::{
     validate_datastore_surface, DatastoreSurfaceScope, DatastoreToolSource,
 };
 pub use tools::{load_agent_context_and_tools_in_txn, load_agent_tools_in_txn};
-pub use tools::{unwire_plugin, wire_plugin, WireReport};
+pub use tools::{unwire_plugin, wire_plugin, write_tools_document, WireReport};
 pub use tools::{
     AgentTools, BashTools, BuiltInTools, CliTool, DatastoreTools, FileTools, HostTools,
     IntegrationTools, LspTools, PluginToolRef, RemoteServiceTools, RemoteToolStyle, RemoteTools,

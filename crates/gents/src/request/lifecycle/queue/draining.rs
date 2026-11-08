@@ -53,7 +53,7 @@ async fn drain_pending_session_requests_where_in_txn(
     reason: &str,
     should_drain: fn(&AgentRequestRow) -> bool,
 ) -> Result<Vec<String>> {
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentRequest(

@@ -153,7 +153,7 @@ async fn create_foreground_tool_call(hook: &DefraSessionHook) -> String {
         "foreground_tool",
         "{}",
         chrono::Utc::now() + chrono::Duration::minutes(5),
-        gents::tools::call::lifecycle::AwaitMode::Foreground,
+        gents_protocol::tool_call::AwaitMode::Foreground,
     )
     .await;
     lifecycle.start_running().await.unwrap();

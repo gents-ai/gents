@@ -232,9 +232,9 @@ async fn publish_readiness(
 ) {
     status
         .set_reconcile_phase(if settled {
-            crate::runtime::status::ReconcilePhase::Idle
+            gents_protocol::node_readiness::ReconcilePhase::Idle
         } else {
-            crate::runtime::status::ReconcilePhase::Applying
+            gents_protocol::node_readiness::ReconcilePhase::Applying
         })
         .await;
     let agent = selected_agent(db).await;
@@ -589,8 +589,9 @@ async fn unclaimed_goal_follows_live_reconcile_status_and_modeled_readiness() {
         build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
         RequestSigner, RequestSpec,
     };
-    use crate::runtime::status::{ReconcilePhase, RuntimeStatusHandle};
+    use crate::runtime::status::RuntimeStatusHandle;
     use crate::NodeIdentity;
+    use gents_protocol::node_readiness::ReconcilePhase;
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
 
     let db = test_db("goal-unclaimed-live-readiness").await;

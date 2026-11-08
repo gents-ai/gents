@@ -1,9 +1,10 @@
 use super::support::*;
 use super::*;
-use crate::runtime::status::{ReconcilePhase, RECONCILE_PHASE_EVENT_TARGET};
+use crate::runtime::status::RECONCILE_PHASE_EVENT_TARGET;
 use crate::store::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET;
 use crate::store::identity::NodeIdentity;
 use anyhow::Result;
+use gents_protocol::node_readiness::ReconcilePhase;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex as StdMutex;
 use tracing::field::{Field, Visit};
@@ -147,9 +148,7 @@ async fn write_documents(
     access
         .transact_write(operation, |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await
         .unwrap();
@@ -216,9 +215,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     user_access
         .transact_write("test.context.update", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await
         .unwrap();
@@ -687,7 +684,7 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
         "host": {"files": {"mode": "ReadOnly"}, "root": root_text}
     }))
     .unwrap();
-    crate::store::config_client::write_tools_document(&user_access, &tools)
+    crate::documents::write_tools_document(&user_access, &tools)
         .await
         .unwrap();
 
@@ -938,7 +935,7 @@ async fn write_tools_naming_plugin(
         "integrations": {"plugins": [{"plugin": "fixture/list_files"}]},
     }))
     .unwrap();
-    crate::store::config_client::write_tools_document(access, &tools)
+    crate::documents::write_tools_document(access, &tools)
         .await
         .unwrap();
 }

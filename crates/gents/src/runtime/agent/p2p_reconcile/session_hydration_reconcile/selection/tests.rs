@@ -127,7 +127,7 @@ async fn canonical_selection_enumerates_multiple_native_cursor_pages() {
             let request = &request;
             let expected = &expected;
             Box::pin(async move {
-                let filter = crate::session::session_scope_filter(
+                let filter = gents_protocol::session::session_scope_filter(
                     &request.node_did,
                     &request.session_id,
                     Some(&request.requester_did),
@@ -183,7 +183,7 @@ async fn hydration_segment_selection_uses_the_session_index() {
         requester_did: "did:key:requester-1".into(),
     };
     let collection = SessionHydrationCollection::AgentOutputSegment;
-    let scope = crate::session::origin::SessionScope {
+    let scope = gents_protocol::session::SessionScope {
         node_did: request.node_did,
         session_id: request.session_id,
         requester_did: Some(request.requester_did),

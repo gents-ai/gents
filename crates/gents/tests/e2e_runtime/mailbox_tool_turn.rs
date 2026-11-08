@@ -125,15 +125,16 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
             let did = did.clone();
             let user = turn.user.did().to_owned();
             Box::pin(async move {
-                let session = gents::session::load_agent_session_row_in_txn(
-                    txn,
-                    &did,
-                    "mailbox-tool-turn-session",
-                    Some(&user),
-                )
-                .await?
-                .unwrap()
-                .session;
+                let session =
+                    gents::store::config_client::agent_session::load_agent_session_row_in_txn(
+                        txn,
+                        &did,
+                        "mailbox-tool-turn-session",
+                        Some(&user),
+                    )
+                    .await?
+                    .unwrap()
+                    .session;
                 let observation = session.observation.unwrap();
                 assert_eq!(observation.preview.as_deref(), Some(prompt));
                 assert_eq!(

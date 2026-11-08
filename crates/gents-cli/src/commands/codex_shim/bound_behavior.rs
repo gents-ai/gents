@@ -47,9 +47,8 @@ mod tests {
 
     #[tokio::test]
     async fn same_labels_resolve_only_the_selected_node_binding() {
-        use gents::store::config_client::{
-            apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-        };
+        use gents::documents::apply_desired_state_plan;
+        use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         use gents::{Collection, NodeIdentity};
         use serde_json::json;
         // Two Nodes share the profile and backend labels; the second is a peer

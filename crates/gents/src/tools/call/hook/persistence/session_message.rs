@@ -192,7 +192,7 @@ impl DefraSessionHook {
                 }
             }
             (
-                crate::request::lifecycle::SessionMessageTarget {
+                gents_protocol::request_lifecycle::SessionMessageTarget {
                     node_did: target.target_node_did,
                     agent_did: target.agent_did,
                     session_id: uuid::Uuid::new_v4().to_string(),
@@ -249,7 +249,7 @@ impl DefraSessionHook {
                 if let Some(reason) = crate::session::message::interrupt_refusal(
                     &self.node,
                     &caller.agent_did,
-                    &crate::session::origin::SessionScope::of_request(&caller),
+                    &gents_protocol::session::SessionScope::of_request(&caller),
                     &crate::session::message::target_scope(&caller.agent_did, &target),
                 )
                 .await?
@@ -294,7 +294,7 @@ impl DefraSessionHook {
             .doc_id()
             .context("session-message dispatch lacks its physical row")?
             .to_owned();
-        let cause = crate::request::lifecycle::SessionMessageCause {
+        let cause = gents_protocol::request_lifecycle::SessionMessageCause {
             caller_node_did: caller.node_did.clone(),
             caller_agent_did: caller.agent_did.clone(),
             caller_session_id: caller.session_id.clone(),
@@ -645,7 +645,7 @@ impl DefraSessionHook {
         if let Some(reason) = crate::session::message::interrupt_refusal(
             &self.node,
             &caller.agent_did,
-            &crate::session::origin::SessionScope::of_request(&caller),
+            &gents_protocol::session::SessionScope::of_request(&caller),
             &target,
         )
         .await?

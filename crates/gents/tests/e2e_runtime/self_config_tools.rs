@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
+use gents::documents::apply_desired_state_plan;
 use gents::store::config_client::{
-    apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
-    DesiredStateApplyDocument, DesiredStateApplyPlan,
+    read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyDocument,
+    DesiredStateApplyPlan,
 };
 use gents::store::graphql::escape_graphql_string;
 use gents::tools::builtin::self_config::build_runtime_self_config_tools;

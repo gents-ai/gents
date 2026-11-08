@@ -62,7 +62,7 @@ pub(crate) async fn finish_goal_relationships(
     access.transact_write("goal.repair_relationships", |txn| {
         let actor = &actor;
         Box::pin(async move {
-            let session = crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+            let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, node_did, session_id)
                 .await?.context("Goal publication session is unavailable")?;
             let parent = escape_graphql_string(&session.doc_id);
             let creator = escape_graphql_string(actor);
@@ -103,9 +103,11 @@ pub(crate) async fn load_goal_creation_claim_fingerprint_in_txn(
     node_did: &str,
     session_id: &str,
 ) -> Result<Option<GoalCreationFingerprint>> {
-    let session = crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
-        .await?
-        .context("goal claim requires a visible physical session")?;
+    let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+        txn, node_did, session_id,
+    )
+    .await?
+    .context("goal claim requires a visible physical session")?;
     // Read through the transaction's own backend: client creates reconcile a
     // lost race over HTTP, where an embedded-only response is unavailable.
     let response = txn
@@ -262,9 +264,11 @@ pub(super) async fn stage_goal_and_claim(
         .unwrap_or_else(|| deterministic_goal_creation_key(node_did, session_id));
     let escaped_did = escape_graphql_string(node_did);
     let escaped_session = escape_graphql_string(session_id);
-    let session = crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
-        .await?
-        .context("goal creation requires a visible physical session")?;
+    let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+        txn, node_did, session_id,
+    )
+    .await?
+    .context("goal creation requires a visible physical session")?;
     let creator = txn
         .actor_did()
         .context("goal creation requires an authenticated actor")?;

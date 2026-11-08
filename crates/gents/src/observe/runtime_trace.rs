@@ -3,7 +3,7 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use opentelemetry::global;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::request::watcher::AgentRequest;
+use gents_protocol::row::AgentRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RequestTraceAttrs {

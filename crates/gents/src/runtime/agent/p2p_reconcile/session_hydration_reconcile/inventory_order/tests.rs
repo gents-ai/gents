@@ -1,9 +1,9 @@
 use super::*;
 use crate::runtime::agent::p2p_reconcile::session_hydration::HydrationDocument;
 use crate::runtime::agent::p2p_reconcile::session_hydration_closure::CanonicalPublicationOrigin;
-use crate::session::canonical_rows::TranscriptMessageRow;
 use gents_protocol::file_inventory::{FileChangeMetadata, FileImageMetadata};
 use gents_protocol::output::origin::{lookup_message, resolve_origin, ObservedMessage};
+use gents_protocol::output::rows::TranscriptMessageRow;
 use gents_protocol::output::{OutputOutcome, PayloadRef, TranscriptMessage};
 use gents_protocol::session_hydration::{HydrationRequest, SessionHydrationCollection};
 use serde_json::{json, Value};
@@ -173,7 +173,7 @@ fn message(value: &Value, selected: &Value) -> TranscriptMessageRow {
     }
 }
 
-fn segment(value: &Value, selected: &Value) -> crate::session::canonical_rows::OutputSegmentRow {
+fn segment(value: &Value, selected: &Value) -> gents_protocol::output::rows::OutputSegmentRow {
     let coordinate = &value["coordinate"];
     let source = &coordinate["source"];
     let source = match source["kind"].as_str().unwrap() {
@@ -188,7 +188,7 @@ fn segment(value: &Value, selected: &Value) -> crate::session::canonical_rows::O
         json!({"stream":run["stream"],"bytes":run["bytes"],"declaration":{
             "block_index":declaration["block"],"part_index":declaration["part"],"payload":{"kind":declaration["kind"]}}})
     }).collect::<Vec<_>>()).unwrap_or_default();
-    crate::session::canonical_rows::OutputSegmentRow {
+    gents_protocol::output::rows::OutputSegmentRow {
         doc_id: document(&value["id"]),
         segment: serde_json::from_value(json!({
             "node_did":selected["admission"]["node"], "requester_did":selected["admission"]["requester"],

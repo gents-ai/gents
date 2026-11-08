@@ -136,9 +136,9 @@ async fn configure_seed_and_compaction(
     agent_did: &str,
     profile_id: &str,
 ) {
+    use gents::documents::apply_desired_state_plan;
     use gents::store::config_client::{
-        apply_desired_state_plan, read_desired_state_record_in_txn as read,
-        DesiredStateApplyDocument, DesiredStateApplyPlan,
+        read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
 
     actors

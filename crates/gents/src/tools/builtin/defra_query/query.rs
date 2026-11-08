@@ -2,7 +2,8 @@ use anyhow::{anyhow, bail, Result};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::render::{render_filter, validate_identifier};
+use super::render::render_filter;
+use crate::store::config_client::schema_introspection::validate_identifier;
 
 pub const DEFAULT_LIMIT: u32 = 50;
 /// Caps database rows per query to bound result allocation and provider input.

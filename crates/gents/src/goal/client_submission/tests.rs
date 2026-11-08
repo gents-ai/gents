@@ -33,7 +33,7 @@ async fn cross_actor_stale_goal_rejection_is_durable_and_recoverable() {
     let session = access
         .transact_readonly("test.blocked_session", |txn| {
             Box::pin(async {
-                crate::session::load_agent_session_owner_in_txn(
+                crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
                     txn,
                     identity.did(),
                     crate::goal::operator_resume::support::SESSION,

@@ -428,9 +428,8 @@ impl McpFixture {
         mcp_port: u16,
         enabled: bool,
     ) -> Result<()> {
-        use gents::store::config_client::{
-            apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-        };
+        use gents::documents::apply_desired_state_plan;
+        use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         let value = serde_json::json!({"node_did":self.node_did,"service_id":service_id,"display_name":"Fixture MCP","description":"MCP probe fixture","hostname":hostname,"tailscale_ip":tailscale_ip,"lan_ip":lan_ip,"mcp_port":mcp_port,"mcp_path":"/mcp","enabled":enabled});
         if mcp_port == 0 || [hostname, tailscale_ip, lan_ip].iter().all(|address| address.is_empty()) {
             return self.seed_unvalidated(&value).await;

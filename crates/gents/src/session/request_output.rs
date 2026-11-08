@@ -13,7 +13,7 @@ use gents_protocol::transcript::present_message;
 
 use crate::store::config_client::ConfigAccess;
 
-use super::canonical_rows::{
+use gents_protocol::output::rows::{
     decode_scoped_canonical_rows, decode_scoped_request_output_segments,
     decode_transcript_message_row, request_output_facts_query, OutputSegmentRow,
     TranscriptMessageRow,

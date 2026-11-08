@@ -23,7 +23,7 @@ use crate::lean_vocab_test::{
     LeanReasoningPart,
 };
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
-use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
+use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 use crate::store::config_client::ConfigAccess;
 
 #[tokio::test]
@@ -394,7 +394,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
     let query = format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
         crate::store::graphql::escape_graphql_string(&request_id),
-        crate::request::watcher::AGENT_REQUEST_FIELDS,
+        gents_protocol::row::AGENT_REQUEST_FIELDS,
     );
     let response = access.execute(&query).await.unwrap();
     let row: gents_protocol::row::AgentRequestRow =

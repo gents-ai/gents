@@ -124,7 +124,7 @@ where
     F: Fn(&str) -> String + Sync,
 {
     let session_id = request.session_id.as_str();
-    let scope = crate::session::session_scope_filter(
+    let scope = gents_protocol::session::session_scope_filter(
         &request.node_did,
         session_id,
         request.requester_did.as_deref(),
@@ -195,9 +195,9 @@ where
                 match crate::goal::fence_goal_continuation_claim_in_txn(
                     txn, request, claimed_at, client && request.input.goal_continuation.is_some(),
                 ).await? {
-                    crate::goal::GoalClaimFence::Allowed => {}
-                    crate::goal::GoalClaimFence::Retired => return Ok(None),
-                    crate::goal::GoalClaimFence::Rejected => {
+                    gents_protocol::goal::GoalClaimFence::Allowed => {}
+                    gents_protocol::goal::GoalClaimFence::Retired => return Ok(None),
+                    gents_protocol::goal::GoalClaimFence::Rejected => {
                         let rejected = reject_pending_admission_in_txn(
                             txn, request, "request authorization denied", claimed_at,
                         ).await?;
@@ -235,7 +235,7 @@ where
                             && current.retry_parent_request.as_deref() == Some(parent.request_id.as_str())
                             && current.caused_by_parent_request_doc_id.as_deref() == Some(parent_doc),
                             "background retry does not name its physical failed wake");
-                        crate::request::admission::verify_runtime_local_control_receipt(current,
+                        crate::store::identity::request_receipt::verify_runtime_local_control_receipt(current,
                             &request.node_did, &parent.request_id,
                             request.requester_did.as_deref().unwrap_or(&request.agent_did))?;
                         let receipt = txn.execute(&format!(r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{background_completion_input_through_sequence background_completion_notification_keys_json}}}}"#,
@@ -800,7 +800,7 @@ impl RequestLifecycle {
         let escaped_deadline = escape_graphql_string(&deadline);
         let escaped_backend_id = escape_graphql_string(&self.backend_id);
         let execution_origin = self.execution_origin.as_str();
-        let request_fields = crate::request::watcher::AGENT_REQUEST_FIELDS;
+        let request_fields = gents_protocol::row::AGENT_REQUEST_FIELDS;
 
         // The generation is written on every successful claim and never cleared
         // when the same physical request resumes; it distinguishes an unclaimed
@@ -1201,7 +1201,7 @@ mod tests {
                 }}) {{ {fields} }}
             }}"#,
             max_retries = DEFAULT_REQUEST_MAX_RETRIES,
-            fields = crate::request::watcher::AGENT_REQUEST_FIELDS,
+            fields = gents_protocol::row::AGENT_REQUEST_FIELDS,
         );
         let agent = identity::Did::new(test_agent_did()).unwrap();
         root_access(node)
@@ -1237,7 +1237,7 @@ mod tests {
         let response = agent_access(node)
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#,
-                crate::request::watcher::AGENT_REQUEST_FIELDS,
+                gents_protocol::row::AGENT_REQUEST_FIELDS,
             ))
             .await
             .unwrap();
@@ -1938,13 +1938,13 @@ mod tests {
             .execute(&format!(
                 "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
                 escape_graphql_string(&doc),
-                crate::request::admission::SIGNED_REQUEST_FIELDS
+                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
             ))
             .await
             .unwrap();
         let row: gents_protocol::row::AgentRequestRow =
             serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-        crate::verify_request_receipt_signature(&row).unwrap();
+        crate::store::identity::request_receipt::verify_request_receipt_signature(&row).unwrap();
         (row.try_into().unwrap(), parent_doc)
     }
 
@@ -2101,11 +2101,11 @@ mod tests {
             .execute(&format!(
                 "{{ AgentMessage(filter: {{ message_key: {{ _eq: \"{}\" }} }}) {{ {} }} }}",
                 escape_graphql_string(origin_key),
-                crate::session::canonical_rows::AGENT_MESSAGE_FIELDS
+                gents_protocol::output::rows::AGENT_MESSAGE_FIELDS
             ))
             .await
             .unwrap();
-        let origin = crate::session::canonical_rows::decode_transcript_message_row(
+        let origin = gents_protocol::output::rows::decode_transcript_message_row(
             &response["data"]["AgentMessage"][0],
         )
         .unwrap();
@@ -2121,8 +2121,8 @@ mod tests {
                 let imported = imported.clone();
                 Box::pin(async move {
                     txn.execute_with_variables(
-                        crate::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
-                        &crate::session::canonical_rows::fork_message_bound_variables(
+                        gents_protocol::output::rows::CREATE_AGENT_MESSAGE_MUTATION,
+                        &crate::store::config_client::session_children::fork_message_bound_variables(
                             txn, &imported,
                         )
                         .await?,

@@ -156,7 +156,7 @@ async fn generated_authored_input_is_durable_before_provider_stream_entry() {
                 };
                 assert_eq!(
                     header["message_key"],
-                    crate::session::canonical_rows::authored_message_key(&doc_id, "prompt"),
+                    gents_protocol::output::rows::authored_message_key(&doc_id, "prompt"),
                     "{}",
                     case.name
                 );
@@ -1256,7 +1256,7 @@ async fn drive_generated_turn_input(
     for (header, authored) in headers.iter().zip(&case.authored) {
         assert_eq!(
             header["message_key"],
-            crate::session::canonical_rows::authored_message_key(
+            gents_protocol::output::rows::authored_message_key(
                 &head.doc_id,
                 &generated_authored_key(&authored.key, &docs)
             ),

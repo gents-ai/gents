@@ -140,7 +140,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                             .into_iter()
                             .find(|r| r.request_id == receipt.request_id)
                             .unwrap();
-                        let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();
+                        let request = gents_protocol::row::AgentRequest::try_from(row).unwrap();
                         let (_authority_owner, authority) =
                             crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
                         let verifier =
@@ -174,7 +174,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                             .await
                             .unwrap();
                         assert_eq!(
-                            allowed == crate::goal::GoalClaimFence::Allowed,
+                            allowed == gents_protocol::goal::GoalClaimFence::Allowed,
                             opening_is_entry,
                             "the publication must pass the modeled assignment-opening claim fence"
                         );

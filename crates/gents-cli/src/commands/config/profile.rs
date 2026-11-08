@@ -98,7 +98,7 @@ async fn list_candidates(
     } else {
         Vec::new()
     };
-    let plan = gents::store::config_client::switch_candidates(
+    let plan = gents::inference::profile_switch::switch_candidates(
         access,
         node_did,
         profile_id,
@@ -165,7 +165,7 @@ async fn set_account(
     plugin_slots: &[String],
 ) -> Result<Value> {
     let backend_id = backend_for_account(access, node_did, account, provider).await?;
-    let receipt = gents::store::config_client::switch_profile_account(
+    let receipt = gents::inference::profile_switch::switch_profile_account(
         access,
         node_did,
         profile_id,
@@ -256,8 +256,7 @@ async fn write_checked(
             gents::inference::auth::credential::enabled_accounts_note(provider, &snapshot.accounts)
         );
     }
-    let doc_id =
-        gents::store::config_client::write_inference_profile_document(access, profile).await?;
+    let doc_id = gents::documents::write_inference_profile_document(access, profile).await?;
     let mut output = json!({"doc_id":doc_id,"node_did":profile.node_did,"profile_id":profile.profile_id,"backend_id":profile.backend_id,"model_name":profile.model_name});
     if let Some(account) = account {
         output["account"] = serde_json::to_value(account)?;
@@ -477,7 +476,7 @@ mod tests {
             "model_name": "model-x",
         }))
         .unwrap();
-        gents::store::config_client::write_inference_profile_document(access, &profile)
+        gents::documents::write_inference_profile_document(access, &profile)
             .await
             .unwrap();
     }
@@ -516,7 +515,7 @@ mod tests {
                 json!({"kind": "api_key", "key": "key-SECRET"}),
             ),
         ] {
-            gents::store::config_client::write_inference_backend_document(
+            gents::documents::write_inference_backend_document(
                 &access,
                 &serde_json::from_value(value).unwrap(),
             )
@@ -783,7 +782,7 @@ mod tests {
     #[tokio::test]
     async fn an_account_with_several_backends_is_ambiguous() {
         let (access, _, _) = seeded().await;
-        gents::store::config_client::write_inference_backend_document(
+        gents::documents::write_inference_backend_document(
             &access,
             &serde_json::from_value(backend(
                 "claude-2",
@@ -893,7 +892,7 @@ mod tests {
             .transact_write("test.profile.agents", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    gents::store::config_client::apply_desired_state_plan(txn, plan)
+                    gents::documents::apply_desired_state_plan(txn, plan)
                         .await
                         .map(|_| ())
                 })
@@ -918,7 +917,7 @@ mod tests {
         assert_eq!(output["companions"], json!(["summ"]));
         assert_eq!(
             output["cost"],
-            json!(gents::store::config_client::SWITCH_COST)
+            json!(gents::inference::profile_switch::SWITCH_COST)
         );
         let candidates: Vec<_> = output["candidates"]
             .as_array()
@@ -960,7 +959,7 @@ mod tests {
         assert_eq!(output["agents"], json!(agent_dids(["x", "y"])));
         assert_eq!(
             output["cost"],
-            json!(gents::store::config_client::SWITCH_COST)
+            json!(gents::inference::profile_switch::SWITCH_COST)
         );
         assert_eq!(output["companions_offered"], json!(["summ"]));
         assert_eq!(output["companions_moved"], json!([]));
@@ -988,7 +987,7 @@ mod tests {
         gents::inference::auth::credential::upsert_oauth_credential_on(&access, &grok)
             .await
             .unwrap();
-        gents::store::config_client::write_inference_backend_document(
+        gents::documents::write_inference_backend_document(
             &access,
             &serde_json::from_value(backend(
                 "xai-oauth-acct-g",
@@ -1012,7 +1011,7 @@ mod tests {
     #[tokio::test]
     async fn set_account_moves_an_api_key_profile_and_counts_its_plugin_slots() {
         let (access, _, _) = seeded().await;
-        gents::store::config_client::write_inference_backend_document(
+        gents::documents::write_inference_backend_document(
             &access,
             &serde_json::from_value(backend(
                 "openai-2",

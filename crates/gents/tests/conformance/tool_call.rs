@@ -14,7 +14,7 @@ fn cancel_cause_vocabulary_matches_production() {
 
 #[test]
 fn lean_emits_await_mode_vocabulary() {
-    use gents::tools::call::lifecycle::AwaitMode;
+    use gents_protocol::tool_call::AwaitMode;
 
     assert_eq!(
         lean_vocabulary_values("AwaitMode"),

@@ -69,7 +69,8 @@ pub(super) async fn load_thread_turns(
         .as_ref()
         .map(|link| (link.node_did.as_str(), link.requester_did.as_deref()))
         .unwrap_or((state.node_did.as_ref(), Some(state.local_requester_did())));
-    let session_scope = gents::session::session_scope_filter(owner, &record.session_id, requester);
+    let session_scope =
+        gents_protocol::session::session_scope_filter(owner, &record.session_id, requester);
     let request_scope = gents::session::public_request_filter(&session_scope);
     let query = format!(
         r#"{{
@@ -119,7 +120,7 @@ pub(super) async fn load_thread_turns(
                 {}
             }}
         }}"#,
-        gents::session::canonical_rows::AGENT_MESSAGE_FIELDS,
+        gents_protocol::output::rows::AGENT_MESSAGE_FIELDS,
     );
     let response = query_node_json(&state.reader, &query).await?;
 
@@ -741,7 +742,7 @@ async fn decode_canonical_message_rows(
     let mut messages = Vec::new();
     let mut physical_ids = BTreeSet::new();
     for raw in raw_rows(response, "AgentMessage") {
-        let observed = gents::session::canonical_rows::decode_transcript_message_row(&raw)
+        let observed = gents_protocol::output::rows::decode_transcript_message_row(&raw)
             .context("decoding canonical AgentMessage header")?;
         anyhow::ensure!(
             physical_ids.insert(observed.doc_id.clone()),

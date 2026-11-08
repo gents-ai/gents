@@ -7,10 +7,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::target::session_target_allowed;
-use crate::session::origin::{SessionLineage, SessionScope};
+use crate::session::origin::SessionLineage;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
 use crate::tools::surface::AgentToolConfig;
+use gents_protocol::session::SessionScope;
 
 const PAGE_SIZE: usize = 100;
 const SCAN_PAGES: usize = 10;
@@ -95,8 +96,8 @@ struct SessionScopeCursor {
     requester_did: Option<String>,
 }
 
-impl From<&crate::AgentRequest> for SessionScopeCursor {
-    fn from(caller: &crate::AgentRequest) -> Self {
+impl From<&gents_protocol::row::AgentRequest> for SessionScopeCursor {
+    fn from(caller: &gents_protocol::row::AgentRequest) -> Self {
         Self {
             node_did: caller.node_did.clone(),
             session_id: caller.session_id.clone(),
@@ -144,7 +145,7 @@ async fn matches_trigger(
     if filter.caused_by_trigger_id.is_none() && filter.caused_by_correlation.is_none() {
         return Ok(true);
     }
-    let mut predicate = crate::session::session_scope_filter(
+    let mut predicate = gents_protocol::session::session_scope_filter(
         &session.node_did,
         &session.session_id,
         session.requester_did.as_deref(),
@@ -171,7 +172,7 @@ async fn matches_trigger(
 
 pub(crate) async fn agent_session_list(
     node: &Arc<EmbeddedNode>,
-    caller: &crate::AgentRequest,
+    caller: &gents_protocol::row::AgentRequest,
     tools: &AgentToolConfig,
     args: &AgentSessionListArgs,
 ) -> Result<Value> {
@@ -242,7 +243,7 @@ pub(crate) async fn agent_session_list(
         if let Some(after) = &cursor {
             predicates.push(format!("{{_or: [{{created_at: {{_lt: {time}}}}}, {{created_at: {{_eq: {time}}}, session_id: {{_lt: {session}}}}}, {{created_at: {{_eq: {time}}}, session_id: {{_eq: {session}}}, node_did: {{_lt: {node}}}}}]}}", time=quoted(&after.created_at), session=quoted(&after.session_id), node=quoted(&after.node_did)));
         }
-        let response = access.execute(&format!("{{AgentSession(filter: {{_and: [{}]}}, order: [{{created_at: DESC}}, {{session_id: DESC}}, {{node_did: DESC}}], limit: {PAGE_SIZE}) {{{}}}}}", predicates.join(","), crate::session::AGENT_SESSION_FIELDS)).await?;
+        let response = access.execute(&format!("{{AgentSession(filter: {{_and: [{}]}}, order: [{{created_at: DESC}}, {{session_id: DESC}}, {{node_did: DESC}}], limit: {PAGE_SIZE}) {{{}}}}}", predicates.join(","), gents_protocol::session::AGENT_SESSION_FIELDS)).await?;
         let rows = response["data"]["AgentSession"]
             .as_array()
             .context("session list omitted canonical rows")?;
@@ -251,7 +252,7 @@ pub(crate) async fn agent_session_list(
             break;
         }
         for (index, row) in rows.iter().enumerate() {
-            let session = crate::session::decode_session_row(row)?.session;
+            let session = gents_protocol::session::decode_session_row(row)?.session;
             let after = Cursor {
                 caller: SessionScopeCursor::from(caller),
                 filter: filter.clone(),

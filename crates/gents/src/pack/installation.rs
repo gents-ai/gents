@@ -542,13 +542,10 @@ pub(crate) async fn install_in_txn(
     let plan = super::provenance::prepare_pack_plan_in_txn(txn, &applied)
         .await?
         .with_removals(removals)?;
-    crate::store::config_client::validate_desired_state_plan(txn, &plan).await?;
-    report.applied = crate::store::config_client::apply_desired_state_plan_with_node_binding(
-        txn,
-        &plan,
-        node_binding,
-    )
-    .await?;
+    crate::documents::validate_desired_state_plan(txn, &plan).await?;
+    report.applied =
+        crate::documents::apply_desired_state_plan_with_node_binding(txn, &plan, node_binding)
+            .await?;
     report.plugins = pack.plugins.clone();
     let written: Vec<(Collection, &str)> = recorded
         .iter()
@@ -766,8 +763,19 @@ async fn record_plugin_store_change_with_stage(
         .transact_write_with_finality("pack.record_plugin_store", |txn| {
             Box::pin(async move {
                 if let Some(changes) = changes {
-                    txn.stage_plugin_delete_roots(&changes.previous, &changes.installed)
-                        .await?;
+                    txn.stage_plugin_delete_roots(
+                        &changes
+                            .previous
+                            .iter()
+                            .map(|plugin| plugin.projected())
+                            .collect::<Vec<_>>(),
+                        &changes
+                            .installed
+                            .iter()
+                            .map(|plugin| plugin.projected())
+                            .collect::<Vec<_>>(),
+                    )
+                    .await?;
                 }
                 write_plugin_record(txn, owner, home, coordinate, installed, node_binding).await
             })
@@ -1017,9 +1025,8 @@ async fn remove_record_in_txn(
     }
 
     let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(removals)?;
-    crate::store::config_client::validate_desired_state_plan(txn, &plan).await?;
-    report.documents.applied =
-        crate::store::config_client::apply_desired_state_plan(txn, &plan).await?;
+    crate::documents::validate_desired_state_plan(txn, &plan).await?;
+    report.documents.applied = crate::documents::apply_desired_state_plan(txn, &plan).await?;
 
     txn.delete_configuration_document(RECORD, &doc_id).await?;
 

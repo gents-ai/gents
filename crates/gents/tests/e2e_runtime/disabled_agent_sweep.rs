@@ -18,9 +18,9 @@ const BACKEND: &str = "disabled-sibling-backend";
 const MARKER: &str = "disabled-sibling-marker";
 
 async fn disable_agent(access: &gents::ConfigAccess, node_did: &str, agent_did: &str) {
+    use gents::documents::apply_desired_state_plan;
     use gents::store::config_client::{
-        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
-        DesiredStateApplyPlan,
+        read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     access
         .transact_write("test.disabled_agent_sweep.disable", |txn| {

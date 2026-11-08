@@ -6,13 +6,13 @@ use tempfile::TempDir;
 
 use super::snapshot::DEFINITION_FILE;
 use super::*;
+use crate::documents::apply_desired_state_plan;
 use crate::documents::EvalSplit;
 use crate::eval::invalidate_run;
 use crate::eval::runner::embedded::EmbeddedHome;
 use crate::eval::scoring::PILOT_PURPOSE;
 use crate::store::config_client::{
-    apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
-    DesiredStateApplyPlan,
+    read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 
 pub(crate) struct Launching {

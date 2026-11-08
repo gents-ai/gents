@@ -10,10 +10,10 @@ use crate::inference::resolved::{ReasoningEffort, ResolvedAgent};
 use crate::openai_wire::OpenAiWireApi;
 use crate::provider_usage;
 use crate::request::lifecycle::ExecutionOrigin;
-use crate::request::watcher::AgentRequest;
 use crate::runtime::agent::completion_retry::CompletionRetryPolicy;
 use crate::runtime::agent::loop_stream::{AggregateTokenBudget, LoopConfig};
 use crate::store::graphql::escape_graphql_string;
+use gents_protocol::row::AgentRequest;
 
 pub(crate) fn effective_max_tokens(
     max_output_tokens: usize,

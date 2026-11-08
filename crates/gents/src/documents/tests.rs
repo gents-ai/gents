@@ -1,5 +1,5 @@
 use super::*;
-use crate::store::config_client::write_tools_document;
+use crate::documents::write_tools_document;
 
 #[test]
 fn tools_document_accepts_empty_string_arrays_and_null_groups() {
@@ -733,7 +733,7 @@ async fn tools_document_round_trips_write_tools() {
             let surface = &surface;
             let decls = &decls;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await?;
+                crate::documents::apply_desired_state_plan(txn, plan).await?;
                 let merged = super::merge_datastore_tool_surfaces(tools, [surface])?;
                 assert_eq!(
                     merged.write_tools, *decls,
@@ -854,7 +854,7 @@ async fn agent_description_round_trip_with_explicit_owner_fixture() {
         .transact_write("test.agent.description", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                crate::documents::apply_desired_state_plan(txn, plan).await
             })
         })
         .await
@@ -943,7 +943,7 @@ async fn inference_retry_policy_fields_round_trip() {
         .transact_write("test.retry_chain.write", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                crate::documents::apply_desired_state_plan(txn, plan).await
             })
         })
         .await

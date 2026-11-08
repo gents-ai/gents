@@ -6,6 +6,9 @@ use gents_loop::rig_compat::CachedInputTokensObservation;
 
 use super::client::AdmissionError;
 use super::controller::InferenceCallRecord;
+use crate::store::config_client::session_children::{
+    session_child_binding_for_request_in_txn, SessionChildSource,
+};
 use crate::store::graphql::escape_graphql_string;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -58,16 +61,15 @@ async fn create_call_in_txn(
     call: &InferenceCallRecord,
     mutation: &str,
 ) -> Result<String> {
-    let (session_doc_id, agent_did) =
-        crate::session::canonical_rows::session_child_binding_for_request_in_txn(
-            txn,
-            &call.node_did,
-            &call.session_id,
-            call.requester_did.as_deref(),
-            &call.request_doc_id,
-            crate::session::canonical_rows::SessionChildSource::Request(call.request_purpose),
-        )
-        .await?;
+    let (session_doc_id, agent_did) = session_child_binding_for_request_in_txn(
+        txn,
+        &call.node_did,
+        &call.session_id,
+        call.requester_did.as_deref(),
+        &call.request_doc_id,
+        SessionChildSource::Request(call.request_purpose),
+    )
+    .await?;
     anyhow::ensure!(
         agent_did == call.agent_did,
         "inference call agent differs from session agent"

@@ -420,7 +420,7 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             escape_graphql_string(&enqueued.doc_id),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ))
         .await
         .unwrap();
@@ -431,7 +431,7 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
             .unwrap_or_else(|| Value::Array(Vec::new())),
     )
     .unwrap();
-    let request = crate::request::watcher::AgentRequest::try_from(
+    let request = gents_protocol::row::AgentRequest::try_from(
         request_rows
             .into_iter()
             .next()
@@ -995,8 +995,7 @@ async fn signer_as_actor(node: &EmbeddedNode, actor: &str, cid: &str) -> anyhow:
     let (block, signature) = node.authorized_signed_block_bytes(cid, Some(actor)).await?;
     let block = defra_core::block::Block::from_dag_cbor(&block)?;
     let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
-    db::block::verify::verified_signature_signer_did(&block, &signature)
-        .map_err(anyhow::Error::msg)
+    db::block::verify::verified_signature_signer_did(&block, &signature).map_err(anyhow::Error::msg)
 }
 
 #[tokio::test]
@@ -1018,12 +1017,8 @@ async fn remote_client_signs_conditional_mailbox_dismissal() -> anyhow::Result<(
     );
     let owner_context =
         defra_core::RequestContext::default().with_identity(Some(actor.did().to_owned()));
-    node.add_dac_policy_with_counter_as(
-        &owner_context,
-        gents_protocol::schemas::MAILBOX_POLICY,
-        0,
-    )
-    .await?;
+    node.add_dac_policy_with_counter_as(&owner_context, gents_protocol::schemas::MAILBOX_POLICY, 0)
+        .await?;
     node.add_collection(gents_protocol::schemas::MAILBOX_ITEM)
         .await?;
     let endpoint = crate::store::config_client::GraphqlEndpoint::as_principal(
@@ -1046,7 +1041,10 @@ async fn remote_client_signs_conditional_mailbox_dismissal() -> anyhow::Result<(
     let row = &created["data"]["add_MailboxItem"][0];
     let doc_id = row["_docID"].as_str().unwrap();
     let initial_cid = row["_version"][0]["cid"].as_str().unwrap();
-    assert_eq!(signer_as_actor(&node, actor.did(), initial_cid).await?, actor.did());
+    assert_eq!(
+        signer_as_actor(&node, actor.did(), initial_cid).await?,
+        actor.did()
+    );
     let dismissed = dismiss_mailbox_item_on(&access, doc_id).await?;
     assert_eq!(dismissed.status, "dismissed");
     let query = format!(

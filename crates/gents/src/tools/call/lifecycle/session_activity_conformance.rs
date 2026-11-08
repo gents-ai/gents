@@ -86,7 +86,7 @@ async fn tool_publications_follow_lean_session_activity() {
                     &format!(r#"mutation($input: AgentSessionMutationInputArg!) {{ update_AgentSession(filter: {{ session_id: {{ _eq: "{session}" }} }}, input: $input) {{ _docID }} }}"#),
                     &serde_json::json!({"input":{"observation":before}}),
                 ).await?;
-                Ok::<_, anyhow::Error>(crate::session::load_agent_session_row_in_txn(txn, &agent, &session_id, requester.as_deref())
+                Ok::<_, anyhow::Error>(crate::store::config_client::agent_session::load_agent_session_row_in_txn(txn, &agent, &session_id, requester.as_deref())
                     .await?.unwrap().session)
             })
         }).await.unwrap();
@@ -136,7 +136,7 @@ async fn tool_publications_follow_lean_session_activity() {
                     let requester = requester.clone();
                     Box::pin(async move {
                         Ok::<_, anyhow::Error>(
-                            crate::session::load_agent_session_row_in_txn(
+                            crate::store::config_client::agent_session::load_agent_session_row_in_txn(
                                 txn,
                                 &agent,
                                 &session_id,

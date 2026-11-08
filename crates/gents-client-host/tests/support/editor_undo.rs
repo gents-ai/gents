@@ -157,7 +157,7 @@ pub async fn verify(
     let value = access.execute(&format!(
         r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, purpose: {{_eq: "normal"}}}}) {{ {} }} Goal(filter: {{node_did: {{_eq: "{}"}}}}) {{ {} }} AgentSessionGoalControl(filter: {{node_did: {{_eq: "{}"}}}}) {{ _docID intent_json }} AgentSessionGoalReceipt {{ command_doc_id command_id receipt_json }} AgentSession(filter: {{node_did: {{_eq: "{}"}}}}) {{ session_id agent_did }} }}"#,
         escape_graphql_string(node), gents::SIGNED_REQUEST_FIELDS,
-        escape_graphql_string(node), gents::goal::GOAL_FIELDS, escape_graphql_string(node), escape_graphql_string(node),
+        escape_graphql_string(node), gents_protocol::goal::GOAL_FIELDS, escape_graphql_string(node), escape_graphql_string(node),
     )).await?;
     let rows: Vec<AgentRequestRow> = serde_json::from_value(value["data"]["AgentRequest"].clone())?;
     let mut sessions = std::collections::BTreeSet::new();

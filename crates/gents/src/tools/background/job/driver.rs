@@ -24,6 +24,7 @@ use super::control::{
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::PluginVerdict;
 use crate::store::config_client::ConfigAccess;
+use crate::tools::background::agent_identity_watch::AgentIdentityWatch;
 
 pub(super) use context::step_context_for;
 pub(super) use output::{guest_state_of, progress_of, scratch_of, settlement_of, writes_of};
@@ -36,8 +37,7 @@ pub(super) use settle::{refusal_text, terminal_text};
 pub use settle::{settle_plugin_job, Settlement};
 pub use step::{run_step, StepOutcome};
 
-pub(crate) type AgentSnapshots =
-    tokio::sync::watch::Receiver<Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot>>;
+pub(crate) type AgentSnapshots = Box<dyn AgentIdentityWatch>;
 
 /// The handles one job step needs on its own runtime. The runtime's single
 /// `JobDriver` holds the one value; tests build it directly.
@@ -85,11 +85,9 @@ impl JobRuntime {
             .agent_snapshots
             .read()
             .map_err(|_| anyhow::anyhow!("job snapshot binding unavailable"))?;
-        let snapshot = snapshots
+        snapshots
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("job runtime has no active agent snapshot"))?
-            .borrow();
-        snapshot
             .watcher_identities()?
             .into_iter()
             .find(|identity| identity.did() == agent_did)

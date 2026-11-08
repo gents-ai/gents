@@ -12,11 +12,11 @@ use gents_loop::claude_messages_body::{
     ClaudeAgentIdentity, ClaudeRequestContext, CLAUDE_REQUEST_PARAM,
 };
 use gents_loop::loop_stream::LoopConfig;
-use gents_protocol::session::SessionCreationCause;
+use gents_protocol::session::{SessionCreationCause, SessionScope};
 
 use crate::inference::resolved::ResolvedAgent;
 use crate::request::lifecycle::ExecutionOrigin;
-use crate::session::origin::{self, CreationOrigin, SessionScope};
+use crate::session::origin::{self, CreationOrigin};
 use crate::store::config_client::ConfigAccess;
 use crate::AgentRequest;
 

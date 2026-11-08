@@ -71,7 +71,7 @@ impl OutputObligationGate {
 
     pub(crate) async fn for_request(
         node: Arc<EmbeddedNode>,
-        request: &crate::request::watcher::AgentRequest,
+        request: &gents_protocol::row::AgentRequest,
         configured: &[(String, crate::documents::WriteToolOutputObligation)],
     ) -> Result<Option<Self>> {
         if configured.is_empty() {
@@ -86,7 +86,7 @@ impl OutputObligationGate {
                     session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
                 escape_graphql_string(&request.node_did),
                 escape_graphql_string(&request.session_id),
-                crate::request::admission::SIGNED_REQUEST_FIELDS,
+                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
             );
             let response = access.execute(&query).await?;
             let rows: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(
@@ -102,7 +102,7 @@ impl OutputObligationGate {
                 &request.doc_id,
                 &rows,
             )?;
-            triggered = crate::request::watcher::AgentRequest::try_from(members.entry.clone())?
+            triggered = gents_protocol::row::AgentRequest::try_from(members.entry.clone())?
                 .has_automated_trigger_lineage();
             request_doc_ids = members.member_doc_ids;
         }
@@ -314,13 +314,13 @@ fn expected_write_count(
         })?;
         let count = canonical_positive_count(
             value,
-            crate::runtime::snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS,
+            crate::documents::automation::MAX_EVENT_TRIGGER_GROUP_DOCS,
         )
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "completed `{}` write expected_count_field `{field}` must be a canonical positive integer <= {}",
                 obligation.tool_name,
-                crate::runtime::snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS,
+                crate::documents::automation::MAX_EVENT_TRIGGER_GROUP_DOCS,
             )
         })?;
         if expected.is_some_and(|prior| prior != count) {

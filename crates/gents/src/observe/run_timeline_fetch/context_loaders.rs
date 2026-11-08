@@ -6,8 +6,8 @@ pub(super) async fn load_timeline_session(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<TimelineSessionRow>> {
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
-    let fields = crate::session::AGENT_SESSION_FIELDS;
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
+    let fields = gents_protocol::session::AGENT_SESSION_FIELDS;
     let query = format!("{{ AgentSession(filter: {{ {scope} }}, limit: 2) {{ {fields} }} }}");
     let rows = load_rows::<serde_json::Value>(access, "AgentSession", &query).await?;
     decode_timeline_session_rows(rows, node_did, session_id, requester_did)
@@ -18,14 +18,14 @@ pub(super) async fn load_timeline_sessions(
     scopes: &[(String, String, Option<String>)],
 ) -> Result<Vec<TimelineSessionRow>> {
     const BATCH_SIZE: usize = 64;
-    let fields = crate::session::AGENT_SESSION_FIELDS;
+    let fields = gents_protocol::session::AGENT_SESSION_FIELDS;
     let mut sessions = Vec::new();
     for batch in scopes.chunks(BATCH_SIZE) {
         let selections = batch
             .iter()
             .enumerate()
             .map(|(index, (node_did, session_id, requester_did))| {
-                let scope = crate::session::session_scope_filter(
+                let scope = gents_protocol::session::session_scope_filter(
                     node_did,
                     session_id,
                     requester_did.as_deref(),
@@ -60,7 +60,7 @@ fn decode_timeline_session_rows(
     );
     rows.first()
         .map(|row| {
-            let row = crate::session::decode_session_row(row)?;
+            let row = gents_protocol::session::decode_session_row(row)?;
             anyhow::ensure!(
                 row.session.node_did == node_did
                     && row.session.session_id == session_id
@@ -124,7 +124,7 @@ mod tests {
             let (session_doc, agent_doc) = access
                 .transact_readonly("test.timeline_scope.targets", |txn| {
                     Box::pin(async move {
-                        let session = crate::session::load_agent_session_owner_in_txn(
+                        let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
                             txn,
                             owner,
                             "shared-label",

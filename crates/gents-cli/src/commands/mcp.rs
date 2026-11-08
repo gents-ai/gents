@@ -70,9 +70,10 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
         .transact_write("cli.mcp.register", |txn| {
             let node_did = &node_did;
             Box::pin(async move {
+                use gents::documents::apply_desired_state_plan;
                 use gents::store::config_client::{
-                    apply_desired_state_plan, read_desired_state_record_in_txn,
-                    DesiredStateApplyDocument, DesiredStateApplyPlan,
+                    read_desired_state_record_in_txn, DesiredStateApplyDocument,
+                    DesiredStateApplyPlan,
                 };
                 let collection = gents::Collection::ToolServiceRegistry;
                 let current =
@@ -442,9 +443,8 @@ mod tests {
 
     #[tokio::test]
     async fn exact_service_read_uses_the_requested_node_scope() {
-        use gents::store::config_client::{
-            apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-        };
+        use gents::documents::apply_desired_state_plan;
+        use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         use gents::NodeIdentity;
         let directory = tempfile::tempdir().unwrap();
         let root =

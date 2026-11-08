@@ -1,8 +1,8 @@
-use crate::session::origin::SessionScope;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::escape_graphql_string;
 use crate::tools::native::FileChanges;
 use anyhow::{ensure, Context, Result};
+use gents_protocol::session::SessionScope;
 
 #[derive(Clone)]
 pub(super) enum FileCapture {
@@ -76,7 +76,7 @@ pub(super) async fn retain_inventory(
             observed == input,
             "file inventory conflicts with an existing projection"
         );
-        let session = crate::session::load_agent_session_owner_in_txn(
+        let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
             txn,
             &scope.node_did,
             &scope.session_id,

@@ -200,15 +200,16 @@ impl EmbeddedHome {
         .preflight(&store_key, Some(&did))
         .await?;
         let (http, client_endpoint) = trial_http().await?;
-        let (node, backend_admission) = protected
-            .start_node(
-                &store_key,
-                identity.clone(),
-                Some(http),
-                p2p.as_ref().map(|p| p(&path)),
-                &path,
-            )
-            .await?;
+        let (node, backend_admission) = crate::runtime::node_start::start_node(
+            protected,
+            &store_key,
+            identity.clone(),
+            Some(http),
+            p2p.as_ref().map(|p| p(&path)),
+            crate::tools::surface::ToolCeiling::meta_only(),
+            &path,
+        )
+        .await?;
         if initialize_schemas {
             ensure_runtime_schemas(&node)
                 .await
@@ -338,15 +339,16 @@ impl EmbeddedHome {
         .preflight(&self.store_key, Some(&self.did))
         .await?;
         let (http, client_endpoint) = trial_http().await?;
-        let (node, admission) = protected
-            .start_node(
-                &self.store_key,
-                self.identity.clone(),
-                Some(http),
-                self.p2p.as_ref().map(|p| p(&self.path)),
-                &self.path,
-            )
-            .await?;
+        let (node, admission) = crate::runtime::node_start::start_node(
+            protected,
+            &self.store_key,
+            self.identity.clone(),
+            Some(http),
+            self.p2p.as_ref().map(|p| p(&self.path)),
+            crate::tools::surface::ToolCeiling::meta_only(),
+            &self.path,
+        )
+        .await?;
         self.node = node;
         self.backend_admission = admission;
         self.client_endpoint = Some(client_endpoint);

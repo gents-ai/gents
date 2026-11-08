@@ -49,7 +49,7 @@ pub(crate) fn visible_reply_preview(message: &gents_protocol::message::Message) 
 
 pub(crate) async fn request_preview_in_txn<'a>(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
-    request: &'a crate::AgentRequest,
+    request: &'a gents_protocol::row::AgentRequest,
 ) -> Result<&'a str> {
     let Some(parent_id) = request.caused_by_parent_request_doc_id.as_deref() else {
         return Ok(&request.content);
@@ -189,24 +189,25 @@ mod tests {
             .unwrap()
             .to_owned();
         let content = "[message agent:engineer session:source node:did:test:sender · at:2030-01-01T00:00:01Z · cause:parent]\n\nInspect the layout.\nKeep the draft.";
-        let request = crate::AgentRequest::try_from(gents_protocol::row::AgentRequestRow {
-            doc_id: Some("child".into()),
-            request_id: "received".into(),
-            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
-            node_did: Some("did:test:receiver".into()),
-            agent_did: Some("engineer".into()),
-            session_id: Some("target".into()),
-            requester_did: Some("did:test:sender".into()),
-            content: Some(content.into()),
-            created_at: Some("2030-01-01T00:00:01Z".into()),
-            caused_by_parent_request_doc_id: Some(parent),
-            caused_by_parent_request_id: Some("parent".into()),
-            caused_by_parent_tool_call_doc_id: Some("tool-doc".into()),
-            caused_by_parent_tool_call_id: Some("tool".into()),
-            request_hop: Some(1),
-            ..Default::default()
-        })
-        .unwrap();
+        let request =
+            gents_protocol::row::AgentRequest::try_from(gents_protocol::row::AgentRequestRow {
+                doc_id: Some("child".into()),
+                request_id: "received".into(),
+                purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+                node_did: Some("did:test:receiver".into()),
+                agent_did: Some("engineer".into()),
+                session_id: Some("target".into()),
+                requester_did: Some("did:test:sender".into()),
+                content: Some(content.into()),
+                created_at: Some("2030-01-01T00:00:01Z".into()),
+                caused_by_parent_request_doc_id: Some(parent),
+                caused_by_parent_request_id: Some("parent".into()),
+                caused_by_parent_tool_call_doc_id: Some("tool-doc".into()),
+                caused_by_parent_tool_call_id: Some("tool".into()),
+                request_hop: Some(1),
+                ..Default::default()
+            })
+            .unwrap();
         let observed =
             ConfigAccess::transact_local_readonly(&node, None, "test.session.preview", |txn| {
                 let request = request.clone();

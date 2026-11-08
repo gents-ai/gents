@@ -7,24 +7,10 @@ use crate::inference::llm::message::Message;
 use crate::store::graphql::escape_graphql_string;
 use gents_loop::claude_messages_body::{prepare_replay_checkpoint, ReplayTag, TaggedAssistantRow};
 use gents_loop::loop_stream::TaggedMessage;
+use gents_protocol::transcript::{SourceBoundary, TranscriptFactRef};
 
 const REDUCTION_KEY_PREFIX: &str = "provider-context-reduction:v1";
 const SOURCE_BOUNDARY_VERSION: u32 = 2;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TranscriptFactRef {
-    pub doc_id: String,
-    pub sequence: i64,
-    pub commit_cid: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SourceBoundary {
-    pub boundary_version: u32,
-    pub request_doc_id: String,
-    pub request_commit_cid: String,
-    pub canonical_through: Option<TranscriptFactRef>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProducerCallRef {
@@ -317,7 +303,7 @@ impl StagedProviderContextReduction {
                 let requester_did = &requester_did;
                 Box::pin(async move {
                     let (session_doc_id, agent_did) =
-                        crate::session::canonical_rows::agent_session_child_binding_in_txn(
+                        crate::store::config_client::session_children::agent_session_child_binding_in_txn(
                             txn,
                             &intended.node_did,
                             &intended.session_id,
@@ -455,7 +441,8 @@ pub async fn capture_source_boundary(
     request_doc_id: &str,
     request_commit_cid: &str,
 ) -> Result<SourceBoundary> {
-    let session_scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+    let session_scope =
+        gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentMessage(
@@ -1490,13 +1477,10 @@ mod tests {
         .unwrap_err();
         assert!(conflict.to_string().contains("conflicting immutable facts"));
 
-        let restored = load_unconsumed_for_request(
-            &reader,
-            "request-doc",
-        )
-        .await
-        .unwrap()
-        .expect("persisted checkpoint is unconsumed");
+        let restored = load_unconsumed_for_request(&reader, "request-doc")
+            .await
+            .unwrap()
+            .expect("persisted checkpoint is unconsumed");
         assert_eq!(restored.0.checkpoint_messages().unwrap(), checkpoint);
         let tagged = restored.0.checkpoint_tagged_messages().unwrap();
         assert_eq!(tagged.len(), checkpoint.len());
@@ -1541,24 +1525,16 @@ mod tests {
         )
         .await
         .unwrap();
-        let chain = load_for_request(
-            &reader,
-            "request-doc",
-        )
-        .await
-        .unwrap();
+        let chain = load_for_request(&reader, "request-doc").await.unwrap();
         assert_eq!(chain.len(), 2);
         assert_eq!(
             chain[1].parent_reduction_key.as_deref(),
             Some(first.reduction_key.as_str())
         );
-        let restored = load_unconsumed_for_request(
-            &reader,
-            "request-doc",
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let restored = load_unconsumed_for_request(&reader, "request-doc")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(restored.0.reduction_key, second.reduction_key);
         assert_eq!(
             restored.0.active_reduction_keys(),
@@ -1605,13 +1581,10 @@ mod tests {
             .write("test.title_capture", &title_capture)
             .await
             .expect("title seed failed");
-        assert!(load_unconsumed_for_request(
-            &reader,
-            "request-doc"
-        )
-        .await
-        .unwrap()
-        .is_some());
+        assert!(load_unconsumed_for_request(&reader, "request-doc")
+            .await
+            .unwrap()
+            .is_some());
 
         let unsupported_provenance = escape_graphql_string(
             &json!({
@@ -1667,17 +1640,17 @@ mod tests {
         }) { _docID } }"#
             .replace("NODE_DID_PLACEHOLDER", &escaped_node_did);
         reader
-            .write("test.missing_provenance_capture", &missing_provenance_capture)
+            .write(
+                "test.missing_provenance_capture",
+                &missing_provenance_capture,
+            )
             .await
             .expect("missing-provenance inference seed failed");
         assert!(
-            load_unconsumed_for_request(
-                &reader,
-                "request-doc"
-            )
-            .await
-            .unwrap()
-            .is_some(),
+            load_unconsumed_for_request(&reader, "request-doc")
+                .await
+                .unwrap()
+                .is_some(),
             "unsupported and incomplete captures are not consumption evidence"
         );
 
@@ -1748,28 +1721,17 @@ mod tests {
             .write("test.rendered_capture", &rendered)
             .await
             .expect("rendered seed failed");
-        assert!(load_unconsumed_for_request(
-            &reader,
-            "request-doc"
-        )
-        .await
-        .unwrap()
-        .is_none());
-        let durable_lineage = load_for_request(
-            &reader,
-            "request-doc",
-        )
-        .await
-        .unwrap();
+        assert!(load_unconsumed_for_request(&reader, "request-doc")
+            .await
+            .unwrap()
+            .is_none());
+        let durable_lineage = load_for_request(&reader, "request-doc").await.unwrap();
         assert_eq!(durable_lineage.len(), 2);
 
-        assert!(load_for_request(
-            &reader,
-            "fork-request-doc"
-        )
-        .await
-        .unwrap()
-        .is_empty());
+        assert!(load_for_request(&reader, "fork-request-doc")
+            .await
+            .unwrap()
+            .is_empty());
         assert_ne!(
             reduction_key(&node_did, "session", "request-doc", 3, 1).unwrap(),
             reduction_key(&node_did, "session", "concurrent-request-doc", 3, 1).unwrap()
@@ -2197,12 +2159,7 @@ mod tests {
         assert_ne!(second.doc_id, first.doc_id);
         assert_eq!(block_ids().await, blocks);
         for request_doc_id in ["request-doc", "request-doc-2"] {
-            let loaded = load_for_request(
-                &reader,
-                request_doc_id,
-            )
-            .await
-            .unwrap();
+            let loaded = load_for_request(&reader, request_doc_id).await.unwrap();
             assert_eq!(loaded[0].compacted_prefix_json, first.compacted_prefix_json);
             assert_eq!(loaded[0].retained_suffix_json, first.retained_suffix_json);
         }
@@ -2217,11 +2174,6 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(load_for_request(
-            &reader,
-            "request-doc"
-        )
-        .await
-        .is_err());
+        assert!(load_for_request(&reader, "request-doc").await.is_err());
     }
 }

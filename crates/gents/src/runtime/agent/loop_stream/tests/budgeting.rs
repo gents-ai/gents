@@ -583,7 +583,7 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
                         &tagged(&compacted_prefix),
                         &tagged(&retained_suffix),
                     );
-                let boundary = crate::turn::provider_context_reduction::SourceBoundary {
+                let boundary = gents_protocol::transcript::SourceBoundary {
                     boundary_version: 2,
                     request_doc_id: request_doc_id.to_string(),
                     request_commit_cid: "claim-cid-3283".to_string(),

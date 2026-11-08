@@ -1,20 +1,21 @@
 use super::*;
-use crate::request::admission::SIGNED_REQUEST_FIELDS;
 use crate::request::lifecycle::queue::goal_continuation_identity;
 use crate::store::identity::NodeIdentity;
+use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::request::lifecycle::{ClaimOutcome, RequestTerminalOutcome, TerminalizeResult};
 use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
-use crate::tools::call::lifecycle::{AwaitMode, SpawnedBackgroundToolAdmission};
+use crate::tools::call::lifecycle::SpawnedBackgroundToolAdmission;
+use gents_protocol::row::AwaitMode;
 
 use super::super::operator_resume::support::*;
 
 async fn verified_client_lifecycle(
     fixture: &Fixture,
-    request: crate::request::watcher::AgentRequest,
+    request: gents_protocol::row::AgentRequest,
 ) -> crate::RequestLifecycle {
     assert_eq!(request.requester_did.as_deref(), Some(fixture.user.did()));
     assert_eq!(request.agent_did, fixture.agent.did());
@@ -163,7 +164,8 @@ async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
                 row.agent_doc_id.as_deref(),
                 Some(fixture.agent_doc_id.as_str())
             );
-            crate::request::admission::verify_request_receipt_signature(&row).unwrap();
+            crate::store::identity::request_receipt::verify_request_receipt_signature(&row)
+                .unwrap();
             let owners = txn
                 .document_owners("AgentRequest", std::slice::from_ref(&receipt.doc_id))
                 .await
@@ -514,7 +516,7 @@ async fn run_generated_wait_observations() {
         )
         .await;
         if case.name == "unrelated_wait_cannot_suppress" {
-            let older = crate::request::watcher::AgentRequest::try_from(
+            let older = gents_protocol::row::AgentRequest::try_from(
                 request_rows(&fixture.agent_access())
                     .await
                     .into_iter()
@@ -1074,7 +1076,7 @@ async fn run_historical_publication_cases() {
                     .as_deref()
                     .expect("parent requester");
                 assert_eq!(requester, fixture.user.did());
-                crate::request::admission::verify_runtime_local_control_receipt(
+                crate::store::identity::request_receipt::verify_runtime_local_control_receipt(
                     &rows[0],
                     fixture.identity.did(),
                     PARENT,

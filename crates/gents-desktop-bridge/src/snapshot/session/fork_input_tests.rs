@@ -82,11 +82,11 @@ fn nested_fork_keeps_automated_input_origin_without_child_turn_membership() {
 
 #[tokio::test]
 async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
-    use gents::session::canonical_rows::{
+    use gents::store::config_client::ConfigAccess;
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
-    use gents::store::config_client::ConfigAccess;
     let node = std::sync::Arc::new(crate::tests::support::node_builder().build().await.unwrap());
     gents::ensure_runtime_schemas(&node).await.unwrap();
     let access = ConfigAccess::local(node.clone());

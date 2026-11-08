@@ -736,7 +736,7 @@ async fn write_signed_owned_request(
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> (String, gents_protocol::row::AgentRequestRow) {
     let (doc_id, row) = write_owned_request(access, create).await;
-    crate::request::admission::verify_request_receipt_signature(&row).unwrap();
+    crate::store::identity::request_receipt::verify_request_receipt_signature(&row).unwrap();
     (doc_id, row)
 }
 
@@ -754,7 +754,7 @@ async fn write_owned_request(
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
             crate::store::graphql::escape_graphql_string(&doc_id),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ))
         .await
         .unwrap();
@@ -842,7 +842,12 @@ async fn owned_test_hook_with_identity_policy(
         RequestSignature::AlteredAfterSigning => {
             create.content.push_str(" changed after signing");
             let written = write_owned_request(&agent_access, &create).await;
-            assert!(crate::request::admission::verify_request_receipt_signature(&written.1).is_err());
+            assert!(
+                crate::store::identity::request_receipt::verify_request_receipt_signature(
+                    &written.1
+                )
+                .is_err()
+            );
             written
         }
     };

@@ -7,8 +7,8 @@ use chrono::{DateTime, Utc};
 use defra_node::Node as EmbeddedNode;
 use serde_json::Value;
 
-use crate::request::watcher::AgentRequest;
 use crate::store::graphql::escape_graphql_string;
+use gents_protocol::row::AgentRequest;
 
 #[derive(Clone)]
 pub struct ArtifactGrant(Arc<ArtifactOwner>);

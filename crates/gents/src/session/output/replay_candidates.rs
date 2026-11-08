@@ -4,8 +4,6 @@ use gents_protocol::output::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::super::canonical_rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS};
-use super::super::query::session_scope_filter;
 use super::access::{rows_value, ReadAccess, ReadCache};
 use super::reconstruct::{preload_request_output_segments, reconstruct_scoped_message_with_facts};
 use super::replay_capture::{
@@ -19,6 +17,8 @@ use super::{
     replay_violation, CanonicalAssistantCandidate, CanonicalProviderCoordinate,
     CanonicalReplayScope, ReconstructedScopedMessage,
 };
+use gents_protocol::output::rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS};
+use gents_protocol::session::session_scope_filter;
 
 /// Resolve physical assistant origins reachable from the bounded session view.
 /// Forks retain their origin's request/session scope; an arbitrary historical
@@ -27,7 +27,7 @@ use super::{
 pub(crate) async fn load_canonical_assistant_candidates(
     access: &crate::ConfigAccess,
     scope: CanonicalReplayScope<'_>,
-    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
+    boundary: &gents_protocol::transcript::SourceBoundary,
 ) -> Result<Vec<CanonicalAssistantCandidate>> {
     load_canonical_assistant_candidates_with(access, access, scope, boundary, None).await
 }
@@ -37,7 +37,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
     access: &crate::ConfigAccess,
     requests: &impl ReplayRequestReader,
     scope: CanonicalReplayScope<'_>,
-    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
+    boundary: &gents_protocol::transcript::SourceBoundary,
     selected_tags: Option<&[gents_loop::claude_messages_body::ReplayTag]>,
 ) -> Result<Vec<CanonicalAssistantCandidate>> {
     load_canonical_assistant_candidates_using(
@@ -54,7 +54,7 @@ pub(super) async fn load_canonical_assistant_candidates_using(
     access: ReadAccess<'_, '_>,
     requests: &impl ReplayRequestReader,
     scope: CanonicalReplayScope<'_>,
-    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
+    boundary: &gents_protocol::transcript::SourceBoundary,
     selected_tags: Option<&[gents_loop::claude_messages_body::ReplayTag]>,
 ) -> Result<Vec<CanonicalAssistantCandidate>> {
     let (request_commits, high_water) =
@@ -90,7 +90,7 @@ pub(super) async fn load_canonical_assistant_candidates_using(
         .await?;
     let headers = rows_value(&response, "AgentMessage")?
         .iter()
-        .map(decode_transcript_message_row)
+        .map(|row| decode_transcript_message_row(row).map_err(anyhow::Error::from))
         .collect::<Result<Vec<_>>>()?;
     let mut ids = BTreeSet::new();
     let mut sequences = BTreeSet::new();

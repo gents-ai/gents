@@ -1,12 +1,11 @@
-use crate::session::canonical_rows::{
-    output_segment_bound_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-};
+use crate::store::config_client::session_children::output_segment_bound_variables;
 use crate::store::config_client::{ConfigAccess, IdempotentTransactionRetry};
 use crate::store::graphql::{created_doc_id, escape_graphql_string};
 use crate::tools::call::lifecycle::{ToolCallLifecycle, ToolCallState};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents_protocol::output::reconstruction::ObservedSegment;
+use gents_protocol::output::rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION;
 use gents_protocol::output::{
     OutputSegment, OutputSource, OutputWriter, SegmentRun, StreamDeclaration, StreamPayload,
 };
@@ -300,7 +299,7 @@ async fn append_tool_output_with_time(
             },
         )
         .await?;
-    crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+    crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
         &access,
         &repair_node_did,
         &repair_actor,

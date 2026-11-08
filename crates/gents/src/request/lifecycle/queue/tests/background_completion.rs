@@ -152,7 +152,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         let db = test_db("desktop-control-scope").await;
         let session_id = "desktop-owned-session";
         let (desktop, create, parent, writer) = desktop_owned_session(&db, session_id).await;
-        let query = format!("{{ AgentSession {{ {} }} }}", session::AGENT_SESSION_FIELDS);
+        let query = format!("{{ AgentSession {{ {} }} }}", gents_protocol::session::AGENT_SESSION_FIELDS);
         let before = agent_data(&db, &query).await;
         let mutation = if source == QueueSource::Goal {
             let mut continuation = prepare_goal_continuation(
@@ -477,7 +477,7 @@ async fn a_returned_result_is_admitted_into_a_paired_client_session() {
         "review notifications",
         background_hints(&parent),
         None,
-        crate::request::lifecycle::RequestHopCause::Return,
+        gents_protocol::request_lifecycle::RequestHopCause::Return,
     )
     .await
     .unwrap()
@@ -524,7 +524,7 @@ async fn a_returned_result_is_admitted_into_a_paired_client_session() {
         .agent_access
         .execute(&format!(
             "{{ AgentSession {{ {} }} }}",
-            session::AGENT_SESSION_FIELDS
+            gents_protocol::session::AGENT_SESSION_FIELDS
         ))
         .await
         .unwrap()["data"]
@@ -1432,7 +1432,7 @@ async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
         background_hints(&parent),
         None,
         &raised_tool,
-        crate::request::lifecycle::RequestHopCause::CrossSession { cause_hop: 1 },
+        gents_protocol::request_lifecycle::RequestHopCause::CrossSession { cause_hop: 1 },
     )
     .await
     .unwrap();
@@ -1525,7 +1525,7 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         background_hints(&parent),
         None,
         &native_tool,
-        crate::request::lifecycle::RequestHopCause::Continuation,
+        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
     )
     .await
     .unwrap();
@@ -1540,7 +1540,7 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         background_hints(&parent),
         None,
         &returned_tool,
-        crate::request::lifecycle::RequestHopCause::Return,
+        gents_protocol::request_lifecycle::RequestHopCause::Return,
     )
     .await
     .unwrap();
@@ -1557,14 +1557,14 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         background_hints(&parent),
         None,
         &refused_tool,
-        crate::request::lifecycle::RequestHopCause::CrossSession { cause_hop: bound },
+        gents_protocol::request_lifecycle::RequestHopCause::CrossSession { cause_hop: bound },
     )
     .await
     .unwrap();
     let refused_wake = refused.request.expect("over-bound wake").doc_id;
     let refused_row = hop_of(refused_wake.clone()).await;
     assert_eq!(refused_row["request_hop"], bound + 1);
-    assert!(!crate::request::lifecycle::request_hop_within_bound(
+    assert!(!gents_protocol::request_lifecycle::request_hop_within_bound(
         Some(bound),
         bound + 1
     ));
@@ -1585,7 +1585,7 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         background_hints(&parent),
         None,
         &later_tool,
-        crate::request::lifecycle::RequestHopCause::Return,
+        gents_protocol::request_lifecycle::RequestHopCause::Return,
     )
     .await
     .unwrap();

@@ -19,7 +19,7 @@ pub(crate) async fn observe_caused_request(
         .doc_id()
         .context("session-message row lacks physical identity")?;
     let access = lifecycle.access()?;
-    let Some(receipt) = load_receipt(
+    let Some(receipt) = load_receipt::<crate::tools::call::lifecycle::ToolCallLifecycle>(
         &access,
         tool_call_doc_id,
         lifecycle.node_did(),
@@ -89,11 +89,13 @@ pub(crate) async fn kill(
         CausedObservation::Bound(caused) => Some(caused),
         CausedObservation::NotVisible | CausedObservation::Unbound(_) => None,
     };
-    let observation = KillObservation::observe(caused.as_deref().map(|caused| CausedFacts {
-        terminal: caused
-            .lifecycle_state
-            .is_some_and(gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal),
-        this_runtime: caused.node_did.as_deref() == Some(lifecycle.node_did()),
+    let observation = KillObservation::observe(caused.as_deref().map(|caused| {
+        CausedFacts {
+            terminal: caused
+                .lifecycle_state
+                .is_some_and(gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal),
+            this_runtime: caused.node_did.as_deref() == Some(lifecycle.node_did()),
+        }
     }));
     match (observation.action(), caused.as_deref()) {
         (KillAction::Settle, _) => {
@@ -140,7 +142,7 @@ pub(crate) async fn kill(
             "cancelled",
             "",
             Some("explicit_cancel"),
-            crate::request::lifecycle::RequestHopCause::Continuation,
+            gents_protocol::request_lifecycle::RequestHopCause::Continuation,
         )
         .await?;
     }

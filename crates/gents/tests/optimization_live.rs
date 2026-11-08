@@ -2,6 +2,7 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
+use gents::documents::apply_desired_state_plan;
 use gents::documents::{EvalDefinition, EvalSplit, InferenceBackend, InferenceProfile};
 use gents::eval::checks::CheckRegistry;
 use gents::eval::optimization::target::JobTarget;
@@ -11,9 +12,7 @@ use gents::eval::optimization::{
 };
 use gents::eval::runner::embedded::{EmbeddedExecutor, EmbeddedHome};
 use gents::eval::runner::{Capture, RunOptions};
-use gents::store::config_client::{
-    apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
+use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::{Collection, ConfigAccess, DocumentRuntimeOptions};
 use serde_json::{json, Value};
 use tempfile::TempDir;

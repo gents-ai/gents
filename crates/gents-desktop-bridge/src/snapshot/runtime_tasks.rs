@@ -434,10 +434,10 @@ mod trigger_recent_runs_tests {
 /// What a session's starter verdict depends on apart from its physical row:
 /// its scope, agent and complete provenance, including the node-signed
 /// creation receipt that binds the physical document and starter index.
-type StarterEvidence = (gents::session::origin::SessionScope, String, String);
+type StarterEvidence = (gents_protocol::session::SessionScope, String, String);
 
 fn starter_evidence(
-    scope: gents::session::origin::SessionScope,
+    scope: gents_protocol::session::SessionScope,
     agent_did: &str,
     provenance: Option<&gents_protocol::session::SessionProvenance>,
 ) -> Option<StarterEvidence> {
@@ -471,7 +471,7 @@ pub(super) async fn resolve_summary_starters<'a, R>(
 {
     let mut started = Vec::new();
     for summary in summaries {
-        let scope = gents::session::origin::SessionScope {
+        let scope = gents_protocol::session::SessionScope {
             node_did: summary.node_did.clone(),
             session_id: summary.session_id.clone(),
             requester_did: summary.requester_did.clone(),
@@ -509,7 +509,7 @@ pub(super) async fn resolve_summary_starters<'a, R>(
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 for row in observed {
                     if let Some(evidence) = starter_evidence(
-                        gents::session::origin::SessionScope::from(&row.session),
+                        gents_protocol::session::SessionScope::from(&row.session),
                         &row.session.agent_did,
                         row.session.provenance.as_ref(),
                     ) {

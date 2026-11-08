@@ -14,11 +14,11 @@ use super::session_hydration_closure::{
     build_canonical_selection, CanonicalClosureInput, CanonicalPublicationOrigin, ScopedDocument,
     ToolEffectRow,
 };
-use crate::session::canonical_rows::{
+use crate::store::graphql::escape_graphql_string;
+use gents_protocol::output::rows::{
     decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
     AGENT_OUTPUT_SEGMENT_FIELDS,
 };
-use crate::store::graphql::escape_graphql_string;
 
 mod inventory;
 mod inventory_order;
@@ -29,8 +29,8 @@ pub use inventory::{FileInventoryPageError, FileInventorySnapshot};
 struct HydrationSelection {
     documents: BTreeSet<HydrationDocument>,
     publications: Vec<CanonicalPublicationOrigin>,
-    headers: Vec<crate::session::canonical_rows::TranscriptMessageRow>,
-    output_segments: Vec<crate::session::canonical_rows::OutputSegmentRow>,
+    headers: Vec<gents_protocol::output::rows::TranscriptMessageRow>,
+    output_segments: Vec<gents_protocol::output::rows::OutputSegmentRow>,
 }
 
 #[derive(Deserialize)]

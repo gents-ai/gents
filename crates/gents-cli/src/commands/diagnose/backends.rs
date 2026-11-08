@@ -213,7 +213,7 @@ mod tests {
             &backend.node_did,
         )
         .await;
-        gents::store::config_client::write_inference_backend_document(access, backend)
+        gents::documents::write_inference_backend_document(access, backend)
             .await
             .unwrap();
         if let Some(status) = status {
@@ -307,9 +307,8 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_backend_uses_exact_owner_observation_without_discovery() {
-        use gents::store::config_client::{
-            apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-        };
+        use gents::documents::apply_desired_state_plan;
+        use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         let client = crate::shared::test_support::ClientHome::new().await;
         let owner = client.node_did().to_owned();
         let peer_dir = tempfile::tempdir().unwrap();
@@ -340,7 +339,7 @@ mod tests {
         for (owner, status) in [(owner.as_str(), "healthy"), (foreign.as_str(), "unhealthy")] {
             let mut value = backend.clone();
             value.node_did = owner.to_owned();
-            gents::store::config_client::write_inference_backend_document(&access, &value)
+            gents::documents::write_inference_backend_document(&access, &value)
                 .await
                 .unwrap();
             gents::inference::backends::registry::set_backend_probe_status_as(

@@ -1531,7 +1531,7 @@ mod tests {
         agent_did: &str,
         active: &ActiveEnrollment,
         label: &str,
-    ) -> crate::request::watcher::AgentRequest {
+    ) -> gents_protocol::row::AgentRequest {
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             format!("agent-request-{label}"),

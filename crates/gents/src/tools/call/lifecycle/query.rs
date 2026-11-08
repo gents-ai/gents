@@ -168,7 +168,8 @@ impl ToolCallLifecycle {
         requester_did: Option<&str>,
     ) -> Result<Option<Self>> {
         let physical = escape_graphql_string(doc_id);
-        let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+        let scope =
+            gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
         Self::load_filtered_in_txn(txn, node, &format!("{scope},_docID:{{_eq:\"{physical}\"}}"))
             .await
     }
@@ -381,7 +382,7 @@ impl ToolCallLifecycle {
         let selected_tool_identity =
             decode_selected_tool_identity(row.selected_service_id, row.selected_tool_name)?;
 
-        let scope = crate::session::session_scope_filter(
+        let scope = gents_protocol::session::session_scope_filter(
             owner,
             &row.session_id,
             row.requester_did.as_deref(),

@@ -277,7 +277,7 @@ pub(crate) async fn settle_session_message_row(
                 "failed",
                 reason,
                 Some(REASON),
-                crate::request::lifecycle::RequestHopCause::Continuation,
+                gents_protocol::request_lifecycle::RequestHopCause::Continuation,
             )
             .await?;
             return Ok(true);
@@ -319,7 +319,7 @@ pub(crate) async fn settle_session_message_row(
         terminal.notification_status(),
         terminal.output(),
         handoff_reason,
-        crate::request::lifecycle::RequestHopCause::Return,
+        gents_protocol::request_lifecycle::RequestHopCause::Return,
     )
     .await?;
     Ok(true)
@@ -362,7 +362,7 @@ mod folded_outcome_conformance {
 mod turn_assignment_tests {
     use super::*;
     use crate::tools::call::lifecycle::admission_fixture::PublishedSessionMessage;
-    use crate::tools::call::lifecycle::AwaitMode;
+    use gents_protocol::tool_call::AwaitMode;
 
     fn recovery_identities(
         admission: &crate::tools::call::lifecycle::admission_fixture::PublishedAdmission,

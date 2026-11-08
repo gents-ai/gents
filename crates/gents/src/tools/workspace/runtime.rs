@@ -5,11 +5,11 @@ use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
 
 use crate::request::lifecycle::WorkspaceLineage;
-use crate::request::watcher::AgentRequest;
 use crate::store::graphql::escape_graphql_string;
 #[cfg(test)]
 use crate::store::graphql::graphql_with_transaction_retry;
 use crate::tools::native::WorkspaceAuthority;
+use gents_protocol::row::AgentRequest;
 
 use super::action_plan::{
     emit_cleanup_workspace_plan, emit_integrate_workspace_plan, emit_seal_workspace_plan,

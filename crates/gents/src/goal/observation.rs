@@ -7,9 +7,9 @@ use gents_protocol::goal_control::{
 use super::*;
 #[cfg(test)]
 mod contract_tests;
-use crate::session::SessionOwnerRow;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::identity::NodeIdentity;
+use gents_protocol::session::SessionOwnerRow;
 
 pub(crate) const SOURCES: [&str; 3] = ["Goal", "AgentSession", "GoalObservation"];
 
@@ -58,7 +58,7 @@ pub(crate) async fn reconcile_goal_observations_with_identities(
                 }
             } else {
                 for session_id in sessions {
-                    if let Some(session) = crate::session::load_agent_session_owner_in_txn(txn, identity.did(), &session_id).await? {
+                    if let Some(session) = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, identity.did(), &session_id).await? {
                         if session.session.agent_did == agent.did() {
                             scopes.push((session.session.session_id, session.session.requester_did));
                         }
@@ -267,9 +267,13 @@ pub async fn prepare_goal_input_in_txn(
     if input.goal_assignment.is_some() {
         return Ok(input);
     }
-    let Some(session) =
-        crate::session::load_agent_session_row_in_txn(txn, node_did, session_id, requester_did)
-            .await?
+    let Some(session) = crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+        txn,
+        node_did,
+        session_id,
+        requester_did,
+    )
+    .await?
     else {
         return Ok(input);
     };
@@ -317,9 +321,13 @@ pub async fn load_session_goal_observation_state_in_txn(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<SessionGoalObservationState> {
-    let Some(session) =
-        crate::session::load_agent_session_row_in_txn(txn, node_did, session_id, requester_did)
-            .await?
+    let Some(session) = crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+        txn,
+        node_did,
+        session_id,
+        requester_did,
+    )
+    .await?
     else {
         return Ok(SessionGoalObservationState::NoReadableSession);
     };
@@ -354,7 +362,7 @@ pub(crate) async fn project_session_goal(
         crate::store::graphql::fence_arrivals(txn, "AgentSession").await?;
         crate::store::graphql::fence_arrivals(txn, "Goal").await?;
         crate::store::graphql::fence_arrivals(txn, "GoalObservation").await?;
-        let Some(session) = crate::session::load_agent_session_row_in_txn(
+        let Some(session) = crate::store::config_client::agent_session::load_agent_session_row_in_txn(
             txn, identity.did(), session_id, requester_did,
         ).await? else { return Ok(()); };
         anyhow::ensure!(session.session.agent_did == signer.did(), "goal observation signer differs from session Agent");

@@ -7,7 +7,7 @@ use crate::session::TxnCanonicalReader;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::escape_graphql_string;
 
-const FIELDS: &str = crate::session::AGENT_SESSION_FIELDS;
+const FIELDS: &str = gents_protocol::session::AGENT_SESSION_FIELDS;
 const HELP: &str = "Read canonical sessions visible to your authenticated DID through DefraDB ACP. Actions: list, count, search, get, transcript, output. Use {\"action\":\"help\",\"topic\":\"search\"} for an action's syntax. Copied IDs grant no access; ACP determines visibility across nodes and requesters.";
 
 fn action_help(topic: Option<&str>) -> Result<&'static str> {
@@ -156,7 +156,7 @@ fn rows(response: Value, collection: &str) -> Result<Vec<Value>> {
         .with_context(|| format!("sessions response omitted {collection}"))?;
     if collection == "AgentSession" {
         for row in &rows {
-            crate::session::decode_session_row(row)?;
+            gents_protocol::session::decode_session_row(row)?;
         }
     }
     Ok(rows)
@@ -523,14 +523,14 @@ async fn tool_output(
                     "{{AgentMessage(filter: {{{},session_id: {{_eq: {}}}}},order: {{sequence: ASC}}) {{{}}}}}",
                     scope(agent, requester),
                     quoted(&session_id),
-                    crate::session::canonical_rows::AGENT_MESSAGE_FIELDS
+                    gents_protocol::output::rows::AGENT_MESSAGE_FIELDS
                 ))
                 .await?,
                 "AgentMessage",
             )?;
             let mut docs = std::collections::BTreeSet::new();
             for row in &headers {
-                let header = crate::session::canonical_rows::decode_transcript_message_row(row)?;
+                let header = gents_protocol::output::rows::decode_transcript_message_row(row)?;
                 for block in &header.message.blocks {
                     use gents_protocol::output::MessageBlock;
                     let (MessageBlock::ToolCall {
@@ -667,12 +667,12 @@ async fn transcript(
         })
         .unwrap_or_default();
     let page_limit = limit.min(6);
-    let headers = rows(txn.execute(&format!("{{AgentMessage(filter: {{{},session_id: {{_eq: {}}}{bounds}}},order: {{sequence: ASC}},limit: {}) {{{}}}}}",scope(agent,requester),quoted(id),page_limit+1,crate::session::canonical_rows::AGENT_MESSAGE_FIELDS)).await?,"AgentMessage")?;
+    let headers = rows(txn.execute(&format!("{{AgentMessage(filter: {{{},session_id: {{_eq: {}}}{bounds}}},order: {{sequence: ASC}},limit: {}) {{{}}}}}",scope(agent,requester),quoted(id),page_limit+1,gents_protocol::output::rows::AGENT_MESSAGE_FIELDS)).await?,"AgentMessage")?;
     let mut reader = TxnCanonicalReader::new(txn, agent, requester);
     let observed = headers
         .iter()
-        .map(crate::session::canonical_rows::decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
+        .map(gents_protocol::output::rows::decode_transcript_message_row)
+        .collect::<Result<Vec<_>, _>>()?;
     reader.observe_headers(&observed);
     let mut messages = Vec::new();
     let mut next = None;
@@ -741,11 +741,11 @@ async fn search_session(
         let bound = after
             .map(|sequence| format!(",sequence: {{_gt: {sequence}}}"))
             .unwrap_or_default();
-        let headers = rows(txn.execute(&format!("{{AgentMessage(filter: {{{},session_id: {{_eq: {}}}{bound}}},order: {{sequence: ASC}},limit: {SEARCH_MESSAGE_PAGE}) {{{}}}}}",scope(agent,requester),quoted(id),crate::session::canonical_rows::AGENT_MESSAGE_FIELDS)).await?,"AgentMessage")?;
+        let headers = rows(txn.execute(&format!("{{AgentMessage(filter: {{{},session_id: {{_eq: {}}}{bound}}},order: {{sequence: ASC}},limit: {SEARCH_MESSAGE_PAGE}) {{{}}}}}",scope(agent,requester),quoted(id),gents_protocol::output::rows::AGENT_MESSAGE_FIELDS)).await?,"AgentMessage")?;
         let observed = headers
             .iter()
-            .map(crate::session::canonical_rows::decode_transcript_message_row)
-            .collect::<Result<Vec<_>>>()?;
+            .map(gents_protocol::output::rows::decode_transcript_message_row)
+            .collect::<Result<Vec<_>, _>>()?;
         reader.observe_headers(&observed);
         let exhausted = headers.len() < SEARCH_MESSAGE_PAGE;
         for row in headers {

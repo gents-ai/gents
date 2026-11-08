@@ -3,12 +3,12 @@ use crate::request::admission::AgentRequestAdmissionVerifier;
 use crate::request::lifecycle::{
     ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
 };
-use crate::request::watcher::AgentRequest;
 use crate::session::mailbox::{
     MailboxAction, MailboxCreateTool, MailboxKind, MailboxNotificationPolicy, MailboxWriteOutcome,
 };
 use crate::store::config_client::{GraphqlEndpoint, NodePermission};
 use gents_loop::tool::{bind_request_tools, ToolDyn};
+use gents_protocol::row::AgentRequest;
 
 #[tokio::test]
 async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Result<()> {
@@ -113,7 +113,7 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     let response = agent_access
         .execute(&format!(
             "{{ AgentRequest {{ {} }} }}",
-            crate::SIGNED_REQUEST_FIELDS
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
         ))
         .await?;
     let row: gents_protocol::row::AgentRequestRow =
@@ -272,7 +272,7 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     reply.caused_by_source_doc_id = Some(doc.to_owned());
     crate::sign_agent_request_create(&user, &mut reply).await?;
     submit_client_request(&user_access, &reply).await?;
-    let reply_row = agent_access.execute(&format!("{{ AgentRequest(filter: {{request_id: {{_eq: \"mailbox-delegated-reply\"}}}}) {{ {} }} }}", crate::SIGNED_REQUEST_FIELDS)).await?;
+    let reply_row = agent_access.execute(&format!("{{ AgentRequest(filter: {{request_id: {{_eq: \"mailbox-delegated-reply\"}}}}) {{ {} }} }}", gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)).await?;
     let reply_row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(reply_row["data"]["AgentRequest"][0].clone())?;
     let reply_request = AgentRequest::try_from(reply_row)?;

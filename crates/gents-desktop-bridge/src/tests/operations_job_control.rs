@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use gents::session::canonical_rows::{
-    output_segment_create_variables, transcript_message_create_variables,
-    CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-};
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
 use gents_desktop_core::error::BridgeErrorCode;
 use gents_protocol::job::{JobControlKind, JobControlOutcome, JobState};
+use gents_protocol::output::rows::{
+    output_segment_create_variables, transcript_message_create_variables,
+    CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
     OutputWriter, PayloadRef, SegmentRun, SourceClose, StreamDeclaration, StreamPayload,

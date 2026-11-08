@@ -402,8 +402,9 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
     use crate::lean_vocab_test::{
         lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
     };
+    use gents::documents::apply_desired_state_plan;
     use gents::store::config_client::{
-        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
+        DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
     };
     use gents::store::graphql::{created_doc_id, escape_graphql_string};
     use gents::NodeIdentity;
@@ -950,8 +951,7 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
                         .transact_write("test.self_config.update", |txn| {
                             let plan = &plan;
                             Box::pin(async move {
-                                gents::store::config_client::apply_desired_state_plan(txn, plan)
-                                    .await
+                                gents::documents::apply_desired_state_plan(txn, plan).await
                             })
                         })
                         .await

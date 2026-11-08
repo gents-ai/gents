@@ -83,7 +83,7 @@ impl ToolCallLifecycle {
             },
         ).await?;
         self.await_mode = AwaitMode::Background;
-        crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+        crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
             &self.access()?,
             &self.node_did,
             &self.actor,

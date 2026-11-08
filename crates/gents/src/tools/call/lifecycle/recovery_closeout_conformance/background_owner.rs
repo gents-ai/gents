@@ -2,7 +2,8 @@ use crate::store::identity::NodeIdentity;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission_with_owner, PublishedAdmissionOptions,
 };
-use crate::tools::call::lifecycle::{AwaitMode, ToolCallLifecycle};
+use gents_protocol::tool_call::AwaitMode;
+use crate::tools::call::lifecycle::ToolCallLifecycle;
 use std::sync::Arc;
 
 use super::fixtures::{completion_obligations, update_request};
@@ -198,7 +199,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 .unwrap()
                 .execute(&format!(
                     r#"{{ AgentSession(filter: {{ {} }}, limit: 1) {{ stopped_at }} }}"#,
-                    crate::session::session_scope_filter(
+                    gents_protocol::session::session_scope_filter(
                         &node_did,
                         &session_id,
                         tool.requester_did(),
@@ -248,7 +249,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 .unwrap()
                 .execute(&format!(
                     r#"{{ AgentSession(filter: {{ {} }}, limit: 1) {{ stopped_at }} }}"#,
-                    crate::session::session_scope_filter(
+                    gents_protocol::session::session_scope_filter(
                         &node_did,
                         &session_id,
                         tool.requester_did(),
@@ -456,7 +457,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         .unwrap()
         .execute(&format!(
             r#"{{ AgentSession(filter: {{ {} }}, limit: 1) {{ stopped_at }} }}"#,
-            crate::session::session_scope_filter(&node_did, &session_id, tool.requester_did(),)
+            gents_protocol::session::session_scope_filter(&node_did, &session_id, tool.requester_did(),)
         ))
         .await
         .unwrap();
@@ -483,7 +484,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         .unwrap()
         .execute(&format!(
             r#"{{ AgentSession(filter: {{ {} }}, limit: 1) {{ stopped_at }} }}"#,
-            crate::session::session_scope_filter(&node_did, &session_id, tool.requester_did())
+            gents_protocol::session::session_scope_filter(&node_did, &session_id, tool.requester_did())
         ))
         .await
         .unwrap();

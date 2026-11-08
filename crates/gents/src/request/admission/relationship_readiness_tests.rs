@@ -7,9 +7,9 @@ use crate::request::lifecycle::{
     build_signed_client_request, ClaimOutcome, ExecutionOrigin, RequestIdentity, RequestLifecycle,
     RequestSigner, RequestSpec,
 };
-use crate::request::watcher::AgentRequest;
 use crate::store::config_client::{ConfigAccess, NodePermission};
 use crate::store::identity::{KeyIdentity, NodeIdentity};
+use gents_protocol::row::AgentRequest;
 
 async fn decision(
     access: &ConfigAccess,
@@ -207,7 +207,7 @@ async fn exercise_readiness(same_agent: bool) {
     let rows = agent_access
         .execute(&format!(
             "{{ AgentRequest {{ {} }} }}",
-            crate::SIGNED_REQUEST_FIELDS
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
         ))
         .await
         .unwrap();

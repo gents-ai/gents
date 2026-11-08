@@ -1,7 +1,8 @@
 use gents::request::lifecycle::ClaimOutcome;
-use gents::request::watcher::{AgentRequest, DefraWatcher};
+use gents::request::watcher::DefraWatcher;
 use gents::Watcher as _;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequest;
 use gents_protocol::row::AgentRequestRow;
 
 use crate::support::{first_row, test_db};

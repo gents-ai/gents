@@ -354,7 +354,7 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
     .unwrap();
     let response = agent_access.execute(&format!(
         r#"{{ AgentRequest(filter: {{request_id: {{_eq: "retained-processing"}}}}) {{ {} }} }}"#,
-        crate::request::watcher::AGENT_REQUEST_FIELDS,
+        gents_protocol::row::AGENT_REQUEST_FIELDS,
     )).await.unwrap();
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();

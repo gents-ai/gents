@@ -212,7 +212,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
                     })
                     .collect(),
                 )?;
-                gents::store::config_client::apply_desired_state_plan(txn, &plan).await
+                gents::documents::apply_desired_state_plan(txn, &plan).await
             })
         })
         .await

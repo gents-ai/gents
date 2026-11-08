@@ -351,7 +351,7 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
     let request_response = agent_access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "pending-tool-request" }} }}) {{ {} }} }}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS
+            gents_protocol::row::AGENT_REQUEST_FIELDS
         ))
         .await
         .unwrap();
@@ -491,10 +491,10 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
         publish_accepted_on_claimed_request, published_admission_with_owner,
         PublishedAdmissionOptions,
     };
-    use crate::tools::call::lifecycle::AwaitMode;
     use gents_protocol::output::{
         MessageBlock, MessagePublication, MessageRole, OutputOutcome, PayloadRef, TranscriptMessage,
     };
+    use gents_protocol::tool_call::AwaitMode;
 
     let (admitted, mut owner) = published_admission_with_owner(PublishedAdmissionOptions {
         name: "accepted-arguments-exact".into(),
@@ -574,7 +574,7 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
         .transact_write("test.unrelated_message", |txn| {
             let unresolvable = &unresolvable;
             Box::pin(async move {
-                let variables = crate::session::canonical_rows::transcript_message_bound_variables(
+                let variables = crate::store::config_client::session_children::transcript_message_bound_variables(
                     txn,
                     unresolvable,
                 )
@@ -582,7 +582,7 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
                 let session_doc = variables["input"]["session_doc_id"].as_str().unwrap();
                 let response = txn
                     .execute_with_variables(
-                        crate::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
+                        gents_protocol::output::rows::CREATE_AGENT_MESSAGE_MUTATION,
                         &variables,
                     )
                     .await?;

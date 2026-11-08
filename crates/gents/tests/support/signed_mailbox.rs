@@ -2,12 +2,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use gents::documents::apply_desired_state_plan;
 use gents::documents::{DatastoreTools, SurfaceToolDecl, Tools};
 use gents::request::lifecycle::{reserve_goal_session, submit_client_request};
 use gents::session::mailbox::canonical_mailbox_write_decl;
 use gents::store::config_client::{
-    apply_desired_state_plan, grant_selected_self_configuration, read_desired_state_record_in_txn,
-    DesiredStateApplyDocument, DesiredStateApplyPlan, GraphqlEndpoint,
+    grant_selected_self_configuration, read_desired_state_record_in_txn, DesiredStateApplyDocument,
+    DesiredStateApplyPlan, GraphqlEndpoint,
 };
 use gents::{Collection, ConfigAccess, DatastoreToolSurfaceDocument, KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{

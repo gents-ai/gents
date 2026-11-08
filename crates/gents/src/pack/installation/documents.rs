@@ -1473,8 +1473,17 @@ pub(super) async fn install_document_graph(
                 let previous_plugins = previous_plugins.clone();
                 let node_binding = node_binding.clone();
                 Box::pin(async move {
-                    txn.stage_plugin_delete_roots(&previous_plugins, &staged_plugins)
-                        .await?;
+                    txn.stage_plugin_delete_roots(
+                        &previous_plugins
+                            .iter()
+                            .map(|plugin| plugin.projected())
+                            .collect::<Vec<_>>(),
+                        &staged_plugins
+                            .iter()
+                            .map(|plugin| plugin.projected())
+                            .collect::<Vec<_>>(),
+                    )
+                    .await?;
                     tokio::task::spawn_blocking(move || {
                         let packs = reference_packs
                             .iter()

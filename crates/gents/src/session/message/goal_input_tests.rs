@@ -20,7 +20,10 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
     for (index, case) in cases.iter().enumerate() {
         let name = case["name"].as_str().unwrap();
         let f = Fixture::new(&before).await;
-        assert_eq!(case["owner"], 1, "{name}: delivery stays on the calling runtime");
+        assert_eq!(
+            case["owner"], 1,
+            "{name}: delivery stays on the calling runtime"
+        );
         let caller_agent = &f.agent;
         let session_id = format!("goal-input-{index}");
         let target = SessionMessageTarget {
@@ -247,13 +250,14 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                 .execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
                     escape_graphql_string(&staged.doc_id),
-                    crate::request::admission::SIGNED_REQUEST_FIELDS,
+                    gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
                 ))
                 .await
                 .unwrap();
             let stored: gents_protocol::row::AgentRequestRow =
                 serde_json::from_value(stored["data"]["AgentRequest"][0].clone()).unwrap();
-            crate::request::admission::verify_request_receipt_signature(&stored).unwrap();
+            crate::store::identity::request_receipt::verify_request_receipt_signature(&stored)
+                .unwrap();
             assert_eq!(
                 stored
                     .input

@@ -167,7 +167,7 @@ impl Fixture {
         let (session, agent) = access
             .transact_readonly("test.edit.targets", |txn| {
                 Box::pin(async move {
-                    let session = crate::session::load_agent_session_owner_in_txn(
+                    let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
                         txn,
                         self.identity.did(),
                         SESSION,

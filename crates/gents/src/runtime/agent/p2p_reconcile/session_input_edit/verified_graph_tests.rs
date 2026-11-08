@@ -382,12 +382,12 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                 .execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
                     escape_graphql_string(&receipt.request_doc_ids[0]),
-                    crate::request::watcher::AGENT_REQUEST_FIELDS,
+                    gents_protocol::row::AGENT_REQUEST_FIELDS,
                 ))
                 .await?;
             let row: gents_protocol::row::AgentRequestRow =
                 serde_json::from_value(request["data"]["AgentRequest"][0].clone())?;
-            let request = crate::request::watcher::AgentRequest::try_from(row)?;
+            let request = gents_protocol::row::AgentRequest::try_from(row)?;
             let (_owner, authority) =
                 crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
             let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(

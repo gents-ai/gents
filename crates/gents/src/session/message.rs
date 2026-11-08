@@ -1,14 +1,14 @@
 #[cfg(test)]
-use crate::request::lifecycle::{SessionMessageCause, SessionMessageTarget};
-#[cfg(test)]
-use crate::session::origin::SessionScope;
-#[cfg(test)]
 use crate::store::config_client::ConfigAccess;
 #[cfg(test)]
 use crate::store::graphql::escape_graphql_string;
 #[cfg(test)]
 use crate::tools::surface::AgentToolConfig;
 use anyhow::Result;
+#[cfg(test)]
+use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
+#[cfg(test)]
+use gents_protocol::session::SessionScope;
 use serde::Deserialize;
 
 #[cfg(test)]
@@ -33,7 +33,10 @@ pub(crate) use body::{load_configured_task, render_body, render_task_body};
 pub(crate) use caused::{kill, observe_caused_request, CausedObservation, KillOutcome};
 #[cfg(test)]
 pub(crate) use commit::load_receipt;
-pub(crate) use commit::{commit, stage_planned_write_in_txn, CommitError, SessionMessageReceipt};
+pub(crate) use commit::{
+    commit, stage_planned_write_in_txn, CommitError, SessionMessageCall, SessionMessageReceipt,
+    ToolCallTerminal,
+};
 pub(crate) use discovery::{agent_session_list, AgentSessionListArgs};
 pub(crate) use inspection::{agent_session_read, AgentSessionReadArgs};
 pub use interrupt::{

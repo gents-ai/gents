@@ -1,6 +1,11 @@
-use super::query::{decode_session_row, session_scope_filter, validate_agent_session};
 use super::*;
+use crate::store::config_client::agent_session::{
+    load_agent_session_owner_in_txn, load_agent_session_row_in_txn,
+};
 use anyhow::Context;
+use gents_protocol::session::{
+    decode_session_row, session_scope_filter, validate_agent_session, SESSION_SCOPE_FIELDS,
+};
 
 /// Reserve a PluginJob child in the transaction that will publish its opening.
 /// The exact pinned job and its authenticated parent are checked before any write.
@@ -303,7 +308,7 @@ async fn verify_caused_opening_in_txn(
         "agent_new provisional immutable starter changed"
     );
     let escaped = escape_graphql_string(opening_doc_id);
-    let response = txn.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 2) {{ {} }} }}"#, crate::request::admission::SIGNED_REQUEST_FIELDS)).await?;
+    let response = txn.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 2) {{ {} }} }}"#, gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)).await?;
     let rows = response["data"]["AgentRequest"]
         .as_array()
         .context("agent_new opening lookup omitted rows")?;
@@ -311,7 +316,7 @@ async fn verify_caused_opening_in_txn(
         anyhow::bail!("agent_new opening request is unavailable or ambiguous")
     };
     let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone())?;
-    crate::request::admission::verify_request_receipt_signature(&row)?;
+    crate::store::identity::request_receipt::verify_request_receipt_signature(&row)?;
     let signature = bs58::encode(&create.admission.signature).into_string();
     anyhow::ensure!(
         row.doc_id.as_deref() == Some(opening_doc_id)
@@ -320,7 +325,9 @@ async fn verify_caused_opening_in_txn(
             && row.agent_doc_id == create.agent_doc_id
             && row.admission_signer_did.as_deref() == Some(create.requester_did.as_str())
             && row.admission_signature.as_deref() == Some(signature.as_str())
-            && crate::request::admission::signed_request_matches_create(&row, create)?,
+            && crate::store::identity::request_receipt::signed_request_matches_create(
+                &row, create
+            )?,
         "agent_new staged opening differs from its signed intent"
     );
     Ok(row)
@@ -582,7 +589,7 @@ pub(crate) async fn ensure_reserved_session_in_txn(
 pub(crate) async fn finalize_reserved_runtime_session_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     session_doc: &str,
-    request: &crate::request::watcher::AgentRequest,
+    request: &gents_protocol::row::AgentRequest,
     provenance: Option<gents_protocol::session::SessionProvenance>,
 ) -> Result<()> {
     let Some(mut origin) = provenance else {
@@ -868,7 +875,7 @@ pub(crate) async fn reopen_session_in_txn(
 
 pub(crate) async fn touch_session_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
-    row: &super::rows::SessionOwnerRow,
+    row: &gents_protocol::session::SessionOwnerRow,
     now: &str,
 ) -> Result<()> {
     patch_session_in_txn(
@@ -926,52 +933,10 @@ pub(crate) async fn close_session_with_access(
         .await
 }
 
-pub(super) const SESSION_SCOPE_FIELDS: &str = "session_id node_did requester_did agent_did \
-created_at closed_at title provenance observation tags _docID";
-
-pub async fn load_agent_session_row_in_txn(
-    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
-    node_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-) -> Result<Option<super::rows::SessionOwnerRow>> {
-    Ok(load_agent_session_owner_in_txn(txn, node_did, session_id)
-        .await?
-        .filter(|row| row.session.requester_did.as_deref() == requester_did))
-}
-
-pub async fn load_agent_session_owner_in_txn(
-    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
-    node_did: &str,
-    session_id: &str,
-) -> Result<Option<super::rows::SessionOwnerRow>> {
-    let scope = format!(
-        r#"node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}"#,
-        escape_graphql_string(node_did),
-        escape_graphql_string(session_id),
-    );
-    let query = format!(
-        r#"{{
-            AgentSession(filter: {{ {scope} }}, limit: 2) {{
-                {SESSION_SCOPE_FIELDS}
-            }}
-        }}"#
-    );
-    let response = txn.execute(&query).await?;
-    let rows = response
-        .get("data")
-        .and_then(|data| data.get("AgentSession"))
-        .and_then(serde_json::Value::as_array)
-        .context("AgentSession query omitted rows")?
-        .clone();
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "duplicate AgentSession rows for session_id={session_id}"
-    );
-    rows.first().map(decode_session_row).transpose()
-}
-
-pub(super) fn touch_activity_value(row: &super::rows::SessionOwnerRow, now: &str) -> String {
+pub(super) fn touch_activity_value(
+    row: &gents_protocol::session::SessionOwnerRow,
+    now: &str,
+) -> String {
     let old = row
         .session
         .observation
@@ -988,7 +953,7 @@ pub(super) fn touch_activity_value(row: &super::rows::SessionOwnerRow, now: &str
 }
 
 pub(super) fn touched_observation(
-    row: &super::rows::SessionOwnerRow,
+    row: &gents_protocol::session::SessionOwnerRow,
     now: &str,
 ) -> gents_protocol::session::SessionObservation {
     gents_protocol::session::SessionObservation {

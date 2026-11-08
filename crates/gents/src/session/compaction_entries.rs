@@ -220,7 +220,7 @@ pub(crate) async fn load_prompt_compaction_state_with_access(
     requester_did: Option<&str>,
     through_sequence: Option<u32>,
 ) -> Result<PromptCompactionState> {
-    let scope = super::query::session_scope_filter(node_did, session_id, requester_did);
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     // A background request is claimed against an immutable transcript high
     // water mark. A compaction produced later may only shape that request when
     // its cumulative canonical cursor is itself inside the claimed snapshot.
@@ -286,7 +286,7 @@ pub async fn load_compaction_entries(
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<CompactionEntry>> {
-    let scope = super::query::session_scope_filter(node_did, session_id, requester_did);
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{
             CompactionEntry(
@@ -420,7 +420,7 @@ pub(super) async fn save_compaction_entry_with_access(
     let compacted_through_sequence = Some(compacted_through_sequence);
     let summary = summary.trim().to_string();
     let escaped_session_id = escape_graphql_string(session_id);
-    let scope = super::query::session_scope_filter(node_did, session_id, requester_did);
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let escaped_node_did = escape_graphql_string(node_did);
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_request_doc_id = escape_graphql_string(request_doc_id);
@@ -439,7 +439,7 @@ pub(super) async fn save_compaction_entry_with_access(
             move |txn| {
                 Box::pin(async move {
                     let (session_doc_id, selected_agent) =
-                        crate::session::canonical_rows::agent_session_child_binding_in_txn(
+                        crate::store::config_client::session_children::agent_session_child_binding_in_txn(
                             txn,
                             node_did,
                             session_id,

@@ -119,9 +119,7 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
     user_access
         .transact_write("test.schedule.plan", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await?;
     let planned = user_access
@@ -147,9 +145,7 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
     user_access
         .transact_write("test.schedule.update", |txn| {
             let plan = &update_plan;
-            Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await?;
     let edited = user_access
@@ -364,7 +360,7 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
     }).await?;
     let trigger_doc =
         gents_protocol::graphql::extract_mutation_doc_id(&trigger_response, "Trigger")?;
-    let task = crate::runtime::snapshot::ResolvedTask {
+    let task = crate::documents::automation::ResolvedTask {
         emit_outcome: false,
         task_id: "task".into(),
         name: None,
@@ -375,7 +371,7 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
         output_schema_ref: None,
         hooks: Vec::new(),
     };
-    let schedule = crate::runtime::snapshot::ResolvedSchedule {
+    let schedule = crate::documents::automation::ResolvedSchedule {
         session_id_template: None,
         trigger_doc_id: trigger_doc,
         schedule_doc_id: schedule_doc.clone(),
@@ -384,7 +380,7 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
         task,
         cadence: crate::documents::ScheduleCadence::Interval { interval_secs: 60 },
         enabled: true,
-        concurrency: crate::runtime::snapshot::ConcurrencyMode::Serial,
+        concurrency: crate::documents::ConcurrencyMode::Serial,
     };
     let snapshot = crate::triggers::engine::tests::snapshot_with_agent_and_schedules(
         agent,

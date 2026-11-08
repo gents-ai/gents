@@ -6,10 +6,8 @@ use super::presentation::{
 };
 use super::TerminalFields;
 use crate::request::lifecycle::queue::next_append_sequence_in_transaction;
-use crate::session::canonical_rows::{
-    decode_transcript_message_row, output_segment_bound_variables,
-    transcript_message_bound_variables, AGENT_MESSAGE_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
-    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+use crate::store::config_client::session_children::{
+    output_segment_bound_variables, transcript_message_bound_variables,
 };
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::{created_doc_id, escape_graphql_string};
@@ -17,6 +15,10 @@ use crate::tools::call::lifecycle::ToolCallState;
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
+use gents_protocol::output::rows::{
+    decode_transcript_message_row, AGENT_MESSAGE_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
+    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
     OutputWriter, PayloadPresentation, PresentedPayload, SegmentRun, SourceClose,

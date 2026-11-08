@@ -12,50 +12,11 @@ use crate::runtime::node_readiness_publisher::{
 };
 use crate::runtime::snapshot::ActiveRuntimeSnapshot;
 use crate::store::graphql::escape_graphql_string;
+use gents_protocol::node_readiness::{ReconcilePhase, ReconcileResult};
 
 /// Reconcile-phase transitions are only observable through this event stream:
 /// `NodeRuntime.reconcile_phase` holds only the phase the runtime is in now.
 pub(crate) const RECONCILE_PHASE_EVENT_TARGET: &str = "gents.runtime.reconcile_phase";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReconcilePhase {
-    Idle,
-    Debouncing,
-    Resolving,
-    Diffing,
-    Applying,
-}
-
-impl ReconcilePhase {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Idle => "idle",
-            Self::Debouncing => "debouncing",
-            Self::Resolving => "resolving",
-            Self::Diffing => "diffing",
-            Self::Applying => "applying",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReconcileResult {
-    Startup,
-    Noop,
-    Applied,
-    Error,
-}
-
-impl ReconcileResult {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Startup => "startup",
-            Self::Noop => "noop",
-            Self::Applied => "applied",
-            Self::Error => "error",
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeStatusRow {

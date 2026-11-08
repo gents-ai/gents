@@ -88,9 +88,11 @@ async fn signed_edit_targets(
         .transact_readonly("test.input_edit.targets", |txn| {
             Box::pin(async move {
                 let session =
-                    gents::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
-                        .await?
-                        .expect("session exists");
+                    gents::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn, node_did, session_id,
+                    )
+                    .await?
+                    .expect("session exists");
                 let (agent_doc, _) = gents::store::config_client::read_desired_state_record_in_txn(
                     txn,
                     gents::Collection::Agent,

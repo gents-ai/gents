@@ -61,7 +61,7 @@ pub(super) async fn load(
     let Some(cutoff) = cutoff else {
         return Ok(Vec::new());
     };
-    let scope = crate::session::session_scope_filter(
+    let scope = gents_protocol::session::session_scope_filter(
         &request.node_did,
         &request.session_id,
         request.requester_did.as_deref(),
@@ -72,7 +72,7 @@ pub(super) async fn load(
             let mut assignments = crate::goal::load_request_assignment_scopes(txn, &request.node_did, &request.session_id).await?;
             let validate_wake = |row: &gents_protocol::row::AgentRequestRow| -> Result<()> {
                 anyhow::ensure!(row.input.as_ref().is_some_and(crate::request::lifecycle::is_background_completion_request), "notification receipt does not belong to a background wake");
-                crate::request::admission::verify_runtime_local_control_receipt(row, &request.node_did,
+                crate::store::identity::request_receipt::verify_runtime_local_control_receipt(row, &request.node_did,
                     row.caused_by_parent_request_id.as_deref().context("background wake receipt has no signed parent")?,
                     request.requester_did.as_deref().unwrap_or(&request.node_did))?;
                 Ok(())
@@ -102,8 +102,8 @@ pub(super) async fn load(
             let keys = &claimed;
             let mut headers = Vec::new();
             for batch in keys.chunks(128) {
-                let response = txn.execute(&format!("{{AgentMessage(filter: {{{scope}, sequence: {{_le: {cutoff}}}, message_key: {{_in: {}}}}}) {{{}}}}}", graphql_string_list_literal(batch.iter().map(String::as_str)), crate::session::canonical_rows::AGENT_MESSAGE_FIELDS)).await?;
-                headers.extend(rows(&response, "AgentMessage")?.iter().map(crate::session::canonical_rows::decode_transcript_message_row).collect::<Result<Vec<_>>>()?);
+                let response = txn.execute(&format!("{{AgentMessage(filter: {{{scope}, sequence: {{_le: {cutoff}}}, message_key: {{_in: {}}}}}) {{{}}}}}", graphql_string_list_literal(batch.iter().map(String::as_str)), gents_protocol::output::rows::AGENT_MESSAGE_FIELDS)).await?;
+                headers.extend(rows(&response, "AgentMessage")?.iter().map(|row| gents_protocol::output::rows::decode_transcript_message_row(row).map_err(anyhow::Error::from)).collect::<Result<Vec<_>>>()?);
             }
             anyhow::ensure!(headers.len() == keys.len() && headers.iter().map(|row| &row.message.message_key).collect::<BTreeSet<_>>().len() == keys.len(), "current wake notifications are missing or ambiguous");
             headers.sort_by_key(|row| row.message.sequence);

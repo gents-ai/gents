@@ -43,7 +43,7 @@ pub async fn validate_position(read: &impl ConfigRead, row: &AgentRequestRow) ->
                 {} superseded_by_request_doc_id failure_reason
             }} }}"#,
                 escape_graphql_string(&position.replaces_request_doc_id),
-                crate::request::admission::SIGNED_REQUEST_FIELDS,
+                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
             ))
             .await?;
         let previous: Vec<AgentRequestRow> =
@@ -51,7 +51,7 @@ pub async fn validate_position(read: &impl ConfigRead, row: &AgentRequestRow) ->
         let [previous] = previous.as_slice() else {
             return Err(InvalidQueuePosition.into());
         };
-        crate::request::admission::verify_request_receipt_signature(previous)
+        crate::store::identity::request_receipt::verify_request_receipt_signature(previous)
             .map_err(|_| InvalidQueuePosition)?;
         let old_input = previous.input.as_ref().ok_or(InvalidQueuePosition)?;
         let old_queue = old_input.queue.as_ref().ok_or(InvalidQueuePosition)?;

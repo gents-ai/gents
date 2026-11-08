@@ -182,7 +182,7 @@ pub async fn verify(
         Goal(filter:{{node_did:{{_eq:"{node_literal}"}},session_id:{{_eq:"{session_literal}"}}}}){{{}}}
     }}"#,
         gents::SIGNED_REQUEST_FIELDS,
-        gents::goal::GOAL_FIELDS
+        gents_protocol::goal::GOAL_FIELDS
     );
     let value = access.execute(&query).await?;
     let controls = value["data"]["AgentSessionGoalControl"]

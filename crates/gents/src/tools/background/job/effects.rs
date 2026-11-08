@@ -11,12 +11,13 @@ use gents_protocol::job::{JobEffects, JobScratch, JobSpawn};
 use gents_protocol::request_admission::AgentRequestCreate;
 use sha2::{Digest, Sha256};
 
-use crate::request::lifecycle::{
-    next_request_hop, RequestHopCause, SessionMessageCause, SessionMessageTarget,
-};
-use crate::session::origin::SessionScope;
 use crate::tools::background::job::admit::{StepChild, StepContext, StepRow};
 use crate::tools::background::job::keys::{job_message_key, job_session_id, job_spawn_key};
+use gents_protocol::request_lifecycle::next_request_hop;
+use gents_protocol::request_lifecycle::RequestHopCause;
+use gents_protocol::request_lifecycle::SessionMessageCause;
+use gents_protocol::request_lifecycle::SessionMessageTarget;
+use gents_protocol::session::SessionScope;
 
 const SCRATCH_MAX_BYTES: u64 = 1_048_576;
 const SCRATCH_MAX_FILES: u32 = 32;
@@ -398,7 +399,7 @@ async fn one_request(
                 {}
             }} }}"#,
             crate::store::graphql::escape_graphql_string(retry_key),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ))
         .await?;
     let rows = response
@@ -417,7 +418,7 @@ async fn one_request(
         .transpose()
         .context("decoding job request fingerprint")?;
     if let Some(stored) = &stored {
-        crate::request::admission::verify_request_receipt_signature(stored)?;
+        crate::store::identity::request_receipt::verify_request_receipt_signature(stored)?;
     }
     Ok(stored)
 }
@@ -454,9 +455,9 @@ mod tests {
     use serde_json::json;
 
     use super::{admit_scratch, interrupt_slots, spawn_cwd, write_scratch};
-    use crate::session::origin::SessionScope;
     use crate::store::config_client::ConfigAccess;
     use gents_protocol::job::JobScratch;
+    use gents_protocol::session::SessionScope;
 
     fn file(name: &str, content: &str) -> JobScratch {
         JobScratch {
@@ -631,7 +632,9 @@ mod tests {
             session_id: "child".into(),
             requester_did: None,
         };
-        assert!(stamp(&ConfigAccess::local(node.clone()), &child).await.is_none());
+        assert!(stamp(&ConfigAccess::local(node.clone()), &child)
+            .await
+            .is_none());
         assert!(interrupt_slots(
             &node,
             &crate::ConfigAccess::local(node.clone()),
@@ -641,7 +644,9 @@ mod tests {
         )
         .await
         .is_err());
-        assert!(stamp(&ConfigAccess::local(node.clone()), &child).await.is_none());
+        assert!(stamp(&ConfigAccess::local(node.clone()), &child)
+            .await
+            .is_none());
         node.shutdown().await.expect("shut down test node");
     }
 
@@ -681,7 +686,6 @@ mod tests {
         );
     }
 
-    use crate::request::lifecycle::SessionMessageCause;
     use crate::tools::background::job::admit::{
         HostFacts, StepCall, StepChild, StepContext, StepRow,
     };
@@ -695,6 +699,7 @@ mod tests {
         DynamicMode, JobCeiling, JobChildState, JobEffects, JobMessage, JobOrigin, JobPin,
         JobPolicy, JobSpawn, JobState,
     };
+    use gents_protocol::request_lifecycle::SessionMessageCause;
 
     struct Harness {
         node: Arc<EmbeddedNode>,
@@ -718,11 +723,13 @@ mod tests {
         .unwrap();
         let tool = &admission.tool;
         let request_doc_id = tool.request_doc_id().unwrap().to_owned();
-        let caller =
-            crate::request::binding::load_agent_request_by_doc_id_with_access(&tool.access().unwrap(), &request_doc_id)
-                .await
-                .unwrap()
-                .unwrap();
+        let caller = crate::request::binding::load_agent_request_by_doc_id_with_access(
+            &tool.access().unwrap(),
+            &request_doc_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
         let cause = SessionMessageCause {
             caller_node_did: admission.node_did.clone(),
             caller_agent_did: caller.agent_did.clone(),
@@ -936,15 +943,12 @@ mod tests {
         let fresh_refs = &fresh_refs;
         harness
             .access
-            .transact_write(
-            "plugin_job.stage_effects",
-            move |txn| {
+            .transact_write("plugin_job.stage_effects", move |txn| {
                 Box::pin(
                     async move { super::stage_effects_in_txn(txn, job, fresh_refs, effects).await },
                 )
-            },
-        )
-        .await
+            })
+            .await
     }
 
     async fn by_key(access: &ConfigAccess, key: &str) -> Vec<serde_json::Value> {
@@ -980,11 +984,17 @@ mod tests {
         stage(&harness, &[kept], &effects, &harness.row)
             .await
             .unwrap();
-        let rows = by_key(&harness.access, &job_spawn_key(&harness.row.root, "kept", 0)).await;
+        let rows = by_key(
+            &harness.access,
+            &job_spawn_key(&harness.row.root, "kept", 0),
+        )
+        .await;
         assert_eq!(rows.len(), 1);
-        assert!(by_key(&harness.access, &job_spawn_key(&harness.row.root, "old", 0))
-            .await
-            .is_empty());
+        assert!(
+            by_key(&harness.access, &job_spawn_key(&harness.row.root, "old", 0))
+                .await
+                .is_empty()
+        );
         let row = &rows[0];
         assert_eq!(
             row["caused_by_parent_request_id"],
@@ -1021,11 +1031,12 @@ mod tests {
         let key = job_spawn_key(&harness.row.root, "worker", 0);
         let rows = by_key(&harness.access, &key).await;
         let doc = rows[0]["_docID"].as_str().unwrap();
-        let response = harness.access
+        let response = harness
+            .access
             .execute(&format!(
                 "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
                 crate::store::graphql::escape_graphql_string(doc),
-                crate::request::watcher::AGENT_REQUEST_FIELDS,
+                gents_protocol::row::AGENT_REQUEST_FIELDS,
             ))
             .await
             .unwrap();
@@ -1051,7 +1062,9 @@ mod tests {
             request,
             60,
         );
-        lifecycle.bind_managed_agent(harness.agent.as_ref()).unwrap();
+        lifecycle
+            .bind_managed_agent(harness.agent.as_ref())
+            .unwrap();
         lifecycle.set_client_claim_admission(admission);
         assert_eq!(
             lifecycle.claim_with_identity().await.unwrap(),
@@ -1122,7 +1135,11 @@ mod tests {
         stage(&harness, &[first], &effects, &harness.row)
             .await
             .unwrap();
-        let rows = by_key(&harness.access, &job_spawn_key(&harness.row.root, "kept", 0)).await;
+        let rows = by_key(
+            &harness.access,
+            &job_spawn_key(&harness.row.root, "kept", 0),
+        )
+        .await;
         assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0]["content"],
@@ -1149,16 +1166,15 @@ mod tests {
             cause: &harness.cause,
         };
         let (job, fresh, effects) = (&job, &fresh, &effects);
-        let staged = harness.access.transact_write(
-            "plugin_job.stage_effects",
-            move |txn| {
+        let staged = harness
+            .access
+            .transact_write("plugin_job.stage_effects", move |txn| {
                 Box::pin(async move {
                     super::stage_recorded_effects_in_txn(txn, job, fresh, effects).await
                 })
-            },
-        )
-        .await
-        .unwrap();
+            })
+            .await
+            .unwrap();
         let lost = || anyhow::anyhow!("commit acknowledgement lost");
         // Production recovers as the job's caller Agent, which owns the children.
         let caller = || Some(identity::Did::new(harness.cause.caller_agent_did.clone()).unwrap());
@@ -1197,11 +1213,19 @@ mod tests {
         )
         .await
         .unwrap();
-        let first = by_key(&harness.access, &job_spawn_key(&harness.row.root, "kept", 0)).await;
+        let first = by_key(
+            &harness.access,
+            &job_spawn_key(&harness.row.root, "kept", 0),
+        )
+        .await;
         stage(&harness, &[kept], &effects, &harness.row)
             .await
             .unwrap();
-        let second = by_key(&harness.access, &job_spawn_key(&harness.row.root, "kept", 0)).await;
+        let second = by_key(
+            &harness.access,
+            &job_spawn_key(&harness.row.root, "kept", 0),
+        )
+        .await;
         assert_eq!(second.len(), 1);
         assert_eq!(second[0]["_docID"], first[0]["_docID"]);
         harness.close().await;
@@ -1226,7 +1250,11 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("integrity"), "{error:#}");
-        let rows = by_key(&harness.access, &job_spawn_key(&harness.row.root, "kept", 0)).await;
+        let rows = by_key(
+            &harness.access,
+            &job_spawn_key(&harness.row.root, "kept", 0),
+        )
+        .await;
         assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0]["content"],
@@ -1287,11 +1315,12 @@ mod tests {
                 )
             )
         );
-        assert!(
-            by_key(&harness.access, &job_message_key(&harness.row.root, "slot", 0, 1))
-                .await
-                .is_empty()
-        );
+        assert!(by_key(
+            &harness.access,
+            &job_message_key(&harness.row.root, "slot", 0, 1)
+        )
+        .await
+        .is_empty());
         harness.close().await;
     }
 
@@ -1303,7 +1332,11 @@ mod tests {
         stage(&harness, &[kept], &effects, &harness.row)
             .await
             .unwrap();
-        let rows = by_key(&harness.access, &job_spawn_key(&harness.row.root, "kept", 0)).await;
+        let rows = by_key(
+            &harness.access,
+            &job_spawn_key(&harness.row.root, "kept", 0),
+        )
+        .await;
         assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0]["content"],
@@ -1335,7 +1368,11 @@ mod tests {
         stage(&harness, &[kept], &effects, &harness.row)
             .await
             .unwrap();
-        let rows = by_key(&harness.access, &job_spawn_key(&harness.row.root, "kept", 0)).await;
+        let rows = by_key(
+            &harness.access,
+            &job_spawn_key(&harness.row.root, "kept", 0),
+        )
+        .await;
         assert_eq!(input_of(&rows[0])["cwd"], "/work/review_seeded_bug");
         harness.close().await;
     }

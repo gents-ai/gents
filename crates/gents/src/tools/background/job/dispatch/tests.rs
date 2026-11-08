@@ -1,7 +1,8 @@
 use super::super::admit::{admit_step, StepCall};
 use super::*;
-use crate::tools::call::lifecycle::{AwaitMode, ToolRowKind};
+use crate::tools::call::lifecycle::ToolRowKind;
 use gents_protocol::job::{DynamicMode, JobCeiling, JobPolicy, JobState};
+use gents_protocol::tool_call::AwaitMode;
 
 fn ceiling() -> JobCeiling {
     JobCeiling {

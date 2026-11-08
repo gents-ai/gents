@@ -237,6 +237,28 @@ pub fn content_digest_hex(bytes: &[u8]) -> String {
     format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(bytes))
 }
 
+impl InstalledPlugin {
+    /// The facts the node's plugin delete-source projection reads from an
+    /// installed record.
+    pub(crate) fn projected(&self) -> crate::store::local::ProjectedPlugin {
+        crate::store::local::ProjectedPlugin {
+            coordinate: format!("{}/{}", self.namespace, self.name),
+            digest: self.digest.clone(),
+            deletes: self
+                .declaration
+                .data
+                .as_ref()
+                .is_some_and(|data| data.ops.iter().any(|op| op == "delete")),
+        }
+    }
+}
+
+pub(crate) fn projected_plugins(
+    records: &[InstalledPlugin],
+) -> Vec<crate::store::local::ProjectedPlugin> {
+    records.iter().map(InstalledPlugin::projected).collect()
+}
+
 pub fn read_bytes(home: &Path, digest_hex: &str) -> Result<Vec<u8>> {
     let path = store_path(home, digest_hex)?;
     std::fs::read(&path)

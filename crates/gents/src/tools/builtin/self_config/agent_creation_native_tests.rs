@@ -51,12 +51,12 @@ async fn claimed_client_tool_context(
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ {} }} }}"#,
             crate::store::graphql::escape_graphql_string(request_id),
-            crate::SIGNED_REQUEST_FIELDS
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
         ))
         .await?;
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone())?;
-    let request = crate::request::watcher::AgentRequest::try_from(row)?;
+    let request = gents_protocol::row::AgentRequest::try_from(row)?;
     let (_authority_owner, authority) =
         crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
     let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(

@@ -1,6 +1,7 @@
 use super::*;
 use crate::lean_vocab_test::LeanRestartRowKind;
-use gents::tools::call::lifecycle::{AwaitMode, ToolRowKind};
+use gents::tools::call::lifecycle::ToolRowKind;
+use gents_protocol::tool_call::AwaitMode;
 
 pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
     let cases = lean_r6_backgrounding_cases();

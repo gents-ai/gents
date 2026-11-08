@@ -99,12 +99,13 @@ async fn authority_rejection(
         }
     }
     crate::store::graphql::fence_arrivals(txn, "AgentSession").await?;
-    let Some(session) = crate::session::load_agent_session_owner_in_txn(
-        txn,
-        &command.node_did,
-        &command.session_id,
-    )
-    .await?
+    let Some(session) =
+        crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+            txn,
+            &command.node_did,
+            &command.session_id,
+        )
+        .await?
     else {
         // Processing is reached only once the command's physical session was
         // observed as this Agent's, so an unresolved logical ID is a binding
@@ -361,7 +362,7 @@ pub(crate) async fn process_command(
             if row.node_did != identity.did() {
                 return Ok(None);
             }
-            let working_agent = match crate::session::load_agent_session_owner_in_txn(txn, &row.node_did, &row.session_id).await? {
+            let working_agent = match crate::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, &row.node_did, &row.session_id).await? {
                 Some(session) => session.session.agent_did,
                 None => match physical_session_agent(txn, &row).await? {
                     Some(agent) => agent,
@@ -426,7 +427,7 @@ pub(crate) async fn process_command(
                         match rejection {
                             Some(reason) => (SessionInputEditOutcome::Rejected, reason, Vec::new()),
                             None => {
-                                let session = crate::session::load_agent_session_owner_in_txn(txn, &command.node_did, &command.session_id).await?.context("validated session disappeared")?;
+                                let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, &command.node_did, &command.session_id).await?.context("validated session disappeared")?;
                                 let requester = session.session.requester_did.context("validated session lacks requester provenance")?;
                                 match crate::request::lifecycle::queue::validate_pending_user_edit_in_txn(txn, &command.node_did, &command.session_id,
                                     &requester, &command.requester_did, &command.edit, &command.replacements).await? {
@@ -460,9 +461,11 @@ async fn test_signed_replacement_fields(
         .transact_readonly("test.edit.targets", |txn| {
             Box::pin(async move {
                 let session =
-                    crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
-                        .await?
-                        .context("test session missing")?;
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn, node_did, session_id,
+                    )
+                    .await?
+                    .context("test session missing")?;
                 let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Agent,

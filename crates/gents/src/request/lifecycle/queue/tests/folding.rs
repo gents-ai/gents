@@ -197,9 +197,9 @@ pub(super) async fn claim_head(
 /// claim, as the daemon does; unsigned fixture rows carry no admission.
 async fn verify_claim_admission(
     db: &TestDb,
-    request: crate::request::watcher::AgentRequest,
+    request: gents_protocol::row::AgentRequest,
 ) -> (
-    crate::request::watcher::AgentRequest,
+    gents_protocol::row::AgentRequest,
     Option<crate::request::admission::ClientClaimAdmission>,
 ) {
     let escaped = escape_graphql_string(&request.doc_id);
@@ -232,7 +232,7 @@ async fn verify_claim_admission(
 async fn claim_request(
     db: &TestDb,
     bound: &RapidHashMap<u64, String>,
-    request: crate::request::watcher::AgentRequest,
+    request: gents_protocol::row::AgentRequest,
     admitted: &[u64],
 ) -> ActiveTurn {
     let head = request.request_id.clone();
@@ -830,7 +830,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                 .await
                 .into_iter()
                 .filter_map(|key| {
-                    key.strip_prefix(&crate::session::canonical_rows::authored_message_key(
+                    key.strip_prefix(&gents_protocol::output::rows::authored_message_key(
                         &head_doc, "",
                     ))
                     .map(str::to_owned)

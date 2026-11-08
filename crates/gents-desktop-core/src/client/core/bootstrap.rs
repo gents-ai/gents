@@ -79,7 +79,7 @@ impl ClientCore {
         checkpoint("paths_and_identity");
         let projection = gents::store::local::document_projector(
             Arc::new(node_identity.clone()),
-            gents::tools::surface::ToolCeiling::meta_only(),
+            std::sync::Arc::new(gents::tools::surface::ToolCeiling::meta_only()),
         )?;
         let mut node_builder =
             gents::store::local::store_key::persistent_builder(paths.node_data_dir(), &store_key)?

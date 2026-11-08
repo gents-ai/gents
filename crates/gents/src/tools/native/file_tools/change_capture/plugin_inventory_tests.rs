@@ -114,14 +114,15 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
         |txn| {
             let parent = &parent;
             Box::pin(async move {
-                let session = crate::session::load_agent_session_row_in_txn(
-                    txn,
-                    parent.node_did(),
-                    parent.session_id(),
-                    parent.requester_did(),
-                )
-                .await?
-                .unwrap();
+                let session =
+                    crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+                        txn,
+                        parent.node_did(),
+                        parent.session_id(),
+                        parent.requester_did(),
+                    )
+                    .await?
+                    .unwrap();
                 Ok::<_, anyhow::Error>(gents_protocol::file_inventory::FileInventoryAdmission {
                     session_doc_id: session.doc_id,
                     request: gents_protocol::session_hydration::HydrationRequest {

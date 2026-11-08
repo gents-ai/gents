@@ -1059,23 +1059,23 @@ async fn terminalization_with_principal_output(
     let request_doc_id = lifecycle.request().doc_id.clone();
     let segments = agent_response(&lifecycle.access().unwrap(), &format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {} }} }}"#,
-            crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS
+            gents_protocol::output::rows::AGENT_OUTPUT_SEGMENT_FIELDS
         )).await;
     let segments = segments.data.as_ref().unwrap()["AgentOutputSegment"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|row| crate::session::canonical_rows::decode_output_segment_row(row).unwrap())
+        .map(|row| gents_protocol::output::rows::decode_output_segment_row(row).unwrap())
         .collect::<Vec<_>>();
     let messages = agent_response(&lifecycle.access().unwrap(), &format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {} }} }}"#,
-            crate::session::canonical_rows::AGENT_MESSAGE_FIELDS
+            gents_protocol::output::rows::AGENT_MESSAGE_FIELDS
         )).await;
     let messages = messages.data.as_ref().unwrap()["AgentMessage"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|row| crate::session::canonical_rows::decode_transcript_message_row(row).unwrap())
+        .map(|row| gents_protocol::output::rows::decode_transcript_message_row(row).unwrap())
         .collect::<Vec<_>>();
     for replica in 0..noise {
         let other_request = format!("bae-noise-request-{replica}");
@@ -1087,10 +1087,10 @@ async fn terminalization_with_principal_output(
             let response = node
                 .execute_request(
                     defra_node::QueryRequest::new(
-                        crate::session::canonical_rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                        gents_protocol::output::rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
                     )
                     .with_variables(
-                        crate::session::canonical_rows::output_segment_create_variables(&segment)
+                        gents_protocol::output::rows::output_segment_create_variables(&segment)
                             .unwrap(),
                     ),
                 )
@@ -1105,13 +1105,11 @@ async fn terminalization_with_principal_output(
             let response = node
                 .execute_request(
                     defra_node::QueryRequest::new(
-                        crate::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
+                        gents_protocol::output::rows::CREATE_AGENT_MESSAGE_MUTATION,
                     )
                     .with_variables(
-                        crate::session::canonical_rows::transcript_message_create_variables(
-                            &message,
-                        )
-                        .unwrap(),
+                        gents_protocol::output::rows::transcript_message_create_variables(&message)
+                            .unwrap(),
                     ),
                 )
                 .await;
@@ -1170,7 +1168,7 @@ async fn terminalization_scale_grid() {
 
 #[tokio::test]
 async fn background_output_query_work_is_independent_of_principal_history() {
-    use crate::session::canonical_rows::{
+    use gents_protocol::output::rows::{
         output_segment_create_variables, request_output_segments_query,
         CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };

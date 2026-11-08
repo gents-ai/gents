@@ -100,7 +100,7 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
 
 #[test]
 fn generated_causal_hop_cases_match_native_materializer() {
-    use gents::{
+    use gents_protocol::request_lifecycle::{
         next_request_hop, request_hop_within_bound, RequestHopCapObservation, RequestHopCause,
     };
 

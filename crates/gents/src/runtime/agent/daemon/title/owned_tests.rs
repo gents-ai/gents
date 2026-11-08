@@ -29,7 +29,7 @@ use crate::lean_vocab_test::{
     LeanPayloadKind, LeanTerminalSelection,
 };
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
-use crate::request::watcher::{AgentRequest, DefraWatcher};
+use crate::request::watcher::DefraWatcher;
 use crate::runtime::agent::completion_retry::CompletionRetryProfileFields;
 use crate::runtime::agent::daemon::AgentDaemonInit;
 use crate::runtime::agent::runtime::{
@@ -37,7 +37,6 @@ use crate::runtime::agent::runtime::{
 };
 use crate::runtime::snapshot::ActiveRuntimeSnapshot;
 use crate::runtime::status::RuntimeStatusHandle;
-use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 use crate::store::config_client::ConfigAccess;
 use crate::store::identity::{NodeIdentity, RuntimeNode};
 use crate::tools::call::hook::{
@@ -45,6 +44,8 @@ use crate::tools::call::hook::{
 };
 use crate::tools::surface::AgentToolSurfaceConfig;
 use crate::turn::prompt::LayeredPromptBuilder;
+use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
+use gents_protocol::row::AgentRequest;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct ReviewUsage {
@@ -298,14 +299,14 @@ async fn install_review_policy(
         update: document,
     }])
     .unwrap();
-    fixture.user_access.transact_write("test.review_policy", |txn| {
-        let plan = &plan;
-        Box::pin(
-            async move { crate::store::config_client::apply_desired_state_plan(txn, plan).await },
-        )
-    })
-    .await
-    .unwrap();
+    fixture
+        .user_access
+        .transact_write("test.review_policy", |txn| {
+            let plan = &plan;
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .unwrap();
     selection
 }
 
@@ -1574,7 +1575,7 @@ impl TitleFixture {
         response["data"]["AgentMessage"].as_array().unwrap().len()
     }
 
-    async fn output_rows(&self) -> (Vec<crate::session::canonical_rows::OutputSegmentRow>, usize) {
+    async fn output_rows(&self) -> (Vec<gents_protocol::output::rows::OutputSegmentRow>, usize) {
         let doc = crate::store::graphql::escape_graphql_string(&self.title.doc_id);
         let query = format!("{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: \"{doc}\" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} AgentMessage(filter: {{ request_doc_id: {{ _eq: \"{doc}\" }} }}) {{ _docID }} }}");
         let response = self.agent_access()
@@ -1586,7 +1587,7 @@ impl TitleFixture {
             .as_array()
             .unwrap()
             .iter()
-            .map(decode_output_segment_row)
+            .map(|row| decode_output_segment_row(row).map_err(anyhow::Error::from))
             .collect::<anyhow::Result<Vec<_>>>()
             .unwrap();
         (rows, data["AgentMessage"].as_array().unwrap().len())

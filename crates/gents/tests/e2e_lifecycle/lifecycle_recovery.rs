@@ -1,12 +1,10 @@
-use gents::{
-    session::canonical_rows::{
-        decode_output_segment_row, decode_transcript_message_row, output_segment_create_variables,
-        transcript_message_create_variables, OutputSegmentRow, AGENT_MESSAGE_FIELDS,
-        AGENT_OUTPUT_SEGMENT_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
-        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-    },
-    tools::call::lifecycle::ToolCallLifecycle,
-    RequestLifecycle,
+use gents::tools::call::lifecycle::ToolCallLifecycle;
+use gents::RequestLifecycle;
+use gents_protocol::output::rows::{
+    decode_output_segment_row, decode_transcript_message_row, output_segment_create_variables,
+    transcript_message_create_variables, OutputSegmentRow, AGENT_MESSAGE_FIELDS,
+    AGENT_OUTPUT_SEGMENT_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
+    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_lifecycle::RequestLifecycleState;

@@ -55,7 +55,7 @@ pub(super) async fn handle_turn_request(
                 }),
             );
             if let Some(thread) = caused.as_ref() {
-                let caller = gents::session::origin::SessionScope {
+                let caller = gents_protocol::session::SessionScope {
                     node_did: state.node_did.to_string(),
                     session_id: thread.root_session_id.clone(),
                     requester_did: Some(state.local_requester_did().to_string()),

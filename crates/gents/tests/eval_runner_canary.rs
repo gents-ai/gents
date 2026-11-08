@@ -3,6 +3,7 @@ mod support;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use gents::documents::apply_desired_state_plan;
 use gents::documents::{EvalSplit, InferenceBackend, InferenceProfile};
 use gents::eval::checks::CheckRegistry;
 use gents::eval::runner::embedded::{EmbeddedExecutor, EmbeddedHome};
@@ -11,9 +12,7 @@ use gents::eval::runner::{
     TrialExecutor, TrialLocator,
 };
 use gents::eval::{load_trials, load_verdicts, Anchor, OutcomeKind, ProviderReason, TrialRecord};
-use gents::store::config_client::{
-    apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
+use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::{Collection, ConfigAccess, DocumentRuntimeOptions};
 use serde_json::{json, Value};
 use tempfile::TempDir;

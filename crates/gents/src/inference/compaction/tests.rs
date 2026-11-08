@@ -2886,7 +2886,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
             Some(requester_did.clone()),
             accepted,
             deadline,
-            crate::tools::call::lifecycle::AwaitMode::Foreground,
+            gents_protocol::tool_call::AwaitMode::Foreground,
         )
         .unwrap();
         if turn != 0 {

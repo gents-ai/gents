@@ -747,7 +747,7 @@ pub(crate) fn handle_terminal_client_method(method: &str) -> std::result::Result
 }
 
 fn tool_calls_query(request: &gents_protocol::row::AgentRequestRow) -> Result<String> {
-    let scope = gents::session::session_scope_filter(
+    let scope = gents_protocol::session::session_scope_filter(
         request.node_did.as_deref().context("tool node missing")?,
         request
             .session_id
@@ -1670,11 +1670,11 @@ mod tests {
         (dir, node)
     }
 
-    use gents::session::canonical_rows::{
+    use gents::store::graphql::single_mutation_document;
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
-    use gents::store::graphql::single_mutation_document;
     use gents_protocol::output::{
         MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
         OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,

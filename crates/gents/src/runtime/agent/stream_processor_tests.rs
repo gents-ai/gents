@@ -512,8 +512,8 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
         .blocks
         .iter()
         .all(|block| matches!(block, gents_protocol::output::MessageBlock::Text { .. })));
-    use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
     use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
+    use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
     use gents_protocol::output::{OutputOutcome, PayloadRef, SourceClose};
     let result = exec(&access, &format!(
         r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
@@ -1135,7 +1135,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         "Review background completion",
         queue,
         None,
-        crate::request::lifecycle::RequestHopCause::Continuation,
+        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
     )
     .await
     .unwrap();
@@ -1593,9 +1593,9 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
         "partial retracted text must not persist as an assistant message"
     );
 
-    use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
     use gents_protocol::output::live::reconstruct_dense_prefix;
     use gents_protocol::output::reconstruction::ObservedSegment;
+    use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
     use gents_protocol::output::{OutputSource, SourceClose};
     let result = exec(&access, &format!(
         r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,

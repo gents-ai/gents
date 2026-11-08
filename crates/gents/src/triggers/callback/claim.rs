@@ -99,7 +99,7 @@ pub async fn claim_invocation(
                         && binding.callback_id == invocation.callback_id,
                     "callback binding changed before claim"
                 );
-                crate::request::admission::observe_unattended_agent_in_txn(
+                crate::documents::observe_unattended_agent_in_txn(
                     txn,
                     node_did,
                     &invocation.agent_did,

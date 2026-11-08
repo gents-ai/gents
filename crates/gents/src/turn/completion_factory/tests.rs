@@ -3,10 +3,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::inference::resolved::SamplingConfig;
-use crate::request::watcher::AgentRequest;
 use crate::runtime::agent::completion_retry::CompletionRetryProfileFields;
 use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
 use crate::tools::surface::AgentToolSurfaceConfig;
+use gents_protocol::row::AgentRequest;
 
 fn request() -> AgentRequest {
     AgentRequest {
@@ -743,7 +743,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
         let response = access
             .execute(&format!(
                 "{{ AgentRequest {{ {} }} }}",
-                crate::SIGNED_REQUEST_FIELDS
+                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
             ))
             .await
             .unwrap();
@@ -792,7 +792,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
             let response = access
                 .execute(&format!(
                     "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc_id}\" }} }}) {{ {} }} }}",
-                    crate::SIGNED_REQUEST_FIELDS
+                    gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
                 ))
                 .await
                 .unwrap();

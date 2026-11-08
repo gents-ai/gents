@@ -615,7 +615,7 @@ async fn count_field_type_decides_whether_a_refused_obligation_can_register() {
         let tool = tool_for("CountOwner", field);
         let schema = tool.field_types().unwrap()[field].clone();
         assert!(
-            !super::can_hold_canonical_count(&schema),
+            !crate::store::config_client::schema_introspection::can_hold_canonical_count(&schema),
             "`{field}` is `{schema}`, which publication refuses"
         );
         assert!(
@@ -664,7 +664,11 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
     for (index, case) in fields.iter().enumerate() {
         let schema = case["schema"].as_str().unwrap();
         let admitted = case["accepted"].as_bool().unwrap();
-        assert_eq!(super::can_hold_canonical_count(schema), admitted, "{case}");
+        assert_eq!(
+            crate::store::config_client::schema_introspection::can_hold_canonical_count(schema),
+            admitted,
+            "{case}"
+        );
         let collection = format!("CountCarrier{index}");
         if let Some(expected_error) = case["schema_error"].as_str() {
             let error = node
@@ -739,12 +743,13 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
         );
         let introspection = crate::store::graphql::graphql_with_transaction_retry(
             &node,
-            &crate::tools::builtin::defra_query::introspection_query(&collection).unwrap(),
+            &crate::store::config_client::schema_introspection::introspection_query(&collection)
+                .unwrap(),
             "introspect count carrier",
         )
         .await
         .unwrap();
-        let decoded = crate::tools::builtin::defra_query::parse_collection_schema(
+        let decoded = crate::store::config_client::schema_introspection::parse_collection_schema(
             introspection.data.as_ref(),
         )
         .unwrap();
@@ -754,7 +759,9 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
             .find(|field| field.name == "count")
             .unwrap();
         assert_eq!(
-            super::can_hold_canonical_count(field.named_type()),
+            crate::store::config_client::schema_introspection::can_hold_canonical_count(
+                field.named_type()
+            ),
             admitted,
             "introspection: {schema}"
         );

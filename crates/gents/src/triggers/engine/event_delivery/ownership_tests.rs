@@ -23,12 +23,12 @@ fn modeled_event_execution_generations_match_runtime_projection() {
             "session_id_template":value["session_template"], "concurrency":value["concurrency"]
         }))
         .unwrap();
-        let resolved = crate::runtime::snapshot::ResolvedEventTrigger {
+        let resolved = crate::documents::automation::ResolvedEventTrigger {
             session_id_template: trigger.session_id_template.clone(),
             trigger_doc_id: value["trigger_doc"].as_str().unwrap().into(),
             trigger_id: trigger.trigger_id.clone(),
             task_id: task.task_id.clone(),
-            task: crate::runtime::agent::document_view::resolved_task_from(&task),
+            task: crate::documents::automation::resolved_task_from(&task),
             event_source_id: value["source_id"].as_str().unwrap().into(),
             event_source_doc_id: value["source_doc"].as_str().unwrap().into(),
             task_doc_id: value["task_doc"].as_str().unwrap().into(),
@@ -37,7 +37,7 @@ fn modeled_event_execution_generations_match_runtime_projection() {
             filter: None,
             enabled: true,
             concurrency: trigger.concurrency.unwrap_or_default(),
-            fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerDocument,
+            fire_mode: crate::documents::automation::EventTriggerFireMode::PerDocument,
             correlation_field: None,
             expected_count: None,
             expected_count_field: None,
@@ -46,17 +46,17 @@ fn modeled_event_execution_generations_match_runtime_projection() {
             workspace_authority: None,
         };
         (
-            super::event_execution_generation(
+            crate::documents::automation::event_execution_generation(
                 &trigger,
                 &task,
-                &super::EventConfigDocIds {
+                &crate::documents::automation::EventConfigDocIds {
                     trigger: value["trigger_doc"].as_str().unwrap(),
                     source: value["source_doc"].as_str().unwrap(),
                     task: value["task_doc"].as_str().unwrap(),
                 },
             )
             .unwrap(),
-            super::resolved_event_execution_generation(&resolved),
+            crate::documents::automation::resolved_event_execution_generation(&resolved),
         )
     };
     for case in &contract.event_execution_cases {
@@ -101,7 +101,7 @@ fn modeled_event_source_generations_match_resolved_projection() {
         })).unwrap()
     };
     let resolved =
-        |generation: &serde_json::Value| crate::runtime::snapshot::ResolvedEventTrigger {
+        |generation: &serde_json::Value| crate::documents::automation::ResolvedEventTrigger {
             event_source_id: "source".into(),
             event_source_doc_id: "source-doc".into(),
             task_doc_id: "task-doc".into(),
@@ -109,7 +109,7 @@ fn modeled_event_source_generations_match_resolved_projection() {
             trigger_doc_id: "trigger-doc".into(),
             trigger_id: "trigger".into(),
             task_id: "task".into(),
-            task: crate::runtime::snapshot::ResolvedTask {
+            task: crate::documents::automation::ResolvedTask {
                 emit_outcome: false,
                 task_id: "task".into(),
                 name: None,
@@ -126,9 +126,9 @@ fn modeled_event_source_generations_match_resolved_projection() {
             enabled: true,
             concurrency: crate::documents::ConcurrencyMode::Parallel,
             fire_mode: if generation["grouped"] == true {
-                crate::runtime::snapshot::EventTriggerFireMode::PerGroup
+                crate::documents::automation::EventTriggerFireMode::PerGroup
             } else {
-                crate::runtime::snapshot::EventTriggerFireMode::PerDocument
+                crate::documents::automation::EventTriggerFireMode::PerDocument
             },
             correlation_field: generation["correlation"].as_str().map(str::to_owned),
             expected_count: generation["expected_count"]
@@ -142,12 +142,18 @@ fn modeled_event_source_generations_match_resolved_projection() {
                 .map(str::to_owned),
         };
     for case in &contract.event_generation_cases {
-        let observed = super::event_source_generation(&source(&case["observed"])).unwrap();
-        let current = super::event_source_generation(&source(&case["current"])).unwrap();
+        let observed =
+            crate::documents::automation::event_source_generation(&source(&case["observed"]))
+                .unwrap();
+        let current =
+            crate::documents::automation::event_source_generation(&source(&case["current"]))
+                .unwrap();
         assert_eq!(observed, case["observed"], "{}", case["name"]);
         assert_eq!(current, case["current"], "{}", case["name"]);
         assert_eq!(
-            super::resolved_event_source_generation(&resolved(&case["observed"])),
+            crate::documents::automation::resolved_event_source_generation(&resolved(
+                &case["observed"]
+            )),
             observed,
             "{}",
             case["name"]

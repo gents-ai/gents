@@ -4,8 +4,9 @@ use crate::request::lifecycle::{
 };
 use crate::request::streaming::DefraStreamWriter;
 use crate::store::identity::NodeIdentity;
-use crate::tools::call::lifecycle::{AwaitMode, ToolCallLifecycle};
+use crate::tools::call::lifecycle::ToolCallLifecycle;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AwaitMode;
 use gents_protocol::{
     message::{AssistantContent, Message, ToolCall, ToolFunction},
     output::PresentationPart,
@@ -463,7 +464,7 @@ async fn canonical_background_fixture_with_input(
     let escaped = escape_graphql_string(&request_id);
     let response = db.agent_access.execute(&format!(
         r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{escaped}"}}}}, limit: 2) {{ {} }} }}"#,
-        crate::SIGNED_REQUEST_FIELDS,
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
     )).await.expect("read canonical fixture parent");
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
@@ -639,7 +640,7 @@ impl CanonicalBackgroundFixture {
             queue,
             existing_notification_doc_id,
             publication,
-            crate::request::lifecycle::RequestHopCause::Continuation,
+            gents_protocol::request_lifecycle::RequestHopCause::Continuation,
         )
         .await
     }

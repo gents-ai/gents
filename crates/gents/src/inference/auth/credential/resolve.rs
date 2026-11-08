@@ -99,8 +99,7 @@ pub(crate) async fn provider_default_account_ref(
     provider: &str,
 ) -> Result<Option<String>> {
     if txn.managed_agent_signer().is_some() {
-        return txn
-            .runtime_default_oauth_account_ref(node_did, provider)
+        return super::runtime_default_oauth_account_ref(txn, node_did, provider)
             .await
             .map_err(Into::into);
     }

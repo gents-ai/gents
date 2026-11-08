@@ -125,7 +125,7 @@ pub async fn load_applied_opening_goal_provenance(
         let data = access
             .execute_read(&format!(
                 "{{ AgentRequest(docIDs: [{ids}]) {{ {} }} }}",
-                crate::SIGNED_REQUEST_FIELDS,
+                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
             ))
             .await?;
         let requests: Vec<AgentRequestRow> = serde_json::from_value(

@@ -1,18 +1,18 @@
 use std::collections::BTreeSet;
 
-use crate::request::lifecycle::materialize::{
-    next_request_hop, request_hop_within_bound, RequestHopCause,
-};
 use crate::tools::background::job::keys::job_spawn_key;
 use crate::tools::background::job::origin::call_origin;
 use crate::tools::background::status::ProcessControlScope;
-use crate::tools::call::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
 use crate::tools::surface::EndpointScope;
+use gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
 use gents_protocol::job::{
     DynamicMode, JobCeiling, JobChildState, JobControlRequest, JobEffects, JobGuestPin,
     JobInterrupt, JobMessage, JobOrigin, JobPin, JobPolicy, JobResume, JobResumeEngine, JobSpawn,
     JobState, JobStepOutput,
 };
+use gents_protocol::request_lifecycle::next_request_hop;
+use gents_protocol::request_lifecycle::request_hop_within_bound;
+use gents_protocol::request_lifecycle::RequestHopCause;
 
 /// Lean `CallArgs`; Lean types `args` as opaque text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1808,7 +1808,7 @@ mod tests {
 
     #[test]
     fn unavailable_hop_cap_refuses_every_spawn() {
-        use crate::request::lifecycle::RequestHopCapObservation;
+        use gents_protocol::request_lifecycle::RequestHopCapObservation;
         let job = running_row(Vec::new());
         let out = effects(vec![spawn("s1", 0, "a")], &[]);
         let mut ctx = base_context();

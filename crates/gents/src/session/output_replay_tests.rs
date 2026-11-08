@@ -10,14 +10,15 @@ use gents_protocol::output::{
 };
 use gents_protocol::rendered_request::RenderedRequestSource;
 
-use super::canonical_rows::{
-    output_segment_create_variables, transcript_message_create_variables,
-    CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-};
 use super::output::replay_candidates::load_canonical_assistant_candidates;
 use super::output::replay_request::ReplayRequestReader;
 use super::output::CanonicalReplayScope;
-use crate::turn::provider_context_reduction::{capture_source_boundary, SourceBoundary};
+use crate::turn::provider_context_reduction::capture_source_boundary;
+use gents_protocol::output::rows::{
+    output_segment_create_variables, transcript_message_create_variables,
+    CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+};
+use gents_protocol::transcript::SourceBoundary;
 
 use gents_loop::claude_messages_body::{
     replay_stage, select_replay, ReplayIssuer, ReplayTag, ReplayWire, TaggedAssistantRow,
@@ -425,7 +426,7 @@ impl ReplayFixture {
             crate::store::graphql::created_doc_id(&created, "AgentOutputSegment").unwrap();
         let header = TranscriptMessage {
             native_request_id: None,
-            message_key: super::canonical_rows::authored_message_key(
+            message_key: gents_protocol::output::rows::authored_message_key(
                 &self.request_doc_id,
                 "assistant-note",
             ),
@@ -1603,19 +1604,19 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
     }
 }
 
-async fn stored_agent_request(fixture: &ReplayFixture) -> crate::request::watcher::AgentRequest {
+async fn stored_agent_request(fixture: &ReplayFixture) -> gents_protocol::row::AgentRequest {
     let response = fixture_query(
         &fixture.access,
         &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             crate::store::graphql::escape_graphql_string(&fixture.request_doc_id),
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
+            gents_protocol::row::AGENT_REQUEST_FIELDS,
         ),
     )
     .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let row = response.data.unwrap()["AgentRequest"][0].clone();
-    crate::request::watcher::AgentRequest::try_from(
+    gents_protocol::row::AgentRequest::try_from(
         serde_json::from_value::<gents_protocol::row::AgentRequestRow>(row).unwrap(),
     )
     .unwrap()
@@ -2050,7 +2051,11 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
             .await
             .unwrap();
         let rows = response["data"]["AgentSession"].as_array().unwrap();
-        assert_eq!(rows.len(), 1, "the replay session scopes its capture blocks");
+        assert_eq!(
+            rows.len(),
+            1,
+            "the replay session scopes its capture blocks"
+        );
         rows[0]["_docID"].as_str().unwrap().to_owned()
     };
     let created = fixture_write(

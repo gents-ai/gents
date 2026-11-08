@@ -144,7 +144,7 @@ impl TriggerSource for ScheduleSource {
                             Ok(Some(s)) => s,
                             Ok(None) => {
                                 let seeded_dt =
-                                    match crate::runtime::snapshot::seed_schedule_next_run_at(
+                                    match crate::documents::automation::seed_schedule_next_run_at(
                                         &resolved.cadence,
                                         now,
                                     ) {
@@ -219,7 +219,7 @@ impl TriggerSource for ScheduleSource {
                         });
 
                         let advanced_next_run_at =
-                            match crate::runtime::snapshot::advance_schedule_next_run_at(
+                            match crate::documents::automation::advance_schedule_next_run_at(
                                 &resolved.cadence,
                                 parsed,
                                 now,
@@ -253,7 +253,7 @@ impl TriggerSource for ScheduleSource {
                             group_vars: None,
                             trigger_context: None,
                             args_vars: None,
-                            durable_fire_key: crate::triggers::engine::durable_fire_key(
+                            durable_fire_key: gents_protocol::trigger_delivery::durable_fire_key(
                                 "schedule",
                                 &[trigger_id, &next_run_at],
                             ),

@@ -7,15 +7,11 @@ use afterburner_core::manifold::{EnvAccess, FsAccess, ListenAccess, NetAccess};
 use anyhow::{Context, Result};
 
 use crate::pack::{BindAccess, PackPlugin};
+use gents_protocol::plugin::{
+    MAX_DECLARED_MEMORY_MIB, MAX_DECLARED_OUTPUT_MIB, MAX_DECLARED_WALL_CLOCK_SECS,
+};
 
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
-
-/// Bounds guest memory even when a pack requests a larger resource budget.
-pub const MAX_DECLARED_MEMORY_MIB: u32 = 4096;
-/// Bounds the time a guest may hold runtime resources for one invocation.
-pub const MAX_DECLARED_WALL_CLOCK_SECS: u32 = 900;
-/// The compiled WASI runner's stdout capture holds at most 4 MiB.
-pub const MAX_DECLARED_OUTPUT_MIB: u32 = 4;
 
 /// Afterburner's compiled WASI stdout pipe has this capacity; its limit must
 /// stay aligned with the largest accepted plugin result.

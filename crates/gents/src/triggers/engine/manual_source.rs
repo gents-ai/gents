@@ -5,7 +5,8 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
-use crate::runtime::snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode};
+use crate::documents::ConcurrencyMode;
+use crate::runtime::snapshot::ActiveRuntimeSnapshot;
 
 const MANUAL_CHANNEL_CAPACITY: usize = 32;
 
@@ -62,7 +63,7 @@ impl ManualTriggerHandle {
             group_vars: None,
             trigger_context: None,
             args_vars: Some(args),
-            durable_fire_key: crate::triggers::engine::durable_fire_key(
+            durable_fire_key: gents_protocol::trigger_delivery::durable_fire_key(
                 "manual",
                 &[&uuid::Uuid::new_v4().to_string()],
             ),

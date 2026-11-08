@@ -466,11 +466,11 @@ pub async fn seed_job_row_for_node(
     progress: &JobProgress,
     coded_output: Option<(&str, &str)>,
 ) -> String {
-    use gents::session::canonical_rows::{
-        output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-    };
     use gents::store::config_client::ConfigAccess;
     use gents_protocol::job::{JobCeiling, JobOrigin, JobPin};
+    use gents_protocol::output::rows::{
+        output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
     use gents_protocol::output::{
         OutputOutcome, OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose,
         StreamDeclaration, StreamPayload,

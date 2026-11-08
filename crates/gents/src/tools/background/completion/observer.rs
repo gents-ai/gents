@@ -1,11 +1,12 @@
 use super::*;
+use crate::tools::background::agent_identity_watch::AgentIdentityWatch;
 
 pub(crate) async fn run_background_completion_observer(
     node: Arc<EmbeddedNode>,
     local_did: String,
     background_executions: crate::tools::call::hook::BackgroundExecutionRegistry,
     job_driver: Arc<crate::tools::background::job::driver::JobDriver>,
-    agents: tokio::sync::watch::Receiver<Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot>>,
+    agents: Box<dyn AgentIdentityWatch>,
     cancel: CancellationToken,
 ) -> Result<()> {
     let mut observer = BackgroundCompletionObserver::new(
@@ -24,7 +25,7 @@ struct BackgroundCompletionObserver {
     local_did: String,
     background_executions: crate::tools::call::hook::BackgroundExecutionRegistry,
     job_driver: Arc<crate::tools::background::job::driver::JobDriver>,
-    agents: tokio::sync::watch::Receiver<Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot>>,
+    agents: Box<dyn AgentIdentityWatch>,
     cancel: CancellationToken,
     subscription: events::DocumentChangeSubscription,
     mailbox_cursor: Option<String>,
@@ -36,7 +37,7 @@ impl BackgroundCompletionObserver {
         local_did: String,
         background_executions: crate::tools::call::hook::BackgroundExecutionRegistry,
         job_driver: Arc<crate::tools::background::job::driver::JobDriver>,
-        agents: tokio::sync::watch::Receiver<Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot>>,
+        agents: Box<dyn AgentIdentityWatch>,
         cancel: CancellationToken,
     ) -> Result<Self> {
         let subscription = crate::subscribe_collections(&node, [AGENT_REQUEST_COLLECTION])?;
@@ -128,7 +129,7 @@ impl BackgroundCompletionObserver {
     }
 
     async fn run_reconcilers(&mut self) -> Result<()> {
-        let identities = self.agents.borrow().watcher_identities()?;
+        let identities = self.agents.watcher_identities()?;
         match crate::session::mailbox::sweep_open_mailbox_items(
             &self.node,
             &self.local_did,
@@ -183,7 +184,7 @@ impl BackgroundCompletionObserver {
                 tracing::warn!(agent_did = %actor, %error, "session relationship recovery failed; will retry");
             }
             if let Err(error) =
-                crate::session::child_ownership::recover_agent_session_child_relationships_with_access(
+                crate::store::config_client::session_children::recover_agent_session_child_relationships_with_access(
                     &access,
                     &self.local_did,
                     &actor,
@@ -244,7 +245,7 @@ impl BackgroundCompletionObserver {
     }
 
     fn selected_agents(&self) -> Vec<(identity::Did, crate::ConfigAccess)> {
-        let identities = match self.agents.borrow().watcher_identities() {
+        let identities = match self.agents.watcher_identities() {
             Ok(identities) => identities,
             Err(error) => {
                 tracing::warn!(%error, "agent recovery identities are inconsistent");

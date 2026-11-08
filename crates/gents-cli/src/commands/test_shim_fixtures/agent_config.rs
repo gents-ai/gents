@@ -112,7 +112,7 @@ pub(crate) async fn configure_runtime_agent(
                         })
                         .collect(),
                 )?;
-                gents::store::config_client::apply_desired_state_plan(txn, &plan)
+                gents::documents::apply_desired_state_plan(txn, &plan)
                     .await
                     .map(|_| ())
             })
@@ -135,9 +135,10 @@ pub(in crate::commands) async fn seed_test_agent_configuration(
     runtime_access(node, node_did)
         .transact_write("grok.test_agent_configuration", |txn| {
             Box::pin(async move {
+                use gents::documents::apply_desired_state_plan;
                 use gents::store::config_client::{
-                    apply_desired_state_plan, read_desired_state_record_in_txn,
-                    DesiredStateApplyDocument, DesiredStateApplyPlan,
+                    read_desired_state_record_in_txn, DesiredStateApplyDocument,
+                    DesiredStateApplyPlan,
                 };
                 use gents::Collection;
 

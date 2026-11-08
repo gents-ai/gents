@@ -387,11 +387,11 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use gents::session::canonical_rows::{
+    use gents_protocol::job::JobState;
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
-    use gents_protocol::job::JobState;
     use gents_protocol::output::{OutputSegment, TranscriptMessage};
     use tokio::sync::{mpsc, oneshot, Mutex};
 

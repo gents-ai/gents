@@ -1,11 +1,11 @@
 use super::session_hydration::HydrationDocument;
-use crate::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
 use anyhow::anyhow;
 use gents_protocol::output::origin::{lookup_message, resolve_origin, ObservedMessage};
 use gents_protocol::output::reconstruction::{
     fork_copy_observations, is_fork_copy_for, reconstruct_message, reconstruct_stream,
     DependencyDenial, ObservedSegment,
 };
+use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, OutputSource, OutputWriter, PayloadRef, ReconstructionError,
     SourceClose,

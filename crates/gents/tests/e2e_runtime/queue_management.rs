@@ -158,9 +158,9 @@ pub(super) async fn row_as(fixture: &support::ManagedAgentFixture, doc: &str) ->
 }
 
 async fn install_review_skill(db: &TestDb, fixture: &support::ManagedAgentFixture) {
+    use gents::documents::apply_desired_state_plan;
     use gents::store::config_client::{
-        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
-        DesiredStateApplyPlan,
+        read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let owner = db.node_identity.did();
     let selected = fixture.binding.agent_did.as_str();

@@ -95,7 +95,7 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
         "integrations": {"plugins": [{"plugin": "fixture/list_files"}]},
     }))
     .unwrap();
-    crate::store::config_client::write_tools_document(&fixture.user_access, &tools)
+    crate::documents::write_tools_document(&fixture.user_access, &tools)
         .await
         .unwrap();
     let demoted = wait_for_agent_state(

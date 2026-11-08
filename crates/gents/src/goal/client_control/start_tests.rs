@@ -178,7 +178,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                 Box::pin(async move {
                     crate::session::ensure_session_in_txn(txn, SESSION, identity.did(), &agent(session),
                         Some(requester), title, None, &time(session["created_at"].as_u64().unwrap())).await?;
-                    let record = crate::session::load_agent_session_owner_in_txn(txn, identity.did(), SESSION)
+                    let record = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, identity.did(), SESSION)
                         .await?.expect("created modeled session");
                     let tags = if session["tags"].as_array().unwrap().is_empty() { Value::Null } else { session["tags"].clone() };
                     let closed = session["closed_at"].as_u64().map(time);
@@ -230,8 +230,12 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
         let session_before = access
             .transact_readonly("test.session_before", |txn| {
                 Box::pin(async {
-                    crate::session::load_agent_session_owner_in_txn(txn, identity.did(), SESSION)
-                        .await
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn,
+                        identity.did(),
+                        SESSION,
+                    )
+                    .await
                 })
             })
             .await
@@ -288,7 +292,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                             "2026-01-01T00:00:00Z",
                         )
                         .await?;
-                        let session = crate::session::load_agent_session_owner_in_txn(
+                        let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
                             txn,
                             identity.did(),
                             "separate-signing-session",
@@ -608,7 +612,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                                     &time(3),
                                 )
                                 .await?;
-                                crate::session::load_agent_session_owner_in_txn(
+                                crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
                                     txn,
                                     identity.did(),
                                     SESSION,
@@ -653,7 +657,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                     );
                     let after = access
                         .transact_readonly("test.goal.recreated_session_after", |txn| {
-                            Box::pin(crate::session::load_agent_session_owner_in_txn(
+                            Box::pin(crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
                                 txn,
                                 identity.did(),
                                 SESSION,
@@ -796,10 +800,14 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                 .unwrap()
                 .is_some());
             assert!(
-                crate::session::load_agent_session_owner_in_txn(&txn, identity.did(), SESSION)
-                    .await
-                    .unwrap()
-                    .is_some()
+                crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    &txn,
+                    identity.did(),
+                    SESSION
+                )
+                .await
+                .unwrap()
+                .is_some()
             );
             txn.discard().await.unwrap();
             assert!(receipt(&access, &doc_id).await.is_none());
@@ -807,7 +815,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
         let requests = access
             .execute(&format!(
                 "{{ AgentRequest(filter: {{request_id: {{_eq: \"first\"}}}}) {{ {} }} }}",
-                crate::SIGNED_REQUEST_FIELDS,
+                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
             ))
             .await
             .unwrap();
@@ -869,8 +877,12 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
         let after = access
             .transact_readonly("test.session_after", |txn| {
                 Box::pin(async {
-                    crate::session::load_agent_session_owner_in_txn(txn, identity.did(), SESSION)
-                        .await
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn,
+                        identity.did(),
+                        SESSION,
+                    )
+                    .await
                 })
             })
             .await

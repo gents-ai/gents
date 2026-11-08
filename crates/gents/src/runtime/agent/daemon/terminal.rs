@@ -5,7 +5,7 @@ use crate::inference::llm::rig_compat::ProviderModel;
 use crate::observe::runtime_trace::{record_current_failure_class, record_current_request_outcome};
 use crate::request::lifecycle::{RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
 use crate::request::streaming::DefraStreamWriter;
-use crate::request::watcher::AgentRequest;
+use gents_protocol::row::AgentRequest;
 
 /// Only the winning terminal CAS authorizes follow-up effects.
 pub(super) async fn terminalize_request(

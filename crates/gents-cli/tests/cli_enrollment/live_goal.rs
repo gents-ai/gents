@@ -1,8 +1,7 @@
 use super::*;
+use gents::documents::apply_desired_state_plan;
 use gents::goal::{resume_goal_request, set_goal_from_access, GoalStatus};
-use gents::store::config_client::{
-    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
+use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::{Collection, NodeIdentity, Tools};
 use serde_json::json;
 use std::sync::Arc;

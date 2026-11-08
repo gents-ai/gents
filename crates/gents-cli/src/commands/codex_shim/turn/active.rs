@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
-use gents::runtime::drop_cleanup::DropCleanup;
+use gents::drop_cleanup::DropCleanup;
 use gents_protocol::client_protocol::{project_persisted_attempt, RequestLifecycleState};
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};
@@ -477,11 +477,9 @@ async fn load_thread_request_rows(
     requester_did: Option<&str>,
     thread_id: &str,
 ) -> Result<Vec<AgentRequestRow>> {
-    let scope = gents::session::public_request_filter(&gents::session::session_scope_filter(
-        node_did,
-        thread_id,
-        requester_did,
-    ));
+    let scope = gents::session::public_request_filter(
+        &gents_protocol::session::session_scope_filter(node_did, thread_id, requester_did),
+    );
     state.reader.transact_readonly("codex.active.rows",|txn| {
         let scope=&scope;
         Box::pin(async move {

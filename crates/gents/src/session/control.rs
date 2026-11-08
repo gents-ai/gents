@@ -34,17 +34,18 @@ pub async fn stop_session_with_access(
             let session_id = session_id.clone();
             let requester_did = requester_did.clone();
             Box::pin(async move {
-                let owner = crate::session::load_agent_session_row_in_txn(
-                    txn,
-                    &node_did,
-                    &session_id,
-                    requester_did.as_deref(),
-                )
-                .await?
-                .context("cannot stop a missing or differently scoped session")?;
+                let owner =
+                    crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+                        txn,
+                        &node_did,
+                        &session_id,
+                        requester_did.as_deref(),
+                    )
+                    .await?
+                    .context("cannot stop a missing or differently scoped session")?;
                 let stopped_at = chrono::Utc::now().to_rfc3339();
                 let doc_id = crate::store::graphql::escape_graphql_string(&owner.doc_id);
-                let scope = crate::session::session_scope_filter(
+                let scope = gents_protocol::session::session_scope_filter(
                     &node_did,
                     &session_id,
                     requester_did.as_deref(),
@@ -145,14 +146,15 @@ pub async fn resume_session_with_access(
             let background_executions = background_executions.clone();
             let job_driver = job_driver.clone();
             Box::pin(async move {
-                let owner = crate::session::load_agent_session_row_in_txn(
-                    txn,
-                    &node_did,
-                    &session_id,
-                    requester_did.as_deref(),
-                )
-                .await?
-                .context("cannot resume a missing or differently scoped session")?;
+                let owner =
+                    crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+                        txn,
+                        &node_did,
+                        &session_id,
+                        requester_did.as_deref(),
+                    )
+                    .await?
+                    .context("cannot resume a missing or differently scoped session")?;
                 ensure_session_executions_settled_in_txn(
                     txn,
                     &node_did,
@@ -163,7 +165,7 @@ pub async fn resume_session_with_access(
                 )
                 .await?;
                 let doc_id = crate::store::graphql::escape_graphql_string(&owner.doc_id);
-                let scope = crate::session::session_scope_filter(
+                let scope = gents_protocol::session::session_scope_filter(
                     &node_did,
                     &session_id,
                     requester_did.as_deref(),
@@ -200,7 +202,7 @@ async fn ensure_session_executions_settled_in_txn(
     background_executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
     job_driver: &crate::tools::background::job::driver::JobDriver,
 ) -> Result<()> {
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let unsettled = session_tool_call_exists_in_txn(
         txn,
         &format!(

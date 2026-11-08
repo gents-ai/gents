@@ -252,9 +252,8 @@ mod probe_scope_tests {
         )
         .await?;
         for (node, hostname) in [(first, "first"), (second, "second")] {
-            use gents::store::config_client::{
-                apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-            };
+            use gents::documents::apply_desired_state_plan;
+            use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
             let value = serde_json::json!({"node_did":node,"service_id":"shared","hostname":hostname,"enabled":true});
             let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
                 collection: gents::Collection::ToolServiceRegistry,

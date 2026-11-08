@@ -235,7 +235,7 @@ pub(super) fn attach_backend_observations(data: &mut Value) {
             backend["_docID"].as_str(),
         ) {
             (Some(node), Some(id), Some(doc)) => {
-                gents::inference::backends::registry::observation_binding::bind_rows(
+                gents::documents::inference_backend::observation_binding::bind_rows(
                     node,
                     id,
                     doc,

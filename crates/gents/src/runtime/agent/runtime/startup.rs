@@ -12,9 +12,10 @@ use crate::inference::admission::AdmissionRegistry;
 use crate::inference::backends::registry;
 use crate::runtime::agent::reconcile::GenerationSupervisor;
 use crate::runtime::agent::{Gents, ProcessLifecycleState};
-use crate::runtime::status::{ReconcilePhase, RuntimeStatusHandle};
+use crate::runtime::status::RuntimeStatusHandle;
 use crate::tools::mcp::health::{spawn_health_checker, ServiceHealthMap};
 use crate::tools::surface::ToolRuntimeContext;
+use gents_protocol::node_readiness::ReconcilePhase;
 
 mod lifecycle_coordinator;
 mod recovery;
@@ -430,10 +431,9 @@ async fn run_agent_owned(
         .write()
         .map_err(|_| anyhow::anyhow!("runtime snapshot binding unavailable"))? =
         Some(active_snapshot_rx.clone());
-    runtime
-        .job_driver
-        .runtime()
-        .bind_snapshot(active_snapshot_rx.clone())?;
+    runtime.job_driver.runtime().bind_snapshot(
+        crate::runtime::snapshot::ActiveSnapshotAgentIdentities::boxed(active_snapshot_rx.clone()),
+    )?;
     let (reconcile_tx, reconcile_rx) = mpsc::channel(8);
     let _reconcile_tx_guard = reconcile_tx.clone();
     let health_checker = AbortOnDropHandle::new(spawn_health_checker(
@@ -654,7 +654,8 @@ async fn run_agent_owned(
     let completion_node_did = agent.node_did().to_string();
     let completion_background_executions = agent.background_execution_registry.clone();
     let completion_job_driver = runtime.job_driver.clone();
-    let completion_agents = active_snapshot_rx.clone();
+    let completion_agents =
+        crate::runtime::snapshot::ActiveSnapshotAgentIdentities::boxed(active_snapshot_rx.clone());
     let completion_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::BackgroundCompletion(
@@ -751,7 +752,8 @@ async fn run_agent_owned(
     let control_node = agent.node.clone();
     let control_node_did = agent.node_did().to_owned();
     let control_executions = agent.background_execution_registry.clone();
-    let control_agents = active_snapshot_rx.clone();
+    let control_agents =
+        crate::runtime::snapshot::ActiveSnapshotAgentIdentities::boxed(active_snapshot_rx.clone());
     let control_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::ToolControlReconcile(

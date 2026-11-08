@@ -2019,7 +2019,7 @@ mod job_calls {
     use crate::tools::call::lifecycle::admission_fixture::{
         fixture_job_pin, published_admission, PublishedAdmission, PublishedAdmissionOptions,
     };
-    use crate::tools::call::lifecycle::AwaitMode;
+    use gents_protocol::tool_call::AwaitMode;
 
     fn tool_output() -> StampContext {
         StampContext::ToolOutput {
@@ -2077,8 +2077,8 @@ mod job_calls {
     }
 
     async fn completed_child(admission: &PublishedAdmission, text: &str) -> String {
-        use crate::request::lifecycle::{SessionMessageCause, SessionMessageTarget};
         use crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified;
+        use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
 
         let tool = &admission.tool;
         let access = tool.access().unwrap();
@@ -2195,7 +2195,7 @@ mod job_calls {
 
         let origin = crate::session::origin::verified_creation_origin(
             &access,
-            &crate::session::origin::SessionScope {
+            &gents_protocol::session::SessionScope {
                 node_did: admission.node_did.clone(),
                 session_id: session,
                 requester_did: Some(agent_did.to_owned()),

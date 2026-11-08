@@ -4,14 +4,14 @@ use crate::store::identity::NodeIdentity as _;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_session_message, PublishedAdmissionOptions, PublishedSessionMessage,
 };
-use crate::tools::call::lifecycle::AwaitMode;
+use gents_protocol::row::AwaitMode;
 
 pub(super) async fn started(
     name: &str,
 ) -> (
     PublishedSessionMessage,
-    crate::AgentRequest,
-    crate::AgentRequest,
+    gents_protocol::row::AgentRequest,
+    gents_protocol::row::AgentRequest,
 ) {
     let message = published_session_message(PublishedAdmissionOptions {
         name: name.to_owned(),
@@ -82,7 +82,7 @@ async fn canonical_goal(
 
 /// `commit` already materializes the caused session; this is the idempotent
 /// re-check, which must read the session through its owning Agent.
-async fn materialize_session(access: &ConfigAccess, caused: &crate::AgentRequest) {
+async fn materialize_session(access: &ConfigAccess, caused: &gents_protocol::row::AgentRequest) {
     // Sessions record created_at in the canonical second-precision UTC form.
     materialize_session_at(
         access,
@@ -94,7 +94,7 @@ async fn materialize_session(access: &ConfigAccess, caused: &crate::AgentRequest
 
 async fn materialize_session_at(
     access: &ConfigAccess,
-    caused: &crate::AgentRequest,
+    caused: &gents_protocol::row::AgentRequest,
     created_at: &str,
 ) {
     let caused = caused.clone();
@@ -438,8 +438,8 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
         &receipt.doc_id,
     )
     .await
-        .unwrap()
-        .unwrap();
+    .unwrap()
+    .unwrap();
     assert_eq!(
         row.input.queue.unwrap().delivery,
         gents_protocol::request_input::QueueDelivery::Steer
@@ -525,37 +525,28 @@ async fn only_the_starting_session_may_interrupt() {
     let node = message.admission.node.clone();
     let caller = SessionScope::of_request(&caller);
     let target = SessionScope::of_request(&caused);
-    assert!(interrupt_refusal(
-        &node,
-        &caller_agent_did(&message),
-        &caller,
-        &target
-    )
-    .await
-    .unwrap()
-    .is_none());
+    assert!(
+        interrupt_refusal(&node, &caller_agent_did(&message), &caller, &target)
+            .await
+            .unwrap()
+            .is_none()
+    );
     let another = SessionScope {
         session_id: "another-session".to_owned(),
         ..caller.clone()
     };
-    assert!(interrupt_refusal(
-        &node,
-        &caller_agent_did(&message),
-        &another,
-        &target
-    )
-    .await
-    .unwrap()
-    .is_some());
-    assert!(interrupt_refusal(
-        &node,
-        &caller_agent_did(&message),
-        &target,
-        &caller
-    )
-    .await
-    .unwrap()
-    .is_some());
+    assert!(
+        interrupt_refusal(&node, &caller_agent_did(&message), &another, &target)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        interrupt_refusal(&node, &caller_agent_did(&message), &target, &caller)
+            .await
+            .unwrap()
+            .is_some()
+    );
     node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
@@ -609,15 +600,12 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
     .unwrap()
     .unwrap();
     assert!(session.provenance.unwrap().creation_receipt.is_some());
-    assert!(interrupt_refusal(
-        &node,
-        &caller_agent_did(&message),
-        &source,
-        &target
-    )
-    .await
-    .unwrap()
-    .is_some());
+    assert!(
+        interrupt_refusal(&node, &caller_agent_did(&message), &source, &target)
+            .await
+            .unwrap()
+            .is_some()
+    );
     access
         .write(
             "test.restore_creation_cause",
@@ -625,15 +613,12 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
         )
         .await
         .unwrap();
-    assert!(interrupt_refusal(
-        &node,
-        &caller_agent_did(&message),
-        &source,
-        &target
-    )
-    .await
-    .unwrap()
-    .is_none());
+    assert!(
+        interrupt_refusal(&node, &caller_agent_did(&message), &source, &target)
+            .await
+            .unwrap()
+            .is_none()
+    );
     let mut forged = caused.input.clone();
     forged.session_creation = Some(gents_protocol::request_input::SessionCreationIntent::PluginJob);
     let mutation = format!("mutation($input: JSON) {{update_AgentRequest(docID: \"{}\", input: {{input: $input}}) {{_docID}}}}", escape_graphql_string(&caused.doc_id));
@@ -652,15 +637,12 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
         rejected.to_string().contains("immutable field"),
         "{rejected:#}"
     );
-    assert!(interrupt_refusal(
-        &node,
-        &caller_agent_did(&message),
-        &source,
-        &target
-    )
-    .await
-    .unwrap()
-    .is_none());
+    assert!(
+        interrupt_refusal(&node, &caller_agent_did(&message), &source, &target)
+            .await
+            .unwrap()
+            .is_none()
+    );
     node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
@@ -693,9 +675,9 @@ async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() 
     .await
     .unwrap_err();
     assert!(
-        error.to_string().contains(
-            "cross-runtime agent delivery requires the authenticated HTTP delivery path"
-        ),
+        error
+            .to_string()
+            .contains("cross-runtime agent delivery requires the authenticated HTTP delivery path"),
         "{error:#}"
     );
     source.node.shutdown().await.expect("shut down test node");
@@ -823,13 +805,9 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
     .await
     .unwrap();
     assert_eq!(
-        interrupt_session_with_access(
-            &node,
-            &owner(&message),
-            &scope
-        )
-        .await
-        .unwrap(),
+        interrupt_session_with_access(&node, &owner(&message), &scope)
+            .await
+            .unwrap(),
         None
     );
     assert_eq!(
@@ -840,7 +818,12 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
         Some(crate::goal::GoalStatus::Paused),
         "an idle same-node interrupt pauses autonomous Goal work"
     );
-    set_state(&owner(&message), &message.caused_request_doc_id, "processing").await;
+    set_state(
+        &owner(&message),
+        &message.caused_request_doc_id,
+        "processing",
+    )
+    .await;
 
     let cause = SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
@@ -887,13 +870,9 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
     assert_eq!(steer.hop(), 1);
 
     assert_eq!(
-        interrupt_session_with_access(
-            &node,
-            &owner(&message),
-            &scope
-        )
-        .await
-        .unwrap(),
+        interrupt_session_with_access(&node, &owner(&message), &scope)
+            .await
+            .unwrap(),
         Some(caused.request_id.clone())
     );
     assert!(
@@ -1360,7 +1339,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
         )
         .await
         .unwrap();
-    let cause = crate::request::lifecycle::SessionMessageCause {
+    let cause = gents_protocol::request_lifecycle::SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
         caller_agent_did: caller.agent_did.clone(),
         caller_session_id: caller.session_id.clone(),
@@ -1423,13 +1402,13 @@ async fn caused_session_records_its_opening_request() {
         .execute(&format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
             escape_graphql_string(&caused.doc_id),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ))
         .await
         .unwrap();
     let mut signed: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(signed["data"]["AgentRequest"][0].clone()).unwrap();
-    crate::request::admission::verify_request_receipt_signature(&signed).unwrap();
+    crate::store::identity::request_receipt::verify_request_receipt_signature(&signed).unwrap();
     signed
         .input
         .as_mut()
@@ -1438,7 +1417,9 @@ async fn caused_session_records_its_opening_request() {
         .as_mut()
         .unwrap()
         .session_id = "forged".into();
-    assert!(crate::request::admission::verify_request_receipt_signature(&signed).is_err());
+    assert!(
+        crate::store::identity::request_receipt::verify_request_receipt_signature(&signed).is_err()
+    );
     let provenance = || async {
         crate::session::origin::load_session(
             &access,
@@ -1453,17 +1434,17 @@ async fn caused_session_records_its_opening_request() {
     };
     let recorded = provenance().await;
     assert_eq!(
-        crate::session::origin::SessionScope::from(recorded.started_by.as_ref().unwrap()),
-        crate::session::origin::SessionScope::of_request(&caller)
+        gents_protocol::session::SessionScope::from(recorded.started_by.as_ref().unwrap()),
+        gents_protocol::session::SessionScope::of_request(&caller)
     );
-    let caller_scope = crate::session::origin::SessionScope::of_request(&caller);
+    let caller_scope = gents_protocol::session::SessionScope::of_request(&caller);
     let started = crate::session::origin::lineage(&access, &caller_scope)
         .await
         .unwrap()
         .started;
     assert!(started
         .iter()
-        .any(|link| link.scope == crate::session::origin::SessionScope::of_request(&caused)));
+        .any(|link| link.scope == gents_protocol::session::SessionScope::of_request(&caused)));
     assert_eq!(
         recorded.parent_request_doc_id,
         caused.caused_by_parent_request_doc_id

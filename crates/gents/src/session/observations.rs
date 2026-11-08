@@ -1,10 +1,8 @@
-use super::query::{decode_session_row, validate_agent_session};
-use super::sessions::{
-    load_agent_session_row_in_txn, patch_session_in_txn, touch_activity_value, touched_observation,
-    SESSION_SCOPE_FIELDS,
-};
+use super::sessions::{patch_session_in_txn, touch_activity_value, touched_observation};
 use super::*;
+use crate::store::config_client::agent_session::load_agent_session_row_in_txn;
 use anyhow::Context;
+use gents_protocol::session::{decode_session_row, validate_agent_session, SESSION_SCOPE_FIELDS};
 use std::collections::BTreeMap;
 
 const REQUEST_FACT_SESSION_BATCH_SIZE: usize =
@@ -724,7 +722,11 @@ pub(crate) async fn load_recent_titles_for_agent(
         .context("recent title query omitted AgentSession rows")?;
     let mut sessions: Vec<gents_protocol::session::AgentSession> = rows
         .iter()
-        .map(|row| decode_session_row(row).map(|row| row.session))
+        .map(|row| {
+            decode_session_row(row)
+                .map(|row| row.session)
+                .map_err(anyhow::Error::from)
+        })
         .collect::<Result<_>>()?;
     sessions.sort_by(|a, b| {
         let key = |session: &gents_protocol::session::AgentSession| {

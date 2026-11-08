@@ -8,12 +8,12 @@ use anyhow::Result;
 use tokio::sync::{mpsc, watch, Mutex};
 
 use crate::inference::admission::AdmissionRegistry;
-use crate::request::watcher::AgentRequest;
 use crate::runtime::agent::daemon::{AgentDaemon, AgentDaemonInit};
 use crate::tools::call::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry};
 use crate::tools::surface::{self, ToolRuntimeContext, ToolSurface};
 use crate::turn::completion_factory::build_admitted_model;
 use crate::turn::prompt::LayeredPromptBuilder;
+use gents_protocol::row::AgentRequest;
 
 #[derive(Clone)]
 pub(super) struct RuntimeContext {

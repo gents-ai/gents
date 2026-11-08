@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
 
 use crate::documents::Task;
-use crate::request::watcher::AgentRequest;
+use gents_protocol::row::AgentRequest;
 
 pub(super) struct Policy {
     definition: Task,

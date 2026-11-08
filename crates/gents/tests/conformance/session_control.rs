@@ -172,7 +172,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
         gents::session::message::interrupt_session_with_access(
             &db.node,
             &access,
-            &gents::session::origin::SessionScope {
+            &gents_protocol::session::SessionScope {
                 node_did: node_did.to_owned(),
                 session_id: interrupted_session.clone(),
                 requester_did: Some(fixture.agent.did().to_owned()),

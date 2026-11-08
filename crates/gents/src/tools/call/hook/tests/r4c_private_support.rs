@@ -89,7 +89,7 @@ pub(super) async fn setup_private_hook_for_agent(
         "the selected agent must own its request"
     );
     let request_doc = crate::store::graphql::escape_graphql_string(&request_doc_id);
-    let loaded = access.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc}" }} }}, limit: 1) {{ {} }} }}"#, crate::request::watcher::AGENT_REQUEST_FIELDS)).await.expect("load R4C request as selected agent");
+    let loaded = access.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc}" }} }}, limit: 1) {{ {} }} }}"#, gents_protocol::row::AGENT_REQUEST_FIELDS)).await.expect("load R4C request as selected agent");
     let rows = loaded["data"]["AgentRequest"]
         .as_array()
         .expect("R4C request query returned rows");

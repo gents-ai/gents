@@ -222,7 +222,7 @@ async fn continuation_row(
     identity: &KeyIdentity,
     doc: &str,
 ) -> AgentRequestRow {
-    let parent = crate::request::watcher::AgentRequest::try_from(root.clone()).unwrap();
+    let parent = gents_protocol::row::AgentRequest::try_from(root.clone()).unwrap();
     let mut child = crate::request::lifecycle::queue::prepare_goal_continuation(
         &parent,
         identity.did().into(),

@@ -19,7 +19,7 @@ pub(super) async fn load_request_scope(
     access
         .transact_readonly("file_review.request_scope", |txn| {
             Box::pin(async move {
-                let session = gents::session::load_agent_session_owner_in_txn(
+                let session = gents::store::config_client::agent_session::load_agent_session_owner_in_txn(
                     txn, node_did, session_id,
                 )
                 .await?
@@ -28,7 +28,7 @@ pub(super) async fn load_request_scope(
                     "This chat's file-review scope is not available yet. Open its changes again after it syncs.",
                 ))?;
                 let scope = gents::session::public_request_filter(
-                    &gents::session::session_scope_filter(
+                    &gents_protocol::session::session_scope_filter(
                         node_did,
                         session_id,
                         session.session.requester_did.as_deref(),

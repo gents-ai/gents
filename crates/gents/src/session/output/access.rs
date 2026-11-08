@@ -5,8 +5,8 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use super::super::canonical_rows::{request_output_segments_query, AGENT_OUTPUT_SEGMENT_FIELDS};
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use gents_protocol::output::rows::{request_output_segments_query, AGENT_OUTPUT_SEGMENT_FIELDS};
 
 #[derive(Clone, Copy)]
 pub(in crate::session) enum ReadAccess<'a, 'txn> {
@@ -20,14 +20,14 @@ pub(in crate::session) enum ReadAccess<'a, 'txn> {
 /// can observe replication filling a gap. The caller fixes agent/requester scope.
 #[derive(Default)]
 pub(super) struct ReadCache {
-    pub(super) headers: BTreeMap<String, super::super::canonical_rows::TranscriptMessageRow>,
+    pub(super) headers: BTreeMap<String, gents_protocol::output::rows::TranscriptMessageRow>,
     pub(super) requests: BTreeMap<String, Arc<RequestOutputRows>>,
     pub(super) sources:
-        RapidHashMap<(String, OutputSource), Vec<super::super::canonical_rows::OutputSegmentRow>>,
+        RapidHashMap<(String, OutputSource), Vec<gents_protocol::output::rows::OutputSegmentRow>>,
     pub(super) source_reads: bool,
     /// Rows the caller read by an exact scoped query in the same transaction;
     /// each still passes coordinate validation before it enters `headers`.
-    pub(super) observed: BTreeMap<String, super::super::canonical_rows::TranscriptMessageRow>,
+    pub(super) observed: BTreeMap<String, gents_protocol::output::rows::TranscriptMessageRow>,
     pub(super) sessions: Option<BTreeMap<String, SessionHeaderRows>>,
     /// One bounded bulk pass reconstructs every message of a request
     /// against the same scan. A reused scan that lacks a referenced close is
@@ -40,7 +40,7 @@ pub(super) struct ReadCache {
 /// last-writer-wins selection.
 #[derive(Clone)]
 pub(super) struct RequestOutputRows {
-    rows: Vec<super::super::canonical_rows::OutputSegmentRow>,
+    rows: Vec<gents_protocol::output::rows::OutputSegmentRow>,
     by_doc_id: RapidHashMap<String, Vec<usize>>,
     by_source: RapidHashMap<OutputSource, Vec<usize>>,
 }
@@ -99,8 +99,8 @@ impl SessionHeaderRows {
     }
 }
 
-impl From<Vec<super::super::canonical_rows::OutputSegmentRow>> for RequestOutputRows {
-    fn from(rows: Vec<super::super::canonical_rows::OutputSegmentRow>) -> Self {
+impl From<Vec<gents_protocol::output::rows::OutputSegmentRow>> for RequestOutputRows {
+    fn from(rows: Vec<gents_protocol::output::rows::OutputSegmentRow>) -> Self {
         let mut by_doc_id: RapidHashMap<String, Vec<usize>> =
             RapidHashMap::with_capacity(rows.len());
         let mut by_source: RapidHashMap<OutputSource, Vec<usize>> = RapidHashMap::new();
@@ -120,7 +120,7 @@ impl From<Vec<super::super::canonical_rows::OutputSegmentRow>> for RequestOutput
 }
 
 impl RequestOutputRows {
-    pub(super) fn push(&mut self, row: super::super::canonical_rows::OutputSegmentRow) {
+    pub(super) fn push(&mut self, row: gents_protocol::output::rows::OutputSegmentRow) {
         let index = self.rows.len();
         self.by_doc_id
             .entry(row.doc_id.clone())
@@ -136,7 +136,7 @@ impl RequestOutputRows {
     pub(super) fn with_doc_id(
         &self,
         doc_id: &str,
-    ) -> impl Iterator<Item = &super::super::canonical_rows::OutputSegmentRow> {
+    ) -> impl Iterator<Item = &gents_protocol::output::rows::OutputSegmentRow> {
         self.by_doc_id
             .get(doc_id)
             .into_iter()
@@ -147,7 +147,7 @@ impl RequestOutputRows {
     pub(super) fn for_source(
         &self,
         source: &OutputSource,
-    ) -> impl Iterator<Item = &super::super::canonical_rows::OutputSegmentRow> {
+    ) -> impl Iterator<Item = &gents_protocol::output::rows::OutputSegmentRow> {
         self.by_source
             .get(source)
             .into_iter()
@@ -167,7 +167,7 @@ impl ReadAccess<'_, '_> {
                 .cursor_rows(
                     "AgentOutputSegment",
                     AGENT_OUTPUT_SEGMENT_FIELDS,
-                    &super::super::canonical_rows::request_output_segments_filter(request_doc_id),
+                    &gents_protocol::output::rows::request_output_segments_filter(request_doc_id),
                 )
                 .await?);
         }

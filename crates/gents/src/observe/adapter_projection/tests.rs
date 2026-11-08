@@ -1287,7 +1287,7 @@ async fn an_agent_new_row_links_the_request_it_caused() {
     let message = published_session_message(PublishedAdmissionOptions {
         name: "timeline-caused-request".to_owned(),
         real_identity: true,
-        await_mode: crate::tools::call::lifecycle::AwaitMode::Background,
+        await_mode: gents_protocol::tool_call::AwaitMode::Background,
         ..Default::default()
     })
     .await

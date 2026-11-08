@@ -94,7 +94,7 @@ pub(super) async fn install(
     };
     let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone())?;
     crate::verify_request_receipt_signature(&row)?;
-    let request = crate::request::watcher::AgentRequest::try_from(row)?;
+    let request = gents_protocol::row::AgentRequest::try_from(row)?;
     let mut lifecycle =
         RequestLifecycle::new_with_node_did(node, &fixture.agent_did, trial_did, request, 60);
     lifecycle.bind_managed_agent(agent_identity)?;

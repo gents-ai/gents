@@ -4,9 +4,10 @@ use crate::request::lifecycle::{
 };
 use crate::request::streaming::DefraStreamWriter;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
-use crate::tools::call::lifecycle::{AwaitMode, ToolCallLifecycle};
+use crate::tools::call::lifecycle::ToolCallLifecycle;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 use gents_protocol::row::AgentRequestRow;
+use gents_protocol::tool_call::AwaitMode;
 use serde_json::{json, Value};
 use std::{sync::Arc, time::Duration};
 
@@ -89,7 +90,7 @@ async fn persist_request(
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             escape_graphql_string(&request_doc),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ))
         .await
         .unwrap();
@@ -373,8 +374,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             .await
             .unwrap();
         let root_row = persist_request(&node, agent.as_ref(), &root).await;
-        let root_request =
-            crate::request::watcher::AgentRequest::try_from(root_row.clone()).unwrap();
+        let root_request = gents_protocol::row::AgentRequest::try_from(root_row.clone()).unwrap();
         let mut child = crate::request::lifecycle::queue::prepare_goal_continuation(
             &root_request,
             agent.did().into(),
@@ -401,7 +401,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             child_row.caused_by_source_doc_id,
             root_row.caused_by_source_doc_id
         );
-        let request = crate::request::watcher::AgentRequest::try_from(child_row.clone()).unwrap();
+        let request = gents_protocol::row::AgentRequest::try_from(child_row.clone()).unwrap();
         let mut outsider = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "output-outsider",

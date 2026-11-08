@@ -91,7 +91,7 @@ async fn write_request(fixture: &ScopeFixture, mut create: AgentRequestCreate) -
         .access
         .execute(&format!(
             "{{AgentRequest(filter: {{request_id: {{_eq: \"{request_id}\"}}}}) {{{}}}}}",
-            crate::request::admission::SIGNED_REQUEST_FIELDS
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
         ))
         .await
         .unwrap();
@@ -265,7 +265,7 @@ async fn wake(
         .execute(&format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
             escape_graphql_string(&doc),
-            crate::request::admission::SIGNED_REQUEST_FIELDS
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
         ))
         .await
         .unwrap();
@@ -283,8 +283,10 @@ async fn append_through(
     appended: &mut u64,
     cutoff: u64,
 ) {
-    use crate::session::canonical_rows::{
+    use crate::store::config_client::session_children::{
         output_segment_bound_variables, transcript_message_bound_variables,
+    };
+    use gents_protocol::output::rows::{
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
     use gents_protocol::output::*;
@@ -373,7 +375,7 @@ async fn append_through(
             })
             .await
             .unwrap();
-        crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+        crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
             &fixture.access,
             fixture.db.node_identity.did(),
             &identity::Did::new(fixture.agent.did()).unwrap(),
@@ -534,7 +536,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                     ).await
                 })
             }).await.unwrap();
-            crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+            crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
                 access,
                 fixture.db.node_identity.did(),
                 &identity::Did::new(fixture.agent.did()).unwrap(),
@@ -578,7 +580,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                     .execute(&format!(
                         "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
                         escape_graphql_string(&doc),
-                        crate::request::admission::SIGNED_REQUEST_FIELDS
+                        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
                     ))
                     .await
                     .unwrap();
@@ -618,7 +620,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                     .execute(&format!(
                         "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
                         escape_graphql_string(&doc),
-                        crate::request::admission::SIGNED_REQUEST_FIELDS
+                        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
                     ))
                     .await
                     .unwrap();
@@ -709,11 +711,12 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
 #[tokio::test]
 async fn claimed_background_wake_reads_user_session_as_selected_agent() {
     use crate::request::lifecycle::queue::persist_background_completion_with_message_waking_with_access;
-    use crate::request::lifecycle::{RequestHopCause, RequestTerminalOutcome};
+    use crate::request::lifecycle::RequestTerminalOutcome;
     use crate::tools::call::lifecycle::admission_fixture::{
         published_admission_with_owner, PublishedAdmissionOptions,
     };
-    use crate::tools::call::lifecycle::AwaitMode;
+    use gents_protocol::request_lifecycle::RequestHopCause;
+    use gents_protocol::tool_call::AwaitMode;
 
     let (fixture, mut parent) = published_admission_with_owner(PublishedAdmissionOptions {
         name: "wake-agent-observation".into(),
@@ -791,7 +794,7 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
     let query = format!(
         r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{{}}}}}"#,
         escape_graphql_string(&wake.doc_id),
-        crate::request::watcher::AGENT_REQUEST_FIELDS,
+        gents_protocol::row::AGENT_REQUEST_FIELDS,
     );
     let row = agent_access.execute(&query).await.unwrap();
     let [row] = row["data"]["AgentRequest"].as_array().unwrap().as_slice() else {
