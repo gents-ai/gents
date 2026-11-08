@@ -612,7 +612,11 @@ mod tests {
         app.layers[0].selected = row_named(MenuId::NodeSettings, "Node");
         press(&mut app, "enter");
         assert_eq!(kinds(&app), [NODE, LayerKind::Form]);
-        assert_eq!(sent(&intended), [Intent::OpenForm(FormRef::Node)]);
+        let node = Intent::OpenForm {
+            form: FormRef::Node,
+            opening: 1,
+        };
+        assert_eq!(sent(&intended), [node]);
     }
 
     #[test]
@@ -1698,6 +1702,7 @@ mod tests {
         let off = MenuAct::SetEnabled {
             doc: Doc::Task,
             id: "t".to_string(),
+            label: "T".to_string(),
             enabled: false,
         };
         let rows = vec![

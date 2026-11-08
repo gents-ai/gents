@@ -1,21 +1,34 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::Utc;
+use gents::documents::InferenceProfile;
+use gents::pack::BindAccess;
 use gents::plugin::store::{list_records, InstalledPlugin};
+use gents::plugin::{allowed, ux};
 use gents::session::mailbox::{MailboxItem, MailboxKind};
 use gents::store::config_client::patch::SelfConfigTarget;
+use gents::store::config_client::ConfigAccess;
 use gents::tools::background::job::promote::{list_promotions, PromotionRecord};
-use gents::Collection;
-use gents_desktop_core::client::{patch_config_components_on, set_default_agent_on};
-use gents_desktop_core::inference::{load_inference_setup_state, AgentView};
+use gents_desktop_core::client::{
+    delete_event_source_on, delete_schedule_on, delete_skill_on, delete_tool_service_registry_on,
+    delete_trigger_on, patch_config_components_on, set_default_agent_on, upsert_event_source_on,
+    upsert_schedule_on, upsert_skill_on, upsert_trigger_on,
+};
+use gents_desktop_core::inference::{load_inference_setup_state, AgentView, InferenceSetupState};
 use gents_shell::sample::{MenuId, Tone};
 use gents_shell::source::{Doc, MenuAct, MenuRow};
+use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
+use super::forms;
+use super::sections::{self, new_id, Sources};
 use super::work::Work;
 use crate::commands::accounts::{account_rows, AccountRow};
-use crate::commands::config::crud::{query_collection, sort_rows, TOOLS_SPEC};
-use crate::commands::config::task_run::enqueue_task_run_on;
+use crate::commands::config::crud::{
+    load_one, query_collection_sorted, ConfigDocumentSpec, EVENT_SOURCE_SPEC, MCP_SPEC,
+    SCHEDULE_SPEC, SKILL_SPEC, TOOLS_SPEC, TRIGGER_SPEC,
+};
+use crate::commands::config::task_run::{enqueue_task_run_on, TaskRunOutput};
 use crate::commands::mailbox::{dismiss_served, served_items};
 use crate::commands::status::load_runtime_status_output;
 use crate::commands::task::load_task_inventory;
@@ -27,19 +40,21 @@ const RUNNER: &str = "gents/workflow";
 pub(super) const NOT_WIRED: &str = "not wired yet";
 
 /// `menu`'s rows, read as the node through `work`, or why they could not be. The installed
-/// workflows are read from `home` alone, so they are listed while `work` is off.
+/// workflows, allowed folders and UX plugins are read from `home` alone, so they are listed while
+/// `work` is off.
 pub(super) async fn read_menu(
     work: &Result<Work, String>,
     home: &Path,
     node_did: &str,
     menu: MenuId,
 ) -> Result<Vec<MenuRow>, String> {
-    if menu == MenuId::Workflows {
+    if matches!(
+        menu,
+        MenuId::Workflows | MenuId::AllowedFolders | MenuId::UxPlugins
+    ) {
         let home = home.to_path_buf();
-        return tokio::task::spawn_blocking(move || read_workflows(&home))
-            .await
-            .map_err(|error| error.to_string())?
-            .map_err(|error| format!("{error:#}"));
+        let rows = blocking(move || read_home(&home, menu)).await;
+        return rows.map_err(|error| format!("{error:#}"));
     }
     let work = work.as_ref().map_err(String::clone)?;
     let access = work.access();
@@ -49,13 +64,23 @@ pub(super) async fn read_menu(
             .map(|rows| accounts(&rows)),
         MenuId::Agents => load_inference_setup_state(&access, node_did)
             .await
-            .map(|state| agents(&state.agents)),
-        MenuId::Tools => query_collection(&access, TOOLS_SPEC, node_did, None)
+            .map(|state| agents(&state.agents, &state.inference_profiles)),
+        MenuId::Tools => query_collection_sorted(&access, TOOLS_SPEC, node_did)
             .await
-            .map(|mut documents| {
-                sort_rows(&mut documents, Collection::Tools.unique_field());
-                tools(&documents)
-            }),
+            .map(|documents| tools(&documents)),
+        MenuId::Skills => query_collection_sorted(&access, SKILL_SPEC, node_did)
+            .await
+            .map(|documents| sections::skills(&documents)),
+        MenuId::Triggers => read_triggers(&access, node_did).await,
+        MenuId::Schedules => query_collection_sorted(&access, SCHEDULE_SPEC, node_did)
+            .await
+            .map(|documents| sections::schedules(&documents)),
+        MenuId::EventSources => query_collection_sorted(&access, EVENT_SOURCE_SPEC, node_did)
+            .await
+            .map(|documents| sections::event_sources(&documents)),
+        MenuId::RemoteTools => query_collection_sorted(&access, MCP_SPEC, node_did)
+            .await
+            .map(|documents| sections::remote_tools(&documents)),
         MenuId::Tasks => load_task_inventory(&access, None)
             .await
             .map(|inventory| tasks(&inventory.tasks)),
@@ -65,24 +90,33 @@ pub(super) async fn read_menu(
         MenuId::Status => load_runtime_status_output(Some(home), &work.endpoint, node_did)
             .await
             .map(|output| status(&output)),
-        // Workflows is read above, and the shell never asks for its own menus' rows.
+        // The home's menus are read above, and the shell never asks for its own menus' rows.
         MenuId::NodeSettings
         | MenuId::AppSettings
         | MenuId::Workflows
+        | MenuId::AllowedFolders
+        | MenuId::UxPlugins
         | MenuId::More
         | MenuId::General
         | MenuId::Developer
         | MenuId::Experimental => Ok(Vec::new()),
-        MenuId::Skills
-        | MenuId::Triggers
-        | MenuId::Schedules
-        | MenuId::EventSources
-        | MenuId::RemoteTools
-        | MenuId::AllowedFolders
-        | MenuId::UxPlugins
-        | MenuId::Profiles => Err(anyhow::anyhow!(NOT_WIRED)),
+        // Asked for by agent, which `read_profiles` knows.
+        MenuId::Profiles => Ok(Vec::new()),
     };
     rows.map_err(|error| format!("{error:#}"))
+}
+
+/// The profiles `agent` can run on, read as the node through `work`.
+pub(super) async fn read_profiles(
+    work: &Result<Work, String>,
+    node_did: &str,
+    agent: &str,
+) -> Result<Vec<MenuRow>, String> {
+    let access = work.as_ref().map_err(String::clone)?.access();
+    let state = load_inference_setup_state(&access, node_did).await;
+    state
+        .map(|state| profiles(&state, agent))
+        .map_err(|error| format!("{error:#}"))
 }
 
 /// Runs `act` as the node through `work`. Both the `Ok` and the `Err` are its notice.
@@ -98,35 +132,73 @@ pub(super) async fn act(
             .await
             .map(|()| format!("default agent: {name}"))
             .map_err(|error| format!("could not make {name} the default: {error:#}")),
-        MenuAct::RunTask { task } => {
-            enqueue_task_run_on(&access, Some(home), task, json!({}), None, None)
-                .await
-                .map(|_| format!("started {task}"))
-                .map_err(|error| format!("could not run {task}: {error:#}"))
-        }
+        MenuAct::RunTask { task } => run_task(&access, home, task)
+            .await
+            .map(|_| format!("started {task}"))
+            .map_err(|error| format!("could not run {task}: {error:#}")),
         MenuAct::SetEnabled {
-            doc: Doc::Task,
-            id: task,
+            doc,
+            id,
+            label,
             enabled,
         } => {
+            let target = match doc {
+                Doc::Task => SelfConfigTarget::Task,
+                Doc::Skill => SelfConfigTarget::Skill,
+                Doc::Trigger => SelfConfigTarget::Trigger,
+                Doc::Schedule | Doc::EventSource | Doc::RemoteTool => {
+                    return Err(NOT_WIRED.to_string())
+                }
+            };
             let state = if *enabled { "on" } else { "off" };
             let patch = vec![("enabled".to_string(), Some(json!(enabled)))];
-            let patches = [(SelfConfigTarget::Task, task.clone(), patch)];
-            patch_config_components_on(&access, node_did, &patches)
+            patch_config_components_on(&access, node_did, &[(target, id.clone(), patch)])
                 .await
-                .map(|()| format!("{task} {state}"))
-                .map_err(|error| format!("could not turn {task} {state}: {error:#}"))
+                .map(|()| format!("{label} is {state}"))
+                .map_err(|error| format!("Couldn’t turn it {state}: {error:#}"))
+        }
+        MenuAct::Duplicate(doc, id) => duplicate(&access, node_did, *doc, id)
+            .await
+            .map_err(|error| format!("Couldn’t duplicate {id}: {error:#}")),
+        MenuAct::Delete { doc, id, label } => {
+            let deleted = match doc {
+                Doc::Skill => delete_skill_on(&access, node_did, id).await,
+                Doc::Trigger => delete_trigger_on(&access, node_did, id).await,
+                Doc::Schedule => delete_schedule_on(&access, node_did, id).await,
+                Doc::EventSource => delete_event_source_on(&access, node_did, id).await,
+                Doc::RemoteTool => delete_tool_service_registry_on(&access, node_did, id).await,
+                Doc::Task => return Err(NOT_WIRED.to_string()),
+            };
+            deleted
+                .map(|_| format!("Deleted {label}"))
+                .map_err(|error| format!("Couldn’t delete {label}: {error:#}"))
         }
         MenuAct::Dismiss { item } => dismiss_served(&access, node_did, item)
             .await
             .map(|_| "dismissed".to_string())
             .map_err(|error| format!("could not dismiss it: {error:#}")),
-        MenuAct::SetEnabled { .. }
-        | MenuAct::Delete(..)
-        | MenuAct::Duplicate(..)
-        | MenuAct::SetFolderAccess { .. }
-        | MenuAct::RemoveFolder(_)
-        | MenuAct::SetAgentProfile { .. } => Err(NOT_WIRED.to_string()),
+        MenuAct::SetFolderAccess { path, access } => grant(home, path, access)
+            .await
+            .map_err(|error| format!("{error:#}")),
+        MenuAct::RemoveFolder(path) => {
+            let (home, folder) = (home.to_path_buf(), PathBuf::from(path));
+            blocking(move || allowed::remove(&home, &folder))
+                .await
+                .map(|_| format!("{path} removed"))
+                .map_err(|error| format!("{error:#}"))
+        }
+        // The desktop's agent editor says "Saved" and "Couldn’t save: {error}" for this change.
+        MenuAct::SetAgentProfile { agent, profile, .. } => {
+            let patch = vec![("inference_profile_id".to_string(), Some(json!(profile)))];
+            patch_config_components_on(
+                &access,
+                node_did,
+                &[(SelfConfigTarget::Agent, agent.clone(), patch)],
+            )
+            .await
+            .map(|()| "Saved".to_string())
+            .map_err(|error| format!("Couldn’t save: {error:#}"))
+        }
         MenuAct::OpenSession { .. }
         | MenuAct::Insert { .. }
         | MenuAct::OpenSetup
@@ -138,11 +210,140 @@ pub(super) async fn act(
     }
 }
 
-fn read_workflows(home: &Path) -> anyhow::Result<Vec<MenuRow>> {
-    Ok(workflows(&list_records(home)?, &list_promotions(home)?))
+/// Grants `path` `access` (`read` or `read_write`) among `home`'s allowed folders, and answers
+/// the notice.
+pub(super) async fn grant(home: &Path, path: &str, access: &str) -> anyhow::Result<String> {
+    let access: BindAccess = access.parse()?;
+    let (home, path) = (home.to_path_buf(), PathBuf::from(path));
+    let granted = blocking(move || allowed::add(&home, &path, access)).await?;
+    let access = match granted.access {
+        BindAccess::Read => "read only",
+        BindAccess::ReadWrite => "read and write",
+    };
+    Ok(format!("{} {access}", granted.path.display()))
 }
 
-fn row(text: String, tone: Tone) -> MenuRow {
+/// `work` off the runtime's threads: the home's files are locked and read synchronously.
+async fn blocking<T, F>(work: F) -> anyhow::Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> anyhow::Result<T> + Send + 'static,
+{
+    tokio::task::spawn_blocking(work).await?
+}
+
+/// Runs `task` now as this home's node, signed by its local signer.
+pub(super) async fn run_task(
+    access: &ConfigAccess,
+    home: &Path,
+    task: &str,
+) -> anyhow::Result<TaskRunOutput> {
+    enqueue_task_run_on(access, Some(home), task, json!({}), None, None).await
+}
+
+async fn read_triggers(access: &ConfigAccess, node_did: &str) -> anyhow::Result<Vec<MenuRow>> {
+    let (triggers, sources) = trigger_sources(access, node_did).await?;
+    Ok(sections::triggers(&triggers, &sources))
+}
+
+/// The node's triggers and the documents they refer to. The inventory's triggers carry what the
+/// runtime observed of them, as the desktop's bridge reads them (`snapshot/runtime.rs:208-251`).
+/// Its schedules and event sources are keyed by id across nodes, so they are read for the node.
+pub(super) async fn trigger_sources(
+    access: &ConfigAccess,
+    node_did: &str,
+) -> anyhow::Result<(Vec<Value>, Sources)> {
+    let inventory = load_task_inventory(access, None).await?;
+    let owned = |rows: Vec<Value>| -> Vec<Value> {
+        rows.into_iter()
+            .filter(|row| row["node_did"] == node_did)
+            .collect()
+    };
+    let sources = Sources {
+        schedules: query_collection_sorted(access, SCHEDULE_SPEC, node_did).await?,
+        event_sources: query_collection_sorted(access, EVENT_SOURCE_SPEC, node_did).await?,
+        tasks: owned(inventory.tasks),
+        agents: load_inference_setup_state(access, node_did).await?.agents,
+    };
+    Ok((owned(inventory.triggers), sources))
+}
+
+/// Writes a copy of `doc`'s `id` and answers the desktop's toast (`RowMenu.tsx:61`).
+async fn duplicate(
+    access: &ConfigAccess,
+    node_did: &str,
+    doc: Doc,
+    id: &str,
+) -> anyhow::Result<String> {
+    let title = match doc {
+        Doc::Skill => {
+            let (title, copy) = copy_of(access, node_did, doc, id, SKILL_SPEC).await?;
+            upsert_skill_on(access, &copy).await?;
+            title
+        }
+        Doc::Trigger => {
+            let (title, copy) = copy_of(access, node_did, doc, id, TRIGGER_SPEC).await?;
+            upsert_trigger_on(access, &copy).await?;
+            title
+        }
+        Doc::Schedule => {
+            let (title, copy) = copy_of(access, node_did, doc, id, SCHEDULE_SPEC).await?;
+            upsert_schedule_on(access, &copy).await?;
+            title
+        }
+        Doc::EventSource => {
+            let (title, copy) = copy_of(access, node_did, doc, id, EVENT_SOURCE_SPEC).await?;
+            upsert_event_source_on(access, &copy).await?;
+            title
+        }
+        Doc::Task | Doc::RemoteTool => anyhow::bail!(NOT_WIRED),
+    };
+    Ok(format!("Duplicated {title}"))
+}
+
+/// `id`'s title and its document as the desktop's duplicates write it (`SkillsPanel.tsx:310-322`,
+/// `TriggersPanel.tsx:506-519`, `SchedulesPanel.tsx:252-264`, `EventSourcesPanel.tsx:332-344`):
+/// a new id, "{title} copy", no timestamps; a skill's name gains "-copy" and a trigger's copy is
+/// off.
+async fn copy_of<T>(
+    access: &ConfigAccess,
+    node_did: &str,
+    doc: Doc,
+    id: &str,
+    spec: ConfigDocumentSpec,
+) -> anyhow::Result<(String, T)>
+where
+    T: DeserializeOwned,
+{
+    let mut document = load_one(access, spec, node_did, id).await?;
+    let title = sections::title(doc, &document);
+    let mut copy = json!({ "display_name": format!("{title} copy") });
+    copy[spec.collection.unique_field()] = json!(new_id(sections::prefix(doc)));
+    if doc == Doc::Skill {
+        let name = sections::named(&document["name"]).unwrap_or(id);
+        copy["name"] = json!(format!("{name}-copy"));
+    }
+    if doc == Doc::Trigger {
+        copy["enabled"] = json!(false);
+    }
+    if let Some(stored) = document.as_object_mut() {
+        stored.remove("created_at");
+        stored.remove("updated_at");
+    }
+    Ok((title, forms::merged(Some(&document), copy)?))
+}
+
+fn read_home(home: &Path, menu: MenuId) -> anyhow::Result<Vec<MenuRow>> {
+    Ok(match menu {
+        MenuId::AllowedFolders => {
+            sections::folders(&allowed::list(home)?, allowed::user_home().as_deref())
+        }
+        MenuId::UxPlugins => sections::ux_plugins(&ux::list(home)?),
+        _ => workflows(&list_records(home)?, &list_promotions(home)?),
+    })
+}
+
+pub(super) fn row(text: String, tone: Tone) -> MenuRow {
     MenuRow {
         text,
         tone,
@@ -172,15 +373,32 @@ fn accounts(rows: &[AccountRow]) -> Vec<MenuRow> {
     std::iter::once(add).chain(rows.iter().map(shown)).collect()
 }
 
-fn agents(agents: &[AgentView]) -> Vec<MenuRow> {
+fn agents(agents: &[AgentView], profiles: &[InferenceProfile]) -> Vec<MenuRow> {
     let shown = |agent: &AgentView| {
         let name = &agent.display_name;
+        let model = match &agent.inference_profile_id {
+            None => "No model".to_string(),
+            Some(id) => profiles
+                .iter()
+                .find(|p| &p.profile_id == id)
+                .map_or_else(|| id.clone(), profile_label),
+        };
+        let more = vec![(
+            "Inference profile…".to_string(),
+            MenuAct::ChooseProfile {
+                agent: agent.agent_id.clone(),
+                name: name.clone(),
+            },
+        )];
         if agent.is_default {
-            return row(format!(" ● {name}   default"), Tone::Accent);
+            return MenuRow {
+                more,
+                ..row(format!(" ● {name}   default   {model}"), Tone::Accent)
+            };
         }
         let (text, tone) = match agent.enabled {
-            true => (format!("   {name}"), Tone::Plain),
-            false => (format!(" ○ {name}   off"), Tone::Label),
+            true => (format!("   {name}   {model}"), Tone::Plain),
+            false => (format!(" ○ {name}   off   {model}"), Tone::Label),
         };
         let make_default = MenuAct::SetDefaultAgent {
             agent: agent.agent_id.clone(),
@@ -188,10 +406,55 @@ fn agents(agents: &[AgentView]) -> Vec<MenuRow> {
         };
         MenuRow {
             enter: Some(make_default),
+            more,
             ..row(text, tone)
         }
     };
     agents.iter().map(shown).collect()
+}
+
+/// The desktop's `profileLabel`: the display name, with the model unless the name holds it.
+pub(super) fn profile_label(profile: &InferenceProfile) -> String {
+    let name = profile
+        .display_name
+        .as_deref()
+        .unwrap_or(&profile.profile_id);
+    if name.contains(&profile.model_name) {
+        name.to_string()
+    } else {
+        format!("{name} · {}", profile.model_name)
+    }
+}
+
+/// One row per node profile, `agent`'s current one marked.
+fn profiles(state: &InferenceSetupState, agent: &str) -> Vec<MenuRow> {
+    let current = state
+        .agents
+        .iter()
+        .find(|view| view.agent_id == agent)
+        .and_then(|view| view.inference_profile_id.as_deref());
+    let name = state
+        .agents
+        .iter()
+        .find(|view| view.agent_id == agent)
+        .map_or(agent, |view| view.display_name.as_str());
+    let shown = |profile: &InferenceProfile| {
+        let label = profile_label(profile);
+        let (text, tone) = match current == Some(profile.profile_id.as_str()) {
+            true => (format!(" ● {label}"), Tone::Accent),
+            false => (format!("   {label}"), Tone::Plain),
+        };
+        MenuRow {
+            enter: Some(MenuAct::SetAgentProfile {
+                agent: agent.to_string(),
+                name: name.to_string(),
+                profile: profile.profile_id.clone(),
+                label,
+            }),
+            ..row(text, tone)
+        }
+    };
+    state.inference_profiles.iter().map(shown).collect()
 }
 
 /// Rows of `query_collection`'s `Tools` documents, whose absent groups read `null`.
@@ -235,6 +498,7 @@ fn tasks(tasks: &[Value]) -> Vec<MenuRow> {
             d: Some(MenuAct::SetEnabled {
                 doc: Doc::Task,
                 id: id.to_string(),
+                label: sections::task_name(task).to_string(),
                 enabled: !enabled,
             }),
             more: Vec::new(),
@@ -393,11 +657,21 @@ mod tests {
 
     #[test]
     fn agent_rows_mark_the_default_and_offer_the_rest() {
-        let rows = agents(&[
-            agent("engineer", "Engineer", true, true),
-            agent("reviewer", "Reviewer", true, false),
-            agent("scout", "Scout", false, false),
-        ]);
+        let rows = agents(
+            &[
+                agent("engineer", "Engineer", true, true),
+                agent("reviewer", "Reviewer", true, false),
+                agent("scout", "Scout", false, false),
+            ],
+            &[],
+        );
+        let rows: Vec<_> = rows
+            .into_iter()
+            .map(|row| MenuRow {
+                more: Vec::new(),
+                ..row
+            })
+            .collect();
 
         let make_default = |agent: &str, name: &str| {
             Some(MenuAct::SetDefaultAgent {
@@ -408,15 +682,15 @@ mod tests {
         assert_eq!(
             rows,
             [
-                row(" ● Engineer   default", Tone::Accent, None, None),
+                row(" ● Engineer   default   No model", Tone::Accent, None, None),
                 row(
-                    "   Reviewer",
+                    "   Reviewer   No model",
                     Tone::Plain,
                     make_default("reviewer", "Reviewer"),
                     None
                 ),
                 row(
-                    " ○ Scout   off",
+                    " ○ Scout   off   No model",
                     Tone::Label,
                     make_default("scout", "Scout"),
                     None
@@ -465,7 +739,7 @@ mod tests {
     #[test]
     fn task_rows_offer_run_and_on_off() {
         let rows = tasks(&[
-            json!({ "task_id": "digest", "agent_id": "engineer", "enabled": true }),
+            json!({ "task_id": "digest", "display_name": "Digest", "agent_id": "engineer", "enabled": true }),
             json!({ "task_id": "sweep", "agent_id": "scout", "enabled": false }),
         ]);
 
@@ -474,10 +748,11 @@ mod tests {
                 task: task.to_string(),
             })
         };
-        let set = |task: &str, enabled| {
+        let set = |task: &str, label: &str, enabled| {
             Some(MenuAct::SetEnabled {
                 doc: Doc::Task,
                 id: task.to_string(),
+                label: label.to_string(),
                 enabled,
             })
         };
@@ -488,16 +763,26 @@ mod tests {
                     " ● digest   engineer",
                     Tone::Plain,
                     run("digest"),
-                    set("digest", false)
+                    set("digest", "Digest", false)
                 ),
                 row(
                     " ○ sweep   scout   off",
                     Tone::Label,
                     run("sweep"),
-                    set("sweep", true)
+                    set("sweep", "sweep", true)
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn an_agent_on_a_missing_profile_shows_its_id() {
+        let mut scout = agent("scout", "Scout", true, false);
+        scout.inference_profile_id = Some("gone".to_string());
+
+        let rows = agents(&[scout], &[]);
+
+        assert_eq!(rows[0].text, "   Scout   gone");
     }
 
     #[test]
@@ -667,6 +952,7 @@ mod tests {
         let off = MenuAct::SetEnabled {
             doc: Doc::Task,
             id: "digest".to_string(),
+            label: "Digest".to_string(),
             enabled: false,
         };
 
@@ -674,7 +960,7 @@ mod tests {
         let turned = act(&work, home.path(), "owner", &off).await;
 
         assert_eq!(made, Ok("default agent: Reviewer".to_string()));
-        assert_eq!(turned, Ok("digest off".to_string()));
+        assert_eq!(turned, Ok("Digest is off".to_string()));
         let work = Ok(work);
         let agents = read_menu(&work, home.path(), "owner", MenuId::Agents).await;
         let tasks = read_menu(&work, home.path(), "owner", MenuId::Tasks).await;
@@ -682,7 +968,13 @@ mod tests {
             let rows = rows.unwrap();
             rows.into_iter().map(|row| row.text).collect::<Vec<_>>()
         };
-        assert_eq!(texts(agents), [" ● reviewer   default", "   engineer"]);
+        assert_eq!(
+            texts(agents),
+            [
+                " ● reviewer   default   profile · model",
+                "   engineer   profile · model"
+            ]
+        );
         assert_eq!(texts(tasks), [" ○ digest   engineer   off"]);
         node.shutdown().await;
     }

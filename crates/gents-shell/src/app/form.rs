@@ -18,7 +18,7 @@ const TESTING: &str = "Testing…";
 pub struct Entry {
     pub key: String,
     pub help: Option<String>,
-    /// Shown only while the field `.0` holds one of `.1`.
+    /// Shown only while the field `.0` shows and holds one of `.1`.
     pub when: Option<(String, Vec<String>)>,
     pub error: Option<String>,
     pub field: Field,
@@ -27,6 +27,8 @@ pub struct Entry {
 /// Not `Debug`, as its fields are not.
 pub struct FormState {
     pub form: FormRef,
+    /// The number this opening took, which its intents carry and their answers echo.
+    opening: u64,
     pub title: String,
     pub note: Vec<String>,
     pub fields: Vec<Entry>,
@@ -39,9 +41,10 @@ pub struct FormState {
 }
 
 impl FormState {
-    fn loading(form: FormRef) -> FormState {
+    fn loading(form: FormRef, opening: u64) -> FormState {
         FormState {
             form,
+            opening,
             title: String::new(),
             note: Vec::new(),
             fields: Vec::new(),
@@ -67,7 +70,7 @@ impl FormState {
     pub fn shows(&self, entry: &Entry) -> bool {
         entry.when.as_ref().is_none_or(|(key, values)| {
             let on = self.fields.iter().find(|other| other.key == *key);
-            on.is_some_and(|on| values.contains(&on.field.value()))
+            on.is_some_and(|on| values.contains(&on.field.value()) && self.shows(on))
         })
     }
 
@@ -104,6 +107,12 @@ impl FormState {
     fn action(&self) -> Option<&FormAction> {
         let index = self.focus.checked_sub(self.fields.len())?;
         self.actions.get(index)
+    }
+
+    /// A save or action is out while its "Saving…", "Starting…" or "Testing…" shows.
+    fn waiting(&self) -> bool {
+        let shown = self.status.as_ref().map(|(text, _)| text.trim_start());
+        shown.is_some_and(|text| [SAVING, STARTING, TESTING].contains(&text))
     }
 
     pub fn on_choice(&self) -> bool {
@@ -188,16 +197,27 @@ fn entry(field: FormField) -> Entry {
 impl App {
     /// Shows "Loading…" until the source answers with `Update::Form`.
     pub fn open_form(&mut self, form: FormRef) {
-        self.form = Some(FormState::loading(form.clone()));
+        let state = self.opening(form.clone());
+        let intent = Intent::OpenForm {
+            form,
+            opening: state.opening,
+        };
+        self.form = Some(state);
         self.push_layer(LayerKind::Form);
-        self.send_form(Intent::OpenForm(form), LOADING);
+        self.send_form(intent, LOADING);
+    }
+
+    /// `form` opened with a number of its own.
+    fn opening(&mut self, form: FormRef) -> FormState {
+        self.openings += 1;
+        FormState::loading(form, self.openings)
     }
 
     /// The desktop's `ConfirmDelete` (`ListDetail.tsx:518-612`), in place of any open form.
     pub(super) fn confirm_delete(&mut self, doc: Doc, id: String, label: String, name: String) {
         let noun = doc.noun();
         let form = FormRef::Delete(doc, id);
-        let mut confirm = FormState::loading(form.clone());
+        let mut confirm = self.opening(form.clone());
         confirm.load(Form {
             form,
             title: format!("Delete {label}?"),
@@ -282,22 +302,24 @@ impl App {
         if matches!(form.form, FormRef::Delete(..)) {
             return self.delete_confirmed();
         }
-        if !form.loaded {
+        if !form.loaded || form.waiting() {
             return;
         }
         form.fields.iter_mut().for_each(|entry| entry.error = None);
         let intent = Intent::SaveForm {
             form: form.form.clone(),
+            opening: form.opening,
             values: form.values(),
         };
+        self.saving.push(form.opening);
         self.send_form(intent, SAVING);
     }
 
     fn run_form_act(&mut self, act: FormAct) {
-        let Some(form) = &self.form else {
+        let Some(form) = self.form.as_ref().filter(|form| !form.waiting()) else {
             return;
         };
-        let values = form.values();
+        let (values, opening) = (form.values(), form.opening);
         match (form.form.clone(), act) {
             (FormRef::Delete(..), _) => self.delete_confirmed(),
             (FormRef::Edit(doc, id), FormAct::Delete { label, name }) => {
@@ -309,7 +331,13 @@ impl App {
                     FormAct::RunSchedule => STARTING,
                     _ => TESTING,
                 };
-                self.send_form(Intent::FormAct { form, act, values }, waiting);
+                let intent = Intent::FormAct {
+                    form,
+                    opening,
+                    act,
+                    values,
+                };
+                self.send_form(intent, waiting);
             }
         }
     }
@@ -324,38 +352,46 @@ impl App {
         };
         let typed = form.fields.first().map(|entry| entry.field.value());
         let asked = form.actions.iter().find_map(|action| match &action.act {
-            FormAct::Delete { name, .. } => Some(name.trim()),
+            FormAct::Delete { label, name } => Some((label.clone(), name.trim())),
             _ => None,
         });
-        if typed.as_deref().map(str::trim) != asked || self.form_says_lost() {
+        let (label, name) = asked.unzip();
+        if typed.as_deref().map(str::trim) != name || self.form_says_lost() {
             return;
         }
+        let label = label.unwrap_or_default();
         let intent = Intent::Act {
             menu: doc.menu(),
-            act: MenuAct::Delete(doc, id),
+            act: MenuAct::Delete { doc, id, label },
         };
         self.close_form();
         self.emit(intent);
     }
 
-    /// An answer for a form no longer shown, or for another form, is dropped.
+    /// An answer for an opening not shown is dropped, except a save's, which shows as a notice
+    /// once its form is closed.
     pub(super) fn apply_form(&mut self, update: Update) {
+        let (Update::Form { opening, .. }
+        | Update::FormSaved { opening, .. }
+        | Update::FormNote { opening, .. }) = update
+        else {
+            return;
+        };
         let shown = self
             .layers
             .iter()
             .any(|layer| layer.kind == LayerKind::Form);
-        let Some(state) = self.form.as_mut().filter(|_| shown) else {
-            return;
-        };
-        let (Update::Form { form, .. }
-        | Update::FormSaved { form, .. }
-        | Update::FormNote { form, .. }) = &update
-        else {
-            return;
-        };
-        if *form != state.form {
-            return;
+        let open = shown && matches!(&self.form, Some(form) if form.opening == opening);
+        if let Update::FormSaved { form, result, .. } = update {
+            let Some(out) = self.saving.iter().position(|out| *out == opening) else {
+                return;
+            };
+            self.saving.remove(out);
+            return self.form_saved(form, result, open);
         }
+        let Some(state) = self.form.as_mut().filter(|_| open) else {
+            return;
+        };
         match update {
             Update::Form {
                 result: Ok(form), ..
@@ -363,11 +399,20 @@ impl App {
             Update::Form {
                 result: Err(why), ..
             } => state.status = Some((format!(" {why}"), Tone::Warn)),
-            Update::FormSaved {
-                form,
-                result: Ok(notice),
-            } => {
-                self.close_form();
+            Update::FormNote { text, tone, .. } => state.status = Some((format!(" {text}"), tone)),
+            _ => {}
+        }
+    }
+
+    /// A save's answer: on its form while it is `open`, else as a notice.
+    fn form_saved(&mut self, form: FormRef, result: Result<String, FormError>, open: bool) {
+        match (result, self.form.as_mut().filter(|_| open)) {
+            (Err(error), Some(state)) => state.failed(error),
+            (Err(error), None) => self.notice = Some(error.message),
+            (Ok(notice), _) => {
+                if open {
+                    self.close_form();
+                }
                 self.notice = Some(notice);
                 match form {
                     FormRef::New(doc) | FormRef::Edit(doc, _) | FormRef::Delete(doc, _) => {
@@ -377,11 +422,6 @@ impl App {
                     FormRef::Node => {}
                 }
             }
-            Update::FormSaved {
-                result: Err(error), ..
-            } => state.failed(error),
-            Update::FormNote { text, tone, .. } => state.status = Some((format!(" {text}"), tone)),
-            _ => {}
         }
     }
 }
@@ -460,10 +500,16 @@ mod tests {
         app.open_form(form.form.clone());
         app.apply(Update::Form {
             form: form.form.clone(),
+            opening: opening(&app),
             result: Ok(form),
         });
         rx.try_iter().for_each(drop);
         (app, rx)
+    }
+
+    /// The number the form took when it last opened.
+    fn opening(app: &App) -> u64 {
+        app.form.as_ref().expect("a form").opening
     }
 
     fn opened(form: Form) -> (App, Receiver<Intent>) {
@@ -481,10 +527,20 @@ mod tests {
             .collect()
     }
 
+    /// The save of an app's first form opening.
     fn save(pairs: &[(&str, &str)]) -> Intent {
         Intent::SaveForm {
             form: skill(),
+            opening: 1,
             values: values(pairs),
+        }
+    }
+
+    fn saved(opening: u64, result: Result<String, FormError>) -> Update {
+        Update::FormSaved {
+            form: skill(),
+            opening,
+            result,
         }
     }
 
@@ -502,12 +558,17 @@ mod tests {
         let (tx, rx) = channel();
         let mut app = App::connected(Vim, 132, 36, tx);
         app.open_form(skill());
-        assert_eq!(sent(&rx), [Intent::OpenForm(skill())]);
+        let open = Intent::OpenForm {
+            form: skill(),
+            opening: 1,
+        };
+        assert_eq!(sent(&rx), [open]);
         assert_eq!(kinds(&app), [LayerKind::Form]);
         assert!(shows(&app, "Loading…"));
 
         app.apply(Update::Form {
             form: skill(),
+            opening: 1,
             result: Ok(skill_form()),
         });
         assert!(shows(&app, " Code review "));
@@ -523,6 +584,7 @@ mod tests {
         app.open_form(skill());
         app.apply(Update::Form {
             form: skill(),
+            opening: 2,
             result: Err("could not read s1".to_string()),
         });
         let s = screen(&app);
@@ -590,6 +652,29 @@ mod tests {
         assert_eq!(sent(&rx), [save(&[("name", ""), ("body", "a\nb")])]);
     }
 
+    #[test]
+    fn a_lines_field_keeps_its_tabs_and_draws_them_as_spaces() {
+        let body = "if x {\n\treturn;\n}";
+        let fields = || {
+            vec![
+                text("name", "Name", ""),
+                field("body", "Body", FieldKind::Lines, body),
+            ]
+        };
+        let (mut app, rx) = opened(form(fields(), Vec::new()));
+        assert!(shows(&app, &row("", "    return;")));
+        press(&mut app, "ctrl-s");
+        assert_eq!(sent(&rx), [save(&[("name", ""), ("body", body)])]);
+
+        let (mut app, rx) = opened(form(fields(), Vec::new()));
+        press(&mut app, "tab");
+        type_text(&mut app, "!");
+        app.handle(Event::Paste("a\tb\nc".to_string()));
+        press(&mut app, "ctrl-s");
+        let edited = "if x {!a\tb\nc\n\treturn;\n}";
+        assert_eq!(sent(&rx), [save(&[("name", ""), ("body", edited)])]);
+    }
+
     fn schedule_fields() -> Vec<FormField> {
         let cadence = FieldKind::Choice(vec![
             ("interval".to_string(), "Interval".to_string()),
@@ -639,6 +724,36 @@ mod tests {
     }
 
     #[test]
+    fn a_field_under_a_hidden_field_hides_too() {
+        let choice = |pairs: &[(&str, &str)]| {
+            let pairs = pairs.iter();
+            FieldKind::Choice(
+                pairs
+                    .map(|(value, label)| (value.to_string(), label.to_string()))
+                    .collect(),
+            )
+        };
+        let kinds = choice(&[("schedule", "On a schedule"), ("event", "Event")]);
+        let fields = vec![
+            field("kind", "When", kinds, "schedule"),
+            shown_when(
+                field("schedule", "Schedule", choice(&[("new:", "New")]), "new:"),
+                "kind",
+                &["schedule"],
+            ),
+            shown_when(text("cron", "Cron expression", ""), "schedule", &["new:"]),
+        ];
+        let (mut app, rx) = opened(form(fields, Vec::new()));
+        assert!(shows(&app, &row("Cron expression", "")));
+
+        press(&mut app, "right");
+        assert!(!shows(&app, &row("Schedule", "New")));
+        assert!(!shows(&app, "Cron expression"));
+        press(&mut app, "ctrl-s");
+        assert_eq!(sent(&rx), [save(&[("kind", "event")])]);
+    }
+
+    #[test]
     fn save_sends_only_visible_values_in_order() {
         let mode = FieldKind::Choice(vec![
             ("x".to_string(), "X".to_string()),
@@ -658,7 +773,8 @@ mod tests {
         assert_eq!(sent(&rx), std::slice::from_ref(&saved));
         assert!(shows(&app, "Saving…"));
         press(&mut app, "tab tab ctrl-s");
-        assert_eq!(sent(&rx), [saved]);
+        assert_eq!(sent(&rx), []);
+        assert!(shows(&app, "Saving…"));
     }
 
     #[test]
@@ -669,26 +785,23 @@ mod tests {
             sent(&rx),
             [save(&[("name", "Review"), ("description", "")])]
         );
-        app.apply(Update::FormSaved {
-            form: skill(),
-            result: Err(FormError {
-                field: Some("description".to_string()),
-                message: "Description is required".to_string(),
-            }),
-        });
+        let required = FormError {
+            field: Some("description".to_string()),
+            message: "Description is required".to_string(),
+        };
+        app.apply(saved(1, Err(required)));
         assert!(shows(&app, &row("", "Description is required")));
         assert!(!shows(&app, "Saving…"));
         type_text(&mut app, "x");
         assert!(shows(&app, &row("Description", "x")));
         assert!(shows(&app, &row("Name", "Review")));
 
-        app.apply(Update::FormSaved {
-            form: skill(),
-            result: Err(FormError {
-                field: None,
-                message: "could not write".to_string(),
-            }),
-        });
+        press(&mut app, "ctrl-s");
+        let unwritten = FormError {
+            field: None,
+            message: "could not write".to_string(),
+        };
+        app.apply(saved(1, Err(unwritten)));
         assert!(shows(&app, " could not write"));
         assert_eq!(kinds(&app), [LayerKind::Form]);
     }
@@ -701,44 +814,90 @@ mod tests {
         app.open_form(skill());
         app.apply(Update::Form {
             form: skill(),
+            opening: 1,
             result: Ok(skill_form()),
         });
+        press(&mut app, "ctrl-s");
         rx.try_iter().for_each(drop);
-        app.apply(Update::FormSaved {
-            form: skill(),
-            result: Ok("Saved".to_string()),
-        });
+        app.apply(saved(1, Ok("Saved".to_string())));
         assert_eq!(kinds(&app), [LayerKind::Menu(MenuId::Skills)]);
         assert_eq!(app.notice.as_deref(), Some("Saved"));
         assert_eq!(sent(&rx), [Intent::ReadMenu(MenuId::Skills)]);
     }
 
     #[test]
-    fn an_answer_for_another_form_is_ignored() {
+    fn a_late_answer_for_an_earlier_opening_changes_nothing() {
         let (mut app, rx) = opened(skill_form());
-        let other = FormRef::Edit(Doc::Skill, "other".to_string());
-        let mut theirs = form(vec![text("name", "Other name", "x")], Vec::new());
-        theirs.form = other.clone();
+        let first = opening(&app);
+        press(&mut app, "esc");
+        app.open_form(skill());
         app.apply(Update::Form {
-            form: other.clone(),
+            form: skill(),
+            opening: opening(&app),
+            result: Ok(skill_form()),
+        });
+        type_text(&mut app, "!");
+        rx.try_iter().for_each(drop);
+
+        let theirs = form(vec![text("name", "Other name", "x")], Vec::new());
+        app.apply(Update::Form {
+            form: skill(),
+            opening: first,
             result: Ok(theirs),
         });
-        app.apply(Update::FormSaved {
-            form: other.clone(),
-            result: Ok("Saved".to_string()),
-        });
+        app.apply(saved(first, Ok("Saved".to_string())));
         app.apply(Update::FormNote {
-            form: other,
-            text: "Schedule started".to_string(),
+            form: skill(),
+            opening: first,
+            text: "Connected".to_string(),
             tone: Tone::Plain,
         });
         assert_eq!(kinds(&app), [LayerKind::Form]);
         assert_eq!(app.notice, None);
         assert_eq!(sent(&rx), []);
         let s = screen(&app);
-        assert!(find(&s, &row("Name", "Review")).is_some());
+        assert!(find(&s, &row("Name", "Review!")).is_some());
         assert_eq!(find(&s, "Other name"), None);
-        assert_eq!(find(&s, "Schedule started"), None);
+        assert_eq!(find(&s, "Connected"), None);
+    }
+
+    #[test]
+    fn a_save_answered_after_its_form_closed_is_a_notice() {
+        let (tx, rx) = channel();
+        let mut app = App::connected(Vim, 132, 36, tx);
+        let skills = LayerKind::Menu(MenuId::Skills);
+        app.push_layer(skills);
+        let open = |app: &mut App| {
+            app.open_form(skill());
+            app.apply(Update::Form {
+                form: skill(),
+                opening: opening(app),
+                result: Ok(skill_form()),
+            });
+            opening(app)
+        };
+        let first = open(&mut app);
+        press(&mut app, "ctrl-s esc");
+        rx.try_iter().for_each(drop);
+        let required = FormError {
+            field: Some("description".to_string()),
+            message: "Description is required".to_string(),
+        };
+        app.apply(saved(first, Err(required)));
+        assert_eq!(kinds(&app), [skills]);
+        assert_eq!(app.notice.as_deref(), Some("Description is required"));
+        assert_eq!(sent(&rx), []);
+
+        let second = open(&mut app);
+        press(&mut app, "ctrl-s esc");
+        open(&mut app);
+        type_text(&mut app, "!");
+        rx.try_iter().for_each(drop);
+        app.apply(saved(second, Ok("Saved".to_string())));
+        assert_eq!(kinds(&app), [skills, LayerKind::Form]);
+        assert!(shows(&app, &row("Name", "Review!")));
+        assert_eq!(app.notice.as_deref(), Some("Saved"));
+        assert_eq!(sent(&rx), [Intent::ReadMenu(MenuId::Skills)]);
     }
 
     #[test]
@@ -773,7 +932,11 @@ mod tests {
         press(&mut app, "enter");
         let act = Intent::Act {
             menu: MenuId::Skills,
-            act: MenuAct::Delete(Doc::Skill, "s1".to_string()),
+            act: MenuAct::Delete {
+                doc: Doc::Skill,
+                id: "s1".to_string(),
+                label: "Code review".to_string(),
+            },
         };
         assert_eq!(sent(&rx), std::slice::from_ref(&act));
         assert_eq!(kinds(&app), []);
@@ -827,23 +990,28 @@ mod tests {
         press(&mut app, "tab enter");
         let run = Intent::FormAct {
             form: schedule.clone(),
+            opening: 1,
             act: FormAct::RunSchedule,
             values: values(&[("name", "Nightly")]),
         };
         assert_eq!(sent(&rx), [run]);
         assert!(shows(&app, "Starting…"));
+        press(&mut app, "enter down enter shift-tab shift-tab ctrl-s");
+        assert_eq!(sent(&rx), []);
 
         app.apply(Update::FormNote {
             form: schedule.clone(),
+            opening: 1,
             text: "Schedule started · r1".to_string(),
             tone: Tone::Plain,
         });
         assert!(shows(&app, "Schedule started · r1"));
         assert!(!shows(&app, "Starting…"));
 
-        press(&mut app, "down enter");
+        press(&mut app, "tab tab enter");
         let test = Intent::FormAct {
             form: schedule,
+            opening: 1,
             act: FormAct::TestConnection,
             values: values(&[("name", "Nightly")]),
         };

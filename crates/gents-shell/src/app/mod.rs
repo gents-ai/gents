@@ -395,6 +395,10 @@ pub struct App {
     pub setup: Option<Setup>,
     /// The Form layer's state, from when it last opened.
     pub form: Option<FormState>,
+    /// The number the last form opening took.
+    openings: u64,
+    /// The openings whose save is out, so its answer shows once its form is closed.
+    saving: Vec<u64>,
     /// Without a source, the sample answers each intent at once.
     intents: Option<Sender<Intent>>,
     pub connection: Connection,
@@ -461,6 +465,8 @@ impl App {
             profiles_of: None,
             setup: None,
             form: None,
+            openings: 0,
+            saving: Vec::new(),
             intents: None,
             connection: Connection::Sample,
             clipboard: None,

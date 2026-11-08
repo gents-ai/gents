@@ -79,16 +79,22 @@ pub enum Intent {
         model: String,
         settings: Vec<(SettingKey, String)>,
     },
-    /// Answered with `Update::Form`.
-    OpenForm(FormRef),
+    /// Answered with `Update::Form`. `opening` numbers this opening of the form: the form's
+    /// intents carry it and their answers echo it.
+    OpenForm {
+        form: FormRef,
+        opening: u64,
+    },
     /// The shown fields' keys and values, in order: answered with `Update::FormSaved`.
     SaveForm {
         form: FormRef,
+        opening: u64,
         values: Vec<(String, String)>,
     },
     /// Runs one of the form's actions on its current values: answered with `Update::FormNote`.
     FormAct {
         form: FormRef,
+        opening: u64,
         act: FormAct,
         values: Vec<(String, String)>,
     },
@@ -192,16 +198,19 @@ pub enum Update {
     /// Answers `OpenForm`: the form to show, or why it could not be read.
     Form {
         form: FormRef,
+        opening: u64,
         result: Result<Form, String>,
     },
     /// Answers `SaveForm`: the notice for what was saved, or why it was not.
     FormSaved {
         form: FormRef,
+        opening: u64,
         result: Result<String, FormError>,
     },
     /// Answers `FormAct` with what the action did.
     FormNote {
         form: FormRef,
+        opening: u64,
         text: String,
         tone: Tone,
     },
@@ -226,9 +235,11 @@ pub enum MenuAct {
     RunTask {
         task: String,
     },
+    /// `label` names the document in the notice.
     SetEnabled {
         doc: Doc,
         id: String,
+        label: String,
         enabled: bool,
     },
     Duplicate(Doc, String),
@@ -271,8 +282,12 @@ pub enum MenuAct {
     },
     /// Handled by the shell: opens the Setup layer.
     OpenSetup,
-    /// The document of `Doc`'s kind with this id.
-    Delete(Doc, String),
+    /// `label` names the document in the notice.
+    Delete {
+        doc: Doc,
+        id: String,
+        label: String,
+    },
 }
 
 /// A kind of document a form edits.
@@ -332,7 +347,7 @@ pub struct Form {
     pub actions: Vec<FormAction>,
 }
 
-/// With `when`, the field shows only while the field `.0` holds one of `.1`.
+/// With `when`, the field shows only while the field `.0` shows and holds one of `.1`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FormField {
     pub key: String,

@@ -14,8 +14,8 @@ use gents_shell::app::{App, ChatLine};
 use gents_shell::keys::KeySet;
 use gents_shell::sample::{MenuId, Opens, RunState, Running, Tone, View};
 use gents_shell::source::{
-    Answer as PromptAnswer, BackgroundCall, Change, ChangeKind, Connection, Input, Intent, Job,
-    JobEnd, MenuAct, MenuRow, Prompt, PromptKind, Session, Update,
+    Answer as PromptAnswer, BackgroundCall, Change, ChangeKind, Connection, Doc, FormError,
+    FormRef, Input, Intent, Job, JobEnd, MenuAct, MenuRow, Prompt, PromptKind, Session, Update,
 };
 use rapidhash::RapidHashMap;
 use ratatui::buffer::Buffer;
@@ -29,6 +29,10 @@ use super::source::{self, Opening};
 use super::work::{self, Work};
 use crate::commands::codex::tests::identity;
 use crate::commands::codex_shim::RuntimeIdentity;
+use crate::commands::config::crud::{
+    load_one, query_collection, query_collection_sorted, MCP_SPEC, NODE_SPEC, SCHEDULE_SPEC,
+    SKILL_SPEC, TRIGGER_SPEC,
+};
 use crate::commands::eval::testing::test_runtime_handle;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -3372,4 +3376,1216 @@ async fn working_tree_reads_land_in_order() {
         .filter(|method| *method == "gitDiffToRemote")
         .count();
     assert_eq!(reads, 2, "the two asked while one was out are read once");
+}
+
+fn node_settings() -> Value {
+    node_settings_of("owner")
+}
+
+fn node_settings_of(did: &str) -> Value {
+    json!({
+        "node": { "node_did": did, "default_agent_id": "engineer" },
+        "inference_backends": [{
+            "node_did": did,
+            "backend_id": "backend",
+            "name": "Backend",
+            "provider_kind": "OpenAiCompatible",
+            "endpoint": "http://127.0.0.1:1/v1",
+            "auth": { "kind": "unauthenticated" },
+        }],
+        "inference_profiles": [{
+            "node_did": did,
+            "profile_id": "profile",
+            "backend_id": "backend",
+            "model_name": "model",
+        }],
+        "agents": [{
+            "node_did": did,
+            "agent_id": "engineer",
+            "display_name": "Engineer",
+            "inference_profile_id": "profile",
+        }],
+        "tasks": [{
+            "node_did": did,
+            "task_id": "triage",
+            "display_name": "Triage",
+            "agent_id": "engineer",
+            "prompt_template": "triage the inbox",
+        }],
+        "schedules": [{
+            "node_did": did,
+            "schedule_id": "daily",
+            "display_name": "Daily",
+            "cadence": { "kind": "cron", "expression": "0 2 * * *", "timezone": "UTC" },
+        }],
+        "triggers": [{
+            "node_did": did,
+            "trigger_id": "nightly",
+            "display_name": "Nightly",
+            "task_id": "triage",
+            "source": { "kind": "schedule", "schedule_id": "daily" },
+        }],
+        "skills": [{
+            "node_did": did,
+            "skill_id": "review",
+            "name": "review",
+            "display_name": "Review",
+            "tool_refs": ["read", "grep"],
+        }, {
+            "node_did": did,
+            "skill_id": "lint",
+        }],
+    })
+}
+
+/// A node served with `node_settings`, and the shell's work on it.
+async fn served_settings() -> (Arc<defra_node::EmbeddedNode>, Work, tempfile::TempDir) {
+    served(node_settings()).await
+}
+
+/// A node served with `config`, and the shell's work on it.
+async fn served(config: Value) -> (Arc<defra_node::EmbeddedNode>, Work, tempfile::TempDir) {
+    let (node, graphql) = crate::shared::test_support::served_config(config).await;
+    let home = tempfile::tempdir().unwrap();
+    let work = Work {
+        endpoint: GraphqlEndpoint::anonymous(graphql),
+        home: home.path().into(),
+    };
+    (node, work, home)
+}
+
+async fn menu_texts(work: &Work, menu: MenuId) -> Vec<String> {
+    let rows = super::menus::read_menu(&Ok(work.clone()), &work.home, "owner", menu).await;
+    rows.unwrap().into_iter().map(|row| row.text).collect()
+}
+
+#[tokio::test]
+async fn a_skill_turns_off_on_a_served_node() {
+    let (node, work, home) = served_settings().await;
+    let off = MenuAct::SetEnabled {
+        doc: Doc::Skill,
+        id: "review".to_string(),
+        label: "Review".to_string(),
+        enabled: false,
+    };
+
+    let turned = super::menus::act(&work, home.path(), "owner", &off).await;
+
+    assert_eq!(turned, Ok("Review is off".to_string()));
+    assert_eq!(
+        menu_texts(&work, MenuId::Skills).await,
+        [
+            " + New skill",
+            " ● lint   0 tools",
+            " ○ Review   2 tools · disabled"
+        ]
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_skill_copy_is_renamed_as_the_desktop_does() {
+    let (node, work, home) = served_settings().await;
+    let duplicate = |id: &str| MenuAct::Duplicate(Doc::Skill, id.to_string());
+
+    let named = super::menus::act(&work, home.path(), "owner", &duplicate("review")).await;
+    let bare = super::menus::act(&work, home.path(), "owner", &duplicate("lint")).await;
+
+    assert_eq!(named, Ok("Duplicated Review".to_string()));
+    assert_eq!(bare, Ok("Duplicated lint".to_string()));
+    let skills = query_collection_sorted(&work.access(), SKILL_SPEC, "owner").await;
+    let mut copies: Vec<_> = skills
+        .unwrap()
+        .into_iter()
+        .filter(|skill| skill["skill_id"].as_str().unwrap().starts_with("skill-"))
+        .map(|skill| {
+            let shown = |field: &str| skill[field].clone();
+            (shown("name"), shown("display_name"), shown("tool_refs"))
+        })
+        .collect();
+    copies.sort_by_key(|(name, ..)| name.to_string());
+    assert_eq!(
+        copies,
+        [
+            (json!("lint-copy"), json!("lint copy"), Value::Null),
+            (
+                json!("review-copy"),
+                json!("Review copy"),
+                json!(["read", "grep"])
+            ),
+        ]
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_duplicate_is_a_new_document_off() {
+    let (node, work, home) = served_settings().await;
+    let duplicate = MenuAct::Duplicate(Doc::Trigger, "nightly".to_string());
+
+    let duplicated = super::menus::act(&work, home.path(), "owner", &duplicate).await;
+
+    assert_eq!(duplicated, Ok("Duplicated Nightly".to_string()));
+    let work = Ok(work);
+    let rows = super::menus::read_menu(&work, home.path(), "owner", MenuId::Triggers).await;
+    let rows = rows.unwrap();
+    let texts: Vec<_> = rows.iter().map(|row| row.text.as_str()).collect();
+    assert_eq!(
+        texts,
+        [
+            " + New trigger",
+            " ● Nightly   Every day at 02:00 · run Triage with Engineer",
+            " ○ Nightly copy   Every day at 02:00 · run Triage with Engineer",
+        ]
+    );
+    let Some(MenuAct::Open(FormRef::Edit(Doc::Trigger, copy))) = &rows[2].enter else {
+        panic!("{:?}", rows[2]);
+    };
+    assert!(copy.starts_with("trig-"), "{copy}");
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_trigger_reads_its_own_nodes_schedule() {
+    let (node, work, _home) = served_settings().await;
+    let other = json!({
+        "node": { "node_did": "other" },
+        "schedules": [{
+            "node_did": "other",
+            "schedule_id": "daily",
+            "cadence": { "kind": "interval", "interval_secs": 60 },
+        }],
+    });
+    let other = serde_json::from_value(other).unwrap();
+    gents::documents::ensure_node(&node, "other").await.unwrap();
+    gents_desktop_core::client::apply_config_components_on(&work.access(), &other)
+        .await
+        .unwrap();
+    let theirs = query_collection_sorted(&work.access(), SCHEDULE_SPEC, "other").await;
+    assert_eq!(theirs.unwrap().len(), 1);
+
+    assert_eq!(
+        menu_texts(&work, MenuId::Triggers).await,
+        [
+            " + New trigger",
+            " ● Nightly   Every day at 02:00 · run Triage with Engineer"
+        ]
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_schedule_in_use_is_not_deleted() {
+    let (node, work, home) = served_settings().await;
+    let delete = |doc, id: &str, label: &str| MenuAct::Delete {
+        doc,
+        id: id.to_string(),
+        label: label.to_string(),
+    };
+    let daily = delete(Doc::Schedule, "daily", "Daily");
+
+    let refused = super::menus::act(&work, home.path(), "owner", &daily).await;
+
+    let Err(refused) = refused else {
+        panic!("{refused:?}");
+    };
+    assert!(
+        refused.starts_with("Couldn’t delete Daily: ") && refused.contains("nightly"),
+        "{refused}"
+    );
+    assert_eq!(
+        menu_texts(&work, MenuId::Schedules).await,
+        [" + New schedule", " Daily   0 2 * * *"]
+    );
+    let nightly = delete(Doc::Trigger, "nightly", "Nightly");
+    let trigger = super::menus::act(&work, home.path(), "owner", &nightly).await;
+    let schedule = super::menus::act(&work, home.path(), "owner", &daily).await;
+    assert_eq!(trigger, Ok("Deleted Nightly".to_string()));
+    assert_eq!(schedule, Ok("Deleted Daily".to_string()));
+    assert_eq!(
+        menu_texts(&work, MenuId::Schedules).await,
+        [
+            " + New schedule",
+            " No schedules.",
+            " A trigger binds a task to a schedule."
+        ]
+    );
+    node.shutdown().await;
+}
+
+/// The values the shell sends for `form` as it opened: no heading, fixed or hidden field.
+fn as_opened(form: &gents_shell::source::Form) -> Vec<(String, String)> {
+    use gents_shell::source::FieldKind;
+    let sent = form.fields.iter().filter(|field| {
+        let typed = !matches!(field.kind, FieldKind::Heading | FieldKind::Fixed);
+        typed && shown(form, field)
+    });
+    sent.map(|field| (field.key.clone(), field.value.clone()))
+        .collect()
+}
+
+/// Whether `form` shows `field`: its `when` holds, on a field it shows.
+fn shown(form: &gents_shell::source::Form, field: &gents_shell::source::FormField) -> bool {
+    field.when.as_ref().is_none_or(|(key, values)| {
+        let on = form.fields.iter().find(|on| on.key == *key);
+        on.is_some_and(|on| values.contains(&on.value) && shown(form, on))
+    })
+}
+
+fn with(values: Vec<(String, String)>, key: &str, value: &str) -> Vec<(String, String)> {
+    let edit = |(sent, was): (String, String)| match sent == key {
+        true => (sent, value.to_string()),
+        false => (sent, was),
+    };
+    values.into_iter().map(edit).collect()
+}
+
+#[tokio::test]
+async fn owner_rules_come_back_in_the_status() {
+    let (node, work, _home) = served_settings().await;
+    let access = work.access();
+    let (grouping, cadence) = (FormRef::New(Doc::EventSource), FormRef::New(Doc::Schedule));
+    let grouped = super::forms::open(&access, "owner", &grouping, "evsrc-a").await;
+    let grouped = with(
+        as_opened(&grouped.unwrap()),
+        "correlation_field",
+        "session_id",
+    );
+    let grouped = with(grouped, "expected_count", "2");
+    let grouped = with(grouped, "timeout_secs", "60");
+    let grouped = with(grouped, "min_count", "3");
+    let cron = super::forms::open(&access, "owner", &cadence, "sched-a").await;
+    let cron = with(as_opened(&cron.unwrap()), "expression", "every day");
+
+    let over =
+        super::forms::save(&access, &work.home, "owner", &grouping, &grouped, "evsrc-a").await;
+    let bad = super::forms::save(&access, &work.home, "owner", &cadence, &cron, "sched-a").await;
+
+    let Err(FormError {
+        field: None,
+        message: over,
+    }) = over
+    else {
+        panic!("{over:?}");
+    };
+    assert!(
+        over.contains("min_count 3 exceeds expected_count 2"),
+        "{over}"
+    );
+    let owner = gents::documents::schedule_cron::validate_cron_schedule("every day", "UTC", None);
+    let owner = format!("{:#}", owner.unwrap_err());
+    let Err(FormError {
+        field: None,
+        message: bad,
+    }) = bad
+    else {
+        panic!("{bad:?}");
+    };
+    assert!(bad.contains(&owner), "{bad} does not carry {owner}");
+    assert_eq!(
+        menu_texts(&work, MenuId::EventSources).await,
+        [
+            " + New event source",
+            " No event sources.",
+            " A trigger binds a task to a reusable source."
+        ]
+    );
+    assert_eq!(
+        menu_texts(&work, MenuId::Schedules).await,
+        [" + New schedule", " Daily   0 2 * * *"]
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_edit_keeps_what_the_form_does_not_show() {
+    let mut config = node_settings();
+    config["contexts"] = json!([
+        { "node_did": "owner", "context_id": "main", "skill_ids": ["commit"] },
+    ]);
+    config["agents"][0]["context_id"] = json!("main");
+    config["skills"].as_array_mut().unwrap().push(json!({
+        "node_did": "owner",
+        "skill_id": "commit",
+        "name": "commit",
+        "display_name": "Commit",
+        "instructions": "Stage, then commit.",
+        "created_at": "2026-01-01T00:00:00Z",
+        "tags": ["gents:pack:git", "vcs"],
+    }));
+    let (node, work, _home) = served(config).await;
+    let access = work.access();
+    let commit = FormRef::Edit(Doc::Skill, "commit".to_string());
+
+    let form = super::forms::open(&access, "owner", &commit, "commit").await;
+    let form = form.unwrap();
+    let values = with(as_opened(&form), "display_name", "Commit changes");
+    let values = with(values, "tags", "vcs, daily");
+    let saved = super::forms::save(&access, &work.home, "owner", &commit, &values, "commit").await;
+
+    assert_eq!(form.note, ["Used by Engineer · From git"]);
+    assert_eq!(saved, Ok("Saved".to_string()));
+    let stored = crate::commands::config::crud::load_one(&access, SKILL_SPEC, "owner", "commit");
+    let stored = stored.await.unwrap();
+    assert_eq!(stored["display_name"], json!("Commit changes"));
+    assert_eq!(stored["instructions"], json!("Stage, then commit."));
+    assert_eq!(stored["tags"], json!(["gents:pack:git", "vcs", "daily"]));
+    assert_eq!(stored["created_at"], json!("2026-01-01T00:00:00Z"));
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn new_then_nothing_writes_nothing() {
+    let (node, work, _home) = served_settings().await;
+    let access = work.access();
+    let skills = || query_collection_sorted(&access, SKILL_SPEC, "owner");
+    let before = skills().await.unwrap();
+
+    let new = FormRef::New(Doc::Skill);
+    let form = super::forms::open(&access, "owner", &new, "skill-new").await;
+
+    assert_eq!(form.unwrap().title, "New skill");
+    assert_eq!(skills().await.unwrap(), before);
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_new_form_saves_under_the_id_it_showed() {
+    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
+    let (node, work, home) = served(node_settings_of("did:key:z")).await;
+    let access = work.access();
+    let shell = open_shell_on(&fake, None, None, ANSWER_WAIT, Ok(work), home.path().into());
+    shell.opened().await;
+    let new = FormRef::New(Doc::Skill);
+
+    shell.intend(Intent::OpenForm {
+        form: new.clone(),
+        opening: 7,
+    });
+    let opened = shell
+        .until(|update| matches!(update, Update::Form { .. }))
+        .await;
+    let Some(Update::Form {
+        opening: 7,
+        result: Ok(form),
+        ..
+    }) = opened.last()
+    else {
+        panic!("{opened:?}");
+    };
+    let id = form.fields.iter().find(|field| field.key == "skill_id");
+    let id = id.unwrap().value.clone();
+    let values = with(as_opened(form), "name", "drafts");
+    shell.intend(Intent::SaveForm {
+        form: new.clone(),
+        opening: 7,
+        values: values.clone(),
+    });
+    let saved = shell
+        .until(|update| matches!(update, Update::FormSaved { .. }))
+        .await;
+    let act = gents_shell::source::FormAct::RunSchedule;
+    shell.intend(Intent::FormAct {
+        form: new.clone(),
+        opening: 7,
+        act,
+        values,
+    });
+    let noted = shell
+        .until(|update| matches!(update, Update::FormNote { .. }))
+        .await;
+
+    let done = Update::FormSaved {
+        form: new.clone(),
+        opening: 7,
+        result: Ok("Saved".to_string()),
+    };
+    assert_eq!(saved.last(), Some(&done));
+    let not_wired = Update::FormNote {
+        form: new,
+        opening: 7,
+        text: "not wired yet".to_string(),
+        tone: Tone::Warn,
+    };
+    assert_eq!(noted.last(), Some(&not_wired));
+    assert!(id.starts_with("skill-"), "{id}");
+    let skills = query_collection_sorted(&access, SKILL_SPEC, "did:key:z").await;
+    let drafts = skills
+        .unwrap()
+        .into_iter()
+        .find(|skill| skill["skill_id"] == *id);
+    let drafts = drafts.expect("the skill saved under the id its form showed");
+    assert_eq!(
+        (&drafts["name"], &drafts["enabled"]),
+        (&json!("drafts"), &json!(false))
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_schedule_runs_now_through_its_trigger() {
+    let keys = tempfile::tempdir().unwrap();
+    let key = keys.path().join("node.key");
+    let identity = gents::store::identity::KeyIdentity::load_or_create(&key, None).unwrap();
+    let did = gents::store::identity::NodeIdentity::did(&identity).to_string();
+    let mut config = node_settings_of(&did);
+    config["schedules"].as_array_mut().unwrap().push(json!({
+        "node_did": did,
+        "schedule_id": "weekly",
+        "cadence": { "kind": "cron", "expression": "0 9 * * 1", "timezone": "UTC" },
+    }));
+    let (node, graphql) = crate::shared::test_support::served_config(config).await;
+    let (home, _) = home_serving(&graphql, Some(&key));
+    let work = Work {
+        endpoint: GraphqlEndpoint::anonymous(graphql),
+        home: home.path().into(),
+    };
+    let access = work.access();
+    let run = |schedule: &str| FormRef::Edit(Doc::Schedule, schedule.to_string());
+    let act = gents_shell::source::FormAct::RunSchedule;
+
+    let started = super::forms::act(
+        &access,
+        home.path(),
+        &did,
+        &run("daily"),
+        &act,
+        &[],
+        "daily",
+    )
+    .await;
+    let refused = super::forms::act(
+        &access,
+        home.path(),
+        &did,
+        &run("weekly"),
+        &act,
+        &[],
+        "weekly",
+    )
+    .await;
+
+    let (text, tone) = started;
+    assert_eq!(tone, Tone::Accent, "{text}");
+    let request = text.strip_prefix("Schedule started · ").expect(&text);
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ caused_by_trigger_kind retry_key }} }}"#,
+        gents::store::graphql::escape_graphql_string(request)
+    );
+    let written = gents::store::config_client::ConfigAccess::local(node.clone())
+        .execute(&query)
+        .await
+        .unwrap();
+    let fired = &written["data"]["AgentRequest"][0];
+    let task = fired["retry_key"].as_str().unwrap_or_default();
+    assert_eq!(fired["caused_by_trigger_kind"], "manual", "{written}");
+    assert!(task.contains(":manual:triage:"), "{written}");
+    let no_trigger = "Couldn’t run the schedule: schedule weekly has no enabled Trigger";
+    assert_eq!(refused, (no_trigger.to_string(), Tone::Warn));
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_new_trigger_on_a_preset_writes_schedule_task_and_trigger() {
+    let (node, work, _home) = served_settings().await;
+    let access = work.access();
+    let new = FormRef::New(Doc::Trigger);
+
+    let form = super::forms::open(&access, "owner", &new, "trig-abc").await;
+    let form = form.unwrap();
+    let sent_with = |pairs: &[(&str, &str)]| {
+        let mut form = form.clone();
+        for field in &mut form.fields {
+            if let Some((_, value)) = pairs.iter().find(|(key, _)| *key == field.key) {
+                field.value = value.to_string();
+            }
+        }
+        as_opened(&form)
+    };
+    let keys = |pairs: &[(&str, &str)]| {
+        let sent = sent_with(pairs).into_iter();
+        sent.map(|(key, _)| key).collect::<Vec<_>>()
+    };
+    let prompt = "Summarise the inbox.\nThen post it.";
+    let custom = sent_with(&[
+        ("preset", "custom"),
+        ("cron", "every day"),
+        ("prompt", prompt),
+    ]);
+    let values = sent_with(&[("prompt", prompt)]);
+    let save = |values| super::forms::save(&access, &work.home, "owner", &new, values, "trig-abc");
+    let refused = save(&custom).await;
+    let saved = save(&values).await;
+
+    assert_eq!(
+        keys(&[]),
+        ["name", "kind", "schedule", "preset", "task", "prompt", "agent", "enable"]
+    );
+    assert_eq!(
+        keys(&[("preset", "custom")])[..5],
+        ["name", "kind", "schedule", "preset", "cron"]
+    );
+    assert_eq!(
+        keys(&[("kind", "event")])[..5],
+        ["name", "kind", "event", "collection", "event_kind"]
+    );
+    let zone = iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string());
+    let owner = gents::documents::schedule_cron::validate_cron_schedule("every day", &zone, None);
+    let owner = format!("{:#}", owner.unwrap_err());
+    let Err(FormError {
+        field: None,
+        message: refused,
+    }) = refused
+    else {
+        panic!("{refused:?}");
+    };
+    assert!(refused.contains(&owner), "{refused} does not carry {owner}");
+    assert_eq!(saved, Ok("Saved".to_string()));
+    let stored = |spec, id| load_one(&access, spec, "owner", id);
+    let schedule = stored(SCHEDULE_SPEC, "sched-abc").await.unwrap();
+    assert_eq!(schedule["display_name"], json!("Every day at 09:00"));
+    assert_eq!(
+        schedule["cadence"],
+        json!({
+            "kind": "cron",
+            "expression": "0 9 * * *",
+            "timezone": zone,
+            "missed_run_policy": "latest_only",
+        })
+    );
+    let trigger = stored(TRIGGER_SPEC, "trig-abc").await.unwrap();
+    let shown = |document: &Value, keys: &[&str]| {
+        let keys = keys.iter();
+        keys.map(|key| document[*key].clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(
+        shown(
+            &trigger,
+            &[
+                "display_name",
+                "task_id",
+                "source",
+                "concurrency",
+                "enabled"
+            ]
+        ),
+        [
+            json!("Summarise the inbox."),
+            json!("task-abc"),
+            json!({ "kind": "schedule", "schedule_id": "sched-abc" }),
+            json!("serial"),
+            json!(false),
+        ]
+    );
+    let tasks = crate::commands::task::load_task_inventory(&access, Some("task-abc")).await;
+    let tasks = tasks.unwrap().tasks;
+    assert_eq!(
+        tasks
+            .iter()
+            .map(|task| shown(task, &["display_name", "agent_id", "prompt_template"]))
+            .collect::<Vec<_>>(),
+        [[
+            json!("Summarise the inbox."),
+            json!("engineer"),
+            json!(prompt)
+        ]]
+    );
+    assert_eq!(
+        menu_texts(&work, MenuId::Triggers).await,
+        [
+            " + New trigger",
+            " ● Nightly   Every day at 02:00 · run Triage with Engineer",
+            " ○ Summarise the inbox.   Every day at 09:00 · run Summarise the inbox. with Engineer",
+        ]
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_schedule_trigger_refuses_a_concurrency_it_cannot_honour() {
+    let (node, work, _home) = served_settings().await;
+    let access = work.access();
+    let nightly = FormRef::Edit(Doc::Trigger, "nightly".to_string());
+    let form = super::forms::open(&access, "owner", &nightly, "nightly").await;
+    let opened = as_opened(&form.unwrap());
+    let save = |concurrency: &str| {
+        let values = with(opened.clone(), "concurrency", concurrency);
+        let (access, home, nightly) = (&access, &work.home, &nightly);
+        async move { super::forms::save(access, home, "owner", nightly, &values, "nightly").await }
+    };
+
+    let queued = save("queued_serial").await;
+    let serial = save("serial").await;
+
+    let Err(FormError {
+        field: None,
+        message: queued,
+    }) = queued
+    else {
+        panic!("{queued:?}");
+    };
+    assert!(
+        queued.contains("queued_serial requires an explicit session_id_template"),
+        "{queued}"
+    );
+    assert_eq!(serial, Ok("Saved".to_string()));
+    let stored = load_one(&access, TRIGGER_SPEC, "owner", "nightly").await;
+    assert_eq!(stored.unwrap()["concurrency"], json!("serial"));
+    node.shutdown().await;
+}
+
+/// The shell's work on `home` with no runtime behind it: reads and writes that need none.
+fn offline(home: &std::path::Path) -> Work {
+    Work {
+        endpoint: GraphqlEndpoint::anonymous("http://127.0.0.1:1/api/v0/graphql".to_string()),
+        home: home.into(),
+    }
+}
+
+#[tokio::test]
+async fn a_remote_tool_without_a_host_shows_the_owners_reason() {
+    let (node, work, home) = served_settings().await;
+    let access = work.access();
+    let new = FormRef::New(Doc::RemoteTool);
+    let form = super::forms::open(&access, "owner", &new, "mcp-a").await;
+    let no_host = with(as_opened(&form.unwrap()), "hostname", " ");
+    let save = |values| super::forms::save(&access, home.path(), "owner", &new, values, "mcp-a");
+
+    let refused = save(&no_host).await;
+    let empty = menu_texts(&work, MenuId::RemoteTools).await;
+    let saved = save(&with(no_host.clone(), "lan_ip", "10.0.0.5")).await;
+
+    let Err(FormError {
+        field: None,
+        message,
+    }) = refused
+    else {
+        panic!("{refused:?}");
+    };
+    let reason = "service mcp-a requires hostname, tailscale_ip, or lan_ip";
+    assert!(message.contains(reason), "{message}");
+    assert_eq!(
+        empty,
+        [
+            " + New remote tools",
+            " No remote tools.",
+            " Add an MCP connection, then select its tools in a Tools document."
+        ]
+    );
+    assert_eq!(saved, Ok("Saved".to_string()));
+    let services = query_collection_sorted(&access, MCP_SPEC, "owner")
+        .await
+        .unwrap();
+    let service = &services[0];
+    assert_eq!(
+        (
+            &service["service_id"],
+            &service["hostname"],
+            &service["lan_ip"]
+        ),
+        (&json!("mcp-a"), &Value::Null, &json!("10.0.0.5"))
+    );
+    assert_eq!(
+        (&service["mcp_port"], &service["enabled"]),
+        (&json!(3333), &json!(false))
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_connection_uses_the_forms_values() {
+    let home = tempfile::tempdir().unwrap();
+    let access = offline(home.path()).access();
+    let new = FormRef::New(Doc::RemoteTool);
+    let form = super::forms::open(&access, "owner", &new, "mcp-a").await;
+    let opened = as_opened(&form.unwrap());
+    let test = gents_shell::source::FormAct::TestConnection;
+    let tested =
+        |values| super::forms::act(&access, home.path(), "owner", &new, &test, values, "mcp-a");
+    let (no_host, far) = (
+        with(opened.clone(), "hostname", ""),
+        with(opened, "mcp_port", "70000"),
+    );
+
+    let no_host = tested(&no_host).await;
+    let far = tested(&far).await;
+
+    let failed = |reason: &str| (format!("Test failed: {reason}"), Tone::Warn);
+    assert_eq!(
+        no_host,
+        failed("hostname, tailscale_ip, or lan_ip is required")
+    );
+    assert_eq!(far, failed("MCP port must be 65535 or less"));
+}
+
+#[tokio::test]
+async fn a_node_save_keeps_what_the_form_does_not_show() {
+    let mut config = node_settings();
+    config["node"] = json!({
+        "node_did": "owner",
+        "display_name": "Studio",
+        "avatar": "7",
+        "default_agent_id": "engineer",
+        "created_at": "2026-01-01T00:00:00Z",
+        "created_by": "did:key:zMaker",
+        "tags": ["gents:pack:home", "desk"],
+    });
+    let (node, work, home) = served(config).await;
+    let access = work.access();
+    let stored = || async {
+        let nodes = query_collection(&access, NODE_SPEC, "owner", None).await;
+        nodes.unwrap().remove(0)
+    };
+    let before = stored().await;
+
+    let form = super::forms::open(&access, "owner", &FormRef::Node, "").await;
+    let form = form.unwrap();
+    let values = with(as_opened(&form), "display_name", " Workshop ");
+    let values = with(values, "tags", "desk, bench");
+    let saved =
+        super::forms::save(&access, home.path(), "owner", &FormRef::Node, &values, "").await;
+
+    assert_eq!(form.note, ["Studio"]);
+    assert_eq!(saved, Ok("Saved".to_string()));
+    let after = stored().await;
+    assert_eq!(before["avatar"], json!("7"));
+    assert_eq!(after["display_name"], json!("Workshop"));
+    assert_eq!(after["tags"], json!(["gents:pack:home", "desk", "bench"]));
+    for kept in [
+        "avatar",
+        "created_at",
+        "created_by",
+        "default_agent_id",
+        "enabled",
+    ] {
+        assert_eq!(after[kept], before[kept], "{kept}");
+    }
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn changing_the_default_agent_enables_it() {
+    let mut config = node_settings();
+    config["agents"].as_array_mut().unwrap().push(json!({
+        "node_did": "owner",
+        "agent_id": "scout",
+        "display_name": "Scout",
+        "inference_profile_id": "profile",
+        "enabled": false,
+    }));
+    let (node, work, home) = served(config).await;
+    let access = work.access();
+    let scout = || async {
+        let state = gents_desktop_core::inference::load_inference_setup_state(&access, "owner");
+        let agents = state.await.unwrap().agents;
+        let scout = agents.into_iter().find(|agent| agent.agent_id == "scout");
+        let scout = scout.unwrap();
+        (scout.enabled, scout.is_default)
+    };
+    let before = scout().await;
+
+    let form = super::forms::open(&access, "owner", &FormRef::Node, "").await;
+    let form = form.unwrap();
+    let values = with(as_opened(&form), "default_agent_id", "scout");
+    let values = with(values, "display_name", "Studio");
+    let saved =
+        super::forms::save(&access, home.path(), "owner", &FormRef::Node, &values, "").await;
+
+    let default = form
+        .fields
+        .iter()
+        .find(|field| field.key == "default_agent_id");
+    let gents_shell::source::FieldKind::Choice(agents) = &default.unwrap().kind else {
+        panic!("{default:?}");
+    };
+    let scout_label = (
+        "scout".to_string(),
+        "Scout · disabled, enabled when saved as default".to_string(),
+    );
+    assert!(agents.contains(&scout_label), "{agents:?}");
+    assert_eq!(saved, Ok("Saved".to_string()));
+    assert_eq!(before, (false, false), "enabled, default");
+    assert_eq!(scout().await, (true, true), "enabled, default");
+    assert_eq!(
+        menu_texts(&work, MenuId::Agents).await,
+        [
+            " ● Scout   default   profile · model",
+            "   Engineer   profile · model"
+        ]
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn folder_rows_toggle_and_remove() {
+    use gents::pack::BindAccess;
+    use gents::plugin::allowed;
+    let (home, folders) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let [notes, repos] = ["notes", "repos"].map(|name| {
+        let folder = folders.path().join(name);
+        std::fs::create_dir(&folder).unwrap();
+        folder.canonicalize().unwrap()
+    });
+    allowed::add(home.path(), &repos, BindAccess::ReadWrite).unwrap();
+    allowed::add(home.path(), &notes, BindAccess::Read).unwrap();
+    let work = offline(home.path());
+    let read = || async {
+        let off = Err("work is off".to_string());
+        super::menus::read_menu(&off, home.path(), "owner", MenuId::AllowedFolders).await
+    };
+    let (work, at) = (&work, home.path());
+    let act = |act: MenuAct| async move { super::menus::act(work, at, "owner", &act).await };
+    let (notes_at, repos_at) = (notes.display().to_string(), repos.display().to_string());
+
+    let listed = read().await.unwrap();
+    let widened = act(MenuAct::SetFolderAccess {
+        path: notes_at.clone(),
+        access: "read_write".to_string(),
+    })
+    .await;
+    let removed = act(MenuAct::RemoveFolder(repos_at.clone())).await;
+    let left = read().await.unwrap();
+    let missing = folders.path().join("missing").display().to_string();
+    let refused = act(MenuAct::SetFolderAccess {
+        path: missing.clone(),
+        access: "read".to_string(),
+    })
+    .await;
+    act(MenuAct::RemoveFolder(notes_at.clone())).await.unwrap();
+    let none = read().await.unwrap();
+
+    let folder = |path: &str, access: &str, other: &str| MenuRow {
+        text: format!(" {path}   {access}"),
+        tone: Tone::Plain,
+        enter: None,
+        d: Some(MenuAct::SetFolderAccess {
+            path: path.to_string(),
+            access: other.to_string(),
+        }),
+        more: vec![(
+            "Remove".to_string(),
+            MenuAct::RemoveFolder(path.to_string()),
+        )],
+    };
+    let add = MenuRow {
+        text: " + Add a folder".to_string(),
+        tone: Tone::Accent,
+        enter: Some(MenuAct::Open(FormRef::AddFolder)),
+        d: None,
+        more: Vec::new(),
+    };
+    assert_eq!(
+        listed,
+        [
+            add.clone(),
+            folder(&notes_at, "Read only", "read_write"),
+            folder(&repos_at, "Read and write", "read"),
+        ]
+    );
+    assert_eq!(widened, Ok(format!("{notes_at} read and write")));
+    assert_eq!(removed, Ok(format!("{repos_at} removed")));
+    assert_eq!(left, [add, folder(&notes_at, "Read and write", "read")]);
+    let refused = refused.unwrap_err();
+    assert!(
+        refused.starts_with(&format!("{missing} does not exist or cannot be read")),
+        "{refused}"
+    );
+    let texts: Vec<_> = none.into_iter().map(|row| row.text).collect();
+    assert_eq!(
+        texts,
+        [
+            " + Add a folder",
+            " None added.",
+            " The working folder is always readable. Other paths are asked about."
+        ]
+    );
+    let dirs = [allowed::AllowedDir {
+        path: notes.clone(),
+        access: BindAccess::Read,
+    }];
+    let under = super::sections::folders(
+        &dirs,
+        Some(folders.path().canonicalize().unwrap().as_path()),
+    );
+    let at_home = super::sections::folders(&dirs, Some(notes.as_path()));
+    assert_eq!(under[1].text, " ~/notes   Read only");
+    assert_eq!(at_home[1].text, " ~   Read only");
+    assert_eq!(under[1].d, folder(&notes_at, "", "read_write").d);
+}
+
+#[tokio::test]
+async fn adding_a_folder_writes_the_homes_file() {
+    use gents::pack::BindAccess;
+    use gents::plugin::allowed;
+    let (home, folder) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let access = offline(home.path()).access();
+    let add = FormRef::AddFolder;
+    let typed = |path: String| vec![("path".to_string(), path)];
+
+    let form = super::forms::open(&access, "owner", &add, "")
+        .await
+        .unwrap();
+    let saved = super::forms::save(
+        &access,
+        home.path(),
+        "owner",
+        &add,
+        &typed(format!(" {} ", folder.path().display())),
+        "",
+    )
+    .await;
+    let missing = folder.path().join("missing");
+    let refused = super::forms::save(
+        &access,
+        home.path(),
+        "owner",
+        &add,
+        &typed(missing.display().to_string()),
+        "",
+    )
+    .await;
+
+    assert_eq!(form.title, "Add a folder");
+    let path = super::forms::field(
+        "path",
+        "Folder path",
+        gents_shell::source::FieldKind::Text,
+        "",
+    );
+    let path = gents_shell::source::FormField {
+        placeholder: "/path/to/folder".to_string(),
+        ..path
+    };
+    assert_eq!(form.fields, [path]);
+    assert_eq!(form.actions, []);
+    let canonical = folder.path().canonicalize().unwrap();
+    assert_eq!(saved, Ok(format!("{} read only", canonical.display())));
+    let Err(FormError {
+        field: None,
+        message,
+    }) = refused
+    else {
+        panic!("{refused:?}");
+    };
+    let reason = format!("{} does not exist or cannot be read", missing.display());
+    assert!(message.starts_with(&reason), "{message}");
+    let dirs = allowed::list(home.path()).unwrap();
+    assert_eq!(
+        dirs,
+        [allowed::AllowedDir {
+            path: canonical,
+            access: BindAccess::Read,
+        }]
+    );
+}
+
+fn profile_of(
+    display_name: Option<&str>,
+    id: &str,
+    model: &str,
+) -> gents::documents::InferenceProfile {
+    let mut profile = json!({
+        "node_did": "owner", "profile_id": id, "backend_id": "backend", "model_name": model,
+    });
+    if let Some(name) = display_name {
+        profile["display_name"] = json!(name);
+    }
+    serde_json::from_value(profile).unwrap()
+}
+
+#[test]
+fn profile_labels_mirror_the_desktop() {
+    use super::menus::profile_label;
+    let named = profile_of(Some("Claude sonnet"), "p", "claude-sonnet");
+    let holding = profile_of(Some("claude-sonnet-4-5"), "p", "claude-sonnet-4-5");
+    assert_eq!(profile_label(&named), "Claude sonnet · claude-sonnet");
+    assert_eq!(profile_label(&holding), "claude-sonnet-4-5");
+    assert_eq!(profile_label(&profile_of(None, "p", "m")), "p · m");
+}
+
+fn two_profiles() -> Value {
+    let mut config = node_settings();
+    config["inference_profiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "node_did": "owner", "profile_id": "other", "backend_id": "backend",
+            "model_name": "other-model", "display_name": "Other",
+        }));
+    config["agents"].as_array_mut().unwrap().push(json!({
+        "node_did": "owner", "agent_id": "scout", "display_name": "Scout",
+        "inference_profile_id": "profile",
+    }));
+    config
+}
+
+async fn profile_rows(work: &Work, agent: &str) -> Vec<gents_shell::source::MenuRow> {
+    super::menus::read_profiles(&Ok(work.clone()), "owner", agent)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn the_agents_current_profile_is_marked() {
+    let (node, work, _home) = served(two_profiles()).await;
+    let rows = profile_rows(&work, "engineer").await;
+    let texts: Vec<_> = rows
+        .iter()
+        .map(|row| (row.text.as_str(), row.tone))
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            ("   Other · other-model", Tone::Plain),
+            (" ● profile · model", Tone::Accent)
+        ]
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn agent_rows_show_their_model_and_offer_a_profile() {
+    let (node, work, _home) = served(two_profiles()).await;
+    let rows =
+        super::menus::read_menu(&Ok(work.clone()), &work.home, "owner", MenuId::Agents).await;
+    let rows = rows.unwrap();
+    let texts: Vec<_> = rows.iter().map(|row| row.text.as_str()).collect();
+    assert_eq!(
+        texts,
+        [
+            " ● Engineer   default   profile · model",
+            "   Scout   profile · model"
+        ]
+    );
+    let choose = |agent: &str, name: &str| {
+        vec![(
+            "Inference profile…".to_string(),
+            MenuAct::ChooseProfile {
+                agent: agent.into(),
+                name: name.into(),
+            },
+        )]
+    };
+    assert_eq!(rows[0].more, choose("engineer", "Engineer"));
+    assert_eq!(
+        rows[1].more,
+        [(
+            "Inference profile…".to_string(),
+            MenuAct::ChooseProfile {
+                agent: "scout".into(),
+                name: "Scout".into()
+            }
+        )]
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn choosing_a_profile_moves_only_that_agent() {
+    let (node, work, home) = served(two_profiles()).await;
+    let choose = profile_rows(&work, "scout").await.remove(0).enter.unwrap();
+
+    let done = super::menus::act(&work, home.path(), "owner", &choose).await;
+
+    assert_eq!(done, Ok("Saved".to_string()));
+    let agents = |agent: &'static str| {
+        let work = work.clone();
+        async move {
+            profile_rows(&work, agent)
+                .await
+                .iter()
+                .map(|row| row.text.clone())
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(
+        agents("scout").await,
+        [" ● Other · other-model", "   profile · model"]
+    );
+    assert_eq!(
+        agents("engineer").await,
+        ["   Other · other-model", " ● profile · model"]
+    );
+    node.shutdown().await;
+}
+
+#[test]
+fn the_key_set_survives_a_restart() {
+    use super::prefs::{read_keys, save_keys};
+    let home = tempfile::tempdir().unwrap();
+    assert_eq!(read_keys(home.path()), KeySet::Vim);
+    save_keys(home.path(), KeySet::Emacs).unwrap();
+    assert_eq!(read_keys(home.path()), KeySet::Emacs);
+    std::fs::write(home.path().join("shell.json"), "garbage").unwrap();
+    assert_eq!(read_keys(home.path()), KeySet::Vim);
+}
+
+#[tokio::test]
+async fn a_failed_key_save_says_so() {
+    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
+    let missing = tempfile::tempdir().unwrap().path().join("gone");
+    let shell = open_shell_on(
+        &fake,
+        None,
+        None,
+        ANSWER_WAIT,
+        Err("off".into()),
+        missing.clone(),
+    );
+    shell.opened().await;
+
+    shell.intend(Intent::SaveKeys(KeySet::Emacs));
+
+    let told = shell
+        .until(|update| matches!(update, Update::Notice(n) if n.starts_with("could not save")))
+        .await;
+    let Some(Update::Notice(notice)) = told.last() else {
+        panic!("{told:?}");
+    };
+    assert!(
+        notice.starts_with("could not save the key set: "),
+        "{notice}"
+    );
+}
+
+#[tokio::test]
+async fn choosing_a_profile_rereads_the_agents_not_the_profiles() {
+    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
+    let mut config = node_settings_of("did:key:z");
+    config["inference_profiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "node_did": "did:key:z", "profile_id": "other", "backend_id": "backend",
+            "model_name": "other-model", "display_name": "Other",
+        }));
+    let (node, work, home) = served(config).await;
+    let shell = open_shell_on(
+        &fake,
+        None,
+        None,
+        ANSWER_WAIT,
+        Ok(work.clone()),
+        home.path().into(),
+    );
+    shell.opened().await;
+    let choose = MenuAct::SetAgentProfile {
+        agent: "engineer".into(),
+        name: "Engineer".into(),
+        profile: "other".into(),
+        label: "Other · other-model".into(),
+    };
+
+    shell.intend(Intent::Act {
+        menu: MenuId::Profiles,
+        act: choose,
+    });
+
+    let told = shell.until(is_menu).await;
+    let Some(Update::Menu { menu, rows }) = told.last() else {
+        panic!("{told:?}");
+    };
+    assert_eq!(*menu, MenuId::Agents);
+    assert!(rows.as_ref().unwrap()[0].text.contains("Other"), "{rows:?}");
+    node.shutdown().await;
 }

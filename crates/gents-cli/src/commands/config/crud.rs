@@ -14,7 +14,7 @@ use crate::{graphql_rows, print_json, resolve_config_access};
 #[derive(Clone, Copy)]
 pub(crate) struct ConfigDocumentSpec {
     pub(super) noun: &'static str,
-    pub(super) collection: Collection,
+    pub(crate) collection: Collection,
 }
 
 pub(super) const BACKEND_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
@@ -37,19 +37,39 @@ pub(super) const PROFILE_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     collection: Collection::InferenceProfile,
 };
 
-pub(super) const TRIGGER_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+pub(crate) const TRIGGER_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     noun: "trigger",
     collection: Collection::Trigger,
 };
 
-pub(super) const SCHEDULE_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+pub(crate) const SCHEDULE_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     noun: "schedule",
     collection: Collection::Schedule,
 };
 
-pub(super) const MCP_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+pub(crate) const MCP_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     noun: "mcp",
     collection: Collection::ToolServiceRegistry,
+};
+
+pub(crate) const SKILL_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+    noun: "skill",
+    collection: Collection::Skill,
+};
+
+pub(crate) const EVENT_SOURCE_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+    noun: "event source",
+    collection: Collection::EventSource,
+};
+
+pub(crate) const CONTEXT_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+    noun: "context",
+    collection: Collection::AgentContext,
+};
+
+pub(crate) const NODE_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+    noun: "node",
+    collection: Collection::Node,
 };
 
 pub(super) async fn config_list(spec: ConfigDocumentSpec, args: ConfigListArgs) -> Result<()> {
@@ -64,8 +84,7 @@ pub(super) async fn config_list(spec: ConfigDocumentSpec, args: ConfigListArgs) 
         Some(&access),
     )
     .await?;
-    let mut rows = query_collection(&access, spec, &node_did, None).await?;
-    sort_rows(&mut rows, spec.collection.unique_field());
+    let rows = query_collection_sorted(&access, spec, &node_did).await?;
 
     match args.output.ensure_supported(
         &format!("config {} list", spec.noun),
@@ -295,7 +314,18 @@ pub(crate) async fn query_collection(
     Ok(rows)
 }
 
-pub(super) async fn load_one(
+/// The node's `spec` documents in id order.
+pub(crate) async fn query_collection_sorted(
+    access: &ConfigAccess,
+    spec: ConfigDocumentSpec,
+    node_did: &str,
+) -> Result<Vec<Value>> {
+    let mut rows = query_collection(access, spec, node_did, None).await?;
+    sort_rows(&mut rows, spec.collection.unique_field());
+    Ok(rows)
+}
+
+pub(crate) async fn load_one(
     access: &ConfigAccess,
     spec: ConfigDocumentSpec,
     node_did: &str,
@@ -329,7 +359,7 @@ fn remove_target(
     Ok(())
 }
 
-pub(crate) fn sort_rows(rows: &mut [Value], id_field: &str) {
+fn sort_rows(rows: &mut [Value], id_field: &str) {
     rows.sort_by(|a, b| {
         a.get(id_field)
             .and_then(Value::as_str)

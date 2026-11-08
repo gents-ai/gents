@@ -1,6 +1,9 @@
 mod client;
+mod forms;
 mod items;
 mod menus;
+mod prefs;
+mod sections;
 mod setup;
 mod source;
 mod tree;
@@ -12,7 +15,6 @@ mod tests;
 use std::path::Path;
 
 use anyhow::Context;
-use gents_shell::keys::KeySet;
 use gents_shell::source::Intent;
 use tokio::runtime::Handle;
 
@@ -26,7 +28,11 @@ pub(crate) async fn open(
     runtime: Handle,
 ) -> anyhow::Result<()> {
     let home = home.to_path_buf();
-    let reading = home.clone();
+    let (reading, saved) = (home.clone(), home.clone());
+    let keys = runtime
+        .spawn_blocking(move || prefs::read_keys(&saved))
+        .await
+        .context("reading the saved key set")?;
     let work = runtime
         .spawn_blocking(move || work::work_for(&reading))
         .await
@@ -58,7 +64,7 @@ pub(crate) async fn open(
     ));
     let ui = runtime
         .spawn_blocking(move || {
-            gents_shell::terminal::run_connected(KeySet::Vim, intents, updates, inputs)
+            gents_shell::terminal::run_connected(keys, intents, updates, inputs)
         })
         .await;
     source.abort();

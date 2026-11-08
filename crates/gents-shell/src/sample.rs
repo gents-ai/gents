@@ -594,16 +594,19 @@ pub fn answer(intent: &Intent) -> Vec<Update> {
             vec![Update::Saved(Ok(format!("saved anthropic-2: {model}")))]
         }
         Intent::Act { .. } => vec![Update::Notice(NOT_WIRED.to_string())],
-        Intent::OpenForm(form) => vec![Update::Form {
+        Intent::OpenForm { form, opening } => vec![Update::Form {
             form: form.clone(),
+            opening: *opening,
             result: Ok(sample_form(form)),
         }],
-        Intent::SaveForm { form, .. } => vec![Update::FormSaved {
+        Intent::SaveForm { form, opening, .. } => vec![Update::FormSaved {
             form: form.clone(),
+            opening: *opening,
             result: Ok("Saved".to_string()),
         }],
-        Intent::FormAct { form, .. } => vec![Update::FormNote {
+        Intent::FormAct { form, opening, .. } => vec![Update::FormNote {
             form: form.clone(),
+            opening: *opening,
             text: NOT_WIRED.to_string(),
             tone: Tone::Warn,
         }],
@@ -868,6 +871,7 @@ fn section_rows(doc: Doc, new: &str, id: &str, title: &str) -> Vec<MenuRow> {
     let on_off = matches!(doc, Doc::Skill | Doc::Trigger).then(|| MenuAct::SetEnabled {
         doc,
         id: id.to_string(),
+        label: title.to_string(),
         enabled: false,
     });
     vec![

@@ -4,8 +4,9 @@ use ratatui::text::Span;
 use crate::keys::Action;
 
 /// `cursor` is a byte offset. It moves by grapheme cluster, the unit `Buffer` draws, so one
-/// backspace removes what one looks like. Control characters are refused: they are not drawn,
-/// and `clusters` skips them, which would put its lengths out of step with the bytes.
+/// backspace removes what one looks like. Control characters but the tab are refused: they are
+/// not drawn, and `clusters` skips them, which would put its lengths out of step with the bytes.
+/// A tab is kept, so a loaded value saves unchanged, and is one cluster drawn as `TAB`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LineInput {
     text: String,
@@ -18,6 +19,9 @@ pub struct LineInput {
 /// lines, shows as a badge, because the box is one row.
 const INLINE_PASTE_CHARS: usize = 400;
 
+/// How a tab is drawn.
+pub const TAB: &str = "    ";
+
 impl LineInput {
     pub fn text(&self) -> &str {
         &self.text
@@ -28,7 +32,7 @@ impl LineInput {
     }
 
     pub fn insert(&mut self, c: char) {
-        if !c.is_control() {
+        if c == '\t' || !c.is_control() {
             self.text.insert(self.cursor, c);
             self.cursor += c.len_utf8();
         }
@@ -310,21 +314,31 @@ impl Lines {
         true
     }
 
-    /// A paste keeps its line breaks; tabs become spaces.
+    /// A paste keeps its line breaks and tabs.
     pub fn paste(&mut self, text: &str) {
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
         for c in text.trim_end_matches('\n').chars() {
             match c {
                 '\n' => self.break_line(),
-                '\t' => self.lines[self.row].insert(' '),
                 c => self.lines[self.row].insert(c),
             }
         }
     }
 
+    /// At a line's end, joins the line below to it.
+    fn delete(&mut self) {
+        let line = &self.lines[self.row];
+        if line.cursor < line.text.len() || self.row + 1 == self.lines.len() {
+            return self.lines[self.row].delete();
+        }
+        let below = self.lines.remove(self.row + 1);
+        self.lines[self.row].text.push_str(&below.text);
+    }
+
     pub fn edit(&mut self, action: Action) {
         match action {
             Action::Backspace => self.backspace(),
+            Action::Delete => self.delete(),
             action => self.lines[self.row].edit(action),
         }
     }
@@ -335,11 +349,21 @@ fn is_word(cluster: &str) -> bool {
     cluster.chars().next().is_some_and(char::is_alphanumeric)
 }
 
+/// Each cluster's bytes and columns. A tab, which `styled_graphemes` skips, is always a cluster
+/// of its own (UAX #29 breaks around controls), so the parts between tabs segment as the whole.
 fn clusters(text: &str) -> Vec<(usize, usize)> {
-    Span::raw(text)
-        .styled_graphemes(Style::new())
-        .map(|grapheme| (grapheme.symbol.len(), Span::raw(grapheme.symbol).width()))
-        .collect()
+    let mut clusters = Vec::new();
+    for (index, part) in text.split('\t').enumerate() {
+        if index > 0 {
+            clusters.push((1, TAB.len()));
+        }
+        let part = Span::raw(part);
+        let graphemes = part.styled_graphemes(Style::new());
+        clusters.extend(
+            graphemes.map(|grapheme| (grapheme.symbol.len(), Span::raw(grapheme.symbol).width())),
+        );
+    }
+    clusters
 }
 
 #[cfg(test)]
@@ -616,6 +640,31 @@ mod tests {
         while l.step(true) {}
         assert_eq!((l.row(), l.shown()), (7, 2..8));
         assert_eq!(l.text(), "日本語\nab\n\n3\n4\n5\n6\n7");
+    }
+
+    #[test]
+    fn a_tab_is_kept_and_its_cursor_steps_over_its_four_columns() {
+        let mut l = Lines::new("\tx\ny");
+        assert_eq!(l.text(), "\tx\ny");
+        assert_eq!(l.current().view(40), ("\tx", 5));
+        l.edit(Action::CursorLeft);
+        assert_eq!(l.current().view(40).1, 4);
+        l.edit(Action::CursorLeft);
+        assert_eq!(l.current().view(40).1, 0);
+        l.paste("a\tb");
+        assert_eq!(l.text(), "a\tb\tx\ny");
+        assert_eq!(l.current().view(40), ("a\tb\tx", 6));
+    }
+
+    #[test]
+    fn delete_at_a_lines_end_joins_the_line_below() {
+        let mut l = Lines::new("ab\ncd");
+        l.edit(Action::Delete);
+        assert_eq!(l.text(), "abcd");
+        assert_eq!(l.current().view(40), ("abcd", 2));
+        l.edit(Action::End);
+        l.edit(Action::Delete);
+        assert_eq!(l.text(), "abcd");
     }
 
     #[test]

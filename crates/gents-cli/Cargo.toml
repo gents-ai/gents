@@ -59,6 +59,7 @@ defra-p2p-adapter.workspace = true
 events.workspace = true
 futures-util = "0.3"
 flate2 = "1"
+iana-time-zone = "0.1"
 include_dir = "0.7"
 identity.workspace = true
 iroh.workspace = true

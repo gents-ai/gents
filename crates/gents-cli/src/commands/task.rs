@@ -53,9 +53,9 @@ pub(crate) async fn task_show(args: TaskShowArgs) -> Result<()> {
 pub(crate) struct TaskInventory {
     pub(crate) tasks: Vec<Value>,
     agents_by_id: BTreeMap<String, Value>,
-    triggers: Vec<Value>,
-    schedules_by_id: BTreeMap<String, Value>,
-    event_sources_by_id: BTreeMap<String, Value>,
+    pub(crate) triggers: Vec<Value>,
+    pub(crate) schedules_by_id: BTreeMap<String, Value>,
+    pub(crate) event_sources_by_id: BTreeMap<String, Value>,
 }
 
 impl TaskInventory {

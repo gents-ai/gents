@@ -13,9 +13,10 @@ use gents::session::mailbox::MailboxItem;
 use gents::store::config_client::{ConfigAccess, SubscribeError};
 use gents_codex_protocol as codex;
 use gents_shell::app::ChatLine;
+use gents_shell::keys::KeySet;
 use gents_shell::sample::{MenuId, Opens, RunState, Running, Tone};
 use gents_shell::source::{
-    BackgroundCall, Change, Connection, FormError, Input, Intent, Job, MenuAct, Prompt,
+    BackgroundCall, Change, Connection, Doc, FormRef, Input, Intent, Job, MenuAct, Prompt,
     SavedAccount, Session, Update,
 };
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
@@ -25,9 +26,10 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::client::{Client, ClientError, ClientEvent};
+use super::sections::{self, new_id};
 use super::tree::git_changes;
 use super::work::{self, Work};
-use super::{items, menus, setup};
+use super::{forms, items, menus, prefs, setup};
 use crate::commands::accounts::account_rows;
 use crate::commands::codex::relay::agent_route_target;
 use crate::commands::codex::{resolve_endpoint, runtime_identity_at, RemoteEndpoint};
@@ -343,6 +345,8 @@ struct Source {
     waiting: RapidHashSet<String>,
     /// The waiting sign-in's token, which `CancelSignIn` takes and cancels. Its answer clears it.
     signing_in: Option<CancellationToken>,
+    /// The id each kind's new form last opened with.
+    new_ids: RapidHashMap<Doc, String>,
 }
 
 impl Source {
@@ -378,6 +382,7 @@ impl Source {
             told: RapidHashMap::new(),
             waiting: RapidHashSet::new(),
             signing_in: None,
+            new_ids: RapidHashMap::new(),
         }
     }
 
@@ -423,11 +428,8 @@ impl Source {
             } => self.reply(session, &agent, &item, &text).await,
             Intent::WorkingTree { agent } => self.read_tree(agent),
             Intent::ReadMenu(menu) => self.read_menu(menu),
-            Intent::ReadProfiles { .. } => self.tell(Update::Menu {
-                menu: MenuId::Profiles,
-                rows: Err(menus::NOT_WIRED.to_string()),
-            }),
-            Intent::SaveKeys(_) => {}
+            Intent::ReadProfiles { agent } => self.read_profiles(agent),
+            Intent::SaveKeys(keys) => self.save_keys(keys),
             Intent::Act { menu, act } => self.act(menu, act),
             Intent::ReadSetup => self.answer_setup(Update::Setup, |access, node| async move {
                 let rows = account_rows(&access, &node, None, Utc::now()).await;
@@ -465,22 +467,67 @@ impl Source {
             } => self.answer_setup(Update::Saved, |access, node| async move {
                 setup::save(&access, &node, &connection, &model, &settings).await
             }),
-            Intent::OpenForm(form) => self.tell(Update::Form {
+            Intent::OpenForm { form, opening } => {
+                if let FormRef::New(doc) = form {
+                    self.new_ids.insert(doc, new_id(sections::prefix(doc)));
+                }
+                let (id, asked) = (self.form_id(&form), form.clone());
+                let opened = move |result| Update::Form {
+                    form: asked,
+                    opening,
+                    result,
+                };
+                self.answer_setup(opened, |access, node| async move {
+                    let opened = forms::open(&access, &node, &form, &id).await;
+                    opened.map_err(|error| format!("{error:#}"))
+                });
+            }
+            Intent::SaveForm {
                 form,
-                result: Err(menus::NOT_WIRED.to_string()),
-            }),
-            Intent::SaveForm { form, .. } => self.tell(Update::FormSaved {
+                opening,
+                values,
+            } => {
+                let (id, asked) = (self.form_id(&form), form.clone());
+                let home = self.home.clone();
+                let saved = move |saved: Result<_, String>| Update::FormSaved {
+                    form: asked,
+                    opening,
+                    result: saved.unwrap_or_else(|off| Err(forms::refused(off))),
+                };
+                self.answer_setup(saved, |access, node| async move {
+                    Ok(forms::save(&access, &home, &node, &form, &values, &id).await)
+                });
+            }
+            Intent::FormAct {
                 form,
-                result: Err(FormError {
-                    field: None,
-                    message: menus::NOT_WIRED.to_string(),
-                }),
-            }),
-            Intent::FormAct { form, .. } => self.tell(Update::FormNote {
-                form,
-                text: menus::NOT_WIRED.to_string(),
-                tone: Tone::Warn,
-            }),
+                opening,
+                act,
+                values,
+            } => {
+                let (id, home, asked) = (self.form_id(&form), self.home.clone(), form.clone());
+                let noted = move |noted: Result<_, String>| {
+                    let (text, tone) = noted.unwrap_or_else(|off| (off, Tone::Warn));
+                    Update::FormNote {
+                        form: asked,
+                        opening,
+                        text,
+                        tone,
+                    }
+                };
+                self.answer_setup(noted, |access, node| async move {
+                    Ok(forms::act(&access, &home, &node, &form, &act, &values, &id).await)
+                });
+            }
+        }
+    }
+
+    /// The id `form`'s document saves under. A new document's is made when its form opens and
+    /// kept for its save, since the shell sends no fixed field's value.
+    fn form_id(&self, form: &FormRef) -> String {
+        match form {
+            FormRef::Edit(_, id) => id.clone(),
+            FormRef::New(doc) => self.new_ids.get(doc).cloned().unwrap_or_default(),
+            FormRef::Node | FormRef::AddFolder | FormRef::Delete(..) => String::new(),
         }
     }
 
@@ -546,6 +593,11 @@ impl Source {
 
     /// Off the chat loop, as `read_menu` reads, and then `menu` is reread to show what changed.
     fn act(&self, menu: MenuId, act: MenuAct) {
+        // A profile is chosen from Profiles, but it shows on the Agents menu.
+        let menu = match act {
+            MenuAct::SetAgentProfile { .. } => MenuId::Agents,
+            _ => menu,
+        };
         let (work, home) = (self.work.clone(), self.home.clone());
         let (principal, updates) = (self.principal.clone(), self.updates.clone());
         self.runtime.spawn(async move {
@@ -567,6 +619,33 @@ impl Source {
         self.runtime.spawn(async move {
             let rows = menus::read_menu(&work, &home, &principal, menu).await;
             let _ = updates.send(Input::Runtime(Update::Menu { menu, rows }));
+        });
+    }
+
+    fn read_profiles(&self, agent: String) {
+        let (work, principal) = (self.work.clone(), self.principal.clone());
+        let updates = self.updates.clone();
+        self.runtime.spawn(async move {
+            let rows = menus::read_profiles(&work, &principal, &agent).await;
+            let _ = updates.send(Input::Runtime(Update::Menu {
+                menu: MenuId::Profiles,
+                rows,
+            }));
+        });
+    }
+
+    fn save_keys(&self, keys: KeySet) {
+        let (home, updates) = (self.home.clone(), self.updates.clone());
+        self.runtime.spawn(async move {
+            let saved = tokio::task::spawn_blocking(move || prefs::save_keys(&home, keys)).await;
+            let failed = saved.map_or_else(
+                |error| Some(error.to_string()),
+                |saved| saved.err().map(|e| e.to_string()),
+            );
+            if let Some(error) = failed {
+                let notice = format!("could not save the key set: {error}");
+                let _ = updates.send(Input::Runtime(Update::Notice(notice)));
+            }
         });
     }
 

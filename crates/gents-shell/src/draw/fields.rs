@@ -5,6 +5,7 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use super::theme;
 use crate::app::fields::{Field, Kind};
+use crate::app::input::TAB;
 use crate::sample::Tone;
 
 /// Wide enough for the longest label and a space after it, and at least `least`.
@@ -64,15 +65,15 @@ fn value(field: &Field, row: usize, room: u16) -> (String, Tone) {
         },
         Kind::Text | Kind::Fixed => &field.input,
     };
-    let (shown, _) = input.view(room);
+    let shown = input.view(room).0.replace('\t', TAB);
     if field.is_empty() {
         (field.placeholder.clone(), Tone::Label)
     } else if field.masked {
         ("•".repeat(shown.chars().count()), Tone::Plain)
     } else if matches!(field.kind, Kind::Fixed) {
-        (shown.to_string(), Tone::Label)
+        (shown, Tone::Label)
     } else {
-        (shown.to_string(), Tone::Plain)
+        (shown, Tone::Plain)
     }
 }
 
